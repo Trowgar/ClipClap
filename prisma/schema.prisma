@@ -1,0 +1,131 @@
+generator client {
+  provider   = "prisma-client-js"
+  engineType = "binary"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Plan {
+  FREE
+  STARTER
+  PRO
+}
+
+enum JobStatus {
+  PENDING
+  DOWNLOADING
+  TRANSCRIBING
+  ANALYZING
+  CUTTING
+  DONE
+  FAILED
+}
+
+model User {
+  id                    String   @id @default(cuid())
+  email                 String?  @unique
+  emailVerified         DateTime?
+  password              String?
+  telegramId            String?  @unique
+  name                  String?
+  image                 String?
+  plan                  Plan     @default(FREE)
+  stripeCustomerId      String?  @unique
+  stripeSubscriptionId  String?  @unique
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  jobs    Job[]
+  clips   Clip[]
+  accounts Account[]
+  sessions Session[]
+
+  @@map("users")
+}
+
+model Job {
+  id               String    @id @default(cuid())
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceUrl        String?
+  sourceKey        String?
+  originalFilename String?
+  status           JobStatus @default(PENDING)
+  error            String?
+  transcription    String?   @db.Text
+  highlights       Json?
+  subtitles        Boolean   @default(true)
+  subtitlePreset   String?   @default("tiktok")
+  createdAt        DateTime  @default(now())
+
+  clips Clip[]
+
+  @@index([userId])
+  @@index([status])
+  @@map("jobs")
+}
+
+model Clip {
+  id             String  @id @default(cuid())
+  jobId          String
+  job            Job     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title          String
+  storageKey     String
+  duration       Int
+  startTime      Float
+  endTime        Float
+  subtitles      Boolean @default(true)
+  subtitlePreset String?
+  parentClipId   String?
+  parentClip     Clip?   @relation("ClipRetrim", fields: [parentClipId], references: [id])
+  retrims        Clip[]  @relation("ClipRetrim")
+  createdAt      DateTime @default(now())
+
+  @@index([jobId])
+  @@index([userId])
+  @@map("clips")
+}
+
+// Auth.js required models
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expires      DateTime
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}

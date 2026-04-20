@@ -1,0 +1,10 @@
+# Apex domain — main site, auto HTTPS via Let's Encrypt
+clipclap.io {
+    encode gzip zstd
+    reverse_proxy web:3000
+}
+
+# www → apex redirect (301)
+www.clipclap.io {
+    redir https://clipclap.io{uri} permanent
+}

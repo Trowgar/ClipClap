@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "paths": {
+      "@clipfast/shared": ["../../packages/shared/dist"],
+      "@clipfast/shared/*": ["../../packages/shared/dist/*"]
+    }
+  },
+  "include": ["src/**/*"]
+}
