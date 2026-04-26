@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { getPlanLimits, PLAN_LIMITS, getPlanFromPriceId } from "../plans";
 
 describe("Plan Limits", () => {
@@ -58,16 +58,28 @@ describe("Plan Limits", () => {
     expect(getPlanLimits("MAX", "MONTHLY").maxJobsPerDay).toBe(100);
   });
 
-  it("getPlanFromPriceId returns correct tuple", () => {
-    process.env.STRIPE_STARTER_WEEKLY_PRICE_ID = "price_sw";
-    process.env.STRIPE_STARTER_MONTHLY_PRICE_ID = "price_sm";
-    process.env.STRIPE_PLUS_MONTHLY_PRICE_ID = "price_pm";
-    process.env.STRIPE_MAX_MONTHLY_PRICE_ID = "price_mm";
+  describe("getPlanFromPriceId", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
 
-    expect(getPlanFromPriceId("price_sw")).toEqual({ plan: "STARTER", cycle: "WEEKLY" });
-    expect(getPlanFromPriceId("price_sm")).toEqual({ plan: "STARTER", cycle: "MONTHLY" });
-    expect(getPlanFromPriceId("price_pm")).toEqual({ plan: "PLUS", cycle: "MONTHLY" });
-    expect(getPlanFromPriceId("price_mm")).toEqual({ plan: "MAX", cycle: "MONTHLY" });
-    expect(getPlanFromPriceId("price_unknown")).toBeNull();
+    it("returns correct tuple for each priceId", () => {
+      vi.stubEnv("STRIPE_STARTER_WEEKLY_PRICE_ID", "price_sw");
+      vi.stubEnv("STRIPE_STARTER_MONTHLY_PRICE_ID", "price_sm");
+      vi.stubEnv("STRIPE_PLUS_MONTHLY_PRICE_ID", "price_pm");
+      vi.stubEnv("STRIPE_MAX_MONTHLY_PRICE_ID", "price_mm");
+
+      expect(getPlanFromPriceId("price_sw")).toEqual({ plan: "STARTER", cycle: "WEEKLY" });
+      expect(getPlanFromPriceId("price_sm")).toEqual({ plan: "STARTER", cycle: "MONTHLY" });
+      expect(getPlanFromPriceId("price_pm")).toEqual({ plan: "PLUS", cycle: "MONTHLY" });
+      expect(getPlanFromPriceId("price_mm")).toEqual({ plan: "MAX", cycle: "MONTHLY" });
+      expect(getPlanFromPriceId("price_unknown")).toBeNull();
+    });
+
+    it("returns null for empty priceId even when env vars are unset", () => {
+      vi.stubEnv("STRIPE_STARTER_WEEKLY_PRICE_ID", "");
+      vi.stubEnv("STRIPE_STARTER_MONTHLY_PRICE_ID", "");
+      expect(getPlanFromPriceId("")).toBeNull();
+    });
   });
 });

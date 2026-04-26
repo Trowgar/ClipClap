@@ -107,14 +107,20 @@ export function getPlanLimits(plan: Plan, cycle?: BillingCycle): PlanLimits {
 export function getPlanFromPriceId(
   priceId: string
 ): { plan: Plan; cycle: BillingCycle } | null {
-  const map: Record<string, { plan: Plan; cycle: BillingCycle }> = {
-    [process.env.STRIPE_STARTER_WEEKLY_PRICE_ID ?? ""]: { plan: "STARTER", cycle: "WEEKLY" },
-    [process.env.STRIPE_STARTER_MONTHLY_PRICE_ID ?? ""]: { plan: "STARTER", cycle: "MONTHLY" },
-    [process.env.STRIPE_PLUS_MONTHLY_PRICE_ID ?? ""]: { plan: "PLUS", cycle: "MONTHLY" },
-    [process.env.STRIPE_MAX_MONTHLY_PRICE_ID ?? ""]: { plan: "MAX", cycle: "MONTHLY" },
-  };
-  delete map[""];
-  return map[priceId] ?? null;
+  if (!priceId) return null;
+  if (priceId === process.env.STRIPE_STARTER_WEEKLY_PRICE_ID) {
+    return { plan: "STARTER", cycle: "WEEKLY" };
+  }
+  if (priceId === process.env.STRIPE_STARTER_MONTHLY_PRICE_ID) {
+    return { plan: "STARTER", cycle: "MONTHLY" };
+  }
+  if (priceId === process.env.STRIPE_PLUS_MONTHLY_PRICE_ID) {
+    return { plan: "PLUS", cycle: "MONTHLY" };
+  }
+  if (priceId === process.env.STRIPE_MAX_MONTHLY_PRICE_ID) {
+    return { plan: "MAX", cycle: "MONTHLY" };
+  }
+  return null;
 }
 
 export const TOPUP_PACKS = {
