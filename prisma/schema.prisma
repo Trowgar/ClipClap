@@ -85,6 +85,7 @@ model Job {
 
   @@index([userId])
   @@index([status])
+  @@index([userId, status])
   @@map("jobs")
 }
 
@@ -104,10 +105,14 @@ model Clip {
   parentClipId   String?
   parentClip     Clip?   @relation("ClipRetrim", fields: [parentClipId], references: [id])
   retrims        Clip[]  @relation("ClipRetrim")
+  expiresAt      DateTime?
+  deletedAt      DateTime?
   createdAt      DateTime @default(now())
 
   @@index([jobId])
   @@index([userId])
+  @@index([expiresAt, deletedAt])
+  @@index([userId, createdAt(sort: Desc)])
   @@map("clips")
 }
 
