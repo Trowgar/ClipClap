@@ -22,8 +22,8 @@ export default async function DashboardLayout({
           avatarUrl: session.user.image ?? null,
         }}
         usage={{
-          used: usage.videosUsed,
-          limit: usage.videosLimit,
+          used: usage.minutesUsed,
+          limit: usage.minutesLimit,
           plan: usage.plan,
         }}
       />

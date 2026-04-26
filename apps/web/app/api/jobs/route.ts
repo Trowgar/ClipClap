@@ -13,10 +13,10 @@ export async function POST(req: NextRequest) {
   const userId = session.user.id;
 
   // Check plan limits
-  const check = await userService.canCreateJob(userId);
+  const check = await userService.canCreateJob(userId, 0);
   if (!check.allowed) {
     return NextResponse.json(
-      { error: check.reason, usage: check.usage, limit: check.limit },
+      { error: check.reason },
       { status: 429 }
     );
   }
