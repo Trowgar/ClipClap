@@ -35,6 +35,7 @@ describe("usage.service", () => {
       plan: "STARTER",
       billingCycle: "MONTHLY",
       topUpMinutesRemaining: 0,
+      currentPeriodEnd: null,
     });
     (prisma.job.aggregate as any).mockResolvedValue({ _sum: { sourceDurationSec: 1800 } });
 
@@ -52,12 +53,14 @@ describe("usage.service", () => {
       billingCycle: "MONTHLY",
       topUpMinutesRemaining: 0,
       subscriptionStatus: "ACTIVE",
+      currentPeriodEnd: null,
     });
     (prisma.job.aggregate as any).mockResolvedValue({ _sum: { sourceDurationSec: 270 * 60 } });
 
     const result = await canSubmitJob("u1", 10);
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toMatch(/limit/i);
+    expect(result).toEqual(
+      expect.objectContaining({ allowed: false, reason: expect.stringMatching(/limit/i) })
+    );
   });
 
   it("canSubmitJob allows when over cap but top-up covers it", async () => {
@@ -67,11 +70,12 @@ describe("usage.service", () => {
       billingCycle: "MONTHLY",
       topUpMinutesRemaining: 50,
       subscriptionStatus: "ACTIVE",
+      currentPeriodEnd: null,
     });
     (prisma.job.aggregate as any).mockResolvedValue({ _sum: { sourceDurationSec: 270 * 60 } });
 
     const result = await canSubmitJob("u1", 30);
-    expect(result.allowed).toBe(true);
+    expect(result).toEqual({ allowed: true });
   });
 
   it("canSubmitJob blocks for NONE plan", async () => {
@@ -80,11 +84,13 @@ describe("usage.service", () => {
       plan: "NONE",
       subscriptionStatus: "NONE",
       topUpMinutesRemaining: 0,
+      currentPeriodEnd: null,
     });
 
     const result = await canSubmitJob("u1", 10);
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toMatch(/subscription/i);
+    expect(result).toEqual(
+      expect.objectContaining({ allowed: false, reason: expect.stringMatching(/subscription/i) })
+    );
   });
 
   it("canSubmitJob blocks during DUNNING", async () => {
@@ -94,11 +100,13 @@ describe("usage.service", () => {
       billingCycle: "MONTHLY",
       subscriptionStatus: "DUNNING",
       topUpMinutesRemaining: 0,
+      currentPeriodEnd: null,
     });
 
     const result = await canSubmitJob("u1", 10);
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toMatch(/payment/i);
+    expect(result).toEqual(
+      expect.objectContaining({ allowed: false, reason: expect.stringMatching(/payment/i) })
+    );
   });
 
   it("canSubmitJob blocks during CANCELED_GRACE (read-only)", async () => {
@@ -108,10 +116,35 @@ describe("usage.service", () => {
       billingCycle: "MONTHLY",
       subscriptionStatus: "CANCELED_GRACE",
       topUpMinutesRemaining: 0,
+      currentPeriodEnd: null,
     });
 
     const result = await canSubmitJob("u1", 10);
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toMatch(/canceled|grace/i);
+    expect(result).toEqual(
+      expect.objectContaining({ allowed: false, reason: expect.stringMatching(/canceled|grace/i) })
+    );
+  });
+
+  it("canSubmitJob anchors period to currentPeriodEnd when present", async () => {
+    const futureEnd = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+    (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
+      id: "u1",
+      plan: "STARTER",
+      billingCycle: "MONTHLY",
+      subscriptionStatus: "ACTIVE",
+      topUpMinutesRemaining: 0,
+      currentPeriodEnd: futureEnd,
+    });
+    (prisma.job.aggregate as any).mockResolvedValue({ _sum: { sourceDurationSec: 60 * 60 } });
+
+    await canSubmitJob("u1", 10);
+
+    const aggregateCall = (prisma.job.aggregate as any).mock.calls[0][0];
+    const periodStart = aggregateCall.where.createdAt.gte as Date;
+    const periodEnd = aggregateCall.where.createdAt.lte as Date;
+    const expectedStart = new Date(futureEnd);
+    expectedStart.setDate(expectedStart.getDate() - 30);
+    expect(periodStart.getTime()).toBe(expectedStart.getTime());
+    expect(periodEnd.getTime()).toBeGreaterThanOrEqual(Date.now() - 1000);
   });
 });

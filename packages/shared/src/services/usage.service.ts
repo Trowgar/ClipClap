@@ -20,14 +20,27 @@ export async function getMinutesUsedInPeriod(
   return Math.ceil(seconds / 60);
 }
 
-function getPeriodStart(cycle: BillingCycle | null): Date {
-  const d = new Date();
-  if (cycle === "WEEKLY") {
-    d.setDate(d.getDate() - 7);
-  } else {
-    d.setDate(d.getDate() - 30);
+// Computes the start of the current billing period.
+// Anchors to Stripe-tracked currentPeriodEnd when present (correct behavior:
+// usage resets at renewal). Falls back to a rolling 7/30-day window when
+// currentPeriodEnd is missing or in the past — only happens for legacy users
+// or in dunning/canceled states where canSubmitJob will block anyway.
+function getPeriodStart(
+  cycle: BillingCycle | null,
+  currentPeriodEnd: Date | null
+): Date {
+  const cycleDays = cycle === "WEEKLY" ? 7 : 30;
+  const now = Date.now();
+
+  if (currentPeriodEnd && currentPeriodEnd.getTime() > now) {
+    const start = new Date(currentPeriodEnd);
+    start.setDate(start.getDate() - cycleDays);
+    return start;
   }
-  return d;
+
+  const fallback = new Date();
+  fallback.setDate(fallback.getDate() - cycleDays);
+  return fallback;
 }
 
 export interface UsageSummary {
@@ -52,7 +65,7 @@ export async function getUsageForUser(userId: string): Promise<UsageSummary> {
     };
   }
   const limits = getPlanLimits(user.plan, user.billingCycle ?? "MONTHLY");
-  const periodStart = getPeriodStart(user.billingCycle);
+  const periodStart = getPeriodStart(user.billingCycle, user.currentPeriodEnd);
   const minutesUsed = await getMinutesUsedInPeriod(
     userId,
     periodStart,
@@ -68,11 +81,13 @@ export async function getUsageForUser(userId: string): Promise<UsageSummary> {
   };
 }
 
-export interface JobSubmissionCheck {
-  allowed: boolean;
-  reason?: string;
-}
+export type JobSubmissionCheck =
+  | { allowed: true }
+  | { allowed: false; reason: string };
 
+// Lifecycle is enforced strictly here; quota check is best-effort because
+// jobDurationMinutes may be 0 at submit time (real source duration only known
+// after DOWNLOAD step in worker). Plan 3 will add a re-check post-probe.
 export async function canSubmitJob(
   userId: string,
   jobDurationMinutes: number
@@ -90,7 +105,7 @@ export async function canSubmitJob(
   }
 
   const limits = getPlanLimits(user.plan, user.billingCycle ?? "MONTHLY");
-  const periodStart = getPeriodStart(user.billingCycle);
+  const periodStart = getPeriodStart(user.billingCycle, user.currentPeriodEnd);
   const used = await getMinutesUsedInPeriod(userId, periodStart, new Date());
   const projectedUsage = used + jobDurationMinutes;
   const totalAvailable = limits.minutesPerPeriod + user.topUpMinutesRemaining;
