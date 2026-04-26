@@ -75,6 +75,7 @@ model Job {
   originalFilename String?
   status           JobStatus @default(PENDING)
   error            String?
+  sourceDurationSec Int?
   transcription    String?   @db.Text
   highlights       Json?
   subtitles        Boolean   @default(true)
