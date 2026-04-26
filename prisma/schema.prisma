@@ -9,9 +9,10 @@ datasource db {
 }
 
 enum Plan {
-  FREE
+  NONE
   STARTER
-  PRO
+  PLUS
+  MAX
 }
 
 enum JobStatus {
@@ -32,7 +33,7 @@ model User {
   telegramId            String?  @unique
   name                  String?
   image                 String?
-  plan                  Plan     @default(FREE)
+  plan                  Plan     @default(NONE)
   stripeCustomerId      String?  @unique
   stripeSubscriptionId  String?  @unique
   createdAt             DateTime @default(now())
