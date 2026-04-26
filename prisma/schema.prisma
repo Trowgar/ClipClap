@@ -25,6 +25,19 @@ enum JobStatus {
   FAILED
 }
 
+enum SubscriptionStatus {
+  NONE
+  ACTIVE
+  DUNNING
+  CANCELED_GRACE
+  CANCELED
+}
+
+enum BillingCycle {
+  WEEKLY
+  MONTHLY
+}
+
 model User {
   id                    String   @id @default(cuid())
   email                 String?  @unique
@@ -36,6 +49,12 @@ model User {
   plan                  Plan     @default(NONE)
   stripeCustomerId      String?  @unique
   stripeSubscriptionId  String?  @unique
+  subscriptionStatus     SubscriptionStatus @default(NONE)
+  billingCycle           BillingCycle?
+  currentPeriodEnd       DateTime?
+  dunningSince           DateTime?
+  graceEndsAt            DateTime?
+  topUpMinutesRemaining  Int                @default(0)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
 
