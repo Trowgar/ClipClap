@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma";
 import { getPresignedDownloadUrl, deleteFile } from "../lib/r2";
 import { getVideoQueue } from "../lib/queue";
+import { computeClipExpiresAt } from "../lib/retention";
 import type { Clip } from "@prisma/client";
 import type { TrimClipInput } from "../types";
 
@@ -59,6 +60,12 @@ export async function trimClip(input: TrimClipInput): Promise<Clip> {
     include: { job: true },
   });
 
+  const user = await prisma.user.findUniqueOrThrow({
+    where: { id: input.userId },
+    select: { plan: true, billingCycle: true },
+  });
+  const expiresAt = computeClipExpiresAt(user.plan, user.billingCycle);
+
   // Create a new clip record as a placeholder
   const newClip = await prisma.clip.create({
     data: {
@@ -72,6 +79,7 @@ export async function trimClip(input: TrimClipInput): Promise<Clip> {
       subtitles: input.subtitles,
       subtitlePreset: input.subtitlePreset,
       parentClipId: original.id,
+      expiresAt,
     },
   });
 

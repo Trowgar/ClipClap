@@ -1,4 +1,4 @@
-import { jobService, uploadFile, prisma, getPlanLimits } from "@clipfast/shared";
+import { jobService, uploadFile, prisma, getPlanLimits, computeClipExpiresAt } from "@clipfast/shared";
 import type { TranscriptionResult, Highlight } from "@clipfast/shared";
 import { downloadVideo } from "./processors/download";
 import { transcribeVideo } from "./processors/transcribe";
@@ -26,6 +26,9 @@ export async function processVideoJob(
       where: { id: userId },
     });
     const planLimits = getPlanLimits(user.plan);
+    // Compute once per job: the user's plan won't change mid-job, so all
+    // clips created in this run share the same retention window.
+    const clipExpiresAt = computeClipExpiresAt(user.plan, user.billingCycle);
 
     // Step 1: Download
     await jobService.updateJobStatus(jobId, "DOWNLOADING");
@@ -98,6 +101,7 @@ export async function processVideoJob(
           endTime: highlight.end,
           subtitles: job.subtitles,
           subtitlePreset: job.subtitlePreset,
+          expiresAt: clipExpiresAt,
         },
       });
 
