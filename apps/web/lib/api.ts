@@ -16,10 +16,10 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
 
 export const api = {
   uploads: {
-    getPresignedUrl: (filename: string, contentType: string) =>
+    getPresignedUrl: (filename: string, contentType: string, fileSizeBytes?: number) =>
       fetchApi<{ uploadUrl: string; key: string }>("/api/uploads", {
         method: "POST",
-        body: JSON.stringify({ filename, contentType }),
+        body: JSON.stringify({ filename, contentType, fileSizeBytes }),
       }),
   },
   jobs: {
@@ -31,6 +31,7 @@ export const api = {
       originalFilename?: string;
       subtitles: boolean;
       subtitlePreset: string;
+      sourceDurationSec?: number;
     }) =>
       fetchApi<JobWithClips>("/api/jobs", {
         method: "POST",

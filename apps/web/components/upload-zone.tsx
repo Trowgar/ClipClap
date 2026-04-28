@@ -16,17 +16,45 @@ import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { useRouter } from "next/navigation";
 
+async function probeVideoDuration(file: File): Promise<number | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.onloadedmetadata = () => {
+      URL.revokeObjectURL(url);
+      const seconds = isFinite(video.duration) ? video.duration : null;
+      resolve(seconds);
+    };
+    video.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(null);
+    };
+    video.src = url;
+  });
+}
+
 export function UploadZone() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragActive, setDragActive] = useState(false);
   const [url, setUrl] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [sourceDurationSec, setSourceDurationSec] = useState<number | null>(null);
   const [subtitles, setSubtitles] = useState(true);
   const [subtitlePreset, setSubtitlePreset] = useState("tiktok");
   const [loading, setLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const setFileAndProbe = useCallback(async (next: File | null) => {
+    setFile(next);
+    setSourceDurationSec(null);
+    if (next && next.type.startsWith("video/")) {
+      const duration = await probeVideoDuration(next);
+      setSourceDurationSec(duration ?? null);
+    }
+  }, []);
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -44,15 +72,15 @@ export function UploadZone() {
     setDragActive(false);
     const droppedFile = e.dataTransfer.files?.[0];
     if (droppedFile?.type.startsWith("video/")) {
-      setFile(droppedFile);
+      setFileAndProbe(droppedFile);
       setUrl("");
     }
-  }, []);
+  }, [setFileAndProbe]);
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = e.target.files?.[0];
     if (selected) {
-      setFile(selected);
+      setFileAndProbe(selected);
       setUrl("");
     }
   };
@@ -72,7 +100,8 @@ export function UploadZone() {
         setUploadProgress("Getting upload URL...");
         const { uploadUrl, key } = await api.uploads.getPresignedUrl(
           file.name,
-          file.type || "video/mp4"
+          file.type || "video/mp4",
+          file.size
         );
         sourceKey = key;
         originalFilename = file.name;
@@ -98,6 +127,7 @@ export function UploadZone() {
         originalFilename,
         subtitles,
         subtitlePreset,
+        sourceDurationSec: sourceDurationSec ?? undefined,
       });
 
       router.push(`/dashboard/jobs/${job.id}`);
