@@ -9,16 +9,15 @@ import type { Plan, BillingCycle } from "@prisma/client";
  * For NONE plan (which should never create clips, but defensive): returns
  * a 24h expiration so any orphaned clips get cleaned up promptly.
  */
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
 export function computeClipExpiresAt(
   plan: Plan,
   cycle: BillingCycle | null,
   createdAt: Date = new Date()
 ): Date {
-  if (plan === "NONE") {
-    return new Date(createdAt.getTime() + 24 * 60 * 60 * 1000);
-  }
-  const limits = getPlanLimits(plan, cycle ?? "MONTHLY");
-  const out = new Date(createdAt);
-  out.setDate(out.getDate() + limits.retentionDays);
-  return out;
+  // Use UTC ms math so retention windows don't drift by 1h across DST
+  // transitions on servers in TZ-aware locales.
+  const days = plan === "NONE" ? 1 : getPlanLimits(plan, cycle ?? "MONTHLY").retentionDays;
+  return new Date(createdAt.getTime() + days * MS_PER_DAY);
 }
