@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { billingService } from "@clipfast/shared";
+import { UnsupportedPlanCycleError } from "@clipfast/shared";
 import type { Plan, BillingCycle } from "@prisma/client";
 
 const VALID_PLANS = ["STARTER", "PLUS", "MAX"] as const;
@@ -34,9 +35,16 @@ export async function POST(req: NextRequest) {
     );
     return NextResponse.json({ url });
   } catch (e) {
+    // Client-class: invalid plan/cycle (e.g. PLUS+WEEKLY). Safe to surface.
+    if (e instanceof UnsupportedPlanCycleError) {
+      return NextResponse.json({ error: e.message }, { status: 400 });
+    }
+    // Server-class: missing env, Stripe API failure, etc. Log internals,
+    // return a generic message so we don't leak infra details to clients.
+    console.error("checkout/route.ts:", e);
     return NextResponse.json(
-      { error: e instanceof Error ? e.message : "Failed to create checkout" },
-      { status: 400 }
+      { error: "Failed to create checkout. Please try again later." },
+      { status: 500 }
     );
   }
 }

@@ -2,6 +2,18 @@ import Stripe from "stripe";
 import { prisma } from "../lib/prisma";
 import type { Plan, BillingCycle } from "@prisma/client";
 
+// 4xx-class: caller picked an invalid plan/cycle combination. Safe to surface
+// to end users.
+export class UnsupportedPlanCycleError extends Error {
+  constructor(plan: Plan, cycle: BillingCycle) {
+    super(
+      `Plan ${plan} does not support ${cycle.toLowerCase()} billing. ` +
+        `Choose a different combination.`
+    );
+    this.name = "UnsupportedPlanCycleError";
+  }
+}
+
 export function getStripe(): Stripe {
   const key = process.env.STRIPE_SECRET_KEY;
   if (!key) throw new Error("STRIPE_SECRET_KEY is required");
@@ -27,10 +39,7 @@ function priceIdFor(plan: Exclude<Plan, "NONE">, cycle: BillingCycle): string {
   if (plan === "MAX" && cycle === "MONTHLY") {
     return requireEnv("STRIPE_MAX_MONTHLY_PRICE_ID");
   }
-  throw new Error(
-    `Unsupported plan/cycle combination: ${plan}/${cycle}. ` +
-      `PLUS and MAX have no weekly cycle.`
-  );
+  throw new UnsupportedPlanCycleError(plan, cycle);
 }
 
 export async function createCheckoutSession(
@@ -65,6 +74,13 @@ export async function createCheckoutSession(
     success_url: successUrl,
     cancel_url: cancelUrl,
     metadata: { userId, plan, cycle },
+    // Propagate metadata to the resulting Subscription so webhook events for
+    // renewals, plan changes, and cancellations carry user context. Without
+    // this, customer.subscription.* events arrive with empty metadata and the
+    // webhook would have to look up the user by stripeSubscriptionId.
+    subscription_data: {
+      metadata: { userId, plan, cycle },
+    },
   });
 
   return session.url!;

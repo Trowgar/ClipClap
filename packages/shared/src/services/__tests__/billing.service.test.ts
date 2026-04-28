@@ -22,7 +22,7 @@ vi.mock("../../lib/prisma", () => ({
 }));
 
 import { prisma } from "../../lib/prisma";
-import { createCheckoutSession } from "../billing.service";
+import { createCheckoutSession, UnsupportedPlanCycleError } from "../billing.service";
 
 describe("billing.service — createCheckoutSession", () => {
   beforeEach(() => {
@@ -34,7 +34,7 @@ describe("billing.service — createCheckoutSession", () => {
     vi.stubEnv("STRIPE_MAX_MONTHLY_PRICE_ID", "price_mm");
   });
 
-  it("routes STARTER+WEEKLY to correct price", async () => {
+  it("routes STARTER+WEEKLY to correct price and propagates metadata to subscription", async () => {
     (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
       id: "u1",
       email: "a@b.c",
@@ -49,6 +49,9 @@ describe("billing.service — createCheckoutSession", () => {
         line_items: [{ price: "price_sw", quantity: 1 }],
         mode: "subscription",
         metadata: expect.objectContaining({ userId: "u1", plan: "STARTER", cycle: "WEEKLY" }),
+        subscription_data: expect.objectContaining({
+          metadata: expect.objectContaining({ userId: "u1", plan: "STARTER", cycle: "WEEKLY" }),
+        }),
       })
     );
   });
@@ -87,7 +90,7 @@ describe("billing.service — createCheckoutSession", () => {
     );
   });
 
-  it("rejects PLUS+WEEKLY (unsupported cycle)", async () => {
+  it("rejects PLUS+WEEKLY with UnsupportedPlanCycleError (typed for 4xx routing)", async () => {
     (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
       id: "u1",
       email: "a@b.c",
@@ -96,7 +99,7 @@ describe("billing.service — createCheckoutSession", () => {
 
     await expect(
       createCheckoutSession("u1", "PLUS", "WEEKLY", "https://x", "https://y")
-    ).rejects.toThrow(/weekly|unsupported/i);
+    ).rejects.toBeInstanceOf(UnsupportedPlanCycleError);
   });
 
   it("rejects MAX+WEEKLY", async () => {
