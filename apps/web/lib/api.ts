@@ -64,6 +64,10 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ pack }),
       }),
+    portal: () =>
+      fetchApi<{ url: string }>("/api/billing/portal", {
+        method: "POST",
+      }),
   },
 };
 
