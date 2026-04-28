@@ -309,4 +309,23 @@ describe("billing.service — handleWebhook", () => {
 
     expect(prisma.user.updateMany).not.toHaveBeenCalled();
   });
+
+  it("checkout.session.completed (payment mode) credits top-up minutes", async () => {
+    mockStripe.webhooks.constructEvent.mockReturnValue({
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          mode: "payment",
+          metadata: { userId: "u1", topupPack: "SMALL", minutes: "100" },
+        },
+      },
+    });
+
+    await handleWebhook("body", "sig");
+
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: "u1" },
+      data: { topUpMinutesRemaining: { increment: 100 } },
+    });
+  });
 });

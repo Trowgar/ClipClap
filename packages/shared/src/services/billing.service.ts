@@ -89,7 +89,8 @@ export async function createCheckoutSession(
 
 // Webhook handler — routes Stripe lifecycle events that mutate User state:
 // DUNNING on payment failure, ACTIVE on payment success, 7-day grace on
-// cancellation, plan/cycle changes on subscription updates.
+// cancellation, plan/cycle changes on subscription updates, and top-up
+// minute credits on one-time payment completions.
 export async function handleWebhook(
   body: string,
   signature: string
@@ -103,11 +104,23 @@ export async function handleWebhook(
   switch (event.type) {
     case "checkout.session.completed": {
       const sess = event.data.object as Stripe.Checkout.Session;
-      // Top-up purchases use mode="payment"; subscriptions are mode="subscription".
-      if (sess.mode !== "subscription") break;
-
       const userId = sess.metadata?.userId;
       if (!userId) break;
+
+      // Top-up: one-time payment crediting minutes.
+      if (sess.mode === "payment") {
+        const minutes = Number(sess.metadata?.minutes ?? "0");
+        if (minutes > 0) {
+          // Dynamic import avoids a circular dependency: topup.service
+          // imports getStripe from this module.
+          const { creditTopupMinutes } = await import("./topup.service");
+          await creditTopupMinutes(userId, minutes);
+        }
+        break;
+      }
+
+      // Subscription completion: activate plan with current period end.
+      if (sess.mode !== "subscription") break;
 
       const subscriptionId =
         typeof sess.subscription === "string"
