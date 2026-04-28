@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { topupService } from "@clipfast/shared";
+import { topupService, TopupRequiresSubscriptionError } from "@clipfast/shared";
 
 const VALID_PACKS = ["SMALL", "LARGE"] as const;
 type ValidPack = (typeof VALID_PACKS)[number];
@@ -31,8 +31,12 @@ export async function POST(req: NextRequest) {
     );
     return NextResponse.json({ url });
   } catch (e) {
-    // Server-class: missing customer, missing env, Stripe API failure, etc.
-    // Log internals, return a generic message so we don't leak infra details.
+    // Client-class: user must subscribe before buying top-ups.
+    if (e instanceof TopupRequiresSubscriptionError) {
+      return NextResponse.json({ error: e.message }, { status: 400 });
+    }
+    // Server-class: missing env, Stripe API failure, etc. Log internals,
+    // return a generic message so we don't leak infra details.
     console.error("topup/route.ts:", e);
     return NextResponse.json(
       { error: "Failed to create top-up checkout. Please try again later." },

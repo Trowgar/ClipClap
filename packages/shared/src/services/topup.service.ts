@@ -2,6 +2,15 @@ import { prisma } from "../lib/prisma";
 import { TOPUP_PACKS, type TopupPack } from "../config/plans";
 import { getStripe } from "./billing.service";
 
+// 4xx-class: user must have an active Stripe customer (i.e. has subscribed
+// at some point). Safe to surface as "subscribe first" guidance.
+export class TopupRequiresSubscriptionError extends Error {
+  constructor() {
+    super("Subscribe to a plan before purchasing top-up minutes.");
+    this.name = "TopupRequiresSubscriptionError";
+  }
+}
+
 /**
  * Create a Stripe Checkout session for a one-time top-up minute pack.
  *
@@ -18,7 +27,7 @@ export async function createTopupCheckoutSession(
 ): Promise<string> {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
   if (!user.stripeCustomerId) {
-    throw new Error("User has no Stripe customer; subscribe to a plan first");
+    throw new TopupRequiresSubscriptionError();
   }
   const stripe = getStripe();
   const priceId = process.env[TOPUP_PACKS[pack].envKey];
@@ -43,6 +52,12 @@ export async function createTopupCheckoutSession(
 /**
  * Increment the user's top-up minute balance. Called from the Stripe webhook
  * when a payment-mode checkout session completes.
+ *
+ * KNOWN ISSUE (deferred to Plan 2): re-delivered webhook events would credit
+ * minutes twice. Proper fix is a WebhookEvent { stripeEventId @unique } table
+ * for full idempotency across all event handlers, which is Plan 2 scope. In
+ * practice Stripe re-delivers terminal events very rarely; the blast radius
+ * here is bounded (extra minutes credited, never extra charges).
  */
 export async function creditTopupMinutes(
   userId: string,

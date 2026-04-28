@@ -157,8 +157,10 @@ export async function handleWebhook(
       if (!subscriptionId) break;
       // Don't immediately cancel — Stripe Smart Retries reattempts at
       // days 3/7/12. We only flip to DUNNING and stamp dunningSince.
+      // Idempotent: only stamp dunningSince on the FIRST failure so a
+      // re-delivered event doesn't re-stamp "yesterday" as "today".
       await prisma.user.updateMany({
-        where: { stripeSubscriptionId: subscriptionId },
+        where: { stripeSubscriptionId: subscriptionId, dunningSince: null },
         data: {
           subscriptionStatus: "DUNNING",
           dunningSince: new Date(),
@@ -194,10 +196,12 @@ export async function handleWebhook(
     case "customer.subscription.deleted": {
       const subscription = event.data.object as Stripe.Subscription;
       // 7-day grace: clips remain accessible read-only until B3 cleanup job.
+      // Idempotent: only set graceEndsAt on the FIRST delete event so a
+      // re-delivered event doesn't push the deadline further into the future.
       const graceEnd = new Date();
       graceEnd.setDate(graceEnd.getDate() + 7);
       await prisma.user.updateMany({
-        where: { stripeSubscriptionId: subscription.id },
+        where: { stripeSubscriptionId: subscription.id, graceEndsAt: null },
         data: {
           subscriptionStatus: "CANCELED_GRACE",
           graceEndsAt: graceEnd,

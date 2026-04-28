@@ -214,7 +214,7 @@ describe("billing.service — handleWebhook", () => {
 
     expect(prisma.user.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { stripeSubscriptionId: "sub_1" },
+        where: { stripeSubscriptionId: "sub_1", dunningSince: null },
         data: expect.objectContaining({
           subscriptionStatus: "DUNNING",
           dunningSince: expect.any(Date),
@@ -264,7 +264,7 @@ describe("billing.service — handleWebhook", () => {
     await handleWebhook("body", "sig");
 
     const callArgs = (prisma.user.updateMany as any).mock.calls[0][0];
-    expect(callArgs.where).toEqual({ stripeSubscriptionId: "sub_1" });
+    expect(callArgs.where).toEqual({ stripeSubscriptionId: "sub_1", graceEndsAt: null });
     expect(callArgs.data.subscriptionStatus).toBe("CANCELED_GRACE");
     const grace = callArgs.data.graceEndsAt as Date;
     const expectedMin = before + 7 * 24 * 60 * 60 * 1000 - 1000;
