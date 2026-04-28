@@ -16,6 +16,10 @@ import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { useRouter } from "next/navigation";
 
+// Best-effort client-side duration probe. The browser only decodes codecs it
+// supports (H.264, WebM); HEVC/AV1/MKV may resolve null and bypass the
+// submit-time max-source-duration check. Server-side enforcement requires
+// ffprobe in the worker post-DOWNLOAD step (TODO in apps/worker, Plan 3 scope).
 async function probeVideoDuration(file: File): Promise<number | null> {
   return new Promise((resolve) => {
     const url = URL.createObjectURL(file);
@@ -187,7 +191,10 @@ export function UploadZone() {
           value={url}
           onChange={(e) => {
             setUrl(e.target.value);
-            if (e.target.value) setFile(null);
+            // Switching to a URL invalidates the previous file's probed duration.
+            // Use setFileAndProbe so sourceDurationSec is reset, otherwise the
+            // server would receive a stale duration that doesn't belong to the URL.
+            if (e.target.value) setFileAndProbe(null);
           }}
         />
       </div>

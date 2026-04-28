@@ -10,6 +10,10 @@ import type { Readable } from "stream";
 
 const execFileAsync = promisify(execFile);
 
+// TODO(plan-3): after download, ffprobe the file to get authoritative
+// sourceDurationSec, persist on Job, and re-evaluate maxSourceDurationMinutes.
+// Without this, browser-undecodable codecs (HEVC/AV1/MKV) bypass the submit-time
+// 180-min cap because the client probe in upload-zone.tsx returns null.
 export async function downloadVideo(
   sourceUrl?: string,
   sourceKey?: string

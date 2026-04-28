@@ -87,6 +87,7 @@ model Job {
   @@index([userId])
   @@index([status])
   @@index([userId, status])
+  @@index([userId, createdAt])
   @@map("jobs")
 }
 

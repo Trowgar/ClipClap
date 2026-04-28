@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
     where: { id: session.user.id },
   });
 
-  if (user.plan === "NONE") {
+  if (user.plan === "NONE" || user.subscriptionStatus === "NONE") {
     return NextResponse.json(
       { error: "Active subscription required to upload" },
       { status: 402 }
