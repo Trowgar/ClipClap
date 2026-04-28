@@ -48,10 +48,15 @@ export const api = {
   },
   billing: {
     subscription: () => fetchApi<SubscriptionData>("/api/billing/subscription"),
-    checkout: (plan: string) =>
+    checkout: (plan: string, cycle: string) =>
       fetchApi<{ url: string }>("/api/billing/checkout", {
         method: "POST",
-        body: JSON.stringify({ plan }),
+        body: JSON.stringify({ plan, cycle }),
+      }),
+    topup: (pack: "SMALL" | "LARGE") =>
+      fetchApi<{ url: string }>("/api/billing/topup", {
+        method: "POST",
+        body: JSON.stringify({ pack }),
       }),
   },
 };
@@ -95,8 +100,10 @@ export interface SubscriptionData {
   } | null;
   usage: {
     plan: string;
-    videosUsed: number;
-    videosLimit: number;
-    maxDurationMinutes: number;
+    billingCycle: string | null;
+    minutesUsed: number;
+    minutesLimit: number;
+    topUpMinutesRemaining: number;
+    storageClipsLimit: number;
   };
 }
