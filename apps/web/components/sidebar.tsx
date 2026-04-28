@@ -15,8 +15,9 @@ interface SidebarProps {
     avatarUrl: string | null;
   };
   usage: {
-    used: number;
-    limit: number;
+    minutesUsed: number;
+    minutesLimit: number;
+    topUpRemaining: number;
     plan: string;
   };
 }
@@ -75,13 +76,20 @@ export function Sidebar({ user, usage }: SidebarProps) {
 
       {/* Usage */}
       <div className="p-3">
-        <UsageBar used={usage.used} limit={usage.limit} plan={usage.plan} />
-        <Link
-          href="/dashboard/plans"
-          className="mt-2 block w-full rounded-md border border-border py-1.5 text-center text-xs font-medium transition-colors hover:bg-accent"
-        >
-          Upgrade
-        </Link>
+        <UsageBar
+          used={usage.minutesUsed}
+          limit={usage.minutesLimit}
+          topup={usage.topUpRemaining}
+          plan={usage.plan}
+        />
+        {usage.plan !== "MAX" && (
+          <Link
+            href="/dashboard/plans"
+            className="mt-2 block w-full rounded-md border border-border py-1.5 text-center text-xs font-medium transition-colors hover:bg-accent"
+          >
+            Upgrade
+          </Link>
+        )}
       </div>
 
       <Separator />
