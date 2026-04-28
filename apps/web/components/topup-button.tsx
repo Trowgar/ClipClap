@@ -2,9 +2,11 @@
 
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
+import type { TopupPack } from "@clipfast/shared";
+import { api } from "@/lib/api";
 
 interface TopupButtonProps {
-  pack: "SMALL" | "LARGE";
+  pack: TopupPack;
   minutes: number;
   priceUsd: number;
 }
@@ -17,14 +19,8 @@ export function TopupButton({ pack, minutes, priceUsd }: TopupButtonProps) {
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch("/api/billing/topup", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pack }),
-      });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error ?? "Failed to start checkout");
-      if (data.url) window.location.href = data.url;
+      const { url } = await api.billing.topup(pack);
+      if (url) window.location.href = url;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Top-up failed");
     } finally {

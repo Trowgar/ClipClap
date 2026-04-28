@@ -1,3 +1,6 @@
+import type { Plan, BillingCycle } from "@prisma/client";
+import type { TopupPack } from "@clipfast/shared";
+
 const BASE = "";
 
 async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
@@ -48,12 +51,15 @@ export const api = {
   },
   billing: {
     subscription: () => fetchApi<SubscriptionData>("/api/billing/subscription"),
-    checkout: (plan: string, cycle: string) =>
+    checkout: (
+      plan: Exclude<Plan, "NONE">,
+      cycle: BillingCycle
+    ) =>
       fetchApi<{ url: string }>("/api/billing/checkout", {
         method: "POST",
         body: JSON.stringify({ plan, cycle }),
       }),
-    topup: (pack: "SMALL" | "LARGE") =>
+    topup: (pack: TopupPack) =>
       fetchApi<{ url: string }>("/api/billing/topup", {
         method: "POST",
         body: JSON.stringify({ pack }),

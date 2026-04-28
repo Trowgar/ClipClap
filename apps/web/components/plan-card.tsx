@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import type { Plan, BillingCycle } from "@prisma/client";
+import { api } from "@/lib/api";
 
 interface CycleOption {
   label: string;
@@ -43,14 +44,8 @@ export function PlanCard({
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch("/api/billing/checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan: planKey, cycle: selectedCycle }),
-      });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error ?? "Failed to start checkout");
-      if (data.url) window.location.href = data.url;
+      const { url } = await api.billing.checkout(planKey, selectedCycle);
+      if (url) window.location.href = url;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Checkout failed");
     } finally {
