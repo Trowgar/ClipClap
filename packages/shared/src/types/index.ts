@@ -17,6 +17,7 @@ export interface CreateJobInput {
   originalFilename?: string;
   subtitles?: boolean;
   subtitlePreset?: string;
+  sourceDurationSec?: number;
 }
 
 export interface TrimClipInput {
