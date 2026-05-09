@@ -18,6 +18,7 @@ export async function runFinalizeStage(
       where: { id: payload.jobId },
       data: {
         status: "DONE",
+        error: null,
         ...buildJobCostTelemetry({
           sourceDurationSec: job.sourceDurationSec,
           processingStartedAt,

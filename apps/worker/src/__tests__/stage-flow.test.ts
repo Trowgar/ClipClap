@@ -44,6 +44,7 @@ vi.mock("../processors/analyze", () => ({
 
 import { runAnalyzeStage } from "../stages/analyze";
 import { runDownloadStage } from "../stages/download";
+import { runFinalizeStage } from "../stages/finalize";
 import { runTranscribeStage } from "../stages/transcribe";
 
 describe("stage handlers", () => {
@@ -144,6 +145,30 @@ describe("stage handlers", () => {
       jobId: "job1",
       userId: "u1",
       mode: "clips",
+    });
+  });
+
+  it("finalize clears stale job errors after successful retries", async () => {
+    const now = new Date("2026-05-09T22:00:00.000Z");
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      sourceDurationSec: 60,
+      processingStartedAt: now,
+      transcribeMs: 1000,
+      analyzeMs: 1000,
+      renderMs: 1000,
+      clipsGenerated: 1,
+      error: "No highlights found in the video",
+    });
+
+    await runFinalizeStage({ jobId: "job1", userId: "u1" });
+
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: "job1" },
+      data: expect.objectContaining({
+        status: "DONE",
+        error: null,
+      }),
     });
   });
 });
