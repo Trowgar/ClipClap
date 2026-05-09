@@ -17,7 +17,7 @@ RUN npx prisma generate
 FROM deps AS development
 COPY . .
 WORKDIR /app/apps/web
-CMD ["npx", "next", "dev", "--hostname", "0.0.0.0"]
+CMD ["npx", "next", "dev", "--turbo", "--hostname", "0.0.0.0"]
 
 # --- Build ---
 FROM deps AS build

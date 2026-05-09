@@ -1,6 +1,5 @@
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { ManageBillingButton } from "@/components/manage-billing-button";
 
 export default async function SettingsPage() {
   const session = await auth();
@@ -39,14 +38,6 @@ export default async function SettingsPage() {
         </div>
       </div>
 
-      {/* Billing */}
-      <div className="space-y-4">
-        <h2 className="text-lg font-semibold">Billing</h2>
-        <p className="text-sm text-muted-foreground">
-          Update your payment method or cancel your subscription.
-        </p>
-        <ManageBillingButton />
-      </div>
     </div>
   );
 }

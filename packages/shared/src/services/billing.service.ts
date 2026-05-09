@@ -228,6 +228,65 @@ export async function handleWebhook(
   }
 }
 
+export interface InvoiceRow {
+  id: string;
+  number: string | null;
+  createdAt: string;
+  description: string;
+  amount: number;
+  currency: string;
+  status: string;
+  invoicePdf: string | null;
+  hostedUrl: string | null;
+}
+
+export interface InvoicePage {
+  invoices: InvoiceRow[];
+  hasMore: boolean;
+  nextCursor: string | null;
+}
+
+export async function listInvoices(
+  userId: string,
+  opts: { cursor?: string; limit?: number } = {}
+): Promise<InvoicePage> {
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+  if (!user.stripeCustomerId) {
+    return { invoices: [], hasMore: false, nextCursor: null };
+  }
+
+  const limit = opts.limit ?? 20;
+  const stripe = getStripe();
+  const list = await stripe.invoices.list({
+    customer: user.stripeCustomerId,
+    limit,
+    ...(opts.cursor ? { starting_after: opts.cursor } : {}),
+  });
+
+  const invoices = list.data.map((inv) => {
+    const firstLine = inv.lines.data[0];
+    const description =
+      firstLine?.description ?? inv.description ?? "Charge";
+    return {
+      id: inv.id,
+      number: inv.number,
+      createdAt: new Date(inv.created * 1000).toISOString(),
+      description,
+      amount: inv.total / 100,
+      currency: inv.currency.toUpperCase(),
+      status: inv.status ?? "unknown",
+      invoicePdf: inv.invoice_pdf ?? null,
+      hostedUrl: inv.hosted_invoice_url ?? null,
+    };
+  });
+
+  return {
+    invoices,
+    hasMore: list.has_more,
+    nextCursor: list.has_more ? invoices[invoices.length - 1]?.id ?? null : null,
+  };
+}
+
 export async function getSubscription(userId: string) {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
 

@@ -1,5 +1,5 @@
 import type { Plan, BillingCycle } from "@prisma/client";
-import type { TopupPack } from "@clipfast/shared";
+import type { TopupPack, InvoicePage } from "@clipfast/shared";
 
 const BASE = "";
 
@@ -68,6 +68,12 @@ export const api = {
       fetchApi<{ url: string }>("/api/billing/portal", {
         method: "POST",
       }),
+    invoices: (cursor?: string) =>
+      fetchApi<InvoicePage>(
+        cursor
+          ? `/api/billing/invoices?after=${encodeURIComponent(cursor)}`
+          : "/api/billing/invoices"
+      ),
   },
 };
 

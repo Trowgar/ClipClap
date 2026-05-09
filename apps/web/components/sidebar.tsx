@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, CreditCard, Settings } from "lucide-react";
+import { Home, CreditCard, Receipt, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { UsageBar } from "./usage-bar";
 import { UserNav } from "./user-nav";
@@ -25,6 +25,7 @@ interface SidebarProps {
 const navItems = [
   { href: "/dashboard", label: "Home", icon: Home },
   { href: "/dashboard/plans", label: "Plans", icon: CreditCard },
+  { href: "/dashboard/billing", label: "Billing", icon: Receipt },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },
 ];
 

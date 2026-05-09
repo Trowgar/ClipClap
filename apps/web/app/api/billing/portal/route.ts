@@ -19,7 +19,7 @@ export async function POST(req: NextRequest) {
   }
 
   const stripe = billingService.getStripe();
-  const origin = req.nextUrl.origin;
+  const origin = process.env.NEXTAUTH_URL ?? req.nextUrl.origin;
   try {
     const portal = await stripe.billingPortal.sessions.create({
       customer: user.stripeCustomerId,

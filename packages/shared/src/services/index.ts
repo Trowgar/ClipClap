@@ -6,4 +6,5 @@ export * as topupService from "./topup.service";
 export * from "./usage.service";
 // Named re-exports for error classes that callers need to instanceof-check
 export { UnsupportedPlanCycleError } from "./billing.service";
+export type { InvoiceRow, InvoicePage } from "./billing.service";
 export { TopupRequiresSubscriptionError } from "./topup.service";

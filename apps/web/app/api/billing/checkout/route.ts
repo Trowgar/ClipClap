@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid billing cycle" }, { status: 400 });
   }
 
-  const origin = req.nextUrl.origin;
+  const origin = process.env.NEXTAUTH_URL ?? req.nextUrl.origin;
   try {
     const url = await billingService.createCheckoutSession(
       session.user.id,

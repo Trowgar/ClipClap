@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const origin = req.nextUrl.origin;
+  const origin = process.env.NEXTAUTH_URL ?? req.nextUrl.origin;
   try {
     const url = await topupService.createTopupCheckoutSession(
       session.user.id,

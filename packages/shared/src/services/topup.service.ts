@@ -39,6 +39,7 @@ export async function createTopupCheckoutSession(
     line_items: [{ price: priceId, quantity: 1 }],
     success_url: successUrl,
     cancel_url: cancelUrl,
+    invoice_creation: { enabled: true },
     metadata: {
       userId,
       topupPack: pack,

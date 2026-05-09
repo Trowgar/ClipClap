@@ -18,6 +18,7 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
       target: ${TARGET:-development}
+    command: ["npx", "next", "dev", "--turbo", "--hostname", "0.0.0.0"]
     expose:
       - "3000"
     depends_on:
