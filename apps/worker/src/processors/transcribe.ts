@@ -15,19 +15,20 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 export async function transcribeVideo(
   videoPath: string
 ): Promise<TranscriptionResult> {
-  // Extract audio with ffmpeg
-  const audioPath = join(tmpdir(), `clipfast-audio-${randomUUID()}.wav`);
+  const audioPath = join(tmpdir(), `clipfast-audio-${randomUUID()}.mp3`);
 
   await execFileAsync("ffmpeg", [
     "-i",
     videoPath,
     "-vn",
     "-acodec",
-    "pcm_s16le",
+    "libmp3lame",
     "-ar",
     "16000",
     "-ac",
     "1",
+    "-b:a",
+    "32k",
     audioPath,
     "-y",
   ]);
