@@ -246,6 +246,7 @@ describe("billing.service — handleWebhook", () => {
         data: expect.objectContaining({
           subscriptionStatus: "ACTIVE",
           dunningSince: null,
+          topUpMinutesRemaining: 0,
           currentPeriodEnd: new Date(1782000000 * 1000),
         }),
       })

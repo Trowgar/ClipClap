@@ -142,6 +142,7 @@ export async function handleWebhook(
           stripeSubscriptionId: subscriptionId,
           dunningSince: null,
           graceEndsAt: null,
+          topUpMinutesRemaining: 0,
           currentPeriodEnd: new Date(subscription.current_period_end * 1000),
         },
       });
@@ -187,6 +188,7 @@ export async function handleWebhook(
         data: {
           subscriptionStatus: "ACTIVE",
           dunningSince: null,
+          topUpMinutesRemaining: 0,
           currentPeriodEnd: new Date(subscription.current_period_end * 1000),
         },
       });

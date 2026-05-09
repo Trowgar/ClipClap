@@ -5,6 +5,7 @@ import { transcribeVideo } from "./processors/transcribe";
 import { analyzeHighlights } from "./processors/analyze";
 import { cutClips, trimClipFile } from "./processors/cut";
 import { burnSubtitles } from "./processors/subtitles";
+import { buildJobCostTelemetry } from "./cost-telemetry";
 import { unlink } from "fs/promises";
 import { randomUUID } from "crypto";
 
@@ -13,6 +14,11 @@ export async function processVideoJob(
   userId: string
 ): Promise<void> {
   const tempFiles: string[] = [];
+  const processingStartedAt = new Date();
+  let transcribeMs = 0;
+  let analyzeMs = 0;
+  let renderMs = 0;
+  let clipsGenerated = 0;
 
   const cleanup = async () => {
     for (const f of tempFiles) {
@@ -41,19 +47,31 @@ export async function processVideoJob(
 
     // Step 2: Transcribe
     await jobService.updateJobStatus(jobId, "TRANSCRIBING");
+    const transcribeStartedAt = Date.now();
     const transcription: TranscriptionResult =
       await transcribeVideo(videoPath);
+    transcribeMs = Date.now() - transcribeStartedAt;
+    const inferredSourceDurationSec =
+      job.sourceDurationSec ?? inferDurationFromSegments(transcription);
     await jobService.updateJobStatus(jobId, "TRANSCRIBING", {
       transcription: transcription.text,
     });
+    if (!job.sourceDurationSec && inferredSourceDurationSec > 0) {
+      await prisma.job.update({
+        where: { id: jobId },
+        data: { sourceDurationSec: inferredSourceDurationSec },
+      });
+    }
     console.log(
       `[${jobId}] Transcribed: ${transcription.segments.length} segments`
     );
 
     // Step 3: Analyze
     await jobService.updateJobStatus(jobId, "ANALYZING");
+    const analyzeStartedAt = Date.now();
     const highlights: Highlight[] =
       await analyzeHighlights(transcription);
+    analyzeMs = Date.now() - analyzeStartedAt;
     await jobService.updateJobStatus(jobId, "ANALYZING", {
       highlights,
     });
@@ -61,6 +79,7 @@ export async function processVideoJob(
 
     // Step 4: Cut + Subtitles + Upload
     await jobService.updateJobStatus(jobId, "CUTTING");
+    const renderStartedAt = Date.now();
 
     for (const highlight of highlights) {
       // Cut the clip
@@ -104,12 +123,31 @@ export async function processVideoJob(
           expiresAt: clipExpiresAt,
         },
       });
+      clipsGenerated += 1;
 
       console.log(`[${jobId}] Clip uploaded: ${highlight.title}`);
     }
+    renderMs = Date.now() - renderStartedAt;
 
     // Done
-    await jobService.updateJobStatus(jobId, "DONE");
+    const processingEndedAt = new Date();
+    await prisma.job.update({
+      where: { id: jobId },
+      data: {
+        status: "DONE",
+        ...buildJobCostTelemetry({
+          sourceDurationSec: inferredSourceDurationSec,
+          processingStartedAt,
+          processingEndedAt,
+          transcribeMs,
+          analyzeMs,
+          renderMs,
+          clipsGenerated,
+          transcriptionModel:
+            process.env.OPENAI_TRANSCRIPTION_MODEL || "whisper-1",
+        }),
+      },
+    });
     console.log(`[${jobId}] Job complete — ${highlights.length} clips`);
   } catch (error) {
     const message =
@@ -120,6 +158,14 @@ export async function processVideoJob(
   } finally {
     await cleanup();
   }
+}
+
+function inferDurationFromSegments(transcription: TranscriptionResult): number {
+  const lastEnd = transcription.segments.reduce(
+    (max, segment) => Math.max(max, segment.end),
+    0
+  );
+  return Math.ceil(lastEnd);
 }
 
 export interface TrimClipJobData {

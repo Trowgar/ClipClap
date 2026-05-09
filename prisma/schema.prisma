@@ -39,27 +39,27 @@ enum BillingCycle {
 }
 
 model User {
-  id                    String   @id @default(cuid())
-  email                 String?  @unique
+  id                    String             @id @default(cuid())
+  email                 String?            @unique
   emailVerified         DateTime?
   password              String?
-  telegramId            String?  @unique
+  telegramId            String?            @unique
   name                  String?
   image                 String?
-  plan                  Plan     @default(NONE)
-  stripeCustomerId      String?  @unique
-  stripeSubscriptionId  String?  @unique
-  subscriptionStatus     SubscriptionStatus @default(NONE)
-  billingCycle           BillingCycle?
-  currentPeriodEnd       DateTime?
-  dunningSince           DateTime?
-  graceEndsAt            DateTime?
-  topUpMinutesRemaining  Int                @default(0)
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  plan                  Plan               @default(NONE)
+  stripeCustomerId      String?            @unique
+  stripeSubscriptionId  String?            @unique
+  subscriptionStatus    SubscriptionStatus @default(NONE)
+  billingCycle          BillingCycle?
+  currentPeriodEnd      DateTime?
+  dunningSince          DateTime?
+  graceEndsAt           DateTime?
+  topUpMinutesRemaining Int                @default(0)
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
 
-  jobs    Job[]
-  clips   Clip[]
+  jobs     Job[]
+  clips    Clip[]
   accounts Account[]
   sessions Session[]
 
@@ -67,20 +67,31 @@ model User {
 }
 
 model Job {
-  id               String    @id @default(cuid())
-  userId           String
-  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  sourceUrl        String?
-  sourceKey        String?
-  originalFilename String?
-  status           JobStatus @default(PENDING)
-  error            String?
-  sourceDurationSec Int?
-  transcription    String?   @db.Text
-  highlights       Json?
-  subtitles        Boolean   @default(true)
-  subtitlePreset   String?   @default("tiktok")
-  createdAt        DateTime  @default(now())
+  id                            String    @id @default(cuid())
+  userId                        String
+  user                          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sourceUrl                     String?
+  sourceKey                     String?
+  originalFilename              String?
+  status                        JobStatus @default(PENDING)
+  error                         String?
+  sourceDurationSec             Int?
+  processingStartedAt           DateTime?
+  processingEndedAt             DateTime?
+  processingMs                  Int?
+  transcribeMs                  Int?
+  analyzeMs                     Int?
+  renderMs                      Int?
+  clipsGenerated                Int       @default(0)
+  estimatedTranscriptionCostUsd Float?
+  estimatedAnalysisCostUsd      Float?
+  estimatedComputeCostUsd       Float?
+  estimatedTotalCostUsd         Float?
+  transcription                 String?   @db.Text
+  highlights                    Json?
+  subtitles                     Boolean   @default(true)
+  subtitlePreset                String?   @default("tiktok")
+  createdAt                     DateTime  @default(now())
 
   clips Clip[]
 
@@ -92,24 +103,24 @@ model Job {
 }
 
 model Clip {
-  id             String  @id @default(cuid())
+  id             String    @id @default(cuid())
   jobId          String
-  job            Job     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  job            Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
   userId         String
-  user           User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   title          String
   storageKey     String
   duration       Int
   startTime      Float
   endTime        Float
-  subtitles      Boolean @default(true)
+  subtitles      Boolean   @default(true)
   subtitlePreset String?
   parentClipId   String?
-  parentClip     Clip?   @relation("ClipRetrim", fields: [parentClipId], references: [id])
-  retrims        Clip[]  @relation("ClipRetrim")
+  parentClip     Clip?     @relation("ClipRetrim", fields: [parentClipId], references: [id])
+  retrims        Clip[]    @relation("ClipRetrim")
   expiresAt      DateTime?
   deletedAt      DateTime?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
 
   @@index([jobId])
   @@index([userId])
