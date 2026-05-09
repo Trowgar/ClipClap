@@ -5,6 +5,7 @@
     "rootDir": "./src",
     "module": "CommonJS",
     "moduleResolution": "node",
+    "baseUrl": ".",
     "paths": {
       "@clipfast/shared": ["../../packages/shared/dist"],
       "@clipfast/shared/*": ["../../packages/shared/dist/*"]

@@ -48,9 +48,10 @@ describe("API Integration Tests", () => {
 
     it("landing page contains key sections", async () => {
       const { text } = await get("/");
-      expect(text).toContain("Long video in");
+      expect(text).toContain("Stop scrubbing");
       expect(text).toContain("Telegram");
       expect(text).toContain("Simple pricing");
+      expect(text).toContain("Get Plus");
     });
 
     it("login page contains auth elements", async () => {

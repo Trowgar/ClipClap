@@ -9,6 +9,18 @@ const segments: WhisperSegment[] = [
   { start: 50.0, end: 55.0, text: "This is outside the clip range" },
 ];
 
+function styleLine(ass: string): string {
+  const line = ass
+    .split("\n")
+    .find((value) => value.startsWith("Style: Default,"));
+  if (!line) throw new Error("Missing Default style line");
+  return line;
+}
+
+function styleFields(ass: string): string[] {
+  return styleLine(ass).replace("Style: ", "").split(",");
+}
+
 describe("generateAss", () => {
   it("generates valid ASS with tiktok preset", () => {
     const ass = generateAss(segments, 10.0, 25.0, "tiktok");
@@ -17,7 +29,7 @@ describe("generateAss", () => {
     expect(ass).toContain("PlayResX: 1080");
     expect(ass).toContain("PlayResY: 1920");
     expect(ass).toContain("Style: Default,Arial,18");
-    expect(ass).toContain("Bold,-1");
+    expect(styleFields(ass)[7]).toBe("-1");
   });
 
   it("adjusts segment times relative to clip start", () => {
@@ -46,7 +58,7 @@ describe("generateAss", () => {
   it("applies minimal preset style", () => {
     const ass = generateAss(segments, 10.0, 25.0, "minimal");
 
-    expect(ass).toContain("Bold,0"); // not bold
+    expect(styleFields(ass)[7]).toBe("0"); // not bold
     expect(ass).toContain(",14,"); // smaller font
   });
 });

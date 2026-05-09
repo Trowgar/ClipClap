@@ -4,10 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "npm run build -w @clipfast/shared && tsc",
     "start": "node dist/index.js",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
+    "test": "vitest run --root ../.. apps/worker/src",
+    "test:watch": "vitest --root ../.. apps/worker/src"
   },
   "dependencies": {
     "@clipfast/shared": "*",

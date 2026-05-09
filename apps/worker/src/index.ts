@@ -1,6 +1,6 @@
 import { Worker } from "bullmq";
 import { getRedis, VIDEO_QUEUE_NAME } from "@clipfast/shared";
-import { processVideoJob } from "./pipeline";
+import { processTrimClipJob, processVideoJob } from "./pipeline";
 
 console.log("ClipFast Worker starting...");
 
@@ -13,7 +13,9 @@ const worker = new Worker(
       await processVideoJob(job.data.jobId, job.data.userId);
     }
 
-    // trim-clip handled in Phase 2 plan (frontend + billing)
+    if (job.name === "trim-clip") {
+      await processTrimClipJob(job.data);
+    }
   },
   {
     connection: getRedis(),

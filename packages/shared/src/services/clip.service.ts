@@ -83,14 +83,17 @@ export async function trimClip(input: TrimClipInput): Promise<Clip> {
     },
   });
 
+  const relativeStart = Math.max(0, input.start - original.startTime);
+  const relativeEnd = Math.max(relativeStart, input.end - original.startTime);
+
   // Enqueue a trim job
   await getVideoQueue().add("trim-clip", {
     clipId: newClip.id,
     originalClipStorageKey: original.storageKey,
     jobId: original.jobId,
     userId: input.userId,
-    start: input.start,
-    end: input.end,
+    start: relativeStart,
+    end: relativeEnd,
     subtitles: input.subtitles,
     subtitlePreset: input.subtitlePreset,
   });

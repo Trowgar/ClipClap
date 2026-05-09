@@ -52,6 +52,39 @@ export async function cutClips(
   return results;
 }
 
+export async function trimClipFile(
+  videoPath: string,
+  start: number,
+  end: number
+): Promise<string> {
+  const clipPath = join(tmpdir(), `clipfast-trim-${randomUUID()}.mp4`);
+
+  await execFileAsync("ffmpeg", [
+    "-ss",
+    String(start),
+    "-to",
+    String(end),
+    "-i",
+    videoPath,
+    "-c:v",
+    "libx264",
+    "-preset",
+    "fast",
+    "-crf",
+    "23",
+    "-c:a",
+    "aac",
+    "-b:a",
+    "128k",
+    "-movflags",
+    "+faststart",
+    clipPath,
+    "-y",
+  ]);
+
+  return clipPath;
+}
+
 /**
  * Builds an FFmpeg filter to crop video to 9:16 vertical format.
  * Centers the crop on the original video.

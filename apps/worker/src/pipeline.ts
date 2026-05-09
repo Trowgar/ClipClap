@@ -3,7 +3,7 @@ import type { TranscriptionResult, Highlight } from "@clipfast/shared";
 import { downloadVideo } from "./processors/download";
 import { transcribeVideo } from "./processors/transcribe";
 import { analyzeHighlights } from "./processors/analyze";
-import { cutClips } from "./processors/cut";
+import { cutClips, trimClipFile } from "./processors/cut";
 import { burnSubtitles } from "./processors/subtitles";
 import { unlink } from "fs/promises";
 import { randomUUID } from "crypto";
@@ -117,6 +117,55 @@ export async function processVideoJob(
     console.error(`[${jobId}] Pipeline failed:`, message);
     await jobService.updateJobStatus(jobId, "FAILED", { error: message });
     throw error;
+  } finally {
+    await cleanup();
+  }
+}
+
+export interface TrimClipJobData {
+  clipId: string;
+  originalClipStorageKey: string;
+  jobId: string;
+  userId: string;
+  start: number;
+  end: number;
+}
+
+export async function processTrimClipJob(
+  data: TrimClipJobData
+): Promise<void> {
+  const tempFiles: string[] = [];
+
+  const cleanup = async () => {
+    for (const f of tempFiles) {
+      await unlink(f).catch(() => {});
+    }
+  };
+
+  try {
+    const originalPath = await downloadVideo(
+      undefined,
+      data.originalClipStorageKey
+    );
+    tempFiles.push(originalPath);
+
+    const trimmedPath = await trimClipFile(
+      originalPath,
+      data.start,
+      data.end
+    );
+    tempFiles.push(trimmedPath);
+
+    const storageKey = `clips/${data.userId}/${data.jobId}/${randomUUID()}.mp4`;
+    await uploadFile(storageKey, trimmedPath, "video/mp4");
+
+    await prisma.clip.update({
+      where: { id: data.clipId },
+      data: {
+        storageKey,
+        duration: Math.round(data.end - data.start),
+      },
+    });
   } finally {
     await cleanup();
   }

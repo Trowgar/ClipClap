@@ -17,37 +17,43 @@ const outputClips = [
 
 const plans = [
   {
-    name: "Free",
-    price: "$0",
-    period: "",
-    features: ["2 videos / week", "10 min max length", "Basic subtitles", "Watermark"],
-    cta: "Start free",
-    popular: false,
-  },
-  {
     name: "Starter",
     price: "$3",
     period: "/week",
     features: [
-      "10 videos / week",
-      "60 min max length",
-      "3 subtitle styles",
-      "No watermark",
+      "75 min / week",
+      "20 clips stored",
+      "7-day retention",
+      "TikTok subtitles",
     ],
     cta: "Get Starter",
+    popular: false,
+  },
+  {
+    name: "Plus",
+    price: "$29",
+    period: "/month",
+    features: [
+      "1,000 min / month",
+      "150 clips stored",
+      "30-day retention",
+      "3 subtitle styles",
+    ],
+    cta: "Get Plus",
     popular: true,
   },
   {
-    name: "Pro",
-    price: "$5",
-    period: "/week",
+    name: "Max",
+    price: "$89",
+    period: "/month",
     features: [
-      "30 videos / week",
-      "3 hour max length",
+      "3,500 min / month",
+      "1,000 clips stored",
+      "90-day retention",
       "All styles",
       "Priority processing",
     ],
-    cta: "Get Pro",
+    cta: "Get Max",
     popular: false,
   },
 ];
@@ -634,7 +640,7 @@ export default function LandingPage() {
               Simple pricing
             </h2>
             <p className="mt-2 text-sm text-neutral-500">
-              Start free. Upgrade when you need more.
+              Start lean, top up when needed, upgrade when volume becomes routine.
             </p>
           </FadeIn>
 
