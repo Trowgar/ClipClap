@@ -1,3 +1,22 @@
+x-worker-base: &worker-base
+  build:
+    context: .
+    dockerfile: apps/worker/Dockerfile
+    target: ${TARGET:-development}
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_started
+  env_file: .env
+  volumes:
+    - ./apps/worker:/app/apps/worker
+    - ./packages:/app/packages
+    - ./prisma:/app/prisma
+    - /app/node_modules
+    - /app/apps/worker/node_modules
+  restart: unless-stopped
+
 services:
   caddy:
     image: caddy:2-alpine
@@ -40,27 +59,45 @@ services:
       - /app/apps/web/.next
     restart: unless-stopped
 
-  worker:
-    build:
-      context: .
-      dockerfile: apps/worker/Dockerfile
-      target: ${TARGET:-development}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
-    env_file: .env
+  worker-download:
+    <<: *worker-base
     environment:
       - NODE_ENV=${NODE_ENV:-development}
+      - WORKER_ROLE=download
+      - DOWNLOAD_CONCURRENCY=4
       - CHOKIDAR_USEPOLLING=true
-    volumes:
-      - ./apps/worker:/app/apps/worker
-      - ./packages:/app/packages
-      - ./prisma:/app/prisma
-      - /app/node_modules
-      - /app/apps/worker/node_modules
-    restart: unless-stopped
+
+  worker-transcribe:
+    <<: *worker-base
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - WORKER_ROLE=transcribe
+      - TRANSCRIBE_CONCURRENCY=2
+      - CHOKIDAR_USEPOLLING=true
+
+  worker-analyze:
+    <<: *worker-base
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - WORKER_ROLE=analyze
+      - ANALYZE_CONCURRENCY=5
+      - CHOKIDAR_USEPOLLING=true
+
+  worker-render:
+    <<: *worker-base
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - WORKER_ROLE=render
+      - RENDER_CONCURRENCY=1
+      - CHOKIDAR_USEPOLLING=true
+
+  worker-finalize:
+    <<: *worker-base
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - WORKER_ROLE=finalize
+      - FINALIZE_CONCURRENCY=3
+      - CHOKIDAR_USEPOLLING=true
 
   postgres:
     image: postgres:16-alpine

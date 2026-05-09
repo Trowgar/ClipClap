@@ -1,34 +1,16 @@
-import { Worker } from "bullmq";
-import { getRedis, VIDEO_QUEUE_NAME } from "@clipfast/shared";
-import { processTrimClipJob, processVideoJob } from "./pipeline";
+import { createStageWorker } from "./worker-app";
 
-console.log("ClipFast Worker starting...");
+const role = process.env.WORKER_ROLE;
 
-const worker = new Worker(
-  VIDEO_QUEUE_NAME,
-  async (job) => {
-    console.log(`Processing job: ${job.id} (${job.name})`);
+console.log(`ClipClap worker starting with role=${role ?? "(empty)"}`);
 
-    if (job.name === "process-video") {
-      await processVideoJob(job.data.jobId, job.data.userId);
-    }
+const worker = createStageWorker(role);
 
-    if (job.name === "trim-clip") {
-      await processTrimClipJob(job.data);
-    }
-  },
-  {
-    connection: getRedis(),
-    concurrency: 2,
-  }
-);
+async function shutdown(signal: string) {
+  console.log(`${signal} received; closing worker`);
+  await worker.close();
+  process.exit(0);
+}
 
-worker.on("completed", (job) => {
-  console.log(`Job ${job.id} completed`);
-});
-
-worker.on("failed", (job, err) => {
-  console.error(`Job ${job?.id} failed:`, err.message);
-});
-
-console.log(`Worker listening on queue: ${VIDEO_QUEUE_NAME}`);
+process.on("SIGINT", () => void shutdown("SIGINT"));
+process.on("SIGTERM", () => void shutdown("SIGTERM"));

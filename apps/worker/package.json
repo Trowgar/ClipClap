@@ -4,6 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "dev:download": "WORKER_ROLE=download tsx watch src/index.ts",
+    "dev:transcribe": "WORKER_ROLE=transcribe tsx watch src/index.ts",
+    "dev:analyze": "WORKER_ROLE=analyze tsx watch src/index.ts",
+    "dev:render": "WORKER_ROLE=render tsx watch src/index.ts",
+    "dev:finalize": "WORKER_ROLE=finalize tsx watch src/index.ts",
     "build": "npm run build -w @clipfast/shared && tsc",
     "start": "node dist/index.js",
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
