@@ -38,6 +38,21 @@ enum BillingCycle {
   MONTHLY
 }
 
+enum JobStepName {
+  DOWNLOAD
+  TRANSCRIBE
+  ANALYZE
+  RENDER
+  FINALIZE
+}
+
+enum JobStepStatus {
+  PENDING
+  RUNNING
+  DONE
+  FAILED
+}
+
 model User {
   id                    String             @id @default(cuid())
   email                 String?            @unique
@@ -87,6 +102,9 @@ model Job {
   estimatedAnalysisCostUsd      Float?
   estimatedComputeCostUsd       Float?
   estimatedTotalCostUsd         Float?
+  sourceArtifactKey             String?
+  transcriptJson                Json?
+  renderManifest                Json?
   transcription                 String?   @db.Text
   highlights                    Json?
   subtitles                     Boolean   @default(true)
@@ -94,12 +112,34 @@ model Job {
   createdAt                     DateTime  @default(now())
 
   clips Clip[]
+  steps JobStep[]
 
   @@index([userId])
   @@index([status])
   @@index([userId, status])
   @@index([userId, createdAt])
   @@map("jobs")
+}
+
+model JobStep {
+  id         String        @id @default(cuid())
+  jobId      String
+  job        Job           @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  step       JobStepName
+  status     JobStepStatus @default(PENDING)
+  attempt    Int           @default(0)
+  inputJson  Json?
+  outputJson Json?
+  error      String?
+  startedAt  DateTime?
+  finishedAt DateTime?
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  @@unique([jobId, step])
+  @@index([status, step])
+  @@index([jobId])
+  @@map("job_steps")
 }
 
 model Clip {
