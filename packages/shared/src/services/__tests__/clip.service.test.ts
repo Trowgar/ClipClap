@@ -19,8 +19,8 @@ vi.mock("../../lib/prisma", () => ({
   },
 }));
 
-vi.mock("../../lib/queue", () => ({
-  getVideoQueue: () => ({
+vi.mock("../../lib/queues", () => ({
+  getStageQueue: () => ({
     add: mocks.queueAdd,
   }),
 }));
@@ -68,12 +68,13 @@ describe("clip.service — trimClip", () => {
       })
     );
     expect(mocks.queueAdd).toHaveBeenCalledWith(
-      "trim-clip",
+      "render",
       expect.objectContaining({
         clipId: "clip_new",
         originalClipStorageKey: "clips/u1/job1/original.mp4",
         start: 2.5,
         end: 15,
+        mode: "trim",
       })
     );
   });

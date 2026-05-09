@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma";
-import { getVideoQueue } from "../lib/queue";
+import { getStageQueue } from "../lib/queues";
 import type { Job, JobStatus, Prisma } from "@prisma/client";
 import type { CreateJobInput } from "../types";
 
@@ -17,7 +17,7 @@ export async function createJob(input: CreateJobInput): Promise<Job> {
     },
   });
 
-  await getVideoQueue().add("process-video", {
+  await getStageQueue("download").add("download", {
     jobId: job.id,
     userId: job.userId,
   });

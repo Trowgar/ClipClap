@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma";
 import { getPresignedDownloadUrl, deleteFile } from "../lib/r2";
-import { getVideoQueue } from "../lib/queue";
+import { getStageQueue } from "../lib/queues";
 import { computeClipExpiresAt } from "../lib/retention";
 import type { Clip } from "@prisma/client";
 import type { TrimClipInput } from "../types";
@@ -86,8 +86,7 @@ export async function trimClip(input: TrimClipInput): Promise<Clip> {
   const relativeStart = Math.max(0, input.start - original.startTime);
   const relativeEnd = Math.max(relativeStart, input.end - original.startTime);
 
-  // Enqueue a trim job
-  await getVideoQueue().add("trim-clip", {
+  await getStageQueue("render").add("render", {
     clipId: newClip.id,
     originalClipStorageKey: original.storageKey,
     jobId: original.jobId,
@@ -96,6 +95,7 @@ export async function trimClip(input: TrimClipInput): Promise<Clip> {
     end: relativeEnd,
     subtitles: input.subtitles,
     subtitlePreset: input.subtitlePreset,
+    mode: "trim",
   });
 
   return newClip;
