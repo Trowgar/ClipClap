@@ -1,15 +1,15 @@
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { jobService, userService, getPlanLimits } from "@clipfast/shared";
+import { projectService, userService, getPlanLimits } from "@clipfast/shared";
 import { UploadZone } from "@/components/upload-zone";
-import { JobList } from "@/components/job-list";
+import { RecentProjects } from "@/components/project-list";
 
 export default async function DashboardPage() {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
 
-  const [jobs, usage] = await Promise.all([
-    jobService.getUserJobs(session.user.id),
+  const [recentProjects, usage] = await Promise.all([
+    projectService.getRecentProjects(session.user.id),
     userService.getUsage(session.user.id),
   ]);
 
@@ -17,7 +17,7 @@ export default async function DashboardPage() {
   // upload zone renders disabled with a clear "subscribe first" banner.
   const limits = getPlanLimits(usage.plan, usage.billingCycle ?? "MONTHLY");
 
-  const serializedJobs = JSON.parse(JSON.stringify(jobs));
+  const serializedProjects = JSON.parse(JSON.stringify(recentProjects.projects));
 
   return (
     <div className="mx-auto max-w-3xl space-y-10">
@@ -38,10 +38,10 @@ export default async function DashboardPage() {
         availableSubtitlePresets={limits.subtitlePresets}
       />
 
-      <div>
-        <h2 className="mb-4 text-lg font-semibold">Recent Jobs</h2>
-        <JobList jobs={serializedJobs} />
-      </div>
+      <RecentProjects
+        projects={serializedProjects}
+        hasMore={recentProjects.hasMore}
+      />
     </div>
   );
 }
