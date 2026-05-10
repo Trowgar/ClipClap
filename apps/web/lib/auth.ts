@@ -2,8 +2,20 @@ import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import Credentials from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@auth/prisma-adapter";
-import { prisma } from "@clipfast/shared";
+import {
+  prisma,
+  TELEGRAM_AUTH_PROVIDER,
+  telegramAuthService,
+} from "@clipfast/shared";
 import bcrypt from "bcryptjs";
+import {
+  createTelegramProvider,
+  getTelegramProfileId,
+  type TelegramOidcProfile,
+} from "./telegram-provider";
+
+const telegramClientId = process.env.TELEGRAM_CLIENT_ID;
+const telegramClientSecret = process.env.TELEGRAM_CLIENT_SECRET;
 
 const nextAuth = NextAuth({
   adapter: PrismaAdapter(prisma),
@@ -12,6 +24,14 @@ const nextAuth = NextAuth({
       clientId: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
     }),
+    ...(telegramClientId && telegramClientSecret
+      ? [
+          createTelegramProvider({
+            clientId: telegramClientId,
+            clientSecret: telegramClientSecret,
+          }),
+        ]
+      : []),
     Credentials({
       name: "credentials",
       credentials: {
@@ -41,6 +61,14 @@ const nextAuth = NextAuth({
     signIn: "/login",
   },
   callbacks: {
+    async signIn({ account, profile }) {
+      if (account?.provider === TELEGRAM_AUTH_PROVIDER && profile) {
+        const telegramId = getTelegramProfileId(profile as TelegramOidcProfile);
+        await telegramAuthService.ensureTelegramAuthAccount(telegramId);
+      }
+
+      return true;
+    },
     jwt({ token, user }) {
       if (user) {
         token.id = user.id;
@@ -54,9 +82,33 @@ const nextAuth = NextAuth({
       return session;
     },
   },
+  events: {
+    async signIn({ user, account, profile }) {
+      await syncTelegramIdentity(user.id, account, profile);
+    },
+    async linkAccount({ user, account, profile }) {
+      await syncTelegramIdentity(user.id, account, profile);
+    },
+  },
 });
 
 export const handlers: typeof nextAuth.handlers = nextAuth.handlers;
 export const auth: typeof nextAuth.auth = nextAuth.auth;
 export const signIn: typeof nextAuth.signIn = nextAuth.signIn;
 export const signOut: typeof nextAuth.signOut = nextAuth.signOut;
+
+async function syncTelegramIdentity(
+  userId: string | undefined,
+  account: { provider?: string; providerAccountId?: string } | null | undefined,
+  profile: unknown
+) {
+  if (!userId || account?.provider !== TELEGRAM_AUTH_PROVIDER) return;
+
+  const telegramId = profile
+    ? getTelegramProfileId(profile as TelegramOidcProfile)
+    : account.providerAccountId;
+
+  if (!telegramId) return;
+
+  await telegramAuthService.syncUserTelegramId(userId, telegramId);
+}

@@ -53,6 +53,12 @@ enum JobStepStatus {
   FAILED
 }
 
+enum TelegramDeliveryStatus {
+  PENDING
+  DELIVERED
+  FAILED
+}
+
 model User {
   id                    String             @id @default(cuid())
   email                 String?            @unique
@@ -73,10 +79,11 @@ model User {
   createdAt             DateTime           @default(now())
   updatedAt             DateTime           @updatedAt
 
-  jobs     Job[]
-  clips    Clip[]
-  accounts Account[]
-  sessions Session[]
+  jobs               Job[]
+  clips              Clip[]
+  telegramDeliveries TelegramDelivery[]
+  accounts           Account[]
+  sessions           Session[]
 
   @@map("users")
 }
@@ -111,8 +118,9 @@ model Job {
   subtitlePreset                String?   @default("tiktok")
   createdAt                     DateTime  @default(now())
 
-  clips Clip[]
-  steps JobStep[]
+  clips            Clip[]
+  steps            JobStep[]
+  telegramDelivery TelegramDelivery?
 
   @@index([userId])
   @@index([status])
@@ -140,6 +148,24 @@ model JobStep {
   @@index([status, step])
   @@index([jobId])
   @@map("job_steps")
+}
+
+model TelegramDelivery {
+  id          String                 @id @default(cuid())
+  jobId       String                 @unique
+  job         Job                    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chatId      String
+  status      TelegramDeliveryStatus @default(PENDING)
+  error       String?
+  deliveredAt DateTime?
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  @@index([status, createdAt])
+  @@index([userId])
+  @@map("telegram_deliveries")
 }
 
 model Clip {

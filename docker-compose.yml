@@ -99,6 +99,28 @@ services:
       - FINALIZE_CONCURRENCY=3
       - CHOKIDAR_USEPOLLING=true
 
+  bot:
+    build:
+      context: .
+      dockerfile: apps/bot/Dockerfile
+      target: ${TARGET:-development}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file: .env
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - CHOKIDAR_USEPOLLING=true
+    volumes:
+      - ./apps/bot:/app/apps/bot
+      - ./packages:/app/packages
+      - ./prisma:/app/prisma
+      - /app/node_modules
+      - /app/apps/bot/node_modules
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     expose:
