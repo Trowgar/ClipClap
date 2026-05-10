@@ -86,6 +86,7 @@ export interface JobWithClips {
   originalFilename: string | null;
   status: string;
   error: string | null;
+  sourceDurationSec: number | null;
   subtitles: boolean;
   subtitlePreset: string | null;
   createdAt: string;
