@@ -110,7 +110,7 @@ export function ClipCard({
             muted
             playsInline
             preload="metadata"
-            className="h-full w-full object-cover transition duration-300 group-hover:scale-[1.02]"
+            className="h-full w-full object-cover"
           />
         ) : (
           <div className="flex h-full items-center justify-center text-muted-foreground">

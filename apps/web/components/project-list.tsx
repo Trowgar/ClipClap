@@ -173,7 +173,7 @@ function ProjectPreview({ project }: { project: SerializedProjectSummary }) {
           muted
           playsInline
           preload="metadata"
-          className="h-full w-full object-cover opacity-85 transition duration-200 group-hover:scale-[1.03] group-hover:opacity-100"
+          className="h-full w-full object-cover opacity-85 transition-opacity duration-200 group-hover:opacity-100"
         />
       ) : (
         <div className="flex h-full w-full items-center justify-center text-muted-foreground">
