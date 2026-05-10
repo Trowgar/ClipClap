@@ -17,7 +17,11 @@ vi.mock("../../lib/r2", () => ({
   getPresignedDownloadUrl: mocks.getPresignedDownloadUrl,
 }));
 
-import { getRecentProjects, getUserProjects } from "../project.service";
+import {
+  getProjectDetail,
+  getRecentProjects,
+  getUserProjects,
+} from "../project.service";
 
 describe("project.service", () => {
   beforeEach(() => {
@@ -59,6 +63,21 @@ describe("project.service", () => {
       expect.objectContaining({ take: 50 })
     );
   });
+
+  it("returns project detail with signed clip preview urls", async () => {
+    const detail = project("job1", "clips/u1/job1/clip.mp4");
+    mocks.jobFindMany.mockResolvedValue([detail]);
+
+    const result = await getProjectDetail("job1", "u1");
+
+    expect(result?.clips[0]).toEqual(
+      expect.objectContaining({
+        id: "clip-job1",
+        previewUrl: "signed:clips/u1/job1/clip.mp4",
+      })
+    );
+    expect(result?.clips[0]).not.toHaveProperty("storageKey");
+  });
 });
 
 function project(id: string, storageKey?: string) {
@@ -71,6 +90,7 @@ function project(id: string, storageKey?: string) {
     status: "DONE",
     error: null,
     sourceDurationSec: 60,
+    clipsGenerated: storageKey ? 1 : 0,
     createdAt: new Date("2026-05-10T00:00:00.000Z"),
     clips: storageKey
       ? [
@@ -79,6 +99,11 @@ function project(id: string, storageKey?: string) {
             title: "Clip",
             storageKey,
             duration: 12,
+            startTime: 4,
+            endTime: 16,
+            subtitles: true,
+            subtitlePreset: "tiktok",
+            parentClipId: null,
             createdAt: new Date("2026-05-10T00:01:00.000Z"),
           },
         ]

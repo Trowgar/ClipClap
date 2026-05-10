@@ -6,26 +6,56 @@ import { Badge } from "@/components/ui/badge";
 import { Download, Film, Loader2, Scissors, Trash2 } from "lucide-react";
 import { formatDuration } from "@/lib/utils";
 import { api } from "@/lib/api";
-import type { ClipData } from "@/lib/api";
 import Link from "next/link";
 
+const CLIP_URL_TTL_MS = 50 * 60 * 1000;
+const clipUrlCache = new Map<string, { url: string; expiresAt: number }>();
+
+export interface ClipCardClip {
+  id: string;
+  title: string;
+  duration: number;
+  subtitles?: boolean;
+  subtitlePreset?: string | null;
+  previewUrl?: string | null;
+}
+
 interface ClipCardProps {
-  clip: ClipData;
+  clip: ClipCardClip;
+  previewUrl?: string | null;
   onDelete?: () => void;
 }
 
-export function ClipCard({ clip, onDelete }: ClipCardProps) {
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(true);
+export function ClipCard({
+  clip,
+  previewUrl: previewUrlProp,
+  onDelete,
+}: ClipCardProps) {
+  const initialPreviewUrl = previewUrlProp ?? clip.previewUrl ?? null;
+  const [previewUrl, setPreviewUrl] = useState<string | null>(() =>
+    initialPreviewUrl ?? getCachedClipUrl(clip.id)
+  );
+  const [previewLoading, setPreviewLoading] = useState(
+    () => !initialPreviewUrl && !getCachedClipUrl(clip.id)
+  );
   const [downloading, setDownloading] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
+    const readyUrl = initialPreviewUrl ?? getCachedClipUrl(clip.id);
+    if (readyUrl) {
+      rememberClipUrl(clip.id, readyUrl);
+      setPreviewUrl(readyUrl);
+      setPreviewLoading(false);
+      return;
+    }
+
     let active = true;
     setPreviewLoading(true);
     api.clips
       .download(clip.id)
       .then(({ url }) => {
+        rememberClipUrl(clip.id, url);
         if (active) setPreviewUrl(url);
       })
       .catch((err) => {
@@ -39,12 +69,12 @@ export function ClipCard({ clip, onDelete }: ClipCardProps) {
     return () => {
       active = false;
     };
-  }, [clip.id]);
+  }, [clip.id, initialPreviewUrl]);
 
   const handleDownload = async () => {
     setDownloading(true);
     try {
-      const { url } = await api.clips.download(clip.id);
+      const url = await getClipUrl(clip.id);
       window.open(url, "_blank");
     } catch (err) {
       console.error("Download failed:", err);
@@ -76,6 +106,7 @@ export function ClipCard({ clip, onDelete }: ClipCardProps) {
         ) : previewUrl ? (
           <video
             src={previewUrl}
+            controls
             muted
             playsInline
             preload="metadata"
@@ -158,4 +189,32 @@ export function ClipCard({ clip, onDelete }: ClipCardProps) {
       </div>
     </article>
   );
+}
+
+function getCachedClipUrl(clipId: string) {
+  const cached = clipUrlCache.get(clipId);
+  if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    clipUrlCache.delete(clipId);
+    return null;
+  }
+  return cached.url;
+}
+
+function rememberClipUrl(clipId: string, url: string) {
+  clipUrlCache.set(clipId, {
+    url,
+    expiresAt: Date.now() + CLIP_URL_TTL_MS,
+  });
+}
+
+async function getClipUrl(clipId: string) {
+  const cachedUrl = getCachedClipUrl(clipId);
+  if (cachedUrl) {
+    return cachedUrl;
+  }
+
+  const { url } = await api.clips.download(clipId);
+  rememberClipUrl(clipId, url);
+  return url;
 }

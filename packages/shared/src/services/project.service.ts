@@ -9,6 +9,15 @@ export interface ProjectClipSummary {
   createdAt: Date;
 }
 
+export interface ProjectDetailClip extends ProjectClipSummary {
+  startTime: number;
+  endTime: number;
+  subtitles: boolean;
+  subtitlePreset: string | null;
+  parentClipId: string | null;
+  previewUrl: string | null;
+}
+
 export interface ProjectSummary {
   id: string;
   userId: string;
@@ -24,6 +33,20 @@ export interface ProjectSummary {
   clips: ProjectClipSummary[];
 }
 
+export interface ProjectDetail {
+  id: string;
+  userId: string;
+  title: string;
+  sourceUrl: string | null;
+  sourceKey: string | null;
+  status: JobStatus;
+  error: string | null;
+  sourceDurationSec: number | null;
+  createdAt: Date;
+  clipsGenerated: number;
+  clips: ProjectDetailClip[];
+}
+
 export interface RecentProjectsResult {
   projects: ProjectSummary[];
   hasMore: boolean;
@@ -37,6 +60,24 @@ const PROJECT_INCLUDE = {
       title: true,
       storageKey: true,
       duration: true,
+      createdAt: true,
+    },
+  },
+};
+
+const PROJECT_DETAIL_INCLUDE = {
+  clips: {
+    orderBy: { startTime: "asc" as const },
+    select: {
+      id: true,
+      title: true,
+      storageKey: true,
+      duration: true,
+      startTime: true,
+      endTime: true,
+      subtitles: true,
+      subtitlePreset: true,
+      parentClipId: true,
       createdAt: true,
     },
   },
@@ -71,6 +112,49 @@ export async function getUserProjects(
   });
 
   return toProjectSummaries(jobs);
+}
+
+export async function getProjectDetail(
+  projectId: string,
+  userId: string
+): Promise<ProjectDetail | null> {
+  const jobs = await prisma.job.findMany({
+    where: { id: projectId, userId },
+    orderBy: { createdAt: "desc" },
+    include: PROJECT_DETAIL_INCLUDE,
+    take: 1,
+  });
+  const job = jobs[0];
+  if (!job) return null;
+
+  return {
+    id: job.id,
+    userId: job.userId,
+    title: job.originalFilename || job.sourceUrl || "Untitled project",
+    sourceUrl: job.sourceUrl,
+    sourceKey: job.sourceKey,
+    status: job.status,
+    error: job.error,
+    sourceDurationSec: job.sourceDurationSec,
+    createdAt: job.createdAt,
+    clipsGenerated: job.clipsGenerated,
+    clips: await Promise.all(
+      job.clips.map(async (clip) => ({
+        id: clip.id,
+        title: clip.title,
+        duration: clip.duration,
+        startTime: clip.startTime,
+        endTime: clip.endTime,
+        subtitles: clip.subtitles,
+        subtitlePreset: clip.subtitlePreset,
+        parentClipId: clip.parentClipId,
+        createdAt: clip.createdAt,
+        previewUrl: clip.storageKey
+          ? await getPresignedDownloadUrl(clip.storageKey)
+          : null,
+      }))
+    ),
+  };
 }
 
 async function toProjectSummaries(
