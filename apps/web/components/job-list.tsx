@@ -33,7 +33,7 @@ export function JobList({ jobs }: JobListProps) {
       {jobs.map((job) => (
         <Link
           key={job.id}
-          href={`/dashboard/jobs/${job.id}`}
+          href={`/dashboard/projects/${job.id}`}
           className="flex items-center justify-between rounded-lg border border-border p-3 transition-colors hover:bg-accent"
         >
           <div className="flex items-center gap-3 min-w-0">

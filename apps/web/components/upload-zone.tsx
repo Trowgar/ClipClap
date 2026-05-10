@@ -193,7 +193,7 @@ export function UploadZone({
         sourceDurationSec: sourceDurationSec ?? undefined,
       });
 
-      router.push(`/dashboard/jobs/${job.id}`);
+      router.push(`/dashboard/projects/${job.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
     } finally {

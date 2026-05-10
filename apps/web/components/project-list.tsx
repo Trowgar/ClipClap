@@ -103,7 +103,7 @@ export function ProjectTable({ projects }: ProjectTableProps) {
           {projects.map((project) => (
             <Link
               key={project.id}
-              href={`/dashboard/jobs/${project.id}`}
+              href={`/dashboard/projects/${project.id}`}
               className="grid grid-cols-[minmax(220px,1fr)_120px_100px_90px] items-center px-4 py-3 text-sm transition-colors hover:bg-accent"
             >
               <div className="flex min-w-0 items-center gap-3">
@@ -139,7 +139,7 @@ export function ProjectTable({ projects }: ProjectTableProps) {
 function ProjectRow({ project }: { project: SerializedProjectSummary }) {
   return (
     <Link
-      href={`/dashboard/jobs/${project.id}`}
+      href={`/dashboard/projects/${project.id}`}
       className="group grid grid-cols-[112px_minmax(0,1fr)_auto] items-center gap-3 rounded-lg border border-border p-2.5 transition-colors hover:bg-accent"
     >
       <ProjectPreview project={project} />

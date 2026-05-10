@@ -83,7 +83,7 @@ export default function ClipPage({
           originalEnd={clip.endTime}
           originalSubtitles={clip.subtitles}
           originalPreset={clip.subtitlePreset}
-          onTrimmed={() => router.push(`/dashboard/jobs/${clip.jobId}`)}
+          onTrimmed={() => router.push(`/dashboard/projects/${clip.jobId}`)}
         />
       </div>
     </div>
