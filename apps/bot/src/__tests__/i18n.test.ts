@@ -310,4 +310,106 @@ describe("bot i18n", () => {
     expect(t5).toContain("Хранилище: 5 / 20 клипов");
     expect(t5).toContain("Всего создано: 5 клипов");
   });
+
+  it("exposes manageOnWebBtn in both locales", () => {
+    expect(t("en").manageOnWebBtn).toBe("🔧 Manage on clipclap.io");
+    expect(t("ru").manageOnWebBtn).toBe("🔧 Управление на clipclap.io");
+  });
+
+  it("currentPlanText renders EN active plan with renewal", () => {
+    const text = t("en").currentPlanText({
+      plan: "MAX",
+      billingCycle: "monthly",
+      periodEnd: "2026-06-24",
+      daysUntilPeriodEnd: 31,
+    });
+    expect(text).toContain("Current plan: MAX (monthly)");
+    expect(text).toContain("Renews: 2026-06-24 (in 31 days)");
+  });
+
+  it("currentPlanText renders RU active plan with renewal and correct plurals", () => {
+    const weekly = t("ru").currentPlanText({
+      plan: "STARTER",
+      billingCycle: "weekly",
+      periodEnd: "2026-05-31",
+      daysUntilPeriodEnd: 7,
+    });
+    expect(weekly).toContain("Текущий тариф: STARTER (недельный)");
+    expect(weekly).toContain("Продление: 2026-05-31 (через 7 дней)");
+
+    const monthly = t("ru").currentPlanText({
+      plan: "MAX",
+      billingCycle: "monthly",
+      periodEnd: "2026-06-24",
+      daysUntilPeriodEnd: 31,
+    });
+    expect(monthly).toContain("Текущий тариф: MAX (месячный)");
+    expect(monthly).toContain("Продление: 2026-06-24 (через 31 день)");
+  });
+
+  it("currentPlanText renders RU день/дня/дней at n=1, 3, 11", () => {
+    const one = t("ru").currentPlanText({
+      plan: "PLUS",
+      billingCycle: "monthly",
+      periodEnd: "2026-05-25",
+      daysUntilPeriodEnd: 1,
+    });
+    expect(one).toContain("через 1 день");
+
+    const three = t("ru").currentPlanText({
+      plan: "PLUS",
+      billingCycle: "monthly",
+      periodEnd: "2026-05-27",
+      daysUntilPeriodEnd: 3,
+    });
+    expect(three).toContain("через 3 дня");
+
+    const eleven = t("ru").currentPlanText({
+      plan: "PLUS",
+      billingCycle: "monthly",
+      periodEnd: "2026-06-04",
+      daysUntilPeriodEnd: 11,
+    });
+    expect(eleven).toContain("через 11 дней");
+  });
+
+  it("currentPlanText renders 'today' / 'сегодня' when daysUntilPeriodEnd is 0", () => {
+    expect(
+      t("en").currentPlanText({
+        plan: "MAX",
+        billingCycle: "monthly",
+        periodEnd: "2026-05-24",
+        daysUntilPeriodEnd: 0,
+      })
+    ).toContain("Renews: 2026-05-24 (today)");
+
+    expect(
+      t("ru").currentPlanText({
+        plan: "MAX",
+        billingCycle: "monthly",
+        periodEnd: "2026-05-24",
+        daysUntilPeriodEnd: 0,
+      })
+    ).toContain("Продление: 2026-05-24 (сегодня)");
+  });
+
+  it("currentPlanText omits Renews line when periodEnd is null", () => {
+    const en = t("en").currentPlanText({
+      plan: "PLUS",
+      billingCycle: "monthly",
+      periodEnd: null,
+      daysUntilPeriodEnd: null,
+    });
+    expect(en).toContain("Current plan: PLUS (monthly)");
+    expect(en).not.toContain("Renews");
+
+    const ru = t("ru").currentPlanText({
+      plan: "PLUS",
+      billingCycle: "monthly",
+      periodEnd: null,
+      daysUntilPeriodEnd: null,
+    });
+    expect(ru).toContain("Текущий тариф: PLUS (месячный)");
+    expect(ru).not.toContain("Продление");
+  });
 });

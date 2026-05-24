@@ -79,6 +79,13 @@ export interface Dict {
   langBtnEn: string;
   langBtnRu: string;
   langBtnAuto: string;
+  currentPlanText: (params: {
+    plan: string;
+    billingCycle: string | null;
+    periodEnd: string | null;
+    daysUntilPeriodEnd: number | null;
+  }) => string;
+  manageOnWebBtn: string;
 }
 
 const en: Dict = {
@@ -182,6 +189,18 @@ const en: Dict = {
   langBtnEn: "🇬🇧 English",
   langBtnRu: "🇷🇺 Русский",
   langBtnAuto: "🤖 Auto-detect",
+  currentPlanText: ({ plan, billingCycle, periodEnd, daysUntilPeriodEnd }) => {
+    const planLine = `Current plan: ${plan}${billingCycle ? ` (${billingCycle})` : ""}`;
+    if (!periodEnd) return planLine;
+    const suffix =
+      daysUntilPeriodEnd === null
+        ? ""
+        : daysUntilPeriodEnd === 0
+          ? " (today)"
+          : ` (in ${daysUntilPeriodEnd} day${daysUntilPeriodEnd === 1 ? "" : "s"})`;
+    return `${planLine}\nRenews: ${periodEnd}${suffix}`;
+  },
+  manageOnWebBtn: "🔧 Manage on clipclap.io",
 };
 
 const ru: Dict = {
@@ -294,6 +313,24 @@ const ru: Dict = {
   langBtnEn: "🇬🇧 English",
   langBtnRu: "🇷🇺 Русский",
   langBtnAuto: "🤖 Авто-определение",
+  currentPlanText: ({ plan, billingCycle, periodEnd, daysUntilPeriodEnd }) => {
+    const cycleLabel =
+      billingCycle === null
+        ? ""
+        : billingCycle === "weekly" || billingCycle === "WEEKLY"
+          ? " (недельный)"
+          : " (месячный)";
+    const planLine = `Текущий тариф: ${plan}${cycleLabel}`;
+    if (!periodEnd) return planLine;
+    const suffix =
+      daysUntilPeriodEnd === null
+        ? ""
+        : daysUntilPeriodEnd === 0
+          ? " (сегодня)"
+          : ` (через ${daysUntilPeriodEnd} ${pluralizeRu(daysUntilPeriodEnd, "день", "дня", "дней")})`;
+    return `${planLine}\nПродление: ${periodEnd}${suffix}`;
+  },
+  manageOnWebBtn: "🔧 Управление на clipclap.io",
 };
 
 const dictionaries: Record<Locale, Dict> = { en, ru };
