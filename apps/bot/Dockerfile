@@ -1,7 +1,8 @@
 # --- Base ---
 FROM node:20-alpine AS base
 WORKDIR /app
-RUN apk add --no-cache openssl
+RUN apk add --no-cache openssl python3 py3-pip
+RUN pip3 install --break-system-packages yt-dlp
 
 # --- Dependencies ---
 FROM base AS deps
