@@ -62,15 +62,14 @@ export function parseLangCallback(
   return null;
 }
 
-export type MenuAction = "plans" | "account" | "help" | "language";
+export type MenuAction = "account" | "help" | "settings";
 
 export function matchMenuAction(text: string): MenuAction | null {
   for (const loc of ["en", "ru"] as const) {
     const d = t(loc);
-    if (text === d.menuPlans) return "plans";
     if (text === d.menuAccount) return "account";
     if (text === d.menuHelp) return "help";
-    if (text === d.menuLanguage) return "language";
+    if (text === d.menuSettings) return "settings";
   }
   return null;
 }
@@ -78,8 +77,8 @@ export function matchMenuAction(text: string): MenuAction | null {
 function buildMainMenu(dict: Dict): ReplyKeyboardMarkup {
   return {
     keyboard: [
-      [{ text: dict.menuPlans }, { text: dict.menuAccount }],
-      [{ text: dict.menuHelp }, { text: dict.menuLanguage }],
+      [{ text: dict.menuAccount }, { text: dict.menuHelp }],
+      [{ text: dict.menuSettings }],
     ],
     is_persistent: true,
     resize_keyboard: true,
@@ -159,7 +158,7 @@ export async function handleUpdate(
 }
 
 function parseMenuCommand(text: string): MenuAction | null {
-  const m = /^\/(plans|account|help)(@\S+)?(\s|$)/.exec(text);
+  const m = /^\/(account|help|settings)(@\S+)?(\s|$)/.exec(text);
   if (!m) return null;
   return m[1] as MenuAction;
 }
@@ -173,81 +172,16 @@ async function handleMenuAction(
   existing: { id: string } | null
 ) {
   switch (action) {
-    case "plans": {
-      if (!existing) {
-        const keyboard = plansKeyboard(dict, config);
-        await client.sendMessage(
-          message.chat.id,
-          dict.welcomeNeedsPlan(config.appUrl),
-          keyboard ? { replyMarkup: keyboard } : undefined
-        );
-        return;
-      }
-
-      const usage = await getUsageForUser(existing.id);
-
-      if (usage.plan === "NONE") {
-        const keyboard = plansKeyboard(dict, config);
-        await client.sendMessage(
-          message.chat.id,
-          dict.welcomeNeedsPlan(config.appUrl),
-          keyboard ? { replyMarkup: keyboard } : undefined
-        );
-        return;
-      }
-
-      const periodEnd = usage.currentPeriodEnd
-        ? usage.currentPeriodEnd.toISOString().slice(0, 10)
-        : null;
-      const daysUntilPeriodEnd = usage.currentPeriodEnd
-        ? Math.max(
-            0,
-            Math.ceil(
-              (usage.currentPeriodEnd.getTime() - Date.now()) / 86_400_000
-            )
-          )
-        : null;
-      const billingCycle = usage.billingCycle
-        ? usage.billingCycle.toLowerCase()
-        : null;
-
-      const text = dict.currentPlanText({
-        plan: usage.plan,
-        billingCycle,
-        periodEnd,
-        daysUntilPeriodEnd,
-      });
-
-      const manageUrl =
-        usage.paymentProvider === "tribute"
-          ? "https://t.me/tribute"
-          : `${config.appUrl}/dashboard/plans`;
-
-      await client.sendMessage(message.chat.id, text, {
-        replyMarkup: {
-          inline_keyboard: [
-            [
-              {
-                text: dict.manageSubscriptionBtn,
-                url: manageUrl,
-              },
-            ],
-          ],
-        },
-      });
-      return;
-    }
     case "account": {
-      const text = await renderAccountText(dict, existing?.id);
-      await client.sendMessage(message.chat.id, text);
+      await sendAccountView(client, message, dict, config, existing);
       return;
     }
     case "help": {
       await client.sendMessage(message.chat.id, dict.helpText(config.appUrl));
       return;
     }
-    case "language": {
-      await client.sendMessage(message.chat.id, dict.languageMenuPrompt, {
+    case "settings": {
+      await client.sendMessage(message.chat.id, dict.settingsMenuPrompt, {
         replyMarkup: languageKeyboard(dict),
       });
       return;
@@ -255,12 +189,15 @@ async function handleMenuAction(
   }
 }
 
-async function renderAccountText(
+async function sendAccountView(
+  client: TelegramClient,
+  message: TelegramMessage,
   dict: Dict,
-  userId: string | undefined
-): Promise<string> {
-  if (!userId) {
-    return dict.accountText({
+  config: BotRuntimeConfig,
+  existing: { id: string } | null
+) {
+  if (!existing) {
+    const text = dict.accountText({
       plan: "NONE",
       billingCycle: null,
       periodEnd: null,
@@ -273,9 +210,16 @@ async function renderAccountText(
       retentionDays: 0,
       clipsTotal: 0,
     });
+    const keyboard = plansKeyboard(dict, config);
+    await client.sendMessage(
+      message.chat.id,
+      text,
+      keyboard ? { replyMarkup: keyboard } : undefined
+    );
+    return;
   }
 
-  const usage = await getUsageForUser(userId);
+  const usage = await getUsageForUser(existing.id);
 
   const periodEnd = usage.currentPeriodEnd
     ? usage.currentPeriodEnd.toISOString().slice(0, 10)
@@ -288,9 +232,11 @@ async function renderAccountText(
         )
       )
     : null;
-  const billingCycle = usage.billingCycle ? usage.billingCycle.toLowerCase() : null;
+  const billingCycle = usage.billingCycle
+    ? usage.billingCycle.toLowerCase()
+    : null;
 
-  return dict.accountText({
+  const text = dict.accountText({
     plan: usage.plan,
     billingCycle,
     periodEnd,
@@ -302,6 +248,29 @@ async function renderAccountText(
     storageClipsLimit: usage.storageClipsLimit,
     retentionDays: usage.retentionDays,
     clipsTotal: usage.clipsTotal,
+  });
+
+  if (usage.plan === "NONE") {
+    const keyboard = plansKeyboard(dict, config);
+    await client.sendMessage(
+      message.chat.id,
+      text,
+      keyboard ? { replyMarkup: keyboard } : undefined
+    );
+    return;
+  }
+
+  const manageUrl =
+    usage.paymentProvider === "tribute"
+      ? "https://t.me/tribute"
+      : `${config.appUrl}/dashboard/plans`;
+
+  await client.sendMessage(message.chat.id, text, {
+    replyMarkup: {
+      inline_keyboard: [
+        [{ text: dict.manageSubscriptionBtn, url: manageUrl }],
+      ],
+    },
   });
 }
 

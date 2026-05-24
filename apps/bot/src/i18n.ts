@@ -52,10 +52,9 @@ export interface Dict {
   planStarterBtn: string;
   planPlusBtn: string;
   planMaxBtn: string;
-  menuPlans: string;
   menuAccount: string;
   menuHelp: string;
-  menuLanguage: string;
+  menuSettings: string;
   helpText: (url: string) => string;
   accountText: (params: {
     plan: string;
@@ -71,7 +70,7 @@ export interface Dict {
     clipsTotal: number;
   }) => string;
   planNone: string;
-  languageMenuPrompt: string;
+  settingsMenuPrompt: string;
   menuHint: string;
   botDescription: string;
   botShortDescription: string;
@@ -79,12 +78,6 @@ export interface Dict {
   langBtnEn: string;
   langBtnRu: string;
   langBtnAuto: string;
-  currentPlanText: (params: {
-    plan: string;
-    billingCycle: string | null;
-    periodEnd: string | null;
-    daysUntilPeriodEnd: number | null;
-  }) => string;
   manageSubscriptionBtn: string;
 }
 
@@ -134,10 +127,9 @@ const en: Dict = {
   planStarterBtn: "💎 Starter — $9 / month",
   planPlusBtn: "🚀 Plus — $29 / month",
   planMaxBtn: "👑 Max — $99 / month",
-  menuPlans: "💎 Plans",
   menuAccount: "📊 Account",
   menuHelp: "❓ Help",
-  menuLanguage: "🌐 Language",
+  menuSettings: "⚙️ Settings",
   helpText: (url) =>
     `Send me a video — I'll cut it into vertical clips with subtitles.\n\nLimits: up to 3 hours source, up to 2 GB file size.\n\nCommands:\n• /start — main menu\n• /link — connect an existing clipclap.io account\n• /lang en|ru|auto — switch language\n\nWebsite: ${url}/dashboard`,
   accountText: ({
@@ -172,7 +164,7 @@ const en: Dict = {
     return `${planLine}\n${renewLine}\n\n${minutesLine}\n${topUpLine}\n${storageLine}\n${totalLine}`.replace(/\n\n\n+/g, "\n\n");
   },
   planNone: "no active plan",
-  languageMenuPrompt: "Pick a language:",
+  settingsMenuPrompt: "Settings:",
   menuHint: "Tap the menu buttons below for quick actions.",
   botDescription:
     "ClipClap turns long videos into short vertical clips with subtitles — ready for TikTok, Reels and Shorts.\n\nSend a video (up to 3 hours) — I'll find the highlights, cut them and burn in subtitles automatically.\n\nHow it works:\n1. Pick a plan\n2. Send a video\n3. Receive your clips\n\nTap START to begin.",
@@ -180,26 +172,15 @@ const en: Dict = {
     "Long video → vertical clips with subtitles. Send a video to start.",
   commands: [
     { command: "start", description: "Show main menu" },
-    { command: "plans", description: "Choose a subscription" },
     { command: "account", description: "Your plan and stats" },
     { command: "help", description: "Limits and how it works" },
+    { command: "settings", description: "Open settings" },
     { command: "lang", description: "Switch language" },
     { command: "link", description: "Connect your clipclap.io account" },
   ],
   langBtnEn: "🇬🇧 English",
   langBtnRu: "🇷🇺 Русский",
   langBtnAuto: "🤖 Auto-detect",
-  currentPlanText: ({ plan, billingCycle, periodEnd, daysUntilPeriodEnd }) => {
-    const planLine = `Current plan: ${plan}${billingCycle ? ` (${billingCycle})` : ""}`;
-    if (!periodEnd) return planLine;
-    const suffix =
-      daysUntilPeriodEnd === null
-        ? ""
-        : daysUntilPeriodEnd === 0
-          ? " (today)"
-          : ` (in ${daysUntilPeriodEnd} day${daysUntilPeriodEnd === 1 ? "" : "s"})`;
-    return `${planLine}\nRenews: ${periodEnd}${suffix}`;
-  },
   manageSubscriptionBtn: "🔧 Manage subscription",
 };
 
@@ -251,10 +232,9 @@ const ru: Dict = {
   planStarterBtn: "💎 Starter — $9 / мес",
   planPlusBtn: "🚀 Plus — $29 / мес",
   planMaxBtn: "👑 Max — $99 / мес",
-  menuPlans: "💎 Тарифы",
   menuAccount: "📊 Аккаунт",
   menuHelp: "❓ Помощь",
-  menuLanguage: "🌐 Язык",
+  menuSettings: "⚙️ Настройки",
   helpText: (url) =>
     `Пришли видео — нарежу вертикальные клипы с субтитрами.\n\nЛимиты: до 3 часов исходник, до 2 ГБ размер файла.\n\nКоманды:\n• /start — главное меню\n• /link — привязать существующий аккаунт clipclap.io\n• /lang en|ru|auto — сменить язык\n\nСайт: ${url}/dashboard`,
   accountText: ({
@@ -296,7 +276,7 @@ const ru: Dict = {
     return `${planLine}\n${renewLine}\n\n${minutesLine}\n${topUpLine}\n${storageLine}\n${totalLine}`.replace(/\n\n\n+/g, "\n\n");
   },
   planNone: "нет активного",
-  languageMenuPrompt: "Выбери язык:",
+  settingsMenuPrompt: "Настройки:",
   menuHint: "Кнопки меню снизу — быстрый доступ к действиям.",
   botDescription:
     "ClipClap нарезает длинные видео на короткие вертикальные клипы с субтитрами — для TikTok, Reels и Shorts.\n\nПришли видео (до 3 часов) — найду самые цепляющие моменты, нарежу и наложу субтитры автоматически.\n\nКак это работает:\n1. Выбери тариф\n2. Пришли видео\n3. Получи клипы\n\nЖми START.",
@@ -304,32 +284,15 @@ const ru: Dict = {
     "Длинное видео → вертикальные клипы с субтитрами. Пришли видео — нарежу.",
   commands: [
     { command: "start", description: "Главное меню" },
-    { command: "plans", description: "Выбрать тариф" },
     { command: "account", description: "Тариф и статистика" },
     { command: "help", description: "Лимиты и как работает" },
+    { command: "settings", description: "Настройки" },
     { command: "lang", description: "Сменить язык" },
     { command: "link", description: "Привязать аккаунт clipclap.io" },
   ],
   langBtnEn: "🇬🇧 English",
   langBtnRu: "🇷🇺 Русский",
   langBtnAuto: "🤖 Авто-определение",
-  currentPlanText: ({ plan, billingCycle, periodEnd, daysUntilPeriodEnd }) => {
-    const cycleLabel =
-      billingCycle === null
-        ? ""
-        : billingCycle === "weekly" || billingCycle === "WEEKLY"
-          ? " (недельный)"
-          : " (месячный)";
-    const planLine = `Текущий тариф: ${plan}${cycleLabel}`;
-    if (!periodEnd) return planLine;
-    const suffix =
-      daysUntilPeriodEnd === null
-        ? ""
-        : daysUntilPeriodEnd === 0
-          ? " (сегодня)"
-          : ` (через ${daysUntilPeriodEnd} ${pluralizeRu(daysUntilPeriodEnd, "день", "дня", "дней")})`;
-    return `${planLine}\nПродление: ${periodEnd}${suffix}`;
-  },
   manageSubscriptionBtn: "🔧 Управление подпиской",
 };
 
