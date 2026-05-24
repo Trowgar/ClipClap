@@ -50,10 +50,20 @@ export interface UsageSummary {
   minutesLimit: number;
   topUpMinutesRemaining: number;
   storageClipsLimit: number;
+  clipsStored: number;
+  retentionDays: number;
+  currentPeriodEnd: Date | null;
+  clipsTotal: number;
 }
 
 export async function getUsageForUser(userId: string): Promise<UsageSummary> {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+
+  const [clipsStored, clipsTotal] = await Promise.all([
+    prisma.clip.count({ where: { userId, deletedAt: null } }),
+    prisma.clip.count({ where: { userId } }),
+  ]);
+
   if (user.plan === "NONE") {
     return {
       plan: "NONE",
@@ -62,8 +72,13 @@ export async function getUsageForUser(userId: string): Promise<UsageSummary> {
       minutesLimit: 0,
       topUpMinutesRemaining: 0,
       storageClipsLimit: 0,
+      clipsStored,
+      retentionDays: 0,
+      currentPeriodEnd: null,
+      clipsTotal,
     };
   }
+
   const limits = getPlanLimits(user.plan, user.billingCycle ?? "MONTHLY");
   const periodStart = getPeriodStart(user.billingCycle, user.currentPeriodEnd);
   const minutesUsed = await getMinutesUsedInPeriod(
@@ -71,6 +86,7 @@ export async function getUsageForUser(userId: string): Promise<UsageSummary> {
     periodStart,
     new Date()
   );
+
   return {
     plan: user.plan,
     billingCycle: user.billingCycle,
@@ -78,6 +94,10 @@ export async function getUsageForUser(userId: string): Promise<UsageSummary> {
     minutesLimit: limits.minutesPerPeriod,
     topUpMinutesRemaining: user.topUpMinutesRemaining,
     storageClipsLimit: limits.storageClips,
+    clipsStored,
+    retentionDays: limits.retentionDays,
+    currentPeriodEnd: user.currentPeriodEnd,
+    clipsTotal,
   };
 }
 

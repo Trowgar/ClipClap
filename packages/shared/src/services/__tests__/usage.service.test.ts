@@ -4,6 +4,7 @@ vi.mock("../../lib/prisma", () => ({
   prisma: {
     user: { findUniqueOrThrow: vi.fn() },
     job: { aggregate: vi.fn() },
+    clip: { count: vi.fn() },
   },
 }));
 
@@ -44,6 +45,72 @@ describe("usage.service", () => {
     expect(usage.minutesUsed).toBe(30);
     expect(usage.minutesLimit).toBe(270);
     expect(usage.topUpMinutesRemaining).toBe(0);
+  });
+
+  it("getUsageForUser includes clipsStored, retentionDays, currentPeriodEnd, clipsTotal", async () => {
+    const periodEnd = new Date("2026-06-24T00:00:00Z");
+    (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
+      id: "u1",
+      plan: "STARTER",
+      billingCycle: "MONTHLY",
+      topUpMinutesRemaining: 100,
+      currentPeriodEnd: periodEnd,
+    });
+    (prisma.job.aggregate as any).mockResolvedValue({
+      _sum: { sourceDurationSec: 2700 },
+    });
+    (prisma.clip.count as any)
+      .mockResolvedValueOnce(8)
+      .mockResolvedValueOnce(42);
+
+    const usage = await getUsageForUser("u1");
+
+    expect(usage.clipsStored).toBe(8);
+    expect(usage.clipsTotal).toBe(42);
+    expect(usage.retentionDays).toBe(7);
+    expect(usage.currentPeriodEnd).toEqual(periodEnd);
+    expect(usage.topUpMinutesRemaining).toBe(100);
+  });
+
+  it("getUsageForUser queries clipsStored with deletedAt: null filter", async () => {
+    (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
+      id: "u1",
+      plan: "STARTER",
+      billingCycle: "MONTHLY",
+      topUpMinutesRemaining: 0,
+      currentPeriodEnd: null,
+    });
+    (prisma.job.aggregate as any).mockResolvedValue({ _sum: { sourceDurationSec: 0 } });
+    (prisma.clip.count as any).mockResolvedValue(0);
+
+    await getUsageForUser("u1");
+
+    const calls = (prisma.clip.count as any).mock.calls;
+    expect(calls.length).toBe(2);
+    expect(calls[0][0]).toEqual({ where: { userId: "u1", deletedAt: null } });
+    expect(calls[1][0]).toEqual({ where: { userId: "u1" } });
+  });
+
+  it("getUsageForUser returns zero/null defaults for NONE plan", async () => {
+    (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
+      id: "u1",
+      plan: "NONE",
+      billingCycle: null,
+      topUpMinutesRemaining: 0,
+      currentPeriodEnd: null,
+    });
+    (prisma.clip.count as any).mockResolvedValueOnce(0).mockResolvedValueOnce(3);
+
+    const usage = await getUsageForUser("u1");
+
+    expect(usage.plan).toBe("NONE");
+    expect(usage.minutesUsed).toBe(0);
+    expect(usage.minutesLimit).toBe(0);
+    expect(usage.storageClipsLimit).toBe(0);
+    expect(usage.retentionDays).toBe(0);
+    expect(usage.currentPeriodEnd).toBeNull();
+    expect(usage.clipsStored).toBe(0);
+    expect(usage.clipsTotal).toBe(3);
   });
 
   it("canSubmitJob blocks when over period cap and no top-up", async () => {
