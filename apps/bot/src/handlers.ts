@@ -568,20 +568,10 @@ async function handleVideo(
     return;
   }
 
-  console.log("[handleVideo] source", {
-    fileId: source.fileId,
-    fileSize: source.fileSize,
-    duration: source.duration,
-    mimeType: source.mimeType,
-    fileName: source.fileName,
-    limit: TELEGRAM_BOT_API_DOWNLOAD_LIMIT_BYTES,
-  });
-
   if (
     typeof source.fileSize === "number" &&
     source.fileSize > TELEGRAM_BOT_API_DOWNLOAD_LIMIT_BYTES
   ) {
-    console.warn("[handleVideo] pre-check rejected: file_size exceeds limit");
     await client.sendMessage(message.chat.id, dict.fileTooLarge(config.appUrl));
     return;
   }
