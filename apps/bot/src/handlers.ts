@@ -174,12 +174,62 @@ async function handleMenuAction(
 ) {
   switch (action) {
     case "plans": {
-      const keyboard = plansKeyboard(dict, config);
-      await client.sendMessage(
-        message.chat.id,
-        dict.welcomeNeedsPlan(config.appUrl),
-        keyboard ? { replyMarkup: keyboard } : undefined
-      );
+      if (!existing) {
+        const keyboard = plansKeyboard(dict, config);
+        await client.sendMessage(
+          message.chat.id,
+          dict.welcomeNeedsPlan(config.appUrl),
+          keyboard ? { replyMarkup: keyboard } : undefined
+        );
+        return;
+      }
+
+      const usage = await getUsageForUser(existing.id);
+
+      if (usage.plan === "NONE") {
+        const keyboard = plansKeyboard(dict, config);
+        await client.sendMessage(
+          message.chat.id,
+          dict.welcomeNeedsPlan(config.appUrl),
+          keyboard ? { replyMarkup: keyboard } : undefined
+        );
+        return;
+      }
+
+      const periodEnd = usage.currentPeriodEnd
+        ? usage.currentPeriodEnd.toISOString().slice(0, 10)
+        : null;
+      const daysUntilPeriodEnd = usage.currentPeriodEnd
+        ? Math.max(
+            0,
+            Math.ceil(
+              (usage.currentPeriodEnd.getTime() - Date.now()) / 86_400_000
+            )
+          )
+        : null;
+      const billingCycle = usage.billingCycle
+        ? usage.billingCycle.toLowerCase()
+        : null;
+
+      const text = dict.currentPlanText({
+        plan: usage.plan,
+        billingCycle,
+        periodEnd,
+        daysUntilPeriodEnd,
+      });
+
+      await client.sendMessage(message.chat.id, text, {
+        replyMarkup: {
+          inline_keyboard: [
+            [
+              {
+                text: dict.manageOnWebBtn,
+                url: `${config.appUrl}/dashboard/plans`,
+              },
+            ],
+          ],
+        },
+      });
       return;
     }
     case "account": {
