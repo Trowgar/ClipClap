@@ -208,6 +208,13 @@ async function renderAccountText(
       plan: "NONE",
       billingCycle: null,
       periodEnd: null,
+      daysUntilPeriodEnd: null,
+      minutesUsed: 0,
+      minutesLimit: 0,
+      topUpMinutes: 0,
+      clipsStored: 0,
+      storageClipsLimit: 0,
+      retentionDays: 0,
       clipsTotal: 0,
     });
   }
@@ -217,12 +224,21 @@ async function renderAccountText(
   });
   const clipsTotal = await prisma.clip.count({ where: { userId } });
   const periodEndIso = user?.currentPeriodEnd;
+  const periodEndDate = periodEndIso ? periodEndIso.toISOString().slice(0, 10) : null;
+  const daysUntilPeriodEnd = periodEndIso
+    ? Math.max(0, Math.ceil((periodEndIso.getTime() - Date.now()) / 86_400_000))
+    : null;
   return dict.accountText({
     plan: user?.plan ?? "NONE",
     billingCycle: user?.billingCycle ?? null,
-    periodEnd: periodEndIso
-      ? periodEndIso.toISOString().slice(0, 10)
-      : null,
+    periodEnd: periodEndDate,
+    daysUntilPeriodEnd,
+    minutesUsed: 0,
+    minutesLimit: 0,
+    topUpMinutes: 0,
+    clipsStored: 0,
+    storageClipsLimit: 0,
+    retentionDays: 0,
     clipsTotal,
   });
 }
