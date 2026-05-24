@@ -188,7 +188,7 @@ const ru: Dict = {
     `Видео больше 20 МБ — это лимит Telegram Bot API. Пока что для длинных видео используй сайт: ${url}/dashboard. Скоро снимем это ограничение.`,
   processingFailed: (error) => `Обработка не удалась: ${error}`,
   done: (n) =>
-    `Готово. ${n} ${pluralizeRu(n, "клип", "клипа", "клипов")} ${n === 1 ? "готов" : "готовы"}.`,
+    `Готово. ${n} ${pluralizeRu(n, "клип", "клипа", "клипов")} ${pluralizeRu(n, "готов", "готовы", "готовы")}.`,
   blocked: (reason, url) => `${reason}\n\nУправление тарифом: ${url}/dashboard/plans`,
   langUsage:
     "Использование: /lang ru — русский, /lang en — английский, /lang auto — по языку Telegram.",

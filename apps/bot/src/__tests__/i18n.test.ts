@@ -37,6 +37,10 @@ describe("bot i18n", () => {
     expect(t("ru").done(1)).toBe("Готово. 1 клип готов.");
     expect(t("ru").done(3)).toBe("Готово. 3 клипа готовы.");
     expect(t("ru").done(7)).toBe("Готово. 7 клипов готовы.");
+    expect(t("ru").done(21)).toBe("Готово. 21 клип готов.");
+    expect(t("ru").done(22)).toBe("Готово. 22 клипа готовы.");
+    expect(t("ru").done(101)).toBe("Готово. 101 клип готов.");
+    expect(t("ru").done(111)).toBe("Готово. 111 клипов готовы.");
   });
 
   it("returns null for non-/lang text", () => {
