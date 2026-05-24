@@ -19,6 +19,7 @@ import {
 } from "@clipfast/shared";
 import type { User } from "@prisma/client";
 import type { TelegramClient } from "./telegram-client";
+import { extractVideoUrl, probeVideoUrl } from "./url-probe";
 import {
   detectLocale,
   parseLangCommand,
@@ -149,12 +150,18 @@ export async function handleUpdate(
   }
 
   const source = getVideoSource(message);
-  if (!source) {
-    await client.sendMessage(message.chat.id, dict.sendVideoHint);
+  if (source) {
+    await handleVideo(client, message, from, source, dict, config);
     return;
   }
 
-  await handleVideo(client, message, from, source, dict, config);
+  const url = extractVideoUrl(text);
+  if (url) {
+    await handleVideoUrl(client, message, from, url, dict, config);
+    return;
+  }
+
+  await client.sendMessage(message.chat.id, dict.sendVideoHint);
 }
 
 function parseMenuCommand(text: string): MenuAction | null {
@@ -668,6 +675,50 @@ async function handleVideo(
   } finally {
     await rm(tempPath, { force: true });
   }
+}
+
+async function handleVideoUrl(
+  client: TelegramClient,
+  message: TelegramMessage,
+  from: TelegramUser,
+  url: string,
+  dict: Dict,
+  config: BotRuntimeConfig
+) {
+  await client.sendMessage(message.chat.id, dict.checkingLink);
+
+  const probe = await probeVideoUrl(url);
+  if (!probe.ok) {
+    await client.sendMessage(message.chat.id, dict.urlAccessFailed);
+    return;
+  }
+
+  const user = await resolveTelegramUser(from);
+  const blockedReason = await getSubmissionBlocker(user.id, probe.durationSec);
+  if (blockedReason) {
+    await client.sendMessage(
+      message.chat.id,
+      dict.blocked(blockedReason, config.appUrl)
+    );
+    return;
+  }
+
+  const job = await jobService.createJob({
+    userId: user.id,
+    sourceUrl: url,
+    originalFilename: probe.title,
+    subtitles: true,
+    subtitlePreset: "tiktok",
+    sourceDurationSec: probe.durationSec,
+  });
+
+  await createTelegramDelivery({
+    jobId: job.id,
+    userId: user.id,
+    chatId: String(message.chat.id),
+  });
+
+  await client.sendMessage(message.chat.id, dict.queued);
 }
 
 async function resolveTelegramUser(from: TelegramUser): Promise<User> {
