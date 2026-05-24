@@ -1,7 +1,9 @@
-import { createWriteStream } from "fs";
+import { createReadStream, createWriteStream } from "fs";
 import { pipeline } from "stream/promises";
 import { Readable } from "stream";
 import type {
+  InlineKeyboardMarkup,
+  ReplyMarkup,
   TelegramApiResponse,
   TelegramFile,
   TelegramUpdate,
@@ -9,24 +11,78 @@ import type {
 
 export class TelegramClient {
   private readonly apiBase: string;
+  private readonly fileBase: string;
 
-  constructor(private readonly token: string) {
-    this.apiBase = `https://api.telegram.org/bot${token}`;
+  constructor(private readonly token: string, baseUrl?: string) {
+    const root = (baseUrl ?? "https://api.telegram.org").replace(/\/+$/, "");
+    this.apiBase = `${root}/bot${token}`;
+    this.fileBase = `${root}/file/bot${token}`;
   }
 
   async getUpdates(offset: number | undefined, timeout = 25) {
     return this.request<TelegramUpdate[]>("getUpdates", {
       offset,
       timeout,
-      allowed_updates: ["message"],
+      allowed_updates: ["message", "callback_query"],
     });
   }
 
-  async sendMessage(chatId: string | number, text: string) {
+  async sendMessage(
+    chatId: string | number,
+    text: string,
+    options?: { replyMarkup?: ReplyMarkup }
+  ) {
     return this.request("sendMessage", {
       chat_id: chatId,
       text,
       disable_web_page_preview: true,
+      reply_markup: options?.replyMarkup,
+    });
+  }
+
+  async editMessageText(
+    chatId: string | number,
+    messageId: number,
+    text: string,
+    options?: { replyMarkup?: InlineKeyboardMarkup }
+  ) {
+    return this.request("editMessageText", {
+      chat_id: chatId,
+      message_id: messageId,
+      text,
+      disable_web_page_preview: true,
+      reply_markup: options?.replyMarkup,
+    });
+  }
+
+  async answerCallbackQuery(callbackQueryId: string, text?: string) {
+    return this.request("answerCallbackQuery", {
+      callback_query_id: callbackQueryId,
+      text,
+    });
+  }
+
+  async setMyDescription(description: string, languageCode?: string) {
+    return this.request("setMyDescription", {
+      description,
+      language_code: languageCode,
+    });
+  }
+
+  async setMyShortDescription(shortDescription: string, languageCode?: string) {
+    return this.request("setMyShortDescription", {
+      short_description: shortDescription,
+      language_code: languageCode,
+    });
+  }
+
+  async setMyCommands(
+    commands: Array<{ command: string; description: string }>,
+    languageCode?: string
+  ) {
+    return this.request("setMyCommands", {
+      commands,
+      language_code: languageCode,
     });
   }
 
@@ -49,9 +105,15 @@ export class TelegramClient {
       throw new Error(`Telegram did not return file_path for ${fileId}`);
     }
 
-    const response = await fetch(
-      `https://api.telegram.org/file/bot${this.token}/${file.file_path}`
-    );
+    if (file.file_path.startsWith("/")) {
+      await pipeline(
+        createReadStream(file.file_path),
+        createWriteStream(destinationPath)
+      );
+      return;
+    }
+
+    const response = await fetch(`${this.fileBase}/${file.file_path}`);
     if (!response.ok || !response.body) {
       throw new Error(`Telegram file download failed: ${response.status}`);
     }
