@@ -2,6 +2,7 @@ import Stripe from "stripe";
 import { prisma } from "../lib/prisma";
 import type { Plan, BillingCycle } from "@prisma/client";
 import { getPlanFromPriceId } from "../config/plans";
+import { notifyPaymentEvent } from "./telegram-notification.service";
 
 // 4xx-class: caller picked an invalid plan/cycle combination. Safe to surface
 // to end users.
@@ -146,6 +147,12 @@ export async function handleWebhook(
           currentPeriodEnd: new Date(subscription.current_period_end * 1000),
         },
       });
+
+      await notifyPaymentEvent(userId, {
+        kind: "subscription_activated",
+        plan: mapped.plan,
+        periodEnd: new Date(subscription.current_period_end * 1000),
+      });
       break;
     }
 
@@ -160,13 +167,30 @@ export async function handleWebhook(
       // days 3/7/12. We only flip to DUNNING and stamp dunningSince.
       // Idempotent: only stamp dunningSince on the FIRST failure so a
       // re-delivered event doesn't re-stamp "yesterday" as "today".
-      await prisma.user.updateMany({
+      const updated = await prisma.user.updateMany({
         where: { stripeSubscriptionId: subscriptionId, dunningSince: null },
         data: {
           subscriptionStatus: "DUNNING",
           dunningSince: new Date(),
         },
       });
+
+      // Only notify on the first failure (matches the dunningSince guard).
+      if (updated.count > 0) {
+        const user = await prisma.user.findUnique({
+          where: { stripeSubscriptionId: subscriptionId },
+          select: { id: true },
+        });
+        if (user) {
+          const manageUrl = `${
+            process.env.APP_URL || process.env.NEXTAUTH_URL || "https://clipclap.io"
+          }/dashboard/plans`;
+          await notifyPaymentEvent(user.id, {
+            kind: "payment_failed",
+            manageUrl,
+          });
+        }
+      }
       break;
     }
 
@@ -192,6 +216,22 @@ export async function handleWebhook(
           currentPeriodEnd: new Date(subscription.current_period_end * 1000),
         },
       });
+
+      // Notify on renewal only — first invoice ("subscription_create") is
+      // already covered by checkout.session.completed.
+      if (invoice.billing_reason === "subscription_cycle") {
+        const user = await prisma.user.findUnique({
+          where: { stripeSubscriptionId: subscriptionId },
+          select: { id: true, plan: true },
+        });
+        if (user && user.plan !== "NONE") {
+          await notifyPaymentEvent(user.id, {
+            kind: "subscription_renewed",
+            plan: user.plan,
+            periodEnd: new Date(subscription.current_period_end * 1000),
+          });
+        }
+      }
       break;
     }
 
@@ -202,13 +242,26 @@ export async function handleWebhook(
       // re-delivered event doesn't push the deadline further into the future.
       const graceEnd = new Date();
       graceEnd.setDate(graceEnd.getDate() + 7);
-      await prisma.user.updateMany({
+      const updated = await prisma.user.updateMany({
         where: { stripeSubscriptionId: subscription.id, graceEndsAt: null },
         data: {
           subscriptionStatus: "CANCELED_GRACE",
           graceEndsAt: graceEnd,
         },
       });
+
+      if (updated.count > 0) {
+        const user = await prisma.user.findUnique({
+          where: { stripeSubscriptionId: subscription.id },
+          select: { id: true },
+        });
+        if (user) {
+          await notifyPaymentEvent(user.id, {
+            kind: "subscription_canceled",
+            graceEndsAt: graceEnd,
+          });
+        }
+      }
       break;
     }
 

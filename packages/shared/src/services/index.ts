@@ -7,11 +7,17 @@ export * as jobStepService from "./job-step.service";
 export * as projectService from "./project.service";
 export * as telegramAuthService from "./telegram-auth.service";
 export * as telegramDeliveryService from "./telegram-delivery.service";
+export * as telegramLinkService from "./telegram-link.service";
+export * as tributeService from "./tribute.service";
+export * as telegramNotificationService from "./telegram-notification.service";
+export * from "./telegram-notification.service";
 export * from "./usage.service";
 export * from "./job-step.service";
 export * from "./project.service";
 export * from "./telegram-auth.service";
 export * from "./telegram-delivery.service";
+export * from "./telegram-link.service";
+export * from "./tribute.service";
 // Named re-exports for error classes that callers need to instanceof-check
 export { UnsupportedPlanCycleError } from "./billing.service";
 export type { InvoiceRow, InvoicePage } from "./billing.service";

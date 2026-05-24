@@ -14,9 +14,10 @@ vi.mock("stripe", () => ({
 vi.mock("../../lib/prisma", () => ({
   prisma: {
     user: {
+      findUnique: vi.fn().mockResolvedValue(null),
       findUniqueOrThrow: vi.fn(),
       update: vi.fn(),
-      updateMany: vi.fn(),
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
   },
 }));
