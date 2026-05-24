@@ -8,6 +8,7 @@ import {
   findOrCreateTelegramUser,
   getPlanLimits,
   getPresignedDownloadUrl,
+  getUsageForUser,
   jobService,
   markTelegramDeliveryFailed,
   markTelegramDeliverySent,
@@ -218,28 +219,34 @@ async function renderAccountText(
       clipsTotal: 0,
     });
   }
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    select: { plan: true, billingCycle: true, currentPeriodEnd: true },
-  });
-  const clipsTotal = await prisma.clip.count({ where: { userId } });
-  const periodEndIso = user?.currentPeriodEnd;
-  const periodEndDate = periodEndIso ? periodEndIso.toISOString().slice(0, 10) : null;
-  const daysUntilPeriodEnd = periodEndIso
-    ? Math.max(0, Math.ceil((periodEndIso.getTime() - Date.now()) / 86_400_000))
+
+  const usage = await getUsageForUser(userId);
+
+  const periodEnd = usage.currentPeriodEnd
+    ? usage.currentPeriodEnd.toISOString().slice(0, 10)
     : null;
+  const daysUntilPeriodEnd = usage.currentPeriodEnd
+    ? Math.max(
+        0,
+        Math.ceil(
+          (usage.currentPeriodEnd.getTime() - Date.now()) / 86_400_000
+        )
+      )
+    : null;
+  const billingCycle = usage.billingCycle ? usage.billingCycle.toLowerCase() : null;
+
   return dict.accountText({
-    plan: user?.plan ?? "NONE",
-    billingCycle: user?.billingCycle ?? null,
-    periodEnd: periodEndDate,
+    plan: usage.plan,
+    billingCycle,
+    periodEnd,
     daysUntilPeriodEnd,
-    minutesUsed: 0,
-    minutesLimit: 0,
-    topUpMinutes: 0,
-    clipsStored: 0,
-    storageClipsLimit: 0,
-    retentionDays: 0,
-    clipsTotal,
+    minutesUsed: usage.minutesUsed,
+    minutesLimit: usage.minutesLimit,
+    topUpMinutes: usage.topUpMinutesRemaining,
+    clipsStored: usage.clipsStored,
+    storageClipsLimit: usage.storageClipsLimit,
+    retentionDays: usage.retentionDays,
+    clipsTotal: usage.clipsTotal,
   });
 }
 
