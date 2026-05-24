@@ -321,4 +321,21 @@ describe("bot i18n", () => {
     expect(t("ru").manageSubscriptionBtn).toBe("🔧 Управление подпиской");
   });
 
+  it("exposes checkingLink in both locales", () => {
+    expect(t("en").checkingLink).toBe("Checking link…");
+    expect(t("ru").checkingLink).toBe("Проверяю ссылку…");
+  });
+
+  it("exposes urlAccessFailed with platform-agnostic fallback hint in both locales", () => {
+    expect(t("en").urlAccessFailed).toContain("Couldn't access");
+    expect(t("en").urlAccessFailed).toContain("upload");
+    expect(t("ru").urlAccessFailed).toContain("Не удалось");
+    expect(t("ru").urlAccessFailed).toContain("загрузи");
+  });
+
+  it("helpText mentions URL support in both locales", () => {
+    expect(t("en").helpText("https://clipclap.io").toLowerCase()).toContain("url");
+    expect(t("ru").helpText("https://clipclap.io").toLowerCase()).toContain("ссылк");
+  });
+
 });

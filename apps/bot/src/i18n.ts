@@ -79,6 +79,8 @@ export interface Dict {
   langBtnRu: string;
   langBtnAuto: string;
   manageSubscriptionBtn: string;
+  checkingLink: string;
+  urlAccessFailed: string;
 }
 
 const en: Dict = {
@@ -131,7 +133,7 @@ const en: Dict = {
   menuHelp: "❓ Help",
   menuSettings: "⚙️ Settings",
   helpText: (url) =>
-    `Send me a video — I'll cut it into vertical clips with subtitles.\n\nLimits: up to 3 hours source, up to 2 GB file size.\n\nCommands:\n• /start — main menu\n• /link — connect an existing clipclap.io account\n• /lang en|ru|auto — switch language\n\nWebsite: ${url}/dashboard`,
+    `Send me a video — I'll cut it into vertical clips with subtitles.\nYou can also paste a URL (YouTube, Twitch, TikTok, Vimeo, X and more).\n\nLimits: up to 3 hours source, up to 2 GB file size.\n\nCommands:\n• /start — main menu\n• /link — connect an existing clipclap.io account\n• /lang en|ru|auto — switch language\n\nWebsite: ${url}/dashboard`,
   accountText: ({
     plan,
     billingCycle,
@@ -182,6 +184,9 @@ const en: Dict = {
   langBtnRu: "🇷🇺 Русский",
   langBtnAuto: "🤖 Auto-detect",
   manageSubscriptionBtn: "🔧 Manage subscription",
+  checkingLink: "Checking link…",
+  urlAccessFailed:
+    "Couldn't access the video at that link. Try a different URL or upload the file directly.",
 };
 
 const ru: Dict = {
@@ -236,7 +241,7 @@ const ru: Dict = {
   menuHelp: "❓ Помощь",
   menuSettings: "⚙️ Настройки",
   helpText: (url) =>
-    `Пришли видео — нарежу вертикальные клипы с субтитрами.\n\nЛимиты: до 3 часов исходник, до 2 ГБ размер файла.\n\nКоманды:\n• /start — главное меню\n• /link — привязать существующий аккаунт clipclap.io\n• /lang en|ru|auto — сменить язык\n\nСайт: ${url}/dashboard`,
+    `Пришли видео — нарежу вертикальные клипы с субтитрами.\nМожно также прислать ссылку (YouTube, Twitch, TikTok, Vimeo, X и др.).\n\nЛимиты: до 3 часов исходник, до 2 ГБ размер файла.\n\nКоманды:\n• /start — главное меню\n• /link — привязать существующий аккаунт clipclap.io\n• /lang en|ru|auto — сменить язык\n\nСайт: ${url}/dashboard`,
   accountText: ({
     plan,
     billingCycle,
@@ -294,6 +299,9 @@ const ru: Dict = {
   langBtnRu: "🇷🇺 Русский",
   langBtnAuto: "🤖 Авто-определение",
   manageSubscriptionBtn: "🔧 Управление подпиской",
+  checkingLink: "Проверяю ссылку…",
+  urlAccessFailed:
+    "Не удалось получить видео по этой ссылке. Попробуй другую ссылку или загрузи файл напрямую.",
 };
 
 const dictionaries: Record<Locale, Dict> = { en, ru };
