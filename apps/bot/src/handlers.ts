@@ -370,7 +370,7 @@ async function handleCallbackQuery(
     case CALLBACK_LANG_RU:
     case CALLBACK_LANG_AUTO: {
       const choice = parseLangCallback(query.data)!;
-      const { ack } = await applyLangChoice(query.from, choice);
+      const ack = await applyLangChoice(query.from, choice);
       await client
         .editMessageText(
           query.message.chat.id,
@@ -430,7 +430,7 @@ export function plansKeyboard(
 async function applyLangChoice(
   from: TelegramUser,
   choice: "en" | "ru" | "auto"
-): Promise<{ dict: Dict; ack: string }> {
+): Promise<string> {
   const user = await resolveTelegramUser(from);
   const stored: string | null = choice === "auto" ? null : choice;
   await prisma.user.update({
@@ -453,7 +453,7 @@ async function applyLangChoice(
         ? dict.langSetRu
         : dict.langSetAuto;
 
-  return { dict, ack };
+  return ack;
 }
 
 async function handleLang(
@@ -468,7 +468,7 @@ async function handleLang(
     return;
   }
 
-  const { ack } = await applyLangChoice(from, choice);
+  const ack = await applyLangChoice(from, choice);
   await client.sendMessage(message.chat.id, ack);
 }
 
