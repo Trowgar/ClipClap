@@ -47,7 +47,7 @@ describe("telegram-provider", () => {
         issuer: TELEGRAM_OIDC_ISSUER,
         clientId: "12345",
         clientSecret: "secret",
-        checks: ["pkce", "state"],
+        checks: ["pkce"],
         idToken: true,
       })
     );

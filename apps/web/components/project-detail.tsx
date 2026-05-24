@@ -4,7 +4,14 @@ import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { ProjectDetail as ProjectDetailData } from "@clipfast/shared";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, CheckCircle2, Clock3, Film, Layers3 } from "lucide-react";
+import {
+  ArrowLeft,
+  CheckCircle2,
+  Clock3,
+  Film,
+  Layers3,
+  Trash2,
+} from "lucide-react";
 import { ClipCard } from "@/components/clip-card";
 import { JobProgress } from "@/components/job-progress";
 import { Button } from "@/components/ui/button";
@@ -30,6 +37,7 @@ export function ProjectDetail({
   const router = useRouter();
   const [project, setProject] = useState(initialProject);
   const [clips, setClips] = useState(initialProject.clips);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     setProject(initialProject);
@@ -48,6 +56,34 @@ export function ProjectDetail({
     [router]
   );
 
+  const handleDeleteProject = useCallback(async () => {
+    const clipCount = clips.length;
+    const message =
+      clipCount > 0
+        ? `Delete "${project.title}" and its ${clipCount} clip${clipCount === 1 ? "" : "s"}?\n\nThis cannot be undone.`
+        : `Delete "${project.title}"?\n\nThis cannot be undone.`;
+
+    if (!window.confirm(message)) return;
+
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/projects/${project.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        window.alert(data.error || "Could not delete project. Try again.");
+        setDeleting(false);
+        return;
+      }
+      router.push("/dashboard/projects");
+      router.refresh();
+    } catch {
+      window.alert("Could not reach the server. Try again.");
+      setDeleting(false);
+    }
+  }, [clips.length, project.id, project.title, router]);
+
   const isProcessing = !["DONE", "FAILED"].includes(project.status);
   const totalClipDuration = clips.reduce((sum, clip) => sum + clip.duration, 0);
 
@@ -62,14 +98,26 @@ export function ProjectDetail({
         Projects
       </Button>
 
-      <div>
-        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Project
-        </p>
-        <h1 className="text-xl font-bold tracking-tight">{project.title}</h1>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Created {formatDate(project.createdAt)}
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            Project
+          </p>
+          <h1 className="text-xl font-bold tracking-tight">{project.title}</h1>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Created {formatDate(project.createdAt)}
+          </p>
+        </div>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleDeleteProject}
+          disabled={deleting}
+          className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+        >
+          <Trash2 className="mr-2 h-4 w-4" />
+          {deleting ? "Deleting…" : "Delete project"}
+        </Button>
       </div>
 
       {isProcessing ? (

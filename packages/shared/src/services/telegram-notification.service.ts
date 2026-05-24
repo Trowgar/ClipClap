@@ -25,7 +25,7 @@ export function renderPaymentNotification(
   if (locale === "ru") {
     switch (event.kind) {
       case "subscription_activated":
-        return `🎉 Подписка ${event.plan} активирована. Период до ${formatDate(event.periodEnd)}.\n\nПришли видео — нарежу клипы.`;
+        return `🎉 Подписка ${event.plan} активирована. Период до ${formatDate(event.periodEnd)}.\n\nПришли видео - нарежу клипы.`;
       case "subscription_renewed":
         return `🔄 Подписка продлена до ${formatDate(event.periodEnd)}.`;
       case "payment_failed":
@@ -56,7 +56,7 @@ export async function sendTelegramMessage(
 ): Promise<boolean> {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) {
-    console.warn("TELEGRAM_BOT_TOKEN missing — skipping notification");
+    console.warn("TELEGRAM_BOT_TOKEN missing - skipping notification");
     return false;
   }
 

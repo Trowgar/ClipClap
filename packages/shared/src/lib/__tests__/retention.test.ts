@@ -34,14 +34,14 @@ describe("computeClipExpiresAt", () => {
     expect(days).toBe(30);
   });
 
-  it("returns 24h for NONE plan (defensive — orphaned clips)", () => {
+  it("returns 24h for NONE plan (defensive - orphaned clips)", () => {
     const expires = computeClipExpiresAt("NONE", null, now);
     const hours = (expires.getTime() - now.getTime()) / (60 * 60 * 1000);
     expect(hours).toBe(24);
   });
 
   it("propagates the underlying error for invalid plan/cycle combos", () => {
-    // PLUS has no WEEKLY cycle in PLAN_LIMITS — getPlanLimits throws and
+    // PLUS has no WEEKLY cycle in PLAN_LIMITS - getPlanLimits throws and
     // computeClipExpiresAt should not silently swallow it. Caller is
     // responsible for not constructing invalid combinations.
     expect(() => computeClipExpiresAt("PLUS", "WEEKLY", now)).toThrow(/no weekly/i);

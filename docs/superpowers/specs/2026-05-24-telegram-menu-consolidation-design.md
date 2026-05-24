@@ -1,4 +1,4 @@
-# Telegram Bot — Menu Consolidation (Account + Settings)
+# Telegram Bot - Menu Consolidation (Account + Settings)
 
 **Date:** 2026-05-24
 **Status:** Approved, ready for implementation
@@ -28,7 +28,7 @@ Russian: 📊 Аккаунт / ❓ Помощь / ⚙️ Настройки.
 
 Tap behavior branches on plan state:
 
-**NONE plan (or no DB record):** text is the current `accountText` NONE variant ("Plan: no active plan / Pick a plan to start clipping / Total clips created: N"), followed by an **inline keyboard with Tribute tariff buttons** (the same `plansKeyboard` helper used today). This is the path NONE-users currently get from the Plans button — it now lives inside Account.
+**NONE plan (or no DB record):** text is the current `accountText` NONE variant ("Plan: no active plan / Pick a plan to start clipping / Total clips created: N"), followed by an **inline keyboard with Tribute tariff buttons** (the same `plansKeyboard` helper used today). This is the path NONE-users currently get from the Plans button - it now lives inside Account.
 
 **Active plan:** text is the current `accountText` active variant (plan, renews, minutes, storage, total). Followed by an inline button `🔧 Manage subscription` whose URL is routed by `usage.paymentProvider`:
 - `tribute` → `https://t.me/tribute`
@@ -42,15 +42,15 @@ Tap shows:
 
 Future settings (notifications, default subtitle preset) will be additional rows in the same inline keyboard or sub-menus opened via callback. None added now (YAGNI).
 
-The `lang_en` / `lang_ru` / `lang_auto` callback handlers stay unchanged — they were already keyed by `CALLBACK_LANG_*`.
+The `lang_en` / `lang_ru` / `lang_auto` callback handlers stay unchanged - they were already keyed by `CALLBACK_LANG_*`.
 
 ## Removed
 
-- **💎 Plans reply button** — gone from the keyboard.
-- **`MenuAction = "plans"`** — removed; its branch logic moves into the "account" handler.
-- **`/plans` slash command** — removed from the autocomplete commands list AND from `parseMenuCommand`'s regex. (`/plans` typed manually now falls through to "send video hint" — a clean break.)
-- **`languageMenuPrompt` string** — replaced by `settingsMenuPrompt`.
-- **`menuLanguage` string** — replaced by `menuSettings`.
+- **💎 Plans reply button** - gone from the keyboard.
+- **`MenuAction = "plans"`** - removed; its branch logic moves into the "account" handler.
+- **`/plans` slash command** - removed from the autocomplete commands list AND from `parseMenuCommand`'s regex. (`/plans` typed manually now falls through to "send video hint" - a clean break.)
+- **`languageMenuPrompt` string** - replaced by `settingsMenuPrompt`.
+- **`menuLanguage` string** - replaced by `menuSettings`.
 
 ## Added
 
@@ -63,14 +63,14 @@ The `lang_en` / `lang_ru` / `lang_auto` callback handlers stay unchanged — the
 ## Slash commands
 
 Final autocomplete list (6 entries):
-- `/start` — main menu
-- `/account` — plan & usage
-- `/help` — limits and how it works
-- `/settings` — settings
-- `/lang` — switch language directly (power-user shortcut, separate from `/settings`)
-- `/link` — connect clipclap.io account
+- `/start` - main menu
+- `/account` - plan & usage
+- `/help` - limits and how it works
+- `/settings` - settings
+- `/lang` - switch language directly (power-user shortcut, separate from `/settings`)
+- `/link` - connect clipclap.io account
 
-`/lang en|ru|auto` continues to work as before — it's not going through the menu, so the rename doesn't affect it.
+`/lang en|ru|auto` continues to work as before - it's not going through the menu, so the rename doesn't affect it.
 
 ## Tests
 
@@ -98,6 +98,6 @@ No service or schema changes needed.
 
 ## Out of scope
 
-- Adding new settings (notifications, default presets) — those land later.
-- Web-dashboard parity — separate effort.
+- Adding new settings (notifications, default presets) - those land later.
+- Web-dashboard parity - separate effort.
 - Migrating users away from old Plans / Language button taps (Telegram caches reply keyboards client-side; users will see the new keyboard on the next bot message that attaches one, or after `/start` / `/menu`).

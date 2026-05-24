@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma";
-import { getPresignedDownloadUrl } from "../lib/r2";
+import { deleteFile, getPresignedDownloadUrl } from "../lib/r2";
 import type { JobStatus } from "@prisma/client";
 
 export interface ProjectClipSummary {
@@ -222,4 +222,47 @@ async function toProjectSummary(job: {
       createdAt: clip.createdAt,
     })),
   };
+}
+
+export type DeleteProjectResult =
+  | { status: "deleted"; deletedClips: number }
+  | { status: "not_found" };
+
+export async function deleteProject(
+  projectId: string,
+  userId: string
+): Promise<DeleteProjectResult> {
+  const job = await prisma.job.findFirst({
+    where: { id: projectId, userId },
+    select: {
+      id: true,
+      sourceKey: true,
+      sourceArtifactKey: true,
+      clips: { select: { storageKey: true } },
+    },
+  });
+  if (!job) return { status: "not_found" };
+
+  const r2Keys = [
+    job.sourceKey,
+    job.sourceArtifactKey,
+    ...job.clips.map((c) => c.storageKey),
+  ].filter((key): key is string => Boolean(key));
+
+  // Delete DB record first - Prisma cascades to clips, steps, deliveries.
+  await prisma.job.delete({ where: { id: job.id } });
+
+  // Best-effort R2 cleanup. Don't fail the operation if R2 hiccups -
+  // orphan keys are recoverable via a retention sweep, but a half-deleted DB
+  // state is not.
+  await Promise.allSettled(
+    r2Keys.map((key) =>
+      deleteFile(key).catch((error) => {
+        console.error(`[deleteProject] failed to delete R2 key ${key}:`, error);
+        throw error;
+      })
+    )
+  );
+
+  return { status: "deleted", deletedClips: job.clips.length };
 }

@@ -85,9 +85,9 @@ export interface Dict {
 
 const en: Dict = {
   welcomeNew:
-    "Welcome to ClipClap! Send me a video and I'll turn it into vertical clips with subtitles.\n\nLanguage: /lang ru — switch to Russian.",
+    "Welcome to ClipClap! Send me a video and I'll turn it into vertical clips with subtitles.\n\nLanguage: /lang ru - switch to Russian.",
   welcomeFirstChoice:
-    "Hi! I turn long videos into vertical clips with subtitles — ready for TikTok, Reels and Shorts.\n\nHow it works:\n1. Pick a plan\n2. Send a video (up to 3 hours)\n3. Get 5–15 short clips back\n\nFirst — how do you want to set up?\n\n• New account — use this Telegram as your ClipClap account.\n• I already have an account — link this Telegram to your existing clipclap.io account.",
+    "Hi! I turn long videos into vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nHow it works:\n1. Pick a plan\n2. Send a video (up to 3 hours)\n3. Get 5–15 short clips back\n\nFirst - how do you want to set up?\n\n• New account - use this Telegram as your ClipClap account.\n• I already have an account - link this Telegram to your existing clipclap.io account.",
   welcomeBack: "Welcome back! Send a video and I'll generate clips.",
   welcomeNeedsPlan: (url) =>
     `Send a video and I'll generate clips. To enable processing, pick a plan: ${url}/dashboard/plans`,
@@ -116,24 +116,24 @@ const en: Dict = {
   uploading: "Uploading your video...",
   queued: "Queued. I'll send the clips back here when rendering finishes.",
   fileTooLarge: (url) =>
-    `This video is over 20 MB — Telegram's Bot API limit. For now, upload longer videos on the website: ${url}/dashboard. We're working on lifting this limit soon.`,
+    `This video is over 20 MB - Telegram's Bot API limit. For now, upload longer videos on the website: ${url}/dashboard. We're working on lifting this limit soon.`,
   processingFailed: (error) => `Processing failed: ${error}`,
   done: (n) => `Done. ${n} clip${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} ready.`,
   blocked: (reason, url) => `${reason}\n\nManage your plan: ${url}/dashboard/plans`,
   langUsage:
-    "Usage: /lang en — English, /lang ru — Russian, /lang auto — follow Telegram language.",
+    "Usage: /lang en - English, /lang ru - Russian, /lang auto - follow Telegram language.",
   langSetEn: "Language set to English.",
   langSetRu: "Язык установлен: русский.",
   langSetAuto: "Auto language detection enabled.",
-  planStarterWeeklyBtn: "🌱 Starter — $3 / week",
-  planStarterBtn: "💎 Starter — $9 / month",
-  planPlusBtn: "🚀 Plus — $29 / month",
-  planMaxBtn: "👑 Max — $99 / month",
+  planStarterWeeklyBtn: "🌱 Starter - $3 / week",
+  planStarterBtn: "💎 Starter - $9 / month",
+  planPlusBtn: "🚀 Plus - $29 / month",
+  planMaxBtn: "👑 Max - $99 / month",
   menuAccount: "📊 Account",
   menuHelp: "❓ Help",
   menuSettings: "⚙️ Settings",
   helpText: (url) =>
-    `Send me a video — I'll cut it into vertical clips with subtitles.\nYou can also paste a URL (YouTube, Twitch, TikTok, Vimeo, X and more).\n\nLimits: up to 3 hours source, up to 2 GB file size.\n\nCommands:\n• /start — main menu\n• /link — connect an existing clipclap.io account\n• /lang en|ru|auto — switch language\n\nWebsite: ${url}/dashboard`,
+    `Send me a video - I'll cut it into vertical clips with subtitles.\nYou can also paste a URL (YouTube, Twitch, TikTok, Vimeo, X and more).\n\nLimits: up to 3 hours source, up to 2 GB file size.\n\nCommands:\n• /start - main menu\n• /link - connect an existing clipclap.io account\n• /lang en|ru|auto - switch language\n\nWebsite: ${url}/dashboard`,
   accountText: ({
     plan,
     billingCycle,
@@ -169,7 +169,7 @@ const en: Dict = {
   settingsMenuPrompt: "Settings:",
   menuHint: "Tap the menu buttons below for quick actions.",
   botDescription:
-    "ClipClap turns long videos into short vertical clips with subtitles — ready for TikTok, Reels and Shorts.\n\nSend a video (up to 3 hours) — I'll find the highlights, cut them and burn in subtitles automatically.\n\nHow it works:\n1. Pick a plan\n2. Send a video\n3. Receive your clips\n\nTap START to begin.",
+    "ClipClap turns long videos into short vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nSend a video (up to 3 hours) - I'll find the highlights, cut them and burn in subtitles automatically.\n\nHow it works:\n1. Pick a plan\n2. Send a video\n3. Receive your clips\n\nTap START to begin.",
   botShortDescription:
     "Long video → vertical clips with subtitles. Send a video to start.",
   commands: [
@@ -191,21 +191,21 @@ const en: Dict = {
 
 const ru: Dict = {
   welcomeNew:
-    "Привет! Это ClipClap. Пришли видео — нарежу вертикальные клипы с субтитрами.\n\nЯзык: /lang en — переключиться на английский.",
+    "Привет! Это ClipClap. Пришли видео - нарежу вертикальные клипы с субтитрами.\n\nЯзык: /lang en - переключиться на английский.",
   welcomeFirstChoice:
-    "Привет! Нарезаю длинные видео на вертикальные клипы с субтитрами — для TikTok, Reels и Shorts.\n\nКак это работает:\n1. Выбери тариф\n2. Пришли видео (до 3 часов)\n3. Получи 5–15 коротких клипов\n\nСначала — как тебе удобнее начать?\n\n• Новый аккаунт — Telegram станет твоим аккаунтом ClipClap.\n• Уже есть аккаунт — привяжем этот Telegram к существующему аккаунту на clipclap.io.",
-  welcomeBack: "С возвращением! Пришли видео — сделаю клипы.",
+    "Привет! Нарезаю длинные видео на вертикальные клипы с субтитрами - для TikTok, Reels и Shorts.\n\nКак это работает:\n1. Выбери тариф\n2. Пришли видео (до 3 часов)\n3. Получи 5–15 коротких клипов\n\nСначала - как тебе удобнее начать?\n\n• Новый аккаунт - Telegram станет твоим аккаунтом ClipClap.\n• Уже есть аккаунт - привяжем этот Telegram к существующему аккаунту на clipclap.io.",
+  welcomeBack: "С возвращением! Пришли видео - сделаю клипы.",
   welcomeNeedsPlan: (url) =>
-    `Пришли видео — сделаю клипы. Чтобы запустить обработку, выбери тариф: ${url}/dashboard/plans`,
+    `Пришли видео - сделаю клипы. Чтобы запустить обработку, выбери тариф: ${url}/dashboard/plans`,
   newAccountBtn: "✨ Создать новый аккаунт",
   linkAccountBtn: "🔗 У меня уже есть аккаунт",
   newAccountCreated: (url) =>
-    `Аккаунт создан. Пришли видео — начну нарезку.\n\nЧтобы запустить обработку, выбери тариф: ${url}/dashboard/plans`,
+    `Аккаунт создан. Пришли видео - начну нарезку.\n\nЧтобы запустить обработку, выбери тариф: ${url}/dashboard/plans`,
   linkAccountInstructions: (code, url) =>
     `Код привязки: ${code}\n\n1. Открой ${url}/dashboard/settings на устройстве, где ты залогинен.\n2. Вставь код в течение 10 минут.\n\nЭтот Telegram привяжется к тому аккаунту.`,
   callbackAck: "Принято",
   linkCodePrompt: (code, url) =>
-    `Код привязки: ${code}\n\nОткрой ${url}/dashboard/settings и введи код в течение 10 минут — Telegram привяжется к твоему аккаунту ClipClap.`,
+    `Код привязки: ${code}\n\nОткрой ${url}/dashboard/settings и введи код в течение 10 минут - Telegram привяжется к твоему аккаунту ClipClap.`,
   linkSuccess: (n) =>
     n > 0
       ? `Telegram привязан. Перенёс ${n} ${pluralizeRu(n, "клип", "клипа", "клипов")} из истории бота.`
@@ -219,29 +219,29 @@ const ru: Dict = {
   linkWrongDirection:
     "Этот код здесь не сработает. Набери /link, чтобы получить новый для этого Telegram.",
   sendVideoHint:
-    "Пришли видео — нарежу вертикальные клипы. /start, если ещё не подключал аккаунт.",
+    "Пришли видео - нарежу вертикальные клипы. /start, если ещё не подключал аккаунт.",
   uploading: "Загружаю видео...",
   queued: "В очереди. Пришлю клипы сюда, когда рендер закончится.",
   fileTooLarge: (url) =>
-    `Видео больше 20 МБ — это лимит Telegram Bot API. Пока что для длинных видео используй сайт: ${url}/dashboard. Скоро снимем это ограничение.`,
+    `Видео больше 20 МБ - это лимит Telegram Bot API. Пока что для длинных видео используй сайт: ${url}/dashboard. Скоро снимем это ограничение.`,
   processingFailed: (error) => `Обработка не удалась: ${error}`,
   done: (n) =>
     `Готово. ${n} ${pluralizeRu(n, "клип", "клипа", "клипов")} ${pluralizeRu(n, "готов", "готовы", "готовы")}.`,
   blocked: (reason, url) => `${reason}\n\nУправление тарифом: ${url}/dashboard/plans`,
   langUsage:
-    "Использование: /lang ru — русский, /lang en — английский, /lang auto — по языку Telegram.",
+    "Использование: /lang ru - русский, /lang en - английский, /lang auto - по языку Telegram.",
   langSetEn: "Language set to English.",
   langSetRu: "Язык установлен: русский.",
   langSetAuto: "Авто-определение языка включено.",
-  planStarterWeeklyBtn: "🌱 Starter — $3 / неделя",
-  planStarterBtn: "💎 Starter — $9 / мес",
-  planPlusBtn: "🚀 Plus — $29 / мес",
-  planMaxBtn: "👑 Max — $99 / мес",
+  planStarterWeeklyBtn: "🌱 Starter - $3 / неделя",
+  planStarterBtn: "💎 Starter - $9 / мес",
+  planPlusBtn: "🚀 Plus - $29 / мес",
+  planMaxBtn: "👑 Max - $99 / мес",
   menuAccount: "📊 Аккаунт",
   menuHelp: "❓ Помощь",
   menuSettings: "⚙️ Настройки",
   helpText: (url) =>
-    `Пришли видео — нарежу вертикальные клипы с субтитрами.\nМожно также прислать ссылку (YouTube, Twitch, TikTok, Vimeo, X и др.).\n\nЛимиты: до 3 часов исходник, до 2 ГБ размер файла.\n\nКоманды:\n• /start — главное меню\n• /link — привязать существующий аккаунт clipclap.io\n• /lang en|ru|auto — сменить язык\n\nСайт: ${url}/dashboard`,
+    `Пришли видео - нарежу вертикальные клипы с субтитрами.\nМожно также прислать ссылку (YouTube, Twitch, TikTok, Vimeo, X и др.).\n\nЛимиты: до 3 часов исходник, до 2 ГБ размер файла.\n\nКоманды:\n• /start - главное меню\n• /link - привязать существующий аккаунт clipclap.io\n• /lang en|ru|auto - сменить язык\n\nСайт: ${url}/dashboard`,
   accountText: ({
     plan,
     billingCycle,
@@ -282,11 +282,11 @@ const ru: Dict = {
   },
   planNone: "нет активного",
   settingsMenuPrompt: "Настройки:",
-  menuHint: "Кнопки меню снизу — быстрый доступ к действиям.",
+  menuHint: "Кнопки меню снизу - быстрый доступ к действиям.",
   botDescription:
-    "ClipClap нарезает длинные видео на короткие вертикальные клипы с субтитрами — для TikTok, Reels и Shorts.\n\nПришли видео (до 3 часов) — найду самые цепляющие моменты, нарежу и наложу субтитры автоматически.\n\nКак это работает:\n1. Выбери тариф\n2. Пришли видео\n3. Получи клипы\n\nЖми START.",
+    "ClipClap нарезает длинные видео на короткие вертикальные клипы с субтитрами - для TikTok, Reels и Shorts.\n\nПришли видео (до 3 часов) - найду самые цепляющие моменты, нарежу и наложу субтитры автоматически.\n\nКак это работает:\n1. Выбери тариф\n2. Пришли видео\n3. Получи клипы\n\nЖми START.",
   botShortDescription:
-    "Длинное видео → вертикальные клипы с субтитрами. Пришли видео — нарежу.",
+    "Длинное видео → вертикальные клипы с субтитрами. Пришли видео - нарежу.",
   commands: [
     { command: "start", description: "Главное меню" },
     { command: "account", description: "Тариф и статистика" },

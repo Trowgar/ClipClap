@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { ArrowRight, ArrowDown, Play, Check, Send, Zap } from "lucide-react";
+import { Logo } from "@/components/logo";
 
 /* ────────────────────────────────────────────
    Data
@@ -315,16 +316,8 @@ export default function LandingPage() {
       {/* ── Nav ── */}
       <header className="sticky top-0 z-50 backdrop-blur-xl bg-black/80 border-b border-white/[0.06]">
         <div className="max-w-6xl mx-auto flex items-center justify-between px-6 py-3.5">
-          <Link href="/" className="flex items-center gap-2.5">
-            <svg viewBox="0 0 32 32" fill="none" className="w-7 h-7">
-              <rect width="32" height="32" rx="8" fill="white" />
-              <rect x="8" y="7" width="10" height="18" rx="2.5" fill="none" stroke="black" strokeWidth="2" />
-              <rect x="14" y="7" width="10" height="18" rx="2.5" fill="black" />
-              <polygon points="18,13.5 18,18.5 21.5,16" fill="white" />
-            </svg>
-            <span className="text-[15px] font-semibold tracking-tight text-white">
-              ClipClap
-            </span>
+          <Link href="/" className="flex items-center" aria-label="ClipClap home">
+            <Logo className="h-6" />
           </Link>
           <div className="flex items-center gap-3">
             <Link
@@ -451,7 +444,7 @@ export default function LandingPage() {
                 <div className="absolute bottom-0 left-0 right-0 px-4 py-3 bg-gradient-to-t from-black/80 to-transparent flex items-end justify-between">
                   <div>
                     <p className="text-white text-xs font-medium">
-                      The Rock Kicks Off The Podcast! — What Now? with Trevor Noah
+                      The Rock Kicks Off The Podcast! - What Now? with Trevor Noah
                     </p>
                     <p className="text-neutral-400 text-[10px] mt-0.5">
                       1h 47min · Spotify
@@ -590,7 +583,7 @@ export default function LandingPage() {
                 <p className="mt-4 text-[15px] text-neutral-400 leading-relaxed max-w-md">
                   Send a link or upload a video to{" "}
                   <span className="text-white font-medium">@clipclapio_bot</span>
-                  {" "}— get clips with subtitles sent back to you. No app needed.
+                  {" "}- get clips with subtitles sent back to you. No app needed.
                 </p>
 
                 <div className="mt-6 space-y-3">
@@ -701,16 +694,8 @@ export default function LandingPage() {
       {/* ── Footer ── */}
       <footer className="border-t border-white/[0.04] px-6 py-8">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <svg viewBox="0 0 32 32" fill="none" className="w-5 h-5">
-              <rect width="32" height="32" rx="8" fill="white" />
-              <rect x="8" y="7" width="10" height="18" rx="2.5" fill="none" stroke="black" strokeWidth="2" />
-              <rect x="14" y="7" width="10" height="18" rx="2.5" fill="black" />
-              <polygon points="18,13.5 18,18.5 21.5,16" fill="white" />
-            </svg>
-            <span className="text-sm text-neutral-600 font-medium">
-              ClipClap
-            </span>
+          <div className="flex items-center">
+            <Logo className="h-4 opacity-60" />
           </div>
           <div className="flex items-center gap-6">
             <a

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Polish all Telegram-side discovery surfaces of the ClipClap bot — pre-Start (description, about, commands list), welcome flow copy, and replace the Language menu text prompt with tappable inline buttons.
+**Goal:** Polish all Telegram-side discovery surfaces of the ClipClap bot - pre-Start (description, about, commands list), welcome flow copy, and replace the Language menu text prompt with tappable inline buttons.
 
 **Architecture:** Strings live in `apps/bot/src/i18n.ts` per-locale. `TelegramClient` gains three thin profile-config methods. A new `setup.ts` module syncs the bot profile (description/about/commands) for `en` and `ru` once at startup. `handlers.ts` gains callback cases for `lang_en|lang_ru|lang_auto` that share a small `applyLangChoice` helper with the existing `/lang` command.
 
@@ -18,7 +18,7 @@
 |---|---|---|
 | `apps/bot/src/i18n.ts` | modify | Add `botDescription`, `botShortDescription`, `commands[]`, `langBtnEn/Ru/Auto` fields. Rewrite `welcomeFirstChoice`, shorten `languageMenuPrompt`. |
 | `apps/bot/src/telegram-client.ts` | modify | Add `setMyDescription`, `setMyShortDescription`, `setMyCommands` methods. |
-| `apps/bot/src/setup.ts` | create | `configureBotProfile(client)` — syncs description/about/commands for both locales at startup. |
+| `apps/bot/src/setup.ts` | create | `configureBotProfile(client)` - syncs description/about/commands for both locales at startup. |
 | `apps/bot/src/handlers.ts` | modify | Export `parseLangCallback` + `applyLangChoice`. Replace `language` menu action with inline-button prompt. Add `lang_en/ru/auto` callback cases. Define `CALLBACK_LANG_*` constants. |
 | `apps/bot/src/index.ts` | modify | Call `configureBotProfile(client)` once at startup before entering polling loop. |
 | `apps/bot/src/__tests__/i18n.test.ts` | modify | Length-bound checks for description/about, commands shape check, welcome markers. |
@@ -101,7 +101,7 @@ Expected: Six new tests fail with errors like `Cannot read properties of undefin
 
 - [ ] **Step 3: Extend the `Dict` interface and add fields**
 
-In `apps/bot/src/i18n.ts`, modify the `Dict` interface — add these fields anywhere inside the interface body:
+In `apps/bot/src/i18n.ts`, modify the `Dict` interface - add these fields anywhere inside the interface body:
 
 ```ts
 export interface Dict {
@@ -115,7 +115,7 @@ export interface Dict {
 }
 ```
 
-(Keep all existing fields exactly as they are — only add the six new ones.)
+(Keep all existing fields exactly as they are - only add the six new ones.)
 
 - [ ] **Step 4: Fill in EN dictionary values**
 
@@ -123,7 +123,7 @@ In `apps/bot/src/i18n.ts`, inside `const en: Dict = { ... }`, add these entries 
 
 ```ts
   botDescription:
-    "ClipClap turns long videos into short vertical clips with subtitles — ready for TikTok, Reels and Shorts.\n\nSend a video (up to 3 hours) — I'll find the highlights, cut them and burn in subtitles automatically.\n\nHow it works:\n1. Pick a plan\n2. Send a video\n3. Receive your clips\n\nTap START to begin.",
+    "ClipClap turns long videos into short vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nSend a video (up to 3 hours) - I'll find the highlights, cut them and burn in subtitles automatically.\n\nHow it works:\n1. Pick a plan\n2. Send a video\n3. Receive your clips\n\nTap START to begin.",
   botShortDescription:
     "Long video → vertical clips with subtitles. Send a video to start.",
   commands: [
@@ -143,7 +143,7 @@ Then replace the existing `welcomeFirstChoice` value in the `en` dict with:
 
 ```ts
   welcomeFirstChoice:
-    "Hi! I turn long videos into vertical clips with subtitles — ready for TikTok, Reels and Shorts.\n\nHow it works:\n1. Pick a plan\n2. Send a video (up to 3 hours)\n3. Get 5–15 short clips back\n\nFirst — how do you want to set up?\n\n• New account — use this Telegram as your ClipClap account.\n• I already have an account — link this Telegram to your existing clipclap.io account.",
+    "Hi! I turn long videos into vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nHow it works:\n1. Pick a plan\n2. Send a video (up to 3 hours)\n3. Get 5–15 short clips back\n\nFirst - how do you want to set up?\n\n• New account - use this Telegram as your ClipClap account.\n• I already have an account - link this Telegram to your existing clipclap.io account.",
 ```
 
 And replace the existing `languageMenuPrompt` value in the `en` dict with:
@@ -158,9 +158,9 @@ In `apps/bot/src/i18n.ts`, inside `const ru: Dict = { ... }`, add these entries 
 
 ```ts
   botDescription:
-    "ClipClap нарезает длинные видео на короткие вертикальные клипы с субтитрами — для TikTok, Reels и Shorts.\n\nПришли видео (до 3 часов) — найду самые цепляющие моменты, нарежу и наложу субтитры автоматически.\n\nКак это работает:\n1. Выбери тариф\n2. Пришли видео\n3. Получи клипы\n\nЖми START.",
+    "ClipClap нарезает длинные видео на короткие вертикальные клипы с субтитрами - для TikTok, Reels и Shorts.\n\nПришли видео (до 3 часов) - найду самые цепляющие моменты, нарежу и наложу субтитры автоматически.\n\nКак это работает:\n1. Выбери тариф\n2. Пришли видео\n3. Получи клипы\n\nЖми START.",
   botShortDescription:
-    "Длинное видео → вертикальные клипы с субтитрами. Пришли видео — нарежу.",
+    "Длинное видео → вертикальные клипы с субтитрами. Пришли видео - нарежу.",
   commands: [
     { command: "start", description: "Главное меню" },
     { command: "plans", description: "Выбрать тариф" },
@@ -178,7 +178,7 @@ Replace the existing `welcomeFirstChoice` value in the `ru` dict with:
 
 ```ts
   welcomeFirstChoice:
-    "Привет! Нарезаю длинные видео на вертикальные клипы с субтитрами — для TikTok, Reels и Shorts.\n\nКак это работает:\n1. Выбери тариф\n2. Пришли видео (до 3 часов)\n3. Получи 5–15 коротких клипов\n\nСначала — как тебе удобнее начать?\n\n• Новый аккаунт — Telegram станет твоим аккаунтом ClipClap.\n• Уже есть аккаунт — привяжем этот Telegram к существующему аккаунту на clipclap.io.",
+    "Привет! Нарезаю длинные видео на вертикальные клипы с субтитрами - для TikTok, Reels и Shorts.\n\nКак это работает:\n1. Выбери тариф\n2. Пришли видео (до 3 часов)\n3. Получи 5–15 коротких клипов\n\nСначала - как тебе удобнее начать?\n\n• Новый аккаунт - Telegram станет твоим аккаунтом ClipClap.\n• Уже есть аккаунт - привяжем этот Telegram к существующему аккаунту на clipclap.io.",
 ```
 
 Replace the existing `languageMenuPrompt` value in the `ru` dict with:
@@ -211,7 +211,7 @@ git -c user.email='trowgar@yahoo.com' -c user.name='Trowgar' commit -m "feat(bot
 **Files:**
 - Modify: `apps/bot/src/telegram-client.ts`
 
-These methods are thin wrappers over `setMyDescription` / `setMyShortDescription` / `setMyCommands`. No new tests — the existing `request()` helper is already exercised by other methods, and Task 3's `configure-bot-profile.test.ts` will cover the call shapes via a mocked client.
+These methods are thin wrappers over `setMyDescription` / `setMyShortDescription` / `setMyCommands`. No new tests - the existing `request()` helper is already exercised by other methods, and Task 3's `configure-bot-profile.test.ts` will cover the call shapes via a mocked client.
 
 - [ ] **Step 1: Add the three methods**
 
@@ -311,7 +311,7 @@ describe("configureBotProfile", () => {
     expect(client.setMyCommands).toHaveBeenCalledWith(t("ru").commands, "ru");
   });
 
-  it("does not throw when the client fails — logs a warning instead", async () => {
+  it("does not throw when the client fails - logs a warning instead", async () => {
     const client = {
       setMyDescription: vi
         .fn()
@@ -333,7 +333,7 @@ describe("configureBotProfile", () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run apps/bot/src/__tests__/configure-bot-profile.test.ts`
-Expected: FAIL — module `../setup` not found.
+Expected: FAIL - module `../setup` not found.
 
 - [ ] **Step 3: Create the `setup.ts` module**
 
@@ -405,7 +405,7 @@ void pollUpdates();
 void pollDeliveries();
 ```
 
-(Everything below — `process.on(...)`, `pollUpdates`, `pollDeliveries`, `shutdown`, `sleep` — stays unchanged.)
+(Everything below - `process.on(...)`, `pollUpdates`, `pollDeliveries`, `shutdown`, `sleep` - stays unchanged.)
 
 - [ ] **Step 6: Typecheck + full test run**
 
@@ -465,7 +465,7 @@ describe("parseLangCallback", () => {
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `npx vitest run apps/bot/src/__tests__/lang-callback.test.ts`
-Expected: FAIL — `CALLBACK_LANG_EN` etc. not exported, `parseLangCallback` not defined.
+Expected: FAIL - `CALLBACK_LANG_EN` etc. not exported, `parseLangCallback` not defined.
 
 - [ ] **Step 3: Add constants and parser to handlers.ts**
 
@@ -492,7 +492,7 @@ export function parseLangCallback(
 Run: `npx vitest run apps/bot/src/__tests__/lang-callback.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Refactor `handleLang` — extract `applyLangChoice` helper**
+- [ ] **Step 5: Refactor `handleLang` - extract `applyLangChoice` helper**
 
 This deduplicates the persistence + locale-resolution logic so the callback handler can reuse it.
 
@@ -619,9 +619,9 @@ Expected: Container comes up healthy, logs show `Bot profile synced (en, ru)`.
 - [ ] **Step 2: Verify pre-Start surfaces**
 
 In a Telegram account that has never used the bot (or after running `/stop` in BotFather then re-adding it):
-- Open the bot's profile — the short description should match `t("en").botShortDescription` (or RU if Telegram client language is Russian).
+- Open the bot's profile - the short description should match `t("en").botShortDescription` (or RU if Telegram client language is Russian).
 - On the empty chat screen above the START button, the big description should match `t("en").botDescription` / `t("ru").botDescription`.
-- Type `/` in the chat — the autocomplete dropdown should show `start, plans, account, help, lang, link` with the new localized descriptions.
+- Type `/` in the chat - the autocomplete dropdown should show `start, plans, account, help, lang, link` with the new localized descriptions.
 
 - [ ] **Step 3: Verify first-time welcome**
 
@@ -633,9 +633,9 @@ In a fresh Telegram account:
 
 - Tap the 🌐 Language button on the persistent keyboard.
 - Confirm a short prompt ("Pick a language:" / "Выбери язык:") appears with three inline buttons (English / Русский / Auto-detect).
-- Tap Русский — message should edit to "Язык установлен: русский." and subsequent bot messages should appear in Russian.
+- Tap Русский - message should edit to "Язык установлен: русский." and subsequent bot messages should appear in Russian.
 - Tap 🌐 Язык again → tap English → message edits to "Language set to English." Subsequent messages return to English.
-- Tap Auto-detect — message edits to the auto-set confirmation; behavior reverts to Telegram client language.
+- Tap Auto-detect - message edits to the auto-set confirmation; behavior reverts to Telegram client language.
 
 - [ ] **Step 5: Verify nothing else broke**
 
@@ -659,5 +659,5 @@ In a fresh Telegram account:
 
 **Risks / things to watch:**
 - `setMyCommands` writes apply globally to the bot for the given language code; existing users will see the new descriptions in `/` immediately on bot restart.
-- `setMyDescription` is shown only on **empty** chats — existing users with chat history won't see the new big description (Telegram intentionally hides it once a conversation starts). This is a Telegram constraint, not a bug.
-- Sync runs on every bot startup. Telegram has light rate limits on these endpoints but they're sufficient for restart-time use. Idempotent on the Telegram side — re-sending the same content is a no-op.
+- `setMyDescription` is shown only on **empty** chats - existing users with chat history won't see the new big description (Telegram intentionally hides it once a conversation starts). This is a Telegram constraint, not a bug.
+- Sync runs on every bot startup. Telegram has light rate limits on these endpoints but they're sufficient for restart-time use. Idempotent on the Telegram side - re-sending the same content is a no-op.

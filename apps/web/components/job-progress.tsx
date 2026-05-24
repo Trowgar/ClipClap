@@ -42,7 +42,7 @@ export function JobProgress({ jobId, initialStatus, onDone }: JobProgressProps) 
           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
         )}
         <span className="text-sm font-medium">
-          {isFailed ? "Processing failed" : currentStatus === "DONE" ? "Complete" : `Processing — ${currentStatus.toLowerCase()}...`}
+          {isFailed ? "Processing failed" : currentStatus === "DONE" ? "Complete" : `Processing - ${currentStatus.toLowerCase()}...`}
         </span>
       </div>
 

@@ -15,6 +15,7 @@ export interface TelegramUserProfile {
   lastName?: string | null;
   username?: string | null;
   photoUrl?: string | null;
+  languageCode?: string | null;
 }
 
 export async function findOrCreateTelegramUser(
@@ -33,6 +34,7 @@ export async function findOrCreateTelegramUser(
   const user = await prisma.user.create({
     data: {
       telegramId,
+      telegramLocale: profile.languageCode ?? undefined,
       name: getTelegramDisplayName(profile),
       image: profile.photoUrl ?? undefined,
     },

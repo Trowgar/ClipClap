@@ -1,10 +1,10 @@
-# Telegram Bot — Plans View for Active Subscribers — Implementation Plan
+# Telegram Bot - Plans View for Active Subscribers - Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Stop showing the "pick a plan" prompt to users who already have an active subscription. Show a short summary of their current plan + a single inline "Manage on web" button instead.
 
-**Architecture:** Add a `currentPlanText` template + `manageOnWebBtn` label to the bot's `Dict`. Branch on plan in `handleMenuAction(case "plans")` — NONE keeps the existing flow, active uses the new path that calls `getUsageForUser` and sends the new text with an inline URL button.
+**Architecture:** Add a `currentPlanText` template + `manageOnWebBtn` label to the bot's `Dict`. Branch on plan in `handleMenuAction(case "plans")` - NONE keeps the existing flow, active uses the new path that calls `getUsageForUser` and sends the new text with an inline URL button.
 
 **Tech Stack:** TypeScript, Vitest.
 
@@ -18,7 +18,7 @@
 |---|---|---|
 | `apps/bot/src/i18n.ts` | modify | Add `currentPlanText` function and `manageOnWebBtn` string to `Dict`; provide EN+RU implementations (use `pluralizeRu` for день/дня/дней in RU). |
 | `apps/bot/src/__tests__/i18n.test.ts` | modify | Tests for `currentPlanText` (EN active, RU active with plurals, `daysUntilPeriodEnd === 0`, `periodEnd === null`) and `manageOnWebBtn`. |
-| `apps/bot/src/handlers.ts` | modify | Replace `case "plans":` body — branch on existing user + plan; for active call `getUsageForUser`, format, send text with inline button. |
+| `apps/bot/src/handlers.ts` | modify | Replace `case "plans":` body - branch on existing user + plan; for active call `getUsageForUser`, format, send text with inline button. |
 
 ---
 
@@ -144,7 +144,7 @@ Expected: Six new tests fail with errors like `t("en").manageOnWebBtn is undefin
 
 - [ ] **Step 3: Extend the `Dict` interface**
 
-In `apps/bot/src/i18n.ts`, add these two fields to the `Dict` interface (alongside existing fields — typical placement is after `accountText` and before `planNone`, but anywhere is acceptable):
+In `apps/bot/src/i18n.ts`, add these two fields to the `Dict` interface (alongside existing fields - typical placement is after `accountText` and before `planNone`, but anywhere is acceptable):
 
 ```ts
   currentPlanText: (params: {
@@ -219,7 +219,7 @@ git -c user.email='trowgar@yahoo.com' -c user.name='Trowgar' commit -m "feat(bot
 
 ---
 
-## Task 2: Handler — branch on plan in `case "plans"`
+## Task 2: Handler - branch on plan in `case "plans"`
 
 **Files:**
 - Modify: `apps/bot/src/handlers.ts`
@@ -335,16 +335,16 @@ Expected: clean startup, `Bot profile sync complete (en, ru)` log line.
 In Telegram, with a user that has an active plan (e.g., MAX monthly):
 - Tap 💎 Plans (or 💎 Тарифы).
 - Confirm the message reads `Current plan: MAX (monthly)` / `Текущий тариф: MAX (месячный)` followed by a Renews line with the correct date + days, then a single inline button "🔧 Manage on clipclap.io".
-- Tap the button — should open the browser to `https://clipclap.io/dashboard/plans`.
+- Tap the button - should open the browser to `https://clipclap.io/dashboard/plans`.
 
 - [ ] **Step 3: Verify NONE-plan view (regression)**
 
 For a user with no active plan:
-- Tap 💎 Plans → confirm the existing "Send a video — pick a plan" prompt + Tribute tariff buttons appear unchanged.
+- Tap 💎 Plans → confirm the existing "Send a video - pick a plan" prompt + Tribute tariff buttons appear unchanged.
 
 - [ ] **Step 4: Verify text edge cases**
 
-- Manually set a user's `currentPeriodEnd` to `null` in the DB (or use one in that state). Tap Plans — should show only the plan line, no Renews line.
+- Manually set a user's `currentPeriodEnd` to `null` in the DB (or use one in that state). Tap Plans - should show only the plan line, no Renews line.
 - For a user whose `currentPeriodEnd` is today or in the past → should render "today" / "сегодня".
 
 - [ ] **Step 5: Confirm no regressions**
@@ -362,9 +362,9 @@ For a user with no active plan:
 - "Output shape" examples → covered by Task 1 tests.
 - "i18n additions" (`currentPlanText`, `manageOnWebBtn`) → Task 1.
 - "Handler change" → Task 2.
-- "Testing" — 6 new test cases (manageOnWebBtn, EN active, RU active with plurals, day-plural variants, today/сегодня, periodEnd-null) → all covered in Task 1.
+- "Testing" - 6 new test cases (manageOnWebBtn, EN active, RU active with plurals, day-plural variants, today/сегодня, periodEnd-null) → all covered in Task 1.
 
 **Risks / things to watch:**
-- For DUNNING / CANCELED_GRACE users, this view says "Current plan: X" cheerfully. The processing blocker still fires via `canSubmitJob` when they actually try to send a video, so the user is not left in a confusing state — but the Plans view does not warn them. Spec marks this as out of scope; if it becomes a support burden, a follow-up can add state-specific copy.
-- `currentPeriodEnd` strictly in the past (`daysUntilPeriodEnd = 0`) renders "today" — for DUNNING / CANCELED_GRACE users this might be misleading. Same out-of-scope flag.
-- The inline-button URL is built from `config.appUrl`, which is set from `APP_URL || NEXTAUTH_URL || "https://clipclap.io"`. In dev, this might be `http://localhost:3000` — clicking it from Telegram on a phone won't resolve. Not a production concern.
+- For DUNNING / CANCELED_GRACE users, this view says "Current plan: X" cheerfully. The processing blocker still fires via `canSubmitJob` when they actually try to send a video, so the user is not left in a confusing state - but the Plans view does not warn them. Spec marks this as out of scope; if it becomes a support burden, a follow-up can add state-specific copy.
+- `currentPeriodEnd` strictly in the past (`daysUntilPeriodEnd = 0`) renders "today" - for DUNNING / CANCELED_GRACE users this might be misleading. Same out-of-scope flag.
+- The inline-button URL is built from `config.appUrl`, which is set from `APP_URL || NEXTAUTH_URL || "https://clipclap.io"`. In dev, this might be `http://localhost:3000` - clicking it from Telegram on a phone won't resolve. Not a production concern.

@@ -1,10 +1,10 @@
-# ClipFast Foundation + Backend Pipeline — Implementation Plan
+# ClipFast Foundation + Backend Pipeline - Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the complete backend infrastructure and video processing pipeline so that a job can be created via API, processed through the full pipeline (download → transcribe → analyze → cut → subtitles), and clips stored in R2.
 
-**Architecture:** Monorepo with npm workspaces. Three apps (web, worker, bot — bot deferred). Shared package for types, config, services, and lib clients. All services run in Docker Compose with PostgreSQL and Redis.
+**Architecture:** Monorepo with npm workspaces. Three apps (web, worker, bot - bot deferred). Shared package for types, config, services, and lib clients. All services run in Docker Compose with PostgreSQL and Redis.
 
 **Tech Stack:** Next.js 15, TypeScript, Prisma, PostgreSQL 16, BullMQ, Redis 7, OpenAI API (Whisper + GPT-4o-mini), FFmpeg, yt-dlp, Cloudflare R2, Auth.js v5, Docker
 
@@ -306,7 +306,7 @@ git commit -m "feat: add Prisma schema with User, Job, Clip models + Auth.js tab
 
 ---
 
-### Task 3: Shared Package — Types & Config
+### Task 3: Shared Package - Types & Config
 
 **Files:**
 - Create: `packages/shared/package.json`
@@ -524,7 +524,7 @@ describe("Plan Limits", () => {
 cd packages/shared && npx vitest run
 ```
 
-Expected: PASS — 4 tests pass.
+Expected: PASS - 4 tests pass.
 
 - [ ] **Step 9: Commit**
 
@@ -535,7 +535,7 @@ git commit -m "feat: add shared package with types, plan config, and tests"
 
 ---
 
-### Task 4: Shared Package — Lib Clients
+### Task 4: Shared Package - Lib Clients
 
 **Files:**
 - Create: `packages/shared/src/lib/prisma.ts`
@@ -1038,7 +1038,7 @@ import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ClipFast — AI Video Clipper",
+  title: "ClipFast - AI Video Clipper",
   description: "Turn long videos into viral short clips with AI",
 };
 
@@ -1065,7 +1065,7 @@ export default function Home() {
     <main className="flex min-h-screen flex-col items-center justify-center">
       <h1 className="text-4xl font-bold tracking-tight">ClipFast</h1>
       <p className="mt-2 text-[var(--muted)]">
-        AI Video Clipper — Coming Soon
+        AI Video Clipper - Coming Soon
       </p>
     </main>
   );
@@ -1731,7 +1731,7 @@ export async function GET(
 
 ```bash
 git add apps/web/app/api/jobs/
-git commit -m "feat: add job API routes — create, list, get, SSE progress"
+git commit -m "feat: add job API routes - create, list, get, SSE progress"
 ```
 
 ---
@@ -1883,7 +1883,7 @@ export async function POST(
 
 ```bash
 git add apps/web/app/api/clips/
-git commit -m "feat: add clip API routes — list, get, download, delete, trim"
+git commit -m "feat: add clip API routes - list, get, download, delete, trim"
 ```
 
 ---
@@ -2060,7 +2060,7 @@ async function downloadFromR2(
 
 ```bash
 git add apps/worker/src/processors/download.ts
-git commit -m "feat: add download processor — yt-dlp for URLs, R2 for uploads"
+git commit -m "feat: add download processor - yt-dlp for URLs, R2 for uploads"
 ```
 
 ---
@@ -2142,7 +2142,7 @@ export async function transcribeVideo(
 
 ```bash
 git add apps/worker/src/processors/transcribe.ts
-git commit -m "feat: add transcribe processor — ffmpeg audio extraction + Whisper API"
+git commit -m "feat: add transcribe processor - ffmpeg audio extraction + Whisper API"
 ```
 
 ---
@@ -2166,7 +2166,7 @@ Rules:
 - Find 3-5 best moments
 - Each clip should be 30-90 seconds long
 - Prefer moments with strong hooks (questions, surprises, emotional peaks)
-- Avoid mid-sentence cuts — start and end at natural breaks
+- Avoid mid-sentence cuts - start and end at natural breaks
 - Return ONLY valid JSON, no markdown
 
 Output format:
@@ -2234,7 +2234,7 @@ function formatTime(seconds: number): string {
 
 ```bash
 git add apps/worker/src/processors/analyze.ts
-git commit -m "feat: add analyze processor — GPT-4o-mini highlight extraction"
+git commit -m "feat: add analyze processor - GPT-4o-mini highlight extraction"
 ```
 
 ---
@@ -2316,7 +2316,7 @@ function buildCropFilter(): string {
 
 ```bash
 git add apps/worker/src/processors/cut.ts
-git commit -m "feat: add cut processor — FFmpeg vertical crop and clip extraction"
+git commit -m "feat: add cut processor - FFmpeg vertical crop and clip extraction"
 ```
 
 ---
@@ -2542,13 +2542,13 @@ describe("generateAss", () => {
 cd apps/worker && npx vitest run src/processors/__tests__/subtitles.test.ts
 ```
 
-Expected: PASS — 5 tests pass.
+Expected: PASS - 5 tests pass.
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add apps/worker/src/processors/subtitles.ts apps/worker/src/processors/__tests__/
-git commit -m "feat: add subtitles processor — ASS generation with 3 presets + FFmpeg burn-in"
+git commit -m "feat: add subtitles processor - ASS generation with 3 presets + FFmpeg burn-in"
 ```
 
 ---
@@ -2669,7 +2669,7 @@ export async function processVideoJob(
 
     // Done
     await jobService.updateJobStatus(jobId, "DONE");
-    console.log(`[${jobId}] Job complete — ${highlights.length} clips`);
+    console.log(`[${jobId}] Job complete - ${highlights.length} clips`);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown error";
@@ -2686,7 +2686,7 @@ export async function processVideoJob(
 
 ```bash
 git add apps/worker/src/pipeline.ts
-git commit -m "feat: add pipeline orchestrator — full video processing flow with cleanup"
+git commit -m "feat: add pipeline orchestrator - full video processing flow with cleanup"
 ```
 
 ---
@@ -2874,7 +2874,7 @@ export * as billingService from "./billing.service";
 
 ```bash
 git add packages/shared/src/services/
-git commit -m "feat: add billing service — Stripe checkout, webhooks, subscription management"
+git commit -m "feat: add billing service - Stripe checkout, webhooks, subscription management"
 ```
 
 ---
@@ -2978,7 +2978,7 @@ export async function GET() {
 
 ```bash
 git add apps/web/app/api/billing/
-git commit -m "feat: add billing API routes — checkout, webhook, subscription status"
+git commit -m "feat: add billing API routes - checkout, webhook, subscription status"
 ```
 
 ---
@@ -3010,7 +3010,7 @@ npm install
 docker compose up -d
 ```
 
-Expected: All services start — web on :3000, postgres on :5432, redis on :6379, worker running.
+Expected: All services start - web on :3000, postgres on :5432, redis on :6379, worker running.
 
 - [ ] **Step 4: Run Prisma migration**
 
@@ -3022,7 +3022,7 @@ Expected: Database schema created in PostgreSQL.
 
 - [ ] **Step 5: Verify web app loads**
 
-Open `http://localhost:3000` — should see "ClipFast — AI Video Clipper — Coming Soon".
+Open `http://localhost:3000` - should see "ClipFast - AI Video Clipper - Coming Soon".
 
 - [ ] **Step 6: Verify worker is running**
 
@@ -3049,7 +3049,7 @@ git commit -m "chore: verify full Docker stack boots correctly"
 - [ ] **Step 1: Create CLAUDE.md**
 
 ```markdown
-# ClipFast — AI Video Clipper
+# ClipFast - AI Video Clipper
 
 ## Project Overview
 
@@ -3061,8 +3061,8 @@ Users upload a video or paste a URL → AI transcribes, finds highlights, cuts c
 Monorepo with npm workspaces. Three Docker services + Postgres + Redis.
 
 ```
-apps/web/        → Next.js 15 (App Router) — frontend + API routes
-apps/worker/     → BullMQ worker — video processing pipeline
+apps/web/        → Next.js 15 (App Router) - frontend + API routes
+apps/worker/     → BullMQ worker - video processing pipeline
 apps/bot/        → grammY Telegram bot (post-MVP)
 packages/shared/ → Types, config, services, lib clients (Prisma, Redis, R2, Queue)
 prisma/          → Database schema
@@ -3092,7 +3092,7 @@ npx prisma db push     # create DB tables
 
 ## Key Patterns
 
-- **Service layer:** Business logic lives in `packages/shared/src/services/`. Both API routes and the Telegram bot call these functions — never duplicate logic in routes.
+- **Service layer:** Business logic lives in `packages/shared/src/services/`. Both API routes and the Telegram bot call these functions - never duplicate logic in routes.
 - **Job queue:** Video processing is async. API creates a Job record + enqueues to BullMQ. Worker picks it up and runs the pipeline.
 - **Pipeline steps:** DOWNLOAD → TRANSCRIBE → ANALYZE → CUT → SUBTITLES → UPLOAD. Each step updates `Job.status`. On failure, `Job.status = FAILED` with error message.
 - **Auth:** All `/dashboard` routes are protected via middleware. API routes check `auth()` session.
@@ -3168,6 +3168,6 @@ git commit -m "docs: add CLAUDE.md project guide"
 - Watermark for FREE plan
 - R2 48h auto-cleanup
 
-**Placeholder scan:** No TBD/TODO found (except watermark noted as post-MVP polish in pipeline.ts — acceptable, will be in Plan 2).
+**Placeholder scan:** No TBD/TODO found (except watermark noted as post-MVP polish in pipeline.ts - acceptable, will be in Plan 2).
 
-**Type consistency:** All types reference `@clipfast/shared` exports. `Highlight`, `WhisperSegment`, `TranscriptionResult`, `CreateJobInput`, `TrimClipInput`, `SubtitlePreset` — consistent across services, processors, and pipeline.
+**Type consistency:** All types reference `@clipfast/shared` exports. `Highlight`, `WhisperSegment`, `TranscriptionResult`, `CreateJobInput`, `TrimClipInput`, `SubtitlePreset` - consistent across services, processors, and pipeline.

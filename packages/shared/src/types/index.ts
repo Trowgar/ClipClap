@@ -6,6 +6,13 @@ export { Plan, JobStatus } from "@prisma/client";
 export interface Highlight {
   start: number;
   end: number;
+  /**
+   * Optional inner anchor - the most engaging core of the clip.
+   * Used by code-side expansion so we never shrink past the moment that
+   * made the LLM pick this clip in the first place.
+   */
+  hookStart?: number;
+  hookEnd?: number;
   title: string;
   reason: string;
 }

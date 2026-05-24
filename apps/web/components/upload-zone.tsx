@@ -115,7 +115,7 @@ export function UploadZone({
     blockedReason = `Source exceeds ${maxSourceDurationMinutes} min upload cap. Trim before uploading.`;
   } else if (overFileSize) {
     const maxGb = (maxFileSizeBytes / 1024 ** 3).toFixed(1);
-    blockedReason = `File is ${formatBytes(file!.size)} — max ${maxGb} GB.`;
+    blockedReason = `File is ${formatBytes(file!.size)} - max ${maxGb} GB.`;
   } else if (overQuota) {
     blockedReason = `Job needs ${durationMinutes} min, only ${minutesAvailable} available. Upgrade or top up.`;
   }
@@ -261,7 +261,7 @@ export function UploadZone({
               placeholder={
                 dragActive
                   ? "Drop your video to upload…"
-                  : "Paste a YouTube / Twitch / TikTok URL — or attach a file"
+                  : "Paste a YouTube / Twitch / TikTok URL - or attach a file"
               }
               className="w-full bg-transparent text-sm text-white outline-none placeholder:text-neutral-500 disabled:cursor-not-allowed disabled:opacity-50"
             />

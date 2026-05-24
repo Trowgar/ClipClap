@@ -1,5 +1,9 @@
+"use client";
+
+import { useCallback, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowRight, Film, FolderOpen } from "lucide-react";
+import { ArrowRight, Film, FolderOpen, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn, formatDate, formatDuration } from "@/lib/utils";
 import type { ProjectSummary } from "@clipfast/shared";
@@ -81,7 +85,42 @@ export function RecentProjects({ projects, hasMore }: RecentProjectsProps) {
   );
 }
 
-export function ProjectTable({ projects }: ProjectTableProps) {
+export function ProjectTable({ projects: initialProjects }: ProjectTableProps) {
+  const router = useRouter();
+  const [projects, setProjects] = useState(initialProjects);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const handleDelete = useCallback(
+    async (project: SerializedProjectSummary) => {
+      const clipCount = project.clipCount;
+      const message =
+        clipCount > 0
+          ? `Delete "${project.title}" and its ${clipCount} clip${clipCount === 1 ? "" : "s"}?\n\nThis cannot be undone.`
+          : `Delete "${project.title}"?\n\nThis cannot be undone.`;
+      if (!window.confirm(message)) return;
+
+      setDeletingId(project.id);
+      try {
+        const res = await fetch(`/api/projects/${project.id}`, {
+          method: "DELETE",
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          window.alert(data.error || "Could not delete project. Try again.");
+          setDeletingId(null);
+          return;
+        }
+        setProjects((current) => current.filter((p) => p.id !== project.id));
+        setDeletingId(null);
+        router.refresh();
+      } catch {
+        window.alert("Could not reach the server. Try again.");
+        setDeletingId(null);
+      }
+    },
+    [router]
+  );
+
   if (projects.length === 0) {
     return (
       <p className="rounded-lg border border-border py-10 text-center text-sm text-muted-foreground">
@@ -92,43 +131,61 @@ export function ProjectTable({ projects }: ProjectTableProps) {
 
   return (
     <div className="overflow-x-auto rounded-lg border border-border">
-      <div className="min-w-[560px]">
-        <div className="grid grid-cols-[minmax(220px,1fr)_120px_100px_90px] border-b border-border bg-muted/20 px-4 py-2 text-xs text-muted-foreground">
+      <div className="min-w-[600px]">
+        <div className="grid grid-cols-[minmax(220px,1fr)_120px_100px_90px_40px] border-b border-border bg-muted/20 px-4 py-2 text-xs text-muted-foreground">
           <span>Project</span>
           <span>Status</span>
           <span>Clips</span>
           <span className="text-right">Source</span>
+          <span />
         </div>
         <div className="divide-y divide-border">
           {projects.map((project) => (
-            <Link
+            <div
               key={project.id}
-              href={`/dashboard/projects/${project.id}`}
-              className="grid grid-cols-[minmax(220px,1fr)_120px_100px_90px] items-center px-4 py-3 text-sm transition-colors hover:bg-accent"
+              className="group grid grid-cols-[minmax(220px,1fr)_120px_100px_90px_40px] items-center px-4 py-3 text-sm transition-colors hover:bg-accent"
             >
-              <div className="flex min-w-0 items-center gap-3">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-muted/20 text-muted-foreground">
-                  <FolderOpen className="h-4 w-4" />
-                </span>
-                <div className="min-w-0">
-                  <p className="truncate font-medium">{project.title}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {formatDate(project.createdAt)}
-                  </p>
+              <Link
+                href={`/dashboard/projects/${project.id}`}
+                className="contents"
+              >
+                <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-muted/20 text-muted-foreground">
+                    <FolderOpen className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0">
+                    <p className="truncate font-medium">{project.title}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {formatDate(project.createdAt)}
+                    </p>
+                  </div>
                 </div>
-              </div>
-              <ProjectStatus status={project.status} />
-              <span className="text-muted-foreground">
-                {project.clipCount} clip{project.clipCount !== 1 ? "s" : ""}
-              </span>
-              <span className="text-right text-xs text-muted-foreground">
-                {project.sourceDurationSec
-                  ? formatDuration(project.sourceDurationSec)
-                  : project.sourceUrl
-                    ? "URL"
-                    : "file"}
-              </span>
-            </Link>
+                <ProjectStatus status={project.status} />
+                <span className="text-muted-foreground">
+                  {project.clipCount} clip{project.clipCount !== 1 ? "s" : ""}
+                </span>
+                <span className="text-right text-xs text-muted-foreground">
+                  {project.sourceDurationSec
+                    ? formatDuration(project.sourceDurationSec)
+                    : project.sourceUrl
+                      ? "URL"
+                      : "file"}
+                </span>
+              </Link>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  handleDelete(project);
+                }}
+                disabled={deletingId === project.id}
+                aria-label={`Delete ${project.title}`}
+                className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40 group-hover:opacity-100 focus:opacity-100"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            </div>
           ))}
         </div>
       </div>

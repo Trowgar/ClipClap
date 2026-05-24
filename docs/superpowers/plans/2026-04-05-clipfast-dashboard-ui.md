@@ -1,4 +1,4 @@
-# ClipFast Dashboard UI — Implementation Plan
+# ClipFast Dashboard UI - Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -24,7 +24,7 @@ apps/web/
 │   └── (dashboard)/
 │       ├── layout.tsx                           # NEW: sidebar layout
 │       └── dashboard/
-│           ├── page.tsx                          # NEW: home — upload + jobs
+│           ├── page.tsx                          # NEW: home - upload + jobs
 │           ├── jobs/[id]/page.tsx                # NEW: job progress + clips
 │           ├── clips/[id]/page.tsx               # NEW: clip player + trim
 │           ├── plans/page.tsx                    # NEW: plan comparison
@@ -1121,7 +1121,7 @@ export function JobProgress({ jobId, initialStatus, onDone }: JobProgressProps) 
           <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
         )}
         <span className="text-sm font-medium">
-          {isFailed ? "Processing failed" : currentStatus === "DONE" ? "Complete" : `Processing — ${currentStatus.toLowerCase()}...`}
+          {isFailed ? "Processing failed" : currentStatus === "DONE" ? "Complete" : `Processing - ${currentStatus.toLowerCase()}...`}
         </span>
       </div>
 
@@ -1324,7 +1324,7 @@ export default function JobPage({
         ) : job.status === "DONE" ? (
           <div className="flex items-center gap-2 text-green-500">
             <span className="text-sm font-medium">
-              Processing complete — {clips.length} clip
+              Processing complete - {clips.length} clip
               {clips.length !== 1 ? "s" : ""} generated
             </span>
           </div>
@@ -2136,7 +2136,7 @@ export default function LandingPage() {
 
       {/* Footer */}
       <footer className="border-t border-border px-6 py-8 text-center text-sm text-muted-foreground">
-        ClipFast — AI Video Clipper
+        ClipFast - AI Video Clipper
       </footer>
     </div>
   );

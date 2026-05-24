@@ -1,6 +1,6 @@
-# ClipClap — Launch Design (Pricing, Retention, Architecture)
+# ClipClap - Launch Design (Pricing, Retention, Architecture)
 
-**Status:** Design approved — ready for implementation planning
+**Status:** Design approved - ready for implementation planning
 **Date:** 2026-04-19
 **Target:** v1 public launch for up to 100 paying customers
 
@@ -10,15 +10,15 @@
 
 This document specifies three tightly coupled decisions that must ship together for v1 public launch:
 
-1. **Pricing tiers and entitlements** — what users pay, what they get
-2. **Storage and billing lifecycle** — how clips are retained, what happens on cancel/downgrade/failed-payment
-3. **Runtime architecture** — how the service handles 50–100 daily active users without falling over
+1. **Pricing tiers and entitlements** - what users pay, what they get
+2. **Storage and billing lifecycle** - how clips are retained, what happens on cancel/downgrade/failed-payment
+3. **Runtime architecture** - how the service handles 50–100 daily active users without falling over
 
 These are coupled: pricing caps limit usage (which bounds compute cost), retention defines storage cost, and architecture defines the concurrency budget. Changing one without the others breaks the unit economics.
 
 **Scope boundary:** This is a v1 launch design, not a 12-month platform roadmap. Post-launch scaling (200+ DAU, GPU workers, multi-region) is intentionally out of scope.
 
-**Audience:** ClipClap targets "clippers" — people who generate short viral clips from long-form content (streams, podcasts, movies) for TikTok/Reels/Shorts monetization. Business goal is 100 paying customers on a controlled budget, not competing head-on with OpusClip/Vizard.
+**Audience:** ClipClap targets "clippers" - people who generate short viral clips from long-form content (streams, podcasts, movies) for TikTok/Reels/Shorts monetization. Business goal is 100 paying customers on a controlled budget, not competing head-on with OpusClip/Vizard.
 
 ---
 
@@ -29,12 +29,12 @@ These are coupled: pricing caps limit usage (which bounds compute cost), retenti
 | Plan | Weekly | Monthly | Min/week | Min/month | Storage | Retention | Subtitle styles | Priority |
 |---|---|---|---|---|---|---|---|---|
 | **Starter** | $3 | $9 | 75 | 270 | 20 clips | 7 days | 1 (TikTok preset) | normal |
-| **Plus** | — | $29 | — | 1,000 | 150 clips | 30 days | 3 presets | normal |
-| **Max** | — | $89 | — | 3,500 | 1,000 clips | 90 days | all | priority |
+| **Plus** | - | $29 | - | 1,000 | 150 clips | 30 days | 3 presets | normal |
+| **Max** | - | $89 | - | 3,500 | 1,000 clips | 90 days | all | priority |
 
 **Design intent:**
 
-- **Starter** is the trial-paid entry. Weekly billing attracts low-commitment users from TikTok/organic traffic. No free tier — resource-constrained launch, and paid entry filters abuse.
+- **Starter** is the trial-paid entry. Weekly billing attracts low-commitment users from TikTok/organic traffic. No free tier - resource-constrained launch, and paid entry filters abuse.
 - **Plus** is the main revenue driver. Monthly-only by design: removing Plus weekly avoids cannibalization of monthly MRR and reduces churn/dunning overhead.
 - **Max** is monthly-only to avoid "burst and ghost" power users who would ruin worker capacity planning on weekly plans.
 
@@ -47,7 +47,7 @@ Available on all plans. Used before subscription cycle ends, do not roll over.
 | Small | $6 | 100 | $0.060 | ~70% |
 | Large | $15 | 300 | $0.050 | ~70% |
 
-Top-up per-minute price is intentionally 2x the effective Plus monthly rate (~$0.029/min). This preserves the upgrade incentive — a user who regularly buys top-ups is always better off upgrading.
+Top-up per-minute price is intentionally 2x the effective Plus monthly rate (~$0.029/min). This preserves the upgrade incentive - a user who regularly buys top-ups is always better off upgrading.
 
 ### 1.3 Unit economics assumptions
 
@@ -59,13 +59,13 @@ All margin calculations in this document use the following baselines:
 | OpenAI GPT-4o-mini (highlights) | ~$0.00004 per source-minute | 1 API call per job, ~25K input + 1.5K output tokens |
 | Server compute (FFmpeg, amortized) | $0.006 per source-minute | ~$270/month infra ÷ 45,000 min/month at 50 DAU |
 | R2 storage + operations | ~$0.001 per source-minute averaged | Negligible; included for safety buffer |
-| GCP internet egress | Tracked separately | ~$0.12/GB outbound — monitored from day 1 |
+| GCP internet egress | Tracked separately | ~$0.12/GB outbound - monitored from day 1 |
 | **Total variable cost** | **≈ $0.013 per source-minute** | Used as conservative baseline |
 | Stripe payment processing | 2.9% + $0.30 per transaction | Stripe Payments standard |
 | Stripe Billing | +0.7% if enabled | Billed subscription features |
 | Stripe Tax (EU compliance) | +0.5% if enabled | For VAT-compliant EU B2C sales |
 
-**Cost optimization lever (post-launch):** OpenAI's `gpt-4o-mini-transcribe` is $0.003/min — half of Whisper. If quality is acceptable for ClipClap's use case, migrating drops total cost to ~$0.010/min and materially improves Max margin. A/B test post-launch, do not block MVP on this.
+**Cost optimization lever (post-launch):** OpenAI's `gpt-4o-mini-transcribe` is $0.003/min - half of Whisper. If quality is acceptable for ClipClap's use case, migrating drops total cost to ~$0.010/min and materially improves Max margin. A/B test post-launch, do not block MVP on this.
 
 ### 1.4 Margins at maximum usage
 
@@ -124,11 +124,11 @@ Clips whose `expiresAt <= NOW()` are hard-deleted by the hourly cleanup job. No 
 
 When a job generates clips that push the user over their count quota:
 
-- **Immediate:** email sent — "You're at X/Y clips. Your oldest N clips will be deleted in 24h. Upgrade or download now to keep them."
+- **Immediate:** email sent - "You're at X/Y clips. Your oldest N clips will be deleted in 24h. Upgrade or download now to keep them."
 - **Immediate:** in-dashboard banner showing at-risk clips
 - **24h later:** oldest N unpinned clips hard-deleted
 
-Rationale: This gives the user a grace period without blocking job creation. The user paid for a job — we shouldn't refuse to run it.
+Rationale: This gives the user a grace period without blocking job creation. The user paid for a job - we shouldn't refuse to run it.
 
 ### 2.4 Scenario: failed payment (dunning window)
 
@@ -161,7 +161,7 @@ Day 7:  All clips hard-deleted from R2
 
 ### 2.6 Scenario: user downgrades plan (e.g. Max → Plus)
 
-Downgrades are **strict** — no grandfathering of retention or quota.
+Downgrades are **strict** - no grandfathering of retention or quota.
 
 ```
 At effective date of downgrade:
@@ -258,7 +258,7 @@ Target: 100 paying customers, ~50-100 DAU at peak.
 
 CPU-bound steps (CUT + SUBTITLES) consume 50-80% of total job time. Worker pool must be sized for CPU parallelism, not I/O.
 
-### 3.3 Worker pool — launch capacity
+### 3.3 Worker pool - launch capacity
 
 **Launch capacity:** 2 VMs with 4 CPU-bound workers total.
 
@@ -368,7 +368,7 @@ CREATE INDEX idx_job_user_status ON "Job"(userId, status);
 
 **Memorystore Basic** ($50/month, 1 GB) is sufficient for BullMQ at this scale.
 
-Persistence is **disabled** — job state is durable in Postgres. Redis crash recovery handled by the reconciler (see 3.10).
+Persistence is **disabled** - job state is durable in Postgres. Redis crash recovery handled by the reconciler (see 3.10).
 
 ### 3.10 Reconciler on worker boot
 
@@ -409,7 +409,7 @@ Every log line from worker and API includes:
 
 **Transport for MVP:** Docker stdout + `docker compose logs`. Post-launch, forward to GCP Cloud Logging (free tier: 50 GB/month) or Papertrail ($7/month).
 
-**Bull-Board UI** (`@bull-board/express`) at `/admin/queues` — auth-gated, for operator debugging.
+**Bull-Board UI** (`@bull-board/express`) at `/admin/queues` - auth-gated, for operator debugging.
 
 **Health endpoint** `/api/health`:
 - Checks Postgres connection

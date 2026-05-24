@@ -8,35 +8,35 @@
 
 **Tech Stack:** Next.js 15 App Router, Prisma + PostgreSQL, Stripe Node SDK, BullMQ + Redis, vitest, Cloudflare R2 via AWS SDK.
 
-**Reference spec:** `docs/superpowers/specs/2026-04-19-clipclap-launch-design.md` — sections 1 (pricing), 2.4–2.8 (billing lifecycle scenarios), 3.6 (direct-to-R2 upload), 3.7 (API rate limiting is Plan 3, not here).
+**Reference spec:** `docs/superpowers/specs/2026-04-19-clipclap-launch-design.md` - sections 1 (pricing), 2.4–2.8 (billing lifecycle scenarios), 3.6 (direct-to-R2 upload), 3.7 (API rate limiting is Plan 3, not here).
 
 ---
 
 ## File Structure
 
 **New files:**
-- `packages/shared/src/config/plans.ts` — rewritten (same path, new content)
-- `packages/shared/src/services/billing.service.ts` — heavily extended
-- `packages/shared/src/services/topup.service.ts` — new, Stripe one-time top-up flow
-- `packages/shared/src/services/usage.service.ts` — new, minute-based usage queries
-- `apps/web/app/api/billing/topup/route.ts` — new endpoint
-- `apps/web/app/api/billing/portal/route.ts` — new, Stripe Customer Portal session
-- `prisma/migrations/<timestamp>_plan_rename_and_lifecycle/migration.sql` — generated
+- `packages/shared/src/config/plans.ts` - rewritten (same path, new content)
+- `packages/shared/src/services/billing.service.ts` - heavily extended
+- `packages/shared/src/services/topup.service.ts` - new, Stripe one-time top-up flow
+- `packages/shared/src/services/usage.service.ts` - new, minute-based usage queries
+- `apps/web/app/api/billing/topup/route.ts` - new endpoint
+- `apps/web/app/api/billing/portal/route.ts` - new, Stripe Customer Portal session
+- `prisma/migrations/<timestamp>_plan_rename_and_lifecycle/migration.sql` - generated
 
 **Modified files:**
-- `prisma/schema.prisma` — Plan enum, User lifecycle fields, Clip retention fields
-- `packages/shared/src/services/user.service.ts` — replace video-count with minute-usage
-- `packages/shared/src/services/index.ts` — export new services
-- `apps/web/app/api/jobs/route.ts` — abuse protections
-- `apps/web/app/api/uploads/route.ts` — file-size and duration pre-check
-- `apps/web/components/plan-card.tsx` — new tier names and features
-- `apps/web/app/(dashboard)/dashboard/plans/page.tsx` — new tier list
-- `apps/web/components/usage-bar.tsx` — minute display
-- `apps/web/components/sidebar.tsx` — usage data update
-- `apps/web/app/(dashboard)/layout.tsx` — pass minute usage
-- `.env.example` — new Stripe price IDs
-- `packages/shared/src/config/__tests__/plans.test.ts` — rewrite
-- `packages/shared/src/config/__tests__/plans.comprehensive.test.ts` — delete or rewrite
+- `prisma/schema.prisma` - Plan enum, User lifecycle fields, Clip retention fields
+- `packages/shared/src/services/user.service.ts` - replace video-count with minute-usage
+- `packages/shared/src/services/index.ts` - export new services
+- `apps/web/app/api/jobs/route.ts` - abuse protections
+- `apps/web/app/api/uploads/route.ts` - file-size and duration pre-check
+- `apps/web/components/plan-card.tsx` - new tier names and features
+- `apps/web/app/(dashboard)/dashboard/plans/page.tsx` - new tier list
+- `apps/web/components/usage-bar.tsx` - minute display
+- `apps/web/components/sidebar.tsx` - usage data update
+- `apps/web/app/(dashboard)/layout.tsx` - pass minute usage
+- `.env.example` - new Stripe price IDs
+- `packages/shared/src/config/__tests__/plans.test.ts` - rewrite
+- `packages/shared/src/config/__tests__/plans.comprehensive.test.ts` - delete or rewrite
 
 ---
 
@@ -937,7 +937,7 @@ git commit -m "chore(stripe): document v1 product setup, update env keys"
 
 ---
 
-## Task 9: Rewrite billing.service.ts — Checkout for Plans + Cycles
+## Task 9: Rewrite billing.service.ts - Checkout for Plans + Cycles
 
 **Files:**
 - Modify: `packages/shared/src/services/billing.service.ts`
@@ -976,7 +976,7 @@ vi.mock("../../lib/prisma", () => ({
 import { prisma } from "../../lib/prisma";
 import { createCheckoutSession } from "../billing.service";
 
-describe("billing.service — createCheckoutSession", () => {
+describe("billing.service - createCheckoutSession", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.STRIPE_SECRET_KEY = "sk_test";
@@ -1142,7 +1142,7 @@ export async function createCheckoutSession(
 export { getStripe, getPlanFromPriceId };
 ```
 
-Keep the existing `handleWebhook` and `getSubscription` functions temporarily — they will be rewritten in Task 10.
+Keep the existing `handleWebhook` and `getSubscription` functions temporarily - they will be rewritten in Task 10.
 
 - [ ] **Step 4: Run tests**
 
@@ -1176,7 +1176,7 @@ Append to `packages/shared/src/services/__tests__/billing.service.test.ts`:
 ```typescript
 import { handleWebhook } from "../billing.service";
 
-describe("billing.service — handleWebhook", () => {
+describe("billing.service - handleWebhook", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.STRIPE_WEBHOOK_SECRET = "whsec_test";
@@ -1449,7 +1449,7 @@ Expected: all 9 tests pass.
 
 ```bash
 git add packages/shared/src/services/billing.service.ts packages/shared/src/services/__tests__/billing.service.test.ts
-git commit -m "feat(billing): lifecycle webhook handlers — dunning, grace, plan change"
+git commit -m "feat(billing): lifecycle webhook handlers - dunning, grace, plan change"
 ```
 
 ---
@@ -1588,7 +1588,7 @@ export async function POST(req: NextRequest) {
 Append to `packages/shared/src/services/__tests__/billing.service.test.ts`:
 
 ```typescript
-describe("billing.service — topup webhook", () => {
+describe("billing.service - topup webhook", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.env.STRIPE_WEBHOOK_SECRET = "whsec_test";
@@ -2104,7 +2104,7 @@ export function PlanCard({
 
 - [ ] **Step 3: Update billing checkout route to accept plan+cycle**
 
-Edit `apps/web/app/api/billing/checkout/route.ts` — inspect current signature, update to accept `{plan, cycle}` from body and pass to `createCheckoutSession`:
+Edit `apps/web/app/api/billing/checkout/route.ts` - inspect current signature, update to accept `{plan, cycle}` from body and pass to `createCheckoutSession`:
 
 ```typescript
 const { plan, cycle } = await req.json();
@@ -2137,7 +2137,7 @@ git commit -m "feat(plans-ui): new tier cards with cycle toggle + top-up purchas
 
 - [ ] **Step 1: Update layout to pass minute usage**
 
-Edit `apps/web/app/(dashboard)/layout.tsx`. The current call `userService.getUsage(...)` returns `{videosUsed, videosLimit, plan}` — it now returns `{minutesUsed, minutesLimit, topUpMinutesRemaining, plan, billingCycle, storageClipsLimit}`. Update the `<Sidebar>` props:
+Edit `apps/web/app/(dashboard)/layout.tsx`. The current call `userService.getUsage(...)` returns `{videosUsed, videosLimit, plan}` - it now returns `{minutesUsed, minutesLimit, topUpMinutesRemaining, plan, billingCycle, storageClipsLimit}`. Update the `<Sidebar>` props:
 
 ```typescript
 <Sidebar
@@ -2285,7 +2285,7 @@ export async function POST(req: NextRequest) {
 
 - [ ] **Step 2: Export getStripe from shared**
 
-Ensure `getStripe` is exported from `packages/shared/src/services/billing.service.ts` (added in Task 9 step 3). Then ensure it's re-exported through `packages/shared/src/services/index.ts` — add if missing:
+Ensure `getStripe` is exported from `packages/shared/src/services/billing.service.ts` (added in Task 9 step 3). Then ensure it's re-exported through `packages/shared/src/services/index.ts` - add if missing:
 
 ```typescript
 export { getStripe } from "./billing.service";
@@ -2483,7 +2483,7 @@ Expected: pipeline runs to `DONE`, clips appear in dashboard.
 
 From Stripe Dashboard:
 1. Go to Customers → [your test customer] → Subscription
-2. Click "..." menu → "Charge customer now" — but with a card Stripe flags as failing (use test card `4000 0000 0000 0341`)
+2. Click "..." menu → "Charge customer now" - but with a card Stripe flags as failing (use test card `4000 0000 0000 0341`)
 3. Wait for the `invoice.payment_failed` event to fire
 4. Check DB:
 
@@ -2537,11 +2537,11 @@ Before handing off to execution:
   - Section 1 (Pricing): Tasks 5, 8, 9, 11, 14 ✓
   - Section 2.1-2.3 (retention data model): Tasks 3, 17 ✓
   - Sections 2.4-2.7 (lifecycle scenarios): Task 10 (state transitions only; cleanup is Plan 2) ✓
-  - Section 2.8 (GDPR erasure): NOT COVERED — intentional, Plan 2 scope
+  - Section 2.8 (GDPR erasure): NOT COVERED - intentional, Plan 2 scope
   - Section 2.9 (source video lifecycle): already implemented in current pipeline ✓
   - Section 2.10-2.11 (cleanup mechanism): Plan 2 scope
   - Section 3.6 (direct-to-R2 upload): Task 13 ✓
-  - Section 3.7 (API rate limiting): NOT COVERED — Plan 3 scope
+  - Section 3.7 (API rate limiting): NOT COVERED - Plan 3 scope
   - Section 1.6 (abuse protections): Task 12, 13 ✓
 
 - [ ] **Placeholder scan:** no "TODO", no "TBD", no "fill in", no "similar to".
@@ -2552,7 +2552,7 @@ Before handing off to execution:
   - `getPlanLimits(plan, cycle)` signature consistent across usage.service, billing.service, API routes ✓
   - `canSubmitJob(userId, durationMinutes)` signature consistent ✓
 
-- [ ] **Gaps:** Task 17 depends on user.plan being set before clip creation. For users whose plan changes during a job (rare edge case), clip inherits the plan at creation time — acceptable.
+- [ ] **Gaps:** Task 17 depends on user.plan being set before clip creation. For users whose plan changes during a job (rare edge case), clip inherits the plan at creation time - acceptable.
 
 ---
 
@@ -2560,7 +2560,7 @@ Before handing off to execution:
 
 Two execution options:
 
-1. **Subagent-Driven (recommended)** — I dispatch a fresh subagent per task, review between tasks, fast iteration
-2. **Inline Execution** — Execute tasks in this session using executing-plans, batch execution with checkpoints
+1. **Subagent-Driven (recommended)** - I dispatch a fresh subagent per task, review between tasks, fast iteration
+2. **Inline Execution** - Execute tasks in this session using executing-plans, batch execution with checkpoints
 
 Which approach?

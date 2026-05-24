@@ -13,28 +13,28 @@
 ## File Structure
 
 **New files:**
-- `packages/shared/src/lib/queues.ts` — queue names, role names, queue factory helpers, queue enqueue helpers.
-- `packages/shared/src/services/job-step.service.ts` — create/start/complete/fail helpers for `JobStep`.
-- `packages/shared/src/services/__tests__/job-step.service.test.ts` — tests for idempotent stage tracking.
-- `apps/worker/src/stages/download.ts` — download stage handler.
-- `apps/worker/src/stages/transcribe.ts` — transcription stage handler.
-- `apps/worker/src/stages/analyze.ts` — highlight analysis stage handler.
-- `apps/worker/src/stages/render.ts` — render stage handler for full video clips and trim clips.
-- `apps/worker/src/stages/finalize.ts` — final DB update, cost telemetry, final `DONE`.
-- `apps/worker/src/worker-app.ts` — creates a BullMQ Worker for one role.
-- `apps/worker/src/__tests__/stage-flow.test.ts` — tests stage handoff.
-- `prisma/migrations/20260509_stage_pipeline_job_steps/migration.sql` — `JobStep` table and stage enum.
+- `packages/shared/src/lib/queues.ts` - queue names, role names, queue factory helpers, queue enqueue helpers.
+- `packages/shared/src/services/job-step.service.ts` - create/start/complete/fail helpers for `JobStep`.
+- `packages/shared/src/services/__tests__/job-step.service.test.ts` - tests for idempotent stage tracking.
+- `apps/worker/src/stages/download.ts` - download stage handler.
+- `apps/worker/src/stages/transcribe.ts` - transcription stage handler.
+- `apps/worker/src/stages/analyze.ts` - highlight analysis stage handler.
+- `apps/worker/src/stages/render.ts` - render stage handler for full video clips and trim clips.
+- `apps/worker/src/stages/finalize.ts` - final DB update, cost telemetry, final `DONE`.
+- `apps/worker/src/worker-app.ts` - creates a BullMQ Worker for one role.
+- `apps/worker/src/__tests__/stage-flow.test.ts` - tests stage handoff.
+- `prisma/migrations/20260509_stage_pipeline_job_steps/migration.sql` - `JobStep` table and stage enum.
 
 **Modified files:**
-- `prisma/schema.prisma` — add `JobStep`, `JobStepStatus`, `JobStepName`, and artifact fields on `Job`.
-- `packages/shared/src/lib/index.ts` — export queue helpers.
-- `packages/shared/src/services/index.ts` — export job step service.
-- `packages/shared/src/services/job.service.ts` — enqueue `download` stage instead of monolithic `process-video`.
-- `packages/shared/src/services/clip.service.ts` — enqueue trim into `render` queue.
-- `apps/worker/src/index.ts` — choose worker role from `WORKER_ROLE`.
-- `apps/worker/src/pipeline.ts` — gradually shrink; keep legacy wrapper only until stage flow passes.
-- `docker-compose.yml` — replace one `worker` service with role-specific workers.
-- `apps/worker/package.json` — keep scripts compatible with one image.
+- `prisma/schema.prisma` - add `JobStep`, `JobStepStatus`, `JobStepName`, and artifact fields on `Job`.
+- `packages/shared/src/lib/index.ts` - export queue helpers.
+- `packages/shared/src/services/index.ts` - export job step service.
+- `packages/shared/src/services/job.service.ts` - enqueue `download` stage instead of monolithic `process-video`.
+- `packages/shared/src/services/clip.service.ts` - enqueue trim into `render` queue.
+- `apps/worker/src/index.ts` - choose worker role from `WORKER_ROLE`.
+- `apps/worker/src/pipeline.ts` - gradually shrink; keep legacy wrapper only until stage flow passes.
+- `docker-compose.yml` - replace one `worker` service with role-specific workers.
+- `apps/worker/package.json` - keep scripts compatible with one image.
 
 ---
 

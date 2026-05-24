@@ -1,4 +1,4 @@
-# ClipFast — Architecture & Technical Design
+# ClipFast - Architecture & Technical Design
 
 ## Overview
 
@@ -189,10 +189,10 @@ Job enters BullMQ queue
 
 ### Error Handling
 
-- Each step updates `Job.status` — user sees exactly where it failed
+- Each step updates `Job.status` - user sees exactly where it failed
 - BullMQ retry: 3 attempts with exponential backoff
 - On failure: `Job.status = FAILED`, `Job.error` = description
-- Temporary files in `/tmp` — cleaned up after job completes (success or failure)
+- Temporary files in `/tmp` - cleaned up after job completes (success or failure)
 
 ### Limit Enforcement
 
@@ -281,9 +281,9 @@ packages/shared/services/
 ### Pages
 
 ```
-/                          # Landing — hero + demo + pricing
+/                          # Landing - hero + demo + pricing
 /login                     # Google OAuth login
-/dashboard                 # Home — upload zone + recent jobs
+/dashboard                 # Home - upload zone + recent jobs
 /dashboard/jobs/:id        # Job progress + clips gallery
 /dashboard/clips/:id       # Clip player + trim editor + download
 /dashboard/plans           # Plan comparison + Stripe checkout

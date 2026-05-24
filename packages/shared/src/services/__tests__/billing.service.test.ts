@@ -25,7 +25,7 @@ vi.mock("../../lib/prisma", () => ({
 import { prisma } from "../../lib/prisma";
 import { createCheckoutSession, UnsupportedPlanCycleError, handleWebhook } from "../billing.service";
 
-describe("billing.service — createCheckoutSession", () => {
+describe("billing.service - createCheckoutSession", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("STRIPE_SECRET_KEY", "sk_test");
@@ -154,7 +154,7 @@ describe("billing.service — createCheckoutSession", () => {
   });
 });
 
-describe("billing.service — handleWebhook", () => {
+describe("billing.service - handleWebhook", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("STRIPE_SECRET_KEY", "sk_test");

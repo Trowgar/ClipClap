@@ -1,9 +1,16 @@
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
+import { prisma } from "@clipfast/shared";
+import { TelegramConnection } from "./telegram-connection";
 
 export default async function SettingsPage() {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
+
+  const user = await prisma.user.findUnique({
+    where: { id: session.user.id },
+    select: { telegramId: true },
+  });
 
   return (
     <div className="mx-auto max-w-2xl space-y-8">
@@ -38,6 +45,11 @@ export default async function SettingsPage() {
         </div>
       </div>
 
+      {/* Telegram */}
+      <div className="space-y-4">
+        <h2 className="text-lg font-semibold">Telegram</h2>
+        <TelegramConnection telegramId={user?.telegramId ?? null} />
+      </div>
     </div>
   );
 }

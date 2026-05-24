@@ -197,7 +197,7 @@ export async function getUsageForUser(userId: string): Promise<UsageSummary> {
 - [ ] **Step 6: Run tests to verify they pass**
 
 Run: `npx vitest run packages/shared/src/services/__tests__/usage.service.test.ts`
-Expected: all tests pass (including existing ones — verify no regression).
+Expected: all tests pass (including existing ones - verify no regression).
 
 - [ ] **Step 7: Run full suite + typecheck**
 
@@ -404,7 +404,7 @@ it("renders correct Russian noun plurals for clips and days", () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run apps/bot/src/__tests__/i18n.test.ts`
-Expected: All five new tests fail — `accountText` signature mismatch or text doesn't match.
+Expected: All five new tests fail - `accountText` signature mismatch or text doesn't match.
 
 - [ ] **Step 3: Update the `Dict` interface signature**
 
@@ -564,7 +564,7 @@ git -c user.email='trowgar@yahoo.com' -c user.name='Trowgar' commit -m "feat(bot
 **Files:**
 - Modify: `apps/bot/src/handlers.ts`
 
-This swaps the in-handler `prisma.clip.count` for the service call and passes all the new fields into `dict.accountText`. The header line "📊 Account" (or RU equivalent) is currently NOT in the dict — it's just the plain text from the dict. We add no new header for now; the existing flow sends `dict.accountText` as the message body directly.
+This swaps the in-handler `prisma.clip.count` for the service call and passes all the new fields into `dict.accountText`. The header line "📊 Account" (or RU equivalent) is currently NOT in the dict - it's just the plain text from the dict. We add no new header for now; the existing flow sends `dict.accountText` as the message body directly.
 
 - [ ] **Step 1: Add `getUsageForUser` to the shared import block**
 
@@ -703,12 +703,12 @@ git -c user.email='trowgar@yahoo.com' -c user.name='Trowgar' commit -m "feat(bot
 - [ ] **Step 1: Rebuild the bot container**
 
 Run: `docker compose up -d --build bot`
-Expected: Container comes up, logs show `Bot profile sync complete (en, ru) — check warnings above for any locale failures` (no warnings).
+Expected: Container comes up, logs show `Bot profile sync complete (en, ru) - check warnings above for any locale failures` (no warnings).
 
 - [ ] **Step 2: Verify active-plan view**
 
 In Telegram, tap 📊 Account (or 📊 Аккаунт) for a user with an active plan:
-- Confirm the new layout — plan line, renews line, blank, minutes line, optional top-up, blank, storage line, total line.
+- Confirm the new layout - plan line, renews line, blank, minutes line, optional top-up, blank, storage line, total line.
 - For RU users, confirm the noun plurals look correct (e.g., `1 день` / `3 дня` / `5 дней`; `1 клип` / `3 клипа` / `5 клипов`).
 - Confirm the `(225 left)` / `(осталось 225)` math matches `minutesLimit - minutesUsed`.
 
@@ -740,11 +740,11 @@ For a user with `topUpMinutesRemaining = 0`:
 - Section "Data layer" (new fields, parallel queries, `deletedAt: null` filter) → Task 1.
 - Section "i18n" (signature change, EN+RU templates, NONE branch, Russian plurals) → Task 2.
 - Section "Handler" (use `getUsageForUser`, compute `daysUntilPeriodEnd`, drop direct `prisma.clip.count`) → Task 3.
-- Section "Error handling" — `getUsageForUser` throws on missing user; the existing top-level error handling in `handleUpdate` catches and logs. No new error code needed.
-- Section "Testing" — service + i18n tests both included.
+- Section "Error handling" - `getUsageForUser` throws on missing user; the existing top-level error handling in `handleUpdate` catches and logs. No new error code needed.
+- Section "Testing" - service + i18n tests both included.
 
 **Risks / things to watch:**
 - The `replace(/\n\n\n+/g, "\n\n")` regex collapses extra blank lines when `topUpLine` is empty. Verify in tests by asserting no triple newlines in the output of the no-top-up case.
-- `billingCycle` is lower-cased in the handler (Prisma stores it as `"MONTHLY"`/`"WEEKLY"`). The RU template checks both upper and lower case to be defensive — that's intentional.
+- `billingCycle` is lower-cased in the handler (Prisma stores it as `"MONTHLY"`/`"WEEKLY"`). The RU template checks both upper and lower case to be defensive - that's intentional.
 - `daysUntilPeriodEnd = 0` renders "today" / "сегодня". If you'd prefer "tomorrow" semantics or a different threshold, change the comparison in both templates.
 - The service now runs three queries (job aggregate + 2 clip counts). All three are indexed on `userId` (per schema). Account view should remain sub-100ms.

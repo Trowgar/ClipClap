@@ -40,7 +40,7 @@ export function createTelegramProvider({
     issuer: TELEGRAM_OIDC_ISSUER,
     clientId,
     clientSecret,
-    checks: ["pkce", "state"],
+    checks: ["pkce"],
     idToken: true,
     authorization: {
       params: {

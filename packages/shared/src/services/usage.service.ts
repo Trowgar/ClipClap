@@ -23,7 +23,7 @@ export async function getMinutesUsedInPeriod(
 // Computes the start of the current billing period.
 // Anchors to Stripe-tracked currentPeriodEnd when present (correct behavior:
 // usage resets at renewal). Falls back to a rolling 7/30-day window when
-// currentPeriodEnd is missing or in the past — only happens for legacy users
+// currentPeriodEnd is missing or in the past - only happens for legacy users
 // or in dunning/canceled states where canSubmitJob will block anyway.
 function getPeriodStart(
   cycle: BillingCycle | null,

@@ -40,7 +40,7 @@ describe("configureBotProfile", () => {
     expect(client.setMyCommands).toHaveBeenCalledWith(t("ru").commands, "ru");
   });
 
-  it("does not throw when the client fails — logs a warning instead", async () => {
+  it("does not throw when the client fails - logs a warning instead", async () => {
     const client = {
       setMyDescription: vi
         .fn()

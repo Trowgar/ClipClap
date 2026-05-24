@@ -5,6 +5,7 @@ import { signIn } from "next-auth/react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
 import { ArrowLeft, Send } from "lucide-react";
+import { Logo } from "@/components/logo";
 
 type Step = "start" | "login" | "register";
 
@@ -132,16 +133,8 @@ export default function LoginPage() {
       <div className="relative w-full max-w-[380px]">
         {/* Logo */}
         <div className="flex justify-center mb-8">
-          <Link href="/" className="flex items-center gap-2.5">
-            <svg viewBox="0 0 32 32" fill="none" className="w-8 h-8">
-              <rect width="32" height="32" rx="8" fill="white" />
-              <rect x="8" y="7" width="10" height="18" rx="2.5" fill="none" stroke="black" strokeWidth="2" />
-              <rect x="14" y="7" width="10" height="18" rx="2.5" fill="black" />
-              <polygon points="18,13.5 18,18.5 21.5,16" fill="white" />
-            </svg>
-            <span className="text-lg font-semibold text-white tracking-tight">
-              ClipClap
-            </span>
+          <Link href="/" className="flex items-center" aria-label="ClipClap home">
+            <Logo className="h-7" />
           </Link>
         </div>
 

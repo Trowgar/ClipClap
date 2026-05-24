@@ -88,7 +88,7 @@ export async function createCheckoutSession(
   return session.url!;
 }
 
-// Webhook handler — routes Stripe lifecycle events that mutate User state:
+// Webhook handler - routes Stripe lifecycle events that mutate User state:
 // DUNNING on payment failure, ACTIVE on payment success, 7-day grace on
 // cancellation, plan/cycle changes on subscription updates, and top-up
 // minute credits on one-time payment completions.
@@ -163,7 +163,7 @@ export async function handleWebhook(
           ? invoice.subscription
           : invoice.subscription?.id;
       if (!subscriptionId) break;
-      // Don't immediately cancel — Stripe Smart Retries reattempts at
+      // Don't immediately cancel - Stripe Smart Retries reattempts at
       // days 3/7/12. We only flip to DUNNING and stamp dunningSince.
       // Idempotent: only stamp dunningSince on the FIRST failure so a
       // re-delivered event doesn't re-stamp "yesterday" as "today".
@@ -217,7 +217,7 @@ export async function handleWebhook(
         },
       });
 
-      // Notify on renewal only — first invoice ("subscription_create") is
+      // Notify on renewal only - first invoice ("subscription_create") is
       // already covered by checkout.session.completed.
       if (invoice.billing_reason === "subscription_cycle") {
         const user = await prisma.user.findUnique({

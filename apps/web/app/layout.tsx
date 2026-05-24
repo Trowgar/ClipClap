@@ -4,7 +4,7 @@ import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ClipClap — AI Video Clipper",
+  title: "ClipClap - AI Video Clipper",
   description: "Turn long videos into viral short clips with AI",
   icons: {
     icon: "/favicon.svg",

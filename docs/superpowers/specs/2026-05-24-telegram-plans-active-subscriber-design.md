@@ -1,4 +1,4 @@
-# Telegram Bot — 💎 Plans for Active Subscribers
+# Telegram Bot - 💎 Plans for Active Subscribers
 
 **Date:** 2026-05-24
 **Status:** Approved, ready for implementation
@@ -8,14 +8,14 @@
 
 A user tapping 💎 Plans (or 💎 Тарифы) should see something appropriate to their state:
 
-- **NONE plan** — show the existing "pick a plan to start clipping" prompt with Tribute tariff buttons. (Unchanged.)
-- **Active plan** — show a short summary (plan name, cycle, renewal date) plus a single inline button to the web dashboard for management. No tariff buttons (would risk Tribute creating a duplicate subscription).
+- **NONE plan** - show the existing "pick a plan to start clipping" prompt with Tribute tariff buttons. (Unchanged.)
+- **Active plan** - show a short summary (plan name, cycle, renewal date) plus a single inline button to the web dashboard for management. No tariff buttons (would risk Tribute creating a duplicate subscription).
 
 ## Non-goals
 
 - In-bot plan upgrade flow. Tribute URLs create new subscriptions; tapping a higher-tier button while already subscribed would double-charge. Upgrades and downgrades go through the web dashboard.
 - In-bot cancel / manage flow. All subscription mutation lives on Tribute (via the web dashboard).
-- DUNNING / CANCELED_GRACE / CANCELED state differentiation. These are valid states with `plan !== "NONE"` — treat them the same as ACTIVE for this view. Users hitting an actual processing blocker get the explanation through `canSubmitJob` (already implemented).
+- DUNNING / CANCELED_GRACE / CANCELED state differentiation. These are valid states with `plan !== "NONE"` - treat them the same as ACTIVE for this view. Users hitting an actual processing blocker get the explanation through `canSubmitJob` (already implemented).
 - Top-up minute packs in this view. Separate flow.
 - Web-dashboard parity. Out of scope here.
 
@@ -27,7 +27,7 @@ In `handleMenuAction(case "plans")`:
 
 ```
 if (existing is null OR usage.plan === "NONE"):
-  send welcomeNeedsPlan text + plansKeyboard (current behavior — unchanged)
+  send welcomeNeedsPlan text + plansKeyboard (current behavior - unchanged)
 else:
   fetch usage via getUsageForUser
   compute periodEnd ISO date, daysUntilPeriodEnd
@@ -102,7 +102,7 @@ In `apps/bot/src/handlers.ts`, replace the `case "plans":` block with:
 ```ts
 case "plans": {
   if (!existing) {
-    // No DB record yet — show pick-a-plan prompt
+    // No DB record yet - show pick-a-plan prompt
     const keyboard = plansKeyboard(dict, config);
     await client.sendMessage(
       message.chat.id,
@@ -162,7 +162,7 @@ In `apps/bot/src/__tests__/i18n.test.ts`, add:
 - `currentPlanText` RU plural at n=3: `"через 3 дня"`.
 - `manageOnWebBtn` matches expected literal in both locales.
 
-No service-level test changes needed — `getUsageForUser` is already covered.
+No service-level test changes needed - `getUsageForUser` is already covered.
 
 ## File changes
 

@@ -148,7 +148,7 @@ export async function processVideoJob(
         }),
       },
     });
-    console.log(`[${jobId}] Job complete — ${highlights.length} clips`);
+    console.log(`[${jobId}] Job complete - ${highlights.length} clips`);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unknown error";

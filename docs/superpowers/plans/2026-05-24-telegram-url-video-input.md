@@ -4,7 +4,7 @@
 
 **Goal:** Accept video URLs pasted into the Telegram chat, validate them via a fast `yt-dlp --simulate` probe, then enqueue them for processing using the existing `Job.sourceUrl` pipeline.
 
-**Architecture:** Add a URL detection regex + a synchronous `yt-dlp` probe step before enqueueing. The bot Docker image gains `yt-dlp` (already installed in the worker). The worker side is unchanged — it already pulls from `sourceUrl` via `yt-dlp`.
+**Architecture:** Add a URL detection regex + a synchronous `yt-dlp` probe step before enqueueing. The bot Docker image gains `yt-dlp` (already installed in the worker). The worker side is unchanged - it already pulls from `sourceUrl` via `yt-dlp`.
 
 **Tech Stack:** TypeScript, yt-dlp (Python CLI), Vitest, child_process.
 
@@ -20,7 +20,7 @@
 | `apps/bot/src/url-probe.ts` | create | `extractVideoUrl(text)` regex helper, `probeVideoUrl(url, timeoutMs)` execFile wrapper with timeout. |
 | `apps/bot/src/handlers.ts` | modify | New `handleVideoUrl(...)` function; wire URL detection into `handleUpdate` flow before the no-video-source fallback. |
 | `apps/bot/src/i18n.ts` | modify | Add `checkingLink` + `urlAccessFailed` to `Dict` with EN+RU values; mention URL support in `helpText`. |
-| `apps/bot/src/__tests__/url-probe.test.ts` | create | Unit tests for `extractVideoUrl` regex (5+ cases) and `probeVideoUrl` (mocked execFile — success, error, no-duration, timeout). |
+| `apps/bot/src/__tests__/url-probe.test.ts` | create | Unit tests for `extractVideoUrl` regex (5+ cases) and `probeVideoUrl` (mocked execFile - success, error, no-duration, timeout). |
 | `apps/bot/src/__tests__/i18n.test.ts` | modify | Assert new strings are non-empty per locale and helpText mentions URL. |
 
 ---
@@ -62,7 +62,7 @@ Expected: 3 new tests fail with `t("en").checkingLink is undefined` etc., and he
 
 - [ ] **Step 3: Add the two new fields to `Dict`**
 
-In `apps/bot/src/i18n.ts`, add to the `Dict` interface (placement doesn't matter — append at end is fine):
+In `apps/bot/src/i18n.ts`, add to the `Dict` interface (placement doesn't matter - append at end is fine):
 
 ```ts
   checkingLink: string;
@@ -83,7 +83,7 @@ And REPLACE the existing `helpText` in the `en` dict with:
 
 ```ts
   helpText: (url) =>
-    `Send me a video — I'll cut it into vertical clips with subtitles.\nYou can also paste a URL (YouTube, Twitch, TikTok, Vimeo, X and more).\n\nLimits: up to 3 hours source, up to 2 GB file size.\n\nCommands:\n• /start — main menu\n• /link — connect an existing clipclap.io account\n• /lang en|ru|auto — switch language\n\nWebsite: ${url}/dashboard`,
+    `Send me a video - I'll cut it into vertical clips with subtitles.\nYou can also paste a URL (YouTube, Twitch, TikTok, Vimeo, X and more).\n\nLimits: up to 3 hours source, up to 2 GB file size.\n\nCommands:\n• /start - main menu\n• /link - connect an existing clipclap.io account\n• /lang en|ru|auto - switch language\n\nWebsite: ${url}/dashboard`,
 ```
 
 - [ ] **Step 5: Add RU values + extend helpText**
@@ -100,7 +100,7 @@ And REPLACE the existing `helpText` in the `ru` dict with:
 
 ```ts
   helpText: (url) =>
-    `Пришли видео — нарежу вертикальные клипы с субтитрами.\nМожно также прислать ссылку (YouTube, Twitch, TikTok, Vimeo, X и др.).\n\nЛимиты: до 3 часов исходник, до 2 ГБ размер файла.\n\nКоманды:\n• /start — главное меню\n• /link — привязать существующий аккаунт clipclap.io\n• /lang en|ru|auto — сменить язык\n\nСайт: ${url}/dashboard`,
+    `Пришли видео - нарежу вертикальные клипы с субтитрами.\nМожно также прислать ссылку (YouTube, Twitch, TikTok, Vimeo, X и др.).\n\nЛимиты: до 3 часов исходник, до 2 ГБ размер файла.\n\nКоманды:\n• /start - главное меню\n• /link - привязать существующий аккаунт clipclap.io\n• /lang en|ru|auto - сменить язык\n\nСайт: ${url}/dashboard`,
 ```
 
 - [ ] **Step 6: Run tests to verify they pass**
@@ -122,7 +122,7 @@ git -c user.email='trowgar@yahoo.com' -c user.name='Trowgar' commit -m "feat(bot
 
 ---
 
-## Task 2: `url-probe.ts` — extractor + yt-dlp probe
+## Task 2: `url-probe.ts` - extractor + yt-dlp probe
 
 **Files:**
 - Create: `apps/bot/src/url-probe.ts`
@@ -228,7 +228,7 @@ describe("probeVideoUrl", () => {
     vi.useFakeTimers();
     const killSpy = vi.fn();
     execFileMock.mockImplementation((_cmd, _args, _opts, _cb: any) => {
-      // Never invoke callback — simulates a hung process
+      // Never invoke callback - simulates a hung process
       return { kill: killSpy } as never;
     });
 
@@ -246,7 +246,7 @@ describe("probeVideoUrl", () => {
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `npx vitest run apps/bot/src/__tests__/url-probe.test.ts`
-Expected: Module not found — `../url-probe` doesn't exist yet.
+Expected: Module not found - `../url-probe` doesn't exist yet.
 
 - [ ] **Step 3: Create `url-probe.ts`**
 
@@ -341,7 +341,7 @@ git -c user.email='trowgar@yahoo.com' -c user.name='Trowgar' commit -m "feat(bot
 
 ---
 
-## Task 3: Handler — wire URL detection into `handleUpdate`
+## Task 3: Handler - wire URL detection into `handleUpdate`
 
 **Files:**
 - Modify: `apps/bot/src/handlers.ts`
@@ -450,12 +450,12 @@ Expected: All green.
 
 ```bash
 git add apps/bot/src/handlers.ts
-git -c user.email='trowgar@yahoo.com' -c user.name='Trowgar' commit -m "feat(bot): accept video URLs — probe via yt-dlp and enqueue with sourceUrl"
+git -c user.email='trowgar@yahoo.com' -c user.name='Trowgar' commit -m "feat(bot): accept video URLs - probe via yt-dlp and enqueue with sourceUrl"
 ```
 
 ---
 
-## Task 4: Dockerfile — install yt-dlp in bot container
+## Task 4: Dockerfile - install yt-dlp in bot container
 
 **Files:**
 - Modify: `apps/bot/Dockerfile`
@@ -481,7 +481,7 @@ RUN apk add --no-cache openssl python3 py3-pip
 RUN pip3 install --break-system-packages yt-dlp
 ```
 
-(Same approach as `apps/worker/Dockerfile`. No `ffmpeg` — probe-only doesn't need it.)
+(Same approach as `apps/worker/Dockerfile`. No `ffmpeg` - probe-only doesn't need it.)
 
 - [ ] **Step 2: Rebuild the bot container**
 
@@ -528,7 +528,7 @@ Send `hello bot`. Expect: existing `sendVideoHint` ("Send me a video and I'll tu
 
 - [ ] **Step 4: Send a Twitch VOD URL**
 
-Send a Twitch VOD URL (e.g., `https://www.twitch.tv/videos/...`). Expect: same flow as YouTube — works because yt-dlp supports Twitch.
+Send a Twitch VOD URL (e.g., `https://www.twitch.tv/videos/...`). Expect: same flow as YouTube - works because yt-dlp supports Twitch.
 
 - [ ] **Step 5: Send a very long URL (over 3 h)**
 
@@ -549,11 +549,11 @@ Send a 4-hour YouTube video URL. Expect: the existing `blocked()` message with "
 - "Handler flow" → Task 3 (`handleVideoUrl`).
 - "i18n additions" → Task 1.
 - "Dockerfile change" → Task 4.
-- "Testing" — extract URL + probe (Task 2), i18n strings (Task 1).
-- "Error handling" — `probeVideoUrl` reasons map directly to `urlAccessFailed`; duration limit goes through `getSubmissionBlocker` reusing the existing path. All cases from spec table covered.
+- "Testing" - extract URL + probe (Task 2), i18n strings (Task 1).
+- "Error handling" - `probeVideoUrl` reasons map directly to `urlAccessFailed`; duration limit goes through `getSubmissionBlocker` reusing the existing path. All cases from spec table covered.
 
 **Risks / things to watch:**
-- Probe is synchronous on the bot's message-handling thread. With long-polling (single concurrent batch from `getUpdates`), one slow probe blocks the next message for up to 10 s. Acceptable for v1 — bot is light traffic. If it becomes a problem, fire-and-forget the probe with an explicit "processing your link…" message and a per-user lock.
-- yt-dlp's `--print "%(duration)s||%(title)s"` format: titles can theoretically contain `||`. We `.join("||")` to recover the title — safe.
+- Probe is synchronous on the bot's message-handling thread. With long-polling (single concurrent batch from `getUpdates`), one slow probe blocks the next message for up to 10 s. Acceptable for v1 - bot is light traffic. If it becomes a problem, fire-and-forget the probe with an explicit "processing your link…" message and a per-user lock.
+- yt-dlp's `--print "%(duration)s||%(title)s"` format: titles can theoretically contain `||`. We `.join("||")` to recover the title - safe.
 - If the user types `/help` or another command that happens to contain a URL substring (unlikely), the command parsing runs first (lines 122–149 in `handleUpdate`), so URL detection only fires when nothing else claimed the message.
-- yt-dlp version drift — `pip3 install yt-dlp` in the Dockerfile gets the latest at build time. Periodic image rebuilds are needed; otherwise the worker's pinned-by-build version may diverge from the bot's. Live with it for now; a follow-up could pin a specific version in both Dockerfiles.
+- yt-dlp version drift - `pip3 install yt-dlp` in the Dockerfile gets the latest at build time. Periodic image rebuilds are needed; otherwise the worker's pinned-by-build version may diverge from the bot's. Live with it for now; a follow-up could pin a specific version in both Dockerfiles.

@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { UsageBar } from "./usage-bar";
 import { UserNav } from "./user-nav";
 import { Separator } from "@/components/ui/separator";
+import { Logo } from "@/components/logo";
 
 interface SidebarProps {
   user: {
@@ -37,16 +38,8 @@ export function Sidebar({ user, usage }: SidebarProps) {
     <aside className="flex h-screen w-56 flex-col border-r border-border bg-background">
       {/* Logo */}
       <div className="flex h-14 items-center px-4 border-b border-border">
-        <Link href="/dashboard" className="flex items-center gap-2.5">
-          <svg viewBox="0 0 32 32" fill="none" className="w-6 h-6">
-            <rect width="32" height="32" rx="8" fill="currentColor" />
-            <rect x="8" y="7" width="10" height="18" rx="2.5" fill="none" stroke="black" strokeWidth="2" />
-            <rect x="14" y="7" width="10" height="18" rx="2.5" fill="black" />
-            <polygon points="18,13.5 18,18.5 21.5,16" fill="currentColor" />
-          </svg>
-          <span className="text-[15px] font-semibold tracking-tight">
-            ClipClap
-          </span>
+        <Link href="/dashboard" className="flex items-center" aria-label="ClipClap home">
+          <Logo className="h-6" />
         </Link>
       </div>
 

@@ -93,7 +93,7 @@ describe("probeVideoUrl", () => {
     vi.useFakeTimers();
     const killSpy = vi.fn();
     execFileMock.mockImplementation((_cmd, _args, _opts, _cb: any) => {
-      // Never invoke callback — simulates a hung process
+      // Never invoke callback - simulates a hung process
       return { kill: killSpy } as never;
     });
 

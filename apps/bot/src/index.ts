@@ -24,7 +24,7 @@ console.log("ClipClap Telegram bot starting");
 
 void (async () => {
   await configureBotProfile(client);
-  console.log("Bot profile sync complete (en, ru) — check warnings above for any locale failures");
+  console.log("Bot profile sync complete (en, ru) - check warnings above for any locale failures");
 })();
 
 void pollUpdates();

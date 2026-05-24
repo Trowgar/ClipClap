@@ -27,7 +27,7 @@ vi.mock("../../lib/queues", () => ({
 
 import { trimClip } from "../clip.service";
 
-describe("clip.service — trimClip", () => {
+describe("clip.service - trimClip", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.clipFindFirstOrThrow.mockResolvedValue({
