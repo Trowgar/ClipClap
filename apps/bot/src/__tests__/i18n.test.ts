@@ -311,9 +311,9 @@ describe("bot i18n", () => {
     expect(t5).toContain("Всего создано: 5 клипов");
   });
 
-  it("exposes manageOnWebBtn in both locales", () => {
-    expect(t("en").manageOnWebBtn).toBe("🔧 Manage on clipclap.io");
-    expect(t("ru").manageOnWebBtn).toBe("🔧 Управление на clipclap.io");
+  it("exposes manageSubscriptionBtn in both locales", () => {
+    expect(t("en").manageSubscriptionBtn).toBe("🔧 Manage subscription");
+    expect(t("ru").manageSubscriptionBtn).toBe("🔧 Управление подпиской");
   });
 
   it("currentPlanText renders EN active plan with renewal", () => {

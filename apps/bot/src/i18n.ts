@@ -85,7 +85,7 @@ export interface Dict {
     periodEnd: string | null;
     daysUntilPeriodEnd: number | null;
   }) => string;
-  manageOnWebBtn: string;
+  manageSubscriptionBtn: string;
 }
 
 const en: Dict = {
@@ -200,7 +200,7 @@ const en: Dict = {
           : ` (in ${daysUntilPeriodEnd} day${daysUntilPeriodEnd === 1 ? "" : "s"})`;
     return `${planLine}\nRenews: ${periodEnd}${suffix}`;
   },
-  manageOnWebBtn: "🔧 Manage on clipclap.io",
+  manageSubscriptionBtn: "🔧 Manage subscription",
 };
 
 const ru: Dict = {
@@ -330,7 +330,7 @@ const ru: Dict = {
           : ` (через ${daysUntilPeriodEnd} ${pluralizeRu(daysUntilPeriodEnd, "день", "дня", "дней")})`;
     return `${planLine}\nПродление: ${periodEnd}${suffix}`;
   },
-  manageOnWebBtn: "🔧 Управление на clipclap.io",
+  manageSubscriptionBtn: "🔧 Управление подпиской",
 };
 
 const dictionaries: Record<Locale, Dict> = { en, ru };

@@ -113,6 +113,56 @@ describe("usage.service", () => {
     expect(usage.clipsTotal).toBe(3);
   });
 
+  it("getUsageForUser reports paymentProvider 'tribute' when tributeSubscriptionId is set", async () => {
+    (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
+      id: "u1",
+      plan: "MAX",
+      billingCycle: "MONTHLY",
+      topUpMinutesRemaining: 0,
+      currentPeriodEnd: null,
+      tributeSubscriptionId: "sub_trib_1",
+      stripeSubscriptionId: null,
+    });
+    (prisma.job.aggregate as any).mockResolvedValue({ _sum: { sourceDurationSec: 0 } });
+    (prisma.clip.count as any).mockResolvedValue(0);
+
+    const usage = await getUsageForUser("u1");
+    expect(usage.paymentProvider).toBe("tribute");
+  });
+
+  it("getUsageForUser reports paymentProvider 'stripe' when stripeSubscriptionId is set", async () => {
+    (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
+      id: "u1",
+      plan: "MAX",
+      billingCycle: "MONTHLY",
+      topUpMinutesRemaining: 0,
+      currentPeriodEnd: null,
+      tributeSubscriptionId: null,
+      stripeSubscriptionId: "sub_stripe_1",
+    });
+    (prisma.job.aggregate as any).mockResolvedValue({ _sum: { sourceDurationSec: 0 } });
+    (prisma.clip.count as any).mockResolvedValue(0);
+
+    const usage = await getUsageForUser("u1");
+    expect(usage.paymentProvider).toBe("stripe");
+  });
+
+  it("getUsageForUser reports paymentProvider null when neither subscription id is set", async () => {
+    (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
+      id: "u1",
+      plan: "NONE",
+      billingCycle: null,
+      topUpMinutesRemaining: 0,
+      currentPeriodEnd: null,
+      tributeSubscriptionId: null,
+      stripeSubscriptionId: null,
+    });
+    (prisma.clip.count as any).mockResolvedValue(0);
+
+    const usage = await getUsageForUser("u1");
+    expect(usage.paymentProvider).toBeNull();
+  });
+
   it("canSubmitJob blocks when over period cap and no top-up", async () => {
     (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
       id: "u1",

@@ -218,13 +218,18 @@ async function handleMenuAction(
         daysUntilPeriodEnd,
       });
 
+      const manageUrl =
+        usage.paymentProvider === "tribute"
+          ? "https://t.me/tribute"
+          : `${config.appUrl}/dashboard/plans`;
+
       await client.sendMessage(message.chat.id, text, {
         replyMarkup: {
           inline_keyboard: [
             [
               {
-                text: dict.manageOnWebBtn,
-                url: `${config.appUrl}/dashboard/plans`,
+                text: dict.manageSubscriptionBtn,
+                url: manageUrl,
               },
             ],
           ],

@@ -43,6 +43,8 @@ function getPeriodStart(
   return fallback;
 }
 
+export type PaymentProvider = "stripe" | "tribute" | null;
+
 export interface UsageSummary {
   plan: Plan;
   billingCycle: BillingCycle | null;
@@ -54,6 +56,16 @@ export interface UsageSummary {
   retentionDays: number;
   currentPeriodEnd: Date | null;
   clipsTotal: number;
+  paymentProvider: PaymentProvider;
+}
+
+function resolvePaymentProvider(user: {
+  tributeSubscriptionId: string | null;
+  stripeSubscriptionId: string | null;
+}): PaymentProvider {
+  if (user.tributeSubscriptionId) return "tribute";
+  if (user.stripeSubscriptionId) return "stripe";
+  return null;
 }
 
 export async function getUsageForUser(userId: string): Promise<UsageSummary> {
@@ -63,6 +75,8 @@ export async function getUsageForUser(userId: string): Promise<UsageSummary> {
     prisma.clip.count({ where: { userId, deletedAt: null } }),
     prisma.clip.count({ where: { userId } }),
   ]);
+
+  const paymentProvider = resolvePaymentProvider(user);
 
   if (user.plan === "NONE") {
     return {
@@ -76,6 +90,7 @@ export async function getUsageForUser(userId: string): Promise<UsageSummary> {
       retentionDays: 0,
       currentPeriodEnd: null,
       clipsTotal,
+      paymentProvider,
     };
   }
 
@@ -98,6 +113,7 @@ export async function getUsageForUser(userId: string): Promise<UsageSummary> {
     retentionDays: limits.retentionDays,
     currentPeriodEnd: user.currentPeriodEnd,
     clipsTotal,
+    paymentProvider,
   };
 }
 
