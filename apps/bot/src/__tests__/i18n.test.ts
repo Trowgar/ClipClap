@@ -137,4 +137,177 @@ describe("bot i18n", () => {
     expect(t("ru").langBtnRu).toContain("Русский");
     expect(t("ru").langBtnAuto.toLowerCase()).toContain("авто");
   });
+
+  it("renders accountText NONE variant in both locales", () => {
+    const en = t("en").accountText({
+      plan: "NONE",
+      billingCycle: null,
+      periodEnd: null,
+      daysUntilPeriodEnd: null,
+      minutesUsed: 0,
+      minutesLimit: 0,
+      topUpMinutes: 0,
+      clipsStored: 0,
+      storageClipsLimit: 0,
+      retentionDays: 0,
+      clipsTotal: 0,
+    });
+    expect(en).toContain("Plan: no active plan");
+    expect(en).toContain("Pick a plan");
+    expect(en).toContain("Total clips created: 0");
+    expect(en).not.toContain("Minutes:");
+    expect(en).not.toContain("Storage:");
+
+    const ru = t("ru").accountText({
+      plan: "NONE",
+      billingCycle: null,
+      periodEnd: null,
+      daysUntilPeriodEnd: null,
+      minutesUsed: 0,
+      minutesLimit: 0,
+      topUpMinutes: 0,
+      clipsStored: 0,
+      storageClipsLimit: 0,
+      retentionDays: 0,
+      clipsTotal: 0,
+    });
+    expect(ru).toContain("Тариф: нет активного");
+    expect(ru).toContain("Выбери тариф");
+    expect(ru).toContain("Всего создано: 0");
+    expect(ru).not.toContain("Минуты:");
+    expect(ru).not.toContain("Хранилище:");
+  });
+
+  it("renders accountText active plan with top-up in EN", () => {
+    const text = t("en").accountText({
+      plan: "STARTER",
+      billingCycle: "monthly",
+      periodEnd: "2026-06-24",
+      daysUntilPeriodEnd: 31,
+      minutesUsed: 45,
+      minutesLimit: 270,
+      topUpMinutes: 100,
+      clipsStored: 8,
+      storageClipsLimit: 20,
+      retentionDays: 7,
+      clipsTotal: 42,
+    });
+    expect(text).toContain("Plan: STARTER (monthly)");
+    expect(text).toContain("Renews: 2026-06-24 (in 31 days)");
+    expect(text).toContain("Minutes: 45 / 270 this period (225 left)");
+    expect(text).toContain("Top-up: 100 minutes");
+    expect(text).toContain("Storage: 8 / 20 clips (kept for 7 days)");
+    expect(text).toContain("Total clips created: 42");
+  });
+
+  it("renders accountText active plan with top-up in RU with correct plurals", () => {
+    const text = t("ru").accountText({
+      plan: "STARTER",
+      billingCycle: "monthly",
+      periodEnd: "2026-06-24",
+      daysUntilPeriodEnd: 31,
+      minutesUsed: 45,
+      minutesLimit: 270,
+      topUpMinutes: 100,
+      clipsStored: 8,
+      storageClipsLimit: 20,
+      retentionDays: 7,
+      clipsTotal: 42,
+    });
+    expect(text).toContain("Тариф: STARTER (месячный)");
+    expect(text).toContain("Продление: 2026-06-24 (через 31 день)");
+    expect(text).toContain("Минуты: 45 / 270 в этом периоде (осталось 225)");
+    expect(text).toContain("Дополнительно: 100 минут");
+    expect(text).toContain("Хранилище: 8 / 20 клипов (хранятся 7 дней)");
+    expect(text).toContain("Всего создано: 42 клипа");
+  });
+
+  it("omits top-up line when topUpMinutes is 0", () => {
+    const en = t("en").accountText({
+      plan: "STARTER",
+      billingCycle: "monthly",
+      periodEnd: "2026-06-24",
+      daysUntilPeriodEnd: 31,
+      minutesUsed: 45,
+      minutesLimit: 270,
+      topUpMinutes: 0,
+      clipsStored: 8,
+      storageClipsLimit: 20,
+      retentionDays: 7,
+      clipsTotal: 42,
+    });
+    expect(en).not.toContain("Top-up");
+
+    const ru = t("ru").accountText({
+      plan: "STARTER",
+      billingCycle: "monthly",
+      periodEnd: "2026-06-24",
+      daysUntilPeriodEnd: 31,
+      minutesUsed: 45,
+      minutesLimit: 270,
+      topUpMinutes: 0,
+      clipsStored: 8,
+      storageClipsLimit: 20,
+      retentionDays: 7,
+      clipsTotal: 42,
+    });
+    expect(ru).not.toContain("Дополнительно");
+  });
+
+  it("renders correct Russian noun plurals for clips and days", () => {
+    const base = {
+      plan: "STARTER",
+      billingCycle: "monthly",
+      periodEnd: "2026-06-24",
+      minutesUsed: 0,
+      minutesLimit: 270,
+      topUpMinutes: 0,
+      storageClipsLimit: 20,
+      retentionDays: 7,
+    };
+    expect(
+      t("ru").accountText({
+        ...base,
+        daysUntilPeriodEnd: 1,
+        clipsStored: 1,
+        clipsTotal: 1,
+      })
+    ).toContain("через 1 день");
+
+    expect(
+      t("ru").accountText({
+        ...base,
+        daysUntilPeriodEnd: 3,
+        clipsStored: 3,
+        clipsTotal: 3,
+      })
+    ).toContain("через 3 дня");
+
+    expect(
+      t("ru").accountText({
+        ...base,
+        daysUntilPeriodEnd: 11,
+        clipsStored: 5,
+        clipsTotal: 5,
+      })
+    ).toContain("через 11 дней");
+
+    expect(
+      t("ru").accountText({
+        ...base,
+        daysUntilPeriodEnd: 21,
+        clipsStored: 21,
+        clipsTotal: 21,
+      })
+    ).toContain("через 21 день");
+
+    const t5 = t("ru").accountText({
+      ...base,
+      daysUntilPeriodEnd: null,
+      clipsStored: 5,
+      clipsTotal: 5,
+    });
+    expect(t5).toContain("Хранилище: 5 / 20 клипов");
+    expect(t5).toContain("Всего создано: 5 клипов");
+  });
 });

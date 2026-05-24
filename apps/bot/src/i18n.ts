@@ -61,6 +61,13 @@ export interface Dict {
     plan: string;
     billingCycle: string | null;
     periodEnd: string | null;
+    daysUntilPeriodEnd: number | null;
+    minutesUsed: number;
+    minutesLimit: number;
+    topUpMinutes: number;
+    clipsStored: number;
+    storageClipsLimit: number;
+    retentionDays: number;
     clipsTotal: number;
   }) => string;
   planNone: string;
@@ -126,10 +133,36 @@ const en: Dict = {
   menuLanguage: "🌐 Language",
   helpText: (url) =>
     `Send me a video — I'll cut it into vertical clips with subtitles.\n\nLimits: up to 3 hours source, up to 2 GB file size.\n\nCommands:\n• /start — main menu\n• /link — connect an existing clipclap.io account\n• /lang en|ru|auto — switch language\n\nWebsite: ${url}/dashboard`,
-  accountText: ({ plan, billingCycle, periodEnd, clipsTotal }) => {
-    const planLine = plan === "NONE" ? "Plan: no active plan" : `Plan: ${plan}${billingCycle ? ` (${billingCycle.toLowerCase()})` : ""}`;
-    const periodLine = periodEnd ? `\nRenews/expires: ${periodEnd}` : "";
-    return `${planLine}${periodLine}\nClips created: ${clipsTotal}`;
+  accountText: ({
+    plan,
+    billingCycle,
+    periodEnd,
+    daysUntilPeriodEnd,
+    minutesUsed,
+    minutesLimit,
+    topUpMinutes,
+    clipsStored,
+    storageClipsLimit,
+    retentionDays,
+    clipsTotal,
+  }) => {
+    if (plan === "NONE") {
+      return `Plan: no active plan\n\nPick a plan to start clipping.\nTotal clips created: ${clipsTotal}`;
+    }
+    const planLine = `Plan: ${plan}${billingCycle ? ` (${billingCycle})` : ""}`;
+    const renewSuffix =
+      daysUntilPeriodEnd === null
+        ? ""
+        : daysUntilPeriodEnd === 0
+          ? " (today)"
+          : ` (in ${daysUntilPeriodEnd} day${daysUntilPeriodEnd === 1 ? "" : "s"})`;
+    const renewLine = periodEnd ? `Renews: ${periodEnd}${renewSuffix}` : "";
+    const minutesLeft = Math.max(0, minutesLimit - minutesUsed);
+    const minutesLine = `Minutes: ${minutesUsed} / ${minutesLimit} this period (${minutesLeft} left)`;
+    const topUpLine = topUpMinutes > 0 ? `+ Top-up: ${topUpMinutes} minutes\n` : "";
+    const storageLine = `Storage: ${clipsStored} / ${storageClipsLimit} clips (kept for ${retentionDays} days)`;
+    const totalLine = `Total clips created: ${clipsTotal}`;
+    return `${planLine}\n${renewLine}\n\n${minutesLine}\n${topUpLine}\n${storageLine}\n${totalLine}`.replace(/\n\n\n+/g, "\n\n");
   },
   planNone: "no active plan",
   languageMenuPrompt: "Pick a language:",
@@ -205,10 +238,43 @@ const ru: Dict = {
   menuLanguage: "🌐 Язык",
   helpText: (url) =>
     `Пришли видео — нарежу вертикальные клипы с субтитрами.\n\nЛимиты: до 3 часов исходник, до 2 ГБ размер файла.\n\nКоманды:\n• /start — главное меню\n• /link — привязать существующий аккаунт clipclap.io\n• /lang en|ru|auto — сменить язык\n\nСайт: ${url}/dashboard`,
-  accountText: ({ plan, billingCycle, periodEnd, clipsTotal }) => {
-    const planLine = plan === "NONE" ? "Тариф: нет активного" : `Тариф: ${plan}${billingCycle ? ` (${billingCycle === "WEEKLY" ? "недельный" : "месячный"})` : ""}`;
-    const periodLine = periodEnd ? `\nДо: ${periodEnd}` : "";
-    return `${planLine}${periodLine}\nКлипов сделано: ${clipsTotal}`;
+  accountText: ({
+    plan,
+    billingCycle,
+    periodEnd,
+    daysUntilPeriodEnd,
+    minutesUsed,
+    minutesLimit,
+    topUpMinutes,
+    clipsStored,
+    storageClipsLimit,
+    retentionDays,
+    clipsTotal,
+  }) => {
+    if (plan === "NONE") {
+      return `Тариф: нет активного\n\nВыбери тариф, чтобы начать.\nВсего создано: ${clipsTotal} ${pluralizeRu(clipsTotal, "клип", "клипа", "клипов")}`;
+    }
+    const cycleLabel =
+      billingCycle === null
+        ? ""
+        : billingCycle === "weekly" || billingCycle === "WEEKLY"
+          ? " (недельный)"
+          : " (месячный)";
+    const planLine = `Тариф: ${plan}${cycleLabel}`;
+    const renewSuffix =
+      daysUntilPeriodEnd === null
+        ? ""
+        : daysUntilPeriodEnd === 0
+          ? " (сегодня)"
+          : ` (через ${daysUntilPeriodEnd} ${pluralizeRu(daysUntilPeriodEnd, "день", "дня", "дней")})`;
+    const renewLine = periodEnd ? `Продление: ${periodEnd}${renewSuffix}` : "";
+    const minutesLeft = Math.max(0, minutesLimit - minutesUsed);
+    const minutesLine = `Минуты: ${minutesUsed} / ${minutesLimit} в этом периоде (осталось ${minutesLeft})`;
+    const topUpLine =
+      topUpMinutes > 0 ? `+ Дополнительно: ${topUpMinutes} минут\n` : "";
+    const storageLine = `Хранилище: ${clipsStored} / ${storageClipsLimit} ${pluralizeRu(clipsStored, "клип", "клипа", "клипов")} (хранятся ${retentionDays} ${pluralizeRu(retentionDays, "день", "дня", "дней")})`;
+    const totalLine = `Всего создано: ${clipsTotal} ${pluralizeRu(clipsTotal, "клип", "клипа", "клипов")}`;
+    return `${planLine}\n${renewLine}\n\n${minutesLine}\n${topUpLine}\n${storageLine}\n${totalLine}`.replace(/\n\n\n+/g, "\n\n");
   },
   planNone: "нет активного",
   languageMenuPrompt: "Выбери язык:",
