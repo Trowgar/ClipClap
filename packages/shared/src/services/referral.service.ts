@@ -191,3 +191,63 @@ export async function voidCommission(
   });
   return { voided: result.count };
 }
+
+/** Move matured PENDING commissions to AVAILABLE. Idempotent. */
+export async function releaseMaturedCommissions(
+  now: Date = new Date()
+): Promise<{ released: number }> {
+  const result = await prisma.referralCommission.updateMany({
+    where: { status: "PENDING", availableAt: { lte: now } },
+    data: { status: "AVAILABLE" },
+  });
+  return { released: result.count };
+}
+
+/**
+ * Create payout batches for referrers whose AVAILABLE balance >= minimum and
+ * who have a payout destination set. Each referrer is processed in its own
+ * transaction that creates the payout AND locks its commissions to
+ * PAYOUT_PENDING, so a double-run cannot create duplicate payouts.
+ */
+export async function runPayoutBatch(
+  _now: Date = new Date()
+): Promise<{ created: number }> {
+  const groups = await prisma.referralCommission.groupBy({
+    by: ["referrerId"],
+    where: { status: "AVAILABLE", payoutId: null },
+    _sum: { commissionUsd: true },
+  });
+
+  let created = 0;
+  for (const group of groups) {
+    const amountUsd = round2(group._sum.commissionUsd ?? 0);
+    if (amountUsd < REFERRAL_CONFIG.minPayoutUsd) continue;
+
+    const referrer = await prisma.user.findUnique({
+      where: { id: group.referrerId },
+      select: { id: true, payoutDestination: true, payoutMethod: true },
+    });
+    if (!referrer?.payoutDestination) continue;
+
+    await prisma.$transaction(async (tx) => {
+      const payout = await tx.referralPayout.create({
+        data: {
+          referrerId: referrer.id,
+          amountUsd,
+          networkFeeUsd: 0,
+          netPayoutUsd: amountUsd,
+          payoutMethod: referrer.payoutMethod,
+          destination: referrer.payoutDestination!,
+          status: "PENDING",
+        },
+      });
+      await tx.referralCommission.updateMany({
+        where: { referrerId: referrer.id, status: "AVAILABLE", payoutId: null },
+        data: { status: "PAYOUT_PENDING", payoutId: payout.id },
+      });
+    });
+    created += 1;
+  }
+
+  return { created };
+}

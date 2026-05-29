@@ -7,6 +7,9 @@ const mocks = vi.hoisted(() => ({
   commissionFindUnique: vi.fn(),
   commissionCreate: vi.fn(),
   commissionUpdateMany: vi.fn(),
+  commissionGroupBy: vi.fn(),
+  payoutCreate: vi.fn(),
+  txFn: vi.fn(),
 }));
 
 vi.mock("../../lib/prisma", () => ({
@@ -20,11 +23,16 @@ vi.mock("../../lib/prisma", () => ({
       findUnique: mocks.commissionFindUnique,
       create: mocks.commissionCreate,
       updateMany: mocks.commissionUpdateMany,
+      groupBy: mocks.commissionGroupBy,
     },
+    referralPayout: {
+      create: mocks.payoutCreate,
+    },
+    $transaction: mocks.txFn,
   },
 }));
 
-import { attachReferral, recordCommission, voidCommission } from "../referral.service";
+import { attachReferral, recordCommission, voidCommission, releaseMaturedCommissions, runPayoutBatch } from "../referral.service";
 
 const REFERRER = {
   id: "ref-1",
@@ -193,5 +201,65 @@ describe("voidCommission", () => {
       },
       data: { status: "VOIDED", adminNote: "refund" },
     });
+  });
+});
+
+describe("releaseMaturedCommissions", () => {
+  it("flips matured PENDING commissions to AVAILABLE", async () => {
+    mocks.commissionUpdateMany.mockResolvedValue({ count: 3 });
+    const now = new Date("2026-05-20T00:00:00Z");
+    const result = await releaseMaturedCommissions(now);
+    expect(result.released).toBe(3);
+    expect(mocks.commissionUpdateMany).toHaveBeenCalledWith({
+      where: { status: "PENDING", availableAt: { lte: now } },
+      data: { status: "AVAILABLE" },
+    });
+  });
+});
+
+describe("runPayoutBatch", () => {
+  it("creates a payout and locks commissions for referrers above the minimum", async () => {
+    mocks.commissionGroupBy.mockResolvedValue([
+      { referrerId: "ref-1", _sum: { commissionUsd: 60 } },
+      { referrerId: "ref-2", _sum: { commissionUsd: 10 } }, // below $50, skipped
+    ]);
+    mocks.userFindUnique.mockResolvedValueOnce({
+      id: "ref-1",
+      payoutDestination: "Tabc...",
+      payoutMethod: "USDT_TRC20",
+    });
+    // $transaction runs the callback with a tx client; reuse the same mocks.
+    mocks.txFn.mockImplementation(async (cb) =>
+      cb({
+        referralPayout: { create: mocks.payoutCreate },
+        referralCommission: { updateMany: mocks.commissionUpdateMany },
+      })
+    );
+    mocks.payoutCreate.mockResolvedValue({ id: "pay-1" });
+    mocks.commissionUpdateMany.mockResolvedValue({ count: 2 });
+
+    const now = new Date("2026-06-01T00:00:00Z");
+    const result = await runPayoutBatch(now);
+
+    expect(result.created).toBe(1);
+    expect(mocks.payoutCreate).toHaveBeenCalledTimes(1);
+    const created = mocks.payoutCreate.mock.calls[0][0].data;
+    expect(created.referrerId).toBe("ref-1");
+    expect(created.amountUsd).toBe(60);
+    expect(created.destination).toBe("Tabc...");
+  });
+
+  it("skips referrers without a payout destination", async () => {
+    mocks.commissionGroupBy.mockResolvedValue([
+      { referrerId: "ref-3", _sum: { commissionUsd: 80 } },
+    ]);
+    mocks.userFindUnique.mockResolvedValueOnce({
+      id: "ref-3",
+      payoutDestination: null,
+      payoutMethod: null,
+    });
+    const result = await runPayoutBatch(new Date("2026-06-01T00:00:00Z"));
+    expect(result.created).toBe(0);
+    expect(mocks.payoutCreate).not.toHaveBeenCalled();
   });
 });
