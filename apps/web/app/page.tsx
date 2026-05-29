@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { ArrowRight, ArrowDown, Play, Check, PaperPlaneTilt, Lightning } from "@phosphor-icons/react";
+import { ArrowRight, ArrowDown, Play, Check, PaperPlaneTilt, Lightning, Handshake } from "@phosphor-icons/react";
 import { Logo } from "@/components/logo";
 
 /* ────────────────────────────────────────────
@@ -688,6 +688,77 @@ export default function LandingPage() {
               </FadeIn>
             ))}
           </div>
+        </div>
+      </section>
+
+      {/* ── Affiliate ── */}
+      <section
+        id="affiliate"
+        className="relative scroll-mt-20 overflow-hidden border-t border-white/[0.04] py-24 sm:py-32"
+      >
+        {/* Soft spotlight */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute left-1/2 top-1/2 h-[420px] w-[760px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/[0.03] blur-[120px]"
+        />
+
+        <div className="relative mx-auto max-w-4xl px-6 text-center">
+          <FadeIn>
+            <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3.5 py-1.5">
+              <Handshake className="h-3.5 w-3.5 text-white" />
+              <span className="text-xs font-medium text-neutral-400">
+                Affiliate Program
+              </span>
+            </div>
+
+            <h2 className="text-2xl font-bold leading-[1.1] tracking-[-0.03em] sm:text-3xl lg:text-[44px]">
+              <span className="text-white">Share ClipClap.</span>{" "}
+              <span className="text-neutral-500">Get paid for life.</span>
+            </h2>
+
+            <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-neutral-400 sm:text-[15px]">
+              Bring creators to ClipClap and earn{" "}
+              <span className="font-medium text-white">30% of every payment</span>{" "}
+              they make, for as long as they keep clipping. No cap. No expiry.
+            </p>
+          </FadeIn>
+
+          <FadeIn delay={0.1}>
+            <div className="mt-12 grid gap-4 text-left sm:grid-cols-3">
+              {[
+                { stat: "30%", label: "Commission on every payment, recurring." },
+                { stat: "Lifetime", label: "You earn for as long as your referral stays subscribed." },
+                { stat: "1st & 15th", label: "Paid out twice a month, $50 minimum." },
+              ].map((h) => (
+                <div
+                  key={h.stat}
+                  className="rounded-2xl border border-white/[0.06] bg-white/[0.01] p-5"
+                >
+                  <div className="text-2xl font-bold tracking-tight text-white">
+                    {h.stat}
+                  </div>
+                  <p className="mt-1.5 text-sm leading-relaxed text-neutral-500">
+                    {h.label}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </FadeIn>
+
+          <FadeIn delay={0.18}>
+            <div className="mt-12 flex flex-col items-center gap-3">
+              <Link
+                href="/login"
+                className="group inline-flex items-center gap-2 rounded-xl bg-white px-6 py-3 text-sm font-semibold text-black transition-all hover:scale-[1.02] hover:bg-neutral-200 active:scale-[0.98]"
+              >
+                Become a partner
+                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+              </Link>
+              <p className="text-xs text-neutral-600">
+                Free to join. Grab your referral link from the dashboard.
+              </p>
+            </div>
+          </FadeIn>
         </div>
       </section>
 
