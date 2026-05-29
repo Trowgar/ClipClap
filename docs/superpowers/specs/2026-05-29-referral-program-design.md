@@ -52,9 +52,10 @@ referralCode            String?   @unique   // auto 8-char slug, lazily generate
 referredById            String?             // the referrer; set once, immutable
 referredBy              User?     @relation("Referrals", fields: [referredById], references: [id])
 referrals               User[]    @relation("Referrals")
-payoutDestination       String?             // crypto address / payout details, set by referrer
-payoutMethod            String?             // e.g. "USDT_TRC20", "PAYPAL"
+payoutDestination       String?             // validated per payoutMethod, set by referrer
+payoutMethod            String?             // "USDT_TRC20" | "PAYPAL" | "BANK"
 referralTermsAcceptedAt DateTime?           // must be set before a referral code is issued
+referralTermsVersion    String?             // which terms version was accepted (e.g. "2026-05-29")
 ```
 
 ### 3.2 `ReferralCommission` - the ledger (one row per referred payment)
@@ -78,9 +79,12 @@ model ReferralCommission {
   originalCurrency  String                                   // "usd","eur","rub"
   originalAmount    Float                                    // amount in payment currency
   exchangeRateToUsd Float                                    // fixed at record creation
-  grossAmountUsd    Float                                    // before processor fee
-  feeUsd            Float                                    // Stripe: real balance_transaction fee; Tribute: configured 10%
-  netAmountUsd      Float                                    // gross - fee  (commission base)
+  grossAmountUsd    Float                                    // before deductions
+  processorFeeUsd   Float                                    // Stripe: real balance_transaction fee; Tribute: configured 10%
+  taxUsd            Float            @default(0)              // VAT/tax (0 at MVP, field ready)
+  discountUsd       Float            @default(0)              // coupons/discounts (0 at MVP, field ready)
+  refundUsd         Float            @default(0)              // partial refund tracking (0 at MVP)
+  netAmountUsd      Float                                    // gross - processorFee - tax - discount (commission base)
   rateBps           Int                                      // 3000 = 30%, fixed at accrual
   commissionUsd     Float                                    // net * rateBps/10000
   status            CommissionStatus @default(PENDING)
@@ -97,7 +101,7 @@ model ReferralCommission {
 }
 ```
 
-> `@@unique([source, externalPaymentId])` is sufficient to guarantee "one payment = one commission" - a payment belongs to exactly one referred user, hence one referrer. `referrerId` is intentionally **not** part of the key.
+> `@@unique([source, externalPaymentId])` is sufficient to guarantee "one payment = one commission" - a payment belongs to exactly one referred user, hence one referrer. `referrerId` is intentionally **not** part of the key. (Future: if a single invoice ever carries multiple billable line items, the key would extend to `[source, externalPaymentId, referredUserId]`; not needed for the current one-payment-one-commission model.)
 
 ### 3.3 `ReferralPayout` - a batch payout to one referrer
 ```prisma
@@ -165,14 +169,14 @@ Single idempotent function in `referral.service`:
 
 ```
 recordCommission({ payerUserId, source, externalPaymentId, originalAmount,
-                   originalCurrency, exchangeRateToUsd, grossAmountUsd, feeUsd, paidAt }):
+                   originalCurrency, exchangeRateToUsd, grossAmountUsd, processorFeeUsd, paidAt }):
   1. payer = getUser(payerUserId)
   2. if !payer.referredById -> return            // unattached payer
   3. if referrer is self (id/telegram/email)     // safety net
        -> return
   4. if referrer is banned                        // /refban
        -> return
-  5. netAmountUsd  = grossAmountUsd - feeUsd
+  5. netAmountUsd  = grossAmountUsd - processorFeeUsd - taxUsd - discountUsd   // tax/discount = 0 at MVP
   6. commissionUsd = round(netAmountUsd * RATE_BPS / 10000, 2)
   7. upsert ReferralCommission by (source, externalPaymentId)
        - on conflict: no-op (duplicate webhook)
@@ -183,13 +187,13 @@ recordCommission({ payerUserId, source, externalPaymentId, originalAmount,
 - **Stripe** - `billing.service.ts` `handleWebhook`, case `invoice.payment_succeeded`:
   - `externalPaymentId = invoice.id`
   - `grossAmountUsd = amount_paid / 100` (normalized to USD)
-  - `feeUsd` = real fee from the invoice's `balance_transaction`
+  - `processorFeeUsd` = real fee from the invoice's `balance_transaction`
   - `paidAt = status_transitions.paid_at ?? created`
   - Covers both first payment and renewals.
 - **Tribute** - `tribute.service.ts` `applySubscription` (`newSubscription` + `renewedSubscription`):
   - `externalPaymentId = period_id ?? `${subscription_id}:${expires_at}`` (each renewal has a distinct `expires_at`, so periods never collapse)
   - `grossAmountUsd` from `payload.amount` normalized to USD
-  - `feeUsd` = configured Tribute fee (10%)
+  - `processorFeeUsd` = configured Tribute fee (10%)
 
 ### 5.2 Currency normalization
 Non-USD payments are normalized using a fixed `exchangeRateToUsd` from config, **captured on the commission record** (`originalCurrency`, `originalAmount`, `exchangeRateToUsd`) so later rate changes never cause reconciliation drift.
@@ -232,7 +236,7 @@ In a single transaction per referrer (prevents double payouts):
 - **Reject** - `REJECTED` (`rejectedAt`); linked commissions revert to `AVAILABLE` (return to next batch). For fraud cases.
 - `/ref <code|telegramId>` - referrer card: total earned, available, pending payout, paid, referred-users count, active-subscriptions count, refund/chargeback count, status (active/banned).
 - `/refban <userId>` - stop **future** accrual; leaves current commissions untouched.
-- `/refvoid <userId>` - void current `AVAILABLE` / `PENDING` / `PAYOUT_PENDING` commissions.
+- `/refvoid <userId> <reason>` - void current `AVAILABLE` / `PENDING` / `PAYOUT_PENDING` commissions. **Reason is mandatory** and written to each affected commission's `adminNote` (no void without a reason).
 
 Approve and Mark-as-paid are deliberately separate steps (approve now, send USDT/PayPal/bank manually, then record the tx).
 
@@ -249,7 +253,7 @@ tx: 0xabc...
 ## 7. Referrer-Facing UI
 
 ### 7.1 Web - `/dashboard/referrals`
-- Terms gate: if `referralTermsAcceptedAt` is unset, show a join screen - "By joining the affiliate program, you agree to the payout terms and anti-fraud rules." Accepting sets the timestamp and issues the code.
+- Terms gate: if `referralTermsAcceptedAt` is unset, show a join screen - "By joining the affiliate program, you agree to the payout terms and anti-fraud rules." Accepting sets `referralTermsAcceptedAt` **and** `referralTermsVersion = REFERRAL_CONFIG.termsVersion`, then issues the code. If terms later change (e.g. 30% → 20%), the stored version records what each referrer agreed to.
 - Referral links with copy buttons: `clipclap.io/?ref=CODE` and `t.me/ClipClapBot?start=ref_CODE`.
 - Balance: **Pending** / **Available** / **Paid (total)**.
 - "Next payout date: 1st / 15th" and "Minimum payout: $50".
@@ -276,7 +280,14 @@ tx: 0xabc...
   Minimum payout: $50
   ```
 - `/balance` - detailed balance + next payout date.
-- `/payout` - set/change `payoutDestination` and `payoutMethod`.
+- `/payout` - set/change `payoutMethod` + `payoutDestination`, with per-method validation.
+
+**Payout destination validation** (web and bot share one validator):
+| `payoutMethod` | `payoutDestination` format |
+|---|---|
+| `PAYPAL` | valid email |
+| `USDT_TRC20` | TRON address (starts with `T`, base58, 34 chars) |
+| `BANK` | free text (IBAN/account), non-empty, manual admin verification |
 
 Surface split: **web** for detailed stats, **bot** for quick actions + notifications, **admin Telegram CRM** for manual approve/reject.
 
@@ -304,6 +315,7 @@ export const REFERRAL_CONFIG = {
   minPayoutUsd: 50,
   attributionWindowDays: 30,
   codeLength: 8,
+  termsVersion: "2026-05-29",    // bump when commission terms change
   feeRateBps: { TRIBUTE: 1000 }, // Stripe fee read from balance_transaction; Tribute 10%
   exchangeRatesToUsd: { usd: 1, eur: 1.08, rub: 0.011 }, // fixed at MVP
 } as const;
