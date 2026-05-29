@@ -11,7 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Scissors, Loader2 } from "lucide-react";
+import { Scissors, CircleNotch } from "@phosphor-icons/react";
 import { api } from "@/lib/api";
 import { formatDuration } from "@/lib/utils";
 
@@ -128,7 +128,7 @@ export function TrimEditor({
       >
         {loading ? (
           <>
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            <CircleNotch weight="bold" className="mr-2 h-4 w-4 animate-spin" />
             Trimming...
           </>
         ) : (

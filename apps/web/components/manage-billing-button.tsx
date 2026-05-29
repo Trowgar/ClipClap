@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2 } from "lucide-react";
+import { CircleNotch } from "@phosphor-icons/react";
 import { api } from "@/lib/api";
 
 export function ManageBillingButton() {
@@ -28,7 +28,7 @@ export function ManageBillingButton() {
         disabled={loading}
         className="inline-flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm transition-colors hover:bg-accent disabled:opacity-60"
       >
-        {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+        {loading && <CircleNotch weight="bold" className="h-3.5 w-3.5 animate-spin" />}
         Manage billing
       </button>
       {error && <p className="mt-2 text-xs text-destructive" role="alert">{error}</p>}

@@ -6,12 +6,12 @@ import type { ProjectDetail as ProjectDetailData } from "@clipfast/shared";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
-  CheckCircle2,
-  Clock3,
-  Film,
-  Layers3,
-  Trash2,
-} from "lucide-react";
+  CheckCircle,
+  Clock,
+  FilmStrip,
+  Stack,
+  Trash,
+} from "@phosphor-icons/react";
 import { ClipCard } from "@/components/clip-card";
 import { JobProgress } from "@/components/job-progress";
 import { Button } from "@/components/ui/button";
@@ -115,7 +115,7 @@ export function ProjectDetail({
           disabled={deleting}
           className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
         >
-          <Trash2 className="mr-2 h-4 w-4" />
+          <Trash className="mr-2 h-4 w-4" />
           {deleting ? "Deleting…" : "Delete project"}
         </Button>
       </div>
@@ -131,22 +131,22 @@ export function ProjectDetail({
       ) : project.status === "DONE" ? (
         <div className="grid gap-2 rounded-lg border border-border bg-card/40 p-2 sm:grid-cols-4">
           <ProjectMetric
-            icon={<CheckCircle2 className="h-4 w-4 text-green-400" />}
+            icon={<CheckCircle className="h-4 w-4 text-green-400" />}
             label="Status"
             value="Ready"
           />
           <ProjectMetric
-            icon={<Film className="h-4 w-4 text-muted-foreground" />}
+            icon={<FilmStrip className="h-4 w-4 text-muted-foreground" />}
             label="Clips"
             value={`${clips.length}`}
           />
           <ProjectMetric
-            icon={<Clock3 className="h-4 w-4 text-muted-foreground" />}
+            icon={<Clock className="h-4 w-4 text-muted-foreground" />}
             label="Runtime"
             value={formatDuration(totalClipDuration)}
           />
           <ProjectMetric
-            icon={<Layers3 className="h-4 w-4 text-muted-foreground" />}
+            icon={<Stack className="h-4 w-4 text-muted-foreground" />}
             label="Source"
             value={
               project.sourceDurationSec

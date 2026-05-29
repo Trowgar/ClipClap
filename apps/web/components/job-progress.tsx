@@ -2,7 +2,7 @@
 
 import { useJobProgress } from "@/hooks/use-jobs";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, CheckCircle2, XCircle } from "lucide-react";
+import { CircleNotch, CheckCircle, XCircle } from "@phosphor-icons/react";
 
 interface JobProgressProps {
   jobId: string;
@@ -37,9 +37,9 @@ export function JobProgress({ jobId, initialStatus, onDone }: JobProgressProps) 
         {isFailed ? (
           <XCircle className="h-5 w-5 text-destructive" />
         ) : currentStatus === "DONE" ? (
-          <CheckCircle2 className="h-5 w-5 text-green-500" />
+          <CheckCircle className="h-5 w-5 text-green-500" />
         ) : (
-          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          <CircleNotch weight="bold" className="h-5 w-5 animate-spin text-muted-foreground" />
         )}
         <span className="text-sm font-medium">
           {isFailed ? "Processing failed" : currentStatus === "DONE" ? "Complete" : `Processing - ${currentStatus.toLowerCase()}...`}

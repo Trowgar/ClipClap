@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Download, ExternalLink, Loader2 } from "lucide-react";
+import { DownloadSimple, ArrowSquareOut, CircleNotch } from "@phosphor-icons/react";
 import { api } from "@/lib/api";
 import type { InvoiceRow } from "@clipfast/shared";
 
@@ -122,7 +122,7 @@ export function InvoiceTable({
                         className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                         title="Download PDF"
                       >
-                        <Download className="h-3 w-3" />
+                        <DownloadSimple className="h-3 w-3" />
                         PDF
                       </a>
                     )}
@@ -134,7 +134,7 @@ export function InvoiceTable({
                         className="inline-flex items-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                         title="View invoice"
                       >
-                        <ExternalLink className="h-3 w-3" />
+                        <ArrowSquareOut className="h-3 w-3" />
                         View
                       </a>
                     )}
@@ -157,7 +157,7 @@ export function InvoiceTable({
             disabled={loading}
             className="inline-flex items-center gap-2 rounded-md border border-border px-4 py-2 text-sm font-medium transition-colors hover:bg-accent disabled:opacity-50"
           >
-            {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            {loading && <CircleNotch weight="bold" className="h-3.5 w-3.5 animate-spin" />}
             {loading ? "Loading…" : "Load more"}
           </button>
         </div>

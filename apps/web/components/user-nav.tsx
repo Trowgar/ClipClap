@@ -7,7 +7,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { LogOut, Settings, User } from "lucide-react";
+import { SignOut, Gear, User } from "@phosphor-icons/react";
 import { signOut } from "next-auth/react";
 
 interface UserNavProps {
@@ -43,13 +43,13 @@ export function UserNav({ name, email, avatarUrl }: UserNavProps) {
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
           <a href="/dashboard/settings">
-            <Settings className="mr-2 h-4 w-4" />
+            <Gear className="mr-2 h-4 w-4" />
             Settings
           </a>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => signOut({ callbackUrl: "/login" })}>
-          <LogOut className="mr-2 h-4 w-4" />
+          <SignOut className="mr-2 h-4 w-4" />
           Sign out
         </DropdownMenuItem>
       </DropdownMenuContent>

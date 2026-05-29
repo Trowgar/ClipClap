@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2 } from "lucide-react";
+import { CircleNotch } from "@phosphor-icons/react";
 import type { TopupPack } from "@clipfast/shared";
 import { api } from "@/lib/api";
 
@@ -40,7 +40,7 @@ export function TopupButton({ pack, minutes, priceUsd }: TopupButtonProps) {
         disabled={loading}
         className="inline-flex items-center gap-2 rounded-md bg-white px-3 py-1.5 text-sm font-medium text-black transition-colors hover:bg-neutral-200 disabled:opacity-60"
       >
-        {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+        {loading && <CircleNotch weight="bold" className="h-3.5 w-3.5 animate-spin" />}
         Buy
       </button>
     </div>

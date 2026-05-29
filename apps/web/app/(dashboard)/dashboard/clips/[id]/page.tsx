@@ -7,7 +7,7 @@ import { ClipPlayer } from "@/components/clip-player";
 import { TrimEditor } from "@/components/trim-editor";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, Download, Loader2 } from "lucide-react";
+import { ArrowLeft, DownloadSimple, CircleNotch } from "@phosphor-icons/react";
 import { formatDuration } from "@/lib/utils";
 import { api } from "@/lib/api";
 
@@ -64,9 +64,9 @@ export default function ClipPage({
         </div>
         <Button onClick={handleDownload} disabled={downloading}>
           {downloading ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            <CircleNotch weight="bold" className="mr-2 h-4 w-4 animate-spin" />
           ) : (
-            <Download className="mr-2 h-4 w-4" />
+            <DownloadSimple className="mr-2 h-4 w-4" />
           )}
           Download
         </Button>

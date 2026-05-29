@@ -3,7 +3,7 @@
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { ArrowRight, Film, FolderOpen, Trash2 } from "lucide-react";
+import { ArrowRight, FilmStrip, FolderOpen, Trash } from "@phosphor-icons/react";
 import { Badge } from "@/components/ui/badge";
 import { cn, formatDate, formatDuration } from "@/lib/utils";
 import type { ProjectSummary } from "@clipfast/shared";
@@ -183,7 +183,7 @@ export function ProjectTable({ projects: initialProjects }: ProjectTableProps) {
                 aria-label={`Delete ${project.title}`}
                 className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40 group-hover:opacity-100 focus:opacity-100"
               >
-                <Trash2 className="h-4 w-4" />
+                <Trash className="h-4 w-4" />
               </button>
             </div>
           ))}
@@ -234,7 +234,7 @@ function ProjectPreview({ project }: { project: SerializedProjectSummary }) {
         />
       ) : (
         <div className="flex h-full w-full items-center justify-center text-muted-foreground">
-          <Film className="h-5 w-5" />
+          <FilmStrip className="h-5 w-5" />
         </div>
       )}
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/25 to-transparent" />

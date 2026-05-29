@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { ArrowRight, Loader2, Lock, Paperclip, X, Link2 } from "lucide-react";
+import { ArrowRight, CircleNotch, Lock, Paperclip, X, LinkSimple } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -247,12 +247,12 @@ export function UploadZone({
               className="ml-auto rounded p-1 text-neutral-500 transition-colors hover:bg-white/[0.06] hover:text-white disabled:opacity-40"
               aria-label="Remove file"
             >
-              <X className="h-3.5 w-3.5" />
+              <X weight="bold" className="h-3.5 w-3.5" />
             </button>
           </div>
         ) : (
           <div className="flex min-w-0 flex-1 items-center gap-2">
-            <Link2 className="h-3.5 w-3.5 shrink-0 text-neutral-500" />
+            <LinkSimple className="h-3.5 w-3.5 shrink-0 text-neutral-500" />
             <input
               type="text"
               value={url}
@@ -295,7 +295,7 @@ export function UploadZone({
           )}
         >
           {loading ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <CircleNotch weight="bold" className="h-3.5 w-3.5 animate-spin" />
           ) : (
             <>
               Cut
@@ -329,7 +329,7 @@ export function UploadZone({
                       : "cursor-not-allowed border border-white/[0.04] text-neutral-700"
                 )}
               >
-                {!isAvailable && <Lock className="h-2.5 w-2.5" />}
+                {!isAvailable && <Lock weight="bold" className="h-2.5 w-2.5" />}
                 {isOff ? "Off" : PRESET_LABEL[p]}
               </button>
             );

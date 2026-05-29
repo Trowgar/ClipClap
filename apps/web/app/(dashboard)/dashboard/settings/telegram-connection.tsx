@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { Send } from "lucide-react";
+import { PaperPlaneTilt } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 
 interface Props {
@@ -127,7 +127,7 @@ export function TelegramConnection({ telegramId }: Props) {
         <div className="flex items-center justify-between rounded-lg border border-border p-4">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#2AABEE]/15">
-              <Send className="h-4 w-4 text-[#2AABEE]" />
+              <PaperPlaneTilt className="h-4 w-4 text-[#2AABEE]" />
             </div>
             <div>
               <p className="text-sm font-medium">Telegram connected</p>
@@ -163,7 +163,7 @@ export function TelegramConnection({ telegramId }: Props) {
           disabled={status === "deep-linking"}
           className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg border border-[#2AABEE]/30 bg-[#2AABEE]/10 px-4 py-2 text-sm font-medium text-white transition-all hover:bg-[#2AABEE]/15 disabled:opacity-40"
         >
-          <Send className="h-4 w-4 text-[#2AABEE]" />
+          <PaperPlaneTilt className="h-4 w-4 text-[#2AABEE]" />
           {status === "deep-linking" ? "Opening Telegram..." : "Connect via Telegram"}
         </button>
       </div>

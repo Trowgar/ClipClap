@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CreditCard, FolderOpen, Home, Receipt, Settings } from "lucide-react";
+import { CreditCard, FolderOpen, House, Receipt, Gear } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { UsageBar } from "./usage-bar";
 import { UserNav } from "./user-nav";
@@ -24,11 +24,11 @@ interface SidebarProps {
 }
 
 const navItems = [
-  { href: "/dashboard", label: "Home", icon: Home },
+  { href: "/dashboard", label: "Home", icon: House },
   { href: "/dashboard/projects", label: "Projects", icon: FolderOpen },
   { href: "/dashboard/plans", label: "Plans", icon: CreditCard },
   { href: "/dashboard/billing", label: "Billing", icon: Receipt },
-  { href: "/dashboard/settings", label: "Settings", icon: Settings },
+  { href: "/dashboard/settings", label: "Settings", icon: Gear },
 ];
 
 export function Sidebar({ user, usage }: SidebarProps) {

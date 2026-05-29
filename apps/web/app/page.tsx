@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { ArrowRight, ArrowDown, Play, Check, Send, Zap } from "lucide-react";
+import { ArrowRight, ArrowDown, Play, Check, PaperPlaneTilt, Lightning } from "@phosphor-icons/react";
 import { Logo } from "@/components/logo";
 
 /* ────────────────────────────────────────────
@@ -141,7 +141,7 @@ function ClipCard({
           {/* Play button */}
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="w-9 h-9 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity">
-              <Play className="w-3.5 h-3.5 text-white fill-white ml-0.5" />
+              <Play weight="fill" className="w-3.5 h-3.5 text-white fill-white ml-0.5" />
             </div>
           </div>
 
@@ -232,7 +232,7 @@ function TelegramMock() {
                               className="absolute inset-0 w-full h-full object-cover"
                             />
                             <div className="absolute inset-0 flex items-center justify-center">
-                              <Play className="w-2.5 h-2.5 text-white/60 fill-white/60" />
+                              <Play weight="fill" className="w-2.5 h-2.5 text-white/60 fill-white/60" />
                             </div>
                             <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-white/10">
                               <div
@@ -288,7 +288,7 @@ function TelegramMock() {
             </p>
           </div>
           <div className="w-8 h-8 rounded-full bg-[#2AABEE] flex items-center justify-center flex-shrink-0">
-            <Send className="w-3.5 h-3.5 text-white ml-[-1px]" />
+            <PaperPlaneTilt className="w-3.5 h-3.5 text-white ml-[-1px]" />
           </div>
         </div>
       </div>
@@ -376,7 +376,7 @@ export default function LandingPage() {
             transition={{ duration: 0.5 }}
             className="inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3.5 py-1.5 mb-6"
           >
-            <Zap className="w-3.5 h-3.5 text-white" />
+            <Lightning className="w-3.5 h-3.5 text-white" />
             <span className="text-xs font-medium text-neutral-300">
               Post 10× more clips
             </span>
@@ -438,7 +438,7 @@ export default function LandingPage() {
                 <div className="absolute top-0 left-0 right-0 h-[8%] bg-gradient-to-b from-black/40 to-transparent" />
                 <div className="absolute inset-0 flex items-center justify-center">
                   <div className="w-14 h-14 rounded-full bg-white/10 backdrop-blur-sm flex items-center justify-center border border-white/10 hover:bg-white/20 transition-colors cursor-pointer">
-                    <Play className="w-6 h-6 text-white fill-white ml-0.5" />
+                    <Play weight="fill" className="w-6 h-6 text-white fill-white ml-0.5" />
                   </div>
                 </div>
                 <div className="absolute bottom-0 left-0 right-0 px-4 py-3 bg-gradient-to-t from-black/80 to-transparent flex items-end justify-between">

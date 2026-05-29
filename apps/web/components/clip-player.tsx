@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { CircleNotch } from "@phosphor-icons/react";
 import { api } from "@/lib/api";
 
 interface ClipPlayerProps {
@@ -30,7 +30,7 @@ export function ClipPlayer({
   if (loading) {
     return (
       <div className="flex aspect-[9/16] max-h-[500px] items-center justify-center rounded-lg bg-card">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+        <CircleNotch weight="bold" className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     );
   }

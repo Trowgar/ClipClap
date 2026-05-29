@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Loader2 } from "lucide-react";
+import { Check, CircleNotch } from "@phosphor-icons/react";
 import type { Plan, BillingCycle } from "@prisma/client";
 import { api } from "@/lib/api";
 
@@ -116,7 +116,7 @@ export function PlanCard({
               : "bg-white/[0.06] text-white hover:bg-white/[0.1]"
         }`}
       >
-        {loading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+        {loading && <CircleNotch weight="bold" className="h-3.5 w-3.5 animate-spin" />}
         {isCurrent ? "Current plan" : loading ? "Loading…" : "Subscribe"}
       </button>
     </div>

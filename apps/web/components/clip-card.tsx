@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Download, Film, Loader2, Scissors, Trash2 } from "lucide-react";
+import { DownloadSimple, FilmStrip, CircleNotch, Scissors, Trash } from "@phosphor-icons/react";
 import { formatDuration } from "@/lib/utils";
 import { api } from "@/lib/api";
 import Link from "next/link";
@@ -101,7 +101,7 @@ export function ClipCard({
       <div className="relative aspect-[9/16] overflow-hidden bg-black">
         {previewLoading ? (
           <div className="flex h-full items-center justify-center text-muted-foreground">
-            <Loader2 className="h-5 w-5 animate-spin" />
+            <CircleNotch weight="bold" className="h-5 w-5 animate-spin" />
           </div>
         ) : previewUrl ? (
           <video
@@ -114,7 +114,7 @@ export function ClipCard({
           />
         ) : (
           <div className="flex h-full items-center justify-center text-muted-foreground">
-            <Film className="h-6 w-6" />
+            <FilmStrip className="h-6 w-6" />
           </div>
         )}
 
@@ -152,9 +152,9 @@ export function ClipCard({
             aria-label={`Download ${clip.title}`}
           >
             {downloading ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <CircleNotch weight="bold" className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Download className="h-3.5 w-3.5" />
+              <DownloadSimple className="h-3.5 w-3.5" />
             )}
             <span className="text-xs">Download</span>
           </Button>
@@ -180,9 +180,9 @@ export function ClipCard({
             aria-label={`Delete ${clip.title}`}
           >
             {deleting ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <CircleNotch weight="bold" className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Trash2 className="h-3.5 w-3.5" />
+              <Trash className="h-3.5 w-3.5" />
             )}
           </Button>
         </div>

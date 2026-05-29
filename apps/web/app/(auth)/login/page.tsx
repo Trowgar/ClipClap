@@ -4,7 +4,7 @@ import { useState, useCallback } from "react";
 import { signIn } from "next-auth/react";
 import { motion, AnimatePresence } from "framer-motion";
 import Link from "next/link";
-import { ArrowLeft, Send } from "lucide-react";
+import { ArrowLeft, PaperPlaneTilt } from "@phosphor-icons/react";
 import { Logo } from "@/components/logo";
 
 type Step = "start" | "login" | "register";
@@ -224,7 +224,7 @@ export default function LoginPage() {
                   onClick={handleTelegramSignIn}
                   className="mt-3 flex w-full items-center justify-center gap-3 rounded-lg border border-[#2AABEE]/30 bg-[#2AABEE]/10 px-4 py-2.5 text-sm font-medium text-white transition-all hover:bg-[#2AABEE]/15 active:scale-[0.98]"
                 >
-                  <Send className="h-4 w-4 text-[#2AABEE]" />
+                  <PaperPlaneTilt className="h-4 w-4 text-[#2AABEE]" />
                   Continue with Telegram
                 </button>
               </motion.div>
