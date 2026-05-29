@@ -10,3 +10,10 @@ export {
 } from "./queues";
 export type { StageName } from "./queues";
 export { computeClipExpiresAt } from "./retention";
+export {
+  getReferralQueue,
+  registerReferralSchedules,
+  REFERRAL_QUEUE_NAME,
+  HOLD_RELEASE_JOB,
+  PAYOUT_BATCH_JOB,
+} from "./referral-queue";
