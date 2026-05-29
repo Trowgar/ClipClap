@@ -358,8 +358,18 @@ async function handleStart(
     if (isNew) {
       const { referralService } = await import("@clipfast/shared");
       await referralService.attachReferral(user.id, payload.code);
+      const keyboard = plansKeyboard(dict, config);
+      await client.sendMessage(
+        message.chat.id,
+        dict.newAccountCreated(config.appUrl),
+        keyboard ? { replyMarkup: keyboard } : undefined
+      );
+      await client.sendMessage(message.chat.id, dict.menuHint, {
+        replyMarkup: buildMainMenu(dict),
+      });
+      return; // bypass the two-button onboarding screen (deep-link)
     }
-    // fall through to the normal welcome flow below
+    // existing user: fall through to the normal welcome flow below
   }
 
   if (!existing) {
