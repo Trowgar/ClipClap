@@ -11,6 +11,8 @@ export * as telegramLinkService from "./telegram-link.service";
 export * as tributeService from "./tribute.service";
 export * as telegramNotificationService from "./telegram-notification.service";
 export * as referralService from "./referral.service";
+export * as walletService from "./wallet.service";
+export * from "./wallet.service";
 export * from "./telegram-notification.service";
 export * from "./usage.service";
 export * from "./job-step.service";
