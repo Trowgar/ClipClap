@@ -2,13 +2,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   userFindUnique: vi.fn(),
+  userFindFirst: vi.fn(),
   userUpdate: vi.fn(),
   userUpdateMany: vi.fn(),
   commissionFindUnique: vi.fn(),
+  commissionFindMany: vi.fn(),
   commissionCreate: vi.fn(),
   commissionUpdateMany: vi.fn(),
   commissionGroupBy: vi.fn(),
+  commissionAggregate: vi.fn(),
+  commissionCount: vi.fn(),
   payoutCreate: vi.fn(),
+  payoutFindMany: vi.fn(),
+  payoutFindUniqueOrThrow: vi.fn(),
+  payoutUpdate: vi.fn(),
+  payoutUpdateMany: vi.fn(),
   txFn: vi.fn(),
 }));
 
@@ -16,23 +24,44 @@ vi.mock("../../lib/prisma", () => ({
   prisma: {
     user: {
       findUnique: mocks.userFindUnique,
+      findFirst: mocks.userFindFirst,
       update: mocks.userUpdate,
       updateMany: mocks.userUpdateMany,
     },
     referralCommission: {
       findUnique: mocks.commissionFindUnique,
+      findMany: mocks.commissionFindMany,
       create: mocks.commissionCreate,
       updateMany: mocks.commissionUpdateMany,
       groupBy: mocks.commissionGroupBy,
+      aggregate: mocks.commissionAggregate,
+      count: mocks.commissionCount,
     },
     referralPayout: {
       create: mocks.payoutCreate,
+      findMany: mocks.payoutFindMany,
+      findUniqueOrThrow: mocks.payoutFindUniqueOrThrow,
+      update: mocks.payoutUpdate,
+      updateMany: mocks.payoutUpdateMany,
     },
     $transaction: mocks.txFn,
   },
 }));
 
-import { attachReferral, recordCommission, voidCommission, releaseMaturedCommissions, runPayoutBatch, getReferralBalance, validatePayoutDestination, setPayoutDestination } from "../referral.service";
+import {
+  attachReferral,
+  recordCommission,
+  voidCommission,
+  voidReferrerCommissions,
+  releaseMaturedCommissions,
+  runPayoutBatch,
+  getReferralBalance,
+  validatePayoutDestination,
+  setPayoutDestination,
+  approvePayout,
+  markPayoutPaid,
+  rejectPayout,
+} from "../referral.service";
 
 const REFERRER = {
   id: "ref-1",
@@ -188,21 +217,314 @@ describe("recordCommission", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// voidCommission
+// ---------------------------------------------------------------------------
+
 describe("voidCommission", () => {
-  it("voids non-paid commissions for a payment and records the reason", async () => {
-    mocks.commissionUpdateMany.mockResolvedValue({ count: 1 });
-    const result = await voidCommission("STRIPE", "in_123", "refund");
-    expect(result.voided).toBe(1);
-    expect(mocks.commissionUpdateMany).toHaveBeenCalledWith({
-      where: {
-        source: "STRIPE",
-        externalPaymentId: "in_123",
-        status: { in: ["PENDING", "AVAILABLE", "PAYOUT_PENDING"] },
-      },
-      data: { status: "VOIDED", adminNote: "refund" },
+  it("voids non-paid commissions, sets payoutId null, detaches from open payout, wraps in transaction", async () => {
+    // Simulate one PAYOUT_PENDING commission linked to payout "pay-1"
+    const txCommissionUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const txPayoutFindMany = vi.fn().mockResolvedValue([
+      { id: "pay-1", status: "PENDING", networkFeeUsd: 0 },
+    ]);
+    const txCommissionAggregate = vi.fn().mockResolvedValue({
+      _sum: { commissionUsd: 0 },
     });
+    const txPayoutUpdate = vi.fn().mockResolvedValue({});
+
+    mocks.txFn.mockImplementation(async (cb) =>
+      cb({
+        referralCommission: {
+          updateMany: txCommissionUpdateMany,
+          aggregate: txCommissionAggregate,
+        },
+        referralPayout: {
+          findMany: txPayoutFindMany,
+          update: txPayoutUpdate,
+        },
+      })
+    );
+
+    const result = await voidCommission("STRIPE", "in_123", "refund");
+
+    expect(result.voided).toBe(1);
+
+    // Commission update must set status VOIDED + payoutId null + reason
+    expect(txCommissionUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          source: "STRIPE",
+          externalPaymentId: "in_123",
+          status: { in: ["PENDING", "AVAILABLE", "PAYOUT_PENDING"] },
+        }),
+        data: expect.objectContaining({
+          status: "VOIDED",
+          adminNote: "refund",
+          payoutId: null,
+        }),
+      })
+    );
+
+    // Remaining sum is 0 => payout should be auto-rejected
+    expect(txPayoutUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "pay-1" },
+        data: expect.objectContaining({
+          status: "REJECTED",
+          adminNote: "auto-voided: all linked commissions reversed",
+        }),
+      })
+    );
+  });
+
+  it("recomputes payout amountUsd when some commissions remain", async () => {
+    const txCommissionUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const txPayoutFindMany = vi.fn().mockResolvedValue([
+      { id: "pay-2", status: "PENDING", networkFeeUsd: 0 },
+    ]);
+    const txCommissionAggregate = vi.fn().mockResolvedValue({
+      _sum: { commissionUsd: 40 },
+    });
+    const txPayoutUpdate = vi.fn().mockResolvedValue({});
+
+    mocks.txFn.mockImplementation(async (cb) =>
+      cb({
+        referralCommission: {
+          updateMany: txCommissionUpdateMany,
+          aggregate: txCommissionAggregate,
+        },
+        referralPayout: {
+          findMany: txPayoutFindMany,
+          update: txPayoutUpdate,
+        },
+      })
+    );
+
+    const result = await voidCommission("STRIPE", "in_456", "partial-refund");
+
+    expect(result.voided).toBe(1);
+
+    // Remaining sum > 0 => payout should be updated with new amounts
+    expect(txPayoutUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "pay-2" },
+        data: expect.objectContaining({
+          amountUsd: 40,
+          netPayoutUsd: 40, // 40 - 0 networkFee
+        }),
+      })
+    );
+    // Should NOT set status REJECTED
+    const callData = txPayoutUpdate.mock.calls[0][0].data;
+    expect(callData.status).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// voidReferrerCommissions
+// ---------------------------------------------------------------------------
+
+describe("voidReferrerCommissions", () => {
+  it("voids all non-paid commissions for a referrer, detaches from open payout, wraps in transaction", async () => {
+    const txCommissionUpdateMany = vi.fn().mockResolvedValue({ count: 2 });
+    // Two commissions, one PAYOUT_PENDING linked to "pay-3"
+    const txPayoutFindMany = vi.fn().mockResolvedValue([
+      { id: "pay-3", status: "PENDING", networkFeeUsd: 0 },
+    ]);
+    const txCommissionAggregate = vi.fn().mockResolvedValue({
+      _sum: { commissionUsd: 0 },
+    });
+    const txPayoutUpdate = vi.fn().mockResolvedValue({});
+
+    mocks.txFn.mockImplementation(async (cb) =>
+      cb({
+        referralCommission: {
+          updateMany: txCommissionUpdateMany,
+          aggregate: txCommissionAggregate,
+        },
+        referralPayout: {
+          findMany: txPayoutFindMany,
+          update: txPayoutUpdate,
+        },
+      })
+    );
+
+    const result = await voidReferrerCommissions("ref-1", "ban");
+
+    expect(result.voided).toBe(2);
+
+    // Commission update must set status VOIDED + payoutId null + reason
+    expect(txCommissionUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          referrerId: "ref-1",
+          status: { in: ["PENDING", "AVAILABLE", "PAYOUT_PENDING"] },
+        }),
+        data: expect.objectContaining({
+          status: "VOIDED",
+          adminNote: "ban",
+          payoutId: null,
+        }),
+      })
+    );
+
+    // All commissions removed => payout auto-rejected
+    expect(txPayoutUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "pay-3" },
+        data: expect.objectContaining({
+          status: "REJECTED",
+          adminNote: "auto-voided: all linked commissions reversed",
+        }),
+      })
+    );
+  });
+
+  it("recomputes payout when partial void - remaining $40", async () => {
+    const txCommissionUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const txPayoutFindMany = vi.fn().mockResolvedValue([
+      { id: "pay-4", status: "PENDING", networkFeeUsd: 0 },
+    ]);
+    const txCommissionAggregate = vi.fn().mockResolvedValue({
+      _sum: { commissionUsd: 40 },
+    });
+    const txPayoutUpdate = vi.fn().mockResolvedValue({});
+
+    mocks.txFn.mockImplementation(async (cb) =>
+      cb({
+        referralCommission: {
+          updateMany: txCommissionUpdateMany,
+          aggregate: txCommissionAggregate,
+        },
+        referralPayout: {
+          findMany: txPayoutFindMany,
+          update: txPayoutUpdate,
+        },
+      })
+    );
+
+    const result = await voidReferrerCommissions("ref-1", "partial-ban");
+
+    expect(result.voided).toBe(1);
+
+    expect(txPayoutUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "pay-4" },
+        data: expect.objectContaining({
+          amountUsd: 40,
+          netPayoutUsd: 40,
+        }),
+      })
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// markPayoutPaid
+// ---------------------------------------------------------------------------
+
+describe("markPayoutPaid", () => {
+  it("does not resurrect voided commissions: updateMany uses status PAYOUT_PENDING filter", async () => {
+    const txPayoutUpdate = vi.fn().mockResolvedValue({});
+    const txCommissionUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
+
+    mocks.txFn.mockImplementation(async (cb) =>
+      cb({
+        referralPayout: { update: txPayoutUpdate },
+        referralCommission: { updateMany: txCommissionUpdateMany },
+      })
+    );
+
+    await markPayoutPaid("pay-1", "tx-abc");
+
+    // Payout update must guard status
+    expect(txPayoutUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: "pay-1",
+          status: { in: ["PENDING", "APPROVED"] },
+        }),
+      })
+    );
+
+    // Commission flip must include status: "PAYOUT_PENDING" in where
+    expect(txCommissionUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          payoutId: "pay-1",
+          status: "PAYOUT_PENDING",
+        }),
+        data: expect.objectContaining({ status: "PAID" }),
+      })
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// approvePayout
+// ---------------------------------------------------------------------------
+
+describe("approvePayout", () => {
+  it("only approves a PENDING payout via updateMany status guard", async () => {
+    mocks.payoutFindUniqueOrThrow.mockResolvedValue({
+      id: "pay-1",
+      amountUsd: 100,
+      networkFeeUsd: 2,
+    });
+    mocks.payoutUpdateMany.mockResolvedValue({ count: 1 });
+
+    await approvePayout("pay-1", "admin-tg", 2);
+
+    expect(mocks.payoutUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: "pay-1",
+          status: "PENDING",
+        }),
+        data: expect.objectContaining({
+          status: "APPROVED",
+          networkFeeUsd: 2,
+          netPayoutUsd: 98,
+        }),
+      })
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// rejectPayout
+// ---------------------------------------------------------------------------
+
+describe("rejectPayout", () => {
+  it("guards payout update with status PENDING or APPROVED", async () => {
+    const txPayoutUpdate = vi.fn().mockResolvedValue({});
+    const txCommissionUpdateMany = vi.fn().mockResolvedValue({ count: 1 });
+
+    mocks.txFn.mockImplementation(async (cb) =>
+      cb({
+        referralPayout: { update: txPayoutUpdate },
+        referralCommission: { updateMany: txCommissionUpdateMany },
+      })
+    );
+
+    await rejectPayout("pay-1", "fraud");
+
+    expect(txPayoutUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          id: "pay-1",
+          status: { in: ["PENDING", "APPROVED"] },
+        }),
+        data: expect.objectContaining({ status: "REJECTED" }),
+      })
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// releaseMaturedCommissions (unchanged)
+// ---------------------------------------------------------------------------
 
 describe("releaseMaturedCommissions", () => {
   it("flips matured PENDING commissions to AVAILABLE", async () => {
@@ -216,6 +538,10 @@ describe("releaseMaturedCommissions", () => {
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// runPayoutBatch (unchanged)
+// ---------------------------------------------------------------------------
 
 describe("runPayoutBatch", () => {
   it("creates a payout and locks commissions for referrers above the minimum", async () => {
@@ -264,6 +590,10 @@ describe("runPayoutBatch", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// validatePayoutDestination (unchanged)
+// ---------------------------------------------------------------------------
+
 describe("validatePayoutDestination", () => {
   it("accepts a valid PayPal email", () => {
     expect(validatePayoutDestination("PAYPAL", "a@b.com").ok).toBe(true);
@@ -286,6 +616,10 @@ describe("validatePayoutDestination", () => {
     expect(validatePayoutDestination("CASH", "x").ok).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// getReferralBalance (unchanged)
+// ---------------------------------------------------------------------------
 
 describe("getReferralBalance", () => {
   it("aggregates pending, available, and paid", async () => {
