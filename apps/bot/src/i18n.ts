@@ -81,6 +81,11 @@ export interface Dict {
   manageSubscriptionBtn: string;
   checkingLink: string;
   urlAccessFailed: string;
+  referralInfo: (web: string, tg: string, available: string, pending: string, paid: string) => string;
+  balanceInfo: (available: string, pending: string, paid: string) => string;
+  payoutPrompt: string;
+  payoutSaved: string;
+  payoutInvalid: (err: string) => string;
 }
 
 const en: Dict = {
@@ -187,6 +192,13 @@ const en: Dict = {
   checkingLink: "Checking link…",
   urlAccessFailed:
     "Couldn't access the video at that link. Try a different URL or upload the file directly.",
+  referralInfo: (web, tg, available, pending, paid) =>
+    `Your referral links:\nWeb: ${web}\nTelegram: ${tg}\n\nBalance:\nPending: $${pending}\nAvailable: $${available}\nPaid: $${paid}\n\nNext payout: 1st / 15th\nMinimum payout: $50`,
+  balanceInfo: (available, pending, paid) =>
+    `Balance:\nPending: $${pending}\nAvailable: $${available}\nPaid: $${paid}\nNext payout: 1st / 15th`,
+  payoutPrompt: "Send your payout details as:\n/payout USDT_TRC20 <address>\nor /payout PAYPAL <email>",
+  payoutSaved: "Payout destination saved.",
+  payoutInvalid: (err) => `Could not save: ${err}`,
 };
 
 const ru: Dict = {
@@ -302,6 +314,13 @@ const ru: Dict = {
   checkingLink: "Проверяю ссылку…",
   urlAccessFailed:
     "Не удалось получить видео по этой ссылке. Попробуй другую ссылку или загрузи файл напрямую.",
+  referralInfo: (web, tg, available, pending, paid) =>
+    `Ваши реферальные ссылки:\nСайт: ${web}\nTelegram: ${tg}\n\nБаланс:\nВ ожидании: $${pending}\nДоступно: $${available}\nВыплачено: $${paid}\n\nБлижайшая выплата: 1 / 15 числа\nМинимум на вывод: $50`,
+  balanceInfo: (available, pending, paid) =>
+    `Баланс:\nВ ожидании: $${pending}\nДоступно: $${available}\nВыплачено: $${paid}\nБлижайшая выплата: 1 / 15 числа`,
+  payoutPrompt: "Отправьте реквизиты так:\n/payout USDT_TRC20 <адрес>\nили /payout PAYPAL <email>",
+  payoutSaved: "Реквизиты для выплаты сохранены.",
+  payoutInvalid: (err) => `Не удалось сохранить: ${err}`,
 };
 
 const dictionaries: Record<Locale, Dict> = { en, ru };

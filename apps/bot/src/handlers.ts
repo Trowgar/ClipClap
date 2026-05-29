@@ -143,6 +143,21 @@ export async function handleUpdate(
     return;
   }
 
+  if (text === "/referral" || text.startsWith("/referral ") || text.startsWith("/referral@")) {
+    await handleReferral(client, message, from, dict, config);
+    return;
+  }
+
+  if (text === "/balance" || text.startsWith("/balance@")) {
+    await handleBalance(client, message, from, dict);
+    return;
+  }
+
+  if (text === "/payout" || text.startsWith("/payout ")) {
+    await handlePayout(client, message, from, text, dict);
+    return;
+  }
+
   const menuAction = parseMenuCommand(text) ?? matchMenuAction(text);
   if (menuAction) {
     await handleMenuAction(client, message, menuAction, dict, config, existing);
@@ -334,6 +349,17 @@ async function handleStart(
   if (payload?.kind === "link") {
     await handleStartLink(client, message, payload.code, dict, config);
     return;
+  }
+
+  if (payload?.kind === "ref") {
+    const isNew = !existing;
+    const from = message.from!;
+    const user = await resolveTelegramUser(from);
+    if (isNew) {
+      const { referralService } = await import("@clipfast/shared");
+      await referralService.attachReferral(user.id, payload.code);
+    }
+    // fall through to the normal welcome flow below
   }
 
   if (!existing) {
@@ -584,7 +610,10 @@ function renderLinkResult(
   }
 }
 
-type StartPayload = { kind: "link"; code: string } | null;
+type StartPayload =
+  | { kind: "link"; code: string }
+  | { kind: "ref"; code: string }
+  | null;
 
 export function parseStartPayload(text: string): StartPayload {
   const trimmed = text.replace(/^\/start(@\S+)?\s*/, "");
@@ -592,6 +621,10 @@ export function parseStartPayload(text: string): StartPayload {
   if (trimmed.startsWith("link_")) {
     const code = trimmed.slice("link_".length).trim();
     if (code) return { kind: "link", code };
+  }
+  if (trimmed.startsWith("ref_")) {
+    const code = trimmed.slice("ref_".length).trim();
+    if (code) return { kind: "ref", code };
   }
   return null;
 }
@@ -812,4 +845,68 @@ function fromTelegramDocument(document: TelegramDocument): VideoSource {
     mimeType: document.mime_type,
     fileSize: document.file_size,
   };
+}
+
+async function handleReferral(
+  client: TelegramClient,
+  message: TelegramMessage,
+  from: TelegramUser,
+  dict: Dict,
+  config: BotRuntimeConfig
+) {
+  const user = await resolveTelegramUser(from);
+  const { referralService } = await import("@clipfast/shared");
+  const code = await referralService.ensureReferralCode(user.id);
+  const balance = await referralService.getReferralBalance(user.id);
+  const botName = process.env.TELEGRAM_BOT_USERNAME ?? "ClipClapBot";
+  const web = `${config.appUrl}/?ref=${code}`;
+  const tg = `https://t.me/${botName}?start=ref_${code}`;
+  await client.sendMessage(
+    message.chat.id,
+    dict.referralInfo(
+      web,
+      tg,
+      balance.availableUsd.toFixed(2),
+      balance.pendingUsd.toFixed(2),
+      balance.paidUsd.toFixed(2)
+    )
+  );
+}
+
+async function handleBalance(
+  client: TelegramClient,
+  message: TelegramMessage,
+  from: TelegramUser,
+  dict: Dict
+) {
+  const user = await resolveTelegramUser(from);
+  const { referralService } = await import("@clipfast/shared");
+  const b = await referralService.getReferralBalance(user.id);
+  await client.sendMessage(
+    message.chat.id,
+    dict.balanceInfo(b.availableUsd.toFixed(2), b.pendingUsd.toFixed(2), b.paidUsd.toFixed(2))
+  );
+}
+
+async function handlePayout(
+  client: TelegramClient,
+  message: TelegramMessage,
+  from: TelegramUser,
+  text: string,
+  dict: Dict
+) {
+  const parts = text.trim().split(/\s+/).slice(1); // drop "/payout"
+  if (parts.length < 2) {
+    await client.sendMessage(message.chat.id, dict.payoutPrompt);
+    return;
+  }
+  const [method, ...rest] = parts;
+  const destination = rest.join(" ");
+  const user = await resolveTelegramUser(from);
+  const { referralService } = await import("@clipfast/shared");
+  const result = await referralService.setPayoutDestination(user.id, method, destination);
+  await client.sendMessage(
+    message.chat.id,
+    result.ok ? dict.payoutSaved : dict.payoutInvalid(result.error ?? "invalid")
+  );
 }

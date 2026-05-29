@@ -27,4 +27,11 @@ describe("parseStartPayload", () => {
   it("returns null when the link prefix has no code", () => {
     expect(parseStartPayload("/start link_")).toBeNull();
   });
+
+  it("parses a ref_ payload", () => {
+    expect(parseStartPayload("/start ref_ABCD1234")).toEqual({
+      kind: "ref",
+      code: "ABCD1234",
+    });
+  });
 });
