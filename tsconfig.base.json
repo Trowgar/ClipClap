@@ -14,7 +14,6 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "./dist",
-    "baseUrl": ".",
     "paths": {
       "@clipfast/shared": ["./packages/shared/src"],
       "@clipfast/shared/*": ["./packages/shared/src/*"]
