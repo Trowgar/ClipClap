@@ -203,6 +203,165 @@ export async function releaseMaturedCommissions(
   return { released: result.count };
 }
 
+// ---- Payout destination validation ----
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const TRON_RE = /^T[A-Za-z0-9]{33}$/;
+export const PAYOUT_METHODS = ["PAYPAL", "USDT_TRC20", "BANK"] as const;
+export type PayoutMethod = (typeof PAYOUT_METHODS)[number];
+
+export function validatePayoutDestination(
+  method: string,
+  destination: string
+): { ok: boolean; error?: string } {
+  const value = destination?.trim() ?? "";
+  switch (method) {
+    case "PAYPAL":
+      return EMAIL_RE.test(value) ? { ok: true } : { ok: false, error: "Invalid PayPal email" };
+    case "USDT_TRC20":
+      return TRON_RE.test(value) ? { ok: true } : { ok: false, error: "Invalid TRON address" };
+    case "BANK":
+      return value.length > 0 ? { ok: true } : { ok: false, error: "Bank details required" };
+    default:
+      return { ok: false, error: "Unsupported payout method" };
+  }
+}
+
+export async function setPayoutDestination(
+  userId: string,
+  method: string,
+  destination: string
+): Promise<{ ok: boolean; error?: string }> {
+  const v = validatePayoutDestination(method, destination);
+  if (!v.ok) return v;
+  await prisma.user.update({
+    where: { id: userId },
+    data: { payoutMethod: method, payoutDestination: destination.trim() },
+  });
+  return { ok: true };
+}
+
+export async function acceptReferralTerms(userId: string): Promise<string> {
+  await prisma.user.update({
+    where: { id: userId },
+    data: {
+      referralTermsAcceptedAt: new Date(),
+      referralTermsVersion: REFERRAL_CONFIG.termsVersion,
+    },
+  });
+  return ensureReferralCode(userId);
+}
+
+export interface ReferralBalance {
+  pendingUsd: number;
+  availableUsd: number;
+  payoutPendingUsd: number;
+  paidUsd: number;
+}
+
+export async function getReferralBalance(referrerId: string): Promise<ReferralBalance> {
+  const groups = await prisma.referralCommission.groupBy({
+    by: ["status"],
+    where: { referrerId },
+    _sum: { commissionUsd: true },
+  });
+  const sumFor = (status: string) =>
+    round2(groups.find((g) => g.status === status)?._sum.commissionUsd ?? 0);
+  return {
+    pendingUsd: sumFor("PENDING"),
+    availableUsd: sumFor("AVAILABLE"),
+    payoutPendingUsd: sumFor("PAYOUT_PENDING"),
+    paidUsd: sumFor("PAID"),
+  };
+}
+
+// ---- Admin operations ----
+
+export async function listPendingPayouts() {
+  return prisma.referralPayout.findMany({
+    where: { status: { in: ["PENDING", "APPROVED"] } },
+    orderBy: { createdAt: "asc" },
+    include: { _count: { select: { commissions: true } } },
+  });
+}
+
+export async function approvePayout(
+  payoutId: string,
+  adminTelegramId: string,
+  networkFeeUsd: number
+): Promise<void> {
+  const payout = await prisma.referralPayout.findUniqueOrThrow({ where: { id: payoutId } });
+  await prisma.referralPayout.update({
+    where: { id: payoutId },
+    data: {
+      status: "APPROVED",
+      approvedBy: adminTelegramId,
+      approvedAt: new Date(),
+      networkFeeUsd,
+      netPayoutUsd: round2(payout.amountUsd - networkFeeUsd),
+    },
+  });
+}
+
+export async function markPayoutPaid(payoutId: string, txRef: string): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.referralPayout.update({
+      where: { id: payoutId },
+      data: { status: "PAID", paidAt: new Date(), txRef },
+    });
+    await tx.referralCommission.updateMany({
+      where: { payoutId },
+      data: { status: "PAID" },
+    });
+  });
+}
+
+export async function rejectPayout(payoutId: string, reason: string): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    await tx.referralPayout.update({
+      where: { id: payoutId },
+      data: { status: "REJECTED", rejectedAt: new Date(), adminNote: reason },
+    });
+    await tx.referralCommission.updateMany({
+      where: { payoutId },
+      data: { status: "AVAILABLE", payoutId: null },
+    });
+  });
+}
+
+export async function banReferrer(userId: string): Promise<void> {
+  await prisma.user.update({ where: { id: userId }, data: { referralBannedAt: new Date() } });
+}
+
+export async function voidReferrerCommissions(
+  userId: string,
+  reason: string
+): Promise<{ voided: number }> {
+  const result = await prisma.referralCommission.updateMany({
+    where: { referrerId: userId, status: { in: [...NON_PAID_STATUSES] } },
+    data: { status: "VOIDED", adminNote: reason },
+  });
+  return { voided: result.count };
+}
+
+export async function getReferrerCard(idOrCode: string) {
+  const user = await prisma.user.findFirst({
+    where: { OR: [{ id: idOrCode }, { referralCode: idOrCode }, { telegramId: idOrCode }] },
+    select: {
+      id: true,
+      referralCode: true,
+      referralBannedAt: true,
+      _count: { select: { referrals: true } },
+    },
+  });
+  if (!user) return null;
+  const balance = await getReferralBalance(user.id);
+  const refundCount = await prisma.referralCommission.count({
+    where: { referrerId: user.id, status: "VOIDED" },
+  });
+  return { user, balance, refundCount };
+}
+
 /**
  * Create payout batches for referrers whose AVAILABLE balance >= minimum and
  * who have a payout destination set. Each referrer is processed in its own

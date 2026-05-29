@@ -32,7 +32,7 @@ vi.mock("../../lib/prisma", () => ({
   },
 }));
 
-import { attachReferral, recordCommission, voidCommission, releaseMaturedCommissions, runPayoutBatch } from "../referral.service";
+import { attachReferral, recordCommission, voidCommission, releaseMaturedCommissions, runPayoutBatch, getReferralBalance, validatePayoutDestination, setPayoutDestination } from "../referral.service";
 
 const REFERRER = {
   id: "ref-1",
@@ -261,5 +261,44 @@ describe("runPayoutBatch", () => {
     const result = await runPayoutBatch(new Date("2026-06-01T00:00:00Z"));
     expect(result.created).toBe(0);
     expect(mocks.payoutCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe("validatePayoutDestination", () => {
+  it("accepts a valid PayPal email", () => {
+    expect(validatePayoutDestination("PAYPAL", "a@b.com").ok).toBe(true);
+  });
+  it("rejects a bad PayPal email", () => {
+    expect(validatePayoutDestination("PAYPAL", "nope").ok).toBe(false);
+  });
+  it("accepts a TRON address", () => {
+    expect(
+      validatePayoutDestination("USDT_TRC20", "TJRabcdefghijklmnopqrstuvwxyz12345").ok
+    ).toBe(true);
+  });
+  it("rejects a non-TRON address", () => {
+    expect(validatePayoutDestination("USDT_TRC20", "0xabc").ok).toBe(false);
+  });
+  it("accepts non-empty bank text", () => {
+    expect(validatePayoutDestination("BANK", "DE89 3704 0044 0532 0130 00").ok).toBe(true);
+  });
+  it("rejects an unknown method", () => {
+    expect(validatePayoutDestination("CASH", "x").ok).toBe(false);
+  });
+});
+
+describe("getReferralBalance", () => {
+  it("aggregates pending, available, and paid", async () => {
+    mocks.commissionGroupBy.mockResolvedValue([
+      { status: "PENDING", _sum: { commissionUsd: 5 } },
+      { status: "AVAILABLE", _sum: { commissionUsd: 60 } },
+      { status: "PAYOUT_PENDING", _sum: { commissionUsd: 12 } },
+      { status: "PAID", _sum: { commissionUsd: 100 } },
+    ]);
+    const balance = await getReferralBalance("ref-1");
+    expect(balance.pendingUsd).toBe(5);
+    expect(balance.availableUsd).toBe(60);
+    expect(balance.payoutPendingUsd).toBe(12);
+    expect(balance.paidUsd).toBe(100);
   });
 });
