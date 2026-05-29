@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   wrCreate: vi.fn(),
   wrFindUnique: vi.fn(),
   wrUpdateMany: vi.fn(),
+  wrUpdate: vi.fn(),
   entryCreate: vi.fn(),
   entryAggregate: vi.fn(),
   withdrawalAggregate: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("../../lib/prisma", () => ({
       create: mocks.wrCreate,
       findUnique: mocks.wrFindUnique,
       updateMany: mocks.wrUpdateMany,
+      update: mocks.wrUpdate,
       aggregate: mocks.withdrawalAggregate,
     },
     walletEntry: { create: mocks.entryCreate, aggregate: mocks.entryAggregate },
@@ -29,6 +31,8 @@ import {
   validateWithdrawalDestination,
   createWithdrawal,
   approveWithdrawal,
+  markWithdrawalPaid,
+  rejectWithdrawal,
 } from "../withdrawal.service";
 
 beforeEach(() => vi.clearAllMocks());
@@ -80,7 +84,9 @@ describe("createWithdrawal", () => {
 
   it("rejects below minimum", async () => {
     wireTx();
-    mocks.entryAggregate.mockResolvedValue({ _sum: { amountUsd: 100 } });
+    mocks.entryAggregate
+      .mockResolvedValueOnce({ _sum: { amountUsd: 100 } }) // credit
+      .mockResolvedValueOnce({ _sum: { amountUsd: 0 } });  // debit
     mocks.withdrawalAggregate.mockResolvedValue({ _sum: { amountUsd: 0 } });
     mocks.wrFindFirst.mockResolvedValue(null);
     const r = await createWithdrawal("u1", {
@@ -92,7 +98,9 @@ describe("createWithdrawal", () => {
 
   it("rejects when an active request exists", async () => {
     wireTx();
-    mocks.entryAggregate.mockResolvedValue({ _sum: { amountUsd: 100 } });
+    mocks.entryAggregate
+      .mockResolvedValueOnce({ _sum: { amountUsd: 100 } }) // credit
+      .mockResolvedValueOnce({ _sum: { amountUsd: 0 } });  // debit
     mocks.withdrawalAggregate.mockResolvedValue({ _sum: { amountUsd: 0 } });
     mocks.wrFindFirst.mockResolvedValue({ id: "existing" });
     const r = await createWithdrawal("u1", {
@@ -120,6 +128,63 @@ describe("approveWithdrawal", () => {
   it("rejects a fee >= amount", async () => {
     mocks.wrFindUnique.mockResolvedValue({ id: "wr1", userId: "u1", amountUsd: 50, status: "PENDING" });
     const r = await approveWithdrawal("wr1", "admin1", 60);
+    expect(r.ok).toBe(false);
+  });
+});
+
+describe("markWithdrawalPaid", () => {
+  function wireTx() {
+    mocks.txFn.mockImplementation(async (cb: (tx: unknown) => unknown) =>
+      cb({
+        withdrawalRequest: { findUnique: mocks.wrFindUnique, update: mocks.wrUpdate },
+        walletEntry: { create: mocks.entryCreate },
+      })
+    );
+  }
+
+  it("pays an APPROVED request and writes a DEBIT for the gross amount", async () => {
+    wireTx();
+    mocks.wrFindUnique.mockResolvedValue({ id: "wr1", userId: "u1", amountUsd: 60, status: "APPROVED" });
+    mocks.wrUpdate.mockResolvedValue({});
+    mocks.entryCreate.mockResolvedValue({ id: "e1" });
+
+    const r = await markWithdrawalPaid("wr1", "admin1", "0xtx");
+    expect(r.ok).toBe(true);
+    const debit = mocks.entryCreate.mock.calls[0][0].data;
+    expect(debit).toMatchObject({
+      userId: "u1", kind: "DEBIT", source: "WITHDRAWAL",
+      refType: "withdrawal", refId: "wr1", amountUsd: 60,
+    });
+  });
+
+  it("refuses to pay a non-APPROVED request and writes no DEBIT", async () => {
+    wireTx();
+    mocks.wrFindUnique.mockResolvedValue({ id: "wr1", userId: "u1", amountUsd: 60, status: "PENDING" });
+    const r = await markWithdrawalPaid("wr1", "admin1", "0xtx");
+    expect(r.ok).toBe(false);
+    expect(mocks.entryCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe("rejectWithdrawal", () => {
+  it("requires a non-empty reason", async () => {
+    const r = await rejectWithdrawal("wr1", "admin1", "   ");
+    expect(r.ok).toBe(false);
+    expect(mocks.wrUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it("rejects an active request", async () => {
+    mocks.wrUpdateMany.mockResolvedValue({ count: 1 });
+    const r = await rejectWithdrawal("wr1", "admin1", "fraud");
+    expect(r.ok).toBe(true);
+    const arg = mocks.wrUpdateMany.mock.calls[0][0];
+    expect(arg.where.status.in).toEqual(["PENDING", "APPROVED"]);
+    expect(arg.data.status).toBe("REJECTED");
+  });
+
+  it("fails on a terminal request (count 0)", async () => {
+    mocks.wrUpdateMany.mockResolvedValue({ count: 0 });
+    const r = await rejectWithdrawal("wr1", "admin1", "fraud");
     expect(r.ok).toBe(false);
   });
 });

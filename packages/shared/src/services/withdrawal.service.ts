@@ -164,6 +164,7 @@ export async function markWithdrawalPaid(id: string, adminId: string, txRef: str
       where: { id },
       data: { status: "PAID", paidBy: adminId, paidAt: new Date(), txRef },
     });
+    // Debit the GROSS amount (the network fee is borne by the user, matching the locked amount).
     await postWalletEntry(tx, {
       userId: wr.userId, kind: "DEBIT", source: "WITHDRAWAL",
       refType: "withdrawal", refId: wr.id, amountUsd: wr.amountUsd,
