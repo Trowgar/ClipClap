@@ -117,7 +117,15 @@ describe("bot i18n", () => {
   it("includes the canonical command set in both locales", () => {
     for (const loc of ["en", "ru"] as const) {
       const names = t(loc).commands.map((c) => c.command);
-      expect(names).toEqual(["start", "account", "help", "settings", "lang", "link"]);
+      expect(names).toEqual([
+        "start",
+        "account",
+        "help",
+        "settings",
+        "lang",
+        "link",
+        "referral",
+      ]);
     }
   });
 

@@ -75,7 +75,7 @@ export function parseLangCallback(
   return null;
 }
 
-export type MenuAction = "account" | "help" | "settings";
+export type MenuAction = "account" | "help" | "settings" | "affiliate";
 
 export function matchMenuAction(text: string): MenuAction | null {
   for (const loc of ["en", "ru"] as const) {
@@ -83,6 +83,7 @@ export function matchMenuAction(text: string): MenuAction | null {
     if (text === d.menuAccount) return "account";
     if (text === d.menuHelp) return "help";
     if (text === d.menuSettings) return "settings";
+    if (text === d.menuAffiliate) return "affiliate";
   }
   return null;
 }
@@ -90,8 +91,8 @@ export function matchMenuAction(text: string): MenuAction | null {
 function buildMainMenu(dict: Dict): ReplyKeyboardMarkup {
   return {
     keyboard: [
-      [{ text: dict.menuAccount }, { text: dict.menuHelp }],
-      [{ text: dict.menuSettings }],
+      [{ text: dict.menuAccount }, { text: dict.menuAffiliate }],
+      [{ text: dict.menuHelp }, { text: dict.menuSettings }],
     ],
     is_persistent: true,
     resize_keyboard: true,
@@ -234,6 +235,10 @@ async function handleMenuAction(
       await client.sendMessage(message.chat.id, dict.settingsMenuPrompt, {
         replyMarkup: languageKeyboard(dict),
       });
+      return;
+    }
+    case "affiliate": {
+      await handleReferral(client, message, message.from!, dict, config);
       return;
     }
   }

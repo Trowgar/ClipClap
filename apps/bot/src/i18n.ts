@@ -55,6 +55,7 @@ export interface Dict {
   menuAccount: string;
   menuHelp: string;
   menuSettings: string;
+  menuAffiliate: string;
   helpText: (url: string) => string;
   accountText: (params: {
     plan: string;
@@ -92,7 +93,7 @@ const en: Dict = {
   welcomeNew:
     "Welcome to ClipClap! Send me a video and I'll turn it into vertical clips with subtitles.\n\nLanguage: /lang ru - switch to Russian.",
   welcomeFirstChoice:
-    "Hi! I turn long videos into vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nHow it works:\n1. Pick a plan\n2. Send a video (up to 3 hours)\n3. Get 5–15 short clips back\n\nFirst - how do you want to set up?\n\n• New account - use this Telegram as your ClipClap account.\n• I already have an account - link this Telegram to your existing clipclap.io account.",
+    "Hi! I turn long videos into vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nHow it works:\n1. Pick a plan\n2. Send a video (up to 3 hours)\n3. Get 5-15 short clips back\n\nFirst - how do you want to set up?\n\n• New account - use this Telegram as your ClipClap account.\n• I already have an account - link this Telegram to your existing clipclap.io account.",
   welcomeBack: "Welcome back! Send a video and I'll generate clips.",
   welcomeNeedsPlan: (url) =>
     `Send a video and I'll generate clips. To enable processing, pick a plan: ${url}/dashboard/plans`,
@@ -137,8 +138,9 @@ const en: Dict = {
   menuAccount: "📊 Account",
   menuHelp: "❓ Help",
   menuSettings: "⚙️ Settings",
+  menuAffiliate: "🤝 Affiliate",
   helpText: (url) =>
-    `Send me a video - I'll cut it into vertical clips with subtitles.\nYou can also paste a URL (YouTube, Twitch, TikTok, Vimeo, X and more).\n\nLimits: up to 3 hours source, up to 2 GB file size.\n\nCommands:\n• /start - main menu\n• /link - connect an existing clipclap.io account\n• /lang en|ru|auto - switch language\n\nWebsite: ${url}/dashboard`,
+    `Send me a video - I'll cut it into vertical clips with subtitles.\nYou can also paste a URL (YouTube, Twitch, TikTok, Vimeo, X and more).\n\nLimits: up to 3 hours source, up to 2 GB file size.\n\nCommands:\n• /start - main menu\n• /link - connect an existing clipclap.io account\n• /referral - your referral link & earnings\n• /lang en|ru|auto - switch language\n\nWebsite: ${url}/dashboard`,
   accountText: ({
     plan,
     billingCycle,
@@ -184,6 +186,7 @@ const en: Dict = {
     { command: "settings", description: "Open settings" },
     { command: "lang", description: "Switch language" },
     { command: "link", description: "Connect your clipclap.io account" },
+    { command: "referral", description: "Your referral link & earnings" },
   ],
   langBtnEn: "🇬🇧 English",
   langBtnRu: "🇷🇺 Русский",
@@ -205,7 +208,7 @@ const ru: Dict = {
   welcomeNew:
     "Привет! Это ClipClap. Пришли видео - нарежу вертикальные клипы с субтитрами.\n\nЯзык: /lang en - переключиться на английский.",
   welcomeFirstChoice:
-    "Привет! Нарезаю длинные видео на вертикальные клипы с субтитрами - для TikTok, Reels и Shorts.\n\nКак это работает:\n1. Выбери тариф\n2. Пришли видео (до 3 часов)\n3. Получи 5–15 коротких клипов\n\nСначала - как тебе удобнее начать?\n\n• Новый аккаунт - Telegram станет твоим аккаунтом ClipClap.\n• Уже есть аккаунт - привяжем этот Telegram к существующему аккаунту на clipclap.io.",
+    "Привет! Нарезаю длинные видео на вертикальные клипы с субтитрами - для TikTok, Reels и Shorts.\n\nКак это работает:\n1. Выбери тариф\n2. Пришли видео (до 3 часов)\n3. Получи 5-15 коротких клипов\n\nСначала - как тебе удобнее начать?\n\n• Новый аккаунт - Telegram станет твоим аккаунтом ClipClap.\n• Уже есть аккаунт - привяжем этот Telegram к существующему аккаунту на clipclap.io.",
   welcomeBack: "С возвращением! Пришли видео - сделаю клипы.",
   welcomeNeedsPlan: (url) =>
     `Пришли видео - сделаю клипы. Чтобы запустить обработку, выбери тариф: ${url}/dashboard/plans`,
@@ -252,8 +255,9 @@ const ru: Dict = {
   menuAccount: "📊 Аккаунт",
   menuHelp: "❓ Помощь",
   menuSettings: "⚙️ Настройки",
+  menuAffiliate: "🤝 Рефералы",
   helpText: (url) =>
-    `Пришли видео - нарежу вертикальные клипы с субтитрами.\nМожно также прислать ссылку (YouTube, Twitch, TikTok, Vimeo, X и др.).\n\nЛимиты: до 3 часов исходник, до 2 ГБ размер файла.\n\nКоманды:\n• /start - главное меню\n• /link - привязать существующий аккаунт clipclap.io\n• /lang en|ru|auto - сменить язык\n\nСайт: ${url}/dashboard`,
+    `Пришли видео - нарежу вертикальные клипы с субтитрами.\nМожно также прислать ссылку (YouTube, Twitch, TikTok, Vimeo, X и др.).\n\nЛимиты: до 3 часов исходник, до 2 ГБ размер файла.\n\nКоманды:\n• /start - главное меню\n• /link - привязать существующий аккаунт clipclap.io\n• /referral - реферальная ссылка и доход\n• /lang en|ru|auto - сменить язык\n\nСайт: ${url}/dashboard`,
   accountText: ({
     plan,
     billingCycle,
@@ -306,6 +310,7 @@ const ru: Dict = {
     { command: "settings", description: "Настройки" },
     { command: "lang", description: "Сменить язык" },
     { command: "link", description: "Привязать аккаунт clipclap.io" },
+    { command: "referral", description: "Реферальная ссылка и доход" },
   ],
   langBtnEn: "🇬🇧 English",
   langBtnRu: "🇷🇺 Русский",
