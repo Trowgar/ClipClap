@@ -712,23 +712,25 @@ export default function LandingPage() {
             </div>
 
             <h2 className="text-2xl font-bold leading-[1.1] tracking-[-0.03em] sm:text-3xl lg:text-[44px]">
-              <span className="text-white">Share ClipClap.</span>{" "}
-              <span className="text-neutral-500">Get paid for life.</span>
+              <span className="text-white">Refer creators.</span>{" "}
+              <span className="text-neutral-500">Earn 30% for life.</span>
             </h2>
 
             <p className="mx-auto mt-4 max-w-xl text-sm leading-relaxed text-neutral-400 sm:text-[15px]">
               Bring creators to ClipClap and earn{" "}
-              <span className="font-medium text-white">30% of every payment</span>{" "}
-              they make, for as long as they keep clipping. No cap. No expiry.
+              <span className="font-medium text-white">
+                30% from every successful payment
+              </span>{" "}
+              they make, for as long as they stay subscribed. No cap. No expiration.
             </p>
           </FadeIn>
 
           <FadeIn delay={0.1}>
             <div className="mt-12 grid gap-4 text-left sm:grid-cols-3">
               {[
-                { stat: "30%", label: "Commission on every payment, recurring." },
-                { stat: "Lifetime", label: "You earn for as long as your referral stays subscribed." },
-                { stat: "1st & 15th", label: "Paid out twice a month, $50 minimum." },
+                { stat: "30%", label: "Earn from every successful subscription payment." },
+                { stat: "Lifetime", label: "Keep earning while your referral stays subscribed." },
+                { stat: "1st & 15th", label: "Payouts twice a month. $50 minimum." },
               ].map((h) => (
                 <div
                   key={h.stat}
@@ -745,17 +747,50 @@ export default function LandingPage() {
             </div>
           </FadeIn>
 
-          <FadeIn delay={0.18}>
+          {/* How it works */}
+          <FadeIn delay={0.16}>
+            <div className="mt-16">
+              <h3 className="text-sm font-medium uppercase tracking-wider text-neutral-500">
+                How it works
+              </h3>
+              <div className="mt-6 grid gap-4 text-left sm:grid-cols-4">
+                {[
+                  "Share your referral link.",
+                  "A creator signs up and subscribes.",
+                  "You earn 30% from every payment.",
+                  "Payouts are processed twice a month.",
+                ].map((step, i) => (
+                  <div
+                    key={step}
+                    className="rounded-2xl border border-white/[0.06] bg-white/[0.01] p-4"
+                  >
+                    <div className="flex h-6 w-6 items-center justify-center rounded-full border border-neutral-700 font-mono text-[11px] text-neutral-500">
+                      {i + 1}
+                    </div>
+                    <p className="mt-3 text-sm leading-relaxed text-neutral-400">
+                      {step}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </FadeIn>
+
+          <FadeIn delay={0.22}>
             <div className="mt-12 flex flex-col items-center gap-3">
               <Link
                 href="/login"
                 className="group inline-flex items-center gap-2 rounded-xl bg-white px-6 py-3 text-sm font-semibold text-black transition-all hover:scale-[1.02] hover:bg-neutral-200 active:scale-[0.98]"
               >
-                Become a partner
+                Join the affiliate program
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
               </Link>
               <p className="text-xs text-neutral-600">
                 Free to join. Grab your referral link from the dashboard.
+              </p>
+              <p className="mx-auto mt-3 max-w-xl text-[11px] leading-relaxed text-neutral-700">
+                Commission is calculated from net revenue after payment processing
+                fees. Payouts are subject to anti-fraud review.
               </p>
             </div>
           </FadeIn>
