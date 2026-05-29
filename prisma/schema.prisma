@@ -46,12 +46,22 @@ enum PaymentSource {
 enum CommissionStatus {
   PENDING
   AVAILABLE
-  PAYOUT_PENDING
-  PAID
   VOIDED
 }
 
-enum PayoutStatus {
+enum WalletEntryKind {
+  CREDIT
+  DEBIT
+}
+
+enum WalletSource {
+  REFERRAL
+  AD_PARTNERSHIP
+  ADJUSTMENT
+  WITHDRAWAL
+}
+
+enum WithdrawalStatus {
   PENDING
   APPROVED
   PAID
@@ -100,8 +110,6 @@ model User {
   topUpMinutesRemaining   Int                @default(0)
   referralCode            String?            @unique
   referredById            String?
-  payoutDestination       String?
-  payoutMethod            String?
   referralTermsAcceptedAt DateTime?
   referralTermsVersion    String?
   referralBannedAt        DateTime?
@@ -118,7 +126,8 @@ model User {
   referrals           User[]               @relation("Referrals")
   commissionsEarned   ReferralCommission[] @relation("ReferrerCommissions")
   commissionsCaused   ReferralCommission[] @relation("ReferredCommissions")
-  payouts             ReferralPayout[]
+  walletEntries       WalletEntry[]
+  withdrawalRequests  WithdrawalRequest[]
 
   @@map("users")
 }
@@ -144,8 +153,6 @@ model ReferralCommission {
   commissionUsd     Float
   status            CommissionStatus @default(PENDING)
   availableAt       DateTime
-  payoutId          String?
-  payout            ReferralPayout?  @relation(fields: [payoutId], references: [id])
   adminNote         String?
   createdAt         DateTime         @default(now())
   updatedAt         DateTime         @updatedAt
@@ -156,29 +163,49 @@ model ReferralCommission {
   @@map("referral_commissions")
 }
 
-model ReferralPayout {
-  id            String               @id @default(cuid())
-  referrerId    String
-  referrer      User                 @relation(fields: [referrerId], references: [id], onDelete: Cascade)
-  amountUsd     Float
-  networkFeeUsd Float                @default(0)
-  netPayoutUsd  Float
-  payoutMethod  String?
-  destination   String
-  status        PayoutStatus         @default(PENDING)
-  txRef         String?
-  adminNote     String?
-  approvedBy    String?
-  approvedAt    DateTime?
-  paidAt        DateTime?
-  rejectedAt    DateTime?
-  commissions   ReferralCommission[]
-  createdAt     DateTime             @default(now())
-  updatedAt     DateTime             @updatedAt
+model WalletEntry {
+  id        String          @id @default(cuid())
+  userId    String
+  user      User            @relation(fields: [userId], references: [id], onDelete: Restrict)
+  kind      WalletEntryKind
+  source    WalletSource
+  amountUsd Float
+  refType   String
+  refId     String
+  memo      String?
+  createdAt DateTime        @default(now())
 
-  @@index([status])
-  @@index([referrerId])
-  @@map("referral_payouts")
+  @@unique([source, refType, refId])
+  @@index([userId, createdAt])
+  @@index([userId, source])
+  @@map("wallet_entries")
+}
+
+model WithdrawalRequest {
+  id                    String           @id @default(cuid())
+  userId                String
+  user                  User             @relation(fields: [userId], references: [id], onDelete: Restrict)
+  amountUsd             Float
+  method                String
+  destination           String
+  requestedAvailableUsd Float
+  networkFeeUsd         Float            @default(0)
+  netAmountUsd          Float?
+  status                WithdrawalStatus @default(PENDING)
+  txRef                 String?
+  adminNote             String?
+  approvedBy            String?
+  approvedAt            DateTime?
+  paidBy                String?
+  paidAt                DateTime?
+  rejectedBy            String?
+  rejectedAt            DateTime?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  @@index([status, createdAt])
+  @@index([userId, status])
+  @@map("withdrawal_requests")
 }
 
 model TelegramLinkToken {
