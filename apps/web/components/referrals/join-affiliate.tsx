@@ -2,13 +2,12 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowRight, CircleNotch } from "@phosphor-icons/react";
+import { CircleNotch } from "@phosphor-icons/react";
 import { useToast } from "@/hooks/use-toast";
 
 /**
- * Accepts the affiliate terms (POST /api/referrals/accept-terms) which issues
- * the user's referral code, then refreshes the server component to reveal the
- * full dashboard.
+ * Accepts the affiliate terms (issues the referral code) then refreshes the
+ * server component to reveal the dashboard.
  */
 export function JoinAffiliate() {
   const router = useRouter();
@@ -21,10 +20,9 @@ export function JoinAffiliate() {
     try {
       const res = await fetch("/api/referrals/accept-terms", { method: "POST" });
       if (!res.ok) throw new Error("Request failed");
-      toast({ title: "Welcome to the affiliate program" });
       startTransition(() => router.refresh());
     } catch {
-      toast({ title: "Couldn't join - please try again" });
+      toast({ title: "Couldn't join. Please try again." });
       setLoading(false);
     }
   }
@@ -34,19 +32,10 @@ export function JoinAffiliate() {
       type="button"
       onClick={join}
       disabled={loading}
-      className="group inline-flex items-center gap-2 rounded-md bg-primary px-5 py-2.5 text-sm font-semibold text-primary-foreground shadow transition-all hover:bg-primary/90 disabled:opacity-60"
+      className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60"
     >
-      {loading ? (
-        <CircleNotch weight="bold" className="h-4 w-4 animate-spin" />
-      ) : (
-        <>
-          Join the program
-          <ArrowRight
-            weight="bold"
-            className="h-4 w-4 transition-transform group-hover:translate-x-0.5"
-          />
-        </>
-      )}
+      {loading && <CircleNotch weight="bold" className="h-3.5 w-3.5 animate-spin" />}
+      Join the program
     </button>
   );
 }

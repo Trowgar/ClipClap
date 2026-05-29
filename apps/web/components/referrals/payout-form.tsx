@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { CircleNotch, FloppyDisk } from "@phosphor-icons/react";
+import { CircleNotch } from "@phosphor-icons/react";
 import {
   Select,
   SelectContent,
@@ -53,15 +53,15 @@ export function PayoutForm({ currentMethod, currentDestination }: PayoutFormProp
       toast({ title: "Payout destination saved" });
       startTransition(() => router.refresh());
     } catch {
-      setError("Network error - please try again");
+      setError("Network error. Please try again.");
     } finally {
       setSaving(false);
     }
   }
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-col gap-3 sm:flex-row">
+    <div className="space-y-2">
+      <div className="flex flex-col gap-2 sm:flex-row">
         <Select value={method} onValueChange={setMethod}>
           <SelectTrigger className="sm:w-48">
             <SelectValue />
@@ -85,13 +85,9 @@ export function PayoutForm({ currentMethod, currentDestination }: PayoutFormProp
           type="button"
           onClick={save}
           disabled={saving || !dirty || destination.trim().length === 0}
-          className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow transition-colors hover:bg-primary/90 disabled:opacity-50"
+          className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
         >
-          {saving ? (
-            <CircleNotch weight="bold" className="h-4 w-4 animate-spin" />
-          ) : (
-            <FloppyDisk weight="duotone" className="h-4 w-4" />
-          )}
+          {saving && <CircleNotch weight="bold" className="h-3.5 w-3.5 animate-spin" />}
           Save
         </button>
       </div>
