@@ -206,7 +206,7 @@ export async function releaseMaturedCommissions(
 // ---- Payout destination validation ----
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const TRON_RE = /^T[A-Za-z0-9]{33}$/;
+const TRON_RE = /^T[1-9A-HJ-NP-Za-km-z]{33}$/;
 export const PAYOUT_METHODS = ["PAYPAL", "USDT_TRC20", "BANK"] as const;
 export type PayoutMethod = (typeof PAYOUT_METHODS)[number];
 

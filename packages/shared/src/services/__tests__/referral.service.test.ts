@@ -273,7 +273,7 @@ describe("validatePayoutDestination", () => {
   });
   it("accepts a TRON address", () => {
     expect(
-      validatePayoutDestination("USDT_TRC20", "TJRabcdefghijklmnopqrstuvwxyz12345").ok
+      validatePayoutDestination("USDT_TRC20", "TJuBGXHbNJXgSJVbEUGjMpfNrY3NW4Mv2X").ok
     ).toBe(true);
   });
   it("rejects a non-TRON address", () => {
