@@ -165,6 +165,30 @@ async function applySubscription(
     periodEnd: expiresAt,
   });
 
+  const amount = payload.amount ?? payload.price ?? 0;
+  if (amount > 0) {
+    const currency = (payload.currency ?? "usd").toLowerCase();
+    const externalPaymentId =
+      payload.period_id ?? `${tributeSubscriptionId}:${payload.expires_at}`;
+    const { recordCommission } = await import("./referral.service");
+    const { exchangeRateToUsd, REFERRAL_CONFIG } = await import("../config/referral");
+    const rate = exchangeRateToUsd(currency);
+    const grossAmountUsd = (amount / 100) * rate; // Tribute amounts are in minor units
+    const feeRateBps = REFERRAL_CONFIG.feeRateBps.TRIBUTE ?? 0;
+    const processorFeeUsd = (grossAmountUsd * feeRateBps) / 10000;
+    await recordCommission({
+      payerUserId: user.id,
+      source: "TRIBUTE",
+      externalPaymentId,
+      originalCurrency: currency,
+      originalAmount: amount / 100,
+      exchangeRateToUsd: rate,
+      grossAmountUsd,
+      processorFeeUsd,
+      paidAt: new Date(),
+    });
+  }
+
   return {
     status: "applied",
     userId: user.id,
@@ -194,6 +218,10 @@ async function applyCancellation(
       graceEndsAt: stillActive ? expiresAt : null,
     },
   });
+
+  // Cancellation ends future Tribute billing; there is no past payment to claw
+  // back here. Future renewals simply stop arriving. (Refund events, if Tribute
+  // ever sends them, would be handled separately.)
 
   await notifyPaymentEvent(user.id, {
     kind: "subscription_canceled",

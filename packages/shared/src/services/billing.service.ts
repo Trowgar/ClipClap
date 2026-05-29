@@ -232,6 +232,73 @@ export async function handleWebhook(
           });
         }
       }
+
+      // Referral accrual: attribute 30% of net to the payer's referrer.
+      const payer = await prisma.user.findUnique({
+        where: { stripeSubscriptionId: subscriptionId },
+        select: { id: true },
+      });
+      if (payer && invoice.amount_paid > 0) {
+        // Real processor fee from the balance transaction when available.
+        let feeUsd = 0;
+        const bt = invoice.charge
+          ? await stripe.charges
+              .retrieve(
+                typeof invoice.charge === "string" ? invoice.charge : invoice.charge.id,
+                { expand: ["balance_transaction"] }
+              )
+              .then((c) => c.balance_transaction)
+              .catch(() => null)
+          : null;
+        if (bt && typeof bt !== "string") feeUsd = bt.fee / 100;
+
+        const paidAtSec =
+          invoice.status_transitions?.paid_at ?? invoice.created;
+        const { referralService } = await import("./index");
+        await referralService.recordCommission({
+          payerUserId: payer.id,
+          source: "STRIPE",
+          externalPaymentId: invoice.id,
+          originalCurrency: invoice.currency ?? "usd",
+          originalAmount: invoice.amount_paid / 100,
+          exchangeRateToUsd: 1,
+          grossAmountUsd: invoice.amount_paid / 100,
+          processorFeeUsd: feeUsd,
+          paidAt: new Date(paidAtSec * 1000),
+        });
+      }
+      break;
+    }
+
+    case "charge.refunded": {
+      const charge = event.data.object as Stripe.Charge;
+      const invoiceId =
+        typeof charge.invoice === "string" ? charge.invoice : charge.invoice?.id;
+      if (invoiceId) {
+        const { referralService } = await import("./index");
+        await referralService.voidCommission("STRIPE", invoiceId, "charge.refunded");
+      }
+      break;
+    }
+
+    case "charge.dispute.created": {
+      const dispute = event.data.object as Stripe.Dispute;
+      const chargeId =
+        typeof dispute.charge === "string" ? dispute.charge : dispute.charge?.id;
+      if (chargeId) {
+        const charge = await stripe.charges.retrieve(chargeId).catch(() => null);
+        const rawInvoice = charge?.invoice ?? null;
+        const invoiceId =
+          typeof rawInvoice === "string"
+            ? rawInvoice
+            : typeof rawInvoice === "object" && rawInvoice !== null
+              ? rawInvoice.id
+              : undefined;
+        if (invoiceId) {
+          const { referralService } = await import("./index");
+          await referralService.voidCommission("STRIPE", invoiceId, "charge.dispute.created");
+        }
+      }
       break;
     }
 
