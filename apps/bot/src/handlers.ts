@@ -53,6 +53,18 @@ export const CALLBACK_LANG_EN = "lang_en";
 export const CALLBACK_LANG_RU = "lang_ru";
 export const CALLBACK_LANG_AUTO = "lang_auto";
 
+export function isReferralAdmin(
+  telegramId: string,
+  allowlist: string | undefined
+): boolean {
+  if (!allowlist) return false;
+  return allowlist
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .includes(telegramId);
+}
+
 export function parseLangCallback(
   data: string | undefined
 ): "en" | "ru" | "auto" | null {
@@ -156,6 +168,22 @@ export async function handleUpdate(
   if (text === "/payout" || text.startsWith("/payout ")) {
     await handlePayout(client, message, from, text, dict);
     return;
+  }
+
+  if (text.startsWith("/payouts") || text.startsWith("/ref ") ||
+      text.startsWith("/refban ") || text.startsWith("/refvoid ")) {
+    if (isReferralAdmin(String(from.id), process.env.REFERRAL_ADMIN_TELEGRAM_IDS)) {
+      await handleAdminCommand(client, message, text);
+      return;
+    }
+    // non-admins fall through to the default hint
+  }
+
+  if (text.startsWith("/approve ") || text.startsWith("/paid ") || text.startsWith("/reject ")) {
+    if (isReferralAdmin(String(from.id), process.env.REFERRAL_ADMIN_TELEGRAM_IDS)) {
+      await handleAdminPayoutAction(client, message, text);
+      return;
+    }
   }
 
   const menuAction = parseMenuCommand(text) ?? matchMenuAction(text);
@@ -919,4 +947,109 @@ async function handlePayout(
     message.chat.id,
     result.ok ? dict.payoutSaved : dict.payoutInvalid(result.error ?? "invalid")
   );
+}
+
+async function handleAdminCommand(
+  client: TelegramClient,
+  message: TelegramMessage,
+  text: string
+) {
+  const { referralService } = await import("@clipfast/shared");
+  const chatId = message.chat.id;
+
+  if (text.startsWith("/payouts")) {
+    const payouts = await referralService.listPendingPayouts();
+    if (payouts.length === 0) {
+      await client.sendMessage(chatId, "No pending payouts.");
+      return;
+    }
+    const lines = payouts.map(
+      (p) =>
+        `${p.id}\n  ${p.status} $${p.amountUsd.toFixed(2)} -> ${p.destination} (${p._count.commissions} commissions)`
+    );
+    await client.sendMessage(
+      chatId,
+      `Pending payouts:\n${lines.join("\n")}\n\n` +
+        `Approve: /approve <id> <networkFee>\nPaid: /paid <id> <txRef>\nReject: /reject <id> <reason>`
+    );
+    return;
+  }
+
+  if (text.startsWith("/ref ")) {
+    const key = text.slice("/ref ".length).trim();
+    const card = await referralService.getReferrerCard(key);
+    if (!card) {
+      await client.sendMessage(chatId, "Referrer not found.");
+      return;
+    }
+    await client.sendMessage(
+      chatId,
+      `Referrer ${card.user.id} (${card.user.referralCode ?? "no code"})\n` +
+        `Referred: ${card.user._count.referrals}\n` +
+        `Pending $${card.balance.pendingUsd.toFixed(2)} - ` +
+        `Available $${card.balance.availableUsd.toFixed(2)} - ` +
+        `In payout $${card.balance.payoutPendingUsd.toFixed(2)} - ` +
+        `Paid $${card.balance.paidUsd.toFixed(2)}\n` +
+        `Voided: ${card.refundCount}\n` +
+        `Status: ${card.user.referralBannedAt ? "BANNED" : "active"}`
+    );
+    return;
+  }
+
+  if (text.startsWith("/refban ")) {
+    const userId = text.slice("/refban ".length).trim();
+    await referralService.banReferrer(userId);
+    await client.sendMessage(chatId, `Banned ${userId} from future accrual.`);
+    return;
+  }
+
+  if (text.startsWith("/refvoid ")) {
+    const rest = text.slice("/refvoid ".length).trim();
+    const [userId, ...reasonParts] = rest.split(/\s+/);
+    const reason = reasonParts.join(" ");
+    if (!userId || !reason) {
+      await client.sendMessage(chatId, "Usage: /refvoid <userId> <reason>");
+      return;
+    }
+    const { voided } = await referralService.voidReferrerCommissions(userId, reason);
+    await client.sendMessage(chatId, `Voided ${voided} commissions for ${userId}.`);
+    return;
+  }
+}
+
+async function handleAdminPayoutAction(
+  client: TelegramClient,
+  message: TelegramMessage,
+  text: string
+) {
+  const { referralService } = await import("@clipfast/shared");
+  const chatId = message.chat.id;
+  const adminId = String(message.from!.id);
+  const parts = text.trim().split(/\s+/);
+  const cmd = parts[0];
+  const id = parts[1];
+
+  if (!id) {
+    await client.sendMessage(chatId, `Usage: ${cmd} <id>`);
+    return;
+  }
+
+  if (cmd === "/approve") {
+    const fee = Number(parts[2] ?? "0");
+    await referralService.approvePayout(id, adminId, Number.isFinite(fee) ? fee : 0);
+    await client.sendMessage(chatId, `Approved ${id} (fee $${fee}).`);
+    return;
+  }
+  if (cmd === "/paid") {
+    const txRef = parts.slice(2).join(" ");
+    await referralService.markPayoutPaid(id, txRef);
+    await client.sendMessage(chatId, `Marked ${id} paid (tx ${txRef}).`);
+    return;
+  }
+  if (cmd === "/reject") {
+    const reason = parts.slice(2).join(" ");
+    await referralService.rejectPayout(id, reason || "rejected");
+    await client.sendMessage(chatId, `Rejected ${id}.`);
+    return;
+  }
 }
