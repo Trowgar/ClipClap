@@ -13,7 +13,9 @@ x-worker-base: &worker-base
     - ./apps/worker:/app/apps/worker
     - ./packages:/app/packages
     - ./prisma:/app/prisma
-    - /app/node_modules
+    # No anon volume for /app/node_modules: workspace deps hoist there from the
+    # image, so `docker compose up -d --build` updates them. (An anon volume here
+    # persists across rebuilds and would shadow new deps with a stale tree.)
     - /app/apps/worker/node_modules
   restart: unless-stopped
 
@@ -54,7 +56,9 @@ services:
       - ./apps/web:/app/apps/web
       - ./packages:/app/packages
       - ./prisma:/app/prisma
-      - /app/node_modules
+      # No anon volume for /app/node_modules: workspace deps hoist there from the
+      # image, so `docker compose up -d --build` updates them. (An anon volume here
+      # persists across rebuilds and would shadow new deps with a stale tree.)
       - /app/apps/web/node_modules
       - /app/apps/web/.next
     restart: unless-stopped
@@ -117,7 +121,9 @@ services:
       - ./apps/bot:/app/apps/bot
       - ./packages:/app/packages
       - ./prisma:/app/prisma
-      - /app/node_modules
+      # No anon volume for /app/node_modules: workspace deps hoist there from the
+      # image, so `docker compose up -d --build` updates them. (An anon volume here
+      # persists across rebuilds and would shadow new deps with a stale tree.)
       - /app/apps/bot/node_modules
     restart: unless-stopped
 
