@@ -182,7 +182,11 @@ PENDING  --approve(networkFeeUsd, adminId)-->  APPROVED
 APPROVED --markPaid(txRef, adminId)-------->   PAID
 PENDING/APPROVED --reject(reason, adminId)->   REJECTED
 ```
-- **approve** (only from `PENDING`): require `0 <= networkFeeUsd < amountUsd` and resulting `netAmountUsd = amountUsd - networkFeeUsd > 0`. **Re-check coverage**: `ledgerBalance >= sum(active withdrawal amounts incl. this request)`; if a clawback has since reduced the balance below coverage, **block approval** with an admin error (no `ON_HOLD` state at MVP - admin resolves by rejecting or waiting for balance to recover). Set `approvedBy`, `approvedAt`.
+- **approve** (only from `PENDING`): require `0 <= networkFeeUsd < amountUsd` and resulting `netAmountUsd = amountUsd - networkFeeUsd > 0`. **Re-check coverage**: `ledgerBalance >= sum(active withdrawal amounts incl. this request)`; if a clawback has since reduced the balance below coverage, **block approval** with an admin error that shows the breakdown (no `ON_HOLD` state at MVP - admin resolves by rejecting or waiting for balance to recover), e.g.:
+```
+Cannot approve: balance no longer covers this withdrawal after a clawback.
+Ledger balance: $40 · Locked: $50 · Requested: $50
+``` Set `approvedBy`, `approvedAt`.
 - **markPaid** (only from `APPROVED`): set `status=PAID`, `paidBy`, `paidAt`, `txRef`, **and** write the debit, all in **one transaction**, idempotently:
 ```
 WalletEntry { userId, kind: DEBIT, source: WITHDRAWAL,
@@ -294,6 +298,9 @@ Exact validators finalized in the plan; serialization-retry count and admin-id e
 - **Migration:** no references to ReferralPayout/runPayoutBatch/payoutDestination/`/payout` remain (grep-level check in the plan's final task).
 
 ---
+
+## 10a. Tech debt (noted, not MVP)
+- **Money as `Float`:** MVP stores USD amounts as `Float` (consistent with the existing `ReferralCommission`/plan code). For a money system this should become integer cents (`amountUsdCents Int`) before volume grows - especially once CPA/CPM ad rewards produce many tiny accruals where float drift accumulates. Tracked as a future migration, not a launch blocker.
 
 ## 11. Out of Scope / Later
 - Ad-partnership earning system (the credit source), creator campaigns, manual bonus UI.
