@@ -38,6 +38,26 @@ enum BillingCycle {
   MONTHLY
 }
 
+enum PaymentSource {
+  STRIPE
+  TRIBUTE
+}
+
+enum CommissionStatus {
+  PENDING
+  AVAILABLE
+  PAYOUT_PENDING
+  PAID
+  VOIDED
+}
+
+enum PayoutStatus {
+  PENDING
+  APPROVED
+  PAID
+  REJECTED
+}
+
 enum JobStepName {
   DOWNLOAD
   TRANSCRIBE
@@ -65,27 +85,126 @@ model User {
   emailVerified         DateTime?
   password              String?
   telegramId            String?            @unique
+  telegramLocale        String?
   name                  String?
   image                 String?
   plan                  Plan               @default(NONE)
   stripeCustomerId      String?            @unique
   stripeSubscriptionId  String?            @unique
+  tributeSubscriptionId String?            @unique
   subscriptionStatus    SubscriptionStatus @default(NONE)
   billingCycle          BillingCycle?
   currentPeriodEnd      DateTime?
   dunningSince          DateTime?
   graceEndsAt           DateTime?
-  topUpMinutesRemaining Int                @default(0)
-  createdAt             DateTime           @default(now())
-  updatedAt             DateTime           @updatedAt
+  topUpMinutesRemaining   Int                @default(0)
+  referralCode            String?            @unique
+  referredById            String?
+  payoutDestination       String?
+  payoutMethod            String?
+  referralTermsAcceptedAt DateTime?
+  referralTermsVersion    String?
+  referralBannedAt        DateTime?
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
 
-  jobs               Job[]
-  clips              Clip[]
-  telegramDeliveries TelegramDelivery[]
-  accounts           Account[]
-  sessions           Session[]
+  jobs                Job[]
+  clips               Clip[]
+  telegramDeliveries  TelegramDelivery[]
+  telegramLinkTokens  TelegramLinkToken[]
+  accounts            Account[]
+  sessions            Session[]
+  referredBy          User?                @relation("Referrals", fields: [referredById], references: [id])
+  referrals           User[]               @relation("Referrals")
+  commissionsEarned   ReferralCommission[] @relation("ReferrerCommissions")
+  commissionsCaused   ReferralCommission[] @relation("ReferredCommissions")
+  payouts             ReferralPayout[]
 
   @@map("users")
+}
+
+model ReferralCommission {
+  id                String           @id @default(cuid())
+  referrerId        String
+  referrer          User             @relation("ReferrerCommissions", fields: [referrerId], references: [id], onDelete: Cascade)
+  referredUserId    String
+  referredUser      User             @relation("ReferredCommissions", fields: [referredUserId], references: [id], onDelete: Cascade)
+  source            PaymentSource
+  externalPaymentId String
+  originalCurrency  String
+  originalAmount    Float
+  exchangeRateToUsd Float
+  grossAmountUsd    Float
+  processorFeeUsd   Float
+  taxUsd            Float            @default(0)
+  discountUsd       Float            @default(0)
+  refundUsd         Float            @default(0)
+  netAmountUsd      Float
+  rateBps           Int
+  commissionUsd     Float
+  status            CommissionStatus @default(PENDING)
+  availableAt       DateTime
+  payoutId          String?
+  payout            ReferralPayout?  @relation(fields: [payoutId], references: [id])
+  adminNote         String?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@unique([source, externalPaymentId])
+  @@index([referrerId, status])
+  @@index([status, availableAt])
+  @@map("referral_commissions")
+}
+
+model ReferralPayout {
+  id            String               @id @default(cuid())
+  referrerId    String
+  referrer      User                 @relation(fields: [referrerId], references: [id], onDelete: Cascade)
+  amountUsd     Float
+  networkFeeUsd Float                @default(0)
+  netPayoutUsd  Float
+  payoutMethod  String?
+  destination   String
+  status        PayoutStatus         @default(PENDING)
+  txRef         String?
+  adminNote     String?
+  approvedBy    String?
+  approvedAt    DateTime?
+  paidAt        DateTime?
+  rejectedAt    DateTime?
+  commissions   ReferralCommission[]
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  @@index([status])
+  @@index([referrerId])
+  @@map("referral_payouts")
+}
+
+model TelegramLinkToken {
+  code       String    @id
+  userId     String?
+  user       User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  telegramId String?
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+  @@index([telegramId])
+  @@index([expiresAt])
+  @@map("telegram_link_tokens")
+}
+
+model TributeWebhookEvent {
+  id        String   @id @default(cuid())
+  eventHash String   @unique
+  name      String
+  payload   Json
+  createdAt DateTime @default(now())
+
+  @@index([name, createdAt])
+  @@map("tribute_webhook_events")
 }
 
 model Job {
