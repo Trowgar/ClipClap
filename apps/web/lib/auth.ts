@@ -89,6 +89,18 @@ const nextAuth = NextAuth({
     async linkAccount({ user, account, profile }) {
       await syncTelegramIdentity(user.id, account, profile);
     },
+    async createUser({ user }) {
+      try {
+        const { cookies } = await import("next/headers");
+        const { referralService, REFERRAL_COOKIE_NAME } = await import("@clipfast/shared");
+        const code = (await cookies()).get(REFERRAL_COOKIE_NAME)?.value;
+        if (code && user.id) {
+          await referralService.attachReferral(user.id, code);
+        }
+      } catch (err) {
+        console.error("[referral] attach on createUser failed:", err);
+      }
+    },
   },
 });
 
