@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 import { prisma, referralService, REFERRAL_CONFIG } from "@clipfast/shared";
 import { CopyField } from "@/components/referrals/copy-field";
 import { JoinAffiliate } from "@/components/referrals/join-affiliate";
-import { PayoutForm } from "@/components/referrals/payout-form";
 
 const RATE_PCT = REFERRAL_CONFIG.rateBps / 100;
 const HOLD_DAYS = REFERRAL_CONFIG.holdDays;
@@ -35,8 +34,6 @@ export default async function ReferralsPage() {
     select: {
       referralCode: true,
       referralTermsAcceptedAt: true,
-      payoutMethod: true,
-      payoutDestination: true,
     },
   });
 
@@ -75,7 +72,7 @@ export default async function ReferralsPage() {
 
   // ---------- Joined ----------
   const code = user.referralCode ?? (await referralService.ensureReferralCode(userId));
-  const balance = await referralService.getReferralBalance(userId);
+  const stats = await referralService.getReferralStats(userId);
   const referrals = await prisma.user.findMany({
     where: { referredById: userId },
     select: { id: true, createdAt: true, plan: true, subscriptionStatus: true },
@@ -90,14 +87,7 @@ export default async function ReferralsPage() {
   const webLink = `${appUrl.replace(/\/$/, "")}/?ref=${code}`;
   const tgLink = `https://t.me/${botName}?start=ref_${code}`;
 
-  const toGo = Math.max(0, MIN_PAYOUT - balance.availableUsd);
   const activeCount = referrals.filter((r) => r.subscriptionStatus === "ACTIVE").length;
-
-  const secondary = [
-    { label: "In hold", value: balance.pendingUsd },
-    { label: "In payout", value: balance.payoutPendingUsd },
-    { label: "Paid out", value: balance.paidUsd },
-  ];
 
   return (
     <div className="mx-auto max-w-3xl space-y-8">
@@ -108,29 +98,26 @@ export default async function ReferralsPage() {
         </p>
       </div>
 
-      {/* Earnings */}
+      {/* Earnings (referral) */}
       <div className="space-y-4">
-        <h2 className="text-lg font-semibold">Earnings</h2>
+        <h2 className="text-lg font-semibold">Referral earnings</h2>
         <div className="rounded-lg border border-border p-5">
-          <div className="text-sm text-muted-foreground">Available to withdraw</div>
-          <div className="mt-1 text-3xl font-bold tabular-nums">
-            {money(balance.availableUsd)}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <div className="text-xs text-muted-foreground">Total earned</div>
+              <div className="mt-0.5 text-2xl font-bold tabular-nums">{money(stats.earnedUsd)}</div>
+            </div>
+            <div>
+              <div className="text-xs text-muted-foreground">Pending ({HOLD_DAYS}-day hold)</div>
+              <div className="mt-0.5 text-2xl font-bold tabular-nums">{money(stats.pendingUsd)}</div>
+            </div>
           </div>
-
-          <div className="mt-5 grid grid-cols-3 gap-4 border-t border-border pt-4">
-            {secondary.map((s) => (
-              <div key={s.label}>
-                <div className="text-xs text-muted-foreground">{s.label}</div>
-                <div className="mt-0.5 text-sm tabular-nums">{money(s.value)}</div>
-              </div>
-            ))}
-          </div>
-
-          <p className="mt-4 text-xs text-muted-foreground">
-            Paid on the {PAYOUT_DAYS} of each month once your available balance reaches{" "}
-            {money(MIN_PAYOUT)}.
-            {toGo > 0 ? ` ${money(toGo)} to go.` : " Ready for the next payout."}
-          </p>
+          <a
+            href="/dashboard/payouts"
+            className="mt-4 inline-block text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline"
+          >
+            Available to withdraw lives on your Payouts page -&gt;
+          </a>
         </div>
       </div>
 
@@ -147,26 +134,13 @@ export default async function ReferralsPage() {
         </div>
       </div>
 
-      {/* Payout destination */}
-      <div className="space-y-4">
-        <h2 className="text-lg font-semibold">Payout destination</h2>
-        <p className="text-sm text-muted-foreground">
-          Where we send your payouts. Network fees are deducted at withdrawal.
-          {!user.payoutDestination && " Not set yet."}
-        </p>
-        <PayoutForm
-          currentMethod={user.payoutMethod ?? null}
-          currentDestination={user.payoutDestination ?? null}
-        />
-      </div>
-
       {/* Referrals */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold">Referrals</h2>
           {referrals.length > 0 && (
             <span className="text-sm text-muted-foreground">
-              {activeCount} active · {referrals.length} total
+              {activeCount} active &middot; {referrals.length} total
             </span>
           )}
         </div>
@@ -212,6 +186,17 @@ export default async function ReferralsPage() {
             </table>
           </div>
         )}
+      </div>
+
+      {/* How it works / terms */}
+      <div className="space-y-4">
+        <h2 className="text-lg font-semibold">How it works</h2>
+        <ul className="space-y-2 text-sm text-muted-foreground">
+          <li>{RATE_PCT}% commission on every payment, for life.</li>
+          <li>Commissions clear after a {HOLD_DAYS}-day hold (covers refunds).</li>
+          <li>Payouts run on the {PAYOUT_DAYS} of each month.</li>
+          <li>Minimum payout {money(MIN_PAYOUT)}.</li>
+        </ul>
       </div>
     </div>
   );
