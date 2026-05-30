@@ -23,14 +23,31 @@ interface SidebarProps {
   };
 }
 
-const navItems = [
-  { href: "/dashboard", label: "Home", icon: House },
-  { href: "/dashboard/projects", label: "Projects", icon: FolderOpen },
-  { href: "/dashboard/plans", label: "Plans", icon: CreditCard },
-  { href: "/dashboard/billing", label: "Billing", icon: Receipt },
-  { href: "/dashboard/referrals", label: "Affiliate", icon: Handshake },
-  { href: "/dashboard/payouts", label: "Payouts", icon: Wallet },
-  { href: "/dashboard/settings", label: "Settings", icon: Gear },
+const navSections: {
+  heading?: string;
+  items: { href: string; label: string; icon: typeof House }[];
+}[] = [
+  {
+    items: [
+      { href: "/dashboard", label: "Home", icon: House },
+      { href: "/dashboard/projects", label: "Projects", icon: FolderOpen },
+    ],
+  },
+  {
+    heading: "Earn",
+    items: [
+      { href: "/dashboard/referrals", label: "Affiliate", icon: Handshake },
+      { href: "/dashboard/payouts", label: "Payouts", icon: Wallet },
+    ],
+  },
+  {
+    heading: "Account",
+    items: [
+      { href: "/dashboard/plans", label: "Plans", icon: CreditCard },
+      { href: "/dashboard/billing", label: "Billing", icon: Receipt },
+      { href: "/dashboard/settings", label: "Settings", icon: Gear },
+    ],
+  },
 ];
 
 export function Sidebar({ user, usage }: SidebarProps) {
@@ -46,29 +63,38 @@ export function Sidebar({ user, usage }: SidebarProps) {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 space-y-1 p-3">
-        {navItems.map((item) => {
-          const isActive =
-            item.href === "/dashboard"
-              ? pathname === "/dashboard"
-              : pathname.startsWith(item.href);
+      <nav className="flex-1 space-y-5 p-3">
+        {navSections.map((section, i) => (
+          <div key={section.heading ?? i} className="space-y-1">
+            {section.heading && (
+              <div className="px-3 pb-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70">
+                {section.heading}
+              </div>
+            )}
+            {section.items.map((item) => {
+              const isActive =
+                item.href === "/dashboard"
+                  ? pathname === "/dashboard"
+                  : pathname.startsWith(item.href);
 
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
-                isActive
-                  ? "bg-accent text-foreground"
-                  : "text-muted-foreground hover:bg-accent hover:text-foreground"
-              )}
-            >
-              <item.icon className="h-4 w-4" />
-              {item.label}
-            </Link>
-          );
-        })}
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  className={cn(
+                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
+                    isActive
+                      ? "bg-accent text-foreground"
+                      : "text-muted-foreground hover:bg-accent hover:text-foreground"
+                  )}
+                >
+                  <item.icon className="h-4 w-4" />
+                  {item.label}
+                </Link>
+              );
+            })}
+          </div>
+        ))}
       </nav>
 
       {/* Usage */}
