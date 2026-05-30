@@ -151,6 +151,7 @@ export async function handleWebhook(
           dunningSince: null,
           graceEndsAt: null,
           topUpMinutesRemaining: 0,
+          currentPeriodStart: new Date(subscription.current_period_start * 1000),
           currentPeriodEnd: new Date(subscription.current_period_end * 1000),
         },
       });
@@ -220,6 +221,7 @@ export async function handleWebhook(
           subscriptionStatus: "ACTIVE",
           dunningSince: null,
           topUpMinutesRemaining: 0,
+          currentPeriodStart: new Date(subscription.current_period_start * 1000),
           currentPeriodEnd: new Date(subscription.current_period_end * 1000),
         },
       });

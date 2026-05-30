@@ -183,6 +183,7 @@ describe("billing.service - handleWebhook", () => {
     mockStripe.subscriptions.retrieve.mockResolvedValue({
       id: "sub_1",
       items: { data: [{ price: { id: "price_pm" } }] },
+      current_period_start: 1778408000,
       current_period_end: 1781000000,
     });
 
@@ -198,6 +199,7 @@ describe("billing.service - handleWebhook", () => {
           stripeSubscriptionId: "sub_1",
           dunningSince: null,
           graceEndsAt: null,
+          currentPeriodStart: new Date(1778408000 * 1000),
           currentPeriodEnd: new Date(1781000000 * 1000),
         }),
       })
@@ -240,6 +242,7 @@ describe("billing.service - handleWebhook", () => {
     });
     mockStripe.subscriptions.retrieve.mockResolvedValue({
       id: "sub_1",
+      current_period_start: 1779408000,
       current_period_end: 1782000000,
     });
 
@@ -252,6 +255,7 @@ describe("billing.service - handleWebhook", () => {
           subscriptionStatus: "ACTIVE",
           dunningSince: null,
           topUpMinutesRemaining: 0,
+          currentPeriodStart: new Date(1779408000 * 1000),
           currentPeriodEnd: new Date(1782000000 * 1000),
         }),
       })
