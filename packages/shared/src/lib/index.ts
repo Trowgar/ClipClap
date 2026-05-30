@@ -15,5 +15,4 @@ export {
   registerReferralSchedules,
   REFERRAL_QUEUE_NAME,
   HOLD_RELEASE_JOB,
-  PAYOUT_BATCH_JOB,
 } from "./referral-queue";

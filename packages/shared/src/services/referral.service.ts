@@ -2,6 +2,7 @@ import { randomBytes } from "crypto";
 import type { PaymentSource } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { REFERRAL_CONFIG } from "../config/referral";
+import { postWalletEntry, getWalletBalance, getEarningsBySource } from "./wallet.service";
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no ambiguous 0/O/1/I
 
@@ -86,7 +87,7 @@ export async function attachReferral(
 }
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
-const NON_PAID_STATUSES = ["PENDING", "AVAILABLE", "PAYOUT_PENDING"] as const;
+const NON_PAID_STATUSES = ["PENDING", "AVAILABLE"] as const;
 
 export interface RecordCommissionInput {
   payerUserId: string;
@@ -175,123 +176,62 @@ export async function recordCommission(
   return { status: "recorded" };
 }
 
+/** Move matured PENDING commissions to AVAILABLE and credit the wallet. Idempotent. */
+export async function releaseMaturedCommissions(
+  now: Date = new Date()
+): Promise<{ released: number }> {
+  const matured = await prisma.referralCommission.findMany({
+    where: { status: "PENDING", availableAt: { lte: now } },
+    select: { id: true, referrerId: true, commissionUsd: true },
+  });
+  let released = 0;
+  for (const c of matured) {
+    await prisma.$transaction(async (tx) => {
+      const upd = await tx.referralCommission.updateMany({
+        where: { id: c.id, status: "PENDING" },
+        data: { status: "AVAILABLE" },
+      });
+      if (upd.count === 0) return; // already released by a concurrent run
+      await postWalletEntry(tx, {
+        userId: c.referrerId, kind: "CREDIT", source: "REFERRAL",
+        refType: "referral_commission", refId: c.id, amountUsd: c.commissionUsd,
+      });
+      released += 1;
+    });
+  }
+  return { released };
+}
+
 /**
  * Void all non-paid commissions for a payment (refund / chargeback / admin).
- * Detaches voided commissions from any open payout batch and recomputes the
- * affected payout(s). If an entire payout becomes empty it is auto-rejected.
- * All steps run in a single transaction so partial failures cannot leave
- * a half-detached state.
+ * Posts a wallet DEBIT clawback for each commission that was already AVAILABLE
+ * (i.e. already credited to the wallet). All steps run in a single transaction.
  */
 export async function voidCommission(
   source: PaymentSource,
   externalPaymentId: string,
   reason: string
 ): Promise<{ voided: number }> {
-  return prisma.$transaction(async (tx) => {
-    // 1. Find open payouts that will lose commissions so we can recompute them.
-    const affectedPayouts = await tx.referralPayout.findMany({
-      where: {
-        status: { in: ["PENDING", "APPROVED"] },
-        commissions: {
-          some: {
-            source,
-            externalPaymentId,
-            status: "PAYOUT_PENDING",
-          },
-        },
-      },
-      select: { id: true, status: true, networkFeeUsd: true },
+  const targets = await prisma.referralCommission.findMany({
+    where: { source, externalPaymentId, status: { in: [...NON_PAID_STATUSES] } },
+    select: { id: true, referrerId: true, commissionUsd: true, status: true },
+  });
+  if (targets.length === 0) return { voided: 0 };
+  await prisma.$transaction(async (tx) => {
+    await tx.referralCommission.updateMany({
+      where: { source, externalPaymentId, status: { in: [...NON_PAID_STATUSES] } },
+      data: { status: "VOIDED", adminNote: reason },
     });
-
-    // 2. Void matching commissions and detach from any payout batch.
-    const result = await tx.referralCommission.updateMany({
-      where: {
-        source,
-        externalPaymentId,
-        status: { in: [...NON_PAID_STATUSES] },
-      },
-      data: { status: "VOIDED", adminNote: reason, payoutId: null },
-    });
-
-    // 3. Recompute each affected payout.
-    for (const payout of affectedPayouts) {
-      const agg = await tx.referralCommission.aggregate({
-        where: { payoutId: payout.id, status: "PAYOUT_PENDING" },
-        _sum: { commissionUsd: true },
-      });
-      const remaining = round2(agg._sum.commissionUsd ?? 0);
-
-      if (remaining === 0) {
-        await tx.referralPayout.update({
-          where: { id: payout.id },
-          data: {
-            status: "REJECTED",
-            rejectedAt: new Date(),
-            adminNote: "auto-voided: all linked commissions reversed",
-          },
-        });
-      } else {
-        await tx.referralPayout.update({
-          where: { id: payout.id },
-          data: {
-            amountUsd: remaining,
-            netPayoutUsd: round2(remaining - (payout.networkFeeUsd ?? 0)),
-          },
+    for (const c of targets) {
+      if (c.status === "AVAILABLE") {
+        await postWalletEntry(tx, {
+          userId: c.referrerId, kind: "DEBIT", source: "REFERRAL",
+          refType: "referral_clawback", refId: c.id, amountUsd: c.commissionUsd,
         });
       }
     }
-
-    return { voided: result.count };
   });
-}
-
-/** Move matured PENDING commissions to AVAILABLE. Idempotent. */
-export async function releaseMaturedCommissions(
-  now: Date = new Date()
-): Promise<{ released: number }> {
-  const result = await prisma.referralCommission.updateMany({
-    where: { status: "PENDING", availableAt: { lte: now } },
-    data: { status: "AVAILABLE" },
-  });
-  return { released: result.count };
-}
-
-// ---- Payout destination validation ----
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const TRON_RE = /^T[1-9A-HJ-NP-Za-km-z]{33}$/;
-export const PAYOUT_METHODS = ["PAYPAL", "USDT_TRC20", "BANK"] as const;
-export type PayoutMethod = (typeof PAYOUT_METHODS)[number];
-
-export function validatePayoutDestination(
-  method: string,
-  destination: string
-): { ok: boolean; error?: string } {
-  const value = destination?.trim() ?? "";
-  switch (method) {
-    case "PAYPAL":
-      return EMAIL_RE.test(value) ? { ok: true } : { ok: false, error: "Invalid PayPal email" };
-    case "USDT_TRC20":
-      return TRON_RE.test(value) ? { ok: true } : { ok: false, error: "Invalid TRON address" };
-    case "BANK":
-      return value.length > 0 ? { ok: true } : { ok: false, error: "Bank details required" };
-    default:
-      return { ok: false, error: "Unsupported payout method" };
-  }
-}
-
-export async function setPayoutDestination(
-  userId: string,
-  method: string,
-  destination: string
-): Promise<{ ok: boolean; error?: string }> {
-  const v = validatePayoutDestination(method, destination);
-  if (!v.ok) return v;
-  await prisma.user.update({
-    where: { id: userId },
-    data: { payoutMethod: method, payoutDestination: destination.trim() },
-  });
-  return { ok: true };
+  return { voided: targets.length };
 }
 
 export async function acceptReferralTerms(userId: string): Promise<string> {
@@ -305,98 +245,7 @@ export async function acceptReferralTerms(userId: string): Promise<string> {
   return ensureReferralCode(userId);
 }
 
-export interface ReferralBalance {
-  pendingUsd: number;
-  availableUsd: number;
-  payoutPendingUsd: number;
-  paidUsd: number;
-}
-
-export async function getReferralBalance(referrerId: string): Promise<ReferralBalance> {
-  const groups = await prisma.referralCommission.groupBy({
-    by: ["status"],
-    where: { referrerId },
-    _sum: { commissionUsd: true },
-  });
-  const sumFor = (status: string) =>
-    round2(groups.find((g) => g.status === status)?._sum.commissionUsd ?? 0);
-  return {
-    pendingUsd: sumFor("PENDING"),
-    availableUsd: sumFor("AVAILABLE"),
-    payoutPendingUsd: sumFor("PAYOUT_PENDING"),
-    paidUsd: sumFor("PAID"),
-  };
-}
-
 // ---- Admin operations ----
-
-export async function listPendingPayouts() {
-  return prisma.referralPayout.findMany({
-    where: { status: { in: ["PENDING", "APPROVED"] } },
-    orderBy: { createdAt: "asc" },
-    include: { _count: { select: { commissions: true } } },
-  });
-}
-
-/**
- * Approve a payout batch. Guards against acting on a non-PENDING payout
- * by using updateMany with a status condition; silently no-ops if already
- * in a terminal/approved state.
- */
-export async function approvePayout(
-  payoutId: string,
-  adminTelegramId: string,
-  networkFeeUsd: number
-): Promise<void> {
-  const payout = await prisma.referralPayout.findUniqueOrThrow({ where: { id: payoutId } });
-  await prisma.referralPayout.updateMany({
-    where: { id: payoutId, status: "PENDING" },
-    data: {
-      status: "APPROVED",
-      approvedBy: adminTelegramId,
-      approvedAt: new Date(),
-      networkFeeUsd,
-      netPayoutUsd: round2(payout.amountUsd - networkFeeUsd),
-    },
-  });
-}
-
-/**
- * Mark a payout as paid and flip all its PAYOUT_PENDING commissions to PAID.
- * Guards the payout update so a REJECTED or already-PAID payout is never
- * paid again. Guards the commission flip so VOIDED commissions cannot be
- * resurrected even if their payoutId was not cleared (defense-in-depth).
- */
-export async function markPayoutPaid(payoutId: string, txRef: string): Promise<void> {
-  await prisma.$transaction(async (tx) => {
-    await tx.referralPayout.update({
-      where: { id: payoutId, status: { in: ["PENDING", "APPROVED"] } },
-      data: { status: "PAID", paidAt: new Date(), txRef },
-    });
-    await tx.referralCommission.updateMany({
-      where: { payoutId, status: "PAYOUT_PENDING" },
-      data: { status: "PAID" },
-    });
-  });
-}
-
-/**
- * Reject a payout and return its commissions to AVAILABLE.
- * Guards the payout update so a PAID or already-REJECTED payout is not
- * double-processed.
- */
-export async function rejectPayout(payoutId: string, reason: string): Promise<void> {
-  await prisma.$transaction(async (tx) => {
-    await tx.referralPayout.update({
-      where: { id: payoutId, status: { in: ["PENDING", "APPROVED"] } },
-      data: { status: "REJECTED", rejectedAt: new Date(), adminNote: reason },
-    });
-    await tx.referralCommission.updateMany({
-      where: { payoutId },
-      data: { status: "AVAILABLE", payoutId: null },
-    });
-  });
-}
 
 export async function banReferrer(userId: string): Promise<void> {
   await prisma.user.update({ where: { id: userId }, data: { referralBannedAt: new Date() } });
@@ -404,68 +253,50 @@ export async function banReferrer(userId: string): Promise<void> {
 
 /**
  * Void all non-paid commissions for a referrer (e.g. on ban).
- * Detaches voided commissions from any open payout batch and recomputes the
- * affected payout(s). If an entire payout becomes empty it is auto-rejected.
+ * Posts a wallet DEBIT clawback for each commission that was already AVAILABLE.
  * All steps run in a single transaction.
  */
 export async function voidReferrerCommissions(
   userId: string,
   reason: string
 ): Promise<{ voided: number }> {
-  return prisma.$transaction(async (tx) => {
-    // 1. Find open payouts that will lose commissions.
-    const affectedPayouts = await tx.referralPayout.findMany({
-      where: {
-        status: { in: ["PENDING", "APPROVED"] },
-        commissions: {
-          some: {
-            referrerId: userId,
-            status: "PAYOUT_PENDING",
-          },
-        },
-      },
-      select: { id: true, status: true, networkFeeUsd: true },
+  const targets = await prisma.referralCommission.findMany({
+    where: { referrerId: userId, status: { in: [...NON_PAID_STATUSES] } },
+    select: { id: true, referrerId: true, commissionUsd: true, status: true },
+  });
+  if (targets.length === 0) return { voided: 0 };
+  await prisma.$transaction(async (tx) => {
+    await tx.referralCommission.updateMany({
+      where: { referrerId: userId, status: { in: [...NON_PAID_STATUSES] } },
+      data: { status: "VOIDED", adminNote: reason },
     });
-
-    // 2. Void matching commissions and detach from any payout batch.
-    const result = await tx.referralCommission.updateMany({
-      where: {
-        referrerId: userId,
-        status: { in: [...NON_PAID_STATUSES] },
-      },
-      data: { status: "VOIDED", adminNote: reason, payoutId: null },
-    });
-
-    // 3. Recompute each affected payout.
-    for (const payout of affectedPayouts) {
-      const agg = await tx.referralCommission.aggregate({
-        where: { payoutId: payout.id, status: "PAYOUT_PENDING" },
-        _sum: { commissionUsd: true },
-      });
-      const remaining = round2(agg._sum.commissionUsd ?? 0);
-
-      if (remaining === 0) {
-        await tx.referralPayout.update({
-          where: { id: payout.id },
-          data: {
-            status: "REJECTED",
-            rejectedAt: new Date(),
-            adminNote: "auto-voided: all linked commissions reversed",
-          },
-        });
-      } else {
-        await tx.referralPayout.update({
-          where: { id: payout.id },
-          data: {
-            amountUsd: remaining,
-            netPayoutUsd: round2(remaining - (payout.networkFeeUsd ?? 0)),
-          },
+    for (const c of targets) {
+      if (c.status === "AVAILABLE") {
+        await postWalletEntry(tx, {
+          userId: c.referrerId, kind: "DEBIT", source: "REFERRAL",
+          refType: "referral_clawback", refId: c.id, amountUsd: c.commissionUsd,
         });
       }
     }
-
-    return { voided: result.count };
   });
+  return { voided: targets.length };
+}
+
+export interface ReferralStats {
+  pendingUsd: number;
+  earnedUsd: number;
+}
+
+export async function getReferralStats(userId: string): Promise<ReferralStats> {
+  const [pending, earned] = await Promise.all([
+    prisma.referralCommission.aggregate({ _sum: { commissionUsd: true }, where: { referrerId: userId, status: "PENDING" } }),
+    prisma.walletEntry.aggregate({ _sum: { amountUsd: true }, where: { userId, kind: "CREDIT", source: "REFERRAL" } }),
+  ]);
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  return {
+    pendingUsd: r2(pending._sum.commissionUsd ?? 0),
+    earnedUsd: r2(earned._sum.amountUsd ?? 0),
+  };
 }
 
 export async function getReferrerCard(idOrCode: string) {
@@ -479,58 +310,10 @@ export async function getReferrerCard(idOrCode: string) {
     },
   });
   if (!user) return null;
-  const balance = await getReferralBalance(user.id);
+  const balance = await getWalletBalance(user.id);
+  const bySource = await getEarningsBySource(user.id);
   const refundCount = await prisma.referralCommission.count({
     where: { referrerId: user.id, status: "VOIDED" },
   });
-  return { user, balance, refundCount };
-}
-
-/**
- * Create payout batches for referrers whose AVAILABLE balance >= minimum and
- * who have a payout destination set. Each referrer is processed in its own
- * transaction that creates the payout AND locks its commissions to
- * PAYOUT_PENDING, so a double-run cannot create duplicate payouts.
- */
-export async function runPayoutBatch(
-  _now: Date = new Date()
-): Promise<{ created: number }> {
-  const groups = await prisma.referralCommission.groupBy({
-    by: ["referrerId"],
-    where: { status: "AVAILABLE", payoutId: null },
-    _sum: { commissionUsd: true },
-  });
-
-  let created = 0;
-  for (const group of groups) {
-    const amountUsd = round2(group._sum.commissionUsd ?? 0);
-    if (amountUsd < REFERRAL_CONFIG.minPayoutUsd) continue;
-
-    const referrer = await prisma.user.findUnique({
-      where: { id: group.referrerId },
-      select: { id: true, payoutDestination: true, payoutMethod: true },
-    });
-    if (!referrer?.payoutDestination) continue;
-
-    await prisma.$transaction(async (tx) => {
-      const payout = await tx.referralPayout.create({
-        data: {
-          referrerId: referrer.id,
-          amountUsd,
-          networkFeeUsd: 0,
-          netPayoutUsd: amountUsd,
-          payoutMethod: referrer.payoutMethod,
-          destination: referrer.payoutDestination!,
-          status: "PENDING",
-        },
-      });
-      await tx.referralCommission.updateMany({
-        where: { referrerId: referrer.id, status: "AVAILABLE", payoutId: null },
-        data: { status: "PAYOUT_PENDING", payoutId: payout.id },
-      });
-    });
-    created += 1;
-  }
-
-  return { created };
+  return { user, balance, bySource, refundCount };
 }

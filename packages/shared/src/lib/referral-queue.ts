@@ -3,7 +3,6 @@ import { getRedis } from "./redis";
 
 export const REFERRAL_QUEUE_NAME = "referral-maintenance";
 export const HOLD_RELEASE_JOB = "hold-release";
-export const PAYOUT_BATCH_JOB = "payout-batch";
 
 let referralQueue: Queue | null = null;
 
@@ -22,19 +21,14 @@ export function getReferralQueue(): Queue {
 
 /**
  * Register repeatable jobs. Idempotent on jobId, so calling on every worker
- * boot is safe. Hold-release runs hourly; payout-batch runs daily at 02:00 UTC
- * (the job body itself checks whether "today" is a payout day).
+ * boot is safe. Hold-release runs hourly.
+ * Also retires the old payout-batch repeatable job from Redis if still present.
  */
 export async function registerReferralSchedules(): Promise<void> {
   const queue = getReferralQueue();
-  await queue.add(
-    HOLD_RELEASE_JOB,
-    {},
-    { repeat: { pattern: "0 * * * *" }, jobId: HOLD_RELEASE_JOB }
-  );
-  await queue.add(
-    PAYOUT_BATCH_JOB,
-    {},
-    { repeat: { pattern: "0 2 * * *" }, jobId: PAYOUT_BATCH_JOB }
-  );
+  await queue.add(HOLD_RELEASE_JOB, {}, { repeat: { pattern: "0 * * * *" }, jobId: HOLD_RELEASE_JOB });
+  // Retire the old 1st/15th payout batch if still scheduled in Redis.
+  for (const job of await queue.getRepeatableJobs()) {
+    if (job.name === "payout-batch") await queue.removeRepeatableByKey(job.key);
+  }
 }
