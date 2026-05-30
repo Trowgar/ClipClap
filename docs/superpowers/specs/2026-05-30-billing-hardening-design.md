@@ -77,8 +77,17 @@ quota check (existing)             → unchanged
 | `api/uploads/route.ts` | manual status checks, no quota/date | **replace manual block with `canSubmitJob(userId, 0)`** |
 
 For the presign route, duration is unknown at presign time, so pass `0` — the call
-still enforces status, the new date buffer, and "already over quota". The plan-specific
-file-size check stays separate.
+still enforces status, the new date buffer, and "already over quota". This is a coarse
+gate: exact minute enforcement happens later at job submit (`api/jobs/route.ts`) with
+the real source duration. Note a user sitting *exactly* at the limit (`remaining = 0`)
+passes presign (`used + 0 > limit` is false) but is then blocked at submit once the real
+duration is known — acceptable, since presign only hands out an upload URL. The
+plan-specific file-size check stays separate.
+
+`CANCELED_GRACE` is blocked here — same as today's behavior
+([usage.service.ts:139-141](../../../packages/shared/src/services/usage.service.ts)), so
+this is not a behavior change: a canceled-but-in-grace user can read existing clips but
+cannot create new work.
 
 **Rule recorded for the future:** every resource-consuming entry point (web upload,
 job submit, URL import, bot job creation, any future premium-only action) must go
@@ -161,10 +170,15 @@ Add a stored period start so the window comes from the provider rather than back
   `customer.subscription.updated`. Tribute has no period-start in its payload → leaves
   it null.
 - `getPeriodStart(cycle, currentPeriodStart, currentPeriodEnd)`:
-  - if `currentPeriodStart` present and `currentPeriodEnd > now` → return it directly.
-  - else fallback: `WEEKLY` → `end - 7 days`; `MONTHLY` → `end.setMonth(end.getMonth()-1)`
-    (calendar month, not fixed 30 days).
-  - if no period info → rolling window from now (`-7d` / `-1 month`).
+  - if `currentPeriodStart` present → **return it directly**, regardless of whether
+    `currentPeriodEnd` is in the past. The usage window must stay anchored to the actual
+    billing period even during DUNNING/grace; access vs. grace is decided separately by
+    `canSubmitJob`. (Pinning the window to the provider's period start also means it does
+    not drift just because we are a few days past period end.)
+  - else fallback (no stored start — e.g. Tribute, legacy rows): derive from
+    `currentPeriodEnd` when present: `WEEKLY` → `end - 7 days`; `MONTHLY` →
+    `end.setMonth(end.getMonth()-1)` (calendar month, not fixed 30 days).
+  - if no period info at all → rolling window from now (`-7d` / `-1 month`).
 
 Calendar-month fallback still has JS `setMonth` overflow on 31-day anchors (e.g. Mar 31
 − 1 month → Mar 3), but those are exactly the cases where the stored
@@ -213,6 +227,8 @@ Applied in dev via `npx prisma db push` (per project workflow — no migration f
   (Mar 30, May 30) and weekly; null-period fallback.
 - `canSubmitJob`: ACTIVE within/after grace; DUNNING within grace (allowed) vs after
   grace (blocked); CANCELED/CANCELED_GRACE/NONE blocked; quota interplay.
+- presign guard: user who has used all minutes → presign blocked; user exactly at limit
+  → presign allowed but submit blocked.
 - `reconcileSubscriptions`: Stripe status map (active/past_due/canceled); Tribute
   date-fallback → CANCELED; ACTIVE-but-not-expired left untouched; transition logging.
 - Webhook dedup: duplicate event id skipped (no side effects); record-after-success;
@@ -226,3 +242,7 @@ Applied in dev via `npx prisma db push` (per project workflow — no migration f
 - Persisting `cancelAtPeriodEnd` / `canceledAt` fields (UI uses live Stripe read).
 - Admin/manual-override subscription source (noted as a future edge case).
 - Full cancellation/grace logic inside `customer.subscription.updated`.
+- Ordering protection against stale-but-distinct events: dedup keys on `event.id`, so an
+  *older* event with a *different* id arriving late could still overwrite fresher state.
+  The hourly reconcile cron corrects this within an hour. A future hardening could ignore
+  an event whose `event.created` predates the last provider sync; out of scope for MVP.
