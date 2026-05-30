@@ -94,8 +94,35 @@ describe("reconcileSubscriptions", () => {
 
     expect(prisma.user.update).toHaveBeenCalledWith({
       where: { id: "u2" },
-      data: expect.objectContaining({ subscriptionStatus: "DUNNING" }),
+      data: expect.objectContaining({
+        subscriptionStatus: "DUNNING",
+        dunningSince: expect.any(Date),
+      }),
     });
+  });
+
+  it("does not restamp dunningSince for an already-DUNNING Stripe user", async () => {
+    (prisma.user.findMany as any).mockResolvedValue([
+      {
+        id: "u2b",
+        stripeSubscriptionId: "sub_2b",
+        tributeSubscriptionId: null,
+        subscriptionStatus: "DUNNING",
+        currentPeriodEnd: new Date(NOW.getTime() - 1 * DAY),
+      },
+    ]);
+    mockStripe.subscriptions.retrieve.mockResolvedValue({
+      status: "past_due",
+      current_period_start: 1780000000,
+      current_period_end: 1782600000,
+    });
+
+    await reconcileSubscriptions(NOW);
+
+    const arg = (prisma.user.update as any).mock.calls[0][0];
+    expect(arg.where).toEqual({ id: "u2b" });
+    expect(arg.data.subscriptionStatus).toBe("DUNNING");
+    expect("dunningSince" in arg.data).toBe(false);
   });
 
   it("date-expires a Tribute user past grace to CANCELED", async () => {

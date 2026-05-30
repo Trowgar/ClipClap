@@ -50,6 +50,8 @@ export async function reconcileSubscriptions(
   let reconciled = 0;
 
   for (const user of users) {
+    // Stripe takes precedence if a user somehow has both IDs set (a payment-channel
+    // switch edge case; neither service clears the other's id).
     if (user.stripeSubscriptionId) {
       const stripe = getStripe();
       let sub;
@@ -70,13 +72,19 @@ export async function reconcileSubscriptions(
         subscriptionStatus: SubscriptionStatus;
         currentPeriodStart: Date;
         currentPeriodEnd: Date;
-        dunningSince?: null;
+        dunningSince?: Date | null;
       } = {
         subscriptionStatus: nextStatus,
         currentPeriodStart: new Date(sub.current_period_start * 1000),
         currentPeriodEnd: new Date(sub.current_period_end * 1000),
       };
       if (nextStatus === "ACTIVE") data.dunningSince = null;
+      // First path to detect the failure (missed invoice.payment_failed webhook):
+      // stamp dunningSince on the transition only, mirroring the webhook's guard so
+      // an already-DUNNING user keeps the original stamp.
+      if (nextStatus === "DUNNING" && user.subscriptionStatus !== "DUNNING") {
+        data.dunningSince = now;
+      }
 
       if (nextStatus !== user.subscriptionStatus) {
         console.log(
@@ -88,7 +96,7 @@ export async function reconcileSubscriptions(
     } else if (user.tributeSubscriptionId) {
       const expiredPastGrace =
         user.currentPeriodEnd != null &&
-        user.currentPeriodEnd.getTime() + graceMs < now.getTime();
+        user.currentPeriodEnd.getTime() + graceMs <= now.getTime();
       if (expiredPastGrace) {
         console.log(
           `[reconcile] user=${user.id} ${user.subscriptionStatus}→CANCELED reason=tribute_period_expired_grace_elapsed`
