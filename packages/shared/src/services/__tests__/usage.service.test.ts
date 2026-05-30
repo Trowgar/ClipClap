@@ -337,6 +337,15 @@ describe("canSubmitJob grace + period logic", () => {
     expect(res.allowed).toBe(false);
   });
 
+  it("blocks DUNNING/ACTIVE exactly at the grace boundary (half-open interval)", async () => {
+    mockUser({
+      subscriptionStatus: "DUNNING",
+      currentPeriodEnd: new Date(Date.now() - SUBSCRIPTION_GRACE_BUFFER_DAYS * DAY),
+    });
+    const res = await canSubmitJob("u1", 1);
+    expect(res.allowed).toBe(false);
+  });
+
   it("blocks ACTIVE with null currentPeriodEnd", async () => {
     mockUser({ subscriptionStatus: "ACTIVE", currentPeriodEnd: null });
     const res = await canSubmitJob("u1", 1);
