@@ -30,18 +30,23 @@ export type CreateWithdrawalResult =
   | { status: "created"; requestId: string }
   | { status: "error"; error: string };
 
-/** Run fn in a Serializable transaction, retrying on serialization failures. */
-async function withSerializableRetry<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
-  let lastErr: unknown;
-  for (let attempt = 0; attempt <= WALLET_CONFIG.serializableRetries; attempt++) {
-    try {
-      return await prisma.$transaction(fn, { isolationLevel: "Serializable" });
-    } catch (err) {
-      if ((err as { code?: string }).code === "P2034") { lastErr = err; continue; }
-      throw err;
-    }
-  }
-  throw lastErr;
+/**
+ * Run fn in a transaction holding a per-user advisory lock, so concurrent
+ * withdrawals for the SAME user serialize (preventing double-spend) with zero
+ * cross-user contention. Read Committed is sufficient: the second caller blocks
+ * on the lock until the first commits, then sees the committed active request /
+ * updated balance. The lock auto-releases on commit or rollback.
+ */
+async function withUserLock<T>(
+  userId: string,
+  fn: (tx: Prisma.TransactionClient) => Promise<T>
+): Promise<T> {
+  return prisma.$transaction(async (tx) => {
+    // Acquire the lock inside a subquery and select a constant - pg_advisory_xact_lock
+    // returns void, which $queryRaw cannot deserialize directly.
+    await tx.$queryRaw`SELECT 1 AS ok FROM (SELECT pg_advisory_xact_lock(hashtext(${userId}), 0)) AS _lock`;
+    return fn(tx);
+  });
 }
 
 async function ledgerBalanceInTx(tx: Prisma.TransactionClient, userId: string): Promise<number> {
@@ -68,7 +73,8 @@ export async function createWithdrawal(
   if (!v.ok) return { status: "error", error: v.error! };
   const amount = round2(input.amountUsd);
 
-  return withSerializableRetry(async (tx) => {
+  try {
+    return await withUserLock(userId, async (tx) => {
     const ledger = await ledgerBalanceInTx(tx, userId);
     const locked = await lockedInTx(tx, userId);
     const available = round2(ledger - locked);
@@ -98,7 +104,17 @@ export async function createWithdrawal(
       select: { id: true },
     });
     return { status: "created", requestId: created.id };
-  });
+    });
+  } catch (err) {
+    // Serializable retries exhausted under heavy contention -> graceful error, not a thrown 500.
+    if ((err as { code?: string }).code === "P2034") {
+      return {
+        status: "error",
+        error: "Could not process the withdrawal right now, please try again.",
+      };
+    }
+    throw err;
+  }
 }
 
 export async function listPendingWithdrawals() {

@@ -53,6 +53,7 @@ describe("createWithdrawal", () => {
   function wireTx() {
     mocks.txFn.mockImplementation(async (cb: (tx: unknown) => unknown) =>
       cb({
+        $queryRaw: () => Promise.resolve([]), // per-user advisory lock (no-op in tests)
         walletEntry: { aggregate: mocks.entryAggregate },
         withdrawalRequest: {
           aggregate: mocks.withdrawalAggregate,

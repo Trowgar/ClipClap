@@ -7,8 +7,6 @@ export interface WalletMethod {
 
 export const WALLET_CONFIG = {
   minWithdrawalUsd: 50,
-  /** Serializable transaction retry attempts on serialization failure. */
-  serializableRetries: 2,
   methods: [
     { value: "USDT_TRC20", label: "USDT (TRC20)", validate: /^T[1-9A-HJ-NP-Za-km-z]{33}$/ },
     { value: "USDT_ERC20", label: "USDT (ERC20)", validate: /^0x[a-fA-F0-9]{40}$/ },
