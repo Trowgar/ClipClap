@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { SUBSCRIPTION_GRACE_BUFFER_DAYS } from "../../config/billing";
 
 vi.mock("../../lib/prisma", () => ({
   prisma: {
@@ -170,7 +171,8 @@ describe("usage.service", () => {
       billingCycle: "MONTHLY",
       topUpMinutesRemaining: 0,
       subscriptionStatus: "ACTIVE",
-      currentPeriodEnd: null,
+      currentPeriodStart: null,
+      currentPeriodEnd: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
     });
     (prisma.job.aggregate as any).mockResolvedValue({ _sum: { sourceDurationSec: 270 * 60 } });
 
@@ -187,7 +189,8 @@ describe("usage.service", () => {
       billingCycle: "MONTHLY",
       topUpMinutesRemaining: 50,
       subscriptionStatus: "ACTIVE",
-      currentPeriodEnd: null,
+      currentPeriodStart: null,
+      currentPeriodEnd: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
     });
     (prisma.job.aggregate as any).mockResolvedValue({ _sum: { sourceDurationSec: 270 * 60 } });
 
@@ -210,19 +213,22 @@ describe("usage.service", () => {
     );
   });
 
-  it("canSubmitJob blocks during DUNNING", async () => {
+  it("canSubmitJob blocks DUNNING once period has lapsed past grace", async () => {
     (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
       id: "u1",
       plan: "PLUS",
       billingCycle: "MONTHLY",
       subscriptionStatus: "DUNNING",
       topUpMinutesRemaining: 0,
-      currentPeriodEnd: null,
+      currentPeriodStart: null,
+      currentPeriodEnd: new Date(
+        Date.now() - (SUBSCRIPTION_GRACE_BUFFER_DAYS + 1) * 24 * 60 * 60 * 1000
+      ),
     });
 
     const result = await canSubmitJob("u1", 10);
     expect(result).toEqual(
-      expect.objectContaining({ allowed: false, reason: expect.stringMatching(/payment/i) })
+      expect.objectContaining({ allowed: false, reason: expect.stringMatching(/ended|period/i) })
     );
   });
 
@@ -242,7 +248,7 @@ describe("usage.service", () => {
     );
   });
 
-  it("canSubmitJob anchors period to currentPeriodEnd when present", async () => {
+  it("canSubmitJob anchors period to currentPeriodEnd when present (no stored start)", async () => {
     const futureEnd = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
     (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
       id: "u1",
@@ -250,6 +256,7 @@ describe("usage.service", () => {
       billingCycle: "MONTHLY",
       subscriptionStatus: "ACTIVE",
       topUpMinutesRemaining: 0,
+      currentPeriodStart: null,
       currentPeriodEnd: futureEnd,
     });
     (prisma.job.aggregate as any).mockResolvedValue({ _sum: { sourceDurationSec: 60 * 60 } });
@@ -260,8 +267,121 @@ describe("usage.service", () => {
     const periodStart = aggregateCall.where.createdAt.gte as Date;
     const periodEnd = aggregateCall.where.createdAt.lte as Date;
     const expectedStart = new Date(futureEnd);
-    expectedStart.setDate(expectedStart.getDate() - 30);
+    expectedStart.setMonth(expectedStart.getMonth() - 1);
     expect(periodStart.getTime()).toBe(expectedStart.getTime());
     expect(periodEnd.getTime()).toBeGreaterThanOrEqual(Date.now() - 1000);
+  });
+});
+
+describe("canSubmitJob grace + period logic", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const DAY = 24 * 60 * 60 * 1000;
+
+  function mockUser(overrides: Record<string, unknown>) {
+    (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
+      id: "u1",
+      plan: "STARTER",
+      billingCycle: "MONTHLY",
+      subscriptionStatus: "ACTIVE",
+      topUpMinutesRemaining: 0,
+      currentPeriodStart: null,
+      currentPeriodEnd: new Date(Date.now() + 5 * DAY),
+      ...overrides,
+    });
+    (prisma.job.aggregate as any).mockResolvedValue({ _sum: { sourceDurationSec: 0 } });
+  }
+
+  it("blocks NONE plan", async () => {
+    mockUser({ plan: "NONE", subscriptionStatus: "NONE" });
+    const res = await canSubmitJob("u1", 1);
+    expect(res.allowed).toBe(false);
+  });
+
+  it("blocks CANCELED_GRACE even within period", async () => {
+    mockUser({ subscriptionStatus: "CANCELED_GRACE" });
+    const res = await canSubmitJob("u1", 1);
+    expect(res.allowed).toBe(false);
+  });
+
+  it("allows ACTIVE within period", async () => {
+    mockUser({ subscriptionStatus: "ACTIVE", currentPeriodEnd: new Date(Date.now() + 2 * DAY) });
+    const res = await canSubmitJob("u1", 1);
+    expect(res.allowed).toBe(true);
+  });
+
+  it("allows DUNNING while within grace (period ended < grace ago)", async () => {
+    mockUser({
+      subscriptionStatus: "DUNNING",
+      currentPeriodEnd: new Date(Date.now() - 1 * DAY),
+    });
+    const res = await canSubmitJob("u1", 1);
+    expect(res.allowed).toBe(true);
+  });
+
+  it("blocks DUNNING after grace has elapsed", async () => {
+    mockUser({
+      subscriptionStatus: "DUNNING",
+      currentPeriodEnd: new Date(Date.now() - (SUBSCRIPTION_GRACE_BUFFER_DAYS + 1) * DAY),
+    });
+    const res = await canSubmitJob("u1", 1);
+    expect(res.allowed).toBe(false);
+  });
+
+  it("blocks ACTIVE whose period ended past grace (missed renewal)", async () => {
+    mockUser({
+      subscriptionStatus: "ACTIVE",
+      currentPeriodEnd: new Date(Date.now() - (SUBSCRIPTION_GRACE_BUFFER_DAYS + 1) * DAY),
+    });
+    const res = await canSubmitJob("u1", 1);
+    expect(res.allowed).toBe(false);
+  });
+
+  it("blocks ACTIVE with null currentPeriodEnd", async () => {
+    mockUser({ subscriptionStatus: "ACTIVE", currentPeriodEnd: null });
+    const res = await canSubmitJob("u1", 1);
+    expect(res.allowed).toBe(false);
+  });
+
+  it("blocks over-quota user (presign-style duration 0)", async () => {
+    mockUser({ subscriptionStatus: "ACTIVE", currentPeriodEnd: new Date(Date.now() + 2 * DAY) });
+    // STARTER MONTHLY limit is 270 min; simulate 300 used.
+    (prisma.job.aggregate as any).mockResolvedValue({ _sum: { sourceDurationSec: 300 * 60 } });
+    const res = await canSubmitJob("u1", 0);
+    expect(res.allowed).toBe(false);
+  });
+
+  it("allows exactly-at-limit user with duration 0 (presign)", async () => {
+    mockUser({ subscriptionStatus: "ACTIVE", currentPeriodEnd: new Date(Date.now() + 2 * DAY) });
+    (prisma.job.aggregate as any).mockResolvedValue({ _sum: { sourceDurationSec: 270 * 60 } });
+    const res = await canSubmitJob("u1", 0);
+    expect(res.allowed).toBe(true);
+  });
+});
+
+describe("getPeriodStart via getUsageForUser", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("uses stored currentPeriodStart when present", async () => {
+    const start = new Date("2026-04-30T00:00:00Z");
+    (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
+      id: "u1",
+      plan: "STARTER",
+      billingCycle: "MONTHLY",
+      subscriptionStatus: "ACTIVE",
+      topUpMinutesRemaining: 0,
+      currentPeriodStart: start,
+      currentPeriodEnd: new Date("2026-05-30T00:00:00Z"),
+      stripeSubscriptionId: "sub_1",
+      tributeSubscriptionId: null,
+    });
+    (prisma.clip.count as any).mockResolvedValue(0);
+    (prisma.job.aggregate as any).mockResolvedValue({ _sum: { sourceDurationSec: 0 } });
+
+    await getUsageForUser("u1");
+
+    // The aggregate window must start at the stored period start.
+    const aggArgs = (prisma.job.aggregate as any).mock.calls[0][0];
+    expect(aggArgs.where.createdAt.gte).toEqual(start);
   });
 });

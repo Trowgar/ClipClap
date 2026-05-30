@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma";
 import { getPlanLimits } from "../config/plans";
+import { SUBSCRIPTION_GRACE_BUFFER_DAYS } from "../config/billing";
 import type { Plan, BillingCycle } from "@prisma/client";
 
 export async function getMinutesUsedInPeriod(
@@ -20,26 +21,36 @@ export async function getMinutesUsedInPeriod(
   return Math.ceil(seconds / 60);
 }
 
-// Computes the start of the current billing period.
-// Anchors to Stripe-tracked currentPeriodEnd when present (correct behavior:
-// usage resets at renewal). Falls back to a rolling 7/30-day window when
-// currentPeriodEnd is missing or in the past - only happens for legacy users
-// or in dunning/canceled states where canSubmitJob will block anyway.
+// Computes the start of the current billing period (the usage window start).
+// Prefers the provider-supplied currentPeriodStart so the window matches the
+// real billing period even during DUNNING/grace. Falls back to subtracting one
+// calendar month (monthly) or 7 days (weekly) from currentPeriodEnd, and finally
+// to a rolling window from now for legacy rows with no period info.
 function getPeriodStart(
   cycle: BillingCycle | null,
+  currentPeriodStart: Date | null,
   currentPeriodEnd: Date | null
 ): Date {
-  const cycleDays = cycle === "WEEKLY" ? 7 : 30;
-  const now = Date.now();
+  if (currentPeriodStart) {
+    return currentPeriodStart;
+  }
 
-  if (currentPeriodEnd && currentPeriodEnd.getTime() > now) {
+  if (currentPeriodEnd) {
     const start = new Date(currentPeriodEnd);
-    start.setDate(start.getDate() - cycleDays);
+    if (cycle === "WEEKLY") {
+      start.setDate(start.getDate() - 7);
+    } else {
+      start.setMonth(start.getMonth() - 1);
+    }
     return start;
   }
 
   const fallback = new Date();
-  fallback.setDate(fallback.getDate() - cycleDays);
+  if (cycle === "WEEKLY") {
+    fallback.setDate(fallback.getDate() - 7);
+  } else {
+    fallback.setMonth(fallback.getMonth() - 1);
+  }
   return fallback;
 }
 
@@ -95,7 +106,11 @@ export async function getUsageForUser(userId: string): Promise<UsageSummary> {
   }
 
   const limits = getPlanLimits(user.plan, user.billingCycle ?? "MONTHLY");
-  const periodStart = getPeriodStart(user.billingCycle, user.currentPeriodEnd);
+  const periodStart = getPeriodStart(
+    user.billingCycle,
+    user.currentPeriodStart,
+    user.currentPeriodEnd
+  );
   const minutesUsed = await getMinutesUsedInPeriod(
     userId,
     periodStart,
@@ -133,15 +148,33 @@ export async function canSubmitJob(
   if (user.plan === "NONE" || user.subscriptionStatus === "NONE") {
     return { allowed: false, reason: "No active subscription. Choose a plan to get started." };
   }
-  if (user.subscriptionStatus === "DUNNING") {
-    return { allowed: false, reason: "Your last payment failed. Please update your payment method." };
-  }
-  if (user.subscriptionStatus === "CANCELED_GRACE" || user.subscriptionStatus === "CANCELED") {
+  if (
+    user.subscriptionStatus === "CANCELED_GRACE" ||
+    user.subscriptionStatus === "CANCELED"
+  ) {
     return { allowed: false, reason: "Your subscription is canceled. Resubscribe to create new clips." };
   }
 
+  // ACTIVE or DUNNING: access is allowed only while the billing period is still
+  // live within the grace buffer. This is the defense-in-depth that stops a
+  // missed renewal webhook (or a stale DB row) from granting access forever.
+  const graceMs = SUBSCRIPTION_GRACE_BUFFER_DAYS * 24 * 60 * 60 * 1000;
+  if (
+    !user.currentPeriodEnd ||
+    user.currentPeriodEnd.getTime() + graceMs <= Date.now()
+  ) {
+    return {
+      allowed: false,
+      reason: "Your subscription period has ended. Renew to continue creating clips.",
+    };
+  }
+
   const limits = getPlanLimits(user.plan, user.billingCycle ?? "MONTHLY");
-  const periodStart = getPeriodStart(user.billingCycle, user.currentPeriodEnd);
+  const periodStart = getPeriodStart(
+    user.billingCycle,
+    user.currentPeriodStart,
+    user.currentPeriodEnd
+  );
   const used = await getMinutesUsedInPeriod(userId, periodStart, new Date());
   const projectedUsage = used + jobDurationMinutes;
   const totalAvailable = limits.minutesPerPeriod + user.topUpMinutesRemaining;
