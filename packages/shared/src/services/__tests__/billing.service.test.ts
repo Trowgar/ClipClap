@@ -19,6 +19,10 @@ vi.mock("../../lib/prisma", () => ({
       update: vi.fn(),
       updateMany: vi.fn().mockResolvedValue({ count: 0 }),
     },
+    stripeWebhookEvent: {
+      findUnique: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({}),
+    },
   },
 }));
 
@@ -310,6 +314,37 @@ describe("billing.service - handleWebhook", () => {
     await handleWebhook("body", "sig");
 
     expect(prisma.user.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("skips processing when the event id was already recorded", async () => {
+    (prisma.stripeWebhookEvent.findUnique as any).mockResolvedValueOnce({
+      eventId: "evt_dup",
+    });
+    mockStripe.webhooks.constructEvent.mockReturnValue({
+      id: "evt_dup",
+      type: "invoice.payment_succeeded",
+      data: { object: { subscription: "sub_1" } },
+    });
+
+    await handleWebhook("body", "sig");
+
+    expect(prisma.user.updateMany).not.toHaveBeenCalled();
+    expect(prisma.stripeWebhookEvent.create).not.toHaveBeenCalled();
+  });
+
+  it("records the event id after successful processing", async () => {
+    (prisma.stripeWebhookEvent.findUnique as any).mockResolvedValue(null);
+    mockStripe.webhooks.constructEvent.mockReturnValue({
+      id: "evt_new",
+      type: "customer.subscription.deleted",
+      data: { object: { id: "sub_1" } },
+    });
+
+    await handleWebhook("body", "sig");
+
+    expect(prisma.stripeWebhookEvent.create).toHaveBeenCalledWith({
+      data: { eventId: "evt_new", type: "customer.subscription.deleted" },
+    });
   });
 
   it("checkout.session.completed (payment mode) credits top-up minutes", async () => {

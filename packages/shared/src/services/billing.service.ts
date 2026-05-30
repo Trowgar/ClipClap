@@ -102,6 +102,13 @@ export async function handleWebhook(
 
   const event = stripe.webhooks.constructEvent(body, signature, webhookSecret);
 
+  // Idempotency: skip events already processed. Recorded AFTER the switch below
+  // so an event that throws mid-processing is retried by Stripe, not skipped.
+  const seen = await prisma.stripeWebhookEvent.findUnique({
+    where: { eventId: event.id },
+  });
+  if (seen) return;
+
   switch (event.type) {
     case "checkout.session.completed": {
       const sess = event.data.object as Stripe.Checkout.Session;
@@ -363,6 +370,16 @@ export async function handleWebhook(
       });
       break;
     }
+  }
+
+  // Mark processed. try/catch absorbs the unique-violation from a rare
+  // concurrent double-delivery (both passed the findUnique check above).
+  try {
+    await prisma.stripeWebhookEvent.create({
+      data: { eventId: event.id, type: event.type },
+    });
+  } catch {
+    // already recorded concurrently - treat as duplicate, nothing to do
   }
 }
 
