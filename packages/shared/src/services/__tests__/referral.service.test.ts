@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   commissionAggregate: vi.fn(),
   commissionCount: vi.fn(),
   entryCreate: vi.fn(),
+  entryFindUnique: vi.fn(),
   entryAggregate: vi.fn(),
   entryGroupBy: vi.fn(),
   txFn: vi.fn(),
@@ -37,6 +38,7 @@ vi.mock("../../lib/prisma", () => ({
     },
     walletEntry: {
       create: mocks.entryCreate,
+      findUnique: mocks.entryFindUnique,
       aggregate: mocks.entryAggregate,
       groupBy: mocks.entryGroupBy,
     },
@@ -227,7 +229,7 @@ describe("releaseMaturedCommissions (wallet)", () => {
       { id: "c2", referrerId: "r1", commissionUsd: 3 },
     ]);
     mocks.txFn.mockImplementation(async (cb: (tx: unknown) => Promise<void>) =>
-      cb({ referralCommission: { updateMany: mocks.commissionUpdateMany }, walletEntry: { create: mocks.entryCreate } })
+      cb({ referralCommission: { updateMany: mocks.commissionUpdateMany }, walletEntry: { create: mocks.entryCreate, findUnique: mocks.entryFindUnique } })
     );
     mocks.commissionUpdateMany.mockResolvedValue({ count: 1 });
     mocks.entryCreate.mockResolvedValue({ id: "w" });
@@ -247,7 +249,7 @@ describe("releaseMaturedCommissions (wallet)", () => {
       { id: "c1", referrerId: "r1", commissionUsd: 5 },
     ]);
     mocks.txFn.mockImplementation(async (cb: (tx: unknown) => Promise<void>) =>
-      cb({ referralCommission: { updateMany: mocks.commissionUpdateMany }, walletEntry: { create: mocks.entryCreate } })
+      cb({ referralCommission: { updateMany: mocks.commissionUpdateMany }, walletEntry: { create: mocks.entryCreate, findUnique: mocks.entryFindUnique } })
     );
     mocks.commissionUpdateMany.mockResolvedValue({ count: 0 }); // already done
 
@@ -262,14 +264,16 @@ describe("releaseMaturedCommissions (wallet)", () => {
 // ---------------------------------------------------------------------------
 
 describe("voidCommission (wallet clawback)", () => {
-  it("voids non-paid commissions and posts a clawback DEBIT for credited ones", async () => {
+  it("credited commission -> clawback DEBIT posted (ledger-driven)", async () => {
     mocks.commissionFindMany.mockResolvedValue([
-      { id: "c1", referrerId: "r1", commissionUsd: 5, status: "AVAILABLE" },
+      { id: "c1", referrerId: "r1" },
     ]);
     mocks.txFn.mockImplementation(async (cb: (tx: unknown) => Promise<void>) =>
-      cb({ referralCommission: { updateMany: mocks.commissionUpdateMany }, walletEntry: { create: mocks.entryCreate } })
+      cb({ referralCommission: { updateMany: mocks.commissionUpdateMany }, walletEntry: { create: mocks.entryCreate, findUnique: mocks.entryFindUnique } })
     );
     mocks.commissionUpdateMany.mockResolvedValue({ count: 1 });
+    // walletEntry.findUnique returns a CREDIT row -> clawback should fire
+    mocks.entryFindUnique.mockResolvedValue({ amountUsd: 5 });
     mocks.entryCreate.mockResolvedValue({ id: "w" });
 
     const r = await voidCommission("STRIPE", "in_1", "refund");
@@ -280,12 +284,15 @@ describe("voidCommission (wallet clawback)", () => {
     });
   });
 
-  it("does not post a debit for a not-yet-credited (PENDING) commission", async () => {
-    mocks.commissionFindMany.mockResolvedValue([{ id: "c1", referrerId: "r1", commissionUsd: 5, status: "PENDING" }]);
+  it("not-credited commission -> no DEBIT (no wallet entry found)", async () => {
+    mocks.commissionFindMany.mockResolvedValue([{ id: "c1", referrerId: "r1" }]);
     mocks.txFn.mockImplementation(async (cb: (tx: unknown) => Promise<void>) =>
-      cb({ referralCommission: { updateMany: mocks.commissionUpdateMany }, walletEntry: { create: mocks.entryCreate } })
+      cb({ referralCommission: { updateMany: mocks.commissionUpdateMany }, walletEntry: { create: mocks.entryCreate, findUnique: mocks.entryFindUnique } })
     );
     mocks.commissionUpdateMany.mockResolvedValue({ count: 1 });
+    // walletEntry.findUnique returns null -> no CREDIT was ever posted
+    mocks.entryFindUnique.mockResolvedValue(null);
+
     const r = await voidCommission("STRIPE", "in_2", "refund");
     expect(r.voided).toBe(1);
     expect(postWalletEntry).not.toHaveBeenCalled();
@@ -304,19 +311,23 @@ describe("voidCommission (wallet clawback)", () => {
 // ---------------------------------------------------------------------------
 
 describe("voidReferrerCommissions", () => {
-  it("voids all non-paid commissions for a referrer and claws back AVAILABLE ones", async () => {
+  it("credited commission -> clawback DEBIT; non-credited -> no DEBIT (ledger-driven)", async () => {
     mocks.commissionFindMany.mockResolvedValue([
-      { id: "c1", referrerId: "ref-1", commissionUsd: 10, status: "AVAILABLE" },
-      { id: "c2", referrerId: "ref-1", commissionUsd: 5, status: "PENDING" },
+      { id: "c1", referrerId: "ref-1" },
+      { id: "c2", referrerId: "ref-1" },
     ]);
     mocks.txFn.mockImplementation(async (cb: (tx: unknown) => Promise<void>) =>
-      cb({ referralCommission: { updateMany: mocks.commissionUpdateMany }, walletEntry: { create: mocks.entryCreate } })
+      cb({ referralCommission: { updateMany: mocks.commissionUpdateMany }, walletEntry: { create: mocks.entryCreate, findUnique: mocks.entryFindUnique } })
     );
     mocks.commissionUpdateMany.mockResolvedValue({ count: 2 });
+    // c1 has a CREDIT entry (amountUsd 10); c2 does not
+    mocks.entryFindUnique
+      .mockResolvedValueOnce({ amountUsd: 10 })
+      .mockResolvedValueOnce(null);
 
     const result = await voidReferrerCommissions("ref-1", "ban");
     expect(result.voided).toBe(2);
-    // Only the AVAILABLE one gets a clawback DEBIT
+    // Only c1 gets a clawback DEBIT
     expect(postWalletEntry).toHaveBeenCalledTimes(1);
     const call = (postWalletEntry as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(call[1]).toMatchObject({

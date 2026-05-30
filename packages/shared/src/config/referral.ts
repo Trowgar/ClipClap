@@ -3,8 +3,6 @@ import type { PaymentSource } from "@prisma/client";
 export const REFERRAL_CONFIG = {
   rateBps: 3000, // 30%
   holdDays: 14,
-  payoutDays: [1, 15] as const,
-  minPayoutUsd: 50,
   attributionWindowDays: 30,
   codeLength: 8,
   termsVersion: "2026-05-29",

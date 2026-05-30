@@ -204,8 +204,9 @@ export async function releaseMaturedCommissions(
 
 /**
  * Void all non-paid commissions for a payment (refund / chargeback / admin).
- * Posts a wallet DEBIT clawback for each commission that was already AVAILABLE
- * (i.e. already credited to the wallet). All steps run in a single transaction.
+ * Posts a wallet DEBIT clawback for each commission that has an existing CREDIT
+ * ledger entry (ledger is the source of truth, not commission.status, to avoid
+ * a race with releaseMaturedCommissions). All steps run in a single transaction.
  */
 export async function voidCommission(
   source: PaymentSource,
@@ -214,7 +215,7 @@ export async function voidCommission(
 ): Promise<{ voided: number }> {
   const targets = await prisma.referralCommission.findMany({
     where: { source, externalPaymentId, status: { in: [...NON_PAID_STATUSES] } },
-    select: { id: true, referrerId: true, commissionUsd: true, status: true },
+    select: { id: true, referrerId: true },
   });
   if (targets.length === 0) return { voided: 0 };
   await prisma.$transaction(async (tx) => {
@@ -223,10 +224,18 @@ export async function voidCommission(
       data: { status: "VOIDED", adminNote: reason },
     });
     for (const c of targets) {
-      if (c.status === "AVAILABLE") {
+      // Ledger is the source of truth: clawback only if a CREDIT was actually posted.
+      const credit = await tx.walletEntry.findUnique({
+        where: {
+          source_refType_refId: {
+            source: "REFERRAL", refType: "referral_commission", refId: c.id,
+          },
+        },
+      });
+      if (credit) {
         await postWalletEntry(tx, {
           userId: c.referrerId, kind: "DEBIT", source: "REFERRAL",
-          refType: "referral_clawback", refId: c.id, amountUsd: c.commissionUsd,
+          refType: "referral_clawback", refId: c.id, amountUsd: credit.amountUsd,
         });
       }
     }
@@ -253,8 +262,9 @@ export async function banReferrer(userId: string): Promise<void> {
 
 /**
  * Void all non-paid commissions for a referrer (e.g. on ban).
- * Posts a wallet DEBIT clawback for each commission that was already AVAILABLE.
- * All steps run in a single transaction.
+ * Posts a wallet DEBIT clawback for each commission that has an existing CREDIT
+ * ledger entry (ledger is the source of truth, not commission.status, to avoid
+ * a race with releaseMaturedCommissions). All steps run in a single transaction.
  */
 export async function voidReferrerCommissions(
   userId: string,
@@ -262,7 +272,7 @@ export async function voidReferrerCommissions(
 ): Promise<{ voided: number }> {
   const targets = await prisma.referralCommission.findMany({
     where: { referrerId: userId, status: { in: [...NON_PAID_STATUSES] } },
-    select: { id: true, referrerId: true, commissionUsd: true, status: true },
+    select: { id: true, referrerId: true },
   });
   if (targets.length === 0) return { voided: 0 };
   await prisma.$transaction(async (tx) => {
@@ -271,10 +281,18 @@ export async function voidReferrerCommissions(
       data: { status: "VOIDED", adminNote: reason },
     });
     for (const c of targets) {
-      if (c.status === "AVAILABLE") {
+      // Ledger is the source of truth: clawback only if a CREDIT was actually posted.
+      const credit = await tx.walletEntry.findUnique({
+        where: {
+          source_refType_refId: {
+            source: "REFERRAL", refType: "referral_commission", refId: c.id,
+          },
+        },
+      });
+      if (credit) {
         await postWalletEntry(tx, {
           userId: c.referrerId, kind: "DEBIT", source: "REFERRAL",
-          refType: "referral_clawback", refId: c.id, amountUsd: c.commissionUsd,
+          refType: "referral_clawback", refId: c.id, amountUsd: credit.amountUsd,
         });
       }
     }

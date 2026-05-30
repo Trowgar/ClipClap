@@ -6,8 +6,6 @@ import { JoinAffiliate } from "@/components/referrals/join-affiliate";
 
 const RATE_PCT = REFERRAL_CONFIG.rateBps / 100;
 const HOLD_DAYS = REFERRAL_CONFIG.holdDays;
-const MIN_PAYOUT = REFERRAL_CONFIG.minPayoutUsd;
-const PAYOUT_DAYS = REFERRAL_CONFIG.payoutDays.join(" & ");
 
 const money = (n: number) =>
   `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -53,9 +51,8 @@ export default async function ReferralsPage() {
           <h2 className="text-lg font-semibold">How it works</h2>
           <ul className="space-y-2 text-sm text-muted-foreground">
             <li>{RATE_PCT}% commission on every payment, for life.</li>
-            <li>Commissions clear after a {HOLD_DAYS}-day hold (covers refunds).</li>
-            <li>Payouts run on the {PAYOUT_DAYS} of each month.</li>
-            <li>Minimum payout {money(MIN_PAYOUT)}.</li>
+            <li>Earnings clear after a {HOLD_DAYS}-day hold.</li>
+            <li>Withdraw anytime from your Payouts page once your balance clears.</li>
           </ul>
         </div>
 
@@ -193,9 +190,8 @@ export default async function ReferralsPage() {
         <h2 className="text-lg font-semibold">How it works</h2>
         <ul className="space-y-2 text-sm text-muted-foreground">
           <li>{RATE_PCT}% commission on every payment, for life.</li>
-          <li>Commissions clear after a {HOLD_DAYS}-day hold (covers refunds).</li>
-          <li>Payouts run on the {PAYOUT_DAYS} of each month.</li>
-          <li>Minimum payout {money(MIN_PAYOUT)}.</li>
+          <li>Earnings clear after a {HOLD_DAYS}-day hold.</li>
+          <li>Withdraw anytime from your Payouts page once your balance clears.</li>
         </ul>
       </div>
     </div>

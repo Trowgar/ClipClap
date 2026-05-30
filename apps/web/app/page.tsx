@@ -730,7 +730,7 @@ export default function LandingPage() {
               {[
                 { stat: "30%", label: "Earn from every successful subscription payment." },
                 { stat: "Lifetime", label: "Keep earning while your referral stays subscribed." },
-                { stat: "1st & 15th", label: "Payouts twice a month. $50 minimum." },
+                { stat: "On-demand", label: "Withdraw your balance anytime, $50 minimum." },
               ].map((h) => (
                 <div
                   key={h.stat}
@@ -758,7 +758,7 @@ export default function LandingPage() {
                   "Share your referral link.",
                   "A creator signs up and subscribes.",
                   "You earn 30% from every payment.",
-                  "Payouts are processed twice a month.",
+                  "Withdraw anytime once your balance clears.",
                 ].map((step, i) => (
                   <div
                     key={step}
