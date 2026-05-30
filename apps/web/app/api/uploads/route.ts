@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { getPresignedUploadUrl, prisma, getPlanLimits } from "@clipfast/shared";
+import { getPresignedUploadUrl, prisma, getPlanLimits, canSubmitJob } from "@clipfast/shared";
 import { randomUUID } from "crypto";
 
 export async function POST(req: NextRequest) {
@@ -23,26 +23,12 @@ export async function POST(req: NextRequest) {
     where: { id: session.user.id },
   });
 
-  if (user.plan === "NONE" || user.subscriptionStatus === "NONE") {
-    return NextResponse.json(
-      { error: "Active subscription required to upload" },
-      { status: 402 }
-    );
-  }
-  if (user.subscriptionStatus === "DUNNING") {
-    return NextResponse.json(
-      { error: "Payment failed; update your payment method" },
-      { status: 402 }
-    );
-  }
-  if (
-    user.subscriptionStatus === "CANCELED_GRACE" ||
-    user.subscriptionStatus === "CANCELED"
-  ) {
-    return NextResponse.json(
-      { error: "Subscription canceled; resubscribe to upload" },
-      { status: 402 }
-    );
+  // Coarse gate at presign time: status + grace-date + already-over-quota.
+  // Duration is unknown until the file is uploaded, so pass 0; exact minute
+  // enforcement happens at job submit (api/jobs/route.ts) with the real duration.
+  const submission = await canSubmitJob(session.user.id, 0);
+  if (!submission.allowed) {
+    return NextResponse.json({ error: submission.reason }, { status: 402 });
   }
 
   const limits = getPlanLimits(user.plan, user.billingCycle ?? "MONTHLY");
