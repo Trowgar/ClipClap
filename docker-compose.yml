@@ -103,6 +103,25 @@ services:
       - FINALIZE_CONCURRENCY=3
       - CHOKIDAR_USEPOLLING=true
 
+  telegram-bot-api:
+    image: aiogram/telegram-bot-api:latest
+    restart: unless-stopped
+    environment:
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      TELEGRAM_LOCAL: "1"
+      TELEGRAM_STAT: "1"
+    expose:
+      - "8081"
+    volumes:
+      - telegram-bot-api-data:/var/lib/telegram-bot-api
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8082/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
   bot:
     build:
       context: .
@@ -113,10 +132,13 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      telegram-bot-api:
+        condition: service_started
     env_file: .env
     environment:
       - NODE_ENV=${NODE_ENV:-development}
       - CHOKIDAR_USEPOLLING=true
+      - TELEGRAM_API_BASE_URL=http://telegram-bot-api:8081
     volumes:
       - ./apps/bot:/app/apps/bot
       - ./packages:/app/packages
@@ -125,6 +147,7 @@ services:
       # image, so `docker compose up -d --build` updates them. (An anon volume here
       # persists across rebuilds and would shadow new deps with a stale tree.)
       - /app/apps/bot/node_modules
+      - telegram-bot-api-data:/var/lib/telegram-bot-api:ro
     restart: unless-stopped
 
   postgres:
@@ -154,3 +177,4 @@ volumes:
   pgdata:
   caddy_data:
   caddy_config:
+  telegram-bot-api-data:
