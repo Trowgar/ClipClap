@@ -365,4 +365,16 @@ describe("billing.service - handleWebhook", () => {
       data: { topUpMinutesRemaining: { increment: 100 } },
     });
   });
+
+  it("absorbs a unique-violation (P2002) from a concurrent create without throwing", async () => {
+    (prisma.stripeWebhookEvent.findUnique as any).mockResolvedValue(null);
+    (prisma.stripeWebhookEvent.create as any).mockRejectedValueOnce({ code: "P2002" });
+    mockStripe.webhooks.constructEvent.mockReturnValue({
+      id: "evt_race",
+      type: "customer.subscription.deleted",
+      data: { object: { id: "sub_1" } },
+    });
+
+    await expect(handleWebhook("body", "sig")).resolves.toBeUndefined();
+  });
 });

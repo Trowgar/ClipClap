@@ -378,8 +378,13 @@ export async function handleWebhook(
     await prisma.stripeWebhookEvent.create({
       data: { eventId: event.id, type: event.type },
     });
-  } catch {
-    // already recorded concurrently - treat as duplicate, nothing to do
+  } catch (err: any) {
+    // P2002 = unique violation from a concurrent double-delivery (expected; the
+    // event was already processed, so nothing to do). Surface anything else so a
+    // real DB failure at record-time is not silently hidden.
+    if (err?.code !== "P2002") {
+      console.warn("[webhook] stripeWebhookEvent.create failed (non-duplicate):", err);
+    }
   }
 }
 
