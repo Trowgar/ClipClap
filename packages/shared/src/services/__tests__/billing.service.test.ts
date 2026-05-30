@@ -313,6 +313,7 @@ describe("billing.service - handleWebhook", () => {
         }),
       })
     );
+    expect(prisma.user.updateMany).toHaveBeenCalledTimes(1);
   });
 
   it("customer.subscription.updated (past_due) stamps DUNNING with guard", async () => {
@@ -341,6 +342,12 @@ describe("billing.service - handleWebhook", () => {
           subscriptionStatus: "DUNNING",
           dunningSince: expect.any(Date),
         }),
+      })
+    );
+    expect(calls).toContainEqual(
+      expect.objectContaining({
+        where: { stripeSubscriptionId: "sub_1" },
+        data: expect.objectContaining({ plan: "MAX", billingCycle: "MONTHLY" }),
       })
     );
   });
