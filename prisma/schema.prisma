@@ -104,6 +104,7 @@ model User {
   tributeSubscriptionId String?            @unique
   subscriptionStatus    SubscriptionStatus @default(NONE)
   billingCycle          BillingCycle?
+  currentPeriodStart    DateTime?
   currentPeriodEnd      DateTime?
   dunningSince          DateTime?
   graceEndsAt           DateTime?
@@ -232,6 +233,15 @@ model TributeWebhookEvent {
 
   @@index([name, createdAt])
   @@map("tribute_webhook_events")
+}
+
+model StripeWebhookEvent {
+  eventId   String   @id
+  type      String
+  createdAt DateTime @default(now())
+
+  @@index([type, createdAt])
+  @@map("stripe_webhook_events")
 }
 
 model Job {
