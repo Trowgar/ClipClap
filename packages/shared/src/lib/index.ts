@@ -15,4 +15,5 @@ export {
   registerReferralSchedules,
   REFERRAL_QUEUE_NAME,
   HOLD_RELEASE_JOB,
+  SUBSCRIPTION_RECONCILE_JOB,
 } from "./referral-queue";

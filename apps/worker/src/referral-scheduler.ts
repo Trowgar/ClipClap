@@ -3,7 +3,9 @@ import {
   getRedis,
   REFERRAL_QUEUE_NAME,
   HOLD_RELEASE_JOB,
+  SUBSCRIPTION_RECONCILE_JOB,
   releaseMaturedCommissions,
+  reconcileSubscriptions,
 } from "@clipfast/shared";
 
 export function createReferralScheduler(): Worker {
@@ -14,6 +16,11 @@ export function createReferralScheduler(): Worker {
       if (job.name === HOLD_RELEASE_JOB) {
         const { released } = await releaseMaturedCommissions(now);
         console.log(`[referral] released ${released} commissions`);
+        return;
+      }
+      if (job.name === SUBSCRIPTION_RECONCILE_JOB) {
+        const { reconciled } = await reconcileSubscriptions(now);
+        console.log(`[reconcile] reconciled ${reconciled} subscriptions`);
         return;
       }
     },

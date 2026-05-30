@@ -3,6 +3,7 @@ import { getRedis } from "./redis";
 
 export const REFERRAL_QUEUE_NAME = "referral-maintenance";
 export const HOLD_RELEASE_JOB = "hold-release";
+export const SUBSCRIPTION_RECONCILE_JOB = "subscription-reconcile";
 
 let referralQueue: Queue | null = null;
 
@@ -27,6 +28,7 @@ export function getReferralQueue(): Queue {
 export async function registerReferralSchedules(): Promise<void> {
   const queue = getReferralQueue();
   await queue.add(HOLD_RELEASE_JOB, {}, { repeat: { pattern: "0 * * * *" }, jobId: HOLD_RELEASE_JOB });
+  await queue.add(SUBSCRIPTION_RECONCILE_JOB, {}, { repeat: { pattern: "0 * * * *" }, jobId: SUBSCRIPTION_RECONCILE_JOB });
   // Retire the old 1st/15th payout batch if still scheduled in Redis.
   for (const job of await queue.getRepeatableJobs()) {
     if (job.name === "payout-batch") await queue.removeRepeatableByKey(job.key);
