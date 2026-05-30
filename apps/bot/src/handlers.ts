@@ -166,11 +166,6 @@ export async function handleUpdate(
     return;
   }
 
-  if (text === "/payout" || text.startsWith("/payout ")) {
-    await handlePayout(client, message, from, text, dict);
-    return;
-  }
-
   if (text.startsWith("/payouts") || text.startsWith("/ref ") ||
       text.startsWith("/refban ") || text.startsWith("/refvoid ")) {
     if (isReferralAdmin(String(from.id), process.env.REFERRAL_ADMIN_TELEGRAM_IDS)) {
@@ -900,7 +895,7 @@ async function handleReferral(
   const user = await resolveTelegramUser(from);
   const { referralService } = await import("@clipfast/shared");
   const code = await referralService.ensureReferralCode(user.id);
-  const balance = await referralService.getReferralBalance(user.id);
+  const stats = await referralService.getReferralStats(user.id);
   const botName = process.env.TELEGRAM_BOT_USERNAME ?? "ClipClapBot";
   const web = `${config.appUrl}/?ref=${code}`;
   const tg = `https://t.me/${botName}?start=ref_${code}`;
@@ -909,9 +904,8 @@ async function handleReferral(
     dict.referralInfo(
       web,
       tg,
-      balance.availableUsd.toFixed(2),
-      balance.pendingUsd.toFixed(2),
-      balance.paidUsd.toFixed(2)
+      stats.earnedUsd.toFixed(2),
+      stats.pendingUsd.toFixed(2)
     )
   );
 }
@@ -923,34 +917,12 @@ async function handleBalance(
   dict: Dict
 ) {
   const user = await resolveTelegramUser(from);
-  const { referralService } = await import("@clipfast/shared");
-  const b = await referralService.getReferralBalance(user.id);
+  const { walletService, referralService } = await import("@clipfast/shared");
+  const bal = await walletService.getWalletBalance(user.id);
+  const stats = await referralService.getReferralStats(user.id);
   await client.sendMessage(
     message.chat.id,
-    dict.balanceInfo(b.availableUsd.toFixed(2), b.pendingUsd.toFixed(2), b.paidUsd.toFixed(2))
-  );
-}
-
-async function handlePayout(
-  client: TelegramClient,
-  message: TelegramMessage,
-  from: TelegramUser,
-  text: string,
-  dict: Dict
-) {
-  const parts = text.trim().split(/\s+/).slice(1); // drop "/payout"
-  if (parts.length < 2) {
-    await client.sendMessage(message.chat.id, dict.payoutPrompt);
-    return;
-  }
-  const [method, ...rest] = parts;
-  const destination = rest.join(" ");
-  const user = await resolveTelegramUser(from);
-  const { referralService } = await import("@clipfast/shared");
-  const result = await referralService.setPayoutDestination(user.id, method, destination);
-  await client.sendMessage(
-    message.chat.id,
-    result.ok ? dict.payoutSaved : dict.payoutInvalid(result.error ?? "invalid")
+    dict.balanceInfo(bal.availableUsd.toFixed(2), stats.pendingUsd.toFixed(2))
   );
 }
 
@@ -959,22 +931,22 @@ async function handleAdminCommand(
   message: TelegramMessage,
   text: string
 ) {
-  const { referralService } = await import("@clipfast/shared");
+  const { withdrawalService, referralService } = await import("@clipfast/shared");
   const chatId = message.chat.id;
 
   if (text.startsWith("/payouts")) {
-    const payouts = await referralService.listPendingPayouts();
-    if (payouts.length === 0) {
-      await client.sendMessage(chatId, "No pending payouts.");
+    const withdrawals = await withdrawalService.listPendingWithdrawals();
+    if (withdrawals.length === 0) {
+      await client.sendMessage(chatId, "No pending withdrawals.");
       return;
     }
-    const lines = payouts.map(
-      (p) =>
-        `${p.id}\n  ${p.status} $${p.amountUsd.toFixed(2)} -> ${p.destination} (${p._count.commissions} commissions)`
+    const lines = withdrawals.map(
+      (w) =>
+        `${w.id}\n  ${w.status} $${w.amountUsd.toFixed(2)} ${w.method} -> ${w.destination}`
     );
     await client.sendMessage(
       chatId,
-      `Pending payouts:\n${lines.join("\n")}\n\n` +
+      `Pending withdrawals:\n${lines.join("\n")}\n\n` +
         `Approve: /approve <id> <networkFee>\nPaid: /paid <id> <txRef>\nReject: /reject <id> <reason>`
     );
     return;
@@ -991,12 +963,12 @@ async function handleAdminCommand(
       chatId,
       `Referrer ${card.user.id} (${card.user.referralCode ?? "no code"})\n` +
         `Referred: ${card.user._count.referrals}\n` +
-        `Pending $${card.balance.pendingUsd.toFixed(2)} - ` +
-        `Available $${card.balance.availableUsd.toFixed(2)} - ` +
-        `In payout $${card.balance.payoutPendingUsd.toFixed(2)} - ` +
-        `Paid $${card.balance.paidUsd.toFixed(2)}\n` +
-        `Voided: ${card.refundCount}\n` +
-        `Status: ${card.user.referralBannedAt ? "BANNED" : "active"}`
+        `Ledger $${card.balance.ledgerBalanceUsd.toFixed(2)} - ` +
+        `Locked $${card.balance.lockedUsd.toFixed(2)} - ` +
+        `Available $${card.balance.availableUsd.toFixed(2)}\n` +
+        `Paid out $${card.balance.paidOutUsd.toFixed(2)}\n` +
+        `Referral earned $${(card.bySource["REFERRAL"] ?? 0).toFixed(2)}\n` +
+        `Voided: ${card.refundCount}  Status: ${card.user.referralBannedAt ? "BANNED" : "active"}`
     );
     return;
   }
@@ -1027,7 +999,7 @@ async function handleAdminPayoutAction(
   message: TelegramMessage,
   text: string
 ) {
-  const { referralService } = await import("@clipfast/shared");
+  const { withdrawalService } = await import("@clipfast/shared");
   const chatId = message.chat.id;
   const adminId = String(message.from!.id);
   const parts = text.trim().split(/\s+/);
@@ -1041,20 +1013,20 @@ async function handleAdminPayoutAction(
 
   if (cmd === "/approve") {
     const fee = Number(parts[2] ?? "0");
-    await referralService.approvePayout(id, adminId, Number.isFinite(fee) ? fee : 0);
-    await client.sendMessage(chatId, `Approved ${id} (fee $${fee}).`);
+    const r = await withdrawalService.approveWithdrawal(id, adminId, Number.isFinite(fee) ? fee : 0);
+    await client.sendMessage(chatId, r.ok ? `Approved ${id} (fee $${fee}).` : (r.error ?? "Failed"));
     return;
   }
   if (cmd === "/paid") {
     const txRef = parts.slice(2).join(" ");
-    await referralService.markPayoutPaid(id, txRef);
-    await client.sendMessage(chatId, `Marked ${id} paid (tx ${txRef}).`);
+    const r = await withdrawalService.markWithdrawalPaid(id, adminId, txRef);
+    await client.sendMessage(chatId, r.ok ? `Marked ${id} paid (tx ${txRef}).` : (r.error ?? "Failed"));
     return;
   }
   if (cmd === "/reject") {
     const reason = parts.slice(2).join(" ");
-    await referralService.rejectPayout(id, reason || "rejected");
-    await client.sendMessage(chatId, `Rejected ${id}.`);
+    const r = await withdrawalService.rejectWithdrawal(id, adminId, reason || "rejected");
+    await client.sendMessage(chatId, r.ok ? `Rejected ${id}.` : (r.error ?? "Failed"));
     return;
   }
 }
