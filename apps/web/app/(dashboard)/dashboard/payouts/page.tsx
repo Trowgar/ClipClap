@@ -15,9 +15,8 @@ export default async function PayoutsPage() {
   const userId = session?.user?.id;
   if (!userId) redirect("/login");
 
-  const [balance, bySource, active, history, referralStats] = await Promise.all([
+  const [balance, active, history, referralStats] = await Promise.all([
     walletService.getWalletBalance(userId),
-    walletService.getEarningsBySource(userId),
     withdrawalService.getActiveWithdrawal(userId),
     withdrawalService.getWithdrawalHistory(userId),
     referralService.getReferralStats(userId),
@@ -34,7 +33,14 @@ export default async function PayoutsPage() {
         <h2 className="text-lg font-semibold">Balance</h2>
         <div className="rounded-lg border border-border p-5">
           <div className="text-sm text-muted-foreground">Available to withdraw</div>
-          <div className="mt-1 text-3xl font-bold tabular-nums">{money(balance.availableUsd)}</div>
+          <div className="mt-1 text-3xl font-bold tabular-nums">
+            {money(Math.max(0, balance.availableUsd))}
+          </div>
+          {balance.availableUsd < 0 && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Your balance is under review following a refund or chargeback.
+            </p>
+          )}
           <div className="mt-5 grid grid-cols-3 gap-4 border-t border-border pt-4">
             <div>
               <div className="text-xs text-muted-foreground">Clearing</div>
@@ -51,7 +57,7 @@ export default async function PayoutsPage() {
           </div>
           <p className="mt-4 text-xs text-muted-foreground">
             Clearing = referral commissions still in a 14-day hold. Earned from referrals:{" "}
-            {money(bySource.REFERRAL ?? 0)}.
+            {money(referralStats.earnedUsd)}.
           </p>
         </div>
       </div>

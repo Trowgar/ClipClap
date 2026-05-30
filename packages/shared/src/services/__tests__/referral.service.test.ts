@@ -348,11 +348,22 @@ describe("voidReferrerCommissions", () => {
 // ---------------------------------------------------------------------------
 
 describe("getReferralStats", () => {
-  it("returns pending commissions and wallet referral credits", async () => {
+  it("returns pending commissions and NET referral earnings (credits - clawbacks)", async () => {
     mocks.commissionAggregate.mockResolvedValue({ _sum: { commissionUsd: 12 } });
-    mocks.entryAggregate.mockResolvedValue({ _sum: { amountUsd: 40 } });
+    mocks.entryAggregate
+      .mockResolvedValueOnce({ _sum: { amountUsd: 40 } }) // REFERRAL credits
+      .mockResolvedValueOnce({ _sum: { amountUsd: 10 } }); // REFERRAL clawback debits
     const s = await getReferralStats("r1");
     expect(s.pendingUsd).toBe(12);
+    expect(s.earnedUsd).toBe(30); // 40 credited - 10 clawed back
+  });
+
+  it("earned equals credits when there are no clawbacks", async () => {
+    mocks.commissionAggregate.mockResolvedValue({ _sum: { commissionUsd: 0 } });
+    mocks.entryAggregate
+      .mockResolvedValueOnce({ _sum: { amountUsd: 40 } })
+      .mockResolvedValueOnce({ _sum: { amountUsd: 0 } });
+    const s = await getReferralStats("r1");
     expect(s.earnedUsd).toBe(40);
   });
 

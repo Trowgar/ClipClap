@@ -306,14 +306,16 @@ export interface ReferralStats {
 }
 
 export async function getReferralStats(userId: string): Promise<ReferralStats> {
-  const [pending, earned] = await Promise.all([
+  const [pending, credited, clawedBack] = await Promise.all([
     prisma.referralCommission.aggregate({ _sum: { commissionUsd: true }, where: { referrerId: userId, status: "PENDING" } }),
     prisma.walletEntry.aggregate({ _sum: { amountUsd: true }, where: { userId, kind: "CREDIT", source: "REFERRAL" } }),
+    prisma.walletEntry.aggregate({ _sum: { amountUsd: true }, where: { userId, kind: "DEBIT", source: "REFERRAL" } }),
   ]);
   const r2 = (n: number) => Math.round(n * 100) / 100;
   return {
     pendingUsd: r2(pending._sum.commissionUsd ?? 0),
-    earnedUsd: r2(earned._sum.amountUsd ?? 0),
+    // Net of clawbacks (refunds/chargebacks) so the figure reflects real earnings.
+    earnedUsd: r2((credited._sum.amountUsd ?? 0) - (clawedBack._sum.amountUsd ?? 0)),
   };
 }
 

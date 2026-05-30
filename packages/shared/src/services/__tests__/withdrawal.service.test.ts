@@ -23,7 +23,7 @@ vi.mock("../../lib/prisma", () => ({
       update: mocks.wrUpdate,
       aggregate: mocks.withdrawalAggregate,
     },
-    walletEntry: { create: mocks.entryCreate, aggregate: mocks.entryAggregate },
+    walletEntry: { createMany: mocks.entryCreate, aggregate: mocks.entryAggregate },
   },
 }));
 
@@ -138,7 +138,7 @@ describe("markWithdrawalPaid", () => {
     mocks.txFn.mockImplementation(async (cb: (tx: unknown) => unknown) =>
       cb({
         withdrawalRequest: { findUnique: mocks.wrFindUnique, update: mocks.wrUpdate },
-        walletEntry: { create: mocks.entryCreate },
+        walletEntry: { createMany: mocks.entryCreate },
       })
     );
   }
@@ -151,7 +151,7 @@ describe("markWithdrawalPaid", () => {
 
     const r = await markWithdrawalPaid("wr1", "admin1", "0xtx");
     expect(r.ok).toBe(true);
-    const debit = mocks.entryCreate.mock.calls[0][0].data;
+    const debit = mocks.entryCreate.mock.calls[0][0].data[0];
     expect(debit).toMatchObject({
       userId: "u1", kind: "DEBIT", source: "WITHDRAWAL",
       refType: "withdrawal", refId: "wr1", amountUsd: 60,

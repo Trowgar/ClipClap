@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   entryAggregate: vi.fn(),
   entryGroupBy: vi.fn(),
-  entryCreate: vi.fn(),
+  entryCreateMany: vi.fn(),
   withdrawalAggregate: vi.fn(),
 }));
 
@@ -12,7 +12,7 @@ vi.mock("../../lib/prisma", () => ({
     walletEntry: {
       aggregate: mocks.entryAggregate,
       groupBy: mocks.entryGroupBy,
-      create: mocks.entryCreate,
+      createMany: mocks.entryCreateMany,
     },
     withdrawalRequest: { aggregate: mocks.withdrawalAggregate },
   },
@@ -46,22 +46,25 @@ describe("getWalletBalance", () => {
 });
 
 describe("postWalletEntry", () => {
-  it("creates an entry via the given client", async () => {
-    mocks.entryCreate.mockResolvedValue({ id: "w1" });
+  it("inserts via createMany with skipDuplicates (idempotent, no thrown duplicate)", async () => {
+    mocks.entryCreateMany.mockResolvedValue({ count: 1 });
     await postWalletEntry(undefined, {
       userId: "u1", kind: "CREDIT", source: "REFERRAL",
       refType: "referral_commission", refId: "c1", amountUsd: 5,
     });
-    expect(mocks.entryCreate).toHaveBeenCalledWith({
-      data: {
-        userId: "u1", kind: "CREDIT", source: "REFERRAL",
-        refType: "referral_commission", refId: "c1", amountUsd: 5, memo: undefined,
-      },
+    expect(mocks.entryCreateMany).toHaveBeenCalledWith({
+      data: [
+        {
+          userId: "u1", kind: "CREDIT", source: "REFERRAL",
+          refType: "referral_commission", refId: "c1", amountUsd: 5, memo: undefined,
+        },
+      ],
+      skipDuplicates: true,
     });
   });
 
-  it("is idempotent on P2002 (duplicate)", async () => {
-    mocks.entryCreate.mockRejectedValueOnce(Object.assign(new Error("dup"), { code: "P2002" }));
+  it("a duplicate is a silent no-op (count 0), resolves without throwing", async () => {
+    mocks.entryCreateMany.mockResolvedValue({ count: 0 });
     await expect(
       postWalletEntry(undefined, {
         userId: "u1", kind: "CREDIT", source: "REFERRAL",

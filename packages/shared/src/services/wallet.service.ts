@@ -59,14 +59,15 @@ export interface PostWalletEntryInput {
 
 /**
  * Append a money-ledger row. Idempotent on the (source, refType, refId) unique
- * key: a duplicate (P2002) is a no-op. Pass a transaction client when posting
- * inside a larger transaction (referral release / withdrawal payment).
+ * key via createMany + skipDuplicates (ON CONFLICT DO NOTHING) - a duplicate is
+ * a silent no-op without raising or logging a P2002 error. Pass a transaction
+ * client when posting inside a larger transaction (referral release / payout).
  */
 export async function postWalletEntry(client: Db | undefined, input: PostWalletEntryInput): Promise<void> {
   const db = client ?? prisma;
-  try {
-    await db.walletEntry.create({
-      data: {
+  await db.walletEntry.createMany({
+    data: [
+      {
         userId: input.userId,
         kind: input.kind,
         source: input.source,
@@ -75,9 +76,7 @@ export async function postWalletEntry(client: Db | undefined, input: PostWalletE
         amountUsd: input.amountUsd,
         memo: input.memo,
       },
-    });
-  } catch (err) {
-    if ((err as { code?: string }).code === "P2002") return; // already posted
-    throw err;
-  }
+    ],
+    skipDuplicates: true,
+  });
 }
