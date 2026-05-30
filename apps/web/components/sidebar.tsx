@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CreditCard, FolderOpen, House, Receipt, Gear, Handshake } from "@phosphor-icons/react";
+import { CreditCard, FolderOpen, House, Receipt, Gear, Handshake, Wallet } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { UsageBar } from "./usage-bar";
 import { UserNav } from "./user-nav";
@@ -29,6 +29,7 @@ const navItems = [
   { href: "/dashboard/plans", label: "Plans", icon: CreditCard },
   { href: "/dashboard/billing", label: "Billing", icon: Receipt },
   { href: "/dashboard/referrals", label: "Affiliate", icon: Handshake },
+  { href: "/dashboard/payouts", label: "Payouts", icon: Wallet },
   { href: "/dashboard/settings", label: "Settings", icon: Gear },
 ];
 
