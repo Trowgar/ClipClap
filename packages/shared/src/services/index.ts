@@ -23,6 +23,7 @@ export * from "./telegram-auth.service";
 export * from "./telegram-delivery.service";
 export * from "./telegram-link.service";
 export * from "./tribute.service";
+export * from "./subscription-reconcile.service";
 export * from "./referral.service";
 // Named re-exports for error classes that callers need to instanceof-check
 export { UnsupportedPlanCycleError } from "./billing.service";
