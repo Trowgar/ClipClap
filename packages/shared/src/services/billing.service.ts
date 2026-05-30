@@ -362,14 +362,40 @@ export async function handleWebhook(
       const priceId = subscription.items.data[0]?.price?.id;
       const mapped = priceId ? getPlanFromPriceId(priceId) : null;
       if (!mapped) break;
-      await prisma.user.updateMany({
-        where: { stripeSubscriptionId: subscription.id },
-        data: {
-          plan: mapped.plan,
-          billingCycle: mapped.cycle,
-          currentPeriodEnd: new Date(subscription.current_period_end * 1000),
-        },
-      });
+
+      const baseData = {
+        plan: mapped.plan,
+        billingCycle: mapped.cycle,
+        currentPeriodStart: new Date(subscription.current_period_start * 1000),
+        currentPeriodEnd: new Date(subscription.current_period_end * 1000),
+      };
+
+      const status = subscription.status;
+      if (status === "active" || status === "trialing") {
+        // Healthy: clear any dunning stamp.
+        await prisma.user.updateMany({
+          where: { stripeSubscriptionId: subscription.id },
+          data: { ...baseData, subscriptionStatus: "ACTIVE", dunningSince: null },
+        });
+      } else if (status === "past_due" || status === "unpaid") {
+        // Always refresh plan/cycle/period; stamp DUNNING only on first transition
+        // (mirrors invoice.payment_failed so dunningSince is not re-stamped).
+        await prisma.user.updateMany({
+          where: { stripeSubscriptionId: subscription.id },
+          data: baseData,
+        });
+        await prisma.user.updateMany({
+          where: { stripeSubscriptionId: subscription.id, dunningSince: null },
+          data: { subscriptionStatus: "DUNNING", dunningSince: new Date() },
+        });
+      } else {
+        // canceled/incomplete/etc: refresh fields, leave status to
+        // customer.subscription.deleted + the reconcile cron.
+        await prisma.user.updateMany({
+          where: { stripeSubscriptionId: subscription.id },
+          data: baseData,
+        });
+      }
       break;
     }
   }

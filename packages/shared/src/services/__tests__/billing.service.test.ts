@@ -283,13 +283,16 @@ describe("billing.service - handleWebhook", () => {
     expect(grace.getTime()).toBeLessThanOrEqual(expectedMax);
   });
 
-  it("customer.subscription.updated with new price changes plan and cycle", async () => {
+  it("customer.subscription.updated (active) sets plan, cycle, period, ACTIVE", async () => {
     mockStripe.webhooks.constructEvent.mockReturnValue({
+      id: "evt_u1",
       type: "customer.subscription.updated",
       data: {
         object: {
           id: "sub_1",
+          status: "active",
           items: { data: [{ price: { id: "price_mm" } }] },
+          current_period_start: 1778408000,
           current_period_end: 1781000000,
         },
       },
@@ -303,7 +306,40 @@ describe("billing.service - handleWebhook", () => {
         data: expect.objectContaining({
           plan: "MAX",
           billingCycle: "MONTHLY",
+          subscriptionStatus: "ACTIVE",
+          dunningSince: null,
+          currentPeriodStart: new Date(1778408000 * 1000),
           currentPeriodEnd: new Date(1781000000 * 1000),
+        }),
+      })
+    );
+  });
+
+  it("customer.subscription.updated (past_due) stamps DUNNING with guard", async () => {
+    mockStripe.webhooks.constructEvent.mockReturnValue({
+      id: "evt_u2",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_1",
+          status: "past_due",
+          items: { data: [{ price: { id: "price_mm" } }] },
+          current_period_start: 1778408000,
+          current_period_end: 1781000000,
+        },
+      },
+    });
+
+    await handleWebhook("body", "sig");
+
+    // base update (plan/cycle/period) + guarded dunning update
+    const calls = (prisma.user.updateMany as any).mock.calls.map((c: any[]) => c[0]);
+    expect(calls).toContainEqual(
+      expect.objectContaining({
+        where: { stripeSubscriptionId: "sub_1", dunningSince: null },
+        data: expect.objectContaining({
+          subscriptionStatus: "DUNNING",
+          dunningSince: expect.any(Date),
         }),
       })
     );
