@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { DownloadSimple, FilmStrip, CircleNotch, Scissors, Trash } from "@phosphor-icons/react";
+import { DownloadSimple, FilmStrip, CircleNotch, PencilSimple, Trash } from "@phosphor-icons/react";
 import { formatDuration } from "@/lib/utils";
 import { api } from "@/lib/api";
 import Link from "next/link";
@@ -162,11 +162,11 @@ export function ClipCard({
             size="sm"
             asChild
             className="h-8 px-2"
-            title="Trim"
+            title="Edit"
           >
-            <Link href={`/dashboard/clips/${clip.id}`} aria-label={`Trim ${clip.title}`}>
-              <Scissors className="h-3.5 w-3.5" />
-              <span className="text-xs">Trim</span>
+            <Link href={`/dashboard/editor?clip=${clip.id}`} aria-label={`Edit ${clip.title}`}>
+              <PencilSimple className="h-3.5 w-3.5" />
+              <span className="text-xs">Edit</span>
             </Link>
           </Button>
           <Button

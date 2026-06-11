@@ -26,6 +26,9 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
   const [trim, setTrim] = useState({ start: 0, end: 0 });
   const [currentTime, setCurrentTime] = useState(0);
   const [playing, setPlaying] = useState(false);
+  const [playbackRate, setPlaybackRate] = useState(1.0);
+  const [showOverlay, setShowOverlay] = useState(true);
+  const [showWordHighlight, setShowWordHighlight] = useState(true);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -126,8 +129,8 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
   if (!clip) return null;
 
   return (
-    <div className="flex h-full flex-col gap-4">
-      <div className="flex items-center justify-between gap-3">
+    <div className="flex h-[calc(100vh-3rem)] flex-col gap-3">
+      <div className="flex shrink-0 items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <Button variant="ghost" size="sm" onClick={() => router.back()}>
             <ArrowLeft className="mr-1.5 h-4 w-4" />
@@ -150,32 +153,45 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
         </Button>
       </div>
 
-      {error && <p className="text-xs text-destructive">{error}</p>}
+      {error && <p className="shrink-0 text-xs text-destructive">{error}</p>}
 
-      <div className="grid min-h-0 flex-1 gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
-        <div className="space-y-3">
-          <VideoPreview
-            src={videoUrl}
-            cues={cues}
-            currentTime={currentTime}
-            playing={playing}
-            onTimeUpdate={setCurrentTime}
-            onPlayingChange={setPlaying}
-            onDuration={handleDuration}
-          />
-          <TrimBar
-            duration={duration}
-            start={trim.start}
-            end={trim.end}
-            currentTime={currentTime}
-            onChange={handleTrimChange}
-            onSeek={seek}
-          />
+      <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_420px]">
+        <div className="flex min-h-0 flex-col gap-3">
+          <div className="min-h-0 flex-1">
+            <VideoPreview
+              src={videoUrl}
+              cues={cues}
+              currentTime={currentTime}
+              duration={duration}
+              playing={playing}
+              playbackRate={playbackRate}
+              showOverlay={showOverlay}
+              showWordHighlight={showWordHighlight}
+              onTimeUpdate={setCurrentTime}
+              onPlayingChange={setPlaying}
+              onDuration={handleDuration}
+              onPlaybackRateChange={setPlaybackRate}
+              onToggleOverlay={() => setShowOverlay((v) => !v)}
+              onToggleWordHighlight={() => setShowWordHighlight((v) => !v)}
+            />
+          </div>
+          <div className="shrink-0">
+            <TrimBar
+              duration={duration}
+              start={trim.start}
+              end={trim.end}
+              currentTime={currentTime}
+              onChange={handleTrimChange}
+              onSeek={seek}
+            />
+          </div>
         </div>
 
         <SubtitleList
           cues={cues}
           currentTime={currentTime}
+          playing={playing}
+          showWordHighlight={showWordHighlight}
           onChange={handleCuesChange}
           onSeek={seek}
         />
