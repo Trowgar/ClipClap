@@ -36,10 +36,30 @@ export interface TrimClipInput {
   subtitlePreset?: string;
 }
 
+export interface SubtitleWord {
+  text: string;
+  start: number; // seconds, relative to the same timeline as the owning segment/cue
+  end: number;
+}
+
 export interface WhisperSegment {
   start: number;
   end: number;
   text: string;
+  words?: SubtitleWord[];
+}
+
+/** Editor working format. Cue times are seconds relative to the clip file (0 = clip start). */
+export interface SubtitleCue {
+  id: string;
+  start: number;
+  end: number;
+  text: string;
+  words?: SubtitleWord[];
+}
+
+export interface SubtitleTrack {
+  cues: SubtitleCue[];
 }
 
 export interface TranscriptionResult {
