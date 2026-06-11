@@ -154,7 +154,11 @@ re-render one clip from a stored source. Extend it to also accept an optional ed
 
 ## Phase 2 — The simplified web editor (React)
 
-Goal: a focused editor at `apps/web/app/(dashboard)/dashboard/clips/[id]/edit`.
+Goal: a focused editor at a single flat route **`/dashboard/editor`**
+(`apps/web/app/(dashboard)/dashboard/editor/page.tsx`), with the target clip passed
+as a query param — `/dashboard/editor?clip=<clipId>`. (Segment form
+`/dashboard/editor/[clipId]` is an alternative if you prefer; flat + query is the
+default per the product owner.)
 Two panels: video preview (left) + subtitle list (right), trim bar under the video.
 Adapt these ClipSubs techniques (all `[ref]` = `Subtitling_app-main`):
 
