@@ -26,12 +26,15 @@ export interface CreateJobInput {
   sourceDurationSec?: number;
 }
 
-export interface TrimClipInput {
+export interface EditClipInput {
   clipId: string;
   userId: string;
+  /** Source-absolute seconds (same timeline as Clip.startTime/endTime). */
   start: number;
   end: number;
   subtitles: boolean;
+  /** Cues relative to the original clip file; omitted = keep the stored track. */
+  subtitleTrack?: SubtitleTrack;
 }
 
 export interface SubtitleWord {

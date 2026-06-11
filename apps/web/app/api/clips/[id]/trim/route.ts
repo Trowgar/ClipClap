@@ -28,7 +28,7 @@ export async function POST(
     );
   }
 
-  const clip = await clipService.trimClip({
+  const clip = await clipService.editClip({
     clipId: id,
     userId: session.user.id,
     start: body.start,

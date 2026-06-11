@@ -1,4 +1,8 @@
-import type { Highlight, TranscriptionResult } from "@clipfast/shared";
+import type {
+  Highlight,
+  SubtitleTrack,
+  TranscriptionResult,
+} from "@clipfast/shared";
 
 export interface BaseStagePayload {
   jobId: string;
@@ -19,6 +23,7 @@ export type RenderStagePayload =
       start: number;
       end: number;
       subtitles: boolean;
+      subtitleTrack?: SubtitleTrack;
     });
 
 export function requireString(value: unknown, label: string): string {

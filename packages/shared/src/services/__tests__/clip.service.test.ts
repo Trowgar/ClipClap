@@ -25,9 +25,9 @@ vi.mock("../../lib/queues", () => ({
   }),
 }));
 
-import { trimClip } from "../clip.service";
+import { editClip } from "../clip.service";
 
-describe("clip.service - trimClip", () => {
+describe("clip.service - editClip", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.clipFindFirstOrThrow.mockResolvedValue({
@@ -48,7 +48,7 @@ describe("clip.service - trimClip", () => {
   });
 
   it("stores absolute trim times but queues relative times for cutting the source clip file", async () => {
-    await trimClip({
+    await editClip({
       clipId: "clip_original",
       userId: "u1",
       start: 42.5,
@@ -74,6 +74,37 @@ describe("clip.service - trimClip", () => {
         start: 2.5,
         end: 15,
         mode: "trim",
+      })
+    );
+  });
+
+  it("editClip enqueues a trim render with the edited subtitle track", async () => {
+    const track = { cues: [{ id: "c1", start: 1, end: 2, text: "hi" }] };
+    await editClip({
+      clipId: "clip_original",
+      userId: "u1",
+      start: 42,
+      end: 50,
+      subtitles: true,
+      subtitleTrack: track,
+    });
+
+    expect(mocks.clipCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          parentClipId: "clip_original",
+          subtitleTrack: track,
+        }),
+      })
+    );
+    expect(mocks.queueAdd).toHaveBeenCalledWith(
+      "render",
+      expect.objectContaining({
+        mode: "trim",
+        subtitles: true,
+        subtitleTrack: track,
+        start: 2,
+        end: 10,
       })
     );
   });

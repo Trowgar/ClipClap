@@ -10,7 +10,11 @@ import { randomUUID } from "crypto";
 import { unlink } from "fs/promises";
 import { downloadVideo } from "../processors/download";
 import { cutClips, trimClipFile } from "../processors/cut";
-import { burnSubtitles, segmentsToCues } from "../processors/subtitles";
+import {
+  burnSubtitles,
+  segmentsToCues,
+  sliceCues,
+} from "../processors/subtitles";
 import {
   asHighlights,
   asTranscription,
@@ -156,13 +160,26 @@ async function renderTrim(
     const trimmedPath = await trimClipFile(originalPath, payload.start, payload.end);
     tempFiles.push(trimmedPath);
 
+    // Edited cues arrive relative to the ORIGINAL clip file; re-window them
+    // to the new trim range so they match the trimmed output.
+    const editedCues = payload.subtitleTrack?.cues ?? [];
+    const windowedCues = sliceCues(editedCues, payload.start, payload.end);
+
+    let finalPath = trimmedPath;
+    if (payload.subtitles && windowedCues.length > 0) {
+      const subbedPath = await burnSubtitles(trimmedPath, windowedCues);
+      tempFiles.push(subbedPath);
+      finalPath = subbedPath;
+    }
+
     const storageKey = `clips/${payload.userId}/${payload.jobId}/${randomUUID()}.mp4`;
-    await uploadFile(storageKey, trimmedPath, "video/mp4");
+    await uploadFile(storageKey, finalPath, "video/mp4");
     await prisma.clip.update({
       where: { id: payload.clipId },
       data: {
         storageKey,
         duration: Math.round(payload.end - payload.start),
+        subtitleTrack: { cues: windowedCues } as unknown as Prisma.InputJsonValue,
       },
     });
   } finally {

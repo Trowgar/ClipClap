@@ -2,8 +2,8 @@ import { prisma } from "../lib/prisma";
 import { getPresignedDownloadUrl, deleteFile } from "../lib/r2";
 import { getStageQueue } from "../lib/queues";
 import { computeClipExpiresAt } from "../lib/retention";
-import type { Clip } from "@prisma/client";
-import type { TrimClipInput } from "../types";
+import type { Clip, Prisma } from "@prisma/client";
+import type { EditClipInput } from "../types";
 
 export async function getClipsByJob(
   jobId: string,
@@ -54,7 +54,7 @@ export async function deleteClip(
   await prisma.clip.delete({ where: { id: clipId } });
 }
 
-export async function trimClip(input: TrimClipInput): Promise<Clip> {
+export async function editClip(input: EditClipInput): Promise<Clip> {
   const original = await prisma.clip.findFirstOrThrow({
     where: { id: input.clipId, userId: input.userId },
     include: { job: true },
@@ -71,12 +71,14 @@ export async function trimClip(input: TrimClipInput): Promise<Clip> {
     data: {
       jobId: original.jobId,
       userId: input.userId,
-      title: `${original.title} (trimmed)`,
+      title: `${original.title} (edited)`,
       storageKey: "", // will be set by worker
       duration: Math.round(input.end - input.start),
       startTime: input.start,
       endTime: input.end,
       subtitles: input.subtitles,
+      subtitleTrack:
+        (input.subtitleTrack as unknown as Prisma.InputJsonValue) ?? undefined,
       parentClipId: original.id,
       expiresAt,
     },
@@ -93,6 +95,7 @@ export async function trimClip(input: TrimClipInput): Promise<Clip> {
     start: relativeStart,
     end: relativeEnd,
     subtitles: input.subtitles,
+    subtitleTrack: input.subtitleTrack,
     mode: "trim",
   });
 
