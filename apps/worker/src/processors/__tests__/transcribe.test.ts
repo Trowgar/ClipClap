@@ -37,9 +37,39 @@ describe("transcribeVideo", () => {
     mocks.execFile.mockImplementation((_cmd, _args, callback) => callback(null));
     mocks.unlink.mockResolvedValue(undefined);
     mocks.transcriptionCreate.mockResolvedValue({
+      text: "hello world",
+      segments: [{ start: 0, end: 1.5, text: " hello world " }],
+      words: [
+        { word: "hello", start: 0, end: 0.6 },
+        { word: "world", start: 0.7, end: 1.4 },
+      ],
+    });
+  });
+
+  it("requests word and segment granularity", async () => {
+    await transcribeVideo("/tmp/source.mp4");
+    expect(mocks.transcriptionCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timestamp_granularities: ["segment", "word"],
+      })
+    );
+  });
+
+  it("attaches words to their segment by time overlap", async () => {
+    const result = await transcribeVideo("/tmp/source.mp4");
+    expect(result.segments[0].words).toEqual([
+      { text: "hello", start: 0, end: 0.6 },
+      { text: "world", start: 0.7, end: 1.4 },
+    ]);
+  });
+
+  it("survives a response without words (segment-only fallback)", async () => {
+    mocks.transcriptionCreate.mockResolvedValue({
       text: "hello",
       segments: [{ start: 0, end: 1, text: " hello " }],
     });
+    const result = await transcribeVideo("/tmp/source.mp4");
+    expect(result.segments[0].words).toBeUndefined();
   });
 
   it("extracts compressed audio before sending it to transcription", async () => {

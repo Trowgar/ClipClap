@@ -6,7 +6,11 @@ import { randomUUID } from "crypto";
 import { createReadStream } from "fs";
 import { unlink } from "fs/promises";
 import OpenAI from "openai";
-import type { TranscriptionResult, WhisperSegment } from "@clipfast/shared";
+import type {
+  SubtitleWord,
+  TranscriptionResult,
+  WhisperSegment,
+} from "@clipfast/shared";
 
 const execFileAsync = promisify(execFile);
 
@@ -39,23 +43,35 @@ export async function transcribeVideo(
       file: createReadStream(audioPath),
       model: process.env.OPENAI_TRANSCRIPTION_MODEL || "whisper-1",
       response_format: "verbose_json",
-      timestamp_granularities: ["segment"],
+      timestamp_granularities: ["segment", "word"],
     });
 
-    const segments: WhisperSegment[] = (
-      (response as unknown as Record<string, unknown>).segments as Array<{
-        start: number;
-        end: number;
-        text: string;
-      }>
-    ).map((s) => ({
-      start: s.start,
-      end: s.end,
-      text: s.text.trim(),
+    const raw = response as unknown as {
+      text: string;
+      segments: Array<{ start: number; end: number; text: string }>;
+      words?: Array<{ word: string; start: number; end: number }>;
+    };
+
+    // Word timings can be missing or unreliable (music, cross-talk); the
+    // burn falls back to segment-level cues when a segment has no words.
+    const allWords: SubtitleWord[] = (raw.words ?? []).map((w) => ({
+      text: w.word.trim(),
+      start: w.start,
+      end: w.end,
     }));
 
+    const segments: WhisperSegment[] = raw.segments.map((s) => {
+      const words = allWords.filter((w) => w.start < s.end && w.end > s.start);
+      return {
+        start: s.start,
+        end: s.end,
+        text: s.text.trim(),
+        ...(words.length > 0 ? { words } : {}),
+      };
+    });
+
     return {
-      text: response.text,
+      text: raw.text,
       segments,
     };
   } finally {
