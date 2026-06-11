@@ -36,6 +36,39 @@ describe("segmentsToCues", () => {
     expect(new Set(cues.map((c) => c.id)).size).toBe(3);
   });
 
+  it("chunks word-timed segments into short viral-style cues", () => {
+    const long: WhisperSegment[] = [
+      {
+        start: 0,
+        end: 6,
+        text: "one two three four five six seven eight",
+        words: [
+          { text: "one", start: 0, end: 0.5 },
+          { text: "two", start: 0.5, end: 1 },
+          { text: "three", start: 1, end: 1.5 },
+          { text: "four", start: 1.5, end: 2 },
+          { text: "five", start: 2, end: 2.5 },
+          { text: "six", start: 2.5, end: 3 },
+          { text: "seven", start: 3, end: 3.5 },
+          { text: "eight", start: 3.5, end: 6 },
+        ],
+      },
+    ];
+    const cues = segmentsToCues(long, 0, 6);
+    expect(cues.length).toBeGreaterThan(1);
+    expect(cues[0].text).toBe("one two three four");
+    expect(cues[0].start).toBe(0);
+    // chunk stays on screen until the next one starts (no flicker gaps)
+    expect(cues[0].end).toBe(cues[1].start);
+    expect(cues.at(-1)!.end).toBe(6);
+    expect(cues[0].words).toHaveLength(4);
+  });
+
+  it("keeps segments without words as a single cue", () => {
+    const cues = segmentsToCues(segments, 10.0, 25.0);
+    expect(cues[0].text).toBe("Hello everyone");
+  });
+
   it("clamps cues that straddle the clip edges", () => {
     const cues = segmentsToCues(segments, 12.0, 16.0);
     expect(cues[0].start).toBe(0);
@@ -85,6 +118,7 @@ describe("generateAss", () => {
     expect(style).toBeDefined();
     const fields = style!.replace("Style: ", "").split(",");
     expect(fields[1]).toBe("Montserrat");
+    expect(Number(fields[2])).toBeGreaterThanOrEqual(56); // readable on 1080x1920
     expect(fields[3]).toBe("&H00FFFFFF"); // white primary
     expect(fields[7]).toBe("-1"); // bold
     expect(fields[21]).toBe("80"); // marginV

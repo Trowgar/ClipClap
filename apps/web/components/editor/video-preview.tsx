@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { Montserrat } from "next/font/google";
 import {
   Play,
   Pause,
@@ -12,6 +13,17 @@ import { formatTimecode } from "@/components/editor/time";
 import type { SubtitleCue } from "@clipfast/shared";
 
 const RATE_PRESETS = [0.6, 1.0, 1.4, 2.0];
+
+// Same family the worker burns with, so the preview matches the output
+const montserrat = Montserrat({
+  weight: "700",
+  subsets: ["latin", "cyrillic"],
+  display: "swap",
+});
+
+// Burn constants from the worker's DEFAULT_STYLE, in PlayRes (1080x1920) px.
+// The overlay scales them to the rendered video box for a faithful preview.
+const BURN = { playResY: 1920, playResX: 1080, fontSize: 64, marginV: 80, marginX: 20 };
 
 // Click-and-drag scrubber with hover timecode, between the video area and the
 // controls bar (adapted from ClipSubs VideoPlayer). Hover state stays local so
@@ -132,9 +144,39 @@ export function VideoPreview({
   onToggleWordHighlight,
 }: VideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number | null>(null);
   const lastEmitRef = useRef(0);
   const lastTimeRef = useRef(0);
+
+  // The object-contain box of the video inside its container - the overlay is
+  // laid out against this rect so subtitles sit on the frame, not the panel.
+  const [videoBox, setVideoBox] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } | null>(null);
+
+  const measureVideoBox = useCallback(() => {
+    const video = videoRef.current;
+    const container = containerRef.current;
+    if (!video || !container || !video.videoWidth || !video.videoHeight) return;
+    const cw = container.clientWidth;
+    const ch = container.clientHeight;
+    const scale = Math.min(cw / video.videoWidth, ch / video.videoHeight);
+    const width = video.videoWidth * scale;
+    const height = video.videoHeight * scale;
+    setVideoBox({ left: (cw - width) / 2, top: (ch - height) / 2, width, height });
+  }, []);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const observer = new ResizeObserver(measureVideoBox);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [measureVideoBox]);
 
   // Sync play/pause state to the element
   useEffect(() => {
@@ -198,6 +240,7 @@ export function VideoPreview({
     <div className="flex h-full flex-col overflow-hidden rounded-xl border border-white/[0.08] bg-white/[0.02]">
       {/* Video area */}
       <div
+        ref={containerRef}
         className="group relative min-h-0 flex-1 cursor-pointer bg-black"
         onClick={() => src && onPlayingChange(!playing)}
       >
@@ -215,6 +258,7 @@ export function VideoPreview({
             onLoadedMetadata={(e) => {
               const d = e.currentTarget.duration;
               if (isFinite(d) && d > 0) onDuration(d);
+              measureVideoBox();
             }}
           />
         ) : (
@@ -231,10 +275,30 @@ export function VideoPreview({
           </div>
         )}
 
-        {/* Subtitle overlay - browser preview of the burn (the final look comes from the server re-render) */}
-        {showOverlay && activeCue && (
-          <div className="pointer-events-none absolute inset-x-0 bottom-10 z-20 flex justify-center px-4">
-            <span className="inline-block max-w-[90%] rounded-lg bg-black/75 px-4 py-2 text-center text-base font-bold leading-normal text-white shadow-lg backdrop-blur-sm">
+        {/* Subtitle overlay - scaled to the video frame with the same
+            proportions as the server burn, so the preview is faithful */}
+        {showOverlay && activeCue && videoBox && (
+          <div
+            className="pointer-events-none absolute z-20 flex justify-center"
+            style={{
+              left: videoBox.left + (videoBox.width * BURN.marginX) / BURN.playResX,
+              width:
+                videoBox.width - (2 * videoBox.width * BURN.marginX) / BURN.playResX,
+              top: videoBox.top,
+              height: videoBox.height,
+              alignItems: "flex-end",
+              paddingBottom: (videoBox.height * BURN.marginV) / BURN.playResY,
+            }}
+          >
+            <span
+              className={cn("text-center leading-tight text-white", montserrat.className)}
+              style={{
+                fontSize: (videoBox.height * BURN.fontSize) / BURN.playResY,
+                fontWeight: 700,
+                textShadow:
+                  "-2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0 0 6px rgba(0,0,0,0.7)",
+              }}
+            >
               {showWordHighlight &&
               activeCue.words &&
               activeCue.words.length > 0

@@ -12,7 +12,8 @@ import {
 import { cn } from "@/lib/utils";
 import type { SubtitleCue } from "@clipfast/shared";
 
-const MIN_CUE_SEC = 1;
+// Chunked viral-style cues are short by design; only flag near-instant ones
+const MIN_CUE_SEC = 0.3;
 
 interface SubtitleListProps {
   cues: SubtitleCue[];

@@ -38,7 +38,7 @@ describe("clip.service - editClip", () => {
       storageKey: "clips/u1/job1/original.mp4",
       startTime: 40,
       endTime: 60,
-      job: { id: "job1" },
+      job: { id: "job1", sourceArtifactKey: "artifacts/job1/source.mp4" },
     });
     mocks.userFindUniqueOrThrow.mockResolvedValue({
       plan: "STARTER",
@@ -105,6 +105,9 @@ describe("clip.service - editClip", () => {
         subtitleTrack: track,
         start: 2,
         end: 10,
+        sourceArtifactKey: "artifacts/job1/source.mp4",
+        sourceStart: 42,
+        sourceEnd: 50,
       })
     );
   });

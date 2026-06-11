@@ -151,13 +151,34 @@ async function renderTrim(
   const tempFiles: string[] = [];
 
   try {
-    const originalPath = await downloadVideo(
-      undefined,
-      payload.originalClipStorageKey
-    );
-    tempFiles.push(originalPath);
+    // Prefer cutting from the job's source artifact: the clip file already
+    // has subtitles burned in, so re-encoding it would stack new text on old.
+    const cleanSource =
+      payload.sourceArtifactKey &&
+      payload.sourceStart !== undefined &&
+      payload.sourceEnd !== undefined;
 
-    const trimmedPath = await trimClipFile(originalPath, payload.start, payload.end);
+    let trimmedPath: string;
+    if (cleanSource) {
+      const sourcePath = await downloadVideo(undefined, payload.sourceArtifactKey!);
+      tempFiles.push(sourcePath);
+      const [cutResult] = await cutClips(sourcePath, [
+        {
+          start: payload.sourceStart!,
+          end: payload.sourceEnd!,
+          title: "edit",
+          reason: "re-render",
+        },
+      ]);
+      trimmedPath = cutResult.clipPath;
+    } else {
+      const originalPath = await downloadVideo(
+        undefined,
+        payload.originalClipStorageKey
+      );
+      tempFiles.push(originalPath);
+      trimmedPath = await trimClipFile(originalPath, payload.start, payload.end);
+    }
     tempFiles.push(trimmedPath);
 
     // Edited cues arrive relative to the ORIGINAL clip file; re-window them

@@ -11,17 +11,23 @@ const execFileAsync = promisify(execFile);
 // One burned-in style for everyone. White Montserrat Bold with a black
 // outline, bottom-centered on a 1080x1920 canvas; the active word flips to
 // yellow via ASS karaoke when word timings exist.
+// Font size is in PlayRes pixels: 64 on a 1920-tall canvas ≈ TikTok-size text.
 const DEFAULT_STYLE = {
   fontName: "Montserrat",
-  fontSize: 18,
+  fontSize: 64,
   primaryColor: "&H00FFFFFF", // white (AABBGGRR)
   karaokeFillColor: "&H00FFFF&", // yellow (BBGGRR inline override)
   outlineColor: "&H00000000",
   backColor: "&H80000000",
-  outline: 3,
+  outline: 4,
   shadow: 0,
   marginV: 80,
 } as const;
+
+// Viral-style chunking: at most this many words / characters per burned cue,
+// so subtitles stay short and fit a 1080-wide vertical frame.
+const MAX_CHUNK_WORDS = 4;
+const MAX_CHUNK_CHARS = 24;
 
 // assets/ ships beside src/ in dev (tsx) and beside dist/ in the production
 // image, so __dirname/../.. lands on apps/worker in both.
@@ -38,18 +44,53 @@ export function segmentsToCues(
 ): SubtitleCue[] {
   return segments
     .filter((s) => s.end > clipStart && s.start < clipEnd)
-    .map((s) => {
+    .flatMap((s) => {
+      const segStart = Math.max(0, s.start - clipStart);
+      const segEnd = Math.min(clipEnd - clipStart, s.end - clipStart);
       const words = s.words
         ?.filter((w) => w.end > clipStart && w.start < clipEnd)
         .map((w) => shiftWord(w, clipStart));
-      return {
-        id: randomUUID(),
-        start: Math.max(0, s.start - clipStart),
-        end: Math.min(clipEnd - clipStart, s.end - clipStart),
-        text: s.text,
-        ...(words && words.length > 0 ? { words } : {}),
-      };
+
+      if (!words || words.length === 0) {
+        return [{ id: randomUUID(), start: segStart, end: segEnd, text: s.text }];
+      }
+
+      // Word timings let us chunk the segment into short punchy cues.
+      const chunks = chunkWords(words);
+      return chunks.map((chunk, i) => {
+        const next = chunks[i + 1];
+        return {
+          id: randomUUID(),
+          start: i === 0 ? segStart : chunk[0].start,
+          // Hold each chunk until the next one starts so text never flickers
+          // off mid-sentence; the last chunk runs to the segment end.
+          end: next ? next[0].start : segEnd,
+          text: chunk.map((w) => w.text).join(" "),
+          words: chunk,
+        };
+      });
     });
+}
+
+function chunkWords(words: SubtitleWord[]): SubtitleWord[][] {
+  const chunks: SubtitleWord[][] = [];
+  let current: SubtitleWord[] = [];
+  let chars = 0;
+  for (const word of words) {
+    const addition = word.text.length + (current.length > 0 ? 1 : 0);
+    if (
+      current.length > 0 &&
+      (current.length >= MAX_CHUNK_WORDS || chars + addition > MAX_CHUNK_CHARS)
+    ) {
+      chunks.push(current);
+      current = [];
+      chars = 0;
+    }
+    current.push(word);
+    chars += word.text.length + (current.length > 1 ? 1 : 0);
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
 }
 
 /** Re-window clip-relative cues to a [start, end] sub-range of the same clip. */

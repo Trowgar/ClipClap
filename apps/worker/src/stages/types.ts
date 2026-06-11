@@ -24,6 +24,12 @@ export type RenderStagePayload =
       end: number;
       subtitles: boolean;
       subtitleTrack?: SubtitleTrack;
+      /** Clean re-render source: cut [sourceStart, sourceEnd] (source-absolute
+       *  seconds) from the job's source artifact instead of re-encoding the
+       *  already-subtitled clip file (which would double-burn subtitles). */
+      sourceArtifactKey?: string;
+      sourceStart?: number;
+      sourceEnd?: number;
     });
 
 export function requireString(value: unknown, label: string): string {
