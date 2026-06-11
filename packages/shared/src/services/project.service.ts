@@ -13,7 +13,6 @@ export interface ProjectDetailClip extends ProjectClipSummary {
   startTime: number;
   endTime: number;
   subtitles: boolean;
-  subtitlePreset: string | null;
   parentClipId: string | null;
   previewUrl: string | null;
 }
@@ -76,7 +75,6 @@ const PROJECT_DETAIL_INCLUDE = {
       startTime: true,
       endTime: true,
       subtitles: true,
-      subtitlePreset: true,
       parentClipId: true,
       createdAt: true,
     },
@@ -146,7 +144,6 @@ export async function getProjectDetail(
         startTime: clip.startTime,
         endTime: clip.endTime,
         subtitles: clip.subtitles,
-        subtitlePreset: clip.subtitlePreset,
         parentClipId: clip.parentClipId,
         createdAt: clip.createdAt,
         previewUrl: clip.storageKey

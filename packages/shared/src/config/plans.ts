@@ -4,7 +4,6 @@ export interface PlanLimits {
   minutesPerPeriod: number;
   storageClips: number;
   retentionDays: number;
-  subtitlePresets: string[];
   priorityQueue: boolean;
   concurrentJobsLimit: number;
   maxSourceDurationMinutes: number;
@@ -30,7 +29,6 @@ export const PLAN_LIMITS: Record<
       minutesPerPeriod: 75,
       storageClips: 20,
       retentionDays: 7,
-      subtitlePresets: ["tiktok"],
       priorityQueue: false,
       concurrentJobsLimit: 1,
       maxSourceDurationMinutes: ABUSE_CAPS.maxSourceDurationMinutes,
@@ -42,7 +40,6 @@ export const PLAN_LIMITS: Record<
       minutesPerPeriod: 270,
       storageClips: 20,
       retentionDays: 7,
-      subtitlePresets: ["tiktok"],
       priorityQueue: false,
       concurrentJobsLimit: 1,
       maxSourceDurationMinutes: ABUSE_CAPS.maxSourceDurationMinutes,
@@ -57,7 +54,6 @@ export const PLAN_LIMITS: Record<
       minutesPerPeriod: 1000,
       storageClips: 150,
       retentionDays: 30,
-      subtitlePresets: ["tiktok", "minimal", "bold"],
       priorityQueue: false,
       concurrentJobsLimit: 2,
       maxSourceDurationMinutes: ABUSE_CAPS.maxSourceDurationMinutes,
@@ -72,7 +68,6 @@ export const PLAN_LIMITS: Record<
       minutesPerPeriod: 3500,
       storageClips: 1000,
       retentionDays: 90,
-      subtitlePresets: ["tiktok", "minimal", "bold"],
       priorityQueue: true,
       concurrentJobsLimit: 3,
       maxSourceDurationMinutes: ABUSE_CAPS.maxSourceDurationMinutes,
@@ -87,7 +82,6 @@ const NONE_LIMITS: PlanLimits = {
   minutesPerPeriod: 0,
   storageClips: 0,
   retentionDays: 0,
-  subtitlePresets: [],
   priorityQueue: false,
   concurrentJobsLimit: 0,
   maxSourceDurationMinutes: 0,

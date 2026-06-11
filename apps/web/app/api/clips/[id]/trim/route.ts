@@ -34,7 +34,6 @@ export async function POST(
     start: body.start,
     end: body.end,
     subtitles: body.subtitles ?? true,
-    subtitlePreset: body.subtitlePreset,
   });
 
   return NextResponse.json(clip, { status: 201 });

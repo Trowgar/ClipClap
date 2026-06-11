@@ -69,7 +69,7 @@ export default async function PlansPage() {
             `Up to ${PLUS_MONTHLY.maxSourceDurationMinutes} min per upload`,
             `${PLUS_MONTHLY.storageClips} clips stored`,
             `${PLUS_MONTHLY.retentionDays}-day retention`,
-            `${PLUS_MONTHLY.subtitlePresets.length} subtitle styles`,
+            "Burned-in subtitles",
             `${PLUS_MONTHLY.concurrentJobsLimit} jobs at once`,
           ]}
           current={usage.plan === "PLUS"}

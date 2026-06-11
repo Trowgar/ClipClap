@@ -77,7 +77,6 @@ export async function trimClip(input: TrimClipInput): Promise<Clip> {
       startTime: input.start,
       endTime: input.end,
       subtitles: input.subtitles,
-      subtitlePreset: input.subtitlePreset,
       parentClipId: original.id,
       expiresAt,
     },
@@ -94,7 +93,6 @@ export async function trimClip(input: TrimClipInput): Promise<Clip> {
     start: relativeStart,
     end: relativeEnd,
     subtitles: input.subtitles,
-    subtitlePreset: input.subtitlePreset,
     mode: "trim",
   });
 

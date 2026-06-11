@@ -33,7 +33,6 @@ export const api = {
       sourceKey?: string;
       originalFilename?: string;
       subtitles: boolean;
-      subtitlePreset: string;
       sourceDurationSec?: number;
     }) =>
       fetchApi<JobWithClips>("/api/jobs", {
@@ -45,7 +44,7 @@ export const api = {
     list: () => fetchApi<ClipData[]>("/api/clips"),
     get: (id: string) => fetchApi<ClipData>(`/api/clips/${id}`),
     download: (id: string) => fetchApi<{ url: string }>(`/api/clips/${id}/download`),
-    trim: (id: string, data: { start: number; end: number; subtitles: boolean; subtitlePreset?: string }) =>
+    trim: (id: string, data: { start: number; end: number; subtitles: boolean }) =>
       fetchApi<ClipData>(`/api/clips/${id}/trim`, { method: "POST", body: JSON.stringify(data) }),
     delete: (id: string) => fetchApi<{ ok: boolean }>(`/api/clips/${id}`, { method: "DELETE" }),
   },
@@ -88,7 +87,6 @@ export interface JobWithClips {
   error: string | null;
   sourceDurationSec: number | null;
   subtitles: boolean;
-  subtitlePreset: string | null;
   createdAt: string;
   clips: ClipData[];
 }
@@ -103,7 +101,6 @@ export interface ClipData {
   startTime: number;
   endTime: number;
   subtitles: boolean;
-  subtitlePreset: string | null;
   parentClipId: string | null;
   createdAt: string;
 }

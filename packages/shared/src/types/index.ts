@@ -23,7 +23,6 @@ export interface CreateJobInput {
   sourceKey?: string;
   originalFilename?: string;
   subtitles?: boolean;
-  subtitlePreset?: string;
   sourceDurationSec?: number;
 }
 
@@ -33,7 +32,6 @@ export interface TrimClipInput {
   start: number;
   end: number;
   subtitles: boolean;
-  subtitlePreset?: string;
 }
 
 export interface SubtitleWord {
@@ -75,5 +73,3 @@ export interface PipelineContext {
   highlights?: Highlight[];
   clipPaths?: string[];
 }
-
-export type SubtitlePreset = "tiktok" | "minimal" | "bold";

@@ -16,7 +16,6 @@ export interface ClipCardClip {
   title: string;
   duration: number;
   subtitles?: boolean;
-  subtitlePreset?: string | null;
   previewUrl?: string | null;
 }
 
@@ -123,12 +122,12 @@ export function ClipCard({
           <span className="rounded bg-black/65 px-1.5 py-0.5 font-mono text-[11px] text-white">
             {formatDuration(clip.duration)}
           </span>
-          {clip.subtitles && clip.subtitlePreset && (
+          {clip.subtitles && (
             <Badge
               variant="outline"
               className="border-white/25 bg-black/50 px-1.5 py-0 text-[10px] text-white"
             >
-              {clip.subtitlePreset}
+              subtitles
             </Badge>
           )}
         </div>

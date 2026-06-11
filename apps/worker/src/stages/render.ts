@@ -10,7 +10,7 @@ import { randomUUID } from "crypto";
 import { unlink } from "fs/promises";
 import { downloadVideo } from "../processors/download";
 import { cutClips, trimClipFile } from "../processors/cut";
-import { burnSubtitles } from "../processors/subtitles";
+import { burnSubtitles, segmentsToCues } from "../processors/subtitles";
 import {
   asHighlights,
   asTranscription,
@@ -82,17 +82,12 @@ async function renderClips(
 
       let finalClipPath = cutResult.clipPath;
       if (job.subtitles) {
-        const preset = (job.subtitlePreset || "tiktok") as
-          | "tiktok"
-          | "minimal"
-          | "bold";
-        const subbedPath = await burnSubtitles(
-          cutResult.clipPath,
+        const cues = segmentsToCues(
           transcription.segments,
           highlight.start,
-          highlight.end,
-          preset
+          highlight.end
         );
+        const subbedPath = await burnSubtitles(cutResult.clipPath, cues);
         tempFiles.push(subbedPath);
         finalClipPath = subbedPath;
       }
@@ -109,7 +104,6 @@ async function renderClips(
           startTime: highlight.start,
           endTime: highlight.end,
           subtitles: job.subtitles,
-          subtitlePreset: job.subtitlePreset,
           expiresAt: clipExpiresAt,
         },
       });

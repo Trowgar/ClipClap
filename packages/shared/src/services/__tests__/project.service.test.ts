@@ -102,7 +102,6 @@ function project(id: string, storageKey?: string) {
             startTime: 4,
             endTime: 16,
             subtitles: true,
-            subtitlePreset: "tiktok",
             parentClipId: null,
             createdAt: new Date("2026-05-10T00:01:00.000Z"),
           },

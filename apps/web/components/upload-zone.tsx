@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
-import { ArrowRight, CircleNotch, Lock, Paperclip, X, LinkSimple } from "@phosphor-icons/react";
+import { ArrowRight, CircleNotch, Paperclip, X, LinkSimple } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -14,15 +14,7 @@ interface UploadZoneProps {
   topUpMinutesRemaining: number;
   maxSourceDurationMinutes: number;
   maxFileSizeBytes: number;
-  availableSubtitlePresets: string[];
 }
-
-const ALL_PRESETS = ["tiktok", "minimal", "bold"] as const;
-const PRESET_LABEL: Record<string, string> = {
-  tiktok: "TikTok",
-  minimal: "Minimal",
-  bold: "Bold",
-};
 
 // Best-effort client-side duration probe. The browser only decodes codecs it
 // supports (H.264, WebM); HEVC/AV1/MKV may resolve null and bypass the
@@ -69,7 +61,6 @@ export function UploadZone({
   topUpMinutesRemaining,
   maxSourceDurationMinutes,
   maxFileSizeBytes,
-  availableSubtitlePresets,
 }: UploadZoneProps) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -77,9 +68,7 @@ export function UploadZone({
   const [url, setUrl] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [sourceDurationSec, setSourceDurationSec] = useState<number | null>(null);
-  const [subtitlePreset, setSubtitlePreset] = useState<string>(
-    availableSubtitlePresets[0] ?? "tiktok"
-  );
+  const [subtitles, setSubtitles] = useState(true);
   const [loading, setLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -183,13 +172,11 @@ export function UploadZone({
       }
 
       setUploadProgress("Creating job…");
-      const isOff = subtitlePreset === "off";
       const job = await api.jobs.create({
         url: url.trim() || undefined,
         sourceKey,
         originalFilename,
-        subtitles: !isOff,
-        subtitlePreset: isOff ? "tiktok" : subtitlePreset,
+        subtitles,
         sourceDurationSec: sourceDurationSec ?? undefined,
       });
 
@@ -201,8 +188,6 @@ export function UploadZone({
       setUploadProgress(null);
     }
   };
-
-  const presetChips: ReadonlyArray<string> = [...ALL_PRESETS, "off"];
 
   return (
     <div
@@ -309,31 +294,22 @@ export function UploadZone({
       <div className="flex flex-wrap items-center justify-between gap-3 text-xs">
         <div className="flex items-center gap-1.5">
           <span className="text-neutral-500">Subtitles</span>
-          {presetChips.map((p) => {
-            const isOff = p === "off";
-            const isAvailable =
-              isOff || availableSubtitlePresets.includes(p);
-            const isSelected = subtitlePreset === p;
-            return (
-              <button
-                key={p}
-                type="button"
-                onClick={() => isAvailable && setSubtitlePreset(p)}
-                disabled={!isAvailable || loading}
-                className={cn(
-                  "inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] transition-colors",
-                  isSelected
-                    ? "bg-white/[0.12] text-white"
-                    : isAvailable
-                      ? "border border-white/[0.08] text-neutral-400 hover:border-white/[0.16] hover:text-neutral-200"
-                      : "cursor-not-allowed border border-white/[0.04] text-neutral-700"
-                )}
-              >
-                {!isAvailable && <Lock weight="bold" className="h-2.5 w-2.5" />}
-                {isOff ? "Off" : PRESET_LABEL[p]}
-              </button>
-            );
-          })}
+          {[true, false].map((on) => (
+            <button
+              key={String(on)}
+              type="button"
+              onClick={() => setSubtitles(on)}
+              disabled={loading}
+              className={cn(
+                "inline-flex items-center rounded-full px-2.5 py-1 text-[11px] transition-colors",
+                subtitles === on
+                  ? "bg-white/[0.12] text-white"
+                  : "border border-white/[0.08] text-neutral-400 hover:border-white/[0.16] hover:text-neutral-200"
+              )}
+            >
+              {on ? "On" : "Off"}
+            </button>
+          ))}
         </div>
 
         <div className="font-mono text-[11px] tabular-nums text-neutral-500">

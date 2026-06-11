@@ -13,7 +13,6 @@ describe("Plan Limits", () => {
     expect(limits.minutesPerPeriod).toBe(270);
     expect(limits.storageClips).toBe(20);
     expect(limits.retentionDays).toBe(7);
-    expect(limits.subtitlePresets).toEqual(["tiktok"]);
     expect(limits.concurrentJobsLimit).toBe(1);
   });
 
@@ -23,16 +22,15 @@ describe("Plan Limits", () => {
     expect(limits.storageClips).toBe(20);
   });
 
-  it("PLUS monthly: 1000 min, 150 clips, 30d retention, 3 presets", () => {
+  it("PLUS monthly: 1000 min, 150 clips, 30d retention", () => {
     const limits = getPlanLimits("PLUS", "MONTHLY");
     expect(limits.minutesPerPeriod).toBe(1000);
     expect(limits.storageClips).toBe(150);
     expect(limits.retentionDays).toBe(30);
-    expect(limits.subtitlePresets).toEqual(["tiktok", "minimal", "bold"]);
     expect(limits.concurrentJobsLimit).toBe(2);
   });
 
-  it("MAX monthly: 3500 min, 1000 clips, 90d retention, all presets, priority", () => {
+  it("MAX monthly: 3500 min, 1000 clips, 90d retention, priority", () => {
     const limits = getPlanLimits("MAX", "MONTHLY");
     expect(limits.minutesPerPeriod).toBe(3500);
     expect(limits.storageClips).toBe(1000);

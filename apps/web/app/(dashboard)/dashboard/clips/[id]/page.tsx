@@ -57,9 +57,7 @@ export default function ClipPage({
             <span className="text-sm text-muted-foreground">
               {formatDuration(clip.duration)}
             </span>
-            {clip.subtitles && clip.subtitlePreset && (
-              <Badge variant="outline">{clip.subtitlePreset}</Badge>
-            )}
+            {clip.subtitles && <Badge variant="outline">subtitles</Badge>}
           </div>
         </div>
         <Button onClick={handleDownload} disabled={downloading}>
@@ -82,7 +80,6 @@ export default function ClipPage({
           originalStart={clip.startTime}
           originalEnd={clip.endTime}
           originalSubtitles={clip.subtitles}
-          originalPreset={clip.subtitlePreset}
           onTrimmed={() => router.push(`/dashboard/projects/${clip.jobId}`)}
         />
       </div>

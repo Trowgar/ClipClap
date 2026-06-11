@@ -4,13 +4,6 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Scissors, CircleNotch } from "@phosphor-icons/react";
 import { api } from "@/lib/api";
 import { formatDuration } from "@/lib/utils";
@@ -20,7 +13,6 @@ interface TrimEditorProps {
   originalStart: number;
   originalEnd: number;
   originalSubtitles: boolean;
-  originalPreset: string | null;
   onTrimmed?: () => void;
 }
 
@@ -29,13 +21,11 @@ export function TrimEditor({
   originalStart,
   originalEnd,
   originalSubtitles,
-  originalPreset,
   onTrimmed,
 }: TrimEditorProps) {
   const [start, setStart] = useState(originalStart);
   const [end, setEnd] = useState(originalEnd);
   const [subtitles, setSubtitles] = useState(originalSubtitles);
-  const [preset, setPreset] = useState(originalPreset || "tiktok");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,8 +33,7 @@ export function TrimEditor({
   const changed =
     start !== originalStart ||
     end !== originalEnd ||
-    subtitles !== originalSubtitles ||
-    preset !== originalPreset;
+    subtitles !== originalSubtitles;
 
   const handleTrim = async () => {
     if (end <= start) {
@@ -58,7 +47,6 @@ export function TrimEditor({
         start,
         end,
         subtitles,
-        subtitlePreset: subtitles ? preset : undefined,
       });
       onTrimmed?.();
     } catch (err) {
@@ -105,18 +93,6 @@ export function TrimEditor({
           />
           Subtitles
         </label>
-        {subtitles && (
-          <Select value={preset} onValueChange={setPreset}>
-            <SelectTrigger className="w-36">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="tiktok">TikTok Style</SelectItem>
-              <SelectItem value="minimal">Minimal</SelectItem>
-              <SelectItem value="bold">Bold</SelectItem>
-            </SelectContent>
-          </Select>
-        )}
       </div>
 
       {error && <p className="text-sm text-destructive">{error}</p>}

@@ -11,7 +11,6 @@ export async function createJob(input: CreateJobInput): Promise<Job> {
       sourceKey: input.sourceKey,
       originalFilename: input.originalFilename,
       subtitles: input.subtitles ?? true,
-      subtitlePreset: input.subtitlePreset ?? "tiktok",
       sourceDurationSec: input.sourceDurationSec,
       status: "PENDING",
     },

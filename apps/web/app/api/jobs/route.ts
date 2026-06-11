@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
 
   const userId = session.user.id;
   const body = await req.json();
-  const { url, sourceKey, originalFilename, subtitles, subtitlePreset, sourceDurationSec } = body;
+  const { url, sourceKey, originalFilename, subtitles, sourceDurationSec } = body;
 
   if (!url && !sourceKey) {
     return NextResponse.json(
@@ -91,7 +91,6 @@ export async function POST(req: NextRequest) {
     sourceKey: sourceKey || undefined,
     originalFilename: originalFilename || undefined,
     subtitles: subtitles !== false,
-    subtitlePreset: subtitlePreset || "tiktok",
     sourceDurationSec: typeof sourceDurationSec === "number" ? sourceDurationSec : undefined,
   });
 

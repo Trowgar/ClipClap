@@ -54,7 +54,6 @@ describe("clip.service - trimClip", () => {
       start: 42.5,
       end: 55,
       subtitles: true,
-      subtitlePreset: "tiktok",
     });
 
     expect(mocks.clipCreate).toHaveBeenCalledWith(

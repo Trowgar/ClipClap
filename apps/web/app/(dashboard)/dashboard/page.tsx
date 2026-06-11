@@ -35,7 +35,6 @@ export default async function DashboardPage() {
         topUpMinutesRemaining={usage.topUpMinutesRemaining}
         maxSourceDurationMinutes={limits.maxSourceDurationMinutes}
         maxFileSizeBytes={limits.maxFileSizeBytes}
-        availableSubtitlePresets={limits.subtitlePresets}
       />
 
       <RecentProjects

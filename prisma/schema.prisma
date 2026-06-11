@@ -271,7 +271,6 @@ model Job {
   transcription                 String?   @db.Text
   highlights                    Json?
   subtitles                     Boolean   @default(true)
-  subtitlePreset                String?   @default("tiktok")
   createdAt                     DateTime  @default(now())
 
   clips            Clip[]
@@ -336,7 +335,6 @@ model Clip {
   startTime      Float
   endTime        Float
   subtitles      Boolean   @default(true)
-  subtitlePreset String?
   parentClipId   String?
   parentClip     Clip?     @relation("ClipRetrim", fields: [parentClipId], references: [id])
   retrims        Clip[]    @relation("ClipRetrim")

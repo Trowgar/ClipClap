@@ -732,7 +732,6 @@ async function handleVideo(
       sourceKey,
       originalFilename: source.fileName || "telegram-video.mp4",
       subtitles: true,
-      subtitlePreset: "tiktok",
       sourceDurationSec: source.duration,
     });
 
@@ -779,7 +778,6 @@ async function handleVideoUrl(
     sourceUrl: url,
     originalFilename: probe.title,
     subtitles: true,
-    subtitlePreset: "tiktok",
     sourceDurationSec: probe.durationSec,
   });
 
