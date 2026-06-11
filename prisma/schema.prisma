@@ -335,6 +335,7 @@ model Clip {
   startTime      Float
   endTime        Float
   subtitles      Boolean   @default(true)
+  subtitleTrack  Json?
   parentClipId   String?
   parentClip     Clip?     @relation("ClipRetrim", fields: [parentClipId], references: [id])
   retrims        Clip[]    @relation("ClipRetrim")

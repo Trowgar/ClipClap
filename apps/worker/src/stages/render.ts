@@ -80,13 +80,15 @@ async function renderClips(
       const [cutResult] = await cutClips(sourcePath, [highlight]);
       tempFiles.push(cutResult.clipPath);
 
+      // Derived even when subtitles are off so the editor can enable them later
+      const cues = segmentsToCues(
+        transcription.segments,
+        highlight.start,
+        highlight.end
+      );
+
       let finalClipPath = cutResult.clipPath;
       if (job.subtitles) {
-        const cues = segmentsToCues(
-          transcription.segments,
-          highlight.start,
-          highlight.end
-        );
         const subbedPath = await burnSubtitles(cutResult.clipPath, cues);
         tempFiles.push(subbedPath);
         finalClipPath = subbedPath;
@@ -104,6 +106,7 @@ async function renderClips(
           startTime: highlight.start,
           endTime: highlight.end,
           subtitles: job.subtitles,
+          subtitleTrack: { cues } as unknown as Prisma.InputJsonValue,
           expiresAt: clipExpiresAt,
         },
       });
