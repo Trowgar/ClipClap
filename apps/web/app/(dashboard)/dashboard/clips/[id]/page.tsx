@@ -1,13 +1,18 @@
 "use client";
 
 import { use, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useClip } from "@/hooks/use-clips";
 import { ClipPlayer } from "@/components/clip-player";
-import { TrimEditor } from "@/components/trim-editor";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, DownloadSimple, CircleNotch } from "@phosphor-icons/react";
+import {
+  ArrowLeft,
+  DownloadSimple,
+  CircleNotch,
+  PencilSimple,
+} from "@phosphor-icons/react";
 import { formatDuration } from "@/lib/utils";
 import { api } from "@/lib/api";
 
@@ -60,28 +65,26 @@ export default function ClipPage({
             {clip.subtitles && <Badge variant="outline">subtitles</Badge>}
           </div>
         </div>
-        <Button onClick={handleDownload} disabled={downloading}>
-          {downloading ? (
-            <CircleNotch weight="bold" className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <DownloadSimple className="mr-2 h-4 w-4" />
-          )}
-          Download
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" asChild>
+            <Link href={`/dashboard/editor?clip=${clip.id}`}>
+              <PencilSimple className="mr-2 h-4 w-4" />
+              Edit
+            </Link>
+          </Button>
+          <Button onClick={handleDownload} disabled={downloading}>
+            {downloading ? (
+              <CircleNotch weight="bold" className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <DownloadSimple className="mr-2 h-4 w-4" />
+            )}
+            Download
+          </Button>
+        </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_320px]">
-        {/* Video player */}
+      <div className="mx-auto max-w-md">
         <ClipPlayer clipId={clip.id} />
-
-        {/* Trim editor */}
-        <TrimEditor
-          clipId={clip.id}
-          originalStart={clip.startTime}
-          originalEnd={clip.endTime}
-          originalSubtitles={clip.subtitles}
-          onTrimmed={() => router.push(`/dashboard/projects/${clip.jobId}`)}
-        />
       </div>
     </div>
   );

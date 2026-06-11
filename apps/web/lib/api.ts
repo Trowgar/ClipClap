@@ -44,8 +44,6 @@ export const api = {
     list: () => fetchApi<ClipData[]>("/api/clips"),
     get: (id: string) => fetchApi<ClipData>(`/api/clips/${id}`),
     download: (id: string) => fetchApi<{ url: string }>(`/api/clips/${id}/download`),
-    trim: (id: string, data: { start: number; end: number; subtitles: boolean }) =>
-      fetchApi<ClipData>(`/api/clips/${id}/trim`, { method: "POST", body: JSON.stringify(data) }),
     subtitles: (id: string) => fetchApi<SubtitleTrack>(`/api/clips/${id}/subtitles`),
     edit: (
       id: string,
