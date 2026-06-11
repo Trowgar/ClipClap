@@ -1,5 +1,5 @@
 import type { Plan, BillingCycle } from "@prisma/client";
-import type { TopupPack, InvoicePage } from "@clipfast/shared";
+import type { TopupPack, InvoicePage, SubtitleTrack } from "@clipfast/shared";
 
 const BASE = "";
 
@@ -46,6 +46,16 @@ export const api = {
     download: (id: string) => fetchApi<{ url: string }>(`/api/clips/${id}/download`),
     trim: (id: string, data: { start: number; end: number; subtitles: boolean }) =>
       fetchApi<ClipData>(`/api/clips/${id}/trim`, { method: "POST", body: JSON.stringify(data) }),
+    subtitles: (id: string) => fetchApi<SubtitleTrack>(`/api/clips/${id}/subtitles`),
+    edit: (
+      id: string,
+      data: {
+        trim?: { start: number; end: number };
+        subtitles?: boolean;
+        subtitleTrack?: SubtitleTrack;
+      }
+    ) =>
+      fetchApi<ClipData>(`/api/clips/${id}/edit`, { method: "PUT", body: JSON.stringify(data) }),
     delete: (id: string) => fetchApi<{ ok: boolean }>(`/api/clips/${id}`, { method: "DELETE" }),
   },
   billing: {
@@ -101,6 +111,7 @@ export interface ClipData {
   startTime: number;
   endTime: number;
   subtitles: boolean;
+  subtitleTrack?: SubtitleTrack | null;
   parentClipId: string | null;
   createdAt: string;
 }
