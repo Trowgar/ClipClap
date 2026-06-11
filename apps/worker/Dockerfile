@@ -1,7 +1,7 @@
 # --- Base ---
 FROM node:20-alpine AS base
 WORKDIR /app
-RUN apk add --no-cache ffmpeg python3 py3-pip openssl
+RUN apk add --no-cache ffmpeg python3 py3-pip openssl fontconfig
 RUN pip3 install --break-system-packages yt-dlp
 
 # --- Dependencies ---
@@ -32,6 +32,7 @@ COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/worker/package.json ./apps/worker/package.json
 COPY --from=build /app/apps/worker/dist ./apps/worker/dist
+COPY --from=build /app/apps/worker/assets ./apps/worker/assets
 COPY --from=build /app/packages/shared/package.json ./packages/shared/package.json
 COPY --from=build /app/packages/shared/dist ./packages/shared/dist
 COPY --from=build /app/prisma ./prisma
