@@ -51,7 +51,7 @@ async function pollUpdates() {
 async function pollDeliveries() {
   while (running) {
     try {
-      await deliverReadyTelegramJobs(client);
+      await deliverReadyTelegramJobs(client, appUrl);
     } catch (error) {
       console.error("Telegram delivery polling failed:", error);
     }

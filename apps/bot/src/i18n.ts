@@ -80,6 +80,7 @@ export interface Dict {
   langBtnRu: string;
   langBtnAuto: string;
   manageSubscriptionBtn: string;
+  editInBrowserBtn: string;
   checkingLink: string;
   urlAccessFailed: string;
   referralInfo: (web: string, tg: string, earned: string, pending: string) => string;
@@ -189,6 +190,7 @@ const en: Dict = {
   langBtnRu: "🇷🇺 Русский",
   langBtnAuto: "🤖 Auto-detect",
   manageSubscriptionBtn: "🔧 Manage subscription",
+  editInBrowserBtn: "✂️ Edit in browser",
   checkingLink: "Checking link…",
   urlAccessFailed:
     "Couldn't access the video at that link. Try a different URL or upload the file directly.",
@@ -310,6 +312,7 @@ const ru: Dict = {
   langBtnRu: "🇷🇺 Русский",
   langBtnAuto: "🤖 Авто-определение",
   manageSubscriptionBtn: "🔧 Управление подпиской",
+  editInBrowserBtn: "✂️ Редактировать в браузере",
   checkingLink: "Проверяю ссылку…",
   urlAccessFailed:
     "Не удалось получить видео по этой ссылке. Попробуй другую ссылку или загрузи файл напрямую.",

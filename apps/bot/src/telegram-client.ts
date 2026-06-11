@@ -86,12 +86,18 @@ export class TelegramClient {
     });
   }
 
-  async sendVideo(chatId: string | number, video: string, caption?: string) {
+  async sendVideo(
+    chatId: string | number,
+    video: string,
+    caption?: string,
+    replyMarkup?: unknown
+  ) {
     return this.request("sendVideo", {
       chat_id: chatId,
       video,
       caption,
       supports_streaming: true,
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     });
   }
 

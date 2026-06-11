@@ -324,7 +324,10 @@ async function sendAccountView(
   });
 }
 
-export async function deliverReadyTelegramJobs(client: TelegramClient) {
+export async function deliverReadyTelegramJobs(
+  client: TelegramClient,
+  appUrl: string
+) {
   const deliveries = await telegramDeliveryService.getPendingTelegramDeliveries();
 
   for (const delivery of deliveries) {
@@ -351,7 +354,16 @@ export async function deliverReadyTelegramJobs(client: TelegramClient) {
 
       for (const clip of delivery.job.clips) {
         const url = await getPresignedDownloadUrl(clip.storageKey);
-        await client.sendVideo(delivery.chatId, url, clip.title);
+        await client.sendVideo(delivery.chatId, url, clip.title, {
+          inline_keyboard: [
+            [
+              {
+                text: dict.editInBrowserBtn,
+                url: `${appUrl}/dashboard/editor?clip=${clip.id}`,
+              },
+            ],
+          ],
+        });
       }
 
       await markTelegramDeliverySent(delivery.id);
