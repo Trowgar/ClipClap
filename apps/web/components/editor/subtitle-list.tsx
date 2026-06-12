@@ -19,7 +19,6 @@ interface SubtitleListProps {
   cues: SubtitleCue[];
   currentTime: number;
   playing: boolean;
-  showWordHighlight: boolean;
   onChange: (cues: SubtitleCue[]) => void;
   onSeek: (seconds: number) => void;
 }
@@ -101,7 +100,6 @@ interface RowProps {
   isLast: boolean;
   isOverlap: boolean;
   currentTime: number;
-  showWordHighlight: boolean;
   onPatch: (id: string, patch: Partial<SubtitleCue>) => void;
   onSplitAtCursor: (id: string, cursor: number) => void;
   onSplitAtPlayhead: (id: string) => void;
@@ -118,7 +116,6 @@ function SubtitleRow({
   isLast,
   isOverlap,
   currentTime,
-  showWordHighlight,
   onPatch,
   onSplitAtCursor,
   onSplitAtPlayhead,
@@ -134,8 +131,7 @@ function SubtitleRow({
   const tooShort = duration < MIN_CUE_SEC;
 
   const wordParts = useMemo(() => toWordParts(cue), [cue]);
-  const overlayActive =
-    showWordHighlight && isActive && !focused && !!wordParts;
+  const overlayActive = isActive && !focused && !!wordParts;
 
   // Active word lingers until the next one starts (reads better than gaps)
   const activeWordStart = useMemo(() => {
@@ -367,7 +363,6 @@ export function SubtitleList({
   cues,
   currentTime,
   playing,
-  showWordHighlight,
   onChange,
   onSeek,
 }: SubtitleListProps) {
@@ -496,7 +491,6 @@ export function SubtitleList({
               isLast={idx === cues.length - 1}
               isOverlap={idx > 0 && cue.start < cues[idx - 1].end - 0.001}
               currentTime={currentTime}
-              showWordHighlight={showWordHighlight}
               onPatch={patch}
               onSplitAtCursor={splitAtCursor}
               onSplitAtPlayhead={splitAtPlayhead}

@@ -11,17 +11,17 @@ const execFileAsync = promisify(execFile);
 // One burned-in style for everyone. White Montserrat Bold with a black
 // outline, bottom-centered on a 1080x1920 canvas; the active word flips to
 // yellow via ASS karaoke when word timings exist.
-// Font size is in PlayRes pixels: 64 on a 1920-tall canvas ≈ TikTok-size text.
+// Font size is in PlayRes pixels: 72 on a 1920-tall canvas ≈ TikTok-size text.
 const DEFAULT_STYLE = {
   fontName: "Montserrat",
-  fontSize: 64,
+  fontSize: 72,
   primaryColor: "&H00FFFFFF", // white (AABBGGRR)
   karaokeFillColor: "&H00FFFF&", // yellow (BBGGRR inline override)
   outlineColor: "&H00000000",
   backColor: "&H80000000",
   outline: 4,
   shadow: 0,
-  marginV: 80,
+  marginV: 120,
 } as const;
 
 // Viral-style chunking: at most this many words / characters per burned cue,

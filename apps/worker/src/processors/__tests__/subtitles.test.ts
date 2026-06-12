@@ -121,7 +121,7 @@ describe("generateAss", () => {
     expect(Number(fields[2])).toBeGreaterThanOrEqual(56); // readable on 1080x1920
     expect(fields[3]).toBe("&H00FFFFFF"); // white primary
     expect(fields[7]).toBe("-1"); // bold
-    expect(fields[21]).toBe("80"); // marginV
+    expect(fields[21]).toBe("120"); // marginV
   });
 
   it("renders cue times relative to the clip", () => {

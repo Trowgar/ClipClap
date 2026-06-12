@@ -2,12 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Montserrat } from "next/font/google";
-import {
-  Play,
-  Pause,
-  ClosedCaptioning,
-  HighlighterCircle,
-} from "@phosphor-icons/react";
+import { Play, Pause } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { formatTimecode } from "@/components/editor/time";
 import type { SubtitleCue } from "@clipfast/shared";
@@ -23,7 +18,7 @@ const montserrat = Montserrat({
 
 // Burn constants from the worker's DEFAULT_STYLE, in PlayRes (1080x1920) px.
 // The overlay scales them to the rendered video box for a faithful preview.
-const BURN = { playResY: 1920, playResX: 1080, fontSize: 64, marginV: 80, marginX: 20 };
+const BURN = { playResY: 1920, playResX: 1080, fontSize: 72, marginV: 120, marginX: 20 };
 
 // Click-and-drag scrubber with hover timecode, between the video area and the
 // controls bar (adapted from ClipSubs VideoPlayer). Hover state stays local so
@@ -117,14 +112,10 @@ interface VideoPreviewProps {
   duration: number;
   playing: boolean;
   playbackRate: number;
-  showOverlay: boolean;
-  showWordHighlight: boolean;
   onTimeUpdate: (seconds: number) => void;
   onPlayingChange: (playing: boolean) => void;
   onDuration: (seconds: number) => void;
   onPlaybackRateChange: (rate: number) => void;
-  onToggleOverlay: () => void;
-  onToggleWordHighlight: () => void;
 }
 
 export function VideoPreview({
@@ -134,14 +125,10 @@ export function VideoPreview({
   duration,
   playing,
   playbackRate,
-  showOverlay,
-  showWordHighlight,
   onTimeUpdate,
   onPlayingChange,
   onDuration,
   onPlaybackRateChange,
-  onToggleOverlay,
-  onToggleWordHighlight,
 }: VideoPreviewProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -277,7 +264,7 @@ export function VideoPreview({
 
         {/* Subtitle overlay - scaled to the video frame with the same
             proportions as the server burn, so the preview is faithful */}
-        {showOverlay && activeCue && videoBox && (
+        {activeCue && videoBox && (
           <div
             className="pointer-events-none absolute z-20 flex justify-center"
             style={{
@@ -299,9 +286,7 @@ export function VideoPreview({
                   "-2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000, 2px 2px 0 #000, 0 0 6px rgba(0,0,0,0.7)",
               }}
             >
-              {showWordHighlight &&
-              activeCue.words &&
-              activeCue.words.length > 0
+              {activeCue.words && activeCue.words.length > 0
                 ? activeCue.words.map((word, i) => (
                     <span
                       key={i}
@@ -347,35 +332,6 @@ export function VideoPreview({
         </div>
 
         <div className="flex items-center gap-1.5">
-          <button
-            type="button"
-            onClick={onToggleOverlay}
-            className={cn(
-              "rounded-md p-1.5 transition-colors",
-              showOverlay
-                ? "bg-white/[0.12] text-white"
-                : "text-neutral-500 hover:bg-white/[0.06] hover:text-neutral-300"
-            )}
-            title="Toggle captions preview"
-          >
-            <ClosedCaptioning size={17} />
-          </button>
-          <button
-            type="button"
-            onClick={onToggleWordHighlight}
-            className={cn(
-              "rounded-md p-1.5 transition-colors",
-              showWordHighlight
-                ? "bg-white/[0.12] text-white"
-                : "text-neutral-500 hover:bg-white/[0.06] hover:text-neutral-300"
-            )}
-            title="Toggle word highlighting"
-          >
-            <HighlighterCircle size={17} />
-          </button>
-
-          <div className="mx-1.5 h-5 w-px bg-white/[0.08]" />
-
           <div className="flex items-center gap-0.5 rounded-md bg-white/[0.04] p-0.5 text-[11px] font-medium">
             {RATE_PRESETS.map((rate) => (
               <button

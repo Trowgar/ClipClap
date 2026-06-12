@@ -27,8 +27,6 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
   const [currentTime, setCurrentTime] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1.0);
-  const [showOverlay, setShowOverlay] = useState(true);
-  const [showWordHighlight, setShowWordHighlight] = useState(true);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -165,14 +163,10 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
               duration={duration}
               playing={playing}
               playbackRate={playbackRate}
-              showOverlay={showOverlay}
-              showWordHighlight={showWordHighlight}
               onTimeUpdate={setCurrentTime}
               onPlayingChange={setPlaying}
               onDuration={handleDuration}
               onPlaybackRateChange={setPlaybackRate}
-              onToggleOverlay={() => setShowOverlay((v) => !v)}
-              onToggleWordHighlight={() => setShowWordHighlight((v) => !v)}
             />
           </div>
           <div className="shrink-0">
@@ -191,7 +185,6 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
           cues={cues}
           currentTime={currentTime}
           playing={playing}
-          showWordHighlight={showWordHighlight}
           onChange={handleCuesChange}
           onSeek={seek}
         />
