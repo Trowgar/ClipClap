@@ -7,6 +7,7 @@ import { VideoPreview } from "@/components/editor/video-preview";
 import { SubtitleList } from "@/components/editor/subtitle-list";
 import { TrimBar } from "@/components/editor/trim-bar";
 import { api, type ClipData } from "@/lib/api";
+import { cn } from "@/lib/utils";
 import { ArrowLeft, CircleNotch, FloppyDisk } from "@phosphor-icons/react";
 import type { SubtitleCue } from "@clipfast/shared";
 
@@ -136,19 +137,29 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
           </Button>
           <h1 className="truncate text-base font-semibold">{clip.title}</h1>
         </div>
-        <Button onClick={handleSave} disabled={saving || !dirty}>
+        <button
+          type="button"
+          onClick={handleSave}
+          disabled={saving || !dirty}
+          className={cn(
+            "inline-flex shrink-0 items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-semibold transition-all",
+            saving || !dirty
+              ? "cursor-not-allowed bg-white/[0.06] text-neutral-500"
+              : "bg-white text-black hover:bg-neutral-200 active:scale-[0.97]"
+          )}
+        >
           {saving ? (
             <>
-              <CircleNotch weight="bold" className="mr-2 h-4 w-4 animate-spin" />
+              <CircleNotch weight="bold" className="h-3.5 w-3.5 animate-spin" />
               Re-rendering…
             </>
           ) : (
             <>
-              <FloppyDisk className="mr-2 h-4 w-4" />
+              <FloppyDisk className="h-3.5 w-3.5" />
               Save and re-render
             </>
           )}
-        </Button>
+        </button>
       </div>
 
       {error && <p className="shrink-0 text-xs text-destructive">{error}</p>}
