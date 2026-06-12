@@ -158,7 +158,6 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
           <div className="min-h-0 flex-1">
             <VideoPreview
               src={videoUrl}
-              cues={cues}
               currentTime={currentTime}
               duration={duration}
               playing={playing}
