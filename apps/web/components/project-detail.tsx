@@ -15,7 +15,8 @@ import {
 import { ClipCard } from "@/components/clip-card";
 import { JobProgress } from "@/components/job-progress";
 import { Button } from "@/components/ui/button";
-import { formatDate, formatDuration } from "@/lib/utils";
+import { formatDuration } from "@/lib/utils";
+import { LocalDate } from "@/components/local-date";
 
 export type SerializedProjectDetail = Omit<
   ProjectDetailData,
@@ -118,7 +119,7 @@ export function ProjectDetail({
           </p>
           <h1 className="text-xl font-bold tracking-tight">{project.title}</h1>
           <p className="mt-1 text-xs text-muted-foreground">
-            Created {formatDate(project.createdAt)}
+            Created <LocalDate date={project.createdAt} />
           </p>
         </div>
         <Button

@@ -1,5 +1,6 @@
 "use client";
 
+import { LocalDate } from "@/components/local-date";
 import { useState } from "react";
 import { DownloadSimple, ArrowSquareOut, CircleNotch } from "@phosphor-icons/react";
 import { api } from "@/lib/api";
@@ -21,14 +22,6 @@ const CURRENCY_SYMBOL: Record<string, string> = {
 function formatAmount(amount: number, currency: string): string {
   const symbol = CURRENCY_SYMBOL[currency] ?? `${currency} `;
   return `${symbol}${amount.toFixed(2)}`;
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
 }
 
 interface InvoiceTableProps {
@@ -89,7 +82,7 @@ export function InvoiceTable({
                 className="transition-colors hover:bg-accent/30"
               >
                 <td className="px-4 py-3 text-muted-foreground">
-                  {formatDate(inv.createdAt)}
+                  <LocalDate date={inv.createdAt} format="date" />
                 </td>
                 <td className="px-4 py-3">
                   <div className="font-medium">{inv.description}</div>

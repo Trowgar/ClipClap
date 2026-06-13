@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
-import { formatDate } from "@/lib/utils";
+import { LocalDate } from "@/components/local-date";
 import type { JobWithClips } from "@/lib/api";
 
 interface JobListProps {
@@ -42,7 +42,7 @@ export function JobList({ jobs }: JobListProps) {
                 {job.originalFilename || job.sourceUrl || "Video"}
               </p>
               <p className="text-xs text-muted-foreground">
-                {formatDate(job.createdAt)}
+                <LocalDate date={job.createdAt} />
               </p>
             </div>
           </div>

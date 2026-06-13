@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowRight, FilmStrip, FolderOpen, Trash } from "@phosphor-icons/react";
 import { Badge } from "@/components/ui/badge";
-import { cn, formatDate, formatDuration } from "@/lib/utils";
+import { cn, formatDuration } from "@/lib/utils";
+import { LocalDate } from "@/components/local-date";
 import type { ProjectSummary } from "@clipfast/shared";
 
 export type SerializedProjectSummary = Omit<
@@ -156,7 +157,7 @@ export function ProjectTable({ projects: initialProjects }: ProjectTableProps) {
                   <div className="min-w-0">
                     <p className="truncate font-medium">{project.title}</p>
                     <p className="text-xs text-muted-foreground">
-                      {formatDate(project.createdAt)}
+                      <LocalDate date={project.createdAt} />
                     </p>
                   </div>
                 </div>
@@ -203,7 +204,7 @@ function ProjectRow({ project }: { project: SerializedProjectSummary }) {
       <div className="min-w-0">
         <p className="truncate text-sm font-medium">{project.title}</p>
         <p className="text-xs text-muted-foreground">
-          {formatDate(project.createdAt)}
+          <LocalDate date={project.createdAt} />
         </p>
         {project.clips[0] && (
           <p className="mt-1 truncate text-xs text-muted-foreground">
