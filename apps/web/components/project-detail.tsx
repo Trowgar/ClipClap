@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { ProjectDetail as ProjectDetailData } from "@clipfast/shared";
 import { useRouter } from "next/navigation";
@@ -47,6 +47,19 @@ export function ProjectDetail({
   const handleDone = useCallback(() => {
     router.refresh();
   }, [router]);
+
+  // Re-fetch the server component as clips finish rendering, so they appear
+  // one by one without a manual page reload (also refreshes sidebar usage).
+  const knownClipCount = useRef(initialProject.clips.length);
+  const handleClipCount = useCallback(
+    (count: number) => {
+      if (count > knownClipCount.current) {
+        knownClipCount.current = count;
+        router.refresh();
+      }
+    },
+    [router]
+  );
 
   const handleDelete = useCallback(
     (clipId: string) => {
@@ -126,6 +139,7 @@ export function ProjectDetail({
             jobId={project.id}
             initialStatus={project.status}
             onDone={handleDone}
+            onClipCount={handleClipCount}
           />
         </div>
       ) : project.status === "DONE" ? (

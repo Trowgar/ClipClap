@@ -12,6 +12,7 @@ import { downloadVideo } from "../processors/download";
 import { cutClips, trimClipFile } from "../processors/cut";
 import {
   burnSubtitles,
+  createAssFilter,
   segmentsToCues,
   sliceCues,
 } from "../processors/subtitles";
@@ -81,9 +82,6 @@ async function renderClips(
     const clipKeys: string[] = [];
 
     for (const highlight of highlights) {
-      const [cutResult] = await cutClips(sourcePath, [highlight]);
-      tempFiles.push(cutResult.clipPath);
-
       // Derived even when subtitles are off so the editor can enable them later
       const cues = segmentsToCues(
         transcription.segments,
@@ -91,12 +89,20 @@ async function renderClips(
         highlight.end
       );
 
-      let finalClipPath = cutResult.clipPath;
-      if (job.subtitles) {
-        const subbedPath = await burnSubtitles(cutResult.clipPath, cues);
-        tempFiles.push(subbedPath);
-        finalClipPath = subbedPath;
+      // Crop and subtitle burn happen in ONE encode pass - re-encoding the
+      // cut a second time just for subtitles doubled render time.
+      let assFilter: { filter: string; assPath: string } | null = null;
+      if (job.subtitles && cues.length > 0) {
+        assFilter = await createAssFilter(cues);
+        tempFiles.push(assFilter.assPath);
       }
+      const [cutResult] = await cutClips(
+        sourcePath,
+        [highlight],
+        assFilter?.filter
+      );
+      tempFiles.push(cutResult.clipPath);
+      const finalClipPath = cutResult.clipPath;
 
       const storageKey = `clips/${payload.userId}/${payload.jobId}/${randomUUID()}.mp4`;
       await uploadFile(storageKey, finalClipPath, "video/mp4");
@@ -158,39 +164,49 @@ async function renderTrim(
       payload.sourceStart !== undefined &&
       payload.sourceEnd !== undefined;
 
-    let trimmedPath: string;
+    // Edited cues arrive relative to the ORIGINAL clip file; re-window them
+    // to the new trim range so they match the trimmed output.
+    const editedCues = payload.subtitleTrack?.cues ?? [];
+    const windowedCues = sliceCues(editedCues, payload.start, payload.end);
+    const wantSubs = payload.subtitles && windowedCues.length > 0;
+
+    let finalPath: string;
     if (cleanSource) {
       const sourcePath = await downloadVideo(undefined, payload.sourceArtifactKey!);
       tempFiles.push(sourcePath);
-      const [cutResult] = await cutClips(sourcePath, [
-        {
-          start: payload.sourceStart!,
-          end: payload.sourceEnd!,
-          title: "edit",
-          reason: "re-render",
-        },
-      ]);
-      trimmedPath = cutResult.clipPath;
+      let assFilter: { filter: string; assPath: string } | null = null;
+      if (wantSubs) {
+        assFilter = await createAssFilter(windowedCues);
+        tempFiles.push(assFilter.assPath);
+      }
+      const [cutResult] = await cutClips(
+        sourcePath,
+        [
+          {
+            start: payload.sourceStart!,
+            end: payload.sourceEnd!,
+            title: "edit",
+            reason: "re-render",
+          },
+        ],
+        assFilter?.filter
+      );
+      finalPath = cutResult.clipPath;
+      tempFiles.push(finalPath);
     } else {
       const originalPath = await downloadVideo(
         undefined,
         payload.originalClipStorageKey
       );
       tempFiles.push(originalPath);
-      trimmedPath = await trimClipFile(originalPath, payload.start, payload.end);
-    }
-    tempFiles.push(trimmedPath);
-
-    // Edited cues arrive relative to the ORIGINAL clip file; re-window them
-    // to the new trim range so they match the trimmed output.
-    const editedCues = payload.subtitleTrack?.cues ?? [];
-    const windowedCues = sliceCues(editedCues, payload.start, payload.end);
-
-    let finalPath = trimmedPath;
-    if (payload.subtitles && windowedCues.length > 0) {
-      const subbedPath = await burnSubtitles(trimmedPath, windowedCues);
-      tempFiles.push(subbedPath);
-      finalPath = subbedPath;
+      const trimmedPath = await trimClipFile(originalPath, payload.start, payload.end);
+      tempFiles.push(trimmedPath);
+      finalPath = trimmedPath;
+      if (wantSubs) {
+        const subbedPath = await burnSubtitles(trimmedPath, windowedCues);
+        tempFiles.push(subbedPath);
+        finalPath = subbedPath;
+      }
     }
 
     const storageKey = `clips/${payload.userId}/${payload.jobId}/${randomUUID()}.mp4`;

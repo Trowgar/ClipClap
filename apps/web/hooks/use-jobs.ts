@@ -50,9 +50,10 @@ export function useJobProgress(jobId: string) {
       }
     };
 
-    eventSource.onerror = () => {
-      eventSource.close();
-    };
+    // Renders run for minutes; proxies and browsers drop idle SSE
+    // connections. EventSource reconnects automatically as long as we do
+    // NOT close it here - closing froze the page at the last status.
+    eventSource.onerror = () => {};
 
     return () => eventSource.close();
   }, [jobId]);

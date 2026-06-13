@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { useJobProgress } from "@/hooks/use-jobs";
 import { Badge } from "@/components/ui/badge";
 import { CircleNotch, CheckCircle, XCircle } from "@phosphor-icons/react";
@@ -8,6 +9,8 @@ interface JobProgressProps {
   jobId: string;
   initialStatus: string;
   onDone?: () => void;
+  /** Fires whenever the server reports a new number of rendered clips. */
+  onClipCount?: (count: number) => void;
 }
 
 const STEPS = [
@@ -19,14 +22,22 @@ const STEPS = [
   "DONE",
 ];
 
-export function JobProgress({ jobId, initialStatus, onDone }: JobProgressProps) {
-  const { status, error, done } = useJobProgress(jobId);
+export function JobProgress({
+  jobId,
+  initialStatus,
+  onDone,
+  onClipCount,
+}: JobProgressProps) {
+  const { status, error, clipCount, done } = useJobProgress(jobId);
   const currentStatus = status || initialStatus;
 
-  if (done && currentStatus === "DONE" && onDone) {
-    // Delay to allow state update
-    setTimeout(onDone, 500);
-  }
+  useEffect(() => {
+    if (clipCount > 0) onClipCount?.(clipCount);
+  }, [clipCount, onClipCount]);
+
+  useEffect(() => {
+    if (done && currentStatus === "DONE") onDone?.();
+  }, [done, currentStatus, onDone]);
 
   const currentIndex = STEPS.indexOf(currentStatus);
   const isFailed = currentStatus === "FAILED";

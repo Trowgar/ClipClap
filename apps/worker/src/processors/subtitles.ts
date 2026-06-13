@@ -182,6 +182,24 @@ function formatAssTime(seconds: number): string {
   return `${h}:${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}.${cs.toString().padStart(2, "0")}`;
 }
 
+/**
+ * Writes the cues to a temp .ass file and returns an FFmpeg filter snippet
+ * that burns them, plus the temp path for cleanup. Lets callers combine the
+ * burn with other filters (crop) in a single encode pass.
+ */
+export async function createAssFilter(
+  cues: SubtitleCue[]
+): Promise<{ filter: string; assPath: string }> {
+  const assPath = join(tmpdir(), `clipfast-subs-${randomUUID()}.ass`);
+  await writeFile(assPath, generateAss(cues), "utf-8");
+  const escapeFilterPath = (p: string) =>
+    p.replace(/\\/g, "/").replace(/:/g, "\\:");
+  return {
+    filter: `ass=filename=${escapeFilterPath(assPath)}:fontsdir=${escapeFilterPath(resolveFontsDir())}`,
+    assPath,
+  };
+}
+
 export async function burnSubtitles(
   videoPath: string,
   cues: SubtitleCue[]
@@ -207,7 +225,7 @@ export async function burnSubtitles(
         "-c:v",
         "libx264",
         "-preset",
-        "fast",
+        "veryfast",
         "-crf",
         "23",
         "-c:a",

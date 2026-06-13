@@ -14,7 +14,8 @@ export interface CutResult {
 
 export async function cutClips(
   videoPath: string,
-  highlights: Highlight[]
+  highlights: Highlight[],
+  extraFilter?: string
 ): Promise<CutResult[]> {
   const results: CutResult[] = [];
 
@@ -29,11 +30,11 @@ export async function cutClips(
       "-i",
       videoPath,
       "-vf",
-      buildCropFilter(),
+      extraFilter ? `${buildCropFilter()},${extraFilter}` : buildCropFilter(),
       "-c:v",
       "libx264",
       "-preset",
-      "fast",
+      "veryfast",
       "-crf",
       "23",
       "-c:a",
@@ -69,7 +70,7 @@ export async function trimClipFile(
     "-c:v",
     "libx264",
     "-preset",
-    "fast",
+    "veryfast",
     "-crf",
     "23",
     "-c:a",
