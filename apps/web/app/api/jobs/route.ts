@@ -29,7 +29,23 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+  const durationMinutes =
+    typeof sourceDurationSec === "number" && sourceDurationSec > 0
+      ? Math.ceil(sourceDurationSec / 60)
+      : 0;
+
+  // All limit checks are independent reads - run them in one round trip
+  const dayStart = new Date();
+  dayStart.setHours(0, 0, 0, 0);
+  const [user, submission, jobsToday, inFlight] = await Promise.all([
+    prisma.user.findUniqueOrThrow({ where: { id: userId } }),
+    canSubmitJob(userId, durationMinutes),
+    prisma.job.count({ where: { userId, createdAt: { gte: dayStart } } }),
+    prisma.job.count({
+      where: { userId, status: { in: [...ACTIVE_STATUSES] } },
+    }),
+  ]);
+
   if (user.plan === "NONE") {
     return NextResponse.json(
       { error: "Active subscription required to create jobs" },
@@ -39,30 +55,19 @@ export async function POST(req: NextRequest) {
 
   const limits = getPlanLimits(user.plan, user.billingCycle ?? "MONTHLY");
 
-  let durationMinutes = 0;
-  if (typeof sourceDurationSec === "number" && sourceDurationSec > 0) {
-    durationMinutes = Math.ceil(sourceDurationSec / 60);
-    if (durationMinutes > limits.maxSourceDurationMinutes) {
-      return NextResponse.json(
-        {
-          error: `Source exceeds max duration (${limits.maxSourceDurationMinutes} min). Trim before uploading.`,
-        },
-        { status: 400 }
-      );
-    }
+  if (durationMinutes > limits.maxSourceDurationMinutes) {
+    return NextResponse.json(
+      {
+        error: `Source exceeds max duration (${limits.maxSourceDurationMinutes} min). Trim before uploading.`,
+      },
+      { status: 400 }
+    );
   }
 
-  const submission = await canSubmitJob(userId, durationMinutes);
   if (!submission.allowed) {
     return NextResponse.json({ error: submission.reason }, { status: 402 });
   }
 
-  // Daily job count
-  const dayStart = new Date();
-  dayStart.setHours(0, 0, 0, 0);
-  const jobsToday = await prisma.job.count({
-    where: { userId, createdAt: { gte: dayStart } },
-  });
   if (jobsToday >= limits.maxJobsPerDay) {
     return NextResponse.json(
       {
@@ -71,11 +76,6 @@ export async function POST(req: NextRequest) {
       { status: 429 }
     );
   }
-
-  // Concurrent in-flight
-  const inFlight = await prisma.job.count({
-    where: { userId, status: { in: [...ACTIVE_STATUSES] } },
-  });
   if (inFlight >= limits.concurrentJobsLimit) {
     return NextResponse.json(
       {

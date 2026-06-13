@@ -280,7 +280,10 @@ export function UploadZone({
           )}
         >
           {loading ? (
-            <CircleNotch weight="bold" className="h-3.5 w-3.5 animate-spin" />
+            <>
+              <CircleNotch weight="bold" className="h-3.5 w-3.5 animate-spin" />
+              {uploadProgress === "Uploading…" ? "Uploading…" : "Creating…"}
+            </>
           ) : (
             <>
               Cut
