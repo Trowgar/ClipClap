@@ -11,23 +11,23 @@ const execFileAsync = promisify(execFile);
 // One burned-in style for everyone. White Montserrat Bold with a black
 // outline, bottom-centered on a 1080x1920 canvas; the active word flips to
 // yellow via ASS karaoke when word timings exist.
-// Font size is in PlayRes pixels: 72 on a 1920-tall canvas ≈ TikTok-size text.
+// Font size is in PlayRes pixels: 100 on a 1920-tall canvas ≈ CapCut/CC-size text.
 const DEFAULT_STYLE = {
   fontName: "Montserrat",
-  fontSize: 72,
+  fontSize: 100,
   primaryColor: "&H00FFFFFF", // white (AABBGGRR)
   karaokeFillColor: "&H00FFFF&", // yellow (BBGGRR inline override)
   outlineColor: "&H00000000",
   backColor: "&H80000000",
-  outline: 4,
+  outline: 5,
   shadow: 0,
-  marginV: 120,
+  marginV: 160,
 } as const;
 
 // Viral-style chunking: at most this many words / characters per burned cue,
 // so subtitles stay short and fit a 1080-wide vertical frame.
-const MAX_CHUNK_WORDS = 4;
-const MAX_CHUNK_CHARS = 24;
+const MAX_CHUNK_WORDS = 3;
+const MAX_CHUNK_CHARS = 18;
 
 // assets/ ships beside src/ in dev (tsx) and beside dist/ in the production
 // image, so __dirname/../.. lands on apps/worker in both.

@@ -22,10 +22,12 @@ const segments: WhisperSegment[] = [
 describe("segmentsToCues", () => {
   it("filters to the clip window and shifts times to clip-relative", () => {
     const cues = segmentsToCues(segments, 10.0, 25.0);
-    expect(cues).toHaveLength(3);
+    // seg2 has 4 words -> two 3-word-max chunks, so 4 cues total
+    expect(cues).toHaveLength(4);
     expect(cues[0]).toMatchObject({ start: 0, end: 3.5, text: "Hello everyone" });
     expect(cues[1].start).toBeCloseTo(3.5);
-    expect(cues[1].end).toBeCloseTo(8.0);
+    expect(cues[1].end).toBeCloseTo(4.6); // held until the next chunk starts
+    expect(cues[2].end).toBeCloseTo(8.0); // last chunk runs to segment end
   });
 
   it("shifts word timings along with the cue and assigns ids", () => {
@@ -33,7 +35,7 @@ describe("segmentsToCues", () => {
     expect(cues[1].words?.[0]?.text).toBe("Welcome");
     expect(cues[1].words?.[0]?.start).toBeCloseTo(3.5);
     expect(cues[1].words?.[0]?.end).toBeCloseTo(4.2);
-    expect(new Set(cues.map((c) => c.id)).size).toBe(3);
+    expect(new Set(cues.map((c) => c.id)).size).toBe(4);
   });
 
   it("chunks word-timed segments into short viral-style cues", () => {
@@ -56,12 +58,12 @@ describe("segmentsToCues", () => {
     ];
     const cues = segmentsToCues(long, 0, 6);
     expect(cues.length).toBeGreaterThan(1);
-    expect(cues[0].text).toBe("one two three four");
+    expect(cues[0].text).toBe("one two three");
     expect(cues[0].start).toBe(0);
     // chunk stays on screen until the next one starts (no flicker gaps)
     expect(cues[0].end).toBe(cues[1].start);
     expect(cues.at(-1)!.end).toBe(6);
-    expect(cues[0].words).toHaveLength(4);
+    expect(cues[0].words).toHaveLength(3);
   });
 
   it("keeps segments without words as a single cue", () => {
@@ -118,10 +120,10 @@ describe("generateAss", () => {
     expect(style).toBeDefined();
     const fields = style!.replace("Style: ", "").split(",");
     expect(fields[1]).toBe("Montserrat");
-    expect(Number(fields[2])).toBeGreaterThanOrEqual(56); // readable on 1080x1920
+    expect(Number(fields[2])).toBeGreaterThanOrEqual(96); // CC-size on 1080x1920
     expect(fields[3]).toBe("&H00FFFFFF"); // white primary
     expect(fields[7]).toBe("-1"); // bold
-    expect(fields[21]).toBe("120"); // marginV
+    expect(fields[21]).toBe("160"); // marginV
   });
 
   it("renders cue times relative to the clip", () => {
