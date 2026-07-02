@@ -33,3 +33,9 @@ tmp/
 
 # Claude Code local settings
 .claude/
+
+# Superpowers tooling runtime state
+.superpowers/
+
+# Local Docker override (host-specific, e.g. linearis-prod nginx/ports)
+docker-compose.override.yml
