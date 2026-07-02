@@ -1,8 +1,9 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { ArrowRight, ArrowDown, Play, Check, PaperPlaneTilt, Lightning, Handshake } from "@phosphor-icons/react";
+import { ArrowRight, ArrowDown, Play, Check, Handshake } from "@phosphor-icons/react";
 import { Logo } from "@/components/logo";
 
 /* ────────────────────────────────────────────
@@ -101,6 +102,61 @@ function FadeIn({
   );
 }
 
+/* Editorial signal bar above the hero headline.
+   Replaces the generic pill badge. Mono, no capsule — the pipeline
+   verbs light up in sequence so the engine reads as "running". */
+const PIPELINE_STEPS = ["detected", "cut", "captioned"];
+
+function PipelineSignal() {
+  const [active, setActive] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(
+      () => setActive((i) => (i + 1) % PIPELINE_STEPS.length),
+      1100,
+    );
+    return () => clearInterval(id);
+  }, []);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5 }}
+      className="inline-flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1 mb-6 font-mono text-[11px] sm:text-xs"
+    >
+      {/* Softly pulsing status dot — neutral, not a status-green */}
+      <span className="relative flex h-1.5 w-1.5">
+        <span className="absolute inline-flex h-full w-full rounded-full bg-white/50 animate-ping" />
+        <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-white/90" />
+      </span>
+
+      <span className="uppercase tracking-[0.18em] text-neutral-300">
+        From long-form to shorts
+      </span>
+
+      {/* Pipeline trace — hidden on the narrowest screens to avoid wrapping */}
+      <span className="hidden items-center gap-2.5 sm:flex">
+        <span className="text-neutral-700">/</span>
+        <span className="flex items-center gap-1.5 tracking-wide">
+          {PIPELINE_STEPS.map((step, i) => (
+            <span key={step} className="flex items-center gap-1.5">
+              {i > 0 && <span className="text-neutral-700">&rarr;</span>}
+              <span
+                className={`transition-colors duration-500 ${
+                  active === i ? "text-neutral-200" : "text-neutral-600"
+                }`}
+              >
+                {step}
+              </span>
+            </span>
+          ))}
+        </span>
+      </span>
+    </motion.div>
+  );
+}
+
 function ClipCard({
   clip,
   index,
@@ -174,6 +230,16 @@ function ClipCard({
 
 /* ── Telegram mock ── */
 
+/* Single source for the Telegram paper-plane glyph (clean plane, no enclosing
+   circle). Color and size are controlled via `className` on the <svg> (fill-*). */
+function TelegramPlane({ className = "" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden className={className}>
+      <path d="M9.78 18.65l.28-4.23 7.68-6.92c.34-.31-.07-.46-.52-.19L7.74 13.3 3.64 12c-.88-.25-.89-.86.2-1.3l15.97-6.16c.73-.33 1.43.18 1.15 1.3l-2.72 12.81c-.19.91-.74 1.13-1.5.71L12.6 16.3l-1.99 1.93c-.23.23-.42.42-.83.42z" />
+    </svg>
+  );
+}
+
 function TelegramMock() {
   return (
     <div className="w-full max-w-[360px] mx-auto">
@@ -181,13 +247,8 @@ function TelegramMock() {
       <div className="rounded-[28px] border border-white/[0.08] bg-[#0e0e0e] overflow-hidden shadow-2xl shadow-black/60">
         {/* Telegram header */}
         <div className="bg-[#0e0e0e] border-b border-white/[0.06] px-4 py-3 flex items-center gap-3">
-          <div className="w-9 h-9 rounded-full bg-[#2AABEE] flex items-center justify-center flex-shrink-0">
-            <svg
-              viewBox="0 0 24 24"
-              className="w-5 h-5 text-white fill-white"
-            >
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z" />
-            </svg>
+          <div className="w-9 h-9 rounded-full bg-white/[0.06] border border-white/10 flex items-center justify-center flex-shrink-0">
+            <TelegramPlane className="w-[18px] h-[18px] fill-neutral-200" />
           </div>
           <div className="flex-1 min-w-0">
             <p className="text-white text-sm font-semibold truncate">
@@ -287,8 +348,8 @@ function TelegramMock() {
               Paste a link or send a video...
             </p>
           </div>
-          <div className="w-8 h-8 rounded-full bg-[#2AABEE] flex items-center justify-center flex-shrink-0">
-            <PaperPlaneTilt className="w-3.5 h-3.5 text-white ml-[-1px]" />
+          <div className="w-8 h-8 rounded-full bg-white/[0.06] border border-white/10 flex items-center justify-center flex-shrink-0">
+            <TelegramPlane className="w-[15px] h-[15px] fill-neutral-300" />
           </div>
         </div>
       </div>
@@ -369,18 +430,8 @@ export default function LandingPage() {
         />
 
         <div className="relative z-10 max-w-4xl mx-auto px-6 text-center">
-          {/* Pill badge */}
-          <motion.div
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5 }}
-            className="inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3.5 py-1.5 mb-6"
-          >
-            <Lightning className="w-3.5 h-3.5 text-white" />
-            <span className="text-xs font-medium text-neutral-300">
-              Post 10× more clips
-            </span>
-          </motion.div>
+          {/* Signal bar (replaces the old pill badge) */}
+          <PipelineSignal />
 
           {/* Headline */}
           <motion.h1
@@ -447,7 +498,7 @@ export default function LandingPage() {
                       The Rock Kicks Off The Podcast! - What Now? with Trevor Noah
                     </p>
                     <p className="text-neutral-400 text-[10px] mt-0.5">
-                      1h 47min · Spotify
+                      1h 47min · YouTube
                     </p>
                   </div>
                   <span className="text-[10px] font-mono text-neutral-500 bg-black/40 px-2 py-0.5 rounded">
@@ -563,12 +614,7 @@ export default function LandingPage() {
             <FadeIn>
               <div>
                 <div className="inline-flex items-center gap-2 rounded-full border border-white/[0.08] bg-white/[0.03] px-3.5 py-1.5 mb-6">
-                  <svg
-                    viewBox="0 0 24 24"
-                    className="w-4 h-4 fill-[#2AABEE]"
-                  >
-                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z" />
-                  </svg>
+                  <TelegramPlane className="w-3.5 h-3.5 fill-neutral-300" />
                   <span className="text-xs font-medium text-neutral-400">
                     Telegram Bot
                   </span>
@@ -605,12 +651,7 @@ export default function LandingPage() {
                   rel="noopener noreferrer"
                   className="group mt-8 inline-flex items-center gap-2.5 rounded-xl bg-[#2AABEE] px-6 py-3 text-sm font-semibold text-white transition-all hover:bg-[#229ED9] hover:scale-[1.02] active:scale-[0.98]"
                 >
-                  <svg
-                    viewBox="0 0 24 24"
-                    className="w-4 h-4 fill-white"
-                  >
-                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8c-.15 1.58-.8 5.42-1.13 7.19-.14.75-.42 1-.68 1.03-.58.05-1.02-.38-1.58-.75-.88-.58-1.38-.94-2.23-1.5-.99-.65-.35-1.01.22-1.59.15-.15 2.71-2.48 2.76-2.69a.2.2 0 00-.05-.18c-.06-.05-.14-.03-.21-.02-.09.02-1.49.95-4.22 2.79-.4.27-.76.41-1.08.4-.36-.01-1.04-.2-1.55-.37-.63-.2-1.12-.31-1.08-.66.02-.18.27-.36.74-.55 2.92-1.27 4.86-2.11 5.83-2.51 2.78-1.16 3.35-1.36 3.73-1.36.08 0 .27.02.39.12.1.08.13.19.14.27-.01.06.01.24 0 .38z" />
-                  </svg>
+                  <TelegramPlane className="w-4 h-4 fill-white" />
                   Open in Telegram
                   <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
                 </a>
