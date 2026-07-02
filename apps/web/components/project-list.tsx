@@ -225,7 +225,17 @@ function ProjectRow({ project }: { project: SerializedProjectSummary }) {
 function ProjectPreview({ project }: { project: SerializedProjectSummary }) {
   return (
     <div className="relative aspect-video overflow-hidden rounded-md border border-white/10 bg-muted/20">
-      {project.previewUrl ? (
+      {project.thumbnailUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={project.thumbnailUrl}
+          alt=""
+          loading="lazy"
+          className="h-full w-full object-cover opacity-85 transition-opacity duration-200 group-hover:opacity-100"
+        />
+      ) : project.previewUrl ? (
+        // Older projects have no thumbnail yet - fall back to the 9:16 clip
+        // (cropped in this 16:9 frame, but still shows something).
         <video
           src={project.previewUrl}
           muted

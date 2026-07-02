@@ -29,6 +29,7 @@ export interface ProjectSummary {
   createdAt: Date;
   clipCount: number;
   previewUrl: string | null;
+  thumbnailUrl: string | null;
   clips: ProjectClipSummary[];
 }
 
@@ -160,6 +161,7 @@ async function toProjectSummaries(
     userId: string;
     sourceUrl: string | null;
     sourceKey: string | null;
+    thumbnailKey: string | null;
     originalFilename: string | null;
     status: JobStatus;
     error: string | null;
@@ -182,6 +184,7 @@ async function toProjectSummary(job: {
   userId: string;
   sourceUrl: string | null;
   sourceKey: string | null;
+  thumbnailKey: string | null;
   originalFilename: string | null;
   status: JobStatus;
   error: string | null;
@@ -199,6 +202,9 @@ async function toProjectSummary(job: {
   const previewUrl = previewClip
     ? await getPresignedDownloadUrl(previewClip.storageKey)
     : null;
+  const thumbnailUrl = job.thumbnailKey
+    ? await getPresignedDownloadUrl(job.thumbnailKey)
+    : null;
 
   return {
     id: job.id,
@@ -212,6 +218,7 @@ async function toProjectSummary(job: {
     createdAt: job.createdAt,
     clipCount: job.clips.length,
     previewUrl,
+    thumbnailUrl,
     clips: job.clips.map((clip) => ({
       id: clip.id,
       title: clip.title,
@@ -235,6 +242,7 @@ export async function deleteProject(
       id: true,
       sourceKey: true,
       sourceArtifactKey: true,
+      thumbnailKey: true,
       clips: { select: { storageKey: true } },
     },
   });
@@ -243,6 +251,7 @@ export async function deleteProject(
   const r2Keys = [
     job.sourceKey,
     job.sourceArtifactKey,
+    job.thumbnailKey,
     ...job.clips.map((c) => c.storageKey),
   ].filter((key): key is string => Boolean(key));
 

@@ -33,7 +33,7 @@ describe("project.service", () => {
 
   it("returns three recent projects and reports when more exist", async () => {
     mocks.jobFindMany.mockResolvedValue([
-      project("job1", "clips/u1/job1/clip.mp4"),
+      project("job1", "clips/u1/job1/clip.mp4", "work/u1/job1/thumb.jpg"),
       project("job2"),
       project("job3"),
       project("job4"),
@@ -50,7 +50,11 @@ describe("project.service", () => {
     );
     expect(result.hasMore).toBe(true);
     expect(result.projects).toHaveLength(3);
+    // Thumbnail is served from the 16:9 source still; the 9:16 clip preview is
+    // kept too as a fallback for older projects that predate thumbnails.
+    expect(result.projects[0].thumbnailUrl).toBe("signed:work/u1/job1/thumb.jpg");
     expect(result.projects[0].previewUrl).toBe("signed:clips/u1/job1/clip.mp4");
+    expect(result.projects[1].thumbnailUrl).toBeNull();
   });
 
   it("returns all project summaries for the projects page", async () => {
@@ -80,12 +84,17 @@ describe("project.service", () => {
   });
 });
 
-function project(id: string, storageKey?: string) {
+function project(
+  id: string,
+  storageKey?: string,
+  thumbnailKey: string | null = null
+) {
   return {
     id,
     userId: "u1",
     sourceUrl: null,
     sourceKey: `uploads/u1/${id}.mp4`,
+    thumbnailKey,
     originalFilename: `${id}.mp4`,
     status: "DONE",
     error: null,

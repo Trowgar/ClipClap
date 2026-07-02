@@ -10,6 +10,7 @@ import { randomUUID } from "crypto";
 import { unlink } from "fs/promises";
 import { downloadVideo } from "../processors/download";
 import { cutClips, trimClipFile } from "../processors/cut";
+import { generateThumbnail } from "../processors/thumbnail";
 import {
   burnSubtitles,
   createAssFilter,
@@ -125,12 +126,35 @@ async function renderClips(
     }
 
     const renderMs = Date.now() - startedAt;
+
+    // 16:9 still from the ORIGINAL source for the dashboard card. The clips are
+    // 9:16, so reusing one as the card preview crops heads; a native-aspect
+    // frame from the source fits cleanly. Best-effort - a thumbnail failure
+    // must not fail the render. Sampled at the first highlight so the frame is
+    // on-content rather than an intro/black frame.
+    let thumbnailKey: string | undefined;
+    if (highlights.length > 0) {
+      try {
+        const thumbPath = await generateThumbnail(sourcePath, highlights[0].start);
+        tempFiles.push(thumbPath);
+        const key = `work/${payload.userId}/${payload.jobId}/thumb-${randomUUID()}.jpg`;
+        await uploadFile(key, thumbPath, "image/jpeg");
+        thumbnailKey = key;
+      } catch (error) {
+        console.error(
+          `[render] thumbnail generation failed for job ${payload.jobId}:`,
+          error
+        );
+      }
+    }
+
     await prisma.job.update({
       where: { id: payload.jobId },
       data: {
         status: "CUTTING",
         renderMs,
         clipsGenerated,
+        ...(thumbnailKey ? { thumbnailKey } : {}),
         renderManifest: {
           mode: "clips",
           clipsGenerated,
