@@ -1,6 +1,6 @@
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { prisma, referralService, REFERRAL_CONFIG } from "@clipfast/shared";
+import { prisma, referralService, REFERRAL_CONFIG } from "@clipclap/shared";
 import { CopyField } from "@/components/referrals/copy-field";
 import { JoinAffiliate } from "@/components/referrals/join-affiliate";
 

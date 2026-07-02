@@ -16,7 +16,7 @@ import {
   redeemLinkFromBot,
   telegramDeliveryService,
   uploadFile,
-} from "@clipfast/shared";
+} from "@clipclap/shared";
 import type { User } from "@prisma/client";
 import type { TelegramClient } from "./telegram-client";
 import { extractVideoUrl, probeVideoUrl } from "./url-probe";
@@ -396,7 +396,7 @@ async function handleStart(
     const from = message.from!;
     const user = await resolveTelegramUser(from);
     if (isNew) {
-      const { referralService } = await import("@clipfast/shared");
+      const { referralService } = await import("@clipclap/shared");
       await referralService.attachReferral(user.id, payload.code);
       const keyboard = plansKeyboard(dict, config);
       await client.sendMessage(
@@ -903,7 +903,7 @@ async function handleReferral(
   config: BotRuntimeConfig
 ) {
   const user = await resolveTelegramUser(from);
-  const { referralService } = await import("@clipfast/shared");
+  const { referralService } = await import("@clipclap/shared");
   const code = await referralService.ensureReferralCode(user.id);
   const stats = await referralService.getReferralStats(user.id);
   const botName = process.env.TELEGRAM_BOT_USERNAME ?? "ClipClapBot";
@@ -927,7 +927,7 @@ async function handleBalance(
   dict: Dict
 ) {
   const user = await resolveTelegramUser(from);
-  const { walletService, referralService } = await import("@clipfast/shared");
+  const { walletService, referralService } = await import("@clipclap/shared");
   const bal = await walletService.getWalletBalance(user.id);
   const stats = await referralService.getReferralStats(user.id);
   await client.sendMessage(
@@ -941,7 +941,7 @@ async function handleAdminCommand(
   message: TelegramMessage,
   text: string
 ) {
-  const { withdrawalService, referralService } = await import("@clipfast/shared");
+  const { withdrawalService, referralService } = await import("@clipclap/shared");
   const chatId = message.chat.id;
 
   if (text.startsWith("/payouts")) {
@@ -1009,7 +1009,7 @@ async function handleAdminPayoutAction(
   message: TelegramMessage,
   text: string
 ) {
-  const { withdrawalService } = await import("@clipfast/shared");
+  const { withdrawalService } = await import("@clipclap/shared");
   const chatId = message.chat.id;
   const adminId = String(message.from!.id);
   const parts = text.trim().split(/\s+/);

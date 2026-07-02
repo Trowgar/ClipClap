@@ -4,7 +4,7 @@
 **Status:** Approved for planning
 **Scope:** A unified referral/affiliate program shared by both the web app and the Telegram bot. Referrers earn a recurring lifetime commission on the payments of users they bring in, accrued to a balance, and paid out in scheduled batches via a Telegram-based admin CRM.
 
-> Naming: the product is **ClipClap** (domain `clipclap.io`, bot `@ClipClapBot`). The legacy name "ClipFast" in `CLAUDE.md` is outdated; use ClipClap throughout.
+> Naming: the product is **ClipClap** (domain `clipclap.io`, bot `@ClipClapBot`). The legacy name "ClipClap" in `CLAUDE.md` is outdated; use ClipClap throughout.
 
 ---
 

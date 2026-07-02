@@ -7,7 +7,7 @@ import { ArrowRight, FilmStrip, FolderOpen, Trash } from "@phosphor-icons/react"
 import { Badge } from "@/components/ui/badge";
 import { cn, formatDuration } from "@/lib/utils";
 import { LocalDate } from "@/components/local-date";
-import type { ProjectSummary } from "@clipfast/shared";
+import type { ProjectSummary } from "@clipclap/shared";
 
 export type SerializedProjectSummary = Omit<
   ProjectSummary,

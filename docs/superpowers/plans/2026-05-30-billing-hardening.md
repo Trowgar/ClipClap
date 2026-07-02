@@ -537,13 +537,13 @@ Replace the three inline status checks in the presign route with a single `canSu
 In `apps/web/app/api/uploads/route.ts`, replace line 3:
 
 ```typescript
-import { getPresignedUploadUrl, prisma, getPlanLimits } from "@clipfast/shared";
+import { getPresignedUploadUrl, prisma, getPlanLimits } from "@clipclap/shared";
 ```
 
 with:
 
 ```typescript
-import { getPresignedUploadUrl, prisma, getPlanLimits, canSubmitJob } from "@clipfast/shared";
+import { getPresignedUploadUrl, prisma, getPlanLimits, canSubmitJob } from "@clipclap/shared";
 ```
 
 - [ ] **Step 2: Replace the inline status block with the unified guard**
@@ -979,7 +979,7 @@ import {
   SUBSCRIPTION_RECONCILE_JOB,
   releaseMaturedCommissions,
   reconcileSubscriptions,
-} from "@clipfast/shared";
+} from "@clipclap/shared";
 ```
 
 Then, inside the worker processor callback, add a branch after the existing `HOLD_RELEASE_JOB` block:

@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
   jobUpdate: vi.fn(),
 }));
 
-vi.mock("@clipfast/shared", () => ({
+vi.mock("@clipclap/shared", () => ({
   jobStepService: {
     startJobStep: mocks.startJobStep,
     completeJobStep: mocks.completeJobStep,

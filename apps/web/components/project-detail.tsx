@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import type { ProjectDetail as ProjectDetailData } from "@clipfast/shared";
+import type { ProjectDetail as ProjectDetailData } from "@clipclap/shared";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,

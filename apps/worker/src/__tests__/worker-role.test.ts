@@ -14,7 +14,7 @@ vi.mock("bullmq", () => ({
   Worker: mocks.Worker,
 }));
 
-vi.mock("@clipfast/shared", () => ({
+vi.mock("@clipclap/shared", () => ({
   getRedis: mocks.getRedis,
   getQueueNameForStage: (role: string) => `video-${role}`,
   parseWorkerRole: (role: string | undefined) => {

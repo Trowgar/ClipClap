@@ -1,6 +1,6 @@
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { prisma } from "@clipfast/shared";
+import { prisma } from "@clipclap/shared";
 import { TelegramConnection } from "./telegram-connection";
 
 export default async function SettingsPage() {

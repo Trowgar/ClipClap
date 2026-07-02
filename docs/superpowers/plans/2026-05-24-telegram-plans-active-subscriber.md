@@ -207,7 +207,7 @@ Expected: All tests pass.
 
 - [ ] **Step 7: Typecheck**
 
-Run: `npm run typecheck -w @clipfast/bot`
+Run: `npm run typecheck -w @clipclap/bot`
 Expected: clean.
 
 - [ ] **Step 8: Commit**
@@ -308,7 +308,7 @@ Replace it with:
 
 Run from repo root:
 ```
-npm run typecheck -w @clipfast/bot && npx vitest run
+npm run typecheck -w @clipclap/bot && npx vitest run
 ```
 Expected: All green.
 

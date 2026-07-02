@@ -1,6 +1,6 @@
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { billingService } from "@clipfast/shared";
+import { billingService } from "@clipclap/shared";
 import { ManageBillingButton } from "@/components/manage-billing-button";
 import { InvoiceTable } from "@/components/invoice-table";
 

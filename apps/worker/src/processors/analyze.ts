@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import type { Highlight, TranscriptionResult } from "@clipfast/shared";
+import type { Highlight, TranscriptionResult } from "@clipclap/shared";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 

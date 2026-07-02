@@ -2,7 +2,7 @@ import type {
   Highlight,
   SubtitleTrack,
   TranscriptionResult,
-} from "@clipfast/shared";
+} from "@clipclap/shared";
 
 export interface BaseStagePayload {
   jobId: string;

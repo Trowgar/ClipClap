@@ -10,7 +10,7 @@ import type {
   SubtitleWord,
   TranscriptionResult,
   WhisperSegment,
-} from "@clipfast/shared";
+} from "@clipclap/shared";
 
 const execFileAsync = promisify(execFile);
 
@@ -19,7 +19,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 export async function transcribeVideo(
   videoPath: string
 ): Promise<TranscriptionResult> {
-  const audioPath = join(tmpdir(), `clipfast-audio-${randomUUID()}.mp3`);
+  const audioPath = join(tmpdir(), `clipclap-audio-${randomUUID()}.mp3`);
 
   await execFileAsync("ffmpeg", [
     "-i",

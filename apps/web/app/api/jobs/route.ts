@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { jobService, prisma, getPlanLimits, canSubmitJob } from "@clipfast/shared";
+import { jobService, prisma, getPlanLimits, canSubmitJob } from "@clipclap/shared";
 
 export const dynamic = "force-dynamic";
 

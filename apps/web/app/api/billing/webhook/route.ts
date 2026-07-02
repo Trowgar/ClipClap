@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { billingService } from "@clipfast/shared";
+import { billingService } from "@clipclap/shared";
 
 export async function POST(req: NextRequest) {
   const body = await req.text();

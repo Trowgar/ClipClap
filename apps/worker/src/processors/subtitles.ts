@@ -4,7 +4,7 @@ import { writeFile, unlink, stat } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
-import type { SubtitleCue, SubtitleWord, WhisperSegment } from "@clipfast/shared";
+import type { SubtitleCue, SubtitleWord, WhisperSegment } from "@clipclap/shared";
 
 const execFileAsync = promisify(execFile);
 
@@ -190,7 +190,7 @@ function formatAssTime(seconds: number): string {
 export async function createAssFilter(
   cues: SubtitleCue[]
 ): Promise<{ filter: string; assPath: string }> {
-  const assPath = join(tmpdir(), `clipfast-subs-${randomUUID()}.ass`);
+  const assPath = join(tmpdir(), `clipclap-subs-${randomUUID()}.ass`);
   await writeFile(assPath, generateAss(cues), "utf-8");
   const escapeFilterPath = (p: string) =>
     p.replace(/\\/g, "/").replace(/:/g, "\\:");
@@ -205,8 +205,8 @@ export async function burnSubtitles(
   cues: SubtitleCue[]
 ): Promise<string> {
   const assContent = generateAss(cues);
-  const assPath = join(tmpdir(), `clipfast-subs-${randomUUID()}.ass`);
-  const outputPath = join(tmpdir(), `clipfast-subbed-${randomUUID()}.mp4`);
+  const assPath = join(tmpdir(), `clipclap-subs-${randomUUID()}.ass`);
+  const outputPath = join(tmpdir(), `clipclap-subbed-${randomUUID()}.mp4`);
 
   await writeFile(assPath, assContent, "utf-8");
 

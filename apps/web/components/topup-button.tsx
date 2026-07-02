@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { CircleNotch } from "@phosphor-icons/react";
-import type { TopupPack } from "@clipfast/shared";
+import type { TopupPack } from "@clipclap/shared";
 import { api } from "@/lib/api";
 
 interface TopupButtonProps {

@@ -1,6 +1,6 @@
 import { auth } from "@/lib/auth";
 import { redirect, notFound } from "next/navigation";
-import { projectService } from "@clipfast/shared";
+import { projectService } from "@clipclap/shared";
 import { ProjectDetail } from "@/components/project-detail";
 
 export default async function ProjectPage({

@@ -1,6 +1,6 @@
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { projectService, userService, getPlanLimits } from "@clipfast/shared";
+import { projectService, userService, getPlanLimits } from "@clipclap/shared";
 import { UploadZone } from "@/components/upload-zone";
 import { RecentProjects } from "@/components/project-list";
 

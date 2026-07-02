@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@clipfast/shared";
+import { prisma } from "@clipclap/shared";
 import bcrypt from "bcryptjs";
 
 export async function POST(req: Request) {

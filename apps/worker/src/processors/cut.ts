@@ -3,7 +3,7 @@ import { promisify } from "util";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
-import type { Highlight } from "@clipfast/shared";
+import type { Highlight } from "@clipclap/shared";
 
 const execFileAsync = promisify(execFile);
 
@@ -20,7 +20,7 @@ export async function cutClips(
   const results: CutResult[] = [];
 
   for (const highlight of highlights) {
-    const clipPath = join(tmpdir(), `clipfast-clip-${randomUUID()}.mp4`);
+    const clipPath = join(tmpdir(), `clipclap-clip-${randomUUID()}.mp4`);
 
     await execFileAsync("ffmpeg", [
       "-ss",
@@ -58,7 +58,7 @@ export async function trimClipFile(
   start: number,
   end: number
 ): Promise<string> {
-  const clipPath = join(tmpdir(), `clipfast-trim-${randomUUID()}.mp4`);
+  const clipPath = join(tmpdir(), `clipclap-trim-${randomUUID()}.mp4`);
 
   await execFileAsync("ffmpeg", [
     "-ss",

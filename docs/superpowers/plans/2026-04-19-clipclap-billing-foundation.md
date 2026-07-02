@@ -230,9 +230,9 @@ Expected: migration applies cleanly, Prisma client regenerates.
 - [ ] **Step 4: Verify DB state**
 
 ```bash
-docker compose exec postgres psql -U clipfast -d clipfast -c "\dT+ Plan"
-docker compose exec postgres psql -U clipfast -d clipfast -c "SELECT column_name, data_type FROM information_schema.columns WHERE table_name='users' AND column_name IN ('subscriptionStatus','billingCycle','currentPeriodEnd','dunningSince','graceEndsAt','topUpMinutesRemaining');"
-docker compose exec postgres psql -U clipfast -d clipfast -c "SELECT column_name FROM information_schema.columns WHERE table_name='clips' AND column_name IN ('expiresAt','deletedAt');"
+docker compose exec postgres psql -U clipclap -d clipclap -c "\dT+ Plan"
+docker compose exec postgres psql -U clipclap -d clipclap -c "SELECT column_name, data_type FROM information_schema.columns WHERE table_name='users' AND column_name IN ('subscriptionStatus','billingCycle','currentPeriodEnd','dunningSince','graceEndsAt','topUpMinutesRemaining');"
+docker compose exec postgres psql -U clipclap -d clipclap -c "SELECT column_name FROM information_schema.columns WHERE table_name='clips' AND column_name IN ('expiresAt','deletedAt');"
 ```
 
 Expected: Plan enum shows NONE/STARTER/PLUS/MAX, User columns exist, Clip columns exist.
@@ -1549,8 +1549,8 @@ Create `apps/web/app/api/billing/topup/route.ts`:
 ```typescript
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { createTopupCheckoutSession } from "@clipfast/shared";
-import { TOPUP_PACKS } from "@clipfast/shared";
+import { createTopupCheckoutSession } from "@clipclap/shared";
+import { TOPUP_PACKS } from "@clipclap/shared";
 
 export async function POST(req: NextRequest) {
   const session = await auth();
@@ -1648,8 +1648,8 @@ Read `apps/web/app/api/jobs/route.ts` to understand the current POST handler sha
 Prepend these checks before the existing `jobService.createJob` call in the POST handler:
 
 ```typescript
-import { getPlanLimits, canSubmitJob } from "@clipfast/shared";
-import { prisma } from "@clipfast/shared";
+import { getPlanLimits, canSubmitJob } from "@clipclap/shared";
+import { prisma } from "@clipclap/shared";
 
 // Inside POST, after auth check and req.json parsing:
 const user = await prisma.user.findUniqueOrThrow({
@@ -1751,7 +1751,7 @@ Replace contents of `apps/web/app/api/uploads/route.ts`:
 ```typescript
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { getPresignedUploadUrl, getPlanLimits, prisma } from "@clipfast/shared";
+import { getPresignedUploadUrl, getPlanLimits, prisma } from "@clipclap/shared";
 import { randomUUID } from "crypto";
 
 export async function POST(req: NextRequest) {
@@ -1856,7 +1856,7 @@ Replace contents of `apps/web/app/(dashboard)/dashboard/plans/page.tsx`:
 ```typescript
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { getUsageForUser, PLAN_LIMITS, TOPUP_PACKS } from "@clipfast/shared";
+import { getUsageForUser, PLAN_LIMITS, TOPUP_PACKS } from "@clipclap/shared";
 import { PlanCard } from "@/components/plan-card";
 
 export default async function PlansPage() {
@@ -2255,7 +2255,7 @@ Create `apps/web/app/api/billing/portal/route.ts`:
 ```typescript
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { prisma, getStripe } from "@clipfast/shared";
+import { prisma, getStripe } from "@clipclap/shared";
 
 export async function POST(req: NextRequest) {
   const session = await auth();
@@ -2361,7 +2361,7 @@ grep -rn "prisma.clip.create" /srv/saas/clipclap.io --include="*.ts" | grep -v n
 For each `prisma.clip.create` call, wrap the data:
 
 ```typescript
-import { getPlanLimits } from "@clipfast/shared";
+import { getPlanLimits } from "@clipclap/shared";
 
 // Fetch user plan once per job:
 const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
@@ -2456,7 +2456,7 @@ Copy the `whsec_...` secret into `.env` as `STRIPE_WEBHOOK_SECRET`, then `docker
 6. Check DB:
 
 ```bash
-docker compose exec postgres psql -U clipfast -d clipfast -c "SELECT email, plan, \"billingCycle\", \"subscriptionStatus\", \"currentPeriodEnd\" FROM users ORDER BY \"updatedAt\" DESC LIMIT 1;"
+docker compose exec postgres psql -U clipclap -d clipclap -c "SELECT email, plan, \"billingCycle\", \"subscriptionStatus\", \"currentPeriodEnd\" FROM users ORDER BY \"updatedAt\" DESC LIMIT 1;"
 ```
 
 Expected: `plan=STARTER, billingCycle=WEEKLY, subscriptionStatus=ACTIVE`.
@@ -2488,7 +2488,7 @@ From Stripe Dashboard:
 4. Check DB:
 
 ```bash
-docker compose exec postgres psql -U clipfast -d clipfast -c "SELECT email, \"subscriptionStatus\", \"dunningSince\" FROM users ORDER BY \"updatedAt\" DESC LIMIT 1;"
+docker compose exec postgres psql -U clipclap -d clipclap -c "SELECT email, \"subscriptionStatus\", \"dunningSince\" FROM users ORDER BY \"updatedAt\" DESC LIMIT 1;"
 ```
 
 Expected: `subscriptionStatus=DUNNING, dunningSince=<timestamp>`.
@@ -2502,7 +2502,7 @@ From Customer Portal (or Stripe Dashboard directly), cancel the subscription imm
 Check DB:
 
 ```bash
-docker compose exec postgres psql -U clipfast -d clipfast -c "SELECT email, \"subscriptionStatus\", \"graceEndsAt\" FROM users ORDER BY \"updatedAt\" DESC LIMIT 1;"
+docker compose exec postgres psql -U clipclap -d clipclap -c "SELECT email, \"subscriptionStatus\", \"graceEndsAt\" FROM users ORDER BY \"updatedAt\" DESC LIMIT 1;"
 ```
 
 Expected: `subscriptionStatus=CANCELED_GRACE, graceEndsAt=<now+7d>`.
@@ -2514,7 +2514,7 @@ Expected: `subscriptionStatus=CANCELED_GRACE, graceEndsAt=<now+7d>`.
 3. Check DB:
 
 ```bash
-docker compose exec postgres psql -U clipfast -d clipfast -c "SELECT email, \"topUpMinutesRemaining\" FROM users ORDER BY \"updatedAt\" DESC LIMIT 1;"
+docker compose exec postgres psql -U clipclap -d clipclap -c "SELECT email, \"topUpMinutesRemaining\" FROM users ORDER BY \"updatedAt\" DESC LIMIT 1;"
 ```
 
 Expected: `topUpMinutesRemaining=100` (or 100 + any previous balance).

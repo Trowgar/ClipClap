@@ -6,8 +6,8 @@
     "module": "CommonJS",
     "moduleResolution": "node",
     "paths": {
-      "@clipfast/shared": ["../../packages/shared/dist"],
-      "@clipfast/shared/*": ["../../packages/shared/dist/*"]
+      "@clipclap/shared": ["../../packages/shared/dist"],
+      "@clipclap/shared/*": ["../../packages/shared/dist/*"]
     }
   },
   "include": ["src/**/*"]

@@ -6,7 +6,7 @@
 
 **Architecture:** New `wallet.service` (derived balances + idempotent ledger writes) and `withdrawal.service` (create in a Serializable transaction + admin lifecycle) in `packages/shared/src/services`. Referral hold-release posts `WalletEntry` CREDITs; referral clawback posts compensating DEBITs. The old `ReferralPayout` model, `runPayoutBatch`, the 1st/15th BullMQ job, `User.payoutMethod/payoutDestination`, the bot `/payout` command, and the referral payout CRM are removed. The Telegram admin CRM is generalized to `WithdrawalRequest`.
 
-**Tech Stack:** TypeScript, Next.js 15 (App Router), Prisma + PostgreSQL, BullMQ + Redis, Auth.js v5, Vitest. Monorepo (`@clipfast/shared`). Continues on branch `feat/referral-program`.
+**Tech Stack:** TypeScript, Next.js 15 (App Router), Prisma + PostgreSQL, BullMQ + Redis, Auth.js v5, Vitest. Monorepo (`@clipclap/shared`). Continues on branch `feat/referral-program`.
 
 ---
 
@@ -1075,7 +1075,7 @@ Update `handleBalance` in `handlers.ts`:
 ```ts
 async function handleBalance(client: TelegramClient, message: TelegramMessage, from: TelegramUser, dict: Dict) {
   const user = await resolveTelegramUser(from);
-  const { walletService, referralService } = await import("@clipfast/shared");
+  const { walletService, referralService } = await import("@clipclap/shared");
   const bal = await walletService.getWalletBalance(user.id);
   const stats = await referralService.getReferralStats(user.id);
   await client.sendMessage(
@@ -1117,7 +1117,7 @@ Paid out $<balance.paidOutUsd>
 Referral earned $<bySource.REFERRAL ?? 0>
 Voided: <refundCount>  Status: <active|BANNED>
 ```
-Import `withdrawalService` from `@clipfast/shared` (dynamic import inside the handlers, matching the existing pattern).
+Import `withdrawalService` from `@clipclap/shared` (dynamic import inside the handlers, matching the existing pattern).
 
 - [ ] **Step 5: Update bot tests.** In `apps/bot/src/__tests__/i18n.test.ts` the canonical command set should no longer include `payout`? (We never added `payout` to the slash list — only `referral`. So no change there.) If any test references the removed `payoutPrompt`/`payoutSaved` keys, update it. Run the bot suite and fix any references.
 
@@ -1142,7 +1142,7 @@ git commit -m "feat(payouts): bot wallet /balance, withdrawal admin CRM, remove 
 ```ts
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { walletService, withdrawalService, referralService } from "@clipfast/shared";
+import { walletService, withdrawalService, referralService } from "@clipclap/shared";
 
 export async function GET() {
   const session = await auth();
@@ -1172,7 +1172,7 @@ export async function GET() {
 ```ts
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { withdrawalService } from "@clipfast/shared";
+import { withdrawalService } from "@clipclap/shared";
 
 export async function POST(req: Request) {
   const session = await auth();
@@ -1305,7 +1305,7 @@ export function WithdrawForm({ availableUsd, minUsd }: { availableUsd: number; m
 ```tsx
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { walletService, withdrawalService, referralService, WALLET_CONFIG } from "@clipfast/shared";
+import { walletService, withdrawalService, referralService, WALLET_CONFIG } from "@clipclap/shared";
 import { WithdrawForm } from "@/components/payouts/withdraw-form";
 
 const money = (n: number) =>

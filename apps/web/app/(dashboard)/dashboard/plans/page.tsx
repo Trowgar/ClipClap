@@ -1,6 +1,6 @@
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { userService, PLAN_LIMITS, TOPUP_PACKS } from "@clipfast/shared";
+import { userService, PLAN_LIMITS, TOPUP_PACKS } from "@clipclap/shared";
 import { PlanCard } from "@/components/plan-card";
 import { TopupButton } from "@/components/topup-button";
 

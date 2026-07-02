@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { getPresignedUploadUrl, prisma, getPlanLimits, canSubmitJob } from "@clipfast/shared";
+import { getPresignedUploadUrl, prisma, getPlanLimits, canSubmitJob } from "@clipclap/shared";
 import { randomUUID } from "crypto";
 
 export async function POST(req: NextRequest) {

@@ -3,7 +3,7 @@ import {
   jobStepService,
   prisma,
   uploadFile,
-} from "@clipfast/shared";
+} from "@clipclap/shared";
 import { randomUUID } from "crypto";
 import { unlink } from "fs/promises";
 import { downloadVideo } from "../processors/download";

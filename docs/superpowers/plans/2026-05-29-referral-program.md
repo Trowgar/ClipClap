@@ -6,7 +6,7 @@
 
 **Architecture:** All business logic lives in `packages/shared/src/services/referral.service.ts` (service-layer pattern per CLAUDE.md), called by both Stripe/Tribute webhook handlers and the bot. Commissions are an immutable ledger (`ReferralCommission`); balance is a derived aggregate. Two idempotent, time-driven service functions (`releaseMaturedCommissions`, `runPayoutBatch`) are scheduled by BullMQ repeatable jobs in the worker process. Attribution is last-touch: a 30-day cookie on web (read at Auth.js `createUser`) and a `ref_<code>` Telegram deep-link.
 
-**Tech Stack:** TypeScript, Next.js 15 (App Router), Prisma + PostgreSQL, BullMQ + Redis, Auth.js v5, Vitest. Monorepo with npm workspaces; shared package imported as `@clipfast/shared`.
+**Tech Stack:** TypeScript, Next.js 15 (App Router), Prisma + PostgreSQL, BullMQ + Redis, Auth.js v5, Vitest. Monorepo with npm workspaces; shared package imported as `@clipclap/shared`.
 
 ---
 
@@ -16,7 +16,7 @@
 - **Prisma:** schema at `prisma/schema.prisma`; migrations via `npx prisma migrate dev --name <name>`. Client uses `engineType = "binary"`.
 - **Commits:** small and frequent, one per task step group. Conventional Commits style (`feat(referral): ...`).
 - **Money math:** all amounts stored as USD `Float`. Round commission to 2 decimals with `Math.round(x * 100) / 100`.
-- **Import surface:** new shared code must be re-exported from `packages/shared/src/services/index.ts` and (for config) reachable via `packages/shared/src/config/index.ts` so `@clipfast/shared` consumers can import it.
+- **Import surface:** new shared code must be re-exported from `packages/shared/src/services/index.ts` and (for config) reachable via `packages/shared/src/config/index.ts` so `@clipclap/shared` consumers can import it.
 
 ---
 
@@ -1121,7 +1121,7 @@ import {
   REFERRAL_CONFIG,
   releaseMaturedCommissions,
   runPayoutBatch,
-} from "@clipfast/shared";
+} from "@clipclap/shared";
 
 export function createReferralScheduler(): Worker {
   const worker = new Worker(
@@ -1156,7 +1156,7 @@ export function createReferralScheduler(): Worker {
 
 ```ts
 import { createStageWorker } from "./worker-app";
-import { registerReferralSchedules } from "@clipfast/shared";
+import { registerReferralSchedules } from "@clipclap/shared";
 import { createReferralScheduler } from "./referral-scheduler";
 
 const role = process.env.WORKER_ROLE;
@@ -1434,7 +1434,7 @@ Expected: PASS.
 ```ts
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { prisma, referralService } from "@clipfast/shared";
+import { prisma, referralService } from "@clipclap/shared";
 
 export async function GET() {
   const session = await auth();
@@ -1477,7 +1477,7 @@ Create `apps/web/app/api/referrals/accept-terms/route.ts`:
 ```ts
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { referralService } from "@clipfast/shared";
+import { referralService } from "@clipclap/shared";
 
 export async function POST() {
   const session = await auth();
@@ -1493,7 +1493,7 @@ Create `apps/web/app/api/referrals/payout-destination/route.ts`:
 ```ts
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { referralService } from "@clipfast/shared";
+import { referralService } from "@clipclap/shared";
 
 export async function POST(req: Request) {
   const session = await auth();
@@ -1532,7 +1532,7 @@ git commit -m "feat(referral): balance/dashboard/admin service functions and web
 ```ts
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { REFERRAL_COOKIE_NAME, REFERRAL_CONFIG } from "@clipfast/shared";
+import { REFERRAL_COOKIE_NAME, REFERRAL_CONFIG } from "@clipclap/shared";
 
 export function middleware(req: NextRequest) {
   const ref = req.nextUrl.searchParams.get("ref");
@@ -1574,7 +1574,7 @@ export const config = {
     async createUser({ user }) {
       try {
         const { cookies } = await import("next/headers");
-        const { referralService, REFERRAL_COOKIE_NAME } = await import("@clipfast/shared");
+        const { referralService, REFERRAL_COOKIE_NAME } = await import("@clipclap/shared");
         const code = (await cookies()).get(REFERRAL_COOKIE_NAME)?.value;
         if (code && user.id) {
           await referralService.attachReferral(user.id, code);
@@ -1843,7 +1843,7 @@ export function parseStartPayload(text: string): StartPayload {
     const isNew = !existing;
     const user = await resolveTelegramUser(from);
     if (isNew) {
-      const { referralService } = await import("@clipfast/shared");
+      const { referralService } = await import("@clipclap/shared");
       await referralService.attachReferral(user.id, payload.code);
     }
     // fall through to the normal welcome flow below
@@ -1906,7 +1906,7 @@ async function handleReferral(
   config: BotRuntimeConfig
 ) {
   const user = await resolveTelegramUser(from);
-  const { referralService } = await import("@clipfast/shared");
+  const { referralService } = await import("@clipclap/shared");
   const code = await referralService.ensureReferralCode(user.id);
   const balance = await referralService.getReferralBalance(user.id);
   const botName = process.env.TELEGRAM_BOT_USERNAME ?? "ClipClapBot";
@@ -1931,7 +1931,7 @@ async function handleBalance(
   dict: Dict
 ) {
   const user = await resolveTelegramUser(from);
-  const { referralService } = await import("@clipfast/shared");
+  const { referralService } = await import("@clipclap/shared");
   const b = await referralService.getReferralBalance(user.id);
   await client.sendMessage(
     message.chat.id,
@@ -1954,7 +1954,7 @@ async function handlePayout(
   const [method, ...rest] = parts;
   const destination = rest.join(" ");
   const user = await resolveTelegramUser(from);
-  const { referralService } = await import("@clipfast/shared");
+  const { referralService } = await import("@clipclap/shared");
   const result = await referralService.setPayoutDestination(user.id, method, destination);
   await client.sendMessage(
     message.chat.id,
@@ -2049,7 +2049,7 @@ async function handleAdminCommand(
   message: TelegramMessage,
   text: string
 ) {
-  const { referralService } = await import("@clipfast/shared");
+  const { referralService } = await import("@clipclap/shared");
   const chatId = message.chat.id;
   const adminId = String(message.from!.id);
 
@@ -2133,7 +2133,7 @@ async function handleAdminPayoutAction(
   message: TelegramMessage,
   text: string
 ) {
-  const { referralService } = await import("@clipfast/shared");
+  const { referralService } = await import("@clipclap/shared");
   const chatId = message.chat.id;
   const adminId = String(message.from!.id);
   const parts = text.trim().split(/\s+/);

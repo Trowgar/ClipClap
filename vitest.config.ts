@@ -3,7 +3,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   resolve: {
     alias: {
-      "@clipfast/shared": new URL("./packages/shared/src", import.meta.url)
+      "@clipclap/shared": new URL("./packages/shared/src", import.meta.url)
         .pathname,
     },
   },

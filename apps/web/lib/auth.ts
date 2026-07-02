@@ -6,7 +6,7 @@ import {
   prisma,
   TELEGRAM_AUTH_PROVIDER,
   telegramAuthService,
-} from "@clipfast/shared";
+} from "@clipclap/shared";
 import bcrypt from "bcryptjs";
 import {
   createTelegramProvider,
@@ -92,7 +92,7 @@ const nextAuth = NextAuth({
     async createUser({ user }) {
       try {
         const { cookies } = await import("next/headers");
-        const { referralService, REFERRAL_COOKIE_NAME } = await import("@clipfast/shared");
+        const { referralService, REFERRAL_COOKIE_NAME } = await import("@clipclap/shared");
         const code = (await cookies()).get(REFERRAL_COOKIE_NAME)?.value;
         if (code && user.id) {
           await referralService.attachReferral(user.id, code);

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { topupService, TopupRequiresSubscriptionError } from "@clipfast/shared";
+import { topupService, TopupRequiresSubscriptionError } from "@clipclap/shared";
 
 const VALID_PACKS = ["SMALL", "LARGE"] as const;
 type ValidPack = (typeof VALID_PACKS)[number];

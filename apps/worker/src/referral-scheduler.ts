@@ -6,7 +6,7 @@ import {
   SUBSCRIPTION_RECONCILE_JOB,
   releaseMaturedCommissions,
   reconcileSubscriptions,
-} from "@clipfast/shared";
+} from "@clipclap/shared";
 
 export function createReferralScheduler(): Worker {
   const worker = new Worker(

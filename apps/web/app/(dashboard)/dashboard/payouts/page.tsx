@@ -1,6 +1,6 @@
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { walletService, withdrawalService, referralService, WALLET_CONFIG } from "@clipfast/shared";
+import { walletService, withdrawalService, referralService, WALLET_CONFIG } from "@clipclap/shared";
 import { WithdrawForm } from "@/components/payouts/withdraw-form";
 
 const money = (n: number) =>

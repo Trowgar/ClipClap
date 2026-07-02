@@ -1,5 +1,5 @@
 import { createStageWorker } from "./worker-app";
-import { registerReferralSchedules } from "@clipfast/shared";
+import { registerReferralSchedules } from "@clipclap/shared";
 import { createReferralScheduler } from "./referral-scheduler";
 
 const role = process.env.WORKER_ROLE;

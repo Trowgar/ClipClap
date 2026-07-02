@@ -2,7 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  transpilePackages: ["@clipfast/shared"],
+  transpilePackages: ["@clipclap/shared"],
   experimental: {
     serverActions: {
       bodySizeLimit: "5gb",

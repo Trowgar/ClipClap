@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { billingService } from "@clipfast/shared";
-import { UnsupportedPlanCycleError } from "@clipfast/shared";
+import { billingService } from "@clipclap/shared";
+import { UnsupportedPlanCycleError } from "@clipclap/shared";
 import type { Plan, BillingCycle } from "@prisma/client";
 
 const VALID_PLANS = ["STARTER", "PLUS", "MAX"] as const;

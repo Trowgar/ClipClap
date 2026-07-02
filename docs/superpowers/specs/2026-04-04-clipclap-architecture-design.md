@@ -1,8 +1,8 @@
-# ClipFast - Architecture & Technical Design
+# ClipClap - Architecture & Technical Design
 
 ## Overview
 
-ClipFast is an AI-powered video clipping service that turns long videos into short, subtitle-enhanced clips ready for TikTok, Reels, and Shorts. Users upload a video or paste a URL, and the system automatically transcribes, analyzes highlights, cuts clips, and adds animated subtitles.
+ClipClap is an AI-powered video clipping service that turns long videos into short, subtitle-enhanced clips ready for TikTok, Reels, and Shorts. Users upload a video or paste a URL, and the system automatically transcribes, analyzes highlights, cuts clips, and adds animated subtitles.
 
 **Channels:** Web application + Telegram bot (shared backend)
 **Target audience:** Beginner creators, micro-creators, small businesses
@@ -294,7 +294,7 @@ packages/shared/services/
 
 ```
 ┌──────────────────────────────────────────────────────┐
-│  ClipFast                                 [avatar ▾] │
+│  ClipClap                                 [avatar ▾] │
 ├────────────┬─────────────────────────────────────────┤
 │            │                                         │
 │  Sidebar   │  Main Content Area                      │
@@ -409,9 +409,9 @@ services:
     image: postgres:16-alpine
     ports: ["5432:5432"]
     environment:
-      POSTGRES_USER: clipfast
+      POSTGRES_USER: clipclap
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: clipfast
+      POSTGRES_DB: clipclap
     volumes:
       - pgdata:/var/lib/postgresql/data
 
@@ -446,7 +446,7 @@ Optional later: Nginx reverse proxy + Certbot SSL, or Cloudflare proxy for HTTPS
 
 ```env
 # Database
-DATABASE_URL=postgresql://clipfast:password@postgres:5432/clipfast
+DATABASE_URL=postgresql://clipclap:password@postgres:5432/clipclap
 
 # Redis
 REDIS_URL=redis://redis:6379
@@ -466,7 +466,7 @@ OPENAI_HIGHLIGHTS_MODEL=gpt-4o-mini
 R2_ACCOUNT_ID=<cloudflare-account-id>
 R2_ACCESS_KEY_ID=<r2-key>
 R2_SECRET_ACCESS_KEY=<r2-secret>
-R2_BUCKET_NAME=clipfast
+R2_BUCKET_NAME=clipclap
 R2_PUBLIC_URL=<r2-public-bucket-url>
 
 # Stripe

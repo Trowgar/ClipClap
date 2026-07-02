@@ -2,7 +2,7 @@ import {
   getStageQueue,
   jobStepService,
   prisma,
-} from "@clipfast/shared";
+} from "@clipclap/shared";
 import type { Prisma } from "@prisma/client";
 import { unlink } from "fs/promises";
 import { downloadVideo } from "../processors/download";

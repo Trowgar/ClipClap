@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { referralService } from "@clipfast/shared";
+import { referralService } from "@clipclap/shared";
 
 export async function POST() {
   const session = await auth();

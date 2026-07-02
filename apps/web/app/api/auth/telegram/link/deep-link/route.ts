@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { createBrowserInitiatedLink } from "@clipfast/shared";
+import { createBrowserInitiatedLink } from "@clipclap/shared";
 
 export const dynamic = "force-dynamic";
 

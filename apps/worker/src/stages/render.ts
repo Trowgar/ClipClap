@@ -4,7 +4,7 @@ import {
   jobStepService,
   prisma,
   uploadFile,
-} from "@clipfast/shared";
+} from "@clipclap/shared";
 import type { Prisma } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { unlink } from "fs/promises";

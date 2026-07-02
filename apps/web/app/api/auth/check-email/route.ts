@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@clipfast/shared";
+import { prisma } from "@clipclap/shared";
 
 export async function POST(req: Request) {
   const { email } = await req.json();

@@ -1,4 +1,4 @@
-import { jobStepService, prisma } from "@clipfast/shared";
+import { jobStepService, prisma } from "@clipclap/shared";
 import { buildJobCostTelemetry } from "../cost-telemetry";
 import type { FinalizeStagePayload } from "./types";
 

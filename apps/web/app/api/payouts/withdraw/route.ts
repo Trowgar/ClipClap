@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { withdrawalService } from "@clipfast/shared";
+import { withdrawalService } from "@clipclap/shared";
 
 export async function POST(req: Request) {
   const session = await auth();

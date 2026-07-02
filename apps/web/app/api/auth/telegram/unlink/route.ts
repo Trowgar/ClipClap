@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { prisma, TELEGRAM_AUTH_PROVIDER } from "@clipfast/shared";
+import { prisma, TELEGRAM_AUTH_PROVIDER } from "@clipclap/shared";
 
 export const dynamic = "force-dynamic";
 

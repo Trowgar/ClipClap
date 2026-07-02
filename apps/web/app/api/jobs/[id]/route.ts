@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { jobService } from "@clipfast/shared";
+import { jobService } from "@clipclap/shared";
 
 export async function GET(
   _req: NextRequest,

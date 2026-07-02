@@ -2,7 +2,7 @@ import {
   getStageQueue,
   jobStepService,
   prisma,
-} from "@clipfast/shared";
+} from "@clipclap/shared";
 import type { Prisma } from "@prisma/client";
 import { analyzeHighlights } from "../processors/analyze";
 import { asTranscription, type AnalyzeStagePayload } from "./types";

@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { auth } from "@/lib/auth";
-import { prisma } from "@clipfast/shared";
+import { prisma } from "@clipclap/shared";
 
 export async function GET(
   _req: NextRequest,

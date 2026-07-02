@@ -5,7 +5,7 @@ import { pipeline } from "stream/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
-import { downloadFile } from "@clipfast/shared";
+import { downloadFile } from "@clipclap/shared";
 import type { Readable } from "stream";
 
 const execFileAsync = promisify(execFile);
@@ -18,7 +18,7 @@ export async function downloadVideo(
   sourceUrl?: string,
   sourceKey?: string
 ): Promise<string> {
-  const outputPath = join(tmpdir(), `clipfast-${randomUUID()}.mp4`);
+  const outputPath = join(tmpdir(), `clipclap-${randomUUID()}.mp4`);
 
   if (sourceUrl) {
     return downloadFromUrl(sourceUrl, outputPath);

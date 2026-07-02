@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { generateAss, segmentsToCues, sliceCues } from "../subtitles";
-import type { SubtitleCue, WhisperSegment } from "@clipfast/shared";
+import type { SubtitleCue, WhisperSegment } from "@clipclap/shared";
 
 const segments: WhisperSegment[] = [
   { start: 10.0, end: 13.5, text: "Hello everyone" },

@@ -238,7 +238,7 @@ New `configure-bot-profile.test.ts`:
 
 ### Deployment
 
-1. `npm run build -w @clipfast/bot` - local typecheck.
+1. `npm run build -w @clipclap/bot` - local typecheck.
 2. `docker compose up -d --build bot` - rebuild image.
 3. On bot startup, log line `Bot profile synced (en, ru)` (or warn line on failure).
 4. Manual verification: open the bot in a fresh Telegram account; confirm new description, new commands list, new welcome message, and tappable language switch.

@@ -131,7 +131,7 @@ describe("stage queue helpers", () => {
 Run:
 
 ```bash
-npm run test -w @clipfast/shared -- packages/shared/src/lib/__tests__/queues.test.ts
+npm run test -w @clipclap/shared -- packages/shared/src/lib/__tests__/queues.test.ts
 ```
 
 Expected: FAIL because `../queues` does not exist.
@@ -201,7 +201,7 @@ export type { StageName } from "./queues";
 Run:
 
 ```bash
-npm run test -w @clipfast/shared -- packages/shared/src/lib/__tests__/queues.test.ts
+npm run test -w @clipclap/shared -- packages/shared/src/lib/__tests__/queues.test.ts
 ```
 
 Expected: PASS.
@@ -301,7 +301,7 @@ describe("job-step.service", () => {
 - [ ] **Step 2: Run RED**
 
 ```bash
-npm run test -w @clipfast/shared -- packages/shared/src/services/__tests__/job-step.service.test.ts
+npm run test -w @clipclap/shared -- packages/shared/src/services/__tests__/job-step.service.test.ts
 ```
 
 Expected: FAIL because `job-step.service` does not exist.
@@ -485,7 +485,7 @@ export * from "./job-step.service";
 - [ ] **Step 6: Run GREEN**
 
 ```bash
-npm run test -w @clipfast/shared -- packages/shared/src/services/__tests__/job-step.service.test.ts
+npm run test -w @clipclap/shared -- packages/shared/src/services/__tests__/job-step.service.test.ts
 npx tsc -p packages/shared/tsconfig.json --noEmit
 ```
 
@@ -542,7 +542,7 @@ const mocks = vi.hoisted(() => ({
   jobUpdate: vi.fn(),
 }));
 
-vi.mock("@clipfast/shared", () => ({
+vi.mock("@clipclap/shared", () => ({
   jobStepService: {
     startJobStep: mocks.startJobStep,
     completeJobStep: mocks.completeJobStep,
@@ -655,7 +655,7 @@ describe("stage handlers", () => {
 - [ ] **Step 2: Run RED**
 
 ```bash
-npm run test -w @clipfast/worker -- apps/worker/src/__tests__/stage-flow.test.ts
+npm run test -w @clipclap/worker -- apps/worker/src/__tests__/stage-flow.test.ts
 ```
 
 Expected: FAIL because stage modules do not exist.
@@ -665,7 +665,7 @@ Expected: FAIL because stage modules do not exist.
 Create `apps/worker/src/stages/download.ts`:
 
 ```ts
-import { getStageQueue, jobStepService, prisma } from "@clipfast/shared";
+import { getStageQueue, jobStepService, prisma } from "@clipclap/shared";
 import { downloadVideo } from "../processors/download";
 
 export async function runDownloadStage(payload: { jobId: string; userId: string }) {
@@ -686,9 +686,9 @@ export async function runDownloadStage(payload: { jobId: string; userId: string 
 Create `apps/worker/src/stages/transcribe.ts`:
 
 ```ts
-import { getStageQueue, jobStepService, prisma } from "@clipfast/shared";
+import { getStageQueue, jobStepService, prisma } from "@clipclap/shared";
 import { transcribeVideo } from "../processors/transcribe";
-import type { TranscriptionResult } from "@clipfast/shared";
+import type { TranscriptionResult } from "@clipclap/shared";
 
 export async function runTranscribeStage(payload: { jobId: string; userId: string }) {
   await jobStepService.startJobStep(payload.jobId, "TRANSCRIBE", payload);
@@ -718,9 +718,9 @@ export async function runTranscribeStage(payload: { jobId: string; userId: strin
 Create `apps/worker/src/stages/analyze.ts`:
 
 ```ts
-import { getStageQueue, jobStepService, prisma } from "@clipfast/shared";
+import { getStageQueue, jobStepService, prisma } from "@clipclap/shared";
 import { analyzeHighlights } from "../processors/analyze";
-import type { TranscriptionResult } from "@clipfast/shared";
+import type { TranscriptionResult } from "@clipclap/shared";
 
 export async function runAnalyzeStage(payload: { jobId: string; userId: string }) {
   await jobStepService.startJobStep(payload.jobId, "ANALYZE", payload);
@@ -785,9 +785,9 @@ await getStageQueue("render").add("render", {
 - [ ] **Step 5: Run GREEN**
 
 ```bash
-npm run test -w @clipfast/worker -- apps/worker/src/__tests__/stage-flow.test.ts
+npm run test -w @clipclap/worker -- apps/worker/src/__tests__/stage-flow.test.ts
 npm run test --workspaces --if-present
-npm run typecheck -w @clipfast/worker
+npm run typecheck -w @clipclap/worker
 ```
 
 Expected: PASS.
@@ -833,7 +833,7 @@ describe("worker role config", () => {
 - [ ] **Step 2: Run RED**
 
 ```bash
-npm run test -w @clipfast/worker -- apps/worker/src/__tests__/worker-role.test.ts
+npm run test -w @clipclap/worker -- apps/worker/src/__tests__/worker-role.test.ts
 ```
 
 Expected: FAIL because `worker-app` does not exist.
@@ -849,7 +849,7 @@ import {
   getRedis,
   parseWorkerRole,
   type StageName,
-} from "@clipfast/shared";
+} from "@clipclap/shared";
 import { runDownloadStage } from "./stages/download";
 import { runTranscribeStage } from "./stages/transcribe";
 import { runAnalyzeStage } from "./stages/analyze";
@@ -983,9 +983,9 @@ If `extends` causes Compose issues, duplicate the service blocks explicitly.
 - [ ] **Step 5: Run GREEN**
 
 ```bash
-npm run test -w @clipfast/worker -- apps/worker/src/__tests__/worker-role.test.ts
+npm run test -w @clipclap/worker -- apps/worker/src/__tests__/worker-role.test.ts
 npm run test --workspaces --if-present
-npm run typecheck -w @clipfast/worker
+npm run typecheck -w @clipclap/worker
 docker compose config >/tmp/clipclap-compose.yml
 ```
 
@@ -1017,10 +1017,10 @@ git commit -m "feat(worker): run role-based stage workers"
 
 ```bash
 npm run test --workspaces --if-present
-npm run typecheck -w @clipfast/worker
+npm run typecheck -w @clipclap/worker
 npx tsc -p packages/shared/tsconfig.json --noEmit
 npx tsc -p apps/web/tsconfig.json --noEmit
-npm run build -w @clipfast/worker
+npm run build -w @clipclap/worker
 docker compose config >/tmp/clipclap-compose.yml
 ```
 

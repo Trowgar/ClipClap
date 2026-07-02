@@ -110,7 +110,7 @@ Expected: All tests pass.
 
 - [ ] **Step 7: Typecheck**
 
-Run: `npm run typecheck -w @clipfast/bot`
+Run: `npm run typecheck -w @clipclap/bot`
 Expected: clean.
 
 - [ ] **Step 8: Commit**
@@ -329,7 +329,7 @@ Expected: All tests pass.
 
 - [ ] **Step 5: Typecheck**
 
-Run: `npm run typecheck -w @clipfast/bot`
+Run: `npm run typecheck -w @clipclap/bot`
 Expected: clean.
 
 - [ ] **Step 6: Commit**
@@ -442,7 +442,7 @@ async function handleVideoUrl(
 
 Run from repo root:
 ```
-npm run typecheck -w @clipfast/bot && npx vitest run apps/bot/src/__tests__/
+npm run typecheck -w @clipclap/bot && npx vitest run apps/bot/src/__tests__/
 ```
 Expected: All green.
 

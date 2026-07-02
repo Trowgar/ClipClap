@@ -5,7 +5,7 @@ import {
   processTributeEvent,
   verifyTributeSignature,
   type TributeWebhookEnvelope,
-} from "@clipfast/shared";
+} from "@clipclap/shared";
 
 export const dynamic = "force-dynamic";
 

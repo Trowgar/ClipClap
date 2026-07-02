@@ -1,5 +1,5 @@
 import type { Plan, BillingCycle } from "@prisma/client";
-import type { TopupPack, InvoicePage, SubtitleTrack } from "@clipfast/shared";
+import type { TopupPack, InvoicePage, SubtitleTrack } from "@clipclap/shared";
 
 const BASE = "";
 

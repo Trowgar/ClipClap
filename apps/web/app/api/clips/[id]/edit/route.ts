@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { clipService } from "@clipfast/shared";
-import type { SubtitleCue, SubtitleTrack } from "@clipfast/shared";
+import { clipService } from "@clipclap/shared";
+import type { SubtitleCue, SubtitleTrack } from "@clipclap/shared";
 
 const MAX_CUES = 500;
 const MAX_CUE_TEXT = 500;

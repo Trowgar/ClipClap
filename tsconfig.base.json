@@ -15,8 +15,8 @@
     "sourceMap": true,
     "outDir": "./dist",
     "paths": {
-      "@clipfast/shared": ["./packages/shared/src"],
-      "@clipfast/shared/*": ["./packages/shared/src/*"]
+      "@clipclap/shared": ["./packages/shared/src"],
+      "@clipclap/shared/*": ["./packages/shared/src/*"]
     }
   }
 }

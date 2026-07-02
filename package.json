@@ -1,5 +1,5 @@
 {
-  "name": "clipfast",
+  "name": "clipclap",
   "private": true,
   "workspaces": [
     "packages/*",

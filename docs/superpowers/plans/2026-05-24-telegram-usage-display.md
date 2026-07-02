@@ -203,7 +203,7 @@ Expected: all tests pass (including existing ones - verify no regression).
 
 Run from repo root:
 ```
-npx vitest run && npm run build -w @clipfast/shared
+npx vitest run && npm run build -w @clipclap/shared
 ```
 Expected: all green. (`shared` builds because `apps/bot` imports from its `dist/`.)
 
@@ -547,7 +547,7 @@ Expected: All tests pass (17 existing + 5 new = 22). If a test fails on whitespa
 
 - [ ] **Step 7: Typecheck**
 
-Run: `npm run typecheck -w @clipfast/bot`
+Run: `npm run typecheck -w @clipclap/bot`
 Expected: clean.
 
 - [ ] **Step 8: Commit**
@@ -568,7 +568,7 @@ This swaps the in-handler `prisma.clip.count` for the service call and passes al
 
 - [ ] **Step 1: Add `getUsageForUser` to the shared import block**
 
-In `apps/bot/src/handlers.ts`, find the existing import from `@clipfast/shared` (currently lines 4–18, includes `canSubmitJob`, `findOrCreateTelegramUser`, etc.). Add `getUsageForUser` to that import alongside the others. The block becomes:
+In `apps/bot/src/handlers.ts`, find the existing import from `@clipclap/shared` (currently lines 4–18, includes `canSubmitJob`, `findOrCreateTelegramUser`, etc.). Add `getUsageForUser` to that import alongside the others. The block becomes:
 
 ```ts
 import {
@@ -586,7 +586,7 @@ import {
   redeemLinkFromBot,
   telegramDeliveryService,
   uploadFile,
-} from "@clipfast/shared";
+} from "@clipclap/shared";
 ```
 
 (Insertion is just adding `getUsageForUser,` alphabetically. Leave everything else untouched.)
@@ -683,7 +683,7 @@ async function renderAccountText(
 
 Run from repo root:
 ```
-npm run typecheck -w @clipfast/bot && npx vitest run
+npm run typecheck -w @clipclap/bot && npx vitest run
 ```
 Expected: All green.
 

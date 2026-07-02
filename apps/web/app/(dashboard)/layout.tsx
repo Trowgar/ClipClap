@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
-import { userService } from "@clipfast/shared";
+import { userService } from "@clipclap/shared";
 import { Sidebar } from "@/components/sidebar";
 
 export default async function DashboardLayout({

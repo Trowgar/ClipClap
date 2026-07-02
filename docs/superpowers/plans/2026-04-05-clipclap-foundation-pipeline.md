@@ -1,4 +1,4 @@
-# ClipFast Foundation + Backend Pipeline - Implementation Plan
+# ClipClap Foundation + Backend Pipeline - Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -24,7 +24,7 @@
 
 ```json
 {
-  "name": "clipfast",
+  "name": "clipclap",
   "private": true,
   "workspaces": [
     "packages/*",
@@ -66,8 +66,8 @@
     "outDir": "./dist",
     "baseUrl": ".",
     "paths": {
-      "@clipfast/shared": ["./packages/shared/src"],
-      "@clipfast/shared/*": ["./packages/shared/src/*"]
+      "@clipclap/shared": ["./packages/shared/src"],
+      "@clipclap/shared/*": ["./packages/shared/src/*"]
     }
   }
 }
@@ -113,8 +113,8 @@ tmp/
 
 ```env
 # Database
-DATABASE_URL=postgresql://clipfast:clipfast_dev@postgres:5432/clipfast
-POSTGRES_PASSWORD=clipfast_dev
+DATABASE_URL=postgresql://clipclap:clipclap_dev@postgres:5432/clipclap
+POSTGRES_PASSWORD=clipclap_dev
 
 # Redis
 REDIS_URL=redis://redis:6379
@@ -134,7 +134,7 @@ OPENAI_HIGHLIGHTS_MODEL=gpt-4o-mini
 R2_ACCOUNT_ID=
 R2_ACCESS_KEY_ID=
 R2_SECRET_ACCESS_KEY=
-R2_BUCKET_NAME=clipfast
+R2_BUCKET_NAME=clipclap
 R2_PUBLIC_URL=
 
 # Stripe
@@ -320,7 +320,7 @@ git commit -m "feat: add Prisma schema with User, Job, Clip models + Auth.js tab
 
 ```json
 {
-  "name": "@clipfast/shared",
+  "name": "@clipclap/shared",
   "version": "0.0.1",
   "private": true,
   "main": "./src/index.ts",
@@ -797,13 +797,13 @@ services:
     ports:
       - "5432:5432"
     environment:
-      POSTGRES_USER: clipfast
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clipfast_dev}
-      POSTGRES_DB: clipfast
+      POSTGRES_USER: clipclap
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-clipclap_dev}
+      POSTGRES_DB: clipclap
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U clipfast"]
+      test: ["CMD-SHELL", "pg_isready -U clipclap"]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -924,7 +924,7 @@ git commit -m "feat: add Docker Compose with web, worker, postgres, redis"
 
 ```json
 {
-  "name": "@clipfast/web",
+  "name": "@clipclap/web",
   "version": "0.0.1",
   "private": true,
   "scripts": {
@@ -938,7 +938,7 @@ git commit -m "feat: add Docker Compose with web, worker, postgres, redis"
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "geist": "^1.3.0",
-    "@clipfast/shared": "*"
+    "@clipclap/shared": "*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -958,7 +958,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  transpilePackages: ["@clipfast/shared"],
+  transpilePackages: ["@clipclap/shared"],
 };
 
 export default nextConfig;
@@ -981,8 +981,8 @@ export default nextConfig;
     "plugins": [{ "name": "next" }],
     "paths": {
       "@/*": ["./app/*", "./*"],
-      "@clipfast/shared": ["../../packages/shared/src"],
-      "@clipfast/shared/*": ["../../packages/shared/src/*"]
+      "@clipclap/shared": ["../../packages/shared/src"],
+      "@clipclap/shared/*": ["../../packages/shared/src/*"]
     }
   },
   "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
@@ -1038,7 +1038,7 @@ import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "ClipFast - AI Video Clipper",
+  title: "ClipClap - AI Video Clipper",
   description: "Turn long videos into viral short clips with AI",
 };
 
@@ -1063,7 +1063,7 @@ export default function RootLayout({
 export default function Home() {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center">
-      <h1 className="text-4xl font-bold tracking-tight">ClipFast</h1>
+      <h1 className="text-4xl font-bold tracking-tight">ClipClap</h1>
       <p className="mt-2 text-[var(--muted)]">
         AI Video Clipper - Coming Soon
       </p>
@@ -1116,7 +1116,7 @@ Add to `apps/web/package.json` dependencies:
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import { PrismaAdapter } from "@auth/prisma-adapter";
-import { prisma } from "@clipfast/shared";
+import { prisma } from "@clipclap/shared";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: PrismaAdapter(prisma),
@@ -1161,7 +1161,7 @@ export default function LoginPage() {
   return (
     <main className="flex min-h-screen flex-col items-center justify-center gap-6">
       <div className="text-center">
-        <h1 className="text-3xl font-bold tracking-tight">ClipFast</h1>
+        <h1 className="text-3xl font-bold tracking-tight">ClipClap</h1>
         <p className="mt-2 text-[var(--muted)]">Sign in to get started</p>
       </div>
       <form
@@ -1550,7 +1550,7 @@ git commit -m "feat: add clip service with CRUD, download URL, and trim support"
 ```typescript
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { jobService, userService, uploadFile } from "@clipfast/shared";
+import { jobService, userService, uploadFile } from "@clipclap/shared";
 import { randomUUID } from "crypto";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
@@ -1632,7 +1632,7 @@ export async function GET() {
 ```typescript
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { jobService } from "@clipfast/shared";
+import { jobService } from "@clipclap/shared";
 
 export async function GET(
   _req: NextRequest,
@@ -1661,7 +1661,7 @@ export async function GET(
 ```typescript
 import { NextRequest } from "next/server";
 import { auth } from "@/lib/auth";
-import { prisma } from "@clipfast/shared";
+import { prisma } from "@clipclap/shared";
 
 export async function GET(
   _req: NextRequest,
@@ -1751,7 +1751,7 @@ git commit -m "feat: add job API routes - create, list, get, SSE progress"
 ```typescript
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { clipService } from "@clipfast/shared";
+import { clipService } from "@clipclap/shared";
 
 export async function GET() {
   const session = await auth();
@@ -1771,7 +1771,7 @@ export async function GET() {
 ```typescript
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { clipService } from "@clipfast/shared";
+import { clipService } from "@clipclap/shared";
 
 export async function GET(
   _req: NextRequest,
@@ -1814,7 +1814,7 @@ export async function DELETE(
 ```typescript
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { clipService } from "@clipfast/shared";
+import { clipService } from "@clipclap/shared";
 
 export async function GET(
   _req: NextRequest,
@@ -1838,7 +1838,7 @@ export async function GET(
 ```typescript
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { clipService } from "@clipfast/shared";
+import { clipService } from "@clipclap/shared";
 
 export async function POST(
   req: NextRequest,
@@ -1901,7 +1901,7 @@ git commit -m "feat: add clip API routes - list, get, download, delete, trim"
 
 ```json
 {
-  "name": "@clipfast/worker",
+  "name": "@clipclap/worker",
   "version": "0.0.1",
   "private": true,
   "scripts": {
@@ -1912,7 +1912,7 @@ git commit -m "feat: add clip API routes - list, get, download, delete, trim"
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@clipfast/shared": "*",
+    "@clipclap/shared": "*",
     "bullmq": "^5.30.0",
     "openai": "^4.80.0"
   },
@@ -1944,10 +1944,10 @@ git commit -m "feat: add clip API routes - list, get, download, delete, trim"
 
 ```typescript
 import { Worker } from "bullmq";
-import { getRedis, VIDEO_QUEUE_NAME } from "@clipfast/shared";
+import { getRedis, VIDEO_QUEUE_NAME } from "@clipclap/shared";
 import { processVideoJob } from "./pipeline";
 
-console.log("ClipFast Worker starting...");
+console.log("ClipClap Worker starting...");
 
 const worker = new Worker(
   VIDEO_QUEUE_NAME,
@@ -2001,7 +2001,7 @@ import { pipeline } from "stream/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
-import { downloadFile } from "@clipfast/shared";
+import { downloadFile } from "@clipclap/shared";
 import type { Readable } from "stream";
 
 const execFileAsync = promisify(execFile);
@@ -2010,7 +2010,7 @@ export async function downloadVideo(
   sourceUrl?: string,
   sourceKey?: string
 ): Promise<string> {
-  const outputPath = join(tmpdir(), `clipfast-${randomUUID()}.mp4`);
+  const outputPath = join(tmpdir(), `clipclap-${randomUUID()}.mp4`);
 
   if (sourceUrl) {
     return downloadFromUrl(sourceUrl, outputPath);
@@ -2081,7 +2081,7 @@ import { randomUUID } from "crypto";
 import { createReadStream } from "fs";
 import { unlink } from "fs/promises";
 import OpenAI from "openai";
-import type { TranscriptionResult, WhisperSegment } from "@clipfast/shared";
+import type { TranscriptionResult, WhisperSegment } from "@clipclap/shared";
 
 const execFileAsync = promisify(execFile);
 
@@ -2091,7 +2091,7 @@ export async function transcribeVideo(
   videoPath: string
 ): Promise<TranscriptionResult> {
   // Extract audio with ffmpeg
-  const audioPath = join(tmpdir(), `clipfast-audio-${randomUUID()}.wav`);
+  const audioPath = join(tmpdir(), `clipclap-audio-${randomUUID()}.wav`);
 
   await execFileAsync("ffmpeg", [
     "-i",
@@ -2156,7 +2156,7 @@ git commit -m "feat: add transcribe processor - ffmpeg audio extraction + Whispe
 
 ```typescript
 import OpenAI from "openai";
-import type { Highlight, TranscriptionResult } from "@clipfast/shared";
+import type { Highlight, TranscriptionResult } from "@clipclap/shared";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -2252,7 +2252,7 @@ import { promisify } from "util";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
-import type { Highlight } from "@clipfast/shared";
+import type { Highlight } from "@clipclap/shared";
 
 const execFileAsync = promisify(execFile);
 
@@ -2268,7 +2268,7 @@ export async function cutClips(
   const results: CutResult[] = [];
 
   for (const highlight of highlights) {
-    const clipPath = join(tmpdir(), `clipfast-clip-${randomUUID()}.mp4`);
+    const clipPath = join(tmpdir(), `clipclap-clip-${randomUUID()}.mp4`);
 
     await execFileAsync("ffmpeg", [
       "-ss",
@@ -2338,7 +2338,7 @@ import { writeFile, unlink } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
-import type { WhisperSegment, SubtitlePreset } from "@clipfast/shared";
+import type { WhisperSegment, SubtitlePreset } from "@clipclap/shared";
 
 const execFileAsync = promisify(execFile);
 
@@ -2400,7 +2400,7 @@ export function generateAss(
   const boldFlag = style.bold ? -1 : 0;
 
   const header = `[Script Info]
-Title: ClipFast Subtitles
+Title: ClipClap Subtitles
 ScriptType: v4.00+
 PlayResX: 1080
 PlayResY: 1920
@@ -2442,8 +2442,8 @@ export async function burnSubtitles(
   preset: SubtitlePreset = "tiktok"
 ): Promise<string> {
   const assContent = generateAss(segments, clipStart, clipEnd, preset);
-  const assPath = join(tmpdir(), `clipfast-subs-${randomUUID()}.ass`);
-  const outputPath = join(tmpdir(), `clipfast-subbed-${randomUUID()}.mp4`);
+  const assPath = join(tmpdir(), `clipclap-subs-${randomUUID()}.ass`);
+  const outputPath = join(tmpdir(), `clipclap-subbed-${randomUUID()}.mp4`);
 
   await writeFile(assPath, assContent, "utf-8");
 
@@ -2484,7 +2484,7 @@ export async function burnSubtitles(
 ```typescript
 import { describe, it, expect } from "vitest";
 import { generateAss } from "../subtitles";
-import type { WhisperSegment } from "@clipfast/shared";
+import type { WhisperSegment } from "@clipclap/shared";
 
 const segments: WhisperSegment[] = [
   { start: 10.0, end: 13.5, text: "Hello everyone" },
@@ -2561,8 +2561,8 @@ git commit -m "feat: add subtitles processor - ASS generation with 3 presets + F
 - [ ] **Step 1: Create pipeline orchestrator**
 
 ```typescript
-import { jobService, uploadFile, prisma, getPlanLimits } from "@clipfast/shared";
-import type { TranscriptionResult, Highlight } from "@clipfast/shared";
+import { jobService, uploadFile, prisma, getPlanLimits } from "@clipclap/shared";
+import type { TranscriptionResult, Highlight } from "@clipclap/shared";
 import { downloadVideo } from "./processors/download";
 import { transcribeVideo } from "./processors/transcribe";
 import { analyzeHighlights } from "./processors/analyze";
@@ -2893,7 +2893,7 @@ git commit -m "feat: add billing service - Stripe checkout, webhooks, subscripti
 ```typescript
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { billingService } from "@clipfast/shared";
+import { billingService } from "@clipclap/shared";
 
 export async function POST(req: NextRequest) {
   const session = await auth();
@@ -2926,7 +2926,7 @@ export async function POST(req: NextRequest) {
 
 ```typescript
 import { NextRequest, NextResponse } from "next/server";
-import { billingService } from "@clipfast/shared";
+import { billingService } from "@clipclap/shared";
 
 export async function POST(req: NextRequest) {
   const body = await req.text();
@@ -2957,7 +2957,7 @@ export async function POST(req: NextRequest) {
 ```typescript
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { billingService, userService } from "@clipfast/shared";
+import { billingService, userService } from "@clipclap/shared";
 
 export async function GET() {
   const session = await auth();
@@ -3022,7 +3022,7 @@ Expected: Database schema created in PostgreSQL.
 
 - [ ] **Step 5: Verify web app loads**
 
-Open `http://localhost:3000` - should see "ClipFast - AI Video Clipper - Coming Soon".
+Open `http://localhost:3000` - should see "ClipClap - AI Video Clipper - Coming Soon".
 
 - [ ] **Step 6: Verify worker is running**
 
@@ -3030,7 +3030,7 @@ Open `http://localhost:3000` - should see "ClipFast - AI Video Clipper - Coming 
 docker compose logs worker
 ```
 
-Expected: "ClipFast Worker starting..." and "Worker listening on queue: video-processing".
+Expected: "ClipClap Worker starting..." and "Worker listening on queue: video-processing".
 
 - [ ] **Step 7: Commit any adjustments**
 
@@ -3049,11 +3049,11 @@ git commit -m "chore: verify full Docker stack boots correctly"
 - [ ] **Step 1: Create CLAUDE.md**
 
 ```markdown
-# ClipFast - AI Video Clipper
+# ClipClap - AI Video Clipper
 
 ## Project Overview
 
-ClipFast turns long videos into short, subtitle-enhanced clips for TikTok/Reels/Shorts.
+ClipClap turns long videos into short, subtitle-enhanced clips for TikTok/Reels/Shorts.
 Users upload a video or paste a URL → AI transcribes, finds highlights, cuts clips, adds subtitles.
 
 ## Architecture
@@ -3170,4 +3170,4 @@ git commit -m "docs: add CLAUDE.md project guide"
 
 **Placeholder scan:** No TBD/TODO found (except watermark noted as post-MVP polish in pipeline.ts - acceptable, will be in Plan 2).
 
-**Type consistency:** All types reference `@clipfast/shared` exports. `Highlight`, `WhisperSegment`, `TranscriptionResult`, `CreateJobInput`, `TrimClipInput`, `SubtitlePreset` - consistent across services, processors, and pipeline.
+**Type consistency:** All types reference `@clipclap/shared` exports. `Highlight`, `WhisperSegment`, `TranscriptionResult`, `CreateJobInput`, `TrimClipInput`, `SubtitlePreset` - consistent across services, processors, and pipeline.

@@ -194,7 +194,7 @@ Expected: All tests pass (including the six new ones).
 
 - [ ] **Step 7: Run full suite + typecheck**
 
-Run: `npx vitest run && npm run typecheck -w @clipfast/bot`
+Run: `npx vitest run && npm run typecheck -w @clipclap/bot`
 Expected: All green.
 
 - [ ] **Step 8: Commit**
@@ -245,7 +245,7 @@ In `apps/bot/src/telegram-client.ts`, add these three methods inside the `Telegr
 
 - [ ] **Step 2: Typecheck**
 
-Run: `npm run typecheck -w @clipfast/bot`
+Run: `npm run typecheck -w @clipclap/bot`
 Expected: No errors.
 
 - [ ] **Step 3: Commit**
@@ -409,7 +409,7 @@ void pollDeliveries();
 
 - [ ] **Step 6: Typecheck + full test run**
 
-Run: `npm run typecheck -w @clipfast/bot && npx vitest run`
+Run: `npm run typecheck -w @clipclap/bot && npx vitest run`
 Expected: All green.
 
 - [ ] **Step 7: Commit**
@@ -595,7 +595,7 @@ In `handleCallbackQuery`, find the `switch (query.data)` block. Add three new ca
 
 - [ ] **Step 8: Typecheck + full test run**
 
-Run: `npm run typecheck -w @clipfast/bot && npx vitest run`
+Run: `npm run typecheck -w @clipclap/bot && npx vitest run`
 Expected: All green. (132 → ~138 tests passing.)
 
 - [ ] **Step 9: Commit**

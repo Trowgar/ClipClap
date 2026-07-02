@@ -1,4 +1,4 @@
-# ClipFast Dashboard UI - Implementation Plan
+# ClipClap Dashboard UI - Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -623,7 +623,7 @@ export function Sidebar({ user, usage }: SidebarProps) {
       {/* Logo */}
       <div className="flex h-14 items-center px-4 border-b border-border">
         <Link href="/dashboard" className="text-lg font-bold tracking-tight">
-          ClipFast
+          ClipClap
         </Link>
       </div>
 
@@ -686,7 +686,7 @@ export function Sidebar({ user, usage }: SidebarProps) {
 ```tsx
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
-import { userService } from "@clipfast/shared";
+import { userService } from "@clipclap/shared";
 import { Sidebar } from "@/components/sidebar";
 
 export default async function DashboardLayout({
@@ -1021,7 +1021,7 @@ git commit -m "feat: add job list component with status badges"
 ```tsx
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { jobService } from "@clipfast/shared";
+import { jobService } from "@clipclap/shared";
 import { UploadZone } from "@/components/upload-zone";
 import { JobList } from "@/components/job-list";
 
@@ -1805,7 +1805,7 @@ export function PlanCard({
 ```tsx
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { userService } from "@clipfast/shared";
+import { userService } from "@clipclap/shared";
 import { PlanCard } from "@/components/plan-card";
 
 export default async function PlansPage() {
@@ -1984,7 +1984,7 @@ export default function LandingPage() {
     <div className="min-h-screen">
       {/* Nav */}
       <header className="flex items-center justify-between border-b border-border px-6 py-4">
-        <span className="text-lg font-bold tracking-tight">ClipFast</span>
+        <span className="text-lg font-bold tracking-tight">ClipClap</span>
         <div className="flex items-center gap-4">
           <Link
             href="/login"
@@ -2136,7 +2136,7 @@ export default function LandingPage() {
 
       {/* Footer */}
       <footer className="border-t border-border px-6 py-8 text-center text-sm text-muted-foreground">
-        ClipFast - AI Video Clipper
+        ClipClap - AI Video Clipper
       </footer>
     </div>
   );

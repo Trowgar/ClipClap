@@ -9,7 +9,7 @@ import { TrimBar } from "@/components/editor/trim-bar";
 import { api, type ClipData } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ArrowLeft, CircleNotch, FloppyDisk } from "@phosphor-icons/react";
-import type { SubtitleCue } from "@clipfast/shared";
+import type { SubtitleCue } from "@clipclap/shared";
 
 interface ClipEditorProps {
   clipId: string;

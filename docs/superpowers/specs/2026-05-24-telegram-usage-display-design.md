@@ -141,7 +141,7 @@ To keep simple consistency with the rest of the UI ("Total clips created: 42 ÐºÐ
 In `apps/bot/src/handlers.ts`, the existing `renderAccountText(dict, userId)` function:
 
 1. If `userId` is undefined (user not yet in DB - shouldn't happen for an existing menu tap, but defensively): return NONE-variant directly with all zeros.
-2. Call `getUsageForUser(userId)` from `@clipfast/shared`.
+2. Call `getUsageForUser(userId)` from `@clipclap/shared`.
 3. Compute `daysUntilPeriodEnd` from `usage.currentPeriodEnd`: `Math.max(0, ceil((periodEnd - now) / day))`, or `null` if no period end.
 4. Format `periodEnd` to `YYYY-MM-DD` string (or `null`).
 5. Format `billingCycle` to lowercase string (`"monthly"` / `"weekly"`) or `null`.

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { walletService, withdrawalService, referralService } from "@clipfast/shared";
+import { walletService, withdrawalService, referralService } from "@clipclap/shared";
 
 export async function GET() {
   const session = await auth();

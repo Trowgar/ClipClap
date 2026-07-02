@@ -4,7 +4,7 @@ import { LocalDate } from "@/components/local-date";
 import { useState } from "react";
 import { DownloadSimple, ArrowSquareOut, CircleNotch } from "@phosphor-icons/react";
 import { api } from "@/lib/api";
-import type { InvoiceRow } from "@clipfast/shared";
+import type { InvoiceRow } from "@clipclap/shared";
 
 const STATUS_STYLES: Record<string, string> = {
   paid: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",

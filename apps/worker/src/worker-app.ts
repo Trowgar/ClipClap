@@ -4,7 +4,7 @@ import {
   getRedis,
   parseWorkerRole,
   type StageName,
-} from "@clipfast/shared";
+} from "@clipclap/shared";
 import { runAnalyzeStage } from "./stages/analyze";
 import { runDownloadStage } from "./stages/download";
 import { runFinalizeStage } from "./stages/finalize";

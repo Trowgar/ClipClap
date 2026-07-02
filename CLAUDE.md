@@ -1,8 +1,8 @@
-# ClipFast — AI Video Clipper
+# ClipClap — AI Video Clipper
 
 ## Project Overview
 
-ClipFast turns long videos into short, subtitle-enhanced clips for TikTok/Reels/Shorts.
+ClipClap turns long videos into short, subtitle-enhanced clips for TikTok/Reels/Shorts.
 Users upload a video or paste a URL → AI transcribes, finds highlights, cuts clips, adds subtitles.
 
 ## Architecture
