@@ -128,8 +128,8 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
   if (!clip) return null;
 
   return (
-    <div className="flex h-[calc(100vh-3rem)] flex-col gap-3">
-      <div className="flex shrink-0 items-center justify-between gap-3">
+    <div className="flex flex-col gap-3 lg:h-[calc(100vh-3rem)]">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
           <Button variant="ghost" size="sm" onClick={() => router.back()}>
             <ArrowLeft className="mr-1.5 h-4 w-4" />
@@ -165,8 +165,8 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
       {error && <p className="shrink-0 text-xs text-destructive">{error}</p>}
 
       <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_420px]">
-        <div className="flex min-h-0 flex-col gap-3">
-          <div className="min-h-0 flex-1">
+        <div className="sticky top-0 z-20 flex flex-col gap-3 bg-background pb-1 lg:static lg:z-auto lg:min-h-0 lg:pb-0">
+          <div className="h-[40dvh] lg:h-auto lg:min-h-0 lg:flex-1">
             <VideoPreview
               src={videoUrl}
               currentTime={currentTime}
