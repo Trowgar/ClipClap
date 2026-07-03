@@ -64,8 +64,8 @@ export function InvoiceTable({
 
   return (
     <div className="space-y-4">
-      <div className="overflow-hidden rounded-lg border border-border">
-        <table className="w-full text-sm">
+      <div className="overflow-x-auto rounded-lg border border-border">
+        <table className="w-full min-w-[640px] text-sm">
           <thead className="bg-secondary/30 text-xs uppercase tracking-wider text-muted-foreground">
             <tr>
               <th className="px-4 py-3 text-left font-medium">Date</th>
