@@ -82,7 +82,7 @@ export function TrimBar({
           role="slider"
           aria-label="Trim start"
           aria-valuenow={start}
-          className="absolute inset-y-0 -ml-1.5 w-3 cursor-ew-resize rounded-sm bg-white"
+          className="absolute inset-y-0 -ml-1.5 w-3 cursor-ew-resize touch-none rounded-sm bg-white before:absolute before:-inset-x-4 before:inset-y-0 before:content-['']"
           style={{ left: `${pct(start)}%` }}
           onPointerDown={dragHandle("start")}
         />
@@ -90,7 +90,7 @@ export function TrimBar({
           role="slider"
           aria-label="Trim end"
           aria-valuenow={end}
-          className="absolute inset-y-0 -ml-1.5 w-3 cursor-ew-resize rounded-sm bg-white"
+          className="absolute inset-y-0 -ml-1.5 w-3 cursor-ew-resize touch-none rounded-sm bg-white before:absolute before:-inset-x-4 before:inset-y-0 before:content-['']"
           style={{ left: `${pct(end)}%` }}
           onPointerDown={dragHandle("end")}
         />

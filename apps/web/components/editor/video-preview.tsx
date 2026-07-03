@@ -65,7 +65,7 @@ function Scrubber({
       }}
       onPointerLeave={() => setHoverPx(null)}
       className={cn(
-        "group relative h-2.5 shrink-0 border-y border-white/[0.08] bg-white/[0.06] transition-[height] duration-150 hover:h-3.5",
+        "group relative h-2.5 shrink-0 touch-none border-y border-white/[0.08] bg-white/[0.06] transition-[height] duration-150 hover:h-3.5 pointer-coarse:h-3.5 before:absolute before:inset-x-0 before:-top-3 before:bottom-0 before:content-['']",
         duration > 0 ? "cursor-pointer" : "cursor-default"
       )}
       title="Seek"
