@@ -9,7 +9,7 @@ import { UserNav } from "./user-nav";
 import { Separator } from "@/components/ui/separator";
 import { Logo } from "@/components/logo";
 
-interface SidebarProps {
+export interface SidebarProps {
   user: {
     name: string | null;
     email: string | null;
@@ -50,20 +50,24 @@ const navSections: {
   },
 ];
 
-export function Sidebar({ user, usage }: SidebarProps) {
+export function SidebarContent({
+  user,
+  usage,
+  onNavigate,
+}: SidebarProps & { onNavigate?: () => void }) {
   const pathname = usePathname();
 
   return (
-    <aside className="flex h-screen w-56 flex-col border-r border-border bg-background">
+    <div className="flex h-full flex-col">
       {/* Logo */}
-      <div className="flex h-14 items-center px-4 border-b border-border">
-        <Link href="/dashboard" className="flex items-center" aria-label="ClipClap home">
+      <div className="flex h-14 shrink-0 items-center px-4 border-b border-border">
+        <Link href="/dashboard" className="flex items-center" aria-label="ClipClap home" onClick={onNavigate}>
           <Logo className="h-6" />
         </Link>
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 space-y-5 p-3">
+      <nav aria-label="Main" className="flex-1 space-y-5 overflow-y-auto p-3">
         {navSections.map((section, i) => (
           <div key={section.heading ?? i} className="space-y-1">
             {section.heading && (
@@ -81,6 +85,7 @@ export function Sidebar({ user, usage }: SidebarProps) {
                 <Link
                   key={item.href}
                   href={item.href}
+                  onClick={onNavigate}
                   className={cn(
                     "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
                     isActive
@@ -98,7 +103,7 @@ export function Sidebar({ user, usage }: SidebarProps) {
       </nav>
 
       {/* Usage */}
-      <div className="p-3">
+      <div className="shrink-0 p-3">
         <UsageBar
           used={usage.minutesUsed}
           limit={usage.minutesLimit}
@@ -108,6 +113,7 @@ export function Sidebar({ user, usage }: SidebarProps) {
         {usage.plan !== "MAX" && (
           <Link
             href="/dashboard/plans"
+            onClick={onNavigate}
             className="mt-2 block w-full rounded-md border border-border py-1.5 text-center text-xs font-medium transition-colors hover:bg-accent"
           >
             Upgrade
@@ -118,13 +124,21 @@ export function Sidebar({ user, usage }: SidebarProps) {
       <Separator />
 
       {/* User */}
-      <div className="p-3">
+      <div className="shrink-0 p-3">
         <UserNav
           name={user.name}
           email={user.email}
           avatarUrl={user.avatarUrl}
         />
       </div>
+    </div>
+  );
+}
+
+export function Sidebar(props: SidebarProps) {
+  return (
+    <aside className="hidden h-full w-56 shrink-0 flex-col border-r border-border bg-background md:flex">
+      <SidebarContent {...props} />
     </aside>
   );
 }
