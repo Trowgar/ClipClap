@@ -41,7 +41,7 @@ export default async function PayoutsPage() {
               Your balance is under review following a refund or chargeback.
             </p>
           )}
-          <div className="mt-5 grid grid-cols-3 gap-4 border-t border-border pt-4">
+          <div className="mt-5 grid grid-cols-1 gap-4 border-t border-border pt-4 sm:grid-cols-3">
             <div>
               <div className="text-xs text-muted-foreground">Clearing</div>
               <div className="mt-0.5 text-sm tabular-nums">{money(referralStats.pendingUsd)}</div>

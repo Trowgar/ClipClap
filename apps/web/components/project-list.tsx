@@ -182,7 +182,7 @@ export function ProjectTable({ projects: initialProjects }: ProjectTableProps) {
                 }}
                 disabled={deletingId === project.id}
                 aria-label={`Delete ${project.title}`}
-                className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40 group-hover:opacity-100 focus:opacity-100"
+                className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-destructive/10 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-40 group-hover:opacity-100 focus:opacity-100 pointer-coarse:opacity-100"
               >
                 <Trash className="h-4 w-4" />
               </button>
