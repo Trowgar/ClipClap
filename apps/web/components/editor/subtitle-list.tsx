@@ -179,7 +179,7 @@ function SubtitleRow({
     <div
       data-idx={index}
       className={cn(
-        "group flex flex-col rounded-lg border p-3 transition-colors",
+        "group flex scroll-mt-[44dvh] flex-col rounded-lg border p-3 transition-colors lg:scroll-mt-0",
         isActive
           ? "border-yellow-300/40 bg-yellow-300/[0.05] ring-1 ring-yellow-300/20"
           : isOverlap
