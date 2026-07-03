@@ -319,12 +319,12 @@ function SubtitleRow({
       </div>
 
       {/* Hover toolbar */}
-      <div className="mt-1.5 flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+      <div className="mt-1.5 flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
         {!isLast && (
           <button
             type="button"
             title="Merge with next"
-            className="rounded p-1 text-neutral-400 hover:bg-white/[0.08] hover:text-white"
+            className="flex items-center justify-center rounded p-1 text-neutral-400 hover:bg-white/[0.08] hover:text-white pointer-coarse:h-10 pointer-coarse:w-10 pointer-coarse:p-0"
             onClick={() => onMergeWithNext(cue.id)}
           >
             <ArrowsInLineVertical size={14} />
@@ -333,7 +333,7 @@ function SubtitleRow({
         <button
           type="button"
           title="Split at playhead"
-          className="rounded p-1 text-neutral-400 hover:bg-white/[0.08] hover:text-white"
+          className="flex items-center justify-center rounded p-1 text-neutral-400 hover:bg-white/[0.08] hover:text-white pointer-coarse:h-10 pointer-coarse:w-10 pointer-coarse:p-0"
           onClick={() => onSplitAtPlayhead(cue.id)}
         >
           <Scissors size={14} />
@@ -341,7 +341,7 @@ function SubtitleRow({
         <button
           type="button"
           title="Play from here"
-          className="rounded p-1 text-neutral-400 hover:bg-white/[0.08] hover:text-white"
+          className="flex items-center justify-center rounded p-1 text-neutral-400 hover:bg-white/[0.08] hover:text-white pointer-coarse:h-10 pointer-coarse:w-10 pointer-coarse:p-0"
           onClick={() => onSeek(cue.start)}
         >
           <Play size={14} weight="fill" />
@@ -349,7 +349,7 @@ function SubtitleRow({
         <button
           type="button"
           title="Delete cue"
-          className="rounded p-1 text-red-400/70 hover:bg-red-400/10 hover:text-red-400"
+          className="flex items-center justify-center rounded p-1 text-red-400/70 hover:bg-red-400/10 hover:text-red-400 pointer-coarse:h-10 pointer-coarse:w-10 pointer-coarse:p-0"
           onClick={() => onDelete(cue.id)}
         >
           <Trash size={14} />
