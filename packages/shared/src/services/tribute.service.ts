@@ -1,7 +1,7 @@
 import { createHash, createHmac, timingSafeEqual } from "crypto";
 import { prisma } from "../lib/prisma";
 import { notifyPaymentEvent } from "./telegram-notification.service";
-import type { Plan, BillingCycle } from "@prisma/client";
+import type { Plan, BillingCycle, TributeWebhookStatus } from "@prisma/client";
 
 export const TRIBUTE_SIGNATURE_HEADER = "trbt-signature";
 
@@ -47,8 +47,6 @@ export interface TributePlanBinding {
   plan: Plan;
   billingCycle: BillingCycle;
 }
-
-export type TributeProductMap = Readonly<Record<string, TributePlanBinding>>;
 
 export interface TributeProductIndex {
   byStartappId: Map<string, TributePlanBinding>;
@@ -165,40 +163,79 @@ export function hashTributeEvent(envelope: TributeWebhookEnvelope): string {
   return createHash("sha256").update(key).digest("hex");
 }
 
+function terminalStatusFor(outcome: TributeProcessOutcome): TributeWebhookStatus {
+  switch (outcome.status) {
+    case "applied":
+    case "cancelled":
+    case "stale_event":
+    case "stale_cancellation":
+      return "APPLIED";
+    case "ignored_event":
+      return "IGNORED";
+    case "unmapped_subscription":
+    case "duplicate": // not reachable here; kept for exhaustiveness
+      return "FAILED";
+  }
+}
+
 export async function processTributeEvent(
   envelope: TributeWebhookEnvelope,
-  productMap: TributeProductMap
+  index: TributeProductIndex
 ): Promise<TributeProcessOutcome> {
   const eventHash = hashTributeEvent(envelope);
 
-  const existing = await prisma.tributeWebhookEvent.findUnique({
-    where: { eventHash },
-  });
-  if (existing) {
-    return { status: "duplicate" };
-  }
-
+  // 1. Ensure an inbox row exists (status RECEIVED). Insert; on unique conflict, inspect.
+  let inserted = true;
   try {
     await prisma.tributeWebhookEvent.create({
-      data: {
-        eventHash,
-        name: envelope.name,
-        payload: envelope as unknown as object,
-      },
+      data: { eventHash, name: envelope.name, payload: envelope as unknown as object, status: "RECEIVED" },
     });
   } catch {
-    return { status: "duplicate" };
+    inserted = false;
   }
 
-  switch (envelope.name) {
-    case "newSubscription":
-    case "renewedSubscription":
-      return applySubscription(envelope, productMap);
-    case "cancelledSubscription":
-      return applyCancellation(envelope);
-    default:
-      return { status: "ignored_event", name: envelope.name };
+  if (!inserted) {
+    const existing = await prisma.tributeWebhookEvent.findUnique({ where: { eventHash } });
+    // Terminal or in-flight -> idempotent no-op. Only RECEIVED/FAILED are (re)claimable.
+    if (!existing || existing.status === "APPLIED" || existing.status === "IGNORED" || existing.status === "PROCESSING") {
+      return { status: "duplicate" };
+    }
   }
+
+  // 2. Atomically claim: RECEIVED/FAILED -> PROCESSING (and bump attempts).
+  const claim = await prisma.tributeWebhookEvent.updateMany({
+    where: { eventHash, status: { in: ["RECEIVED", "FAILED"] } },
+    data: { status: "PROCESSING", attempts: { increment: 1 } },
+  });
+  if (claim.count !== 1) {
+    return { status: "duplicate" }; // another delivery claimed it first
+  }
+
+  // 3. Dispatch to business handlers.
+  let outcome: TributeProcessOutcome;
+  try {
+    outcome = await dispatchTributeEvent(envelope, index);
+  } catch (err) {
+    await prisma.tributeWebhookEvent.update({
+      where: { eventHash },
+      data: { status: "FAILED", lastError: err instanceof Error ? err.message : String(err) },
+    });
+    throw err; // route returns 5xx -> Tribute retries
+  }
+
+  // 4. Persist terminal status.
+  const status = terminalStatusFor(outcome);
+  await prisma.tributeWebhookEvent.update({
+    where: { eventHash },
+    data: {
+      status,
+      outcome: outcome.status,
+      processedAt: status === "APPLIED" || status === "IGNORED" ? new Date() : null,
+      lastError: status === "FAILED" ? `outcome=${outcome.status}` : null,
+    },
+  });
+
+  return outcome;
 }
 
 async function applySubscription(
@@ -358,21 +395,4 @@ export async function dispatchTributeEvent(
     default:
       return { status: "ignored_event", name: envelope.name };
   }
-}
-
-export function loadTributeProductMapFromEnv(env: NodeJS.ProcessEnv): TributeProductMap {
-  const map: Record<string, TributePlanBinding> = {};
-  const tiers: Array<{ envKey: string; plan: Plan; billingCycle: BillingCycle }> = [
-    { envKey: "TRIBUTE_PRODUCT_STARTER_WEEKLY_ID", plan: "STARTER", billingCycle: "WEEKLY" },
-    { envKey: "TRIBUTE_PRODUCT_STARTER_MONTHLY_ID", plan: "STARTER", billingCycle: "MONTHLY" },
-    { envKey: "TRIBUTE_PRODUCT_PLUS_MONTHLY_ID", plan: "PLUS", billingCycle: "MONTHLY" },
-    { envKey: "TRIBUTE_PRODUCT_MAX_MONTHLY_ID", plan: "MAX", billingCycle: "MONTHLY" },
-  ];
-  for (const tier of tiers) {
-    const id = env[tier.envKey];
-    if (id) {
-      map[id] = { plan: tier.plan, billingCycle: tier.billingCycle };
-    }
-  }
-  return map;
 }

@@ -44,6 +44,7 @@ import {
   hashTributeEvent,
   loadTributeProductIndexFromEnv,
   normalizeProductName,
+  processTributeEvent,
   resolveProductBinding,
   verifyTributeSignature,
   type TributeProductIndex,
@@ -315,5 +316,77 @@ describe("dispatchTributeEvent", () => {
   it("ignores unrecognized event names", async () => {
     const outcome = await dispatchTributeEvent(makeEnvelope({ name: "physical_order_shipped" }), index);
     expect(outcome).toEqual({ status: "ignored_event", name: "physical_order_shipped" });
+  });
+});
+
+describe("processTributeEvent (inbox state-machine)", () => {
+  const index = loadTributeProductIndexFromEnv(FULL_ENV);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.notify.mockResolvedValue(undefined);
+    mocks.recordCommission.mockResolvedValue(undefined);
+    mocks.eventCreate.mockResolvedValue({}); // fresh RECEIVED row inserted
+    mocks.eventUpdateMany.mockResolvedValue({ count: 1 }); // claim succeeds
+    mocks.eventUpdate.mockResolvedValue({});
+    mocks.userFindUnique.mockResolvedValue(null);
+    mocks.userUpsert.mockResolvedValue({ id: "user_1" });
+  });
+
+  it("claims a fresh event, applies it, and marks the row APPLIED", async () => {
+    const outcome = await processTributeEvent(makeEnvelope(), index);
+    expect(outcome).toMatchObject({ status: "applied", plan: "STARTER" });
+    expect(mocks.eventUpdateMany).toHaveBeenCalledWith({
+      where: { eventHash: expect.any(String), status: { in: ["RECEIVED", "FAILED"] } },
+      data: { status: "PROCESSING", attempts: { increment: 1 } },
+    });
+    expect(mocks.eventUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "APPLIED" }) })
+    );
+  });
+
+  it("returns duplicate for an already-APPLIED event and does not re-apply", async () => {
+    mocks.eventCreate.mockRejectedValueOnce(new Error("P2002 unique"));
+    mocks.eventFindUnique.mockResolvedValueOnce({ status: "APPLIED" });
+    const outcome = await processTributeEvent(makeEnvelope(), index);
+    expect(outcome).toEqual({ status: "duplicate" });
+    expect(mocks.userUpsert).not.toHaveBeenCalled();
+    expect(mocks.notify).not.toHaveBeenCalled();
+  });
+
+  it("returns duplicate when another worker holds the claim (updateMany count 0)", async () => {
+    mocks.eventCreate.mockRejectedValueOnce(new Error("P2002 unique"));
+    mocks.eventFindUnique.mockResolvedValueOnce({ status: "RECEIVED" });
+    mocks.eventUpdateMany.mockResolvedValueOnce({ count: 0 });
+    const outcome = await processTributeEvent(makeEnvelope(), index);
+    expect(outcome).toEqual({ status: "duplicate" });
+    expect(mocks.userUpsert).not.toHaveBeenCalled();
+  });
+
+  it("re-processes a previously FAILED event once config is fixed", async () => {
+    mocks.eventCreate.mockRejectedValueOnce(new Error("P2002 unique"));
+    mocks.eventFindUnique.mockResolvedValueOnce({ status: "FAILED" });
+    const outcome = await processTributeEvent(makeEnvelope(), index);
+    expect(outcome).toMatchObject({ status: "applied" });
+  });
+
+  it("marks the row FAILED on an unmapped event", async () => {
+    const env = makeEnvelope();
+    const outcome = await processTributeEvent(
+      { ...env, payload: { ...env.payload, web_app_link: "https://t.me/tribute/app?startapp=zzz", subscription_name: "Nope" } },
+      index
+    );
+    expect(outcome).toMatchObject({ status: "unmapped_subscription" });
+    expect(mocks.eventUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "FAILED" }) })
+    );
+  });
+
+  it("marks the row IGNORED on an unrecognized event", async () => {
+    const outcome = await processTributeEvent(makeEnvelope({ name: "physical_order_shipped" }), index);
+    expect(outcome).toMatchObject({ status: "ignored_event" });
+    expect(mocks.eventUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "IGNORED" }) })
+    );
   });
 });
