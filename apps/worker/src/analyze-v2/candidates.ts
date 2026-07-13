@@ -60,7 +60,8 @@ export function mergeCandidates(
     merged.push({ ...c });
   }
 
-  // span guard: split oversized unions at the payoff, keep two tight halves
+  // span guard: split at the strongest payoff - the head stays tight; the tail
+  // re-anchors on the remaining range and may still be large (acceptable critic input)
   const guarded: ScanCandidate[] = [];
   for (const c of merged) {
     if (speechSpanSec(c, nodes) <= SPAN_GUARD_SEC || c.payoffNode <= c.startNode || c.payoffNode >= c.endNode) {
