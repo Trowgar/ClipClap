@@ -5,6 +5,11 @@ import type { Plan, BillingCycle } from "@prisma/client";
 
 export const TRIBUTE_SIGNATURE_HEADER = "trbt-signature";
 
+export function canonicalTributeEventName(name: string): string {
+  // "new_subscription" | "newSubscription" | "New-Subscription" -> "newsubscription"
+  return name.toLowerCase().replace(/[_\s-]/g, "");
+}
+
 export type TributeEventName =
   | "newSubscription"
   | "renewedSubscription"
@@ -69,12 +74,15 @@ export function verifyTributeSignature(
 }
 
 export function hashTributeEvent(envelope: TributeWebhookEnvelope): string {
+  const p = envelope.payload;
+  // Stable across Tribute retries: excludes sent_at (which changes per retry),
+  // keyed on the canonical event + subscriber + period + event creation time.
   const key = [
-    envelope.name,
-    envelope.sent_at,
-    envelope.payload?.subscription_id ?? "",
-    envelope.payload?.period_id ?? "",
-    envelope.payload?.telegram_user_id ?? "",
+    canonicalTributeEventName(envelope.name),
+    p.telegram_user_id ?? "",
+    p.subscription_id ?? "",
+    p.period_id ?? "",
+    envelope.created_at ?? "",
   ].join("|");
   return createHash("sha256").update(key).digest("hex");
 }
