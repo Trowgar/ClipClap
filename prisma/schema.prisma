@@ -83,6 +83,17 @@ enum JobStepStatus {
   FAILED
 }
 
+enum AnalyzeEngine {
+  LEGACY
+  RECALL_CRITIC
+}
+
+enum NoClipsReason {
+  NO_USABLE_SPEECH
+  NO_VIABLE_MOMENTS
+  PARTIAL_TRANSCRIPT
+}
+
 enum TelegramDeliveryStatus {
   PENDING
   DELIVERED
@@ -287,6 +298,16 @@ model Job {
   transcription                 String?   @db.Text
   highlights                    Json?
   subtitles                     Boolean   @default(true)
+  language              String?
+  languageRaw           String?
+  noClipsReason         NoClipsReason?
+  normalizedArtifactKey String?
+  analyzeEngine         AnalyzeEngine?
+  highlightsVersion     Int            @default(1)
+  transcriptCoverage    Float?
+  transcriptPartial     Boolean        @default(false)
+  analysisInputTokens   Int?
+  analysisOutputTokens  Int?
   createdAt                     DateTime  @default(now())
 
   clips            Clip[]
@@ -352,6 +373,14 @@ model Clip {
   endTime        Float
   subtitles      Boolean   @default(true)
   subtitleTrack  Json?
+  description String?
+  score       Float?
+  language    String?
+  lowQuality  Boolean @default(false)
+  hookStart   Float? // source-absolute seconds, same timeline as startTime/endTime
+  hookEnd     Float? // source-absolute seconds
+  payoffAt    Float? // source-absolute seconds
+  clipKind    String? // TS union ClipKind in shared types
   parentClipId   String?
   parentClip     Clip?     @relation("ClipRetrim", fields: [parentClipId], references: [id])
   retrims        Clip[]    @relation("ClipRetrim")
@@ -363,6 +392,7 @@ model Clip {
   @@index([userId])
   @@index([expiresAt, deletedAt])
   @@index([userId, createdAt(sort: Desc)])
+  @@index([jobId, score(sort: Desc)])
   @@map("clips")
 }
 
