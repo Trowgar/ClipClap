@@ -294,11 +294,14 @@ if s.leadingStrength < 0.8 and s.index > 0:
    s = nearest earlier node with leadingStrength >= 0.8
        within MAX_START_EXPANSION_SEC   ?? drop("no_clean_start")
 
-// 2. payoff containment, then end selection with bounded tail
+// 2. payoff containment, then end selection with bounded tail.
+//    The critic's end_node is HONORED when its tail past the payoff is within
+//    PAYOFF_MAX_TAIL_SEC; the pull-back below fires only on genuine rambling.
 if e.index < p.index: e = p
-e = strongest-boundary node in [p.end, p.end + PAYOFF_MAX_TAIL_SEC]       // prefer >= 0.8
-    ?? strongest-boundary node in [p.end, p.end + PAYOFF_MAX_TAIL_SEC + SENTENCE_SLACK_SEC]
-    ?? p                                    // ending right at the payoff is always legal
+if (e.end - p.end) > PAYOFF_MAX_TAIL_SEC:
+   e = strongest-boundary node in [p.end, p.end + PAYOFF_MAX_TAIL_SEC]    // prefer >= 0.8
+       ?? strongest-boundary node in [p.end, p.end + PAYOFF_MAX_TAIL_SEC + SENTENCE_SLACK_SEC]
+       ?? p                                 // ending right at the payoff is always legal
 if e.hasWords == false:
    e = lastWordBearingNodeBefore(e)
    if e == null or e.index < p.index: drop("opaque_end")   // re-check containment
