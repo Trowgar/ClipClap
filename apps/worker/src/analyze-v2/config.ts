@@ -32,7 +32,9 @@ export interface AnalyzeConfig {
 type Env = Record<string, string | undefined>;
 
 function num(env: Env, key: string, fallback: number): number {
-  const parsed = Number(env[key]);
+  const raw = env[key];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 

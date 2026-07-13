@@ -27,4 +27,24 @@ describe("loadAnalyzeConfig", () => {
     expect(cfg.scoreThreshold).toBe(0.7);
     expect(cfg.softCap).toBe(12);
   });
+
+  it("treats blank env values as absent", () => {
+    const cfg = loadAnalyzeConfig({ CLIP_SOFT_CAP: "", CLIP_MAX_SEC: "  " });
+    expect(cfg.softCap).toBe(12);
+    expect(cfg.maxSec).toBe(90);
+  });
+
+  it("clamps v2Pct to the 0..100 range", () => {
+    expect(loadAnalyzeConfig({ ANALYZE_V2_PCT: "150" }).v2Pct).toBe(100);
+    expect(loadAnalyzeConfig({ ANALYZE_V2_PCT: "-5" }).v2Pct).toBe(0);
+  });
+
+  it("falls back to legacy for unknown engines and accepts shadow", () => {
+    expect(loadAnalyzeConfig({ ANALYZE_ENGINE: "garbage" }).engine).toBe(
+      "legacy",
+    );
+    expect(loadAnalyzeConfig({ ANALYZE_ENGINE: "shadow" }).engine).toBe(
+      "shadow",
+    );
+  });
 });
