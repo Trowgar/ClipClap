@@ -25,7 +25,7 @@
 | `.env.example` | Document `TRIBUTE_PRODUCT_*_NAME` vars | Modify |
 
 **Conventions used below**
-- Run tests in the web container: `docker compose exec -w /app web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
+- Run tests in the web container: `docker compose exec -w /app/apps/web web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
   (the web container has `@clipclap/shared` and `vitest`; `-w /app` sets the repo root).
 - Commit identity is the repo default (`Trowgar <trowgar@yahoo.com>`); do **not** add a Claude attribution trailer.
 - All work happens on the current branch `fix/tribute-webhook-activation`.
@@ -261,7 +261,7 @@ describe("hashTributeEvent", () => {
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `docker compose exec -w /app web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
+Run: `docker compose exec -w /app/apps/web web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
 Expected: FAIL — `canonicalTributeEventName` is not exported, and `hashTributeEvent` still includes `sent_at`.
 
 - [ ] **Step 3: Add `canonicalTributeEventName` and rewrite `hashTributeEvent`**
@@ -291,7 +291,7 @@ export function hashTributeEvent(envelope: TributeWebhookEnvelope): string {
 
 - [ ] **Step 4: Run the tests to verify signature/normalization/hash pass**
 
-Run: `docker compose exec -w /app web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
+Run: `docker compose exec -w /app/apps/web web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
 Expected: the `signature`, `canonicalTributeEventName`, and `hashTributeEvent` describes PASS. (Other imports referenced later don't exist yet, but this file currently imports only the four symbols above, so the run is green.)
 
 - [ ] **Step 5: Commit**
@@ -423,7 +423,7 @@ describe("resolveProductBinding", () => {
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `docker compose exec -w /app web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
+Run: `docker compose exec -w /app/apps/web web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
 Expected: FAIL — `extractStartapp`, `normalizeProductName`, `loadTributeProductIndexFromEnv`, `resolveProductBinding`, `TributeProductIndex` are undefined.
 
 - [ ] **Step 3: Implement the product index**
@@ -512,7 +512,7 @@ Also delete the now-unused `TributeProductMap` export and any remaining referenc
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `docker compose exec -w /app web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
+Run: `docker compose exec -w /app/apps/web web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
 Expected: all currently-defined describes PASS. (The file does not yet import `processTributeEvent`/`dispatchTributeEvent`, added in Tasks 4-5.)
 
 - [ ] **Step 5: Document the env vars**
@@ -645,7 +645,7 @@ describe("dispatchTributeEvent", () => {
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `docker compose exec -w /app web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
+Run: `docker compose exec -w /app/apps/web web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
 Expected: FAIL — `dispatchTributeEvent` is undefined.
 
 - [ ] **Step 3: Extend the outcome type and rewrite handlers + dispatch**
@@ -838,7 +838,7 @@ Note: the top-of-file import `import { notifyPaymentEvent } from "./telegram-not
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `docker compose exec -w /app web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
+Run: `docker compose exec -w /app/apps/web web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
 Expected: the `dispatchTributeEvent` describe PASSES along with all prior describes.
 
 - [ ] **Step 5: Commit**
@@ -936,7 +936,7 @@ describe("processTributeEvent (inbox state-machine)", () => {
 
 - [ ] **Step 2: Run to verify failure**
 
-Run: `docker compose exec -w /app web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
+Run: `docker compose exec -w /app/apps/web web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
 Expected: FAIL — the rewritten `processTributeEvent` doesn't exist yet (old one referenced `productMap`/removed types).
 
 - [ ] **Step 3: Rewrite `processTributeEvent`**
@@ -1026,7 +1026,7 @@ export async function processTributeEvent(
 
 - [ ] **Step 4: Run to verify pass**
 
-Run: `docker compose exec -w /app web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
+Run: `docker compose exec -w /app/apps/web web npx vitest run --root ../.. packages/shared/src/services/__tests__/tribute.service.test.ts`
 Expected: ALL describes PASS.
 
 - [ ] **Step 5: Typecheck the shared package**
@@ -1238,7 +1238,7 @@ No code changes — this task applies the migration, runs the full suite, and ex
 
 - [ ] **Step 1: Full test suite (shared)**
 
-Run: `docker compose exec -w /app web npx vitest run --root ../.. packages/shared/src`
+Run: `docker compose exec -w /app/apps/web web npx vitest run --root ../.. packages/shared/src`
 Expected: PASS, including all `tribute.service.test.ts` describes.
 
 - [ ] **Step 2: Typecheck shared + web + worker**
