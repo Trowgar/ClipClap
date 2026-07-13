@@ -1,7 +1,7 @@
 # Highlight Core Redesign: Recall-Judge on a Sentence-Graph Spine
 
 **Date:** 2026-07-13
-**Status:** Revised per owner design review (2026-07-13); pending owner re-approval before implementation plan
+**Status:** Approved (2026-07-13, post-review revision) - ready for implementation plan
 **Scope:** ANALYZE stage rewrite + in-scope touchpoints in TRANSCRIBE (language capture, long-video chunking), DOWNLOAD (A/V normalization), RENDER (new Clip fields, duration/skew assertions), consumers (description slot, 0-clip and low-quality messaging).
 
 ## 1. Problem
