@@ -39,8 +39,13 @@ vi.mock("../referral.service", () => ({
 
 import {
   canonicalTributeEventName,
+  extractStartapp,
   hashTributeEvent,
+  loadTributeProductIndexFromEnv,
+  normalizeProductName,
+  resolveProductBinding,
   verifyTributeSignature,
+  type TributeProductIndex,
   type TributeWebhookEnvelope,
 } from "../tribute.service";
 
@@ -126,5 +131,94 @@ describe("hashTributeEvent", () => {
     const a = makeEnvelope();
     const b = makeEnvelope({ payload: { ...makeEnvelope().payload, period_id: "396298" } });
     expect(hashTributeEvent(a)).not.toBe(hashTributeEvent(b));
+  });
+});
+
+const FULL_ENV = {
+  TRIBUTE_PRODUCT_STARTER_WEEKLY_ID: "UZa",
+  TRIBUTE_PRODUCT_STARTER_WEEKLY_NAME: "Starter Weekly",
+  TRIBUTE_PRODUCT_STARTER_MONTHLY_ID: "UZd",
+  TRIBUTE_PRODUCT_STARTER_MONTHLY_NAME: "Starter Monthly",
+  TRIBUTE_PRODUCT_PLUS_MONTHLY_ID: "UZh",
+  TRIBUTE_PRODUCT_PLUS_MONTHLY_NAME: "Plus Monthly",
+  TRIBUTE_PRODUCT_MAX_MONTHLY_ID: "UZi",
+  TRIBUTE_PRODUCT_MAX_MONTHLY_NAME: "Max Monthly",
+} as unknown as NodeJS.ProcessEnv;
+
+describe("extractStartapp", () => {
+  it("returns the startapp param", () => {
+    expect(extractStartapp("https://t.me/tribute/app?startapp=sUZa")).toBe("sUZa");
+  });
+  it("returns undefined for missing/empty/malformed links", () => {
+    expect(extractStartapp(undefined)).toBeUndefined();
+    expect(extractStartapp("")).toBeUndefined();
+    expect(extractStartapp("https://t.me/tribute/app?startapp=")).toBeUndefined();
+    expect(extractStartapp("not a url")).toBeUndefined();
+  });
+});
+
+describe("normalizeProductName", () => {
+  it("lowercases and strips punctuation/whitespace, keeping unicode letters", () => {
+    expect(normalizeProductName("Starter Weekly")).toBe("starterweekly");
+    expect(normalizeProductName("  Plus-Monthly ")).toBe("plusmonthly");
+    expect(normalizeProductName("Стартер Недельный")).toBe("стартернедельный");
+  });
+});
+
+describe("loadTributeProductIndexFromEnv", () => {
+  it("indexes each tier by startapp id and normalized name", () => {
+    const index = loadTributeProductIndexFromEnv(FULL_ENV);
+    expect(index.byStartappId.get("UZa")).toEqual({ plan: "STARTER", billingCycle: "WEEKLY" });
+    expect(index.byNormalizedName.get("startermonthly")).toEqual({ plan: "STARTER", billingCycle: "MONTHLY" });
+  });
+
+  it("throws when two tiers collide on the same id", () => {
+    expect(() =>
+      loadTributeProductIndexFromEnv({
+        ...FULL_ENV,
+        TRIBUTE_PRODUCT_PLUS_MONTHLY_ID: "UZa", // collides with STARTER_WEEKLY
+      } as unknown as NodeJS.ProcessEnv)
+    ).toThrow(/duplicate/i);
+  });
+
+  it("throws in production when a configured tier is missing its _NAME", () => {
+    const env = { ...FULL_ENV, NODE_ENV: "production" } as unknown as NodeJS.ProcessEnv;
+    delete (env as Record<string, unknown>).TRIBUTE_PRODUCT_STARTER_WEEKLY_NAME;
+    expect(() => loadTributeProductIndexFromEnv(env)).toThrow(/production/i);
+  });
+});
+
+describe("resolveProductBinding", () => {
+  const index = loadTributeProductIndexFromEnv(FULL_ENV);
+  const base = makeEnvelope().payload;
+
+  it("resolves via the s-stripped startapp code", () => {
+    expect(resolveProductBinding(base, index)).toEqual({
+      binding: { plan: "STARTER", billingCycle: "WEEKLY" },
+      resolvedBy: "startapp_stripped",
+    });
+  });
+
+  it("resolves via an exact (non-prefixed) startapp code", () => {
+    const payload = { ...base, web_app_link: "https://t.me/tribute/app?startapp=UZd" };
+    expect(resolveProductBinding(payload, index)?.resolvedBy).toBe("startapp_exact");
+  });
+
+  it("falls back to subscription_name when web_app_link is absent", () => {
+    const payload = { ...base, web_app_link: undefined, subscription_name: "Plus Monthly" };
+    expect(resolveProductBinding(payload, index)).toEqual({
+      binding: { plan: "PLUS", billingCycle: "MONTHLY" },
+      resolvedBy: "subscription_name",
+    });
+  });
+
+  it("falls back to subscription_name when web_app_link is malformed", () => {
+    const payload = { ...base, web_app_link: "not a url", subscription_name: "Max Monthly" };
+    expect(resolveProductBinding(payload, index)?.binding).toEqual({ plan: "MAX", billingCycle: "MONTHLY" });
+  });
+
+  it("is case-sensitive on the startapp id and returns undefined when nothing matches", () => {
+    const payload = { ...base, web_app_link: "https://t.me/tribute/app?startapp=uza", subscription_name: "Unknown" };
+    expect(resolveProductBinding(payload, index)).toBeUndefined();
   });
 });

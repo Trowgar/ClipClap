@@ -50,6 +50,82 @@ export interface TributePlanBinding {
 
 export type TributeProductMap = Readonly<Record<string, TributePlanBinding>>;
 
+export interface TributeProductIndex {
+  byStartappId: Map<string, TributePlanBinding>;
+  byNormalizedName: Map<string, TributePlanBinding>;
+}
+
+export type ProductResolvedBy = "startapp_exact" | "startapp_stripped" | "subscription_name";
+
+export function extractStartapp(webAppLink?: string | null): string | undefined {
+  if (!webAppLink?.trim()) return undefined;
+  try {
+    return new URL(webAppLink).searchParams.get("startapp")?.trim() || undefined;
+  } catch {
+    return undefined; // malformed URL -> caller falls back to subscription_name
+  }
+}
+
+export function normalizeProductName(value: string): string {
+  return value.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+const TRIBUTE_TIERS: Array<{ idKey: string; nameKey: string; plan: Plan; billingCycle: BillingCycle }> = [
+  { idKey: "TRIBUTE_PRODUCT_STARTER_WEEKLY_ID", nameKey: "TRIBUTE_PRODUCT_STARTER_WEEKLY_NAME", plan: "STARTER", billingCycle: "WEEKLY" },
+  { idKey: "TRIBUTE_PRODUCT_STARTER_MONTHLY_ID", nameKey: "TRIBUTE_PRODUCT_STARTER_MONTHLY_NAME", plan: "STARTER", billingCycle: "MONTHLY" },
+  { idKey: "TRIBUTE_PRODUCT_PLUS_MONTHLY_ID", nameKey: "TRIBUTE_PRODUCT_PLUS_MONTHLY_NAME", plan: "PLUS", billingCycle: "MONTHLY" },
+  { idKey: "TRIBUTE_PRODUCT_MAX_MONTHLY_ID", nameKey: "TRIBUTE_PRODUCT_MAX_MONTHLY_NAME", plan: "MAX", billingCycle: "MONTHLY" },
+];
+
+export function loadTributeProductIndexFromEnv(env: NodeJS.ProcessEnv): TributeProductIndex {
+  const byStartappId = new Map<string, TributePlanBinding>();
+  const byNormalizedName = new Map<string, TributePlanBinding>();
+  const isProd = env.NODE_ENV === "production";
+
+  const add = (map: Map<string, TributePlanBinding>, key: string, binding: TributePlanBinding, label: string) => {
+    const existing = map.get(key);
+    if (existing && (existing.plan !== binding.plan || existing.billingCycle !== binding.billingCycle)) {
+      throw new Error(`Duplicate Tribute product mapping key "${key}" (${label})`);
+    }
+    map.set(key, binding);
+  };
+
+  for (const tier of TRIBUTE_TIERS) {
+    const id = env[tier.idKey]?.trim();
+    const name = env[tier.nameKey]?.trim();
+    if (!id) continue; // tier not configured
+    const binding: TributePlanBinding = { plan: tier.plan, billingCycle: tier.billingCycle };
+    add(byStartappId, id, binding, `${tier.plan}/${tier.billingCycle}`);
+    if (name) {
+      add(byNormalizedName, normalizeProductName(name), binding, `${tier.plan}/${tier.billingCycle}`);
+    } else if (isProd) {
+      throw new Error(`Tribute product ${tier.plan}/${tier.billingCycle} is missing ${tier.nameKey} (required in production)`);
+    }
+  }
+
+  return { byStartappId, byNormalizedName };
+}
+
+export function resolveProductBinding(
+  payload: TributeSubscriptionPayload,
+  index: TributeProductIndex
+): { binding: TributePlanBinding; resolvedBy: ProductResolvedBy } | undefined {
+  const startapp = extractStartapp(payload.web_app_link);
+  if (startapp) {
+    const exact = index.byStartappId.get(startapp);
+    if (exact) return { binding: exact, resolvedBy: "startapp_exact" };
+    if (startapp.startsWith("s")) {
+      const stripped = index.byStartappId.get(startapp.slice(1));
+      if (stripped) return { binding: stripped, resolvedBy: "startapp_stripped" };
+    }
+  }
+  if (payload.subscription_name) {
+    const byName = index.byNormalizedName.get(normalizeProductName(payload.subscription_name));
+    if (byName) return { binding: byName, resolvedBy: "subscription_name" };
+  }
+  return undefined;
+}
+
 export type TributeProcessOutcome =
   | { status: "duplicate" }
   | { status: "unmapped_subscription"; subscriptionId: string }
