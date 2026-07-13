@@ -39,6 +39,7 @@ vi.mock("../referral.service", () => ({
 
 import {
   canonicalTributeEventName,
+  dispatchTributeEvent,
   extractStartapp,
   hashTributeEvent,
   loadTributeProductIndexFromEnv,
@@ -220,5 +221,99 @@ describe("resolveProductBinding", () => {
   it("is case-sensitive on the startapp id and returns undefined when nothing matches", () => {
     const payload = { ...base, web_app_link: "https://t.me/tribute/app?startapp=uza", subscription_name: "Unknown" };
     expect(resolveProductBinding(payload, index)).toBeUndefined();
+  });
+});
+
+describe("dispatchTributeEvent", () => {
+  const index = loadTributeProductIndexFromEnv(FULL_ENV);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.notify.mockResolvedValue(undefined);
+    mocks.recordCommission.mockResolvedValue(undefined);
+  });
+
+  it("activates the plan on new_subscription and asserts full-ms period end", async () => {
+    mocks.userFindUnique.mockResolvedValueOnce(null);
+    mocks.userUpsert.mockResolvedValueOnce({ id: "user_1" });
+    const outcome = await dispatchTributeEvent(makeEnvelope(), index);
+    expect(outcome).toEqual({ status: "applied", userId: "user_1", plan: "STARTER", eventName: "new_subscription" });
+    expect(mocks.userUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { telegramId: "332548055" },
+        update: expect.objectContaining({
+          plan: "STARTER",
+          billingCycle: "WEEKLY",
+          currentPeriodEnd: new Date("2026-07-18T12:44:17.751Z"),
+          subscriptionStatus: "ACTIVE",
+          tributeSubscriptionId: "219056",
+        }),
+      })
+    );
+    expect(mocks.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("activates via subscription_name when web_app_link is missing", async () => {
+    mocks.userFindUnique.mockResolvedValueOnce(null);
+    mocks.userUpsert.mockResolvedValueOnce({ id: "user_1" });
+    const env = makeEnvelope();
+    const outcome = await dispatchTributeEvent(
+      { ...env, payload: { ...env.payload, web_app_link: undefined } },
+      index
+    );
+    expect(outcome).toMatchObject({ status: "applied", plan: "STARTER" });
+  });
+
+  it("returns unmapped_subscription and does not upsert when nothing matches", async () => {
+    const env = makeEnvelope();
+    const outcome = await dispatchTributeEvent(
+      { ...env, payload: { ...env.payload, web_app_link: "https://t.me/tribute/app?startapp=zzz", subscription_name: "Nope" } },
+      index
+    );
+    expect(outcome).toEqual({ status: "unmapped_subscription", subscriptionId: "219056" });
+    expect(mocks.userUpsert).not.toHaveBeenCalled();
+  });
+
+  it("does not shrink currentPeriodEnd (stale renewal)", async () => {
+    mocks.userFindUnique.mockResolvedValueOnce({ id: "user_1", currentPeriodEnd: new Date("2026-08-01T00:00:00Z") });
+    const outcome = await dispatchTributeEvent(makeEnvelope({ name: "renewed_subscription" }), index);
+    expect(outcome).toEqual({ status: "stale_event", userId: "user_1" });
+    expect(mocks.userUpsert).not.toHaveBeenCalled();
+  });
+
+  it("does not roll back activation when the notification throws", async () => {
+    mocks.userFindUnique.mockResolvedValueOnce(null);
+    mocks.userUpsert.mockResolvedValueOnce({ id: "user_1" });
+    mocks.notify.mockRejectedValueOnce(new Error("telegram down"));
+    const outcome = await dispatchTributeEvent(makeEnvelope(), index);
+    expect(outcome).toMatchObject({ status: "applied" });
+  });
+
+  it("cancels with grace when expires_at is in the future and the subscription matches", async () => {
+    mocks.userFindUnique.mockResolvedValueOnce({ id: "user_1", tributeSubscriptionId: "219056" });
+    mocks.userUpdate.mockResolvedValueOnce({});
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+    const env = makeEnvelope({ name: "cancelled_subscription" });
+    const outcome = await dispatchTributeEvent(
+      { ...env, payload: { ...env.payload, expires_at: future } },
+      index
+    );
+    expect(outcome).toEqual({ status: "cancelled", userId: "user_1", eventName: "cancelled_subscription" });
+    expect(mocks.userUpdate).toHaveBeenCalledWith({
+      where: { id: "user_1" },
+      data: expect.objectContaining({ subscriptionStatus: "CANCELED_GRACE" }),
+    });
+  });
+
+  it("ignores a cancellation for a different subscription (stale)", async () => {
+    mocks.userFindUnique.mockResolvedValueOnce({ id: "user_1", tributeSubscriptionId: "999999" });
+    const outcome = await dispatchTributeEvent(makeEnvelope({ name: "cancelled_subscription" }), index);
+    expect(outcome).toEqual({ status: "stale_cancellation", userId: "user_1" });
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
+
+  it("ignores unrecognized event names", async () => {
+    const outcome = await dispatchTributeEvent(makeEnvelope({ name: "physical_order_shipped" }), index);
+    expect(outcome).toEqual({ status: "ignored_event", name: "physical_order_shipped" });
   });
 });

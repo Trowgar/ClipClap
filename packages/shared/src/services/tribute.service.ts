@@ -131,7 +131,9 @@ export type TributeProcessOutcome =
   | { status: "unmapped_subscription"; subscriptionId: string }
   | { status: "ignored_event"; name: string }
   | { status: "applied"; userId: string; plan: Plan; eventName: string }
-  | { status: "cancelled"; userId: string; eventName: string };
+  | { status: "cancelled"; userId: string; eventName: string }
+  | { status: "stale_event"; userId: string }
+  | { status: "stale_cancellation"; userId: string };
 
 export function verifyTributeSignature(
   rawBody: string,
@@ -201,22 +203,40 @@ export async function processTributeEvent(
 
 async function applySubscription(
   envelope: TributeWebhookEnvelope,
-  productMap: TributeProductMap
+  index: TributeProductIndex
 ): Promise<TributeProcessOutcome> {
   const payload = envelope.payload;
-  const binding =
-    (payload.period_id ? productMap[payload.period_id] : undefined) ??
-    productMap[payload.subscription_id];
-  if (!binding) {
-    return {
-      status: "unmapped_subscription",
-      subscriptionId: payload.period_id || payload.subscription_id,
-    };
+  const resolved = resolveProductBinding(payload, index);
+  if (!resolved) {
+    console.error("[tribute] product mapping failed", {
+      eventName: envelope.name,
+      telegramUserId: payload.telegram_user_id,
+      subscriptionId: payload.subscription_id,
+      periodId: payload.period_id,
+      channelId: payload.channel_id,
+      subscriptionName: payload.subscription_name,
+      startapp: extractStartapp(payload.web_app_link),
+    });
+    return { status: "unmapped_subscription", subscriptionId: String(payload.subscription_id) };
+  }
+  const { binding, resolvedBy } = resolved;
+  if (resolvedBy === "subscription_name") {
+    console.info("[tribute] product resolved via subscription_name (startapp mapping missed)", {
+      subscriptionName: payload.subscription_name,
+    });
   }
 
   const telegramId = String(payload.telegram_user_id);
   const expiresAt = new Date(payload.expires_at);
   const tributeSubscriptionId = String(payload.subscription_id);
+
+  const existing = await prisma.user.findUnique({
+    where: { telegramId },
+    select: { id: true, currentPeriodEnd: true },
+  });
+  if (existing?.currentPeriodEnd && expiresAt < existing.currentPeriodEnd) {
+    return { status: "stale_event", userId: existing.id };
+  }
 
   const user = await prisma.user.upsert({
     where: { telegramId },
@@ -240,27 +260,17 @@ async function applySubscription(
     },
   });
 
-  await notifyPaymentEvent(user.id, {
-    kind:
-      envelope.name === "newSubscription"
-        ? "subscription_activated"
-        : "subscription_renewed",
-    plan: binding.plan,
-    periodEnd: expiresAt,
-  });
-
+  // Referral accrual is non-critical: never let it fail the activation.
   try {
     const amount = payload.amount ?? payload.price ?? 0;
     if (amount > 0) {
       const currency = (payload.currency ?? "usd").toLowerCase();
-      const externalPaymentId =
-        payload.period_id ?? `${tributeSubscriptionId}:${payload.expires_at}`;
+      const externalPaymentId = payload.period_id ?? `${tributeSubscriptionId}:${payload.expires_at}`;
       const { recordCommission } = await import("./referral.service");
       const { exchangeRateToUsd, REFERRAL_CONFIG } = await import("../config/referral");
       const rate = exchangeRateToUsd(currency);
-      const grossAmountUsd = (amount / 100) * rate; // Tribute amounts are in minor units
+      const grossAmountUsd = (amount / 100) * rate;
       const feeRateBps = REFERRAL_CONFIG.feeRateBps.TRIBUTE ?? 0;
-      // bt.fee / 100 - Stripe prices for this product are USD-only
       const processorFeeUsd = (grossAmountUsd * feeRateBps) / 10000;
       await recordCommission({
         payerUserId: user.id,
@@ -276,31 +286,44 @@ async function applySubscription(
     }
   } catch (err) {
     console.error("[referral] accrual failed:", err);
-    // Do NOT rethrow - referral is non-critical relative to Tribute subscription processing.
   }
 
-  return {
-    status: "applied",
-    userId: user.id,
-    plan: binding.plan,
-    eventName: envelope.name,
-  };
+  // Notification is best-effort: a Telegram failure must NOT roll back paid access.
+  try {
+    await notifyPaymentEvent(user.id, {
+      kind: envelope.name && canonicalTributeEventName(envelope.name) === "newsubscription"
+        ? "subscription_activated"
+        : "subscription_renewed",
+      plan: binding.plan,
+      periodEnd: expiresAt,
+    });
+  } catch (err) {
+    console.warn("[tribute] notification failed (activation stands):", err instanceof Error ? err.message : err);
+  }
+
+  return { status: "applied", userId: user.id, plan: binding.plan, eventName: envelope.name };
 }
 
 async function applyCancellation(
   envelope: TributeWebhookEnvelope
 ): Promise<TributeProcessOutcome> {
-  const telegramId = String(envelope.payload.telegram_user_id);
-  const expiresAt = new Date(envelope.payload.expires_at);
+  const payload = envelope.payload;
+  const telegramId = String(payload.telegram_user_id);
+  const expiresAt = new Date(payload.expires_at);
 
   const user = await prisma.user.findUnique({ where: { telegramId } });
   if (!user) {
     return { status: "ignored_event", name: envelope.name };
   }
+  // A late cancellation for a superseded subscription must not cancel a newer one.
+  if (
+    user.tributeSubscriptionId &&
+    String(user.tributeSubscriptionId) !== String(payload.subscription_id)
+  ) {
+    return { status: "stale_cancellation", userId: user.id };
+  }
 
-  const now = new Date();
-  const stillActive = expiresAt > now;
-
+  const stillActive = expiresAt > new Date();
   await prisma.user.update({
     where: { id: user.id },
     data: {
@@ -309,16 +332,32 @@ async function applyCancellation(
     },
   });
 
-  // Cancellation ends future Tribute billing; there is no past payment to claw
-  // back here. Future renewals simply stop arriving. (Refund events, if Tribute
-  // ever sends them, would be handled separately.)
-
-  await notifyPaymentEvent(user.id, {
-    kind: "subscription_canceled",
-    graceEndsAt: stillActive ? expiresAt : null,
-  });
+  try {
+    await notifyPaymentEvent(user.id, {
+      kind: "subscription_canceled",
+      graceEndsAt: stillActive ? expiresAt : null,
+    });
+  } catch (err) {
+    console.warn("[tribute] cancel notification failed:", err instanceof Error ? err.message : err);
+  }
 
   return { status: "cancelled", userId: user.id, eventName: envelope.name };
+}
+
+export async function dispatchTributeEvent(
+  envelope: TributeWebhookEnvelope,
+  index: TributeProductIndex
+): Promise<TributeProcessOutcome> {
+  switch (canonicalTributeEventName(envelope.name)) {
+    case "newsubscription":
+    case "renewedsubscription":
+      return applySubscription(envelope, index);
+    case "cancelledsubscription":
+    case "canceledsubscription":
+      return applyCancellation(envelope);
+    default:
+      return { status: "ignored_event", name: envelope.name };
+  }
 }
 
 export function loadTributeProductMapFromEnv(env: NodeJS.ProcessEnv): TributeProductMap {
