@@ -68,6 +68,18 @@ async function main() {
     return;
   }
 
+  // Refuse to clobber a DIFFERENT active subscription the user may have acquired.
+  if (
+    before?.subscriptionStatus === "ACTIVE" &&
+    before.tributeSubscriptionId &&
+    String(before.tributeSubscriptionId) !== String(payload.subscription_id)
+  ) {
+    console.log(
+      `[replay] user already has a different active Tribute subscription (${before.tributeSubscriptionId}); refusing to overwrite. No action taken.`
+    );
+    return;
+  }
+
   const activationInstant = new Date();
   const compensatedEnd = new Date(activationInstant.getTime() + COMPENSATION_DAYS * DAY_MS);
   console.log("[replay] would set currentPeriodEnd (compensation)", compensatedEnd.toISOString());

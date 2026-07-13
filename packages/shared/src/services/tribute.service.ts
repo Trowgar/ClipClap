@@ -2,6 +2,7 @@ import { createHash, createHmac, timingSafeEqual } from "crypto";
 import { prisma } from "../lib/prisma";
 import { notifyPaymentEvent } from "./telegram-notification.service";
 import type { Plan, BillingCycle, TributeWebhookStatus } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 export const TRIBUTE_SIGNATURE_HEADER = "trbt-signature";
 
@@ -151,17 +152,21 @@ export function verifyTributeSignature(
 
 export function hashTributeEvent(envelope: TributeWebhookEnvelope): string {
   const p = envelope.payload;
-  // Stable across Tribute retries: excludes sent_at (which changes per retry),
-  // keyed on the canonical event + subscriber + period + event creation time.
+  // Stable across Tribute retries: keyed only on business identity (canonical
+  // event + subscriber + subscription + period). Deliberately excludes both
+  // sent_at and created_at, which Tribute may vary per delivery attempt.
   const key = [
     canonicalTributeEventName(envelope.name),
     p.telegram_user_id ?? "",
     p.subscription_id ?? "",
     p.period_id ?? "",
-    envelope.created_at ?? "",
   ].join("|");
   return createHash("sha256").update(key).digest("hex");
 }
+
+// A PROCESSING row whose handler crashed mid-flight would otherwise block every
+// future retry forever (silent loss). After this lease it is reclaimable.
+const PROCESSING_LEASE_MS = 15 * 60_000;
 
 function terminalStatusFor(outcome: TributeProcessOutcome): TributeWebhookStatus {
   switch (outcome.status) {
@@ -184,31 +189,47 @@ export async function processTributeEvent(
 ): Promise<TributeProcessOutcome> {
   const eventHash = hashTributeEvent(envelope);
 
-  // 1. Ensure an inbox row exists (status RECEIVED). Insert; on unique conflict, inspect.
+  // 1. Ensure an inbox row exists (status RECEIVED). Only a unique-constraint
+  //    conflict (P2002) means "already received"; any other create error is a
+  //    genuine failure that must surface (5xx -> Tribute retries), never be
+  //    masked as a duplicate.
   let inserted = true;
   try {
     await prisma.tributeWebhookEvent.create({
       data: { eventHash, name: envelope.name, payload: envelope as unknown as object, status: "RECEIVED" },
     });
-  } catch {
+  } catch (err) {
+    if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002")) {
+      throw err;
+    }
     inserted = false;
   }
 
   if (!inserted) {
     const existing = await prisma.tributeWebhookEvent.findUnique({ where: { eventHash } });
-    // Terminal or in-flight -> idempotent no-op. Only RECEIVED/FAILED are (re)claimable.
-    if (!existing || existing.status === "APPLIED" || existing.status === "IGNORED" || existing.status === "PROCESSING") {
+    // Terminal states are idempotent no-ops. RECEIVED / FAILED / abandoned
+    // PROCESSING fall through to the atomic claim below.
+    if (!existing || existing.status === "APPLIED" || existing.status === "IGNORED") {
       return { status: "duplicate" };
     }
   }
 
-  // 2. Atomically claim: RECEIVED/FAILED -> PROCESSING (and bump attempts).
+  // 2. Atomically claim: RECEIVED/FAILED, or a PROCESSING row abandoned past the
+  //    lease, -> PROCESSING (and bump attempts). A fresh PROCESSING row held by a
+  //    concurrent delivery will not match, so count !== 1 means someone else has it.
+  const staleCutoff = new Date(Date.now() - PROCESSING_LEASE_MS);
   const claim = await prisma.tributeWebhookEvent.updateMany({
-    where: { eventHash, status: { in: ["RECEIVED", "FAILED"] } },
+    where: {
+      eventHash,
+      OR: [
+        { status: { in: ["RECEIVED", "FAILED"] } },
+        { status: "PROCESSING", updatedAt: { lt: staleCutoff } },
+      ],
+    },
     data: { status: "PROCESSING", attempts: { increment: 1 } },
   });
   if (claim.count !== 1) {
-    return { status: "duplicate" }; // another delivery claimed it first
+    return { status: "duplicate" };
   }
 
   // 3. Dispatch to business handlers.

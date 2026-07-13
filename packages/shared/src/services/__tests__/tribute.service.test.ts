@@ -1,5 +1,13 @@
 import { createHmac } from "crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Prisma } from "@prisma/client";
+
+function p2002(): Prisma.PrismaClientKnownRequestError {
+  return new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+    code: "P2002",
+    clientVersion: "5.20.0",
+  });
+}
 
 const mocks = vi.hoisted(() => ({
   eventCreate: vi.fn(),
@@ -337,7 +345,13 @@ describe("processTributeEvent (inbox state-machine)", () => {
     const outcome = await processTributeEvent(makeEnvelope(), index);
     expect(outcome).toMatchObject({ status: "applied", plan: "STARTER" });
     expect(mocks.eventUpdateMany).toHaveBeenCalledWith({
-      where: { eventHash: expect.any(String), status: { in: ["RECEIVED", "FAILED"] } },
+      where: {
+        eventHash: expect.any(String),
+        OR: [
+          { status: { in: ["RECEIVED", "FAILED"] } },
+          expect.objectContaining({ status: "PROCESSING" }),
+        ],
+      },
       data: { status: "PROCESSING", attempts: { increment: 1 } },
     });
     expect(mocks.eventUpdate).toHaveBeenCalledWith(
@@ -346,7 +360,7 @@ describe("processTributeEvent (inbox state-machine)", () => {
   });
 
   it("returns duplicate for an already-APPLIED event and does not re-apply", async () => {
-    mocks.eventCreate.mockRejectedValueOnce(new Error("P2002 unique"));
+    mocks.eventCreate.mockRejectedValueOnce(p2002());
     mocks.eventFindUnique.mockResolvedValueOnce({ status: "APPLIED" });
     const outcome = await processTributeEvent(makeEnvelope(), index);
     expect(outcome).toEqual({ status: "duplicate" });
@@ -355,7 +369,7 @@ describe("processTributeEvent (inbox state-machine)", () => {
   });
 
   it("returns duplicate when another worker holds the claim (updateMany count 0)", async () => {
-    mocks.eventCreate.mockRejectedValueOnce(new Error("P2002 unique"));
+    mocks.eventCreate.mockRejectedValueOnce(p2002());
     mocks.eventFindUnique.mockResolvedValueOnce({ status: "RECEIVED" });
     mocks.eventUpdateMany.mockResolvedValueOnce({ count: 0 });
     const outcome = await processTributeEvent(makeEnvelope(), index);
@@ -364,7 +378,7 @@ describe("processTributeEvent (inbox state-machine)", () => {
   });
 
   it("re-processes a previously FAILED event once config is fixed", async () => {
-    mocks.eventCreate.mockRejectedValueOnce(new Error("P2002 unique"));
+    mocks.eventCreate.mockRejectedValueOnce(p2002());
     mocks.eventFindUnique.mockResolvedValueOnce({ status: "FAILED" });
     const outcome = await processTributeEvent(makeEnvelope(), index);
     expect(outcome).toMatchObject({ status: "applied" });
@@ -388,5 +402,38 @@ describe("processTributeEvent (inbox state-machine)", () => {
     expect(mocks.eventUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: "IGNORED" }) })
     );
+  });
+
+  it("rethrows a non-P2002 create failure instead of masking it as duplicate", async () => {
+    mocks.eventCreate.mockRejectedValueOnce(new Error("connection reset"));
+    await expect(processTributeEvent(makeEnvelope(), index)).rejects.toThrow("connection reset");
+    expect(mocks.userUpsert).not.toHaveBeenCalled();
+  });
+
+  it("reclaims a PROCESSING row abandoned past the lease", async () => {
+    mocks.eventCreate.mockRejectedValueOnce(p2002());
+    mocks.eventFindUnique.mockResolvedValueOnce({ status: "PROCESSING" });
+    mocks.eventUpdateMany.mockResolvedValueOnce({ count: 1 }); // lease expired -> reclaimed
+    const outcome = await processTributeEvent(makeEnvelope(), index);
+    expect(outcome).toMatchObject({ status: "applied" });
+    expect(mocks.eventUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: expect.arrayContaining([
+            { status: { in: ["RECEIVED", "FAILED"] } },
+            expect.objectContaining({ status: "PROCESSING" }),
+          ]),
+        }),
+      })
+    );
+  });
+
+  it("does not reclaim a freshly-PROCESSING row held by a concurrent delivery", async () => {
+    mocks.eventCreate.mockRejectedValueOnce(p2002());
+    mocks.eventFindUnique.mockResolvedValueOnce({ status: "PROCESSING" });
+    mocks.eventUpdateMany.mockResolvedValueOnce({ count: 0 }); // still within lease -> not reclaimed
+    const outcome = await processTributeEvent(makeEnvelope(), index);
+    expect(outcome).toEqual({ status: "duplicate" });
+    expect(mocks.userUpsert).not.toHaveBeenCalled();
   });
 });
