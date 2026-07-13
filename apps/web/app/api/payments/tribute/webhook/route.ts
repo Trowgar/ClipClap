@@ -59,9 +59,11 @@ export async function POST(req: NextRequest) {
     expires_at: envelope.payload?.expires_at,
   });
 
-  const index = loadTributeProductIndexFromEnv(process.env);
-
   try {
+    // Inside the try so a product-config error (e.g. a missing _NAME in prod)
+    // is logged and returns a controlled 500 (Tribute retries) instead of an
+    // uncaught throw.
+    const index = loadTributeProductIndexFromEnv(process.env);
     const outcome = await processTributeEvent(envelope, index);
     console.log("[tribute-webhook] outcome", outcome);
     // Unmapped events are a config problem, not a client error: return 5xx so

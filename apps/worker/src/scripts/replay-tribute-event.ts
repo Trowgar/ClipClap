@@ -89,19 +89,20 @@ async function main() {
     return;
   }
 
-  // Activate via the real handler path (sets plan/status/subscriptionId, sends notification).
-  const outcome = await dispatchTributeEvent(envelope, index);
+  // Activate via the real handler path, but with a compensated expires_at so the
+  // user's currentPeriodEnd AND the activation notification both reflect the
+  // 7-day extension (not the original, shorter payload expiry).
+  const compensatedEnvelope: TributeWebhookEnvelope = {
+    ...envelope,
+    payload: { ...payload, expires_at: compensatedEnd.toISOString() },
+  };
+  const outcome = await dispatchTributeEvent(compensatedEnvelope, index);
   console.log("[replay] dispatch outcome", outcome);
   if (outcome.status !== "applied") {
     console.log("[replay] activation not performed (non-applied outcome); no compensation written.");
     return;
   }
 
-  // Explicit, auditable compensation override on top of the pure handler.
-  await prisma.user.update({
-    where: { telegramId },
-    data: { currentPeriodEnd: compensatedEnd },
-  });
   await prisma.tributeWebhookEvent.update({
     where: { eventHash },
     data: { status: "APPLIED", outcome: "applied_with_compensation", processedAt: new Date() },
