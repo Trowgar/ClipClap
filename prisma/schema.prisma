@@ -224,14 +224,29 @@ model TelegramLinkToken {
   @@map("telegram_link_tokens")
 }
 
+enum TributeWebhookStatus {
+  RECEIVED
+  PROCESSING
+  APPLIED
+  IGNORED
+  FAILED
+}
+
 model TributeWebhookEvent {
-  id        String   @id @default(cuid())
-  eventHash String   @unique
-  name      String
-  payload   Json
-  createdAt DateTime @default(now())
+  id          String               @id @default(cuid())
+  eventHash   String               @unique
+  name        String
+  payload     Json
+  status      TributeWebhookStatus @default(RECEIVED)
+  outcome     String?
+  attempts    Int                  @default(0)
+  lastError   String?
+  processedAt DateTime?
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
 
   @@index([name, createdAt])
+  @@index([status])
   @@map("tribute_webhook_events")
 }
 
