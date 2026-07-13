@@ -68,13 +68,15 @@ export function snapNodes(
     e = walked;
   }
 
-  // 3. seconds from real node edges. Lead-in only ever moves within the silence
-  //    before the start (never into the previous, excluded sentence). Tail-hold
-  //    always applies in full: protecting the payoff's last word beats avoiding a
-  //    sub-frame bleed into the next node.
+  // 3. seconds from real node edges (lead-in/tail-hold only ever move within
+  //    silence). The next-node cap stops the tail-hold from bleeding into the
+  //    next sentence's first word - an audible end-of-clip artifact; it can only
+  //    trim hold-silence, never the payoff's last word, because of the max guard.
   const prevS = s.index > 0 ? nodes[s.index - 1] : null;
   let startSec = Math.max(prevS ? prevS.end : 0, s.start - cfg.leadInSec);
-  const endSec = e.end + cfg.tailHoldSec;
+  const nextE = e.index < maxIdx ? nodes[e.index + 1] : null;
+  let endSec = Math.min(e.end + cfg.tailHoldSec, nextE ? nextE.start : Infinity);
+  endSec = Math.max(endSec, e.end); // nested-word ends: the cap must never cut the last word
 
   const hookStartSec = nodes[verdict.hookStartNode].start;
   const hookEndSec = nodes[verdict.hookEndNode].end;

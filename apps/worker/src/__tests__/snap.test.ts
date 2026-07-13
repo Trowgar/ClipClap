@@ -44,7 +44,8 @@ describe("snapNodes", () => {
     const r = snapNodes(verdict({}), strongNodes(), cfg);
     if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
     expect(r.clip.startSec).toBeCloseTo(4 - cfg.leadInSec, 5);
-    expect(r.clip.endSec).toBeCloseTo(15.8 + cfg.tailHoldSec, 5);
+    // tail-hold capped at the next node's onset: min(15.8 + 0.3, 16) = 16
+    expect(r.clip.endSec).toBeCloseTo(16, 5);
     expect(r.clip.payoffSec).toBeCloseTo(13.8, 5);
     expect(r.clip.shortMoment).toBe(false);
   });
