@@ -29,6 +29,10 @@ function cand(p: Partial<ScanCandidate>): ScanCandidate {
   };
 }
 
+function speechSpan(c: { startNode: number; endNode: number }, secEach: number): number {
+  return (c.endNode - c.startNode + 1) * secEach;
+}
+
 describe("mergeCandidates", () => {
   it("unions candidates overlapping more than half of the shorter one", () => {
     const merged = mergeCandidates(
@@ -62,11 +66,14 @@ describe("mergeCandidates", () => {
     expect(merged[1].threadSetupNode).toBe(0); // earliest node of the shared thread
   });
 
-  it("splits merged regions longer than ~130s of speech at the strongest payoff", () => {
+  it("refuses to merge overlapping candidates when the union would exceed the span guard", () => {
+    // A [0,19] and B [8,29] overlap by 12 nodes > 50% of the shorter (20 -> 10),
+    // but the union [0,29] would carry 180s of speech > 130 - the merge gate
+    // keeps them separate (the critic sees both; post-critic NMS dedups).
+    // A (120s) fits whole; B (132s) exceeds the guard on its own and is split
+    // at its payoff 25: head [8,25] (108s) keeps the payoff, tail [26,29]
+    // re-anchors its payoff on its own end node.
     const merged = mergeCandidates(
-      // A [0,19] and B [8,29] overlap by 12 nodes > 50% of the shorter (20 -> 10),
-      // so they union into [0,29] (180s of speech) with payoff 5 from the
-      // stronger constituent. The span guard then splits at that payoff.
       [
         cand({ startNode: 0, endNode: 19, payoffNode: 5, interest: 0.9 }),
         cand({ startNode: 8, endNode: 29, payoffNode: 25, interest: 0.6 }),
@@ -74,14 +81,71 @@ describe("mergeCandidates", () => {
       nodes(30, 6),
       cfg
     );
-    expect(merged.length).toBe(2);
-    expect(merged[0]).toMatchObject({ startNode: 0, endNode: 5, payoffNode: 5 });
-    expect(merged[1]).toMatchObject({ startNode: 6, endNode: 29, payoffNode: 29 });
-    // Guarantee: the single split at the payoff bounds only the HEAD; the tail
-    // re-anchors on the remaining range and may still exceed 130s - that is
-    // accepted critic input (snap enforces the final clip length bounds later).
-    const headSpan = (merged[0].endNode - merged[0].startNode + 1) * 6;
-    expect(headSpan).toBeLessThanOrEqual(135);
+    expect(merged).toHaveLength(3);
+    expect(merged[0]).toMatchObject({ startNode: 0, endNode: 19, payoffNode: 5 });
+    expect(merged[1]).toMatchObject({ startNode: 8, endNode: 25, payoffNode: 25 });
+    expect(merged[2]).toMatchObject({ startNode: 26, endNode: 29, payoffNode: 29 });
+  });
+
+  it("iteratively splits an oversized raw candidate until every piece fits the guard", () => {
+    // One 300s scanner candidate with a late payoff: splitting at the payoff
+    // would leave a 294s head, so the guard falls back to midpoint splits and
+    // recurses until every piece carries <= 130s of speech. The original
+    // payoff survives in exactly one piece.
+    const merged = mergeCandidates(
+      [cand({ startNode: 0, endNode: 49, payoffNode: 48, interest: 0.9 })],
+      nodes(50, 6),
+      cfg
+    );
+    expect(merged.length).toBeGreaterThan(1);
+    for (const m of merged) {
+      expect(speechSpan(m, 6)).toBeLessThanOrEqual(130);
+    }
+    const withPayoff = merged.filter((m) => m.startNode <= 48 && 48 <= m.endNode);
+    expect(withPayoff).toHaveLength(1);
+    expect(withPayoff[0].payoffNode).toBe(48);
+  });
+
+  it("does not chain staircase candidates into an unbounded union", () => {
+    // 15 length-10 candidates each shifted by 1 node: every consecutive pair
+    // overlaps 9/10, but the transitive union would be [0,23] = 144s of speech.
+    // The merge gate stops the chain before any union crosses 130s.
+    const merged = mergeCandidates(
+      Array.from({ length: 15 }, (_, i) =>
+        cand({ startNode: i, endNode: i + 9, payoffNode: i, interest: 0.5 })
+      ),
+      nodes(40, 6),
+      cfg
+    );
+    expect(merged.length).toBeGreaterThan(1);
+    for (const m of merged) {
+      expect(speechSpan(m, 6)).toBeLessThanOrEqual(130);
+    }
+  });
+
+  it("keeps zero-overlap adjacent-payoff candidates separate", () => {
+    // Payoffs 2 and 3 are adjacent, but the ranges share no node - the
+    // payoff-proximity rule requires at least one node of overlap.
+    const merged = mergeCandidates(
+      [
+        cand({ startNode: 0, endNode: 2, payoffNode: 2, type: "funny" }),
+        cand({ startNode: 3, endNode: 12, payoffNode: 3, type: "reveal" }),
+      ],
+      nodes(20),
+      cfg
+    );
+    expect(merged).toHaveLength(2);
+    expect(merged[0]).toMatchObject({ startNode: 0, endNode: 2, type: "funny" });
+    expect(merged[1]).toMatchObject({ startNode: 3, endNode: 12, type: "reveal" });
+  });
+
+  it("does not mutate the caller's candidate objects", () => {
+    const input = cand({ startNode: 0, endNode: 2, payoffNode: 99, interest: 1.5 });
+    const merged = mergeCandidates([input], nodes(10), cfg);
+    expect(input.payoffNode).toBe(99); // caller's object untouched
+    expect(input.interest).toBe(1.5);
+    expect(merged[0].payoffNode).toBe(0); // coerced to startNode on the copy
+    expect(merged[0].interest).toBe(1); // clamped on the copy
   });
 });
 
@@ -121,5 +185,32 @@ describe("selectCriticCandidates", () => {
     for (let w = 0; w < 5; w++) {
       expect(selected.filter((c) => c.windowIndex === w)).toHaveLength(2);
     }
+  });
+
+  it("caps extras per 10-minute region while quota picks ignore the cap", () => {
+    const ns = nodes(150); // 5s nodes -> region boundary at node 120 (600s)
+    const all = [
+      // window 0: 10 disjoint candidates, payoffs all inside region 0
+      ...Array.from({ length: 10 }, (_, i) =>
+        cand({
+          startNode: i * 4,
+          endNode: i * 4 + 1,
+          payoffNode: i * 4 + 1,
+          interest: 0.9 - i * 0.01,
+          windowIndex: 0,
+        })
+      ),
+      // window 1: 2 candidates with payoffs in region 1 (start >= 600s)
+      cand({ startNode: 120, endNode: 121, payoffNode: 121, interest: 0.5, windowIndex: 1 }),
+      cand({ startNode: 124, endNode: 125, payoffNode: 125, interest: 0.49, windowIndex: 1 }),
+    ];
+    const merged = mergeCandidates(all, ns, cfg);
+    expect(merged).toHaveLength(12); // disjoint, nothing merges
+    const selected = selectCriticCandidates(merged, ns, cfg, 60); // K = 30, no K pressure
+    // region 0 gets 2 quota picks + extras only up to regionMaxCandidates (6);
+    // the remaining 4 region-0 extras are rejected by the cap despite K room
+    const region0 = selected.filter((c) => ns[c.payoffNode].start < 600);
+    expect(region0).toHaveLength(cfg.regionMaxCandidates);
+    expect(selected).toHaveLength(cfg.regionMaxCandidates + 2);
   });
 });

@@ -22,14 +22,17 @@ export function mergeCandidates(
   cfg: AnalyzeConfig
 ): MergedCandidate[] {
   const maxNode = nodes.length - 1;
-  const valid = candidates.filter(
-    (c) =>
-      Number.isInteger(c.startNode) &&
-      Number.isInteger(c.endNode) &&
-      c.startNode >= 0 &&
-      c.endNode <= maxNode &&
-      c.startNode <= c.endNode
-  );
+  // copy before clamping - callers' objects must stay untouched
+  const valid = candidates
+    .filter(
+      (c) =>
+        Number.isInteger(c.startNode) &&
+        Number.isInteger(c.endNode) &&
+        c.startNode >= 0 &&
+        c.endNode <= maxNode &&
+        c.startNode <= c.endNode
+    )
+    .map((c) => ({ ...c }));
   for (const c of valid) {
     if (!Number.isInteger(c.payoffNode) || c.payoffNode < c.startNode || c.payoffNode > c.endNode) {
       c.payoffNode = c.startNode;
@@ -37,22 +40,35 @@ export function mergeCandidates(
     c.interest = Math.min(1, Math.max(0, c.interest));
   }
 
-  const sorted = [...valid].sort((a, b) => a.startNode - b.startNode);
+  const sorted = valid.sort((a, b) => a.startNode - b.startNode);
   const merged: ScanCandidate[] = [];
   for (const c of sorted) {
     const prev = merged[merged.length - 1];
     if (prev) {
       const shorter = Math.min(prev.endNode - prev.startNode + 1, c.endNode - c.startNode + 1);
+      const overlap = overlapNodes(prev, c);
       const shouldMerge =
-        overlapNodes(prev, c) > shorter * 0.5 ||
-        Math.abs(prev.payoffNode - c.payoffNode) <= 1;
-      if (shouldMerge) {
+        overlap > shorter * 0.5 ||
+        // payoff proximity only counts when the ranges actually share a node -
+        // zero-overlap adjacent moments are distinct
+        (overlap >= 1 && Math.abs(prev.payoffNode - c.payoffNode) <= 1);
+      // merge gate: never build a union carrying more speech than the span
+      // guard allows. Overlapping near-duplicates that stay separate are fine -
+      // the critic sees both and post-critic NMS dedups.
+      const union = {
+        startNode: Math.min(prev.startNode, c.startNode),
+        endNode: Math.max(prev.endNode, c.endNode),
+      };
+      if (shouldMerge && speechSpanSec(union, nodes) <= SPAN_GUARD_SEC) {
         const stronger = c.interest > prev.interest ? c : prev;
-        prev.startNode = Math.min(prev.startNode, c.startNode);
-        prev.endNode = Math.max(prev.endNode, c.endNode);
+        prev.startNode = union.startNode;
+        prev.endNode = union.endNode;
         prev.interest = Math.max(prev.interest, c.interest);
         prev.type = stronger.type;
         prev.payoffNode = stronger.payoffNode;
+        // the earliest constituent's windowIndex is kept (quota attribution
+        // bias accepted); on cross-thread merge the first thread label wins
+        // and the other is dropped
         prev.thread = prev.thread ?? c.thread;
         continue;
       }
@@ -60,16 +76,43 @@ export function mergeCandidates(
     merged.push({ ...c });
   }
 
-  // span guard: split at the strongest payoff - the head stays tight; the tail
-  // re-anchors on the remaining range and may still be large (acceptable critic input)
+  // span guard: merges can no longer exceed the guard (the gate above bounds
+  // unions), but a single raw scanner candidate still can. Iteratively split:
+  // prefer the strongest payoff when the head [start, payoff] fits; otherwise
+  // split at the midpoint, keeping the original payoff in whichever half
+  // contains it (the other half re-anchors its payoff on its own end node).
+  // Every split strictly shrinks the range, so this terminates with all pieces
+  // within the guard (except an unsplittable single node).
   const guarded: ScanCandidate[] = [];
   for (const c of merged) {
-    if (speechSpanSec(c, nodes) <= SPAN_GUARD_SEC || c.payoffNode <= c.startNode || c.payoffNode >= c.endNode) {
-      guarded.push(c);
-      continue;
+    const stack: ScanCandidate[] = [c];
+    while (stack.length > 0) {
+      const cur = stack.pop()!;
+      if (cur.startNode >= cur.endNode || speechSpanSec(cur, nodes) <= SPAN_GUARD_SEC) {
+        guarded.push(cur);
+        continue;
+      }
+      const payoffInside = cur.payoffNode > cur.startNode && cur.payoffNode < cur.endNode;
+      let head: ScanCandidate;
+      let tail: ScanCandidate;
+      if (
+        payoffInside &&
+        speechSpanSec({ startNode: cur.startNode, endNode: cur.payoffNode }, nodes) <= SPAN_GUARD_SEC
+      ) {
+        head = { ...cur, endNode: cur.payoffNode };
+        tail = { ...cur, startNode: cur.payoffNode + 1, payoffNode: cur.endNode };
+      } else {
+        const mid = Math.floor((cur.startNode + cur.endNode) / 2);
+        if (cur.payoffNode <= mid) {
+          head = { ...cur, endNode: mid };
+          tail = { ...cur, startNode: mid + 1, payoffNode: cur.endNode };
+        } else {
+          head = { ...cur, endNode: mid, payoffNode: mid };
+          tail = { ...cur, startNode: mid + 1 };
+        }
+      }
+      stack.push(tail, head); // head is popped first to keep position order
     }
-    guarded.push({ ...c, endNode: c.payoffNode });
-    guarded.push({ ...c, startNode: c.payoffNode + 1, payoffNode: c.endNode });
   }
 
   // thread collation: earliest start node per thread label
