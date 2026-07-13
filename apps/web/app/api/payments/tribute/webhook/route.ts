@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   TRIBUTE_SIGNATURE_HEADER,
-  loadTributeProductMapFromEnv,
+  loadTributeProductIndexFromEnv,
   processTributeEvent,
   verifyTributeSignature,
   type TributeWebhookEnvelope,
@@ -59,17 +59,17 @@ export async function POST(req: NextRequest) {
     expires_at: envelope.payload?.expires_at,
   });
 
-  const productMap = loadTributeProductMapFromEnv(process.env);
+  const index = loadTributeProductIndexFromEnv(process.env);
 
   try {
-    const outcome = await processTributeEvent(envelope, productMap);
+    const outcome = await processTributeEvent(envelope, index);
     console.log("[tribute-webhook] outcome", outcome);
-    return NextResponse.json({ ok: true, outcome });
+    // Unmapped events are a config problem, not a client error: return 5xx so
+    // Tribute retries (the inbox row is FAILED and reprocessable after a fix).
+    const retryable = outcome.status === "unmapped_subscription";
+    return NextResponse.json({ ok: !retryable, outcome }, { status: retryable ? 500 : 200 });
   } catch (error) {
     console.error("[tribute-webhook] processing failed:", error);
-    return NextResponse.json(
-      { error: "Processing failed" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Processing failed" }, { status: 500 });
   }
 }
