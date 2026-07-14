@@ -44,7 +44,7 @@ export async function runTranscribeStage(
     const minCoverage = Number(process.env.TRANSCRIPT_MIN_COVERAGE) || 0.9;
     if (outcome.coverage < minCoverage) {
       throw new Error(
-        `Transcript coverage ${(outcome.coverage * 100).toFixed(0)}% is below the ${minCoverage * 100}% floor (${outcome.missingRanges.length} missing ranges)`
+        `Transcript coverage ${(outcome.coverage * 100).toFixed(0)}% is below the ${(minCoverage * 100).toFixed(0)}% floor (${outcome.missingRanges.length} missing ranges)`
       );
     }
 
