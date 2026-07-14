@@ -250,6 +250,7 @@ async function sendAccountView(
   if (!existing) {
     const text = dict.accountText({
       plan: "NONE",
+      phase: "NONE",
       billingCycle: null,
       periodEnd: null,
       daysUntilPeriodEnd: null,
@@ -292,6 +293,7 @@ async function sendAccountView(
     billingCycle,
     periodEnd,
     daysUntilPeriodEnd,
+    phase: usage.subscriptionState.phase,
     minutesUsed: usage.minutesUsed,
     minutesLimit: usage.minutesLimit,
     topUpMinutes: usage.topUpMinutesRemaining,
