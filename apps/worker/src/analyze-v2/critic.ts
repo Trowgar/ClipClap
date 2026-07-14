@@ -35,6 +35,7 @@ export interface CriticRunResult {
   telemetry: {
     batchSplits: number;
     refusalDrops: number;
+    truncatedDrops: number;
     invariantDrops: number;
     fallbackModelUsed: boolean;
   };
@@ -58,6 +59,7 @@ export async function runCritic(
   const telemetry = {
     batchSplits: 0,
     refusalDrops: 0,
+    truncatedDrops: 0,
     invariantDrops: 0,
     fallbackModelUsed: false,
   };
@@ -98,6 +100,14 @@ export async function runCritic(
       }
       // single candidate: double the output cap once
       result = await callBatch(batch, cfg.criticModel, 2);
+      if (!result.ok && result.kind === "truncated") {
+        // content-shaped anomaly of one candidate, not infrastructure - drop it
+        telemetry.truncatedDrops += batch.length;
+        console.warn(
+          `[analyze-v2] critic dropped still-truncated candidate ${batch.map((c) => c.id).join(",")}`
+        );
+        return [];
+      }
     }
 
     if (!result.ok && result.kind === "refusal") {

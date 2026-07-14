@@ -128,6 +128,18 @@ describe("runCritic", () => {
     expect(caps[1]).toBe(caps[0] * 2);
   });
 
+  it("drops a single candidate that is still truncated after the doubled cap", async () => {
+    const truncated = () => ({
+      choices: [{ message: { content: "{" }, finish_reason: "length" }],
+      usage: { prompt_tokens: 10, completion_tokens: 512 },
+    });
+    const client = seqClient([truncated, truncated]);
+    const r = await runCritic(client, newUsage(), nodes(10), [cand("a", 0)], "ru", { ...cfg, criticBatchSize: 1 });
+    expect(r.verdicts).toHaveLength(0);
+    expect(r.telemetry.truncatedDrops).toBe(1);
+    expect(client.chat.completions.create).toHaveBeenCalledTimes(2);
+  });
+
   it("drops the batch's candidates after two refusals", async () => {
     const refusal = () => ({
       choices: [{ message: { content: null, refusal: "no" }, finish_reason: "stop" }],
