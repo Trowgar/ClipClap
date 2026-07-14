@@ -191,6 +191,55 @@ describe("bot i18n", () => {
     expect(ru).not.toContain("Хранилище:");
   });
 
+  it("renders accountText PERIOD_ENDED as ended, not active, in both locales", () => {
+    const base = {
+      plan: "MAX",
+      billingCycle: "monthly",
+      periodEnd: "2026-06-20",
+      daysUntilPeriodEnd: 0,
+      phase: "PERIOD_ENDED" as const,
+      minutesUsed: 69,
+      minutesLimit: 3500,
+      topUpMinutes: 0,
+      clipsStored: 13,
+      storageClipsLimit: 1000,
+      retentionDays: 90,
+      clipsTotal: 13,
+    };
+
+    const en = t("en").accountText(base);
+    expect(en).toContain("ended 2026-06-20");
+    expect(en).toContain("Renew to keep clipping.");
+    expect(en).not.toContain("(today)");
+    expect(en).not.toContain("Renews:");
+
+    const ru = t("ru").accountText(base);
+    expect(ru).toContain("истёк 2026-06-20");
+    expect(ru).toContain("Продлите");
+    expect(ru).not.toContain("(сегодня)");
+    expect(ru).not.toContain("Продление:");
+  });
+
+  it("renders accountText CANCELED as canceled in both locales", () => {
+    const base = {
+      plan: "MAX",
+      billingCycle: "monthly",
+      periodEnd: "2026-06-20",
+      daysUntilPeriodEnd: 0,
+      phase: "CANCELED" as const,
+      minutesUsed: 0,
+      minutesLimit: 3500,
+      topUpMinutes: 0,
+      clipsStored: 13,
+      storageClipsLimit: 1000,
+      retentionDays: 90,
+      clipsTotal: 13,
+    };
+
+    expect(t("en").accountText(base)).toContain("canceled");
+    expect(t("ru").accountText(base)).toContain("отменён");
+  });
+
   it("renders accountText active plan with top-up in EN", () => {
     const text = t("en").accountText({
       plan: "STARTER",

@@ -1,3 +1,5 @@
+import type { SubscriptionPhase } from "@clipclap/shared";
+
 export type Locale = "en" | "ru";
 
 export function detectLocale(languageCode?: string | null): Locale {
@@ -64,6 +66,7 @@ export interface Dict {
     billingCycle: string | null;
     periodEnd: string | null;
     daysUntilPeriodEnd: number | null;
+    phase?: SubscriptionPhase;
     minutesUsed: number;
     minutesLimit: number;
     topUpMinutes: number;
@@ -153,6 +156,7 @@ const en: Dict = {
     billingCycle,
     periodEnd,
     daysUntilPeriodEnd,
+    phase,
     minutesUsed,
     minutesLimit,
     topUpMinutes,
@@ -161,17 +165,31 @@ const en: Dict = {
     retentionDays,
     clipsTotal,
   }) => {
-    if (plan === "NONE") {
+    if (plan === "NONE" || phase === "NONE") {
       return `Plan: no active plan\n\nPick a plan to start clipping.\nTotal clips created: ${clipsTotal}`;
     }
-    const planLine = `Plan: ${plan}${billingCycle ? ` (${billingCycle})` : ""}`;
-    const renewSuffix =
-      daysUntilPeriodEnd === null
-        ? ""
-        : daysUntilPeriodEnd === 0
-          ? " (today)"
-          : ` (in ${daysUntilPeriodEnd} day${daysUntilPeriodEnd === 1 ? "" : "s"})`;
-    const renewLine = periodEnd ? `Renews: ${periodEnd}${renewSuffix}` : "";
+    const planLabel = `${plan}${billingCycle ? ` (${billingCycle})` : ""}`;
+    let planLine: string;
+    let renewLine: string;
+    if (phase === "PERIOD_ENDED") {
+      planLine = `Plan: ${planLabel} - ended${periodEnd ? ` ${periodEnd}` : ""}`;
+      renewLine = "Renew to keep clipping.";
+    } else if (phase === "CANCELED" || phase === "CANCELED_GRACE") {
+      planLine = `Plan: ${planLabel} - canceled`;
+      renewLine = "Resubscribe to keep clipping.";
+    } else {
+      planLine = `Plan: ${planLabel}`;
+      const renewSuffix =
+        daysUntilPeriodEnd === null
+          ? ""
+          : daysUntilPeriodEnd === 0
+            ? " (today)"
+            : ` (in ${daysUntilPeriodEnd} day${daysUntilPeriodEnd === 1 ? "" : "s"})`;
+      renewLine = periodEnd ? `Renews: ${periodEnd}${renewSuffix}` : "";
+      if (phase === "DUNNING") {
+        renewLine = `${renewLine ? `${renewLine}\n` : ""}Payment issue - please update your payment method.`;
+      }
+    }
     const minutesLeft = Math.max(0, minutesLimit - minutesUsed);
     const minutesLine = `Minutes: ${minutesUsed} / ${minutesLimit} this period (${minutesLeft} left)`;
     const topUpLine = topUpMinutes > 0 ? `+ Top-up: ${topUpMinutes} minutes\n` : "";
@@ -275,6 +293,7 @@ const ru: Dict = {
     billingCycle,
     periodEnd,
     daysUntilPeriodEnd,
+    phase,
     minutesUsed,
     minutesLimit,
     topUpMinutes,
@@ -283,7 +302,7 @@ const ru: Dict = {
     retentionDays,
     clipsTotal,
   }) => {
-    if (plan === "NONE") {
+    if (plan === "NONE" || phase === "NONE") {
       return `Тариф: нет активного\n\nВыбери тариф, чтобы начать.\nВсего создано: ${clipsTotal} ${pluralizeRu(clipsTotal, "клип", "клипа", "клипов")}`;
     }
     const cycleLabel =
@@ -292,14 +311,28 @@ const ru: Dict = {
         : billingCycle === "weekly" || billingCycle === "WEEKLY"
           ? " (недельный)"
           : " (месячный)";
-    const planLine = `Тариф: ${plan}${cycleLabel}`;
-    const renewSuffix =
-      daysUntilPeriodEnd === null
-        ? ""
-        : daysUntilPeriodEnd === 0
-          ? " (сегодня)"
-          : ` (через ${daysUntilPeriodEnd} ${pluralizeRu(daysUntilPeriodEnd, "день", "дня", "дней")})`;
-    const renewLine = periodEnd ? `Продление: ${periodEnd}${renewSuffix}` : "";
+    const planLabel = `${plan}${cycleLabel}`;
+    let planLine: string;
+    let renewLine: string;
+    if (phase === "PERIOD_ENDED") {
+      planLine = `Тариф: ${planLabel} - истёк${periodEnd ? ` ${periodEnd}` : ""}`;
+      renewLine = "Продлите, чтобы продолжить нарезку.";
+    } else if (phase === "CANCELED" || phase === "CANCELED_GRACE") {
+      planLine = `Тариф: ${planLabel} - отменён`;
+      renewLine = "Оформите заново, чтобы продолжить.";
+    } else {
+      planLine = `Тариф: ${planLabel}`;
+      const renewSuffix =
+        daysUntilPeriodEnd === null
+          ? ""
+          : daysUntilPeriodEnd === 0
+            ? " (сегодня)"
+            : ` (через ${daysUntilPeriodEnd} ${pluralizeRu(daysUntilPeriodEnd, "день", "дня", "дней")})`;
+      renewLine = periodEnd ? `Продление: ${periodEnd}${renewSuffix}` : "";
+      if (phase === "DUNNING") {
+        renewLine = `${renewLine ? `${renewLine}\n` : ""}Проблема с оплатой - обновите способ оплаты.`;
+      }
+    }
     const minutesLeft = Math.max(0, minutesLimit - minutesUsed);
     const minutesLine = `Минуты: ${minutesUsed} / ${minutesLimit} в этом периоде (осталось ${minutesLeft})`;
     const topUpLine =
