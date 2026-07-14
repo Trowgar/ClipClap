@@ -3,18 +3,37 @@ import type { Job, Clip, User } from "@prisma/client";
 export type { Job, Clip, User } from "@prisma/client";
 export { Plan, JobStatus } from "@prisma/client";
 
+export type ClipKind =
+  | "reaction"
+  | "conflict"
+  | "insight"
+  | "story"
+  | "funny"
+  | "reveal"
+  | "question"
+  | "opinion"
+  | "other";
+
 export interface Highlight {
   start: number;
   end: number;
   /**
    * Optional inner anchor - the most engaging core of the clip.
-   * Used by code-side expansion so we never shrink past the moment that
-   * made the LLM pick this clip in the first place.
+   * The boundary machine never cuts inside [hookStart, hookEnd].
    */
   hookStart?: number;
   hookEnd?: number;
   title: string;
-  reason: string;
+  /** V1 only. Optional so V2 highlights and inline trim highlights typecheck. */
+  reason?: string;
+  /** V2 fields - all optional so V1 JSON keeps parsing. */
+  description?: string;
+  score?: number;
+  payoffAt?: number;
+  language?: string;
+  lowQuality?: boolean;
+  shortMoment?: boolean;
+  kind?: string;
 }
 
 export interface CreateJobInput {
@@ -66,6 +85,12 @@ export interface SubtitleTrack {
 export interface TranscriptionResult {
   text: string;
   segments: WhisperSegment[];
+  /** ISO-639-1 only (never a raw Whisper name); null/undefined if unmapped. */
+  language?: string;
+  /** Whisper's raw language name, verbatim (e.g. "russian"). */
+  languageRaw?: string;
+  /** Source ranges Whisper never heard (failed chunks). Candidates must not cross these. */
+  missingRanges?: Array<{ start: number; end: number; reason: string }>;
 }
 
 export interface PipelineContext {

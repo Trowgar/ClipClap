@@ -21,6 +21,7 @@ export * from "./job-step.service";
 export * from "./project.service";
 export * from "./telegram-auth.service";
 export * from "./telegram-delivery.service";
+export * from "./telegram-caption";
 export * from "./telegram-link.service";
 export * from "./tribute.service";
 export * from "./subscription-reconcile.service";

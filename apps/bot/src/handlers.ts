@@ -2,6 +2,7 @@ import { mkdir, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import {
+  buildClipCaption,
   canSubmitJob,
   createBotInitiatedLink,
   createTelegramDelivery,
@@ -347,6 +348,15 @@ export async function deliverReadyTelegramJobs(
         continue;
       }
 
+      if (delivery.job.clips.length === 0) {
+        await client.sendMessage(
+          delivery.chatId,
+          dict.doneNoClips(delivery.job.noClipsReason ?? "NO_VIABLE_MOMENTS")
+        );
+        await markTelegramDeliverySent(delivery.id);
+        continue;
+      }
+
       await client.sendMessage(
         delivery.chatId,
         dict.done(delivery.job.clips.length)
@@ -354,7 +364,13 @@ export async function deliverReadyTelegramJobs(
 
       for (const clip of delivery.job.clips) {
         const url = await getPresignedDownloadUrl(clip.storageKey);
-        await client.sendVideo(delivery.chatId, url, clip.title, {
+        const caption = buildClipCaption({
+          title: clip.title,
+          description: clip.description,
+          lowQuality: clip.lowQuality,
+          lowQualityNote: dict.lowQualityNote,
+        });
+        await client.sendVideo(delivery.chatId, url, caption, {
           inline_keyboard: [
             [
               {

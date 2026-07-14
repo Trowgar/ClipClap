@@ -141,8 +141,8 @@ Window = contiguous node slice covering ~600s of speech with ~90s overlap (`SCAN
 
 1. Drop index-invalid rows; concatenate across windows.
 2. **Thread collation:** group candidates sharing a `thread` label; attach `threadSetupNode` (earliest referenced node). This is how a cross-window callback survives windowing.
-3. **Merge:** sort by `start_node`; union two candidates when node ranges overlap >50% of the shorter, or payoff nodes are within 1 node. Merged range `[min, max]`, `interest = max`, `type` from the higher-interest one.
-4. **Span guard:** if a merged region exceeds ~130s of speech, split back at the strongest constituent's `payoff_node`.
+3. **Merge:** sort by `start_node`; union two candidates when node ranges overlap >50% of the shorter, or payoff nodes are within 1 node AND the ranges overlap by at least 1 node (zero-overlap adjacent moments never merge). Merged range `[min, max]`, `interest = max`, `type` from the higher-interest one. **Merge gate:** a union whose speech span would exceed ~130s is not created - the candidates stay separate (the critic sees near-duplicates; post-critic NMS dedups). This bounds transitive merge chains at the source.
+4. **Span guard (iterative):** any remaining candidate over ~130s of speech (a single oversized scanner range) splits repeatedly: at its payoff when the payoff is strictly inside and the head fits <=130s, otherwise at the midpoint node with the payoff assigned to the containing half; iterate until every piece fits.
 
 After the critic runs, candidates are only ever kept or dropped - never trimmed or merged (§7, §12).
 
@@ -294,19 +294,28 @@ if s.leadingStrength < 0.8 and s.index > 0:
    s = nearest earlier node with leadingStrength >= 0.8
        within MAX_START_EXPANSION_SEC   ?? drop("no_clean_start")
 
-// 2. payoff containment, then end selection with bounded tail
+// 2. payoff containment, then end selection with bounded tail.
+//    The critic's end_node is HONORED when its tail past the payoff is within
+//    PAYOFF_MAX_TAIL_SEC; the pull-back below fires only on genuine rambling.
 if e.index < p.index: e = p
-e = strongest-boundary node in [p.end, p.end + PAYOFF_MAX_TAIL_SEC]       // prefer >= 0.8
-    ?? strongest-boundary node in [p.end, p.end + PAYOFF_MAX_TAIL_SEC + SENTENCE_SLACK_SEC]
-    ?? p                                    // ending right at the payoff is always legal
+if (e.end - p.end) > PAYOFF_MAX_TAIL_SEC:
+   e = strongest-boundary node in [p.end, p.end + PAYOFF_MAX_TAIL_SEC]    // prefer >= 0.8
+       ?? strongest-boundary node in [p.end, p.end + PAYOFF_MAX_TAIL_SEC + SENTENCE_SLACK_SEC]
+       ?? p                                 // ending right at the payoff is always legal
 if e.hasWords == false:
    e = lastWordBearingNodeBefore(e)
    if e == null or e.index < p.index: drop("opaque_end")   // re-check containment
 
 // 3. seconds from real node edges (lead-in/tail-hold only ever move within silence)
-startSec = max(prevNode(s)?.end ?? 0, s.start - LEAD_IN)
-endSec   = min(e.end + TAIL_HOLD, nextNode(e)?.start ?? e.end + TAIL_HOLD)
+//    nested prev.end (word timings can nest) must never push the start past the
+//    sentence onset - clamp its contribution at s.start
+startSec = max(min(prevNode(s)?.end ?? 0, s.start), s.start - LEAD_IN)
+endSec   = min(e.end + TAIL_HOLD, nextNode(e)?.start ?? +inf) // don't bleed into next sentence
+endSec   = max(endSec, e.end)   // nested-word ends: the cap never cuts the last word
+endSec   = max(endSec, p.end)   // payoff containment outranks the bleed cap
 hookStart = nodes[hook_start_node].start ; hookEnd = nodes[hook_end_node].end
+// note: there is NO early both-ends-opaque bail - the clean-start walk-back and the
+// opaque-end walk-back each salvage their own side or drop with a specific reason
 
 // 4. epsilon-tolerant invariants (violation -> drop, better lost than broken)
 assert startSec <= hookStart + EPS          // hook may open the clip exactly

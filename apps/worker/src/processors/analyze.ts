@@ -131,7 +131,7 @@ const TARGET_MIN_DURATION_SEC = 30;
 const HARD_MAX_DURATION_SEC = 90;
 const DROP_BELOW_DURATION_SEC = 15;
 
-export async function analyzeHighlights(
+export async function analyzeHighlightsV1(
   transcription: TranscriptionResult
 ): Promise<Highlight[]> {
   // Format transcript with raw second timestamps to avoid M:SS ambiguity

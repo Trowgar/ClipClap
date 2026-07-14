@@ -5,8 +5,9 @@ const mocks = vi.hoisted(() => ({
   completeJobStep: vi.fn(),
   failJobStep: vi.fn(),
   downloadVideo: vi.fn(),
+  normalizeSource: vi.fn(),
   transcribeVideo: vi.fn(),
-  analyzeHighlights: vi.fn(),
+  analyzeHighlightsV1: vi.fn(),
   uploadFile: vi.fn(),
   getStageQueue: vi.fn(),
   queueAdd: vi.fn(),
@@ -34,12 +35,16 @@ vi.mock("../processors/download", () => ({
   downloadVideo: mocks.downloadVideo,
 }));
 
+vi.mock("../processors/normalize", () => ({
+  normalizeSource: mocks.normalizeSource,
+}));
+
 vi.mock("../processors/transcribe", () => ({
   transcribeVideo: mocks.transcribeVideo,
 }));
 
 vi.mock("../processors/analyze", () => ({
-  analyzeHighlights: mocks.analyzeHighlights,
+  analyzeHighlightsV1: mocks.analyzeHighlightsV1,
 }));
 
 import { runAnalyzeStage } from "../stages/analyze";
@@ -61,6 +66,10 @@ describe("stage handlers", () => {
       sourceKey: null,
     });
     mocks.downloadVideo.mockResolvedValue("/tmp/source.mp4");
+    mocks.normalizeSource.mockResolvedValue({
+      path: "/tmp/source.mp4",
+      action: "none",
+    });
 
     await runDownloadStage({ jobId: "job1", userId: "u1" });
 
@@ -93,8 +102,13 @@ describe("stage handlers", () => {
     });
     mocks.downloadVideo.mockResolvedValue("/tmp/source.mp4");
     mocks.transcribeVideo.mockResolvedValue({
-      text: "hello",
-      segments: [{ start: 0, end: 10, text: "hello" }],
+      transcription: {
+        text: "hello",
+        segments: [{ start: 0, end: 10, text: "hello" }],
+      },
+      coverage: 1,
+      partial: false,
+      missingRanges: [],
     });
 
     await runTranscribeStage({ jobId: "job1", userId: "u1" });
@@ -128,7 +142,7 @@ describe("stage handlers", () => {
         segments: [{ start: 0, end: 10, text: "hello" }],
       },
     });
-    mocks.analyzeHighlights.mockResolvedValue([
+    mocks.analyzeHighlightsV1.mockResolvedValue([
       { start: 0, end: 10, title: "Clip", reason: "Hook" },
     ]);
 

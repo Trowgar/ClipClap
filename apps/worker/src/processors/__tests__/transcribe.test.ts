@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   execFile: vi.fn(),
   createReadStream: vi.fn(() => "audio-stream"),
+  statSync: vi.fn(() => ({ size: 1024 })),
   unlink: vi.fn(),
   transcriptionCreate: vi.fn(),
 }));
@@ -13,6 +14,7 @@ vi.mock("child_process", () => ({
 
 vi.mock("fs", () => ({
   createReadStream: mocks.createReadStream,
+  statSync: mocks.statSync,
 }));
 
 vi.mock("fs/promises", () => ({
@@ -34,7 +36,12 @@ import { transcribeVideo } from "../transcribe";
 describe("transcribeVideo", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.execFile.mockImplementation((_cmd, _args, callback) => callback(null));
+    // execFileAsync (via promisify) resolves with the value after the err arg;
+    // ffprobe duration reads `.stdout`, ffmpeg extract ignores the result.
+    mocks.execFile.mockImplementation((_cmd, _args, callback) =>
+      callback(null, { stdout: "12.5", stderr: "" })
+    );
+    mocks.statSync.mockReturnValue({ size: 1024 });
     mocks.unlink.mockResolvedValue(undefined);
     mocks.transcriptionCreate.mockResolvedValue({
       text: "hello world",
@@ -57,7 +64,7 @@ describe("transcribeVideo", () => {
 
   it("attaches words to their segment by time overlap", async () => {
     const result = await transcribeVideo("/tmp/source.mp4");
-    expect(result.segments[0].words).toEqual([
+    expect(result.transcription.segments[0].words).toEqual([
       { text: "hello", start: 0, end: 0.6 },
       { text: "world", start: 0.7, end: 1.4 },
     ]);
@@ -69,7 +76,7 @@ describe("transcribeVideo", () => {
       segments: [{ start: 0, end: 1, text: " hello " }],
     });
     const result = await transcribeVideo("/tmp/source.mp4");
-    expect(result.segments[0].words).toBeUndefined();
+    expect(result.transcription.segments[0].words).toBeUndefined();
   });
 
   it("extracts compressed audio before sending it to transcription", async () => {

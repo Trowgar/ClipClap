@@ -180,6 +180,23 @@ export function ProjectDetail({
         </div>
       )}
 
+      {project.status === "DONE" && clips.length === 0 && (
+        <div className="rounded-lg border border-border bg-card/40 p-6 text-center">
+          <p className="text-sm font-medium">No clips this time</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {project.noClipsReason === "NO_USABLE_SPEECH"
+              ? "We could not find usable speech in this video."
+              : project.noClipsReason === "PARTIAL_TRANSCRIPT"
+                ? "Part of the video could not be processed, and no strong moments were found in the rest."
+                : "We watched the whole video but did not find moments strong enough for clips. Try a video with more talk, emotion, or story."}
+          </p>
+        </div>
+      )}
+      {project.transcriptPartial && clips.length > 0 && (
+        <p className="text-xs text-muted-foreground">
+          Note: part of the video could not be processed; clips come from the rest.
+        </p>
+      )}
       {clips.length > 0 && (
         <div>
           <div className="mb-4 flex items-end justify-between gap-3">

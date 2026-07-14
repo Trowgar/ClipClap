@@ -64,6 +64,16 @@ export default function ClipPage({
             </span>
             {clip.subtitles && <Badge variant="outline">subtitles</Badge>}
           </div>
+          {clip.description && (
+            <p className="mt-2 max-w-xl text-sm text-muted-foreground">
+              {clip.description}
+            </p>
+          )}
+          {clip.lowQuality && (
+            <Badge variant="outline" className="mt-2 border-yellow-500/40 text-yellow-300">
+              best available
+            </Badge>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" asChild>
