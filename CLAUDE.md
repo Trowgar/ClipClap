@@ -55,7 +55,9 @@ docker compose logs -f web    # follow web logs
 docker compose logs -f worker # follow worker logs
 npx prisma studio             # visual DB browser
 npx prisma db push            # push schema changes
-TARGET=production docker compose up -d  # production mode
+# DO NOT use TARGET=production on linearis-prod: the bind mounts shadow the
+# production images' dist/ and the web command override needs the dev image.
+# Plain `docker compose up -d` (dev target) IS the production mode on this host.
 ```
 
 ## Environment Variables
