@@ -7,6 +7,14 @@ const DEFAULT_TRANSCRIPTION_COST_PER_MINUTE = 0.006;
 const ANALYSIS_COST_PER_MINUTE = 0.00005;
 const COMPUTE_COST_PER_MINUTE = 0.006;
 
+/** USD per 1M tokens (input, output). Estimation only - update with pricing. */
+const MODEL_TOKEN_PRICES: Record<string, { input: number; output: number }> = {
+  "gpt-4o-mini": { input: 0.15, output: 0.6 },
+  "gpt-5-mini": { input: 0.25, output: 2.0 },
+  "gpt-5.1": { input: 1.25, output: 10.0 },
+};
+const DEFAULT_TOKEN_PRICE = { input: 1.25, output: 10.0 };
+
 export interface JobCostTelemetryInput {
   sourceDurationSec: number | null | undefined;
   processingStartedAt: Date;
@@ -16,6 +24,10 @@ export interface JobCostTelemetryInput {
   renderMs: number;
   clipsGenerated: number;
   transcriptionModel?: string;
+  analysisInputTokens?: number | null;
+  analysisOutputTokens?: number | null;
+  /** Model whose price dominates analysis cost (the critic). */
+  criticModel?: string;
 }
 
 export function buildJobCostTelemetry(input: JobCostTelemetryInput) {
@@ -27,9 +39,16 @@ export function buildJobCostTelemetry(input: JobCostTelemetryInput) {
   const estimatedTranscriptionCostUsd = roundUsd(
     sourceMinutes * transcriptionRate
   );
-  const estimatedAnalysisCostUsd = roundUsd(
-    sourceMinutes * ANALYSIS_COST_PER_MINUTE
-  );
+  const hasTokenUsage =
+    (input.analysisInputTokens ?? 0) > 0 || (input.analysisOutputTokens ?? 0) > 0;
+  const tokenPrice =
+    MODEL_TOKEN_PRICES[input.criticModel ?? ""] ?? DEFAULT_TOKEN_PRICE;
+  const estimatedAnalysisCostUsd = hasTokenUsage
+    ? roundUsd(
+        ((input.analysisInputTokens ?? 0) / 1_000_000) * tokenPrice.input +
+          ((input.analysisOutputTokens ?? 0) / 1_000_000) * tokenPrice.output
+      )
+    : roundUsd(sourceMinutes * ANALYSIS_COST_PER_MINUTE);
   const estimatedComputeCostUsd = roundUsd(
     sourceMinutes * COMPUTE_COST_PER_MINUTE
   );

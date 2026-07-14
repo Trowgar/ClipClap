@@ -29,6 +29,9 @@ export async function runFinalizeStage(
           clipsGenerated: job.clipsGenerated,
           transcriptionModel:
             process.env.OPENAI_TRANSCRIPTION_MODEL || "whisper-1",
+          analysisInputTokens: job.analysisInputTokens,
+          analysisOutputTokens: job.analysisOutputTokens,
+          criticModel: process.env.OPENAI_CRITIC_MODEL || "gpt-5.1",
         }),
       },
     });
