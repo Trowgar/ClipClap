@@ -307,9 +307,15 @@ if e.hasWords == false:
    if e == null or e.index < p.index: drop("opaque_end")   // re-check containment
 
 // 3. seconds from real node edges (lead-in/tail-hold only ever move within silence)
-startSec = max(prevNode(s)?.end ?? 0, s.start - LEAD_IN)
-endSec   = min(e.end + TAIL_HOLD, nextNode(e)?.start ?? e.end + TAIL_HOLD)
+//    nested prev.end (word timings can nest) must never push the start past the
+//    sentence onset - clamp its contribution at s.start
+startSec = max(min(prevNode(s)?.end ?? 0, s.start), s.start - LEAD_IN)
+endSec   = min(e.end + TAIL_HOLD, nextNode(e)?.start ?? +inf) // don't bleed into next sentence
+endSec   = max(endSec, e.end)   // nested-word ends: the cap never cuts the last word
+endSec   = max(endSec, p.end)   // payoff containment outranks the bleed cap
 hookStart = nodes[hook_start_node].start ; hookEnd = nodes[hook_end_node].end
+// note: there is NO early both-ends-opaque bail - the clean-start walk-back and the
+// opaque-end walk-back each salvage their own side or drop with a specific reason
 
 // 4. epsilon-tolerant invariants (violation -> drop, better lost than broken)
 assert startSec <= hookStart + EPS          // hook may open the clip exactly
