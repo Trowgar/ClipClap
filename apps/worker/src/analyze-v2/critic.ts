@@ -30,12 +30,19 @@ interface CriticRow {
   language: string;
 }
 
+/** Row plus the model tier that produced it - fallback rows ship lowQuality. */
+interface TaggedRow {
+  row: CriticRow;
+  degraded: boolean;
+}
+
 export interface CriticRunResult {
   verdicts: CriticVerdict[];
   telemetry: {
     batchSplits: number;
     refusalDrops: number;
     truncatedDrops: number;
+    omittedDrops: number;
     invariantDrops: number;
     fallbackModelUsed: boolean;
   };
@@ -60,6 +67,7 @@ export async function runCritic(
     batchSplits: 0,
     refusalDrops: 0,
     truncatedDrops: 0,
+    omittedDrops: 0,
     invariantDrops: 0,
     fallbackModelUsed: false,
   };
@@ -70,7 +78,8 @@ export async function runCritic(
   }
 
   const kindById = new Map(candidates.map((c) => [c.id, c.type]));
-  const verdicts: CriticVerdict[] = [];
+  /** ids whose loss is already attributed to refusal/truncation telemetry. */
+  const accountedDropIds = new Set<string>();
 
   const callBatch = async (
     batch: MergedCandidate[],
@@ -87,61 +96,97 @@ export async function runCritic(
       retryDelayMs: options.retryDelayMs,
     });
 
-  const processBatch = async (batch: MergedCandidate[]): Promise<CriticRow[]> => {
+  const processBatch = async (batch: MergedCandidate[]): Promise<TaggedRow[]> => {
+    const ids = () => batch.map((c) => c.id).join(",");
+
+    const split = async (): Promise<TaggedRow[]> => {
+      // split in half and recurse - each half gets its own budget and
+      // starts over on the primary model
+      telemetry.batchSplits += 1;
+      const mid = Math.ceil(batch.length / 2);
+      const first = await processBatch(batch.slice(0, mid));
+      const second = await processBatch(batch.slice(mid));
+      return [...first, ...second];
+    };
+    const dropTruncated = (): TaggedRow[] => {
+      // content-shaped anomaly of the candidate(s), not infrastructure - drop
+      telemetry.truncatedDrops += batch.length;
+      for (const c of batch) accountedDropIds.add(c.id);
+      console.warn(`[analyze-v2] critic dropped still-truncated candidate ${ids()}`);
+      return [];
+    };
+    const dropRefused = (): TaggedRow[] => {
+      telemetry.refusalDrops += batch.length;
+      for (const c of batch) accountedDropIds.add(c.id);
+      return [];
+    };
+
+    let degraded = false;
     let result = await callBatch(batch, cfg.criticModel, 1);
 
     if (!result.ok && result.kind === "truncated") {
-      if (batch.length > 1) {
-        // split in half and recurse - each half gets its own budget
-        telemetry.batchSplits += 1;
-        const mid = Math.ceil(batch.length / 2);
-        const [a, b] = [batch.slice(0, mid), batch.slice(mid)];
-        return [...(await processBatch(a)), ...(await processBatch(b))];
-      }
+      if (batch.length > 1) return split();
       // single candidate: double the output cap once
       result = await callBatch(batch, cfg.criticModel, 2);
-      if (!result.ok && result.kind === "truncated") {
-        // content-shaped anomaly of one candidate, not infrastructure - drop it
-        telemetry.truncatedDrops += batch.length;
-        console.warn(
-          `[analyze-v2] critic dropped still-truncated candidate ${batch.map((c) => c.id).join(",")}`
-        );
-        return [];
-      }
+      if (!result.ok && result.kind === "truncated") return dropTruncated();
     }
 
     if (!result.ok && result.kind === "refusal") {
       result = await callBatch(batch, cfg.criticModel, 1);
-      if (!result.ok && result.kind === "refusal") {
-        telemetry.refusalDrops += batch.length;
-        return [];
-      }
+      if (!result.ok && result.kind === "refusal") return dropRefused();
     }
 
     if (!result.ok && result.kind === "error") {
       // llm.ts already retried once with backoff; try the fallback model
       telemetry.fallbackModelUsed = true;
+      degraded = true;
       result = await callBatch(batch, cfg.criticModelFallback, 1);
     }
 
     if (!result.ok) {
-      throw new AnalyzeTechnicalError(
-        `critic failed for batch [${batch.map((c) => c.id).join(",")}]: ${result.kind}`
-      );
+      // post-fallback (or residual second-chance) outcome: only a hard API
+      // error is terminal - content-shaped anomalies degrade gracefully
+      if (result.kind === "error") {
+        throw new AnalyzeTechnicalError(`critic failed for batch [${ids()}]: error`);
+      }
+      if (result.kind === "truncated") {
+        return batch.length > 1 ? split() : dropTruncated();
+      }
+      return dropRefused();
     }
-    return result.data.results ?? [];
+
+    // per-batch id guard: a row may only claim an id from THIS batch, so a
+    // hallucinating batch can never steal another batch's candidate
+    const batchIds = new Set(batch.map((c) => c.id));
+    const own: TaggedRow[] = [];
+    for (const row of result.data.results ?? []) {
+      if (!row || typeof row !== "object" || !batchIds.has(row.id)) {
+        telemetry.invariantDrops += 1;
+        continue;
+      }
+      own.push({ row, degraded });
+    }
+    return own;
   };
 
-  const rowsPerBatch = await mapWithConcurrency(batches, CRITIC_CONCURRENCY, processBatch);
+  const tagged = (await mapWithConcurrency(batches, CRITIC_CONCURRENCY, processBatch)).flat();
 
-  // business invariants: every input id at most once, no unknown ids, sane fields
+  // business invariants: every id at most once, sane fields, node indices in range
+  const verdicts: CriticVerdict[] = [];
   const seen = new Set<string>();
-  const inputIds = new Set(candidates.map((c) => c.id));
-  for (const row of rowsPerBatch.flat()) {
-    if (!row || typeof row !== "object" || !inputIds.has(row.id) || seen.has(row.id)) {
+  const maxNode = nodes.length - 1;
+  for (const { row, degraded } of tagged) {
+    if (seen.has(row.id)) {
       telemetry.invariantDrops += 1;
       continue;
     }
+    const nodeRefs = [
+      row.start_node,
+      row.payoff_node,
+      row.end_node,
+      row.hook_start_node,
+      row.hook_end_node,
+    ];
     if (
       !Number.isFinite(row.score) ||
       row.score < 0 ||
@@ -149,7 +194,8 @@ export async function runCritic(
       typeof row.title !== "string" ||
       row.title.trim().length === 0 ||
       typeof row.description !== "string" ||
-      row.description.trim().length === 0
+      row.description.trim().length === 0 ||
+      nodeRefs.some((n) => !Number.isInteger(n) || n < 0 || n > maxNode)
     ) {
       telemetry.invariantDrops += 1;
       continue;
@@ -171,8 +217,19 @@ export async function runCritic(
       titleEvidenceNodes: row.title_evidence_nodes ?? [],
       descriptionEvidenceNodes: row.description_evidence_nodes ?? [],
       language: row.language,
+      lowQuality: degraded ? true : undefined,
       kind: kindById.get(row.id),
     });
+  }
+
+  // silent omissions: input ids that ended with no verdict and no attributed drop
+  const verdictIds = new Set(verdicts.map((v) => v.id));
+  const omitted = candidates
+    .filter((c) => !verdictIds.has(c.id) && !accountedDropIds.has(c.id))
+    .map((c) => c.id);
+  if (omitted.length > 0) {
+    telemetry.omittedDrops += omitted.length;
+    console.warn(`[analyze-v2] critic returned no verdict for candidate ${omitted.join(",")}`);
   }
 
   return { verdicts, telemetry };
@@ -202,14 +259,18 @@ export async function repairCopy(
     retryDelayMs: options.retryDelayMs,
   });
   if (!result.ok) return null;
+  // schema-valid but blank copy must not overwrite the original
+  if (!result.data.title?.trim() || !result.data.description?.trim()) return null;
   return {
     title: truncateTitle(result.data.title),
     description: result.data.description.trim(),
   };
 }
 
+/** Code-point-safe 70-char cap - never splits a surrogate pair. */
 function truncateTitle(title: string): string {
   const trimmed = title.trim();
-  if (trimmed.length <= 70) return trimmed;
-  return trimmed.slice(0, 69).trimEnd() + "…";
+  const chars = Array.from(trimmed);
+  if (chars.length <= 70) return trimmed;
+  return chars.slice(0, 69).join("").trimEnd() + "…";
 }
