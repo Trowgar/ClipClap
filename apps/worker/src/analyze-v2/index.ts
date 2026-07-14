@@ -7,7 +7,7 @@ import { mergeCandidates, selectCriticCandidates } from "./candidates";
 import { runCritic, repairCopy } from "./critic";
 import { snapNodes } from "./snap";
 import { evidenceGate, snippetFallbackCopy, lexicalOverlap } from "./gates";
-import { scriptMismatch } from "./language";
+import { dominantScript, scriptMismatch } from "./language";
 import { selectAndOrder } from "./select";
 import { newUsage } from "./llm";
 import type {
@@ -62,7 +62,10 @@ export async function analyzeHighlightsV2(
     };
   }
 
-  const languageIso = transcription.language ?? "en";
+  // Legacy transcripts (pre-V2) carry no language; fall back to the transcript's
+  // dominant script so a Russian video does not get English-prompted copy.
+  const languageIso =
+    transcription.language ?? scriptFallbackIso(transcription.text);
   let candidates: MergedCandidate[];
   let scannerTelemetry: Record<string, unknown> = {};
 
@@ -169,6 +172,9 @@ export async function analyzeHighlightsV2(
   const telemetry = {
     ...scannerTelemetry,
     criticVerdicts: critic.verdicts.length,
+    verdictScores: critic.verdicts
+      .map((v) => ({ id: v.id, keep: v.keep, score: v.score }))
+      .sort((a, b) => b.score - a.score),
     ...critic.telemetry,
     evidenceDrops,
     snapDrops,
@@ -221,6 +227,22 @@ function toHighlight(clip: SnappedClip): V2Highlight {
     _descriptionEvidenceNodes: v.descriptionEvidenceNodes,
     _grounded: v.grounded,
   };
+}
+
+/** Coarse last-resort language guess for legacy transcripts without a language.
+ *  New V2 transcripts carry the Whisper-detected ISO code and never hit this. */
+function scriptFallbackIso(text: string): string {
+  const sample = text.slice(0, 2000);
+  switch (dominantScript(sample)) {
+    case "cyrillic":
+      return "ru";
+    case "arabic":
+      return "ar";
+    case "cjk":
+      return "zh";
+    default:
+      return "en";
+  }
 }
 
 function mean(values: number[]): number {
