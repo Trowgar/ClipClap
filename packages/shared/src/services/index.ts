@@ -17,6 +17,7 @@ export * as withdrawalService from "./withdrawal.service";
 export * from "./withdrawal.service";
 export * from "./telegram-notification.service";
 export * from "./usage.service";
+export * from "./subscription-state";
 export * from "./job-step.service";
 export * from "./project.service";
 export * from "./telegram-auth.service";
