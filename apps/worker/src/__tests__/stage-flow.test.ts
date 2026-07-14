@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   completeJobStep: vi.fn(),
   failJobStep: vi.fn(),
   downloadVideo: vi.fn(),
+  normalizeSource: vi.fn(),
   transcribeVideo: vi.fn(),
   analyzeHighlightsV1: vi.fn(),
   uploadFile: vi.fn(),
@@ -34,6 +35,10 @@ vi.mock("../processors/download", () => ({
   downloadVideo: mocks.downloadVideo,
 }));
 
+vi.mock("../processors/normalize", () => ({
+  normalizeSource: mocks.normalizeSource,
+}));
+
 vi.mock("../processors/transcribe", () => ({
   transcribeVideo: mocks.transcribeVideo,
 }));
@@ -61,6 +66,10 @@ describe("stage handlers", () => {
       sourceKey: null,
     });
     mocks.downloadVideo.mockResolvedValue("/tmp/source.mp4");
+    mocks.normalizeSource.mockResolvedValue({
+      path: "/tmp/source.mp4",
+      action: "none",
+    });
 
     await runDownloadStage({ jobId: "job1", userId: "u1" });
 

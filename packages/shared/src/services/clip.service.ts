@@ -96,7 +96,10 @@ export async function editClip(input: EditClipInput): Promise<Clip> {
     end: relativeEnd,
     subtitles: input.subtitles,
     subtitleTrack: input.subtitleTrack,
-    sourceArtifactKey: original.job.sourceArtifactKey ?? undefined,
+    sourceArtifactKey:
+      original.job.normalizedArtifactKey ??
+      original.job.sourceArtifactKey ??
+      undefined,
     sourceStart: input.start,
     sourceEnd: input.end,
     mode: "trim",
