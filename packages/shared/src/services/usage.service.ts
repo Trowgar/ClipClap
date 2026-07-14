@@ -1,6 +1,10 @@
 import { prisma } from "../lib/prisma";
 import { getPlanLimits } from "../config/plans";
-import { SUBSCRIPTION_GRACE_BUFFER_DAYS } from "../config/billing";
+import {
+  getSubscriptionState,
+  type SubscriptionState,
+  type SubscriptionPhase,
+} from "./subscription-state";
 import type { Plan, BillingCycle } from "@prisma/client";
 
 export async function getMinutesUsedInPeriod(
@@ -68,6 +72,7 @@ export interface UsageSummary {
   currentPeriodEnd: Date | null;
   clipsTotal: number;
   paymentProvider: PaymentProvider;
+  subscriptionState: SubscriptionState;
 }
 
 function resolvePaymentProvider(user: {
@@ -88,6 +93,7 @@ export async function getUsageForUser(userId: string): Promise<UsageSummary> {
   ]);
 
   const paymentProvider = resolvePaymentProvider(user);
+  const subscriptionState = getSubscriptionState(user, new Date());
 
   if (user.plan === "NONE") {
     return {
@@ -102,6 +108,7 @@ export async function getUsageForUser(userId: string): Promise<UsageSummary> {
       currentPeriodEnd: null,
       clipsTotal,
       paymentProvider,
+      subscriptionState,
     };
   }
 
@@ -129,12 +136,26 @@ export async function getUsageForUser(userId: string): Promise<UsageSummary> {
     currentPeriodEnd: user.currentPeriodEnd,
     clipsTotal,
     paymentProvider,
+    subscriptionState,
   };
 }
 
 export type JobSubmissionCheck =
   | { allowed: true }
   | { allowed: false; reason: string };
+
+// Block messages by phase. ACTIVE/DUNNING entries are never read (guarded by
+// state.live) but are present so the map is total over SubscriptionPhase.
+const LIFECYCLE_BLOCK_REASON: Record<SubscriptionPhase, string> = {
+  NONE: "No active subscription. Choose a plan to get started.",
+  ACTIVE: "",
+  DUNNING: "",
+  CANCELED: "Your subscription is canceled. Resubscribe to create new clips.",
+  CANCELED_GRACE:
+    "Your subscription is canceled. Resubscribe to create new clips.",
+  PERIOD_ENDED:
+    "Your subscription period has ended. Renew to continue creating clips.",
+};
 
 // Lifecycle is enforced strictly here; quota check is best-effort because
 // jobDurationMinutes may be 0 at submit time (real source duration only known
@@ -145,28 +166,13 @@ export async function canSubmitJob(
 ): Promise<JobSubmissionCheck> {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
 
-  if (user.plan === "NONE" || user.subscriptionStatus === "NONE") {
-    return { allowed: false, reason: "No active subscription. Choose a plan to get started." };
-  }
-  if (
-    user.subscriptionStatus === "CANCELED_GRACE" ||
-    user.subscriptionStatus === "CANCELED"
-  ) {
-    return { allowed: false, reason: "Your subscription is canceled. Resubscribe to create new clips." };
-  }
-
-  // ACTIVE or DUNNING: access is allowed only while the billing period is still
-  // live within the grace buffer. This is the defense-in-depth that stops a
-  // missed renewal webhook (or a stale DB row) from granting access forever.
-  const graceMs = SUBSCRIPTION_GRACE_BUFFER_DAYS * 24 * 60 * 60 * 1000;
-  if (
-    !user.currentPeriodEnd ||
-    user.currentPeriodEnd.getTime() + graceMs <= Date.now()
-  ) {
-    return {
-      allowed: false,
-      reason: "Your subscription period has ended. Renew to continue creating clips.",
-    };
+  // Lifecycle gate: single source of truth shared with the account card and the
+  // reconcile cron. `live` is false for NONE/CANCELED*/period-ended; the message
+  // is chosen per phase so the user sees why they were blocked. This preserves
+  // the exact reason strings the original inline checks returned.
+  const state = getSubscriptionState(user, new Date());
+  if (!state.live) {
+    return { allowed: false, reason: LIFECYCLE_BLOCK_REASON[state.phase] };
   }
 
   const limits = getPlanLimits(user.plan, user.billingCycle ?? "MONTHLY");

@@ -213,6 +213,63 @@ describe("usage.service", () => {
     );
   });
 
+  it("getUsageForUser reports subscriptionState PERIOD_ENDED for a lapsed ACTIVE plan", async () => {
+    (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
+      id: "u1",
+      plan: "MAX",
+      billingCycle: "MONTHLY",
+      subscriptionStatus: "ACTIVE",
+      topUpMinutesRemaining: 0,
+      currentPeriodStart: null,
+      currentPeriodEnd: new Date(
+        Date.now() - (SUBSCRIPTION_GRACE_BUFFER_DAYS + 5) * 24 * 60 * 60 * 1000
+      ),
+      tributeSubscriptionId: null,
+      stripeSubscriptionId: null,
+    });
+    (prisma.job.aggregate as any).mockResolvedValue({ _sum: { sourceDurationSec: 0 } });
+    (prisma.clip.count as any).mockResolvedValue(0);
+
+    const usage = await getUsageForUser("u1");
+    expect(usage.subscriptionState).toEqual({ phase: "PERIOD_ENDED", live: false });
+  });
+
+  it("getUsageForUser reports subscriptionState ACTIVE for a live plan", async () => {
+    (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
+      id: "u1",
+      plan: "MAX",
+      billingCycle: "MONTHLY",
+      subscriptionStatus: "ACTIVE",
+      topUpMinutesRemaining: 0,
+      currentPeriodStart: null,
+      currentPeriodEnd: new Date(Date.now() + 5 * 24 * 60 * 60 * 1000),
+      tributeSubscriptionId: null,
+      stripeSubscriptionId: null,
+    });
+    (prisma.job.aggregate as any).mockResolvedValue({ _sum: { sourceDurationSec: 0 } });
+    (prisma.clip.count as any).mockResolvedValue(0);
+
+    const usage = await getUsageForUser("u1");
+    expect(usage.subscriptionState).toEqual({ phase: "ACTIVE", live: true });
+  });
+
+  it("getUsageForUser reports subscriptionState NONE for NONE plan", async () => {
+    (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
+      id: "u1",
+      plan: "NONE",
+      billingCycle: null,
+      subscriptionStatus: "NONE",
+      topUpMinutesRemaining: 0,
+      currentPeriodEnd: null,
+      tributeSubscriptionId: null,
+      stripeSubscriptionId: null,
+    });
+    (prisma.clip.count as any).mockResolvedValue(0);
+
+    const usage = await getUsageForUser("u1");
+    expect(usage.subscriptionState).toEqual({ phase: "NONE", live: false });
+  });
+
   it("canSubmitJob blocks DUNNING once period has lapsed past grace", async () => {
     (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
       id: "u1",
