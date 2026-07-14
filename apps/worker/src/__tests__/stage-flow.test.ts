@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   failJobStep: vi.fn(),
   downloadVideo: vi.fn(),
   transcribeVideo: vi.fn(),
-  analyzeHighlights: vi.fn(),
+  analyzeHighlightsV1: vi.fn(),
   uploadFile: vi.fn(),
   getStageQueue: vi.fn(),
   queueAdd: vi.fn(),
@@ -39,7 +39,7 @@ vi.mock("../processors/transcribe", () => ({
 }));
 
 vi.mock("../processors/analyze", () => ({
-  analyzeHighlights: mocks.analyzeHighlights,
+  analyzeHighlightsV1: mocks.analyzeHighlightsV1,
 }));
 
 import { runAnalyzeStage } from "../stages/analyze";
@@ -128,7 +128,7 @@ describe("stage handlers", () => {
         segments: [{ start: 0, end: 10, text: "hello" }],
       },
     });
-    mocks.analyzeHighlights.mockResolvedValue([
+    mocks.analyzeHighlightsV1.mockResolvedValue([
       { start: 0, end: 10, title: "Clip", reason: "Hook" },
     ]);
 
