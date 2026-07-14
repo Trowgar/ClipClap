@@ -28,17 +28,25 @@ export async function runTranscribeStage(
     const job = await prisma.job.findUniqueOrThrow({
       where: { id: payload.jobId },
     });
-    const sourceArtifactKey = requireString(
-      job.sourceArtifactKey,
+    const sourceKey = requireString(
+      job.normalizedArtifactKey ?? job.sourceArtifactKey,
       "sourceArtifactKey"
     );
-    localPath = await downloadVideo(undefined, sourceArtifactKey);
+    localPath = await downloadVideo(undefined, sourceKey);
 
     const startedAt = Date.now();
-    const transcription = await transcribeVideo(localPath);
+    const outcome = await transcribeVideo(localPath);
     const transcribeMs = Date.now() - startedAt;
+    const { transcription } = outcome;
     const inferredSourceDurationSec =
       job.sourceDurationSec ?? inferDurationFromSegments(transcription);
+
+    const minCoverage = Number(process.env.TRANSCRIPT_MIN_COVERAGE) || 0.9;
+    if (outcome.coverage < minCoverage) {
+      throw new Error(
+        `Transcript coverage ${(outcome.coverage * 100).toFixed(0)}% is below the ${minCoverage * 100}% floor (${outcome.missingRanges.length} missing ranges)`
+      );
+    }
 
     await prisma.job.update({
       where: { id: payload.jobId },
@@ -47,6 +55,10 @@ export async function runTranscribeStage(
         transcription: transcription.text,
         transcriptJson: transcription as unknown as Prisma.InputJsonValue,
         transcribeMs,
+        language: transcription.language ?? null,
+        languageRaw: transcription.languageRaw ?? null,
+        transcriptCoverage: outcome.coverage,
+        transcriptPartial: outcome.partial,
         ...(inferredSourceDurationSec > 0
           ? { sourceDurationSec: inferredSourceDurationSec }
           : {}),
@@ -55,6 +67,9 @@ export async function runTranscribeStage(
     await jobStepService.completeJobStep(payload.jobId, "TRANSCRIBE", {
       segments: transcription.segments.length,
       transcribeMs,
+      language: transcription.language ?? null,
+      coverage: outcome.coverage,
+      missingRanges: outcome.missingRanges.length,
     });
     await getStageQueue("analyze").add("analyze", payload);
   } catch (error) {

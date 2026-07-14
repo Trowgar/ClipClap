@@ -93,8 +93,13 @@ describe("stage handlers", () => {
     });
     mocks.downloadVideo.mockResolvedValue("/tmp/source.mp4");
     mocks.transcribeVideo.mockResolvedValue({
-      text: "hello",
-      segments: [{ start: 0, end: 10, text: "hello" }],
+      transcription: {
+        text: "hello",
+        segments: [{ start: 0, end: 10, text: "hello" }],
+      },
+      coverage: 1,
+      partial: false,
+      missingRanges: [],
     });
 
     await runTranscribeStage({ jobId: "job1", userId: "u1" });
