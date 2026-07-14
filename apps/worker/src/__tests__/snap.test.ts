@@ -104,6 +104,40 @@ describe("snapNodes", () => {
     expect(r.clip.endSec).toBeGreaterThanOrEqual(nodes[6].end); // last word-bearing node covers payoff
   });
 
+  it("clamps a nested prev.end at the start node onset instead of cutting into it", () => {
+    // node1's words nest past node2's onset (legal nested-word input);
+    // the start must land exactly at node2.start, not at prev.end.
+    const nodes = strongNodes().map((n, i) => (i === 1 ? { ...n, end: 5.5 } : n));
+    const r = snapNodes(verdict({}), nodes, cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.startSec).toBe(4);
+  });
+
+  it("salvages a clip whose start and end nodes are both opaque", () => {
+    const nodes = strongNodes()
+      .slice(0, 12)
+      .map((n, i) => {
+        if (i === 3) return { ...n, hasWords: false, leadingStrength: 0.3 };
+        if (i === 8) return { ...n, hasWords: false };
+        return n;
+      });
+    const r = snapNodes(
+      verdict({ startNode: 3, payoffNode: 6, endNode: 8, hookStartNode: 6, hookEndNode: 6 }),
+      nodes,
+      cfg
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it("extends the end for a nested payoff that outlasts the end node", () => {
+    // payoff node6's last word runs to 20s, past endNode 7's end (15.8s);
+    // payoff containment outranks the bleed cap - extend, don't drop.
+    const nodes = strongNodes().map((n, i) => (i === 6 ? { ...n, end: 20 } : n));
+    const r = snapNodes(verdict({}), nodes, cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.endSec).toBeGreaterThanOrEqual(20);
+  });
+
   it("compresses >90s clips from the start along strong boundaries, keeping the hook", () => {
     const nodes: SentenceNode[] = Array.from({ length: 60 }, (_, i) => ({
       index: i,

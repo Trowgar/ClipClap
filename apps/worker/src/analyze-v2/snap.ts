@@ -27,7 +27,6 @@ export function snapNodes(
   let e = nodes[verdict.endNode];
 
   if (!p.hasWords) return { ok: false, reason: "opaque_payoff" };
-  if (!s.hasWords && !e.hasWords) return { ok: false, reason: "opaque_end" };
 
   // 1. clean start - the mid-thought guard the end already has via trailingStrength.
   //    Walk to an earlier node whose leading boundary is strong, adding at most
@@ -73,10 +72,13 @@ export function snapNodes(
   //    next sentence's first word - an audible end-of-clip artifact; it can only
   //    trim hold-silence, never the payoff's last word, because of the max guard.
   const prevS = s.index > 0 ? nodes[s.index - 1] : null;
-  let startSec = Math.max(prevS ? prevS.end : 0, s.start - cfg.leadInSec);
+  // Nested prev.end must never push the start past the sentence onset; worst
+  // case we start exactly at s.start with no lead-in.
+  let startSec = Math.max(Math.min(prevS ? prevS.end : 0, s.start), s.start - cfg.leadInSec);
   const nextE = e.index < maxIdx ? nodes[e.index + 1] : null;
   let endSec = Math.min(e.end + cfg.tailHoldSec, nextE ? nextE.start : Infinity);
   endSec = Math.max(endSec, e.end); // nested-word ends: the cap must never cut the last word
+  endSec = Math.max(endSec, p.end); // payoff containment outranks the bleed cap - a nested long payoff word extends the clip
 
   const hookStartSec = nodes[verdict.hookStartNode].start;
   const hookEndSec = nodes[verdict.hookEndNode].end;
@@ -89,7 +91,8 @@ export function snapNodes(
       const cand = nodes[i];
       if (!cand.hasWords || cand.leadingStrength < STRONG) continue;
       const prev = cand.index > 0 ? nodes[cand.index - 1] : null;
-      const candidateStart = Math.max(prev ? prev.end : 0, cand.start - cfg.leadInSec);
+      // same onset clamp as the main start: nested prev.end must not poison the candidate
+      const candidateStart = Math.max(Math.min(prev ? prev.end : 0, cand.start), cand.start - cfg.leadInSec);
       if (endSec - candidateStart <= cfg.maxSec) {
         s = cand;
         startSec = candidateStart;
