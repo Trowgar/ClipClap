@@ -11,7 +11,7 @@ export async function getClipsByJob(
 ): Promise<Clip[]> {
   return prisma.clip.findMany({
     where: { jobId, userId },
-    orderBy: { startTime: "asc" },
+    orderBy: [{ score: { sort: "desc", nulls: "last" } }, { startTime: "asc" }],
   });
 }
 

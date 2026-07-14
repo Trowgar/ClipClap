@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma";
 import { deleteFile, getPresignedDownloadUrl } from "../lib/r2";
-import type { JobStatus } from "@prisma/client";
+import type { JobStatus, NoClipsReason } from "@prisma/client";
 
 export interface ProjectClipSummary {
   id: string;
@@ -15,6 +15,8 @@ export interface ProjectDetailClip extends ProjectClipSummary {
   subtitles: boolean;
   parentClipId: string | null;
   previewUrl: string | null;
+  description: string | null;
+  lowQuality: boolean;
 }
 
 export interface ProjectSummary {
@@ -44,6 +46,8 @@ export interface ProjectDetail {
   sourceDurationSec: number | null;
   createdAt: Date;
   clipsGenerated: number;
+  noClipsReason: NoClipsReason | null;
+  transcriptPartial: boolean;
   clips: ProjectDetailClip[];
 }
 
@@ -78,6 +82,8 @@ const PROJECT_DETAIL_INCLUDE = {
       subtitles: true,
       parentClipId: true,
       createdAt: true,
+      description: true,
+      lowQuality: true,
     },
   },
 };
@@ -137,6 +143,8 @@ export async function getProjectDetail(
     sourceDurationSec: job.sourceDurationSec,
     createdAt: job.createdAt,
     clipsGenerated: job.clipsGenerated,
+    noClipsReason: job.noClipsReason,
+    transcriptPartial: job.transcriptPartial,
     clips: await Promise.all(
       job.clips.map(async (clip) => ({
         id: clip.id,
@@ -147,6 +155,8 @@ export async function getProjectDetail(
         subtitles: clip.subtitles,
         parentClipId: clip.parentClipId,
         createdAt: clip.createdAt,
+        description: clip.description,
+        lowQuality: clip.lowQuality,
         previewUrl: clip.storageKey
           ? await getPresignedDownloadUrl(clip.storageKey)
           : null,

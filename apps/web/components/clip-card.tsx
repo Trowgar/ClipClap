@@ -17,6 +17,8 @@ export interface ClipCardClip {
   duration: number;
   subtitles?: boolean;
   previewUrl?: string | null;
+  description?: string | null;
+  lowQuality?: boolean;
 }
 
 interface ClipCardProps {
@@ -130,6 +132,14 @@ export function ClipCard({
               subtitles
             </Badge>
           )}
+          {clip.lowQuality && (
+            <Badge
+              variant="outline"
+              className="border-yellow-500/40 bg-black/50 px-1.5 py-0 text-[10px] text-yellow-300"
+            >
+              best available
+            </Badge>
+          )}
         </div>
       </div>
 
@@ -138,6 +148,11 @@ export function ClipCard({
           <p className="line-clamp-2 min-h-[2.5rem] text-sm font-medium leading-5">
             {clip.title}
           </p>
+          {clip.description && (
+            <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+              {clip.description}
+            </p>
+          )}
         </div>
 
         <div className="grid grid-cols-[1fr_1fr_36px] gap-2">

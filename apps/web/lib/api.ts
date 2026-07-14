@@ -112,6 +112,8 @@ export interface ClipData {
   subtitleTrack?: SubtitleTrack | null;
   parentClipId: string | null;
   createdAt: string;
+  description?: string | null;
+  lowQuality?: boolean;
 }
 
 export interface SubscriptionData {
