@@ -56,6 +56,10 @@ describe("stage handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getStageQueue.mockReturnValue({ add: mocks.queueAdd });
+    // pin the engine: these tests assert the legacy analyze path and must not
+    // depend on the ambient ANALYZE_ENGINE of the environment they run in
+    vi.stubEnv("ANALYZE_ENGINE", "legacy");
+    vi.stubEnv("ANALYZE_V2_PCT", "0");
   });
 
   it("download persists a source artifact and enqueues transcribe", async () => {
