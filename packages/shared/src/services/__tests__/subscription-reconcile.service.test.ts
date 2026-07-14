@@ -163,6 +163,44 @@ describe("reconcileSubscriptions", () => {
     expect(prisma.user.update).not.toHaveBeenCalled();
   });
 
+  it("date-expires a provider-less user past grace to CANCELED", async () => {
+    (prisma.user.findMany as any).mockResolvedValue([
+      {
+        id: "u6",
+        stripeSubscriptionId: null,
+        tributeSubscriptionId: null,
+        subscriptionStatus: "ACTIVE",
+        currentPeriodEnd: new Date(NOW.getTime() - 10 * DAY),
+      },
+    ]);
+
+    const res = await reconcileSubscriptions(NOW);
+
+    expect(res.reconciled).toBe(1);
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: "u6" },
+      data: { subscriptionStatus: "CANCELED", graceEndsAt: null },
+    });
+    expect(mockStripe.subscriptions.retrieve).not.toHaveBeenCalled();
+  });
+
+  it("leaves a provider-less user still within grace untouched", async () => {
+    (prisma.user.findMany as any).mockResolvedValue([
+      {
+        id: "u7",
+        stripeSubscriptionId: null,
+        tributeSubscriptionId: null,
+        subscriptionStatus: "ACTIVE",
+        currentPeriodEnd: new Date(NOW.getTime() - 1 * DAY),
+      },
+    ]);
+
+    const res = await reconcileSubscriptions(NOW);
+
+    expect(res.reconciled).toBe(0);
+    expect(prisma.user.update).not.toHaveBeenCalled();
+  });
+
   it("skips a Stripe user when retrieve throws (logs, continues)", async () => {
     (prisma.user.findMany as any).mockResolvedValue([
       {

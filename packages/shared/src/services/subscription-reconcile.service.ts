@@ -1,7 +1,7 @@
 import type { SubscriptionStatus } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { getStripe } from "./billing.service";
-import { SUBSCRIPTION_GRACE_BUFFER_DAYS } from "../config/billing";
+import { isPeriodLive } from "./subscription-state";
 
 // Maps a Stripe subscription.status to our local SubscriptionStatus.
 // Returns null for transient states (incomplete, paused) we should not act on.
@@ -31,7 +31,6 @@ export async function reconcileSubscriptions(
 ): Promise<{ reconciled: number }> {
   const skewMs = 5 * 60 * 1000;
   const cutoff = new Date(now.getTime() - skewMs);
-  const graceMs = SUBSCRIPTION_GRACE_BUFFER_DAYS * 24 * 60 * 60 * 1000;
 
   const users = await prisma.user.findMany({
     where: {
@@ -94,12 +93,24 @@ export async function reconcileSubscriptions(
       await prisma.user.update({ where: { id: user.id }, data });
       reconciled++;
     } else if (user.tributeSubscriptionId) {
-      const expiredPastGrace =
-        user.currentPeriodEnd != null &&
-        user.currentPeriodEnd.getTime() + graceMs <= now.getTime();
-      if (expiredPastGrace) {
+      if (!isPeriodLive(user.currentPeriodEnd, now)) {
         console.log(
           `[reconcile] user=${user.id} ${user.subscriptionStatus}→CANCELED reason=tribute_period_expired_grace_elapsed`
+        );
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { subscriptionStatus: "CANCELED", graceEndsAt: null },
+        });
+        reconciled++;
+      }
+    } else {
+      // No provider subscription attached (manual grant / stale row). A lapsed
+      // period can never self-renew, so date-expire it once grace has elapsed -
+      // mirrors the Tribute branch and stops a stuck ACTIVE row from lasting
+      // forever (the account-card-vs-gate contradiction this fix targets).
+      if (!isPeriodLive(user.currentPeriodEnd, now)) {
+        console.log(
+          `[reconcile] user=${user.id} ${user.subscriptionStatus}→CANCELED reason=provider_absent_period_expired`
         );
         await prisma.user.update({
           where: { id: user.id },
