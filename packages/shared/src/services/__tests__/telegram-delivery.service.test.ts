@@ -57,7 +57,12 @@ describe("telegram-delivery.service", () => {
       include: {
         job: {
           include: {
-            clips: { orderBy: { startTime: "asc" } },
+            clips: {
+              orderBy: [
+                { score: { sort: "desc", nulls: "last" } },
+                { startTime: "asc" },
+              ],
+            },
           },
         },
       },

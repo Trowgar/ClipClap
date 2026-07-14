@@ -43,6 +43,8 @@ export interface Dict {
   fileTooLarge: (url: string) => string;
   processingFailed: (error: string) => string;
   done: (n: number) => string;
+  doneNoClips: (reason: string) => string;
+  lowQualityNote: string;
   blocked: (reason: string, url: string) => string;
   langUsage: string;
   langSetEn: string;
@@ -91,7 +93,7 @@ const en: Dict = {
   welcomeNew:
     "Welcome to ClipClap! Send me a video and I'll turn it into vertical clips with subtitles.\n\nLanguage: /lang ru - switch to Russian.",
   welcomeFirstChoice:
-    "Hi! I turn long videos into vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nHow it works:\n1. Pick a plan\n2. Send a video (up to 3 hours)\n3. Get 5-15 short clips back\n\nFirst - how do you want to set up?\n\n• New account - use this Telegram as your ClipClap account.\n• I already have an account - link this Telegram to your existing clipclap.io account.",
+    "Hi! I turn long videos into vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nHow it works:\n1. Pick a plan\n2. Send a video (up to 3 hours)\n3. Get back the strongest short clips (up to 12 - depends on the video)\n\nFirst - how do you want to set up?\n\n• New account - use this Telegram as your ClipClap account.\n• I already have an account - link this Telegram to your existing clipclap.io account.",
   welcomeBack: "Welcome back! Send a video and I'll generate clips.",
   welcomeNeedsPlan: (url) =>
     `Send a video and I'll generate clips. To enable processing, pick a plan: ${url}/dashboard/plans`,
@@ -123,6 +125,13 @@ const en: Dict = {
     `This video is over 20 MB - Telegram's Bot API limit. For now, upload longer videos on the website: ${url}/dashboard. We're working on lifting this limit soon.`,
   processingFailed: (error) => `Processing failed: ${error}`,
   done: (n) => `Done. ${n} clip${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} ready.`,
+  doneNoClips: (reason) =>
+    reason === "NO_USABLE_SPEECH"
+      ? "Done, but I could not find usable speech in this video - no clips this time."
+      : reason === "PARTIAL_TRANSCRIPT"
+        ? "Done, but part of the video could not be processed and no strong moments were found in the rest."
+        : "Done. I watched the whole video but did not find moments strong enough for clips - no clips this time. Try a video with more talk, emotion, or story.",
+  lowQualityNote: "Heads up: no strong moments found - this is the best available.",
   blocked: (reason, url) => `${reason}\n\nManage your plan: ${url}/dashboard/plans`,
   langUsage:
     "Usage: /lang en - English, /lang ru - Russian, /lang auto - follow Telegram language.",
@@ -204,7 +213,7 @@ const ru: Dict = {
   welcomeNew:
     "Привет! Это ClipClap. Пришли видео - нарежу вертикальные клипы с субтитрами.\n\nЯзык: /lang en - переключиться на английский.",
   welcomeFirstChoice:
-    "Привет! Нарезаю длинные видео на вертикальные клипы с субтитрами - для TikTok, Reels и Shorts.\n\nКак это работает:\n1. Выбери тариф\n2. Пришли видео (до 3 часов)\n3. Получи 5-15 коротких клипов\n\nСначала - как тебе удобнее начать?\n\n• Новый аккаунт - Telegram станет твоим аккаунтом ClipClap.\n• Уже есть аккаунт - привяжем этот Telegram к существующему аккаунту на clipclap.io.",
+    "Привет! Нарезаю длинные видео на вертикальные клипы с субтитрами - для TikTok, Reels и Shorts.\n\nКак это работает:\n1. Выбери тариф\n2. Пришли видео (до 3 часов)\n3. Получи самые сильные короткие клипы (до 12 - зависит от видео)\n\nСначала - как тебе удобнее начать?\n\n• Новый аккаунт - Telegram станет твоим аккаунтом ClipClap.\n• Уже есть аккаунт - привяжем этот Telegram к существующему аккаунту на clipclap.io.",
   welcomeBack: "С возвращением! Пришли видео - сделаю клипы.",
   welcomeNeedsPlan: (url) =>
     `Пришли видео - сделаю клипы. Чтобы запустить обработку, выбери тариф: ${url}/dashboard/plans`,
@@ -238,6 +247,13 @@ const ru: Dict = {
   processingFailed: (error) => `Обработка не удалась: ${error}`,
   done: (n) =>
     `Готово. ${n} ${pluralizeRu(n, "клип", "клипа", "клипов")} ${pluralizeRu(n, "готов", "готовы", "готовы")}.`,
+  doneNoClips: (reason) =>
+    reason === "NO_USABLE_SPEECH"
+      ? "Готово, но в этом видео не нашлось пригодной речи - клипов не будет."
+      : reason === "PARTIAL_TRANSCRIPT"
+        ? "Готово, но часть видео не удалось обработать, а в остальном сильных моментов не нашлось."
+        : "Готово. Я просмотрел всё видео, но не нашёл достаточно сильных моментов - клипов в этот раз нет. Попробуй видео с большим количеством речи, эмоций или истории.",
+  lowQualityNote: "Внимание: сильных моментов не нашлось - это лучшее из доступного.",
   blocked: (reason, url) => `${reason}\n\nУправление тарифом: ${url}/dashboard/plans`,
   langUsage:
     "Использование: /lang ru - русский, /lang en - английский, /lang auto - по языку Telegram.",

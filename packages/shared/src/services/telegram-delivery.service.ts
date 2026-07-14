@@ -27,7 +27,12 @@ export async function getPendingTelegramDeliveries(take = 20) {
     include: {
       job: {
         include: {
-          clips: { orderBy: { startTime: "asc" } },
+          clips: {
+            orderBy: [
+              { score: { sort: "desc", nulls: "last" } },
+              { startTime: "asc" },
+            ],
+          },
         },
       },
     },
