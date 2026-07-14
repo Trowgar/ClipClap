@@ -10,6 +10,7 @@ import { randomUUID } from "crypto";
 import { unlink } from "fs/promises";
 import { downloadVideo } from "../processors/download";
 import { cutClips, trimClipFile } from "../processors/cut";
+import { probeTimeline } from "../processors/normalize";
 import { generateThumbnail } from "../processors/thumbnail";
 import {
   burnSubtitles,
@@ -68,7 +69,7 @@ async function renderClips(
       select: { plan: true, billingCycle: true },
     });
     const sourceArtifactKey = requireString(
-      job.sourceArtifactKey,
+      job.normalizedArtifactKey ?? job.sourceArtifactKey,
       "sourceArtifactKey"
     );
     const transcription = asTranscription(job.transcriptJson);
@@ -81,6 +82,10 @@ async function renderClips(
     const startedAt = Date.now();
     let clipsGenerated = 0;
     const clipKeys: string[] = [];
+    const renderChecks: Array<{
+      renderDurationErrorMs: number;
+      renderAvStartSkewMs: number | null;
+    }> = [];
 
     for (const highlight of highlights) {
       // Derived even when subtitles are off so the editor can enable them later
@@ -103,6 +108,37 @@ async function renderClips(
         assFilter?.filter
       );
       tempFiles.push(cutResult.clipPath);
+      // duration error and A/V start skew are DIFFERENT failures: a clip can
+      // have perfect duration and 400ms lip-sync offset (spec §10)
+      try {
+        const probe = await probeTimeline(cutResult.clipPath);
+        const actualDuration = await probeDuration(cutResult.clipPath);
+        const renderDurationErrorMs = Math.round(
+          Math.abs(actualDuration - (highlight.end - highlight.start)) * 1000
+        );
+        const renderAvStartSkewMs =
+          probe.videoStart !== null && probe.audioStart !== null
+            ? Math.round(Math.abs(probe.videoStart - probe.audioStart) * 1000)
+            : null;
+        renderChecks.push({ renderDurationErrorMs, renderAvStartSkewMs });
+        if (renderDurationErrorMs > 500 || (renderAvStartSkewMs ?? 0) > 80) {
+          console.warn(
+            `[render] drift on job ${payload.jobId}: durationErrorMs=${renderDurationErrorMs} avStartSkewMs=${renderAvStartSkewMs}`
+          );
+        }
+      } catch (error) {
+        console.warn(`[render] probe failed for job ${payload.jobId}:`, error);
+      }
+      // subtitle cue sanity (spec §7): cues must live inside the clip window
+      if (cues.length > 0) {
+        const clipDuration = highlight.end - highlight.start;
+        const last = cues[cues.length - 1];
+        if (cues[0].start < 0 || last.end > clipDuration + 0.5) {
+          console.warn(
+            `[render] cue window violation on job ${payload.jobId}: first=${cues[0].start} last=${last.end} duration=${clipDuration}`
+          );
+        }
+      }
       const finalClipPath = cutResult.clipPath;
 
       const storageKey = `clips/${payload.userId}/${payload.jobId}/${randomUUID()}.mp4`;
@@ -112,6 +148,14 @@ async function renderClips(
           jobId: payload.jobId,
           userId: payload.userId,
           title: highlight.title,
+          description: highlight.description ?? null,
+          score: highlight.score ?? null,
+          language: highlight.language ?? null,
+          lowQuality: highlight.lowQuality ?? false,
+          hookStart: highlight.hookStart ?? null,
+          hookEnd: highlight.hookEnd ?? null,
+          payoffAt: highlight.payoffAt ?? null,
+          clipKind: highlight.kind ?? null,
           storageKey,
           duration: Math.round(highlight.end - highlight.start),
           startTime: highlight.start,
@@ -159,6 +203,7 @@ async function renderClips(
           mode: "clips",
           clipsGenerated,
           clipKeys,
+          renderChecks,
         } as Prisma.InputJsonValue,
       },
     });
@@ -262,4 +307,14 @@ async function markJobFailed(jobId: string, error: unknown) {
       error: error instanceof Error ? error.message : String(error),
     },
   });
+}
+
+async function probeDuration(path: string): Promise<number> {
+  const { execFile } = await import("child_process");
+  const { promisify } = await import("util");
+  const { stdout } = await promisify(execFile)("ffprobe", [
+    "-v", "error", "-show_entries", "format=duration",
+    "-of", "default=noprint_wrappers=1:nokey=1", path,
+  ]);
+  return Number(stdout.trim()) || 0;
 }
