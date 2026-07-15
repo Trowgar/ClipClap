@@ -59,7 +59,7 @@ enum TributeOrderStatus {
   PENDING
   PAID
   DUNNING
-  CANCELLED
+  CANCELED
   FAILED
 }
 
@@ -77,7 +77,7 @@ model TributeOrder {
   createdAt    DateTime           @default(now())
   updatedAt    DateTime           @updatedAt
 
-  user User @relation(fields: [userId], references: [id])
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   @@index([userId])
   @@index([userId, plan, billingCycle, status])
@@ -98,7 +98,7 @@ In the `User` model (after `withdrawalRequests  WithdrawalRequest[]` at line 142
 Create `prisma/migrations/20260714120000_tribute_shop_orders/migration.sql`:
 
 ```sql
-CREATE TYPE "TributeOrderStatus" AS ENUM ('PENDING', 'PAID', 'DUNNING', 'CANCELLED', 'FAILED');
+CREATE TYPE "TributeOrderStatus" AS ENUM ('PENDING', 'PAID', 'DUNNING', 'CANCELED', 'FAILED');
 
 CREATE TABLE "tribute_orders" (
     "id" TEXT NOT NULL,
@@ -972,8 +972,8 @@ async function applyCancellation(
   const user = await prisma.user.findUnique({ where: { id: order.userId } });
   if (!user) return { status: "unknown_order", orderUuid };
 
-  if (order.status !== "CANCELLED") {
-    await prisma.tributeOrder.update({ where: { orderUuid }, data: { status: "CANCELLED" } });
+  if (order.status !== "CANCELED") {
+    await prisma.tributeOrder.update({ where: { orderUuid }, data: { status: "CANCELED" } });
   }
   // Stale-order guard: audit-only for a superseded order.
   if (user.tributeSubscriptionId !== orderUuid) return { status: "stale_order", orderUuid };
