@@ -106,12 +106,6 @@ function buildMainMenu(dict: Dict): ReplyKeyboardMarkup {
 
 export interface BotRuntimeConfig {
   appUrl: string;
-  tributeUrls: {
-    starterWeekly?: string;
-    starter?: string;
-    plus?: string;
-    max?: string;
-  };
 }
 
 export async function handleUpdate(
