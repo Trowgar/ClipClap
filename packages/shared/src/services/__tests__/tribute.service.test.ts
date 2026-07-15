@@ -116,6 +116,13 @@ describe("hashTributeEvent", () => {
     expect(a).toBe(aRetry);
     expect(a).not.toBe(b);
   });
+
+  it("refund keys on uuid+transactionId; failed events key on uuid+created_at", () => {
+    expect(hashTributeEvent(envelope("shopOrderRefunded", { transactionId: 1 })))
+      .not.toBe(hashTributeEvent(envelope("shopOrderRefunded", { transactionId: 2 })));
+    expect(hashTributeEvent({ ...envelope("shopOrderChargeFailed"), created_at: "2026-07-14T10:00:00Z" }))
+      .not.toBe(hashTributeEvent({ ...envelope("shopOrderChargeFailed"), created_at: "2026-07-15T10:00:00Z" }));
+  });
 });
 
 describe("dispatchTributeEvent - activation", () => {
@@ -157,6 +164,18 @@ describe("dispatchTributeEvent - activation", () => {
     expect(out).toEqual({ status: "stale_order", orderUuid: "ord-1" });
     expect(mocks.userUpdate).not.toHaveBeenCalled();
   });
+
+  it("renewal (shopOrderChargeSuccess) extends period and notifies renewed", async () => {
+    mocks.orderFindUnique.mockResolvedValue({ ...ORDER, status: "PAID" });
+    mocks.userFindUnique.mockResolvedValue({ id: "user-1", currentPeriodEnd: new Date("2026-07-14T00:00:00Z") });
+    mocks.userUpdate.mockResolvedValue({ id: "user-1" });
+    const out = await dispatchTributeEvent(envelope("shopOrderChargeSuccess", { memberExpiresAt: "2026-07-28T00:00:00.000Z" }));
+    expect(out).toEqual({ status: "renewed", userId: "user-1", plan: "STARTER" });
+    expect(mocks.userUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ subscriptionStatus: "ACTIVE", currentPeriodEnd: new Date("2026-07-28T00:00:00.000Z") }) })
+    );
+    expect(mocks.notify).toHaveBeenCalledWith("user-1", expect.objectContaining({ kind: "subscription_renewed" }));
+  });
 });
 
 describe("dispatchTributeEvent - charge failed", () => {
@@ -183,6 +202,14 @@ describe("dispatchTributeEvent - charge failed", () => {
     expect(out).toEqual({ status: "stale_order", orderUuid: "ord-1" });
     expect(mocks.userUpdate).not.toHaveBeenCalled();
   });
+
+  it("is stale when a newer success already advanced the period (memberExpiresAt <= currentPeriodEnd)", async () => {
+    mocks.orderFindUnique.mockResolvedValue({ ...ORDER, status: "PAID" });
+    mocks.userFindUnique.mockResolvedValue({ id: "user-1", subscriptionStatus: "ACTIVE", tributeSubscriptionId: "ord-1", currentPeriodEnd: new Date("2026-08-01T00:00:00Z") });
+    const out = await dispatchTributeEvent(envelope("shopOrderChargeFailed", { memberExpiresAt: "2026-07-25T00:00:00Z" }));
+    expect(out).toEqual({ status: "stale_order", orderUuid: "ord-1" });
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
 });
 
 describe("dispatchTributeEvent - cancellation", () => {
@@ -195,6 +222,27 @@ describe("dispatchTributeEvent - cancellation", () => {
     expect(mocks.userUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ subscriptionStatus: "CANCELED_GRACE" }) })
     );
+  });
+
+  it("hard-cancels (CANCELED, no grace) when the period already lapsed", async () => {
+    mocks.orderFindUnique.mockResolvedValue({ ...ORDER, status: "PAID" });
+    mocks.userFindUnique.mockResolvedValue({ id: "user-1", tributeSubscriptionId: "ord-1" });
+    const past = new Date(Date.now() - 86_400_000).toISOString();
+    const out = await dispatchTributeEvent(envelope("shopOrderCancelled", { memberExpiresAt: past }));
+    expect(out).toEqual({ status: "cancelled", userId: "user-1" });
+    expect(mocks.userUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ subscriptionStatus: "CANCELED", graceEndsAt: null }) })
+    );
+  });
+
+  it("cancel for a superseded order flips the order to CANCELED but leaves User access", async () => {
+    mocks.orderFindUnique.mockResolvedValue({ ...ORDER, status: "PAID" });
+    mocks.userFindUnique.mockResolvedValue({ id: "user-1", tributeSubscriptionId: "ord-OTHER" });
+    const future = new Date(Date.now() + 86_400_000).toISOString();
+    const out = await dispatchTributeEvent(envelope("shopOrderCancelled", { memberExpiresAt: future }));
+    expect(out).toEqual({ status: "stale_order", orderUuid: "ord-1" });
+    expect(mocks.orderUpdate).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "CANCELED" } }));
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
   });
 });
 
