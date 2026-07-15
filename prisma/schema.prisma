@@ -140,6 +140,7 @@ model User {
   commissionsCaused   ReferralCommission[] @relation("ReferredCommissions")
   walletEntries       WalletEntry[]
   withdrawalRequests  WithdrawalRequest[]
+  tributeOrders       TributeOrder[]
 
   @@map("users")
 }
@@ -259,6 +260,35 @@ model TributeWebhookEvent {
   @@index([name, createdAt])
   @@index([status])
   @@map("tribute_webhook_events")
+}
+
+enum TributeOrderStatus {
+  PENDING
+  PAID
+  DUNNING
+  CANCELED
+  FAILED
+}
+
+model TributeOrder {
+  id           String             @id @default(cuid())
+  orderUuid    String             @unique
+  userId       String
+  telegramId   String
+  plan         Plan
+  billingCycle BillingCycle
+  amount       Int
+  currency     String
+  payUrl       String
+  status       TributeOrderStatus @default(PENDING)
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([userId, plan, billingCycle, status])
+  @@map("tribute_orders")
 }
 
 model StripeWebhookEvent {
