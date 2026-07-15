@@ -24,7 +24,6 @@ const flowMocks = vi.hoisted(() => ({
   createShopOrder: vi.fn(),
   cancelShopOrder: vi.fn(),
   getTributeCatalogEntry: vi.fn(),
-  resolveTelegramUser: vi.fn(),
   orderFindFirst: vi.fn(),
   orderCreate: vi.fn(),
 }));
@@ -36,7 +35,7 @@ vi.mock("@clipclap/shared", async (importOriginal) => {
     createShopOrder: flowMocks.createShopOrder,
     cancelShopOrder: flowMocks.cancelShopOrder,
     getTributeCatalogEntry: flowMocks.getTributeCatalogEntry,
-    prisma: { tributeOrder: { findFirst: flowMocks.orderFindFirst, create: flowMocks.orderCreate }, user: { findUnique: vi.fn() } },
+    prisma: { tributeOrder: { findFirst: flowMocks.orderFindFirst, create: flowMocks.orderCreate } },
   };
 });
 
@@ -54,7 +53,6 @@ describe("handleSubscribeCallback", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     flowMocks.getTributeCatalogEntry.mockReturnValue({ amount: 8900, currency: "eur", period: "monthly", title: "t", description: "d" });
-    flowMocks.resolveTelegramUser.mockResolvedValue({ id: "user-1" });
     flowMocks.orderFindFirst.mockResolvedValue(null);
     flowMocks.cancelShopOrder.mockResolvedValue(undefined);
   });
@@ -73,6 +71,17 @@ describe("handleSubscribeCallback", () => {
     expect(flowMocks.orderCreate).toHaveBeenCalled();
     const editArgs = (client as unknown as { editMessageText: ReturnType<typeof vi.fn> }).editMessageText.mock.calls[0];
     expect(JSON.stringify(editArgs)).toContain("https://pay");
+  });
+
+  it("reuses a fresh PENDING order instead of creating a new one", async () => {
+    flowMocks.orderFindFirst.mockResolvedValue({ payUrl: "https://reused-pay" });
+    const client = fakeClient();
+    const query = { id: "q", from: { id: 42 }, message: { chat: { id: 7 }, message_id: 3 }, data: "sub:MAX:MONTHLY" };
+    await handleSubscribeCallback(client, query as never, t("en"), { id: "user-1" } as never);
+    expect(flowMocks.createShopOrder).not.toHaveBeenCalled();
+    expect(flowMocks.orderCreate).not.toHaveBeenCalled();
+    const editArgs = (client as unknown as { editMessageText: ReturnType<typeof vi.fn> }).editMessageText.mock.calls[0];
+    expect(JSON.stringify(editArgs)).toContain("https://reused-pay");
   });
 
   it("best-effort cancels the remote order when the local insert fails", async () => {
