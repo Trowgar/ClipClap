@@ -1,14 +1,18 @@
 import { mkdir, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
+import { randomUUID } from "crypto";
 import {
   buildClipCaption,
+  cancelShopOrder,
   canSubmitJob,
   createBotInitiatedLink,
+  createShopOrder,
   createTelegramDelivery,
   findOrCreateTelegramUser,
   getPlanLimits,
   getPresignedDownloadUrl,
+  getTributeCatalogEntry,
   getUsageForUser,
   jobService,
   markTelegramDeliveryFailed,
@@ -482,6 +486,12 @@ async function handleCallbackQuery(
 
   await client.answerCallbackQuery(query.id, dict.callbackAck).catch(() => undefined);
 
+  if (query.data.startsWith("sub:")) {
+    const user = await resolveTelegramUser(query.from);
+    await handleSubscribeCallback(client, query, dict, user);
+    return;
+  }
+
   switch (query.data) {
     case CALLBACK_NEW_ACCOUNT: {
       await resolveTelegramUser(query.from);
@@ -570,13 +580,106 @@ export function parseSubCallback(
   data: string | undefined
 ): { plan: SubPlan; cycle: SubCycle } | null {
   if (!data || !data.startsWith("sub:")) return null;
-  const [, plan, cycle] = data.split(":");
+  const parts = data.split(":");
+  if (parts.length !== 3) return null;
+  const [, plan, cycle] = parts;
   const isPlan = plan === "STARTER" || plan === "PLUS" || plan === "MAX";
   const isCycle = cycle === "WEEKLY" || cycle === "MONTHLY";
   if (!isPlan || !isCycle) return null;
   // Only STARTER offers weekly; PLUS/MAX are monthly-only.
   if (cycle === "WEEKLY" && plan !== "STARTER") return null;
   return { plan: plan as SubPlan, cycle: cycle as SubCycle };
+}
+
+// In-memory per-user lock: prevents a double-tap from minting two orders.
+const subscribeLocks = new Set<string>();
+
+export async function handleSubscribeCallback(
+  client: TelegramClient,
+  query: TelegramCallbackQuery,
+  dict: Dict,
+  user: { id: string }
+): Promise<void> {
+  const parsed = parseSubCallback(query.data);
+  if (!parsed || !query.message || !query.from) return;
+
+  const telegramId = String(query.from.id);
+  const chatId = query.message.chat.id;
+  const messageId = query.message.message_id;
+
+  if (subscribeLocks.has(telegramId)) return;
+  subscribeLocks.add(telegramId);
+  try {
+    const entry = getTributeCatalogEntry(parsed.plan, parsed.cycle);
+
+    // Reuse a fresh PENDING order for the same user+plan+cycle (avoids a second order).
+    const fresh = await prisma.tributeOrder.findFirst({
+      where: {
+        userId: user.id,
+        plan: parsed.plan,
+        billingCycle: parsed.cycle,
+        status: "PENDING",
+        createdAt: { gt: new Date(Date.now() - 15 * 60_000) },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    let payUrl: string;
+    if (fresh) {
+      payUrl = fresh.payUrl;
+    } else {
+      const checkoutIntentId = randomUUID();
+      let result: { uuid: string; webappPaymentUrl: string };
+      try {
+        result = await createShopOrder({
+          plan: parsed.plan,
+          billingCycle: parsed.cycle,
+          telegramId,
+          checkoutIntentId,
+        });
+      } catch (err) {
+        console.error("[tribute] createShopOrder failed", { telegramId, checkoutIntentId, err });
+        await client.sendMessage(chatId, dict.checkoutError).catch(() => undefined);
+        return;
+      }
+
+      try {
+        await prisma.tributeOrder.create({
+          data: {
+            orderUuid: result.uuid,
+            userId: user.id,
+            telegramId,
+            plan: parsed.plan,
+            billingCycle: parsed.cycle,
+            amount: entry.amount,
+            currency: entry.currency,
+            payUrl: result.webappPaymentUrl,
+            status: "PENDING",
+          },
+        });
+      } catch (err) {
+        // Remote order exists but we could not record it: cancel it so the user
+        // is never handed an order we cannot track, then ask them to retry.
+        console.error("[tribute] order insert failed; cancelling remote order", {
+          checkoutIntentId,
+          uuid: result.uuid,
+          err,
+        });
+        await cancelShopOrder(result.uuid).catch(() => undefined);
+        await client.sendMessage(chatId, dict.checkoutError).catch(() => undefined);
+        return;
+      }
+      payUrl = result.webappPaymentUrl;
+    }
+
+    await client
+      .editMessageText(chatId, messageId, dict.checkoutReady, {
+        replyMarkup: { inline_keyboard: [[{ text: dict.payBtn, url: payUrl }]] },
+      })
+      .catch(() => undefined);
+  } finally {
+    subscribeLocks.delete(telegramId);
+  }
 }
 
 async function applyLangChoice(
