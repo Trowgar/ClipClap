@@ -9,6 +9,7 @@ export * as telegramAuthService from "./telegram-auth.service";
 export * as telegramDeliveryService from "./telegram-delivery.service";
 export * as telegramLinkService from "./telegram-link.service";
 export * as tributeService from "./tribute.service";
+export * as tributeShopService from "./tribute-shop.service";
 export * as telegramNotificationService from "./telegram-notification.service";
 export * as referralService from "./referral.service";
 export * as walletService from "./wallet.service";
@@ -25,6 +26,7 @@ export * from "./telegram-delivery.service";
 export * from "./telegram-caption";
 export * from "./telegram-link.service";
 export * from "./tribute.service";
+export * from "./tribute-shop.service";
 export * from "./subscription-reconcile.service";
 export * from "./referral.service";
 // Named re-exports for error classes that callers need to instanceof-check
