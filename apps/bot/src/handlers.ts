@@ -262,7 +262,7 @@ async function sendAccountView(
       retentionDays: 0,
       clipsTotal: 0,
     });
-    const keyboard = plansKeyboard(dict, config);
+    const keyboard = plansKeyboard(dict);
     await client.sendMessage(
       message.chat.id,
       text,
@@ -304,7 +304,7 @@ async function sendAccountView(
   });
 
   if (usage.plan === "NONE") {
-    const keyboard = plansKeyboard(dict, config);
+    const keyboard = plansKeyboard(dict);
     await client.sendMessage(
       message.chat.id,
       text,
@@ -416,7 +416,7 @@ async function handleStart(
     if (isNew) {
       const { referralService } = await import("@clipclap/shared");
       await referralService.attachReferral(user.id, payload.code);
-      const keyboard = plansKeyboard(dict, config);
+      const keyboard = plansKeyboard(dict);
       await client.sendMessage(
         message.chat.id,
         dict.newAccountCreated(config.appUrl),
@@ -442,7 +442,7 @@ async function handleStart(
   const usage = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
 
   if (usage.plan === "NONE") {
-    const keyboard = plansKeyboard(dict, config);
+    const keyboard = plansKeyboard(dict);
     await client.sendMessage(
       message.chat.id,
       dict.welcomeNeedsPlan(config.appUrl),
@@ -485,7 +485,7 @@ async function handleCallbackQuery(
   switch (query.data) {
     case CALLBACK_NEW_ACCOUNT: {
       await resolveTelegramUser(query.from);
-      const keyboard = plansKeyboard(dict, config);
+      const keyboard = plansKeyboard(dict);
       await client
         .editMessageText(
           query.message.chat.id,
@@ -552,27 +552,31 @@ function languageKeyboard(dict: Dict): InlineKeyboardMarkup {
   };
 }
 
-export function plansKeyboard(
-  dict: Dict,
-  config: BotRuntimeConfig
-): InlineKeyboardMarkup | null {
-  const rows: { text: string; url: string }[][] = [];
-  if (config.tributeUrls.starterWeekly) {
-    rows.push([
-      { text: dict.planStarterWeeklyBtn, url: config.tributeUrls.starterWeekly },
-    ]);
-  }
-  if (config.tributeUrls.starter) {
-    rows.push([{ text: dict.planStarterBtn, url: config.tributeUrls.starter }]);
-  }
-  if (config.tributeUrls.plus) {
-    rows.push([{ text: dict.planPlusBtn, url: config.tributeUrls.plus }]);
-  }
-  if (config.tributeUrls.max) {
-    rows.push([{ text: dict.planMaxBtn, url: config.tributeUrls.max }]);
-  }
-  if (rows.length === 0) return null;
-  return { inline_keyboard: rows };
+export function plansKeyboard(dict: Dict): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [{ text: dict.planStarterWeeklyBtn, callback_data: "sub:STARTER:WEEKLY" }],
+      [{ text: dict.planStarterBtn, callback_data: "sub:STARTER:MONTHLY" }],
+      [{ text: dict.planPlusBtn, callback_data: "sub:PLUS:MONTHLY" }],
+      [{ text: dict.planMaxBtn, callback_data: "sub:MAX:MONTHLY" }],
+    ],
+  };
+}
+
+export type SubPlan = "STARTER" | "PLUS" | "MAX";
+export type SubCycle = "WEEKLY" | "MONTHLY";
+
+export function parseSubCallback(
+  data: string | undefined
+): { plan: SubPlan; cycle: SubCycle } | null {
+  if (!data || !data.startsWith("sub:")) return null;
+  const [, plan, cycle] = data.split(":");
+  const isPlan = plan === "STARTER" || plan === "PLUS" || plan === "MAX";
+  const isCycle = cycle === "WEEKLY" || cycle === "MONTHLY";
+  if (!isPlan || !isCycle) return null;
+  // Only STARTER offers weekly; PLUS/MAX are monthly-only.
+  if (cycle === "WEEKLY" && plan !== "STARTER") return null;
+  return { plan: plan as SubPlan, cycle: cycle as SubCycle };
 }
 
 async function applyLangChoice(

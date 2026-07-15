@@ -90,6 +90,9 @@ export interface Dict {
   urlAccessFailed: string;
   referralInfo: (web: string, tg: string, earned: string, pending: string) => string;
   balanceInfo: (available: string, clearing: string) => string;
+  payBtn: string;
+  checkoutReady: string;
+  checkoutError: string;
 }
 
 const en: Dict = {
@@ -141,10 +144,10 @@ const en: Dict = {
   langSetEn: "Language set to English.",
   langSetRu: "Язык установлен: русский.",
   langSetAuto: "Auto language detection enabled.",
-  planStarterWeeklyBtn: "🌱 Starter - $3 / week",
-  planStarterBtn: "💎 Starter - $9 / month",
-  planPlusBtn: "🚀 Plus - $29 / month",
-  planMaxBtn: "👑 Max - $99 / month",
+  planStarterWeeklyBtn: "🌱 Starter - €3 / week",
+  planStarterBtn: "💎 Starter - €9 / month",
+  planPlusBtn: "🚀 Plus - €29 / month",
+  planMaxBtn: "👑 Max - €89 / month",
   menuAccount: "📊 Account",
   menuHelp: "❓ Help",
   menuSettings: "⚙️ Settings",
@@ -225,6 +228,9 @@ const en: Dict = {
     `Your referral links:\nWeb: ${web}\nTelegram: ${tg}\n\nReferral earnings: $${earned}\nPending (14-day hold): $${pending}\n\nWithdraw on clipclap.io/dashboard/payouts`,
   balanceInfo: (available, clearing) =>
     `Wallet balance:\nAvailable: $${available}\nClearing: $${clearing} (commissions still in a 14-day hold)\n\nWithdraw on clipclap.io/dashboard/payouts`,
+  payBtn: "💳 Pay",
+  checkoutReady: "Tap Pay to complete your subscription. You'll return to the bot after payment.",
+  checkoutError: "Could not start checkout. Please try again in a moment.",
 };
 
 const ru: Dict = {
@@ -278,10 +284,10 @@ const ru: Dict = {
   langSetEn: "Language set to English.",
   langSetRu: "Язык установлен: русский.",
   langSetAuto: "Авто-определение языка включено.",
-  planStarterWeeklyBtn: "🌱 Starter - $3 / неделя",
-  planStarterBtn: "💎 Starter - $9 / мес",
-  planPlusBtn: "🚀 Plus - $29 / мес",
-  planMaxBtn: "👑 Max - $99 / мес",
+  planStarterWeeklyBtn: "🌱 Starter - €3 / неделя",
+  planStarterBtn: "💎 Starter - €9 / мес",
+  planPlusBtn: "🚀 Plus - €29 / мес",
+  planMaxBtn: "👑 Max - €89 / мес",
   menuAccount: "📊 Аккаунт",
   menuHelp: "❓ Помощь",
   menuSettings: "⚙️ Настройки",
@@ -369,6 +375,9 @@ const ru: Dict = {
     `Ваши реферальные ссылки:\nСайт: ${web}\nTelegram: ${tg}\n\nЗаработано с рефералов: $${earned}\nВ ожидании (14-дневный холд): $${pending}\n\nВывод на clipclap.io/dashboard/payouts`,
   balanceInfo: (available, clearing) =>
     `Баланс кошелька:\nДоступно: $${available}\nВ обработке: $${clearing} (комиссии ещё в 14-дневном холде)\n\nВывод на clipclap.io/dashboard/payouts`,
+  payBtn: "💳 Оплатить",
+  checkoutReady: "Нажми «Оплатить», чтобы оформить подписку. После оплаты вернёшься в бота.",
+  checkoutError: "Не удалось начать оплату. Попробуй ещё раз через минуту.",
 };
 
 const dictionaries: Record<Locale, Dict> = { en, ru };
