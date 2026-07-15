@@ -210,6 +210,13 @@ describe("dispatchTributeEvent - charge failed", () => {
     expect(out).toEqual({ status: "stale_order", orderUuid: "ord-1" });
     expect(mocks.userUpdate).not.toHaveBeenCalled();
   });
+
+  it("charge_failed at the period boundary (memberExpiresAt == currentPeriodEnd) still triggers DUNNING", async () => {
+    mocks.orderFindUnique.mockResolvedValue({ ...ORDER, status: "PAID" });
+    mocks.userFindUnique.mockResolvedValue({ id: "user-1", subscriptionStatus: "ACTIVE", tributeSubscriptionId: "ord-1", currentPeriodEnd: new Date("2026-07-25T00:00:00.000Z") });
+    const out = await dispatchTributeEvent(envelope("shopOrderChargeFailed", { memberExpiresAt: "2026-07-25T00:00:00.000Z" }));
+    expect(out).toEqual({ status: "dunning", userId: "user-1" });
+  });
 });
 
 describe("dispatchTributeEvent - cancellation", () => {
@@ -243,6 +250,17 @@ describe("dispatchTributeEvent - cancellation", () => {
     expect(out).toEqual({ status: "stale_order", orderUuid: "ord-1" });
     expect(mocks.orderUpdate).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "CANCELED" } }));
     expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
+
+  it("cancellation without memberExpiresAt keeps grace using the already-paid currentPeriodEnd", async () => {
+    mocks.orderFindUnique.mockResolvedValue({ ...ORDER, status: "PAID" });
+    const future = new Date(Date.now() + 3 * 86_400_000);
+    mocks.userFindUnique.mockResolvedValue({ id: "user-1", tributeSubscriptionId: "ord-1", currentPeriodEnd: future });
+    const out = await dispatchTributeEvent(envelope("shopOrderCancelled", {}));
+    expect(out).toEqual({ status: "cancelled", userId: "user-1" });
+    expect(mocks.userUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ subscriptionStatus: "CANCELED_GRACE", graceEndsAt: future }) })
+    );
   });
 });
 
@@ -283,5 +301,24 @@ describe("processTributeEvent - idempotency", () => {
     const out = await processTributeEvent(envelope("shopOrder", { memberExpiresAt: "2026-07-21T00:00:00Z" }));
     expect(out).toEqual({ status: "duplicate" });
     expect(mocks.eventUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it("returns duplicate when the atomic claim is lost to a concurrent delivery", async () => {
+    mocks.eventCreate.mockRejectedValue(p2002());
+    mocks.eventFindUnique.mockResolvedValue({ status: "RECEIVED" });
+    mocks.eventUpdateMany.mockResolvedValue({ count: 0 });
+    const out = await processTributeEvent(envelope("shopOrder", { memberExpiresAt: "2026-07-21T00:00:00Z" }));
+    expect(out).toEqual({ status: "duplicate" });
+  });
+
+  it("marks the inbox row FAILED and rethrows when a handler throws", async () => {
+    mocks.eventCreate.mockResolvedValue({});
+    mocks.eventUpdateMany.mockResolvedValue({ count: 1 });
+    mocks.orderFindUnique.mockResolvedValue({ ...ORDER });
+    // shopOrder with no memberExpiresAt makes applyOrderPayment throw.
+    await expect(processTributeEvent(envelope("shopOrder", {}))).rejects.toThrow();
+    expect(mocks.eventUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "FAILED" }) })
+    );
   });
 });

@@ -103,6 +103,7 @@ export async function processTributeEvent(
 ): Promise<TributeProcessOutcome> {
   const eventHash = hashTributeEvent(envelope);
 
+  // 1. Ensure an inbox row exists (RECEIVED). Only a P2002 conflict means "already received".
   let inserted = true;
   try {
     await prisma.tributeWebhookEvent.create({
@@ -122,6 +123,7 @@ export async function processTributeEvent(
     }
   }
 
+  // 2. Atomically claim RECEIVED/FAILED (or a PROCESSING row past the lease) -> PROCESSING.
   const staleCutoff = new Date(Date.now() - PROCESSING_LEASE_MS);
   const claim = await prisma.tributeWebhookEvent.updateMany({
     where: {
@@ -137,6 +139,7 @@ export async function processTributeEvent(
     return { status: "duplicate" };
   }
 
+  // 3. Dispatch to business handlers.
   let outcome: TributeProcessOutcome;
   try {
     outcome = await dispatchTributeEvent(envelope);
@@ -148,6 +151,7 @@ export async function processTributeEvent(
     throw err; // route returns 5xx -> Tribute retries
   }
 
+  // 4. Persist terminal status.
   const status = terminalStatusFor(outcome);
   await prisma.tributeWebhookEvent.update({
     where: { eventHash },
@@ -261,7 +265,7 @@ async function applyChargeFailed(
   // Stale-order guard: only the user's active order affects access.
   if (user.tributeSubscriptionId !== orderUuid) return { status: "stale_order", orderUuid };
   // Out-of-order guard: a newer charge_success already advanced coverage.
-  if (p.memberExpiresAt && user.currentPeriodEnd && new Date(p.memberExpiresAt) <= user.currentPeriodEnd) {
+  if (p.memberExpiresAt && user.currentPeriodEnd && new Date(p.memberExpiresAt) < user.currentPeriodEnd) {
     return { status: "stale_order", orderUuid };
   }
 
@@ -292,7 +296,9 @@ async function applyCancellation(
   // Stale-order guard: audit-only for a superseded order.
   if (user.tributeSubscriptionId !== orderUuid) return { status: "stale_order", orderUuid };
 
-  const expiresAt = p.memberExpiresAt ? new Date(p.memberExpiresAt) : null;
+  // Fall back to the already-known paid-through date so a cancellation webhook
+  // that omits memberExpiresAt never forfeits access the user already paid for.
+  const expiresAt = p.memberExpiresAt ? new Date(p.memberExpiresAt) : user.currentPeriodEnd;
   const stillActive = expiresAt ? expiresAt > new Date() : false;
   await prisma.user.update({
     where: { id: order.userId },
