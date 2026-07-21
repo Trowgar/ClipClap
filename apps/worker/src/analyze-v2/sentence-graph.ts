@@ -25,6 +25,10 @@ function wordsUnreliable(words: SubtitleWord[]): boolean {
 export function isCleanStart(nodes: SentenceNode[], index: number): boolean {
   const n = nodes[index];
   if (!n) return false;
+  // The node itself must be word-bearing: an opaque node has no reliable onset
+  // to cut at, no matter how strong its leading boundary is. Without this
+  // guard the critic's window markers advertise starts snap must reject.
+  if (!n.hasWords) return false;
   return (
     n.leadingStrength >= 0.8 ||
     (index > 0 && nodes[index - 1].hasWords === false)

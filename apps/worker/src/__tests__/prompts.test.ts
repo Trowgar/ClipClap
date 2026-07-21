@@ -28,6 +28,8 @@ describe("isCleanStart", () => {
     expect(isCleanStart(nodes, 1)).toBe(false);
     expect(isCleanStart(nodes, 3)).toBe(true);
     expect(isCleanStart(nodes, 99)).toBe(false);
+    // an opaque node is never a valid start, even with a strong leading boundary
+    expect(isCleanStart([node(0), node(1, { hasWords: false })], 1)).toBe(false);
   });
 });
 
