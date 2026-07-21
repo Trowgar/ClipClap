@@ -363,7 +363,7 @@ if duration > CLIP_MAX_SEC:
    both remain inside; if still > CLIP_MAX_SEC -> drop("too_long")
 ```
 
-**Unreliable word timings (music/crosstalk):** such regions are opaque nodes. A boundary may pass *through* an opaque region only when it is interior to the clip, never at an edge - code walks to the nearest word-bearing node (re-checking payoff containment, step 2). If a candidate's payoff node is opaque, or both edge nodes are opaque/unreliable, the candidate drops - better lost than a cut whose edges we cannot trust. (The earlier anchor-text fallback is removed - see §12.)
+**Unreliable word timings (music/crosstalk):** such regions are opaque nodes with REAL segment-level edges (Whisper segment boundaries) - only their word timings are untrustworthy. An opaque payoff or end therefore ships at `boundaryConfidence: "segment"` (the cut rides the segment edge, V1-grade accuracy) instead of dropping; code still prefers walking the end back to a word-bearing node at or after the payoff. A start immediately AFTER an opaque node counts as a clean cold open (a music/silence break is a strong semantic boundary even though leadingStrength inherits the opaque neighbor's 0.2). Drops remain only when the end would land before the payoff. (The earlier anchor-text fallback is removed - see §12.)
 
 **Evidence gate (replaces the lexical grounding gate):** code validates `title_evidence_nodes` / `description_evidence_nodes`: present and inside `[start_node, end_node]` (evidence at most 2 nodes outside auto-widens the range instead of dropping - snap re-validates the widened edges). Opaque nodes ARE valid evidence: their segment TEXT is real Whisper output, only word TIMINGS are unreliable - grounding is textual, timing integrity belongs to snap's edge rules. Missing or invalid evidence, or critic `grounded=false` / `self_contained=false` -> candidate is ineligible. A lexical title-vs-transcript overlap score is still computed but **only as telemetry** - word matching penalizes honest paraphrase and collapses on inflected languages (Russian morphology), so it must not gate.
 
@@ -519,7 +519,7 @@ clipKind     String?  // TS union ClipKind in shared types; DB stays String for 
 | Cut mid-thought | Minimized: clean-start check (leadingStrength >= 0.8 or walk-back <= 3s, else drop) + strong-end selection + critic boundary rules |
 | Cut payoff | Critic rule + `e.index >= p.index` re-checked after every end adjustment (incl. opaque walk-back) + epsilon invariants |
 | Ramble past payoff | End = strongest boundary within payoff+4s, else within +7s (sentence-completion slack), else the payoff node itself |
-| Opaque payoff or both edges opaque | Drop the candidate |
+| Opaque payoff/end | Ship at segment confidence (`boundaryConfidence: "segment"`); walk end back to word-bearing >= payoff when possible; drop only if the end would precede the payoff |
 | Overlaps | Keep-or-drop NMS by score (no trim/merge after critic) |
 | Ungrounded copy | Evidence-node gate (in-range, word-bearing) + critic `grounded` flag; lexical overlap is telemetry only |
 | Wrong-language copy | Script check -> one repair retry -> verbatim-snippet fallback copy; clip never dropped for copy language |
