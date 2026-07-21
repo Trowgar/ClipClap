@@ -126,20 +126,33 @@ export async function analyzeHighlightsV2(
   // eligibility: keep + evidence gate + snap + copy language
   const eligible: SnappedClip[] = [];
   let evidenceDrops = 0;
+  let evidenceWidened = 0;
   let snapDrops = 0;
   let copyRepairs = 0;
   let snippetFallbacks = 0;
+  const gateDropReasons: Record<string, number> = {};
+  const droppedVerdicts: Array<{ id: string; stage: string; reason: string; score: number }> = [];
 
   for (const verdict of critic.verdicts) {
     if (!verdict.keep) continue;
+
+    // Evidence just past the chosen boundary is a boundary problem, not a
+    // grounding failure: widen the range to contain its own evidence (snap
+    // re-validates clean start, invariants and the 90s cap afterwards).
+    if (widenRangeToEvidence(verdict, nodes.length - 1)) evidenceWidened += 1;
+
     const gate = evidenceGate(verdict, nodes);
     if (!gate.ok) {
       evidenceDrops += 1;
+      const reason = gate.reason ?? "unknown";
+      gateDropReasons[reason] = (gateDropReasons[reason] ?? 0) + 1;
+      droppedVerdicts.push({ id: verdict.id, stage: "gate", reason, score: verdict.score });
       continue;
     }
     const snapped = snapNodes(verdict, nodes, cfg);
     if (!snapped.ok) {
       snapDrops += 1;
+      droppedVerdicts.push({ id: verdict.id, stage: "snap", reason: snapped.reason, score: verdict.score });
       continue;
     }
 
@@ -177,6 +190,9 @@ export async function analyzeHighlightsV2(
       .sort((a, b) => b.score - a.score),
     ...critic.telemetry,
     evidenceDrops,
+    evidenceWidened,
+    gateDropReasons,
+    droppedVerdicts,
     snapDrops,
     copyRepairs,
     snippetFallbacks,
@@ -227,6 +243,32 @@ function toHighlight(clip: SnappedClip): V2Highlight {
     _descriptionEvidenceNodes: v.descriptionEvidenceNodes,
     _grounded: v.grounded,
   };
+}
+
+const EVIDENCE_WIDEN_MAX_NODES = 2;
+
+/** Evidence cited at most EVIDENCE_WIDEN_MAX_NODES outside [startNode, endNode]
+ *  pulls the boundary out to contain it. Mutates the verdict; returns whether
+ *  anything moved. Evidence further out stays a genuine grounding failure. */
+function widenRangeToEvidence(
+  verdict: { startNode: number; endNode: number; titleEvidenceNodes: number[]; descriptionEvidenceNodes: number[] },
+  maxIdx: number
+): boolean {
+  const evidence = [...verdict.titleEvidenceNodes, ...verdict.descriptionEvidenceNodes]
+    .filter((i) => Number.isInteger(i) && i >= 0 && i <= maxIdx);
+  if (evidence.length === 0) return false;
+  const min = Math.min(...evidence);
+  const max = Math.max(...evidence);
+  let widened = false;
+  if (min < verdict.startNode && verdict.startNode - min <= EVIDENCE_WIDEN_MAX_NODES) {
+    verdict.startNode = min;
+    widened = true;
+  }
+  if (max > verdict.endNode && max - verdict.endNode <= EVIDENCE_WIDEN_MAX_NODES) {
+    verdict.endNode = max;
+    widened = true;
+  }
+  return widened;
 }
 
 /** Coarse last-resort language guess for legacy transcripts without a language.

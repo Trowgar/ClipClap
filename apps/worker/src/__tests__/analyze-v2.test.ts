@@ -155,4 +155,43 @@ describe("analyzeHighlightsV2", () => {
     expect(r.highlights[0].title).toMatch(/предложение/);
     expect(r.telemetry.snippetFallbacks).toBe(1);
   });
+
+  it("widens the range to contain evidence cited just outside the boundary", async () => {
+    const verdict = JSON.parse(criticResponse(0.9).choices[0].message.content);
+    verdict.results[0].title_evidence_nodes = [8]; // 2 nodes before start_node 10
+    const criticWiden = {
+      choices: [{ message: { content: JSON.stringify(verdict) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 200, completion_tokens: 80 },
+    };
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: client(scanResponse(), criticWiden),
+      cfg,
+      transcriptPartial: false,
+    });
+    expect(r.telemetry.evidenceWidened).toBe(1);
+    expect(r.highlights).toHaveLength(1);
+    // the widened start pulled the clip back to node 8's onset (minus lead-in)
+    expect(r.highlights[0].start).toBeLessThan(40.2);
+    expect(r.highlights[0]._startNode).toBe(8);
+  });
+
+  it("drops far-outside evidence with a named gate reason", async () => {
+    const verdict = JSON.parse(criticResponse(0.9).choices[0].message.content);
+    verdict.results[0].title_evidence_nodes = [4]; // 6 nodes before start_node 10
+    const criticBadEvidence = {
+      choices: [{ message: { content: JSON.stringify(verdict) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 200, completion_tokens: 80 },
+    };
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: client(scanResponse(), criticBadEvidence),
+      cfg,
+      transcriptPartial: false,
+    });
+    expect(r.highlights).toHaveLength(0);
+    expect(r.telemetry.evidenceWidened).toBe(0);
+    expect(r.telemetry.gateDropReasons).toEqual({ title_evidence_invalid: 1 });
+    expect(r.telemetry.droppedVerdicts).toEqual([
+      { id: "c0", stage: "gate", reason: "title_evidence_invalid", score: 0.9 },
+    ]);
+  });
 });

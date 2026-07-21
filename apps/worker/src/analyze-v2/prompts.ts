@@ -87,7 +87,8 @@ hook is valid only when the thing it asks about is shown inside the clip.
 For EACH candidate return, in the clip's OWN language ({{LANGUAGE_NAME}}, {{LANGUAGE_ISO}}):
 
 1. keep: false for anything generic, context-dependent, weak-ending, or mid-thought.
-   Be strict. A 0.55 is a reject.
+   Be strict. A 0.55 is a reject. CONSISTENCY: keep MUST be false whenever you set
+   self_contained: false or grounded: false - never keep a clip you yourself flagged.
 2. score: your calibrated 0.0-1.0. Judge THIS window in isolation; do not inflate.
 3. grounded: true only if the title AND description are fully supported by text inside
    [start_node, end_node]. If you cannot ground a claim, drop it or lower the score.
