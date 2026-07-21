@@ -77,4 +77,26 @@ describe("selectAndOrder", () => {
     const r = selectAndOrder([a, b], cfg);
     expect(r.selected).toHaveLength(2);
   });
+
+  it("charges short clips a score surcharge in the strong tier", () => {
+    // lone 7s reaction fragment at 0.69 must NOT ship; the same score at 30s
+    // does; a genuinely great 8s punchline (0.8) still clears the raised bar
+    const fragment = clip(217, 224, 0.69);
+    const normal = clip(0, 30, 0.69);
+    const goldenPunch = clip(500, 508, 0.8);
+    const r = selectAndOrder([fragment, normal, goldenPunch], cfg);
+    const ranges = r.selected.map((c) => `${c.startSec}-${c.endSec}`);
+    expect(ranges).toContain("0-30");
+    expect(ranges).toContain("500-508");
+    expect(ranges).not.toContain("217-224");
+  });
+
+  it("applies the surcharge in the weak tier too", () => {
+    const shortWeak = clip(0, 8, 0.45); // 0.45 < 0.35 + 0.15
+    const longWeak = clip(100, 140, 0.45);
+    const r = selectAndOrder([shortWeak, longWeak], cfg);
+    expect(r.tier).toBe("weak");
+    expect(r.selected).toHaveLength(1);
+    expect(r.selected[0].startSec).toBe(100);
+  });
 });

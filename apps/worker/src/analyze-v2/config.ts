@@ -9,6 +9,10 @@ export interface AnalyzeConfig {
   reasoningEffort: string;
   scoreThreshold: number;
   weakFallbackMinScore: number;
+  /** Clips shorter than this pay a score surcharge - lone reaction fragments
+   *  ("этот контент - экстремизм", 7s) need to EARN their brevity. */
+  shortClipStrictSec: number;
+  shortClipScoreBonus: number;
   softCap: number;
   hardMinSec: number;
   targetMinSec: number;
@@ -50,6 +54,8 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     reasoningEffort: env.SELECTION_REASONING_EFFORT || "low",
     scoreThreshold: num(env, "CLIP_SCORE_THRESHOLD", 0.6),
     weakFallbackMinScore: num(env, "WEAK_FALLBACK_MIN_SCORE", 0.35),
+    shortClipStrictSec: num(env, "SHORT_CLIP_STRICT_SEC", 12),
+    shortClipScoreBonus: num(env, "SHORT_CLIP_SCORE_BONUS", 0.15),
     softCap: num(env, "CLIP_SOFT_CAP", 12),
     hardMinSec: num(env, "CLIP_HARD_MIN_SEC", 6),
     targetMinSec: num(env, "CLIP_TARGET_MIN_SEC", 8),

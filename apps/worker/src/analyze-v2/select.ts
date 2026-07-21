@@ -13,7 +13,14 @@ export function selectAndOrder(
   clips: SnappedClip[],
   cfg: AnalyzeConfig
 ): SelectionResult {
-  const strong = clips.filter((c) => c.verdict.score >= cfg.scoreThreshold);
+  // Deterministic backstop for lone reaction fragments: the critic is TOLD to
+  // reject short clips without their target inside, but LLM discipline is not
+  // a guarantee - very short clips must beat a raised bar instead.
+  const surcharge = (c: SnappedClip) =>
+    c.endSec - c.startSec < cfg.shortClipStrictSec ? cfg.shortClipScoreBonus : 0;
+  const strong = clips.filter(
+    (c) => c.verdict.score >= cfg.scoreThreshold + surcharge(c)
+  );
 
   let tier: SelectionResult["tier"];
   let pool: SnappedClip[];
@@ -22,7 +29,7 @@ export function selectAndOrder(
     pool = strong;
   } else {
     const weak = clips
-      .filter((c) => c.verdict.score >= cfg.weakFallbackMinScore)
+      .filter((c) => c.verdict.score >= cfg.weakFallbackMinScore + surcharge(c))
       .sort((a, b) => b.verdict.score - a.verdict.score)
       .slice(0, 2)
       .map((c) => ({ ...c, verdict: { ...c.verdict, lowQuality: true } }));
