@@ -45,8 +45,9 @@ describe("criticCandidateBlock", () => {
     };
     const block = criticCandidateBlock(candidate, nodes);
     const lines = block.split("\n");
-    expect(lines.find((l) => l.includes("#0"))!.startsWith("¶ ")).toBe(true);
-    expect(lines.find((l) => l.includes("#1"))!.startsWith("  ")).toBe(true);
-    expect(lines.find((l) => l.includes("#2"))!.startsWith("¶ ")).toBe(true);
+    // match node lines by "#<idx> [" - the candidate header also contains #0
+    expect(lines.find((l) => l.includes("#0 ["))!.startsWith("¶ ")).toBe(true);
+    expect(lines.find((l) => l.includes("#1 ["))!.startsWith("  ")).toBe(true);
+    expect(lines.find((l) => l.includes("#2 ["))!.startsWith("¶ ")).toBe(true);
   });
 });
