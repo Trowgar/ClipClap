@@ -189,9 +189,9 @@ describe("analyzeHighlightsV2", () => {
     });
     expect(r.highlights).toHaveLength(0);
     expect(r.telemetry.evidenceWidened).toBe(0);
-    expect(r.telemetry.gateDropReasons).toEqual({ title_evidence_invalid: 1 });
+    expect(r.telemetry.gateDropReasons).toEqual({ title_evidence_out_of_range: 1 });
     expect(r.telemetry.droppedVerdicts).toEqual([
-      { id: "c0", stage: "gate", reason: "title_evidence_invalid", score: 0.9 },
+      { id: "c0", stage: "gate", reason: "title_evidence_out_of_range", score: 0.9 },
     ]);
   });
 });
