@@ -22,6 +22,14 @@ function wordsUnreliable(words: SubtitleWord[]): boolean {
  *  terminal punctuation or a sentence-length pause) or it follows an opaque
  *  music/silence region. This is THE clean-start semantics - snap's guard and
  *  the critic's ¶ window markers must agree, so both consume this helper. */
+/** First LETTER of the text is lowercase - Whisper capitalizes real sentence
+ *  starts, so a lowercase onset is strong evidence of a mid-sentence fragment
+ *  (hesitation pauses mint fake 0.8 boundaries; capitalization vetoes them). */
+function startsLowercase(text: string): boolean {
+  const m = text.match(/\p{L}/u);
+  return m !== null && /\p{Ll}/u.test(m[0]);
+}
+
 export function isCleanStart(nodes: SentenceNode[], index: number): boolean {
   const n = nodes[index];
   if (!n) return false;
@@ -29,10 +37,29 @@ export function isCleanStart(nodes: SentenceNode[], index: number): boolean {
   // to cut at, no matter how strong its leading boundary is. Without this
   // guard the critic's window markers advertise starts snap must reject.
   if (!n.hasWords) return false;
-  return (
+  // Terminal-punctuation boundaries (leading 1.0) are trustworthy as-is.
+  // Pause/segment boundaries (0.8) and post-opaque starts also need the
+  // capitalization signal - a hesitation pause before "глаза на все её
+  // хотелки" is not a sentence start. (A transcript with punctuation but no
+  // capitals still yields clean starts through the 1.0 path.)
+  if (n.leadingStrength >= 1.0) return true;
+  const boundaryOk =
     n.leadingStrength >= 0.8 ||
-    (index > 0 && nodes[index - 1].hasWords === false)
-  );
+    (index > 0 && nodes[index - 1].hasWords === false);
+  return boundaryOk && !startsLowercase(n.text);
+}
+
+/** A node ENDS cleanly when its own trailing boundary is terminal, the
+ *  transcript ends, music follows, or the next node opens cleanly. Mirrors
+ *  isCleanStart - "…искала ты его потому," followed by a lowercase
+ *  continuation is a mid-clause cut, not an ending. */
+export function isCleanEnd(nodes: SentenceNode[], index: number): boolean {
+  const n = nodes[index];
+  if (!n) return false;
+  if (n.trailingStrength >= 1.0) return true;
+  if (index === nodes.length - 1) return true;
+  if (nodes[index + 1].hasWords === false) return true;
+  return isCleanStart(nodes, index + 1);
 }
 
 export function buildSentenceGraph(

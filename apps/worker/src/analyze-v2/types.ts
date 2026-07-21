@@ -71,6 +71,7 @@ export interface SnappedClip {
 
 export type DropReason =
   | "no_clean_start"
+  | "no_clean_end"
   | "opaque_end"
   | "opaque_payoff"
   | "invariant_violation"

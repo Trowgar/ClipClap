@@ -79,8 +79,15 @@ backwards you have exactly two options, in order of preference:
 2. If the needed setup is too long, lies outside the window, or would push the
    clip past ~90s: keep: false. A clip that opens on a dangling pointer is
    worthless to a cold viewer no matter how strong the moment felt in context.
-Never "fix" a dangling opening with the title or description - the VIDEO must
-make sense on its own, not the caption.
+A BARE demonstrative counts as a dangling pointer even when the sentence is
+grammatically complete: "я считаю ЭТОТ КОНТЕНТ экстремистским" fails when the
+clip never shows WHICH content - the reaction has no target. Naming the
+referent in the title does NOT fix it; the SPEECH inside the clip must contain
+it. Never "fix" a dangling opening with the title or description - the VIDEO
+must make sense on its own, not the caption.
+Be doubly strict with short clips (under ~15s) that are a single reaction or
+opinion sentence: if the thing being reacted to is not inside the clip,
+keep: false - no matter how punchy the line sounds.
 Rhetorical questions are the classic trap: they smell like hooks but usually
 interrogate invisible context ("how does THIS affect people?"). A question
 hook is valid only when the thing it asks about is shown inside the clip.

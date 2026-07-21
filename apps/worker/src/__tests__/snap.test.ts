@@ -11,7 +11,7 @@ function strongNodes(): SentenceNode[] {
     index: i,
     start: i * 2,
     end: i * 2 + 1.8,
-    text: `sentence ${i}.`,
+    text: `Sentence ${i}.`,
     hasWords: true,
     trailingStrength: 1.0,
     leadingStrength: 1.0,
@@ -155,12 +155,60 @@ describe("snapNodes", () => {
     expect(r.clip.endSec).toBeGreaterThanOrEqual(20);
   });
 
+  it("vetoes a lowercase pause-boundary start and walks back to a real sentence onset", () => {
+    // CLIP4 regression: a hesitation pause minted a fake 0.8 boundary before
+    // "глаза на все её хотелки" - the lowercase onset must veto it and the
+    // walk-back must land on the earlier capitalized sentence start.
+    const nodes = strongNodes().map((n, i) =>
+      i === 3
+        ? { ...n, text: "глаза на все её хотелки.", leadingStrength: 0.8 }
+        : n
+    );
+    const r = snapNodes(verdict({ startNode: 3 }), nodes, cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    // node2 is the nearest clean (capitalized, strong) start within reach
+    expect(r.clip.startSec).toBeCloseTo(nodes[2].start - cfg.leadInSec, 5);
+  });
+
+  it("trims a weak comma end back to the sentence-final payoff", () => {
+    // CLIP3 regression: end lands on "...искала ты его потому," (weak trailing,
+    // lowercase continuation follows) - repair must trim BACK to the payoff's
+    // terminal boundary, not swallow the next sentence forward.
+    const nodes = strongNodes().map((n, i) => {
+      if (i === 7) return { ...n, text: "которого не существует,", trailingStrength: 0.4, leadingStrength: 0.4 };
+      if (i === 8) return { ...n, text: "а искала ты его потому,", trailingStrength: 0.4, leadingStrength: 0.4 };
+      // real graphs derive leadingStrength from the previous node's trailing
+      if (i === 9) return { ...n, leadingStrength: 0.4 };
+      return n;
+    });
+    const r = snapNodes(verdict({ payoffNode: 6, endNode: 8 }), nodes, cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    // trimmed to node6 ("Sentence 6." trailing 1.0): endSec = min(13.8 + 0.3, 14) = 14
+    expect(r.clip.endSec).toBeCloseTo(14, 5);
+  });
+
+  it("drops with no_clean_end when no clean boundary exists near the payoff", () => {
+    const nodes = strongNodes().map((n, i) =>
+      i >= 5 && i <= 9
+        ? { ...n, text: "и снова без точки,", trailingStrength: 0.4, leadingStrength: 0.4 }
+        : n
+    );
+    // payoff and end both sit inside the weak run; forward slack (3s) cannot
+    // reach node 10 (17.8s away from node 6's end), backward finds nothing >= payoff
+    const r = snapNodes(
+      verdict({ startNode: 2, payoffNode: 6, endNode: 6, hookStartNode: 5, hookEndNode: 6 }),
+      nodes,
+      cfg
+    );
+    expect(r).toEqual({ ok: false, reason: "no_clean_end" });
+  });
+
   it("compresses >90s clips from the start along strong boundaries, keeping the hook", () => {
     const nodes: SentenceNode[] = Array.from({ length: 60 }, (_, i) => ({
       index: i,
       start: i * 2,
       end: i * 2 + 1.9,
-      text: `s${i}.`,
+      text: `S${i}.`,
       hasWords: true,
       trailingStrength: 1.0,
       leadingStrength: 1.0,

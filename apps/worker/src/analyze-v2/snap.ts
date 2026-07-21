@@ -1,5 +1,5 @@
 import type { AnalyzeConfig } from "./config";
-import { isCleanStart } from "./sentence-graph";
+import { isCleanEnd, isCleanStart } from "./sentence-graph";
 import type { CriticVerdict, SentenceNode, SnapResult } from "./types";
 
 const EPS = 0.05;
@@ -79,6 +79,35 @@ export function snapNodes(
     } else {
       return { ok: false, reason: "opaque_end" };
     }
+  }
+
+  // 2b. clean end - the mirror of the clean-start guard. A weak trailing
+  //     boundary followed by a lowercase continuation ("...искала ты его
+  //     потому,") is a mid-clause cut. Repair order: BACKWARD first - trimming
+  //     the dangling fragment to the latest clean end at or after the payoff
+  //     never adds foreign content ("...единорога." wins over "...потому,").
+  //     FORWARD (within SENTENCE_SLACK) only when no clean end exists between
+  //     the payoff and e - i.e. the payoff's own sentence is still open and
+  //     must be completed. Neither works -> drop, better lost than broken.
+  if (e.hasWords && !isCleanEnd(nodes, e.index)) {
+    let repaired: SentenceNode | null = null;
+    for (let i = e.index - 1; i >= p.index; i--) {
+      if (nodes[i].hasWords && isCleanEnd(nodes, i)) {
+        repaired = nodes[i];
+        break;
+      }
+    }
+    if (!repaired) {
+      for (let i = e.index + 1; i < nodes.length; i++) {
+        if (nodes[i].end - e.end > SENTENCE_SLACK_SEC) break;
+        if (nodes[i].hasWords && isCleanEnd(nodes, i)) {
+          repaired = nodes[i];
+          break;
+        }
+      }
+    }
+    if (!repaired) return { ok: false, reason: "no_clean_end" };
+    e = repaired;
   }
 
   // 3. seconds from real node edges (lead-in/tail-hold only ever move within
