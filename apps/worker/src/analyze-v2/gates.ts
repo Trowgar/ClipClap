@@ -21,15 +21,15 @@ export function evidenceGate(
     }
     for (const idx of evidence) {
       const node = nodes[idx];
-      if (
-        !Number.isInteger(idx) ||
-        !node ||
-        idx < verdict.startNode ||
-        idx > verdict.endNode ||
-        !node.hasWords
-      ) {
+      if (!Number.isInteger(idx) || !node) {
         return { ok: false, reason: `${label}_evidence_invalid` };
       }
+      if (idx < verdict.startNode || idx > verdict.endNode) {
+        return { ok: false, reason: `${label}_evidence_out_of_range` };
+      }
+      // NOTE: opaque nodes (hasWords=false) are VALID evidence - their segment
+      // TEXT is real Whisper output; only the word TIMINGS are unreliable.
+      // Grounding is about text; timing integrity belongs to snap's edge rules.
     }
   }
   return { ok: true };

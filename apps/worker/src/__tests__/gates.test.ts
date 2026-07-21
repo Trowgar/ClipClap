@@ -39,14 +39,18 @@ describe("evidenceGate", () => {
   it("passes valid in-range word-bearing evidence", () => {
     expect(evidenceGate(verdict({}), nodes()).ok).toBe(true);
   });
-  it("fails when evidence is out of clip range", () => {
-    expect(evidenceGate(verdict({ titleEvidenceNodes: [7] }), nodes()).ok).toBe(false);
+  it("fails when evidence is out of clip range, with a named reason", () => {
+    const r = evidenceGate(verdict({ titleEvidenceNodes: [7] }), nodes());
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe("title_evidence_out_of_range");
   });
-  it("fails when evidence is empty or points at an opaque node", () => {
+  it("fails when evidence is empty", () => {
     expect(evidenceGate(verdict({ titleEvidenceNodes: [] }), nodes()).ok).toBe(false);
+  });
+  it("accepts opaque evidence nodes - segment text is real, only word timings are not", () => {
     expect(
       evidenceGate(verdict({ endNode: 9, descriptionEvidenceNodes: [8] }), nodes()).ok
-    ).toBe(false);
+    ).toBe(true);
   });
   it("fails when critic itself says grounded=false or selfContained=false", () => {
     expect(evidenceGate(verdict({ grounded: false }), nodes()).ok).toBe(false);
