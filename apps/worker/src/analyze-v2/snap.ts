@@ -1,4 +1,5 @@
 import type { AnalyzeConfig } from "./config";
+import { isCleanStart } from "./sentence-graph";
 import type { CriticVerdict, SentenceNode, SnapResult } from "./types";
 
 const EPS = 0.05;
@@ -31,12 +32,8 @@ export function snapNodes(
   // just coarser. Such clips ship with boundaryConfidence "segment".
   let boundaryConfidence: "word" | "segment" = p.hasWords ? "word" : "segment";
 
-  // A node right after an opaque node opens after music/silence - semantically
-  // a strong cold-open boundary even though its leadingStrength inherits the
-  // opaque neighbor's 0.2.
-  const cleanStartAt = (n: SentenceNode) =>
-    n.leadingStrength >= STRONG ||
-    (n.index > 0 && nodes[n.index - 1].hasWords === false);
+  // Shared clean-start semantics (also drives the critic's ¶ window markers).
+  const cleanStartAt = (n: SentenceNode) => isCleanStart(nodes, n.index);
 
   // 1. clean start - the mid-thought guard the end already has via trailingStrength.
   //    Walk to an earlier node whose leading boundary is strong, adding at most

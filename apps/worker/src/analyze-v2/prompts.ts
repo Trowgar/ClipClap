@@ -1,3 +1,4 @@
+import { isCleanStart } from "./sentence-graph";
 import type { MergedCandidate, SentenceNode } from "./types";
 
 export const SCANNER_PROMPT = `You are a fast recall scanner for a short-form video clipping tool. You read a
@@ -51,9 +52,9 @@ kill the weak ones. Quality over quantity - it is correct and expected to reject
 most candidates.
 
 Each candidate arrives as a window of numbered transcript nodes:
-  #<index> [<start>s-<end>s] <text>
-with word-level timings at the edge nodes:
-  [<start>s-<end>s] <word>
+  ¶ #<index> [<start>s-<end>s] <text>
+A leading ¶ marks a STRONG BOUNDARY line: the sentence opens after terminal
+punctuation, a real pause, or a music break. Lines without ¶ begin mid-flow.
 Address everything by node index. NEVER output a timestamp, a second, or an index
 you were not shown. The window is padded with surrounding context so you can judge
 self-containment and find where a clean sentence actually begins.
@@ -96,8 +97,9 @@ For EACH candidate return, in the clip's OWN language ({{LANGUAGE_NAME}}, {{LANG
    full sense to a stranger - apply the COLD VIEWER RULE above; a dangling opening
    pointer means false.
 5. Boundary nodes (LENGTH MATCHES THE MOMENT - roughly 8-90s, NEVER pad to a minimum):
-   - start_node: the node that begins the opening line (a sentence onset, a clean
-     1-2s lead-in is fine; never a dangling pronoun or mid-answer fragment).
+   - start_node: MUST be a ¶ line. The cutter REJECTS clips starting on an
+     unmarked line - when the moment's natural start is unmarked, walk UP to the
+     nearest ¶ line above it (never a dangling pronoun or mid-answer fragment).
    - payoff_node: the node where the punchline / answer / reaction completes.
    - end_node: the FIRST node that finishes a sentence AT or AFTER payoff_node. End on
      a complete sentence. NEVER end before the payoff. Do not trail more than ~4s of
@@ -156,7 +158,10 @@ export function criticCandidateBlock(
   }
   for (let i = from; i <= to; i++) {
     const n = nodes[i];
-    lines.push(`#${n.index} [${n.start.toFixed(1)}s-${n.end.toFixed(1)}s] ${n.text}`);
+    // ¶ marks nodes the boundary machine accepts as clip STARTS - the critic
+    // must pick start_node from these lines or the clip dies at the cutter.
+    const marker = isCleanStart(nodes, i) ? "¶ " : "  ";
+    lines.push(`${marker}#${n.index} [${n.start.toFixed(1)}s-${n.end.toFixed(1)}s] ${n.text}`);
   }
   return lines.join("\n");
 }

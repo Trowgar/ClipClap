@@ -170,7 +170,7 @@ Every window is represented, no region floods the critic, and cost stays linear 
 | Reasoning | `reasoning_effort: "low"` (`SELECTION_REASONING_EFFORT` env) |
 | Output cap | `max_output_tokens ≈ CRITIC_BATCH_SIZE * 400` (covers JSON + evidence arrays + reasoning tokens) |
 | response_format | `json_schema`, `strict: true` |
-| Input per candidate | local node window `[start_node-16 .. end_node+12]` (clamped; backward reach feeds the COLD VIEWER RULE - the critic must be able to pull a setup from ~a minute earlier; forward reach feeds payoff chasing) as `#<idx> [<start>s-<end>s] <text>`, plus word-level lines for the first 2 and last 2 nodes (the boundary zones); plus a one-line `thread:` note when the candidate references a collated thread |
+| Input per candidate | local node window `[start_node-16 .. end_node+12]` (clamped; backward reach feeds the COLD VIEWER RULE - the critic must be able to pull a setup from ~a minute earlier; forward reach feeds payoff chasing) as `#<idx> [<start>s-<end>s] <text>`, with ¶ markers on clean-start lines (shared `isCleanStart` semantics with snap - the critic picks starts the cutter will accept); plus a one-line `thread:` note when the candidate references a collated thread |
 | Output | `{results: [{id, keep, score, grounded, self_contained, start_node, payoff_node, end_node, hook_start_node, hook_end_node, title, description, title_evidence_nodes, description_evidence_nodes, language}]}` - node indices, never seconds |
 | Posture | judge hard; `keep: false` for weak/contextless/mid-thought/weak-ending; "a 0.55 is a reject"; length matches the moment; title <= 70 chars + one truthful description, both in the source language |
 | Truncation/refusal | strict schema holds only for completed responses. Truncated (`finish_reason: length` / incomplete): split the batch in half and retry (down to single-candidate batches), then double the output cap once. Refusal: retry once, then drop that batch's candidates with telemetry. |
@@ -239,9 +239,9 @@ kill the weak ones. Quality over quantity - it is correct and expected to reject
 most candidates.
 
 Each candidate arrives as a window of numbered transcript nodes:
-  #<index> [<start>s-<end>s] <text>
-with word-level timings at the edge nodes:
-  [<start>s-<end>s] <word>
+  ¶ #<index> [<start>s-<end>s] <text>
+A leading ¶ marks a STRONG BOUNDARY line: the sentence opens after terminal
+punctuation, a real pause, or a music break. Lines without ¶ begin mid-flow.
 Address everything by node index. NEVER output a timestamp, a second, or an index
 you were not shown. The window is padded with surrounding context so you can judge
 self-containment and find where a clean sentence actually begins.
@@ -283,8 +283,9 @@ For EACH candidate return, in the clip's OWN language ({{LANGUAGE_NAME}}, {{LANG
    full sense to a stranger - apply the COLD VIEWER RULE above; a dangling opening
    pointer means false.
 5. Boundary nodes (LENGTH MATCHES THE MOMENT - roughly 8-90s, NEVER pad to a minimum):
-   - start_node: the node that begins the opening line (a sentence onset, a clean
-     1-2s lead-in is fine; never a dangling pronoun or mid-answer fragment).
+   - start_node: MUST be a ¶ line. The cutter REJECTS clips starting on an
+     unmarked line - when the moment's natural start is unmarked, walk UP to the
+     nearest ¶ line above it (never a dangling pronoun or mid-answer fragment).
    - payoff_node: the node where the punchline / answer / reaction completes.
    - end_node: the FIRST node that finishes a sentence AT or AFTER payoff_node. End on
      a complete sentence. NEVER end before the payoff. Do not trail more than ~4s of

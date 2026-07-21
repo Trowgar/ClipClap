@@ -18,6 +18,19 @@ function wordsUnreliable(words: SubtitleWord[]): boolean {
   return false;
 }
 
+/** A node opens cleanly when its leading boundary is strong (>= 0.8: after
+ *  terminal punctuation or a sentence-length pause) or it follows an opaque
+ *  music/silence region. This is THE clean-start semantics - snap's guard and
+ *  the critic's ¶ window markers must agree, so both consume this helper. */
+export function isCleanStart(nodes: SentenceNode[], index: number): boolean {
+  const n = nodes[index];
+  if (!n) return false;
+  return (
+    n.leadingStrength >= 0.8 ||
+    (index > 0 && nodes[index - 1].hasWords === false)
+  );
+}
+
 export function buildSentenceGraph(
   segments: WhisperSegment[],
   cfg: AnalyzeConfig
