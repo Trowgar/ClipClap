@@ -22,6 +22,11 @@ Return a moment when it contains any of:
 - a clear setup that pays off (a self-contained mini story)
 - a curiosity hook: an unfinished thought that makes you want the answer
 
+Include the SETUP in the range: when the moment is a reaction, a comeback, or a
+rant about something said a few sentences earlier, start the range at that
+earlier setup - a range whose first line points backwards with "this / that /
+they / so" at something outside the range is a broken clip, not a hook.
+
 For each moment give:
 - start_node: index where the setup/hook begins
 - end_node: index where the payoff/punchline lands (be generous, include the payoff)
@@ -59,6 +64,26 @@ Score each candidate 0.0-1.0 for SCROLL-STOPPING potential:
 - Is it SELF-CONTAINED: does it make full sense with no prior context?
 - Does it deliver on its own hook? (No bait it does not pay off.)
 
+COLD VIEWER RULE - the most common failure, check it FIRST:
+The viewer sees ONLY the text between your chosen start_node and end_node.
+The padded window around the candidate exists so you can FIX boundaries, not so
+you can understand the clip - you know the surrounding context, the viewer
+never will. A clip FAILS this rule when its opening sentence points at
+something said BEFORE start_node: demonstratives and dangling references like
+"this", "that", "these", "they", "so that's why", "which is why", "это",
+"вот эта", "этот", "они", "поэтому", "тогда". When the opening points
+backwards you have exactly two options, in order of preference:
+1. Move start_node EARLIER - the window shows you the preceding nodes - so the
+   clip CONTAINS the thing being pointed at: the setup, then the reaction.
+2. If the needed setup is too long, lies outside the window, or would push the
+   clip past ~90s: keep: false. A clip that opens on a dangling pointer is
+   worthless to a cold viewer no matter how strong the moment felt in context.
+Never "fix" a dangling opening with the title or description - the VIDEO must
+make sense on its own, not the caption.
+Rhetorical questions are the classic trap: they smell like hooks but usually
+interrogate invisible context ("how does THIS affect people?"). A question
+hook is valid only when the thing it asks about is shown inside the clip.
+
 For EACH candidate return, in the clip's OWN language ({{LANGUAGE_NAME}}, {{LANGUAGE_ISO}}):
 
 1. keep: false for anything generic, context-dependent, weak-ending, or mid-thought.
@@ -66,8 +91,9 @@ For EACH candidate return, in the clip's OWN language ({{LANGUAGE_NAME}}, {{LANG
 2. score: your calibrated 0.0-1.0. Judge THIS window in isolation; do not inflate.
 3. grounded: true only if the title AND description are fully supported by text inside
    [start_node, end_node]. If you cannot ground a claim, drop it or lower the score.
-4. self_contained: true only if the clip makes full sense to a stranger with no prior
-   context - no dangling references, no missing setup.
+4. self_contained: true only if the text between start_node and end_node ALONE makes
+   full sense to a stranger - apply the COLD VIEWER RULE above; a dangling opening
+   pointer means false.
 5. Boundary nodes (LENGTH MATCHES THE MOMENT - roughly 8-90s, NEVER pad to a minimum):
    - start_node: the node that begins the opening line (a sentence onset, a clean
      1-2s lead-in is fine; never a dangling pronoun or mid-answer fragment).
@@ -75,6 +101,11 @@ For EACH candidate return, in the clip's OWN language ({{LANGUAGE_NAME}}, {{LANG
    - end_node: the FIRST node that finishes a sentence AT or AFTER payoff_node. End on
      a complete sentence. NEVER end before the payoff. Do not trail more than ~4s of
      talk after the payoff - trim filler, goodbyes, topic changes.
+   - PAYOFF CHASING: before settling the end, look ~10s past your tentative end_node
+     inside the window. If a sharper beat lands there - a punchline, a comeback, an
+     emotional reaction - move payoff_node and end_node forward to include it. Never
+     end a clip on a definition, a summary, or a dry explanation when the actual
+     punchline follows right after it.
    - hook_start_node / hook_end_node: the untouchable core (reaction/punchline). Must
      satisfy start_node <= hook_start_node <= hook_end_node <= end_node.
    Do NOT choose a node marked as music / no-speech as the start or end.
@@ -99,8 +130,11 @@ export function scannerUserPrompt(windowText: string): string {
   return `Transcript slice:\n\n${windowText}`;
 }
 
-const CONTEXT_BEFORE = 4;
-const CONTEXT_AFTER = 8;
+// Backward reach exists for the COLD VIEWER RULE: the critic must be able to
+// pull a setup that lives well before the scanner's range (a reaction to a
+// point made ~a minute earlier). Forward reach exists for payoff chasing.
+const CONTEXT_BEFORE = 16;
+const CONTEXT_AFTER = 12;
 
 /** Candidate block: context-padded node lines with times. The critic addresses
  *  everything by node index; the [start-end] second markers at each node give it
