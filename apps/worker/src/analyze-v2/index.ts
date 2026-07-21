@@ -242,6 +242,7 @@ function toHighlight(clip: SnappedClip): V2Highlight {
     _titleEvidenceNodes: v.titleEvidenceNodes,
     _descriptionEvidenceNodes: v.descriptionEvidenceNodes,
     _grounded: v.grounded,
+    _boundaryConfidence: clip.boundaryConfidence,
   };
 }
 

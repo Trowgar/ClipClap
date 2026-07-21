@@ -64,6 +64,9 @@ export interface SnappedClip {
   hookEndSec: number;
   payoffSec: number;
   shortMoment: boolean;
+  /** "segment" when an edge rode an opaque node's segment boundary (word
+   *  timings unreliable there - e.g. a punchline drowned in laughter). */
+  boundaryConfidence?: "word" | "segment";
 }
 
 export type DropReason =
@@ -96,6 +99,7 @@ export type V2Highlight = Highlight & {
   _titleEvidenceNodes?: number[];
   _descriptionEvidenceNodes?: number[];
   _grounded?: boolean;
+  _boundaryConfidence?: "word" | "segment";
 };
 
 export interface V2Result {

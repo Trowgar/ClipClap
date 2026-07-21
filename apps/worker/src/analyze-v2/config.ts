@@ -61,7 +61,7 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     perWindowMinCandidates: num(env, "PER_WINDOW_MIN_CANDIDATES", 2),
     regionMaxCandidates: num(env, "REGION_MAX_CANDIDATES", 6),
     maxConcurrency: num(env, "ANALYZE_MAX_CONCURRENCY", 5),
-    maxStartExpansionSec: num(env, "MAX_START_EXPANSION_SEC", 3),
+    maxStartExpansionSec: num(env, "MAX_START_EXPANSION_SEC", 6),
     gapSentence: num(env, "GAP_SENTENCE", 0.6),
     gapPhrase: num(env, "GAP_PHRASE", 0.3),
     nodeMaxSec: num(env, "NODE_MAX_SEC", 12),

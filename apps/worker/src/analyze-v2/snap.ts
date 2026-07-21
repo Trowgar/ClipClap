@@ -26,17 +26,27 @@ export function snapNodes(
   const p = nodes[verdict.payoffNode];
   let e = nodes[verdict.endNode];
 
-  if (!p.hasWords) return { ok: false, reason: "opaque_payoff" };
+  // An opaque payoff (punchline drowned in laughter/music - words unreliable)
+  // is NOT dropped: its segment-level start/end are real Whisper boundaries,
+  // just coarser. Such clips ship with boundaryConfidence "segment".
+  let boundaryConfidence: "word" | "segment" = p.hasWords ? "word" : "segment";
+
+  // A node right after an opaque node opens after music/silence - semantically
+  // a strong cold-open boundary even though its leadingStrength inherits the
+  // opaque neighbor's 0.2.
+  const cleanStartAt = (n: SentenceNode) =>
+    n.leadingStrength >= STRONG ||
+    (n.index > 0 && nodes[n.index - 1].hasWords === false);
 
   // 1. clean start - the mid-thought guard the end already has via trailingStrength.
   //    Walk to an earlier node whose leading boundary is strong, adding at most
   //    maxStartExpansionSec of lead-in; no such node -> drop.
-  if (s.leadingStrength < STRONG && s.index > 0) {
+  if (!cleanStartAt(s) && s.index > 0) {
     let found: SentenceNode | null = null;
     for (let i = s.index - 1; i >= 0; i--) {
       const cand = nodes[i];
       if (s.start - cand.start > cfg.maxStartExpansionSec) break;
-      if (cand.hasWords && cand.leadingStrength >= STRONG) {
+      if (cand.hasWords && cleanStartAt(cand)) {
         found = cand;
         break;
       }
@@ -59,12 +69,19 @@ export function snapNodes(
       pickEnd(nodes, p, cfg.payoffMaxTailSec + SENTENCE_SLACK_SEC) ??
       p;
   }
-  // An opaque end node has no reliable last-word time: walk back to the last
-  // word-bearing node, but never before the payoff, else drop.
+  // An opaque end node has no reliable last-word time: prefer walking back to
+  // the last word-bearing node at or after the payoff. When none exists (the
+  // payoff itself is opaque), keep the opaque node - its segment edge is a real
+  // Whisper boundary - and mark the clip segment-confidence.
   if (!e.hasWords) {
     const walked = lastWordBearingBefore(nodes, e.index);
-    if (!walked || walked.index < p.index) return { ok: false, reason: "opaque_end" };
-    e = walked;
+    if (walked && walked.index >= p.index) {
+      e = walked;
+    } else if (e.index >= p.index) {
+      boundaryConfidence = "segment";
+    } else {
+      return { ok: false, reason: "opaque_end" };
+    }
   }
 
   // 3. seconds from real node edges (lead-in/tail-hold only ever move within
@@ -126,6 +143,7 @@ export function snapNodes(
       hookEndSec,
       payoffSec: p.end,
       shortMoment: duration < cfg.targetMinSec,
+      boundaryConfidence,
     },
   };
 }

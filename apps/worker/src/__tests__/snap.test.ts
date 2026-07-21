@@ -91,10 +91,27 @@ describe("snapNodes", () => {
     expect(r.clip.endSec - r.clip.startSec).toBeLessThan(8);
   });
 
-  it("drops when the payoff node is opaque", () => {
+  it("accepts an opaque payoff at segment confidence instead of dropping", () => {
+    // punchline drowned in laughter: words unreliable, segment edges real
     const nodes = strongNodes().map((n, i) => (i === 6 ? { ...n, hasWords: false } : n));
     const r = snapNodes(verdict({}), nodes, cfg);
-    expect(r).toEqual({ ok: false, reason: "opaque_payoff" });
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.boundaryConfidence).toBe("segment");
+    expect(r.clip.endSec).toBeGreaterThanOrEqual(nodes[6].end);
+  });
+
+  it("treats a start right after an opaque node as a clean cold open", () => {
+    // music break before the sentence: leadingStrength inherits 0.2 but the
+    // gap itself is a strong semantic boundary
+    const nodes = strongNodes().map((n, i) =>
+      i === 4 ? { ...n, hasWords: false } : i === 5 ? { ...n, leadingStrength: 0.2 } : n
+    );
+    const r = snapNodes(
+      verdict({ startNode: 5, payoffNode: 7, endNode: 8, hookStartNode: 6, hookEndNode: 7 }),
+      nodes,
+      cfg
+    );
+    expect(r.ok).toBe(true);
   });
 
   it("walks an opaque end back and re-checks payoff containment", () => {
