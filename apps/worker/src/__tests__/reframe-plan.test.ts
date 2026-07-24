@@ -112,6 +112,31 @@ describe("buildCropPlan layouts", () => {
     expect(buildCropPlan(oneShot, withTracks([]), 608, 1080)).toBeNull();
     expect(buildCropPlan([], [], W, H)).toBeNull();
   });
+
+  it("square source with far-apart faces centers instead of splitting", () => {
+    // 1080x1080: tileW 1216 > 1080 so a split's crop would exceed iw and fail
+    // the encode (error -22). The narrow-source guard must center instead.
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([track(50, 150), track(880, 150, { id: 1 })]),
+      1080,
+      1080
+    );
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "center", x: 236 }]);
+  });
+
+  it("square source still crops a single face (cropW 608 < 1080)", () => {
+    const plan = buildCropPlan(oneShot, withTracks([track(300, 200)]), 1080, 1080);
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 96 }]);
+  });
+
+  it("drops a stray low-sample track and stays single on the dominant face", () => {
+    // dominant has 10 samples; the edge stray has 2 < 0.3*10 -> filtered out,
+    // so the fit bbox stays narrow and the shot resolves to a single crop.
+    const stray = track(1700, 150, { id: 1, samples: 2 });
+    const plan = buildCropPlan(oneShot, withTracks([track(600, 400), stray]), W, H);
+    expect(plan!.shots[0]).toEqual({ start: 0, end: 30, layout: "single", x: 496 });
+  });
 });
 
 describe("adjacent-shot merging", () => {
@@ -144,6 +169,67 @@ describe("adjacent-shot merging", () => {
       H
     );
     expect(plan!.shots).toHaveLength(2);
+  });
+
+  it("merges center-center adjacent shots into one window", () => {
+    const plan = buildCropPlan(
+      twoShots,
+      [
+        { shotIndex: 0, tracks: [] },
+        { shotIndex: 1, tracks: [] },
+      ],
+      W,
+      H
+    );
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "center", x: 656 }]);
+  });
+
+  it("merges split-split adjacent shots, first tile geometry wins", () => {
+    // shot 0 tiles resolve to top 0 / bottom 704; shot 1's left face nudges the
+    // top tile to 52 (dx < 4% of iw) so the pair merges keeping shot 0 geometry.
+    const plan = buildCropPlan(
+      twoShots,
+      [
+        { shotIndex: 0, tracks: [track(1570, 150, { id: 1 }), track(200, 150)] },
+        { shotIndex: 1, tracks: [track(1570, 150, { id: 1 }), track(585, 150)] },
+      ],
+      W,
+      H
+    );
+    expect(plan!.shots).toEqual([
+      { start: 0, end: 30, layout: "split", top: { x: 0 }, bottom: { x: 704 } },
+    ]);
+  });
+
+  it("keeps split-split shots separate when a tile moves past 4% of iw", () => {
+    // shot 1's left face pushes the top tile to 192 (dx > 4% of 1920) -> no merge.
+    const plan = buildCropPlan(
+      twoShots,
+      [
+        { shotIndex: 0, tracks: [track(1570, 150, { id: 1 }), track(200, 150)] },
+        { shotIndex: 1, tracks: [track(1570, 150, { id: 1 }), track(725, 150)] },
+      ],
+      W,
+      H
+    );
+    expect(plan!.shots).toHaveLength(2);
+    expect(plan!.shots.every((s) => s.layout === "split")).toBe(true);
+  });
+});
+
+describe("plan complexity cap", () => {
+  it("returns null when the merged plan exceeds the ffmpeg expression cap", () => {
+    // 95 alternating single crops never merge (dx 1312 >> 4% of iw), exceeding
+    // MAX_PLAN_SHOTS so the plan bails rather than nesting 95 if() segments.
+    const shots: Shot[] = Array.from({ length: 95 }, (_, i) => ({
+      start: i * 2,
+      end: i * 2 + 2,
+    }));
+    const tracksByShot: ShotTracks[] = shots.map((_, i) => ({
+      shotIndex: i,
+      tracks: [i % 2 === 0 ? track(100, 300) : track(1500, 300)],
+    }));
+    expect(buildCropPlan(shots, tracksByShot, W, H)).toBeNull();
   });
 });
 

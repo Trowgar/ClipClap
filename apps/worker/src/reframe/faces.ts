@@ -84,6 +84,9 @@ export async function detectFaces(
   try {
     const framesDir = join(workDir, "frames");
     await mkdir(framesDir);
+    // ffmpeg and the python sidecar run sequentially; splitting the budget keeps
+    // the worst case near timeoutMs instead of ~2x it.
+    const startedAt = Date.now();
     await execFileAsync(
       "ffmpeg",
       [
@@ -100,6 +103,7 @@ export async function detectFaces(
     );
     const shotsPath = join(workDir, "shots.json");
     await writeFile(shotsPath, JSON.stringify(shots), "utf-8");
+    const pythonTimeout = Math.max(1000, timeoutMs - (Date.now() - startedAt));
     const { stdout } = await execFileAsync(
       "python3",
       [
@@ -112,7 +116,7 @@ export async function detectFaces(
         "--source-width", String(sourceWidth),
         "--source-height", String(sourceHeight),
       ],
-      { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }
+      { timeout: pythonTimeout, maxBuffer: 16 * 1024 * 1024 }
     );
     return parseDetectorOutput(stdout, shots.length);
   } finally {

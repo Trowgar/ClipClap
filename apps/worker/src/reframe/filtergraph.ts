@@ -59,8 +59,10 @@ export function buildFiltergraph(plan: CropPlan, assSnippet?: string): FilterSpe
     topSegs.push({ end: s.end, x: lastTop });
     botSegs.push({ end: s.end, x: lastBottom });
   }
+  // Half-open [start,end) matches piecewiseX's lt(t,end) switch; between() is
+  // inclusive at end, which flashes the overlay one frame past the seam.
   const enable = splits
-    .map((s) => `between(t,${fmt(s.start)},${fmt(s.end)})`)
+    .map((s) => `gte(t,${fmt(s.start)})*lt(t,${fmt(s.end)})`)
     .join("+");
 
   const chains = [

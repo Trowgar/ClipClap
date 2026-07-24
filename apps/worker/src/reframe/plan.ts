@@ -5,6 +5,8 @@ const FIT_MARGIN = 0.9; // face bbox must fit in 90% of the crop window
 const DOMINANCE_LEAD = 1.5; // top-2 must each lead the 3rd by this factor
 const MERGE_DX_FRAC = 0.04; // same-layout shots merge when |dx| < 4% of iw
 const MIN_TRACK_SAMPLES = 2; // 1-sample tracks are detector noise
+const MIN_SAMPLE_FRAC = 0.3; // tracks seen in <30% of the dominant track's samples are transient noise
+const MAX_PLAN_SHOTS = 90; // ffmpeg av_expr nesting fails at ~100 segments; headroom below that
 const W_AREA = 0.5;
 const W_CENTER = 0.3;
 const W_MOUTH = 0.2;
@@ -48,12 +50,21 @@ export function buildCropPlan(
   const tileW = tileWidthFor(sourceHeight);
   // Already vertical or narrower: nothing to reframe, let the legacy path run.
   if (cropW >= sourceWidth) return null;
+  // Split tiles need ih*9/8 of width; on narrower-than-9:8 sources a split
+  // would emit crop w > iw and fail the encode (error -22) - center instead.
+  const splitPossible = tileW <= sourceWidth;
   const centerX = evenClamp((sourceWidth - cropW) / 2, cropW, sourceWidth);
   const byIndex = new Map(tracksByShot.map((s) => [s.shotIndex, s.tracks]));
 
   const layouts = shots.map((shot, i): ShotLayout => {
-    const tracks = (byIndex.get(i) ?? []).filter(
-      (t) => t.samples >= MIN_TRACK_SAMPLES
+    const shotTracks = byIndex.get(i) ?? [];
+    const maxSamples = Math.max(0, ...shotTracks.map((t) => t.samples));
+    // Keep only tracks that clear the noise floor AND are seen often enough
+    // relative to the dominant track - a stray low-sample track must not widen
+    // the fit bbox or become a split tile pointing at nothing.
+    const tracks = shotTracks.filter(
+      (t) =>
+        t.samples >= MIN_TRACK_SAMPLES && t.samples >= MIN_SAMPLE_FRAC * maxSamples
     );
     if (tracks.length === 0) {
       return { start: shot.start, end: shot.end, layout: "center", x: centerX };
@@ -63,6 +74,11 @@ export function buildCropPlan(
     if (maxX - minX <= FIT_MARGIN * cropW) {
       const x = evenClamp((minX + maxX) / 2 - cropW / 2, cropW, sourceWidth);
       return { start: shot.start, end: shot.end, layout: "single", x };
+    }
+    // Guard both split-producing paths (2-track and 3+ dominant-pair): a split
+    // needs tileW <= sourceWidth or the encode fails with error -22.
+    if (!splitPossible) {
+      return { start: shot.start, end: shot.end, layout: "center", x: centerX };
     }
     let pair = tracks;
     if (tracks.length > 2) {
@@ -94,11 +110,16 @@ export function buildCropPlan(
     };
   });
 
+  const merged = mergeAdjacentLayouts(layouts, sourceWidth);
+  // piecewiseX nests one if() per shot; ffmpeg's av_expr parser fails at 100
+  // nested segments ("Missing ')' or too many args"). Bail so the orchestrator
+  // falls back to a plain centered crop rather than emitting a broken graph.
+  if (merged.length > MAX_PLAN_SHOTS) return null;
   return {
     version: 1,
     engine: "faces",
     source: { width: sourceWidth, height: sourceHeight },
-    shots: mergeAdjacentLayouts(layouts, sourceWidth),
+    shots: merged,
   };
 }
 

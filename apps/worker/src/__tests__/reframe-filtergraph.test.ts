@@ -72,8 +72,8 @@ describe("buildFiltergraph", () => {
         "[b0]crop=w=608:h=ih:x='if(lt(t,12.40),496,if(lt(t,31.00),656,656))':y=0,scale=1080:1920[base]",
         "[t0]crop=w=1216:h=ih:x='if(lt(t,12.40),0,if(lt(t,31.00),0,0))':y=0,scale=1080:960[top]",
         "[m0]crop=w=1216:h=ih:x='if(lt(t,12.40),704,if(lt(t,31.00),704,704))':y=0,scale=1080:960[bottom]",
-        "[base][top]overlay=x=0:y=0:enable='between(t,12.40,31.00)'[o1]",
-        "[o1][bottom]overlay=x=0:y=960:enable='between(t,12.40,31.00)'[vout]",
+        "[base][top]overlay=x=0:y=0:enable='gte(t,12.40)*lt(t,31.00)'[o1]",
+        "[o1][bottom]overlay=x=0:y=960:enable='gte(t,12.40)*lt(t,31.00)'[vout]",
       ].join(";")
     );
   });
@@ -85,7 +85,7 @@ describe("buildFiltergraph", () => {
     );
     expect(spec.kind).toBe("complex");
     expect(spec.graph.endsWith("[o2];[o2]ass=filename=/tmp/x.ass[vout]")).toBe(true);
-    expect(spec.graph).toContain("overlay=x=0:y=960:enable='between(t,0.00,20.00)'[o2]");
+    expect(spec.graph).toContain("overlay=x=0:y=960:enable='gte(t,0.00)*lt(t,20.00)'[o2]");
   });
 
   it("joins multiple split windows with + in enable", () => {
@@ -97,7 +97,7 @@ describe("buildFiltergraph", () => {
       ])
     );
     expect(spec.graph).toContain(
-      "enable='between(t,0.00,10.00)+between(t,20.00,30.00)'"
+      "enable='gte(t,0.00)*lt(t,10.00)+gte(t,20.00)*lt(t,30.00)'"
     );
   });
 });
