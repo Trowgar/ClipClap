@@ -40,17 +40,28 @@ async function main() {
         }) => {
           const response = await real.chat.completions.create(body as never);
           const completion = response as {
-            choices: Array<{ message: { content: string | null } }>;
+            choices: Array<{
+              message: { content: string | null; refusal?: string | null };
+              finish_reason?: string;
+            }>;
           };
-          const content = completion.choices[0]?.message?.content;
-          if (content) {
-            responses[
-              requestKey({
-                model: body.model,
-                system: body.messages.find((m) => m.role === "system")?.content ?? "",
-                user: body.messages.find((m) => m.role === "user")?.content ?? "",
-              })
-            ] = content;
+          const choice = completion.choices[0];
+          const content = choice?.message?.content;
+          const key = requestKey({
+            model: body.model,
+            system: body.messages.find((m) => m.role === "system")?.content ?? "",
+            user: body.messages.find((m) => m.role === "user")?.content ?? "",
+          });
+          // Non-content outcomes are load-bearing: the critic splits a batch on
+          // `truncated` and retries on `refusal`. Recording only content made
+          // those calls vanish from the fixture, so replay died on an unrecorded
+          // request instead of reproducing the recorded run.
+          if (choice?.message?.refusal) {
+            responses[key] = JSON.stringify({ __outcome: "refusal" });
+          } else if (choice?.finish_reason === "length" || !content) {
+            responses[key] = JSON.stringify({ __outcome: "truncated" });
+          } else {
+            responses[key] = content;
           }
           return response;
         },

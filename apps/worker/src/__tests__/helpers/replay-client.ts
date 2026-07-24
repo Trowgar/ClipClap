@@ -22,6 +22,25 @@ export interface ReplayClient {
   missing: string[];
 }
 
+/** A recorded call that did not return content. Stored in the same map slot as
+ *  a normal response, so the fixture format stays Record<string, string> and
+ *  every existing recording keeps working. */
+type RecordedOutcome = "truncated" | "refusal";
+
+function recordedOutcome(recorded: string): RecordedOutcome | null {
+  if (!recorded.includes("__outcome")) return null;
+  try {
+    const parsed: unknown = JSON.parse(recorded);
+    const outcome =
+      typeof parsed === "object" && parsed !== null
+        ? (parsed as { __outcome?: unknown }).__outcome
+        : undefined;
+    return outcome === "truncated" || outcome === "refusal" ? outcome : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Minimal stand-in for the OpenAI client covering exactly what
  *  callJsonSchema uses. Responses are raw JSON strings, as the API returns. */
 export function createReplayClient(
@@ -48,9 +67,25 @@ export function createReplayClient(
       );
     }
     served.push(key);
+    const usage = { prompt_tokens: 0, completion_tokens: 0 };
+    const outcome = recordedOutcome(recorded);
+    if (outcome === "truncated") {
+      return {
+        choices: [{ message: { content: null, refusal: null }, finish_reason: "length" }],
+        usage,
+      };
+    }
+    if (outcome === "refusal") {
+      return {
+        choices: [
+          { message: { content: null, refusal: "recorded refusal" }, finish_reason: "stop" },
+        ],
+        usage,
+      };
+    }
     return {
       choices: [{ message: { content: recorded, refusal: null }, finish_reason: "stop" }],
-      usage: { prompt_tokens: 0, completion_tokens: 0 },
+      usage,
     };
   };
   return {
