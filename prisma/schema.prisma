@@ -107,6 +107,7 @@ model User {
   password              String?
   telegramId            String?            @unique
   telegramLocale        String?
+  subtitlesEnabled      Boolean            @default(true)
   name                  String?
   image                 String?
   plan                  Plan               @default(NONE)
