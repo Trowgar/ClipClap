@@ -52,6 +52,7 @@ export interface TelegramMessage {
   };
   from?: TelegramUser;
   text?: string;
+  caption?: string;
   video?: TelegramVideo;
   document?: TelegramDocument;
   reply_to_message?: TelegramMessage;

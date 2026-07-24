@@ -17,7 +17,8 @@ describe("support + help i18n", () => {
       expect(d.supportClosed.length).toBeGreaterThan(0);
       expect(d.supportReplyPrefix.length).toBeGreaterThan(0);
       expect(d.supportUnavailable.length).toBeGreaterThan(0);
-      expect(d.supportTextOnly.length).toBeGreaterThan(0);
+      expect(d.supportVideoInSession.length).toBeGreaterThan(0);
+      expect(d.supportMediaUnsupported.length).toBeGreaterThan(0);
       expect(d.helpMenuPrompt.length).toBeGreaterThan(0);
     }
   });

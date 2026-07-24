@@ -102,6 +102,20 @@ export class TelegramClient {
     });
   }
 
+  async copyMessage(
+    chatId: string | number,
+    fromChatId: string | number,
+    messageId: number,
+    options?: { caption?: string }
+  ) {
+    return this.request("copyMessage", {
+      chat_id: chatId,
+      from_chat_id: fromChatId,
+      message_id: messageId,
+      caption: options?.caption,
+    });
+  }
+
   async getFile(fileId: string) {
     return this.request<TelegramFile>("getFile", { file_id: fileId });
   }

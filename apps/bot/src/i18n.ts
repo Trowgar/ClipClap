@@ -71,7 +71,8 @@ export interface Dict {
   supportClosed: string;
   supportReplyPrefix: string;
   supportUnavailable: string;
-  supportTextOnly: string;
+  supportVideoInSession: string;
+  supportMediaUnsupported: string;
   accountText: (params: {
     plan: string;
     billingCycle: string | null;
@@ -194,8 +195,10 @@ const en: Dict = {
   supportClosed: "Chat closed. Send a video anytime to make clips.",
   supportReplyPrefix: "💬 Support:",
   supportUnavailable: "Support is temporarily unavailable. Please try again later.",
-  supportTextOnly:
-    "Support takes text only for now - please describe your issue in a message.",
+  supportVideoInSession:
+    '⚠️ You\'re in the support chat right now.\n\n• To make a clip - tap "⬅️ Close chat" below and send the video again.\n• To describe your issue - send text or a screenshot.',
+  supportMediaUnsupported:
+    "Couldn't send that. Send a screenshot or describe it in text.",
   accountText: ({
     plan,
     billingCycle,
@@ -369,8 +372,10 @@ const ru: Dict = {
   supportClosed: "Диалог закрыт. Пришли видео - нарежу клипы.",
   supportReplyPrefix: "💬 Поддержка:",
   supportUnavailable: "Поддержка временно недоступна. Попробуй позже.",
-  supportTextOnly:
-    "Поддержка пока принимает только текст - опиши вопрос сообщением.",
+  supportVideoInSession:
+    "⚠️ Ты сейчас в чате поддержки.\n\n• Чтобы сделать клип - нажми «⬅️ Закрыть диалог» внизу и пришли видео снова.\n• Чтобы описать проблему - напиши текстом или пришли скриншот.",
+  supportMediaUnsupported:
+    "Не удалось переслать это. Пришли скриншот или опиши текстом.",
   accountText: ({
     plan,
     billingCycle,
