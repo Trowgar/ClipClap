@@ -63,6 +63,15 @@ export interface Dict {
   plansSubscribed: (plan: string, periodEnd: string | null) => string;
   noPlanNudge: string;
   helpText: (url: string) => string;
+  helpMenuPrompt: string;
+  helpHowBtn: string;
+  helpSupportBtn: string;
+  supportPrompt: string;
+  supportCloseBtn: string;
+  supportClosed: string;
+  supportReplyPrefix: string;
+  supportUnavailable: string;
+  supportTextOnly: string;
   accountText: (params: {
     plan: string;
     billingCycle: string | null;
@@ -176,6 +185,17 @@ const en: Dict = {
   noPlanNudge: "👉 Tap 💳 Plans to subscribe.",
   helpText: (url) =>
     `Send me a video - I'll cut it into vertical clips with subtitles.\nYou can also paste a URL (YouTube, Twitch, TikTok, Vimeo, X and more).\n\nLimits: up to 3 hours source, up to 2 GB file size.\n\nCommands:\n• /start - main menu\n• /link - connect an existing clipclap.io account\n• /referral - your referral link & earnings\n• /lang en|ru - switch language\n\nWebsite: ${url}/dashboard`,
+  helpMenuPrompt: "❓ Help - choose:",
+  helpHowBtn: "❓ How it works",
+  helpSupportBtn: "💬 Support",
+  supportPrompt:
+    "Write your message - we'll pass it to support and reply right here.",
+  supportCloseBtn: "⬅️ Close chat",
+  supportClosed: "Chat closed. Send a video anytime to make clips.",
+  supportReplyPrefix: "💬 Support:",
+  supportUnavailable: "Support is temporarily unavailable. Please try again later.",
+  supportTextOnly:
+    "Support takes text only for now - please describe your issue in a message.",
   accountText: ({
     plan,
     billingCycle,
@@ -341,6 +361,16 @@ const ru: Dict = {
   noPlanNudge: "👉 Нажми 💳 Тарифы, чтобы оформить подписку.",
   helpText: (url) =>
     `Пришли видео - нарежу вертикальные клипы с субтитрами.\nМожно также прислать ссылку (YouTube, Twitch, TikTok, Vimeo, X и др.).\n\nЛимиты: до 3 часов исходник, до 2 ГБ размер файла.\n\nКоманды:\n• /start - главное меню\n• /link - привязать существующий аккаунт clipclap.io\n• /referral - реферальная ссылка и доход\n• /lang en|ru - сменить язык\n\nСайт: ${url}/dashboard`,
+  helpMenuPrompt: "❓ Помощь - выбери:",
+  helpHowBtn: "❓ Как это работает",
+  helpSupportBtn: "💬 Поддержка",
+  supportPrompt: "Напиши сообщение - передадим в поддержку, ответим здесь же.",
+  supportCloseBtn: "⬅️ Закрыть диалог",
+  supportClosed: "Диалог закрыт. Пришли видео - нарежу клипы.",
+  supportReplyPrefix: "💬 Поддержка:",
+  supportUnavailable: "Поддержка временно недоступна. Попробуй позже.",
+  supportTextOnly:
+    "Поддержка пока принимает только текст - опиши вопрос сообщением.",
   accountText: ({
     plan,
     billingCycle,
