@@ -57,6 +57,8 @@ export const CALLBACK_LINK_ACCOUNT = "link_acc";
 export const CALLBACK_LANG_EN = "lang_en";
 export const CALLBACK_LANG_RU = "lang_ru";
 
+export const CALLBACK_SUBTITLES_TOGGLE = "subs_toggle";
+
 export function isReferralAdmin(
   telegramId: string,
   allowlist: string | undefined
@@ -547,6 +549,10 @@ async function handleCallbackQuery(
         .catch(() => undefined);
       return;
     }
+    case CALLBACK_SUBTITLES_TOGGLE: {
+      await handleSubtitlesToggle(client, query, dict);
+      return;
+    }
     default:
       return;
   }
@@ -568,6 +574,33 @@ export function languageKeyboard(dict: Dict): InlineKeyboardMarkup {
       [{ text: dict.langBtnRu, callback_data: CALLBACK_LANG_RU }],
     ],
   };
+}
+
+export function subtitlesKeyboard(dict: Dict, enabled: boolean): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [
+      [{ text: dict.subtitlesToggleBtn(enabled), callback_data: CALLBACK_SUBTITLES_TOGGLE }],
+    ],
+  };
+}
+
+export async function handleSubtitlesToggle(
+  client: TelegramClient,
+  query: TelegramCallbackQuery,
+  dict: Dict
+): Promise<void> {
+  if (!query.message || !query.from) return;
+  const user = await resolveTelegramUser(query.from);
+  const enabled = !user.subtitlesEnabled;
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { subtitlesEnabled: enabled },
+  });
+  await client
+    .editMessageText(query.message.chat.id, query.message.message_id, dict.subtitlesAck(enabled), {
+      replyMarkup: subtitlesKeyboard(dict, enabled),
+    })
+    .catch(() => undefined);
 }
 
 export function plansKeyboard(dict: Dict): InlineKeyboardMarkup {
@@ -865,7 +898,7 @@ async function handleVideo(
       userId: user.id,
       sourceKey,
       originalFilename: source.fileName || "telegram-video.mp4",
-      subtitles: true,
+      subtitles: user.subtitlesEnabled,
       sourceDurationSec: source.duration,
     });
 
@@ -911,7 +944,7 @@ async function handleVideoUrl(
     userId: user.id,
     sourceUrl: url,
     originalFilename: probe.title,
-    subtitles: true,
+    subtitles: user.subtitlesEnabled,
     sourceDurationSec: probe.durationSec,
   });
 
