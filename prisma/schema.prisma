@@ -405,6 +405,7 @@ model Clip {
   endTime        Float
   subtitles      Boolean   @default(true)
   subtitleTrack  Json?
+  cropPlan       Json?
   description String?
   score       Float?
   language    String?
