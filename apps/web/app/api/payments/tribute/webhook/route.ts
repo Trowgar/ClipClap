@@ -34,6 +34,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
+  // Tribute's "Send test request" button posts a minimal signed ping, not a real
+  // event: {"test_event":"test_event"}. Acknowledge it with 200 so the dashboard
+  // shows success; real events (which carry a string `name`) fall through below.
+  const maybeTest = envelope as unknown as { test_event?: unknown; name?: unknown };
+  if (maybeTest.test_event !== undefined && typeof maybeTest.name !== "string") {
+    console.log("[tribute-webhook] test ping acknowledged");
+    return NextResponse.json({ ok: true, test: true }, { status: 200 });
+  }
+
   if (
     !envelope ||
     typeof envelope.name !== "string" ||
