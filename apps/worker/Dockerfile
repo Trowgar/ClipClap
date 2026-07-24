@@ -1,7 +1,7 @@
 # --- Base ---
 FROM node:20-alpine AS base
 WORKDIR /app
-RUN apk add --no-cache ffmpeg python3 py3-pip openssl fontconfig
+RUN apk add --no-cache ffmpeg python3 py3-pip openssl fontconfig py3-opencv py3-numpy
 RUN pip3 install --break-system-packages yt-dlp
 
 # --- Dependencies ---
