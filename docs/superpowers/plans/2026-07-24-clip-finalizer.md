@@ -266,7 +266,10 @@ export function toShape(result: V2Result): EvalShape {
     tier: (t.tier as string) ?? null,
     clips: result.highlights.map((h) => ({
       range: `${h.start.toFixed(1)}-${h.end.toFixed(1)}`,
-      score: h.score,
+      // Highlight.score is optional in the shared types (V1 JSON compatibility),
+      // so it must be defaulted: undefined would vanish from snapshot.json,
+      // while 0 shows up as a visible diff if scoring ever breaks.
+      score: h.score ?? 0,
       title: h.title,
     })),
     dropReasons: (t.gateDropReasons as Record<string, number>) ?? {},
