@@ -175,7 +175,7 @@ export function parseSupportReply(
 ): { uid: string } | null {
   const r = message.reply_to_message;
   if (!r?.from?.is_bot) return null;
-  const m = SUPPORT_UID_RE.exec(r.text ?? "");
+  const m = SUPPORT_UID_RE.exec(r.text ?? r.caption ?? "");
   return m ? { uid: m[1] } : null;
 }
 
@@ -237,6 +237,35 @@ export async function relaySupportMessage(
     .catch((e) => {
       console.error(`Failed to relay support message to ${chat}:`, e);
     });
+}
+
+export async function relaySupportMedia(
+  client: TelegramClient,
+  from: TelegramUser,
+  message: TelegramMessage
+): Promise<boolean> {
+  const chat = getSupportChatId();
+  if (!chat) {
+    console.warn(
+      "Support media received but SUPPORT_CHAT_ID is not configured"
+    );
+    return true;
+  }
+  const rawName = [from.first_name, from.last_name].filter(Boolean).join(" ");
+  const name = rawName.replace(/#uid\d+/g, "").trim() || String(from.id);
+  const username = from.username ? ` (@${from.username})` : "";
+  const caption =
+    `${SUPPORT_MARKER}${from.id} ${name}${username}` +
+    (message.caption ? `\n\n${message.caption}` : "");
+  try {
+    await client.copyMessage(chat, message.chat.id, message.message_id, {
+      caption,
+    });
+    return true;
+  } catch (e) {
+    console.error(`Failed to relay support media to ${chat}:`, e);
+    return false;
+  }
 }
 
 export async function deliverSupportReply(
@@ -440,29 +469,49 @@ export async function handleUpdate(
   if (helpAction) {
     if (helpAction === "how") {
       await client.sendMessage(message.chat.id, dict.helpText(config.appUrl));
+    } else if (String(message.chat.id) === getSupportChatId()) {
+      await client
+        .sendMessage(
+          message.chat.id,
+          "Ты оператор - тикеты от пользователей приходят сюда. Отвечай reply'ем на сообщение тикета."
+        )
+        .catch(() => undefined);
     } else {
       await openSupport(client, message, from, dict);
     }
     return;
   }
 
-  // Video/document files always process (unambiguous product intent), even in a
-  // support session. Plain text (including pasted URLs) is treated as part of the
-  // support conversation and relayed while a session is open.
   const source = getVideoSource(message);
-  if (source) {
-    await handleVideo(client, message, from, source, dict, config);
+
+  // While a support session is open, capture the conversation. A video is NOT
+  // turned into a clip here - tell the user to close the chat first. Screenshots
+  // and other media are relayed to the operator.
+  if (supportOpen && String(message.chat.id) !== getSupportChatId()) {
+    if (source) {
+      await client
+        .sendMessage(message.chat.id, dict.supportVideoInSession, {
+          replyMarkup: supportKeyboard(dict),
+        })
+        .catch(() => undefined);
+      return;
+    }
+    if (text) {
+      await relaySupportMessage(client, from, text);
+      return;
+    }
+    const ok = await relaySupportMedia(client, from, message);
+    if (!ok) {
+      await client
+        .sendMessage(message.chat.id, dict.supportMediaUnsupported)
+        .catch(() => undefined);
+    }
     return;
   }
 
-  if (supportOpen && String(message.chat.id) !== getSupportChatId()) {
-    if (text) {
-      await relaySupportMessage(client, from, text);
-    } else {
-      await client
-        .sendMessage(message.chat.id, dict.supportTextOnly)
-        .catch(() => undefined);
-    }
+  // Session closed: normal product path.
+  if (source) {
+    await handleVideo(client, message, from, source, dict, config);
     return;
   }
 

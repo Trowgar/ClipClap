@@ -21,6 +21,7 @@ import {
   parseSupportReply,
   relaySupportMessage,
   deliverSupportReply,
+  relaySupportMedia,
 } from "../handlers";
 
 const origEnv = { ...process.env };
@@ -129,5 +130,53 @@ describe("deliverSupportReply", () => {
     const send = (client as unknown as { sendMessage: ReturnType<typeof vi.fn> }).sendMessage.mock.calls[0];
     expect(send[0]).toBe("777");
     expect(mocks.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("parseSupportReply from caption", () => {
+  it("reads #uid from a media reply's caption when text is absent", () => {
+    const msg = {
+      message_id: 3,
+      chat: { id: 5, type: "private" },
+      reply_to_message: {
+        message_id: 1,
+        chat: { id: 5, type: "private" },
+        from: { id: 9, is_bot: true },
+        caption: "🆕 #uid575308044 Ivan\n\nscreenshot",
+      },
+    };
+    expect(parseSupportReply(msg as never)).toEqual({ uid: "575308044" });
+  });
+});
+
+describe("relaySupportMedia", () => {
+  it("copies the media to the support chat with a #uid caption", async () => {
+    process.env.SUPPORT_CHAT_ID = "777";
+    const client = { copyMessage: vi.fn().mockResolvedValue(undefined) } as never;
+    const msg = { message_id: 8, chat: { id: 42, type: "private" }, caption: "look" };
+    const ok = await relaySupportMedia(client, { id: 42, first_name: "Ann" } as never, msg as never);
+    expect(ok).toBe(true);
+    const call = (client as unknown as { copyMessage: ReturnType<typeof vi.fn> }).copyMessage.mock.calls[0];
+    expect(call[0]).toBe("777");
+    expect(call[1]).toBe(42);
+    expect(call[2]).toBe(8);
+    expect(call[3].caption).toContain("🆕 #uid42");
+    expect(call[3].caption).toContain("look");
+  });
+
+  it("returns false when copyMessage throws", async () => {
+    process.env.SUPPORT_CHAT_ID = "777";
+    const client = { copyMessage: vi.fn().mockRejectedValue(new Error("sticker")) } as never;
+    const ok = await relaySupportMedia(client, { id: 1 } as never, { message_id: 2, chat: { id: 1 } } as never);
+    expect(ok).toBe(false);
+  });
+
+  it("no-ops (returns true) when no support chat is configured", async () => {
+    delete process.env.SUPPORT_CHAT_ID;
+    delete process.env.REFERRAL_ADMIN_TELEGRAM_IDS;
+    const client = { copyMessage: vi.fn() } as never;
+    const ok = await relaySupportMedia(client, { id: 1 } as never, { message_id: 2, chat: { id: 1 } } as never);
+    expect(ok).toBe(true);
+    expect((client as unknown as { copyMessage: ReturnType<typeof vi.fn> }).copyMessage).not.toHaveBeenCalled();
   });
 });
