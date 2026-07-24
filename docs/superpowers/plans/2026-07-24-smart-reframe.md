@@ -115,8 +115,10 @@ In `prisma/schema.prisma`, model `Clip`, add directly after the `subtitleTrack` 
 Create `prisma/migrations/20260724110000_clip_crop_plan/migration.sql`:
 
 ```sql
-ALTER TABLE "Clip" ADD COLUMN "cropPlan" JSONB;
+ALTER TABLE "clips" ADD COLUMN "cropPlan" JSONB;
 ```
+
+(The Clip model has `@@map("clips")` - the mapped table name is the real one, matching `20260611200000_add_clip_subtitle_track`.)
 
 - [ ] **Step 3: Deploy and regenerate**
 
