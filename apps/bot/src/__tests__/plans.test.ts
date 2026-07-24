@@ -78,8 +78,10 @@ describe("sendPlansView", () => {
     expect(JSON.stringify(call[2])).toContain("sub:STARTER:WEEKLY");
   });
 
-  it("subscribed: status line + single Manage->Tribute button, no buy buttons", async () => {
-    flowMocks.getUsageForUser.mockResolvedValue({ plan: "PLUS", subscriptionState: { phase: "ACTIVE", live: true }, currentPeriodEnd: new Date("2026-08-14T00:00:00.000Z"), paymentProvider: "tribute" });
+  it("subscribed (any provider): Manage always -> Tribute, never the site, no buy buttons", async () => {
+    // paymentProvider null == a manual grant; the Manage button must still go to
+    // Tribute, not the website (bot's only paid channel is Tribute).
+    flowMocks.getUsageForUser.mockResolvedValue({ plan: "PLUS", subscriptionState: { phase: "ACTIVE", live: true }, currentPeriodEnd: new Date("2026-08-14T00:00:00.000Z"), paymentProvider: null });
     const client = fakeClient();
     await sendPlansView(client, { chat: { id: 1 } } as never, t("en"), { appUrl: "https://x" }, { id: "u1" });
     const call = (client as unknown as { sendMessage: ReturnType<typeof vi.fn> }).sendMessage.mock.calls[0];
@@ -87,6 +89,7 @@ describe("sendPlansView", () => {
     expect(call[1]).toContain("2026-08-14");
     const opts = JSON.stringify(call[2]);
     expect(opts).toContain("https://t.me/tribute");
+    expect(opts).not.toContain("dashboard");
     expect(opts).not.toContain("sub:");
   });
 });

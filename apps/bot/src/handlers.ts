@@ -244,14 +244,9 @@ async function handleMenuAction(
   }
 }
 
-function manageSubscriptionUrl(
-  paymentProvider: string | null | undefined,
-  config: BotRuntimeConfig
-): string {
-  return paymentProvider === "tribute"
-    ? "https://t.me/tribute"
-    : `${config.appUrl}/dashboard/plans`;
-}
+// The bot's only paid channel is Tribute, so subscription management and
+// cancellation always happen there - never the website.
+const TRIBUTE_MANAGE_URL = "https://t.me/tribute";
 
 async function sendAccountView(
   client: TelegramClient,
@@ -316,7 +311,7 @@ async function sendAccountView(
     return;
   }
 
-  const manageUrl = manageSubscriptionUrl(usage.paymentProvider, config);
+  const manageUrl = TRIBUTE_MANAGE_URL;
 
   await client.sendMessage(message.chat.id, text, {
     replyMarkup: {
@@ -354,7 +349,7 @@ export async function sendPlansView(
   const periodEnd = usage.currentPeriodEnd
     ? usage.currentPeriodEnd.toISOString().slice(0, 10)
     : null;
-  const manageUrl = manageSubscriptionUrl(usage.paymentProvider, config);
+  const manageUrl = TRIBUTE_MANAGE_URL;
 
   await client.sendMessage(message.chat.id, dict.plansSubscribed(usage.plan, periodEnd), {
     replyMarkup: {
