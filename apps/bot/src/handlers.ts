@@ -122,6 +122,161 @@ function referralKeyboard(dict: Dict): ReplyKeyboardMarkup {
   };
 }
 
+export function matchHelpAction(text: string): "how" | "support" | null {
+  for (const loc of ["en", "ru"] as const) {
+    const d = t(loc);
+    if (text === d.helpHowBtn) return "how";
+    if (text === d.helpSupportBtn) return "support";
+  }
+  return null;
+}
+
+function helpKeyboard(dict: Dict): ReplyKeyboardMarkup {
+  return {
+    keyboard: [
+      [{ text: dict.helpHowBtn }, { text: dict.helpSupportBtn }],
+      [{ text: dict.settingsBackBtn }],
+    ],
+    is_persistent: true,
+    resize_keyboard: true,
+  };
+}
+
+const SUPPORT_MARKER = "🆕 #uid";
+const SUPPORT_UID_RE = new RegExp(`^${SUPPORT_MARKER}(\\d+)`);
+
+export function matchSupportAction(text: string): "close" | null {
+  for (const loc of ["en", "ru"] as const) {
+    if (text === t(loc).supportCloseBtn) return "close";
+  }
+  return null;
+}
+
+export function getSupportChatId(): string | null {
+  const explicit = process.env.SUPPORT_CHAT_ID?.trim();
+  if (explicit) return explicit;
+  const first = (process.env.REFERRAL_ADMIN_TELEGRAM_IDS ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)[0];
+  return first ?? null;
+}
+
+function supportKeyboard(dict: Dict): ReplyKeyboardMarkup {
+  return {
+    keyboard: [[{ text: dict.supportCloseBtn }]],
+    is_persistent: true,
+    resize_keyboard: true,
+  };
+}
+
+export function parseSupportReply(
+  message: TelegramMessage
+): { uid: string } | null {
+  const r = message.reply_to_message;
+  if (!r?.from?.is_bot) return null;
+  const m = SUPPORT_UID_RE.exec(r.text ?? "");
+  return m ? { uid: m[1] } : null;
+}
+
+async function openSupport(
+  client: TelegramClient,
+  message: TelegramMessage,
+  from: TelegramUser,
+  dict: Dict
+) {
+  if (!getSupportChatId()) {
+    await client
+      .sendMessage(message.chat.id, dict.supportUnavailable)
+      .catch(() => undefined);
+    return;
+  }
+  const user = await resolveTelegramUser(from);
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { supportOpen: true },
+  });
+  await client.sendMessage(message.chat.id, dict.supportPrompt, {
+    replyMarkup: supportKeyboard(dict),
+  });
+}
+
+async function closeSupport(
+  client: TelegramClient,
+  chatId: number,
+  userId: string,
+  dict: Dict
+) {
+  await prisma.user.update({
+    where: { id: userId },
+    data: { supportOpen: false },
+  });
+  await client.sendMessage(chatId, dict.supportClosed, {
+    replyMarkup: buildMainMenu(dict),
+  });
+}
+
+export async function relaySupportMessage(
+  client: TelegramClient,
+  from: TelegramUser,
+  text: string
+) {
+  const chat = getSupportChatId();
+  if (!chat) {
+    console.warn(
+      "Support message received but SUPPORT_CHAT_ID is not configured"
+    );
+    return;
+  }
+  const rawName = [from.first_name, from.last_name].filter(Boolean).join(" ");
+  const name = rawName.replace(/#uid\d+/g, "").trim() || String(from.id);
+  const username = from.username ? ` (@${from.username})` : "";
+  const header = `${SUPPORT_MARKER}${from.id} ${name}${username}`;
+  await client
+    .sendMessage(chat, `${header}\n\n${text}`)
+    .catch((e) => {
+      console.error(`Failed to relay support message to ${chat}:`, e);
+    });
+}
+
+export async function deliverSupportReply(
+  client: TelegramClient,
+  uid: string,
+  text: string,
+  supportChatId: string | number
+) {
+  const target = await prisma.user.findUnique({
+    where: { telegramId: uid },
+    select: { telegramLocale: true },
+  });
+  if (!target) {
+    await client
+      .sendMessage(
+        supportChatId,
+        `⚠️ #uid${uid}: пользователь не найден, ответ не доставлен.`
+      )
+      .catch(() => undefined);
+    return;
+  }
+  const dict = t(detectLocale(target.telegramLocale ?? undefined));
+  try {
+    await client.sendMessage(uid, `${dict.supportReplyPrefix}\n${text}`, {
+      replyMarkup: supportKeyboard(dict),
+    });
+  } catch {
+    await client
+      .sendMessage(
+        supportChatId,
+        `⚠️ #uid${uid}: не удалось доставить ответ (юзер мог заблокировать бота).`
+      )
+      .catch(() => undefined);
+    return;
+  }
+  await prisma.user
+    .update({ where: { telegramId: uid }, data: { supportOpen: true } })
+    .catch(() => undefined);
+}
+
 function settingsKeyboard(dict: Dict): ReplyKeyboardMarkup {
   return {
     keyboard: [
@@ -167,11 +322,53 @@ export async function handleUpdate(
 
   const existing = await prisma.user.findUnique({
     where: { telegramId: String(from.id) },
-    select: { id: true, telegramLocale: true },
+    select: { id: true, telegramLocale: true, supportOpen: true },
   });
+  let supportOpen = existing?.supportOpen ?? false;
 
   const locale = detectLocale(existing?.telegramLocale ?? from.language_code);
   const dict = t(locale);
+
+  // Operator answering a support ticket (a Telegram reply to the bot's #uid message).
+  if (String(message.chat.id) === getSupportChatId()) {
+    const parsed = parseSupportReply(message);
+    if (parsed) {
+      if (!text) {
+        await client
+          .sendMessage(
+            message.chat.id,
+            "⚠️ Ответ должен быть текстом. Ответь текстом на сообщение тикета."
+          )
+          .catch(() => undefined);
+        return;
+      }
+      await deliverSupportReply(client, parsed.uid, text, message.chat.id);
+      return;
+    }
+  }
+
+  // Close the support session from its reply-keyboard button.
+  if (matchSupportAction(text) === "close") {
+    const user = await resolveTelegramUser(from);
+    await closeSupport(client, message.chat.id, user.id, dict);
+    return;
+  }
+
+  // Any recognized navigation exits an open support session (no stuck flag).
+  if (supportOpen) {
+    const navMatched =
+      text.startsWith("/") ||
+      (parseMenuCommand(text) ?? matchMenuAction(text)) !== null ||
+      matchSettingsAction(text) !== null ||
+      matchReferralAction(text) !== null ||
+      matchHelpAction(text) !== null;
+    if (navMatched) {
+      await prisma.user
+        .update({ where: { id: existing!.id }, data: { supportOpen: false } })
+        .catch(() => undefined);
+      supportOpen = false;
+    }
+  }
 
   if (text.startsWith("/start")) {
     await handleStart(client, message, text, dict, config, existing);
@@ -239,9 +436,33 @@ export async function handleUpdate(
     return;
   }
 
+  const helpAction = matchHelpAction(text);
+  if (helpAction) {
+    if (helpAction === "how") {
+      await client.sendMessage(message.chat.id, dict.helpText(config.appUrl));
+    } else {
+      await openSupport(client, message, from, dict);
+    }
+    return;
+  }
+
+  // Video/document files always process (unambiguous product intent), even in a
+  // support session. Plain text (including pasted URLs) is treated as part of the
+  // support conversation and relayed while a session is open.
   const source = getVideoSource(message);
   if (source) {
     await handleVideo(client, message, from, source, dict, config);
+    return;
+  }
+
+  if (supportOpen && String(message.chat.id) !== getSupportChatId()) {
+    if (text) {
+      await relaySupportMessage(client, from, text);
+    } else {
+      await client
+        .sendMessage(message.chat.id, dict.supportTextOnly)
+        .catch(() => undefined);
+    }
     return;
   }
 
@@ -274,7 +495,9 @@ async function handleMenuAction(
       return;
     }
     case "help": {
-      await client.sendMessage(message.chat.id, dict.helpText(config.appUrl));
+      await client.sendMessage(message.chat.id, dict.helpMenuPrompt, {
+        replyMarkup: helpKeyboard(dict),
+      });
       return;
     }
     case "settings": {
