@@ -1,0 +1,92 @@
+import { execFile } from "child_process";
+import { promisify } from "util";
+import { loadReframeConfig, type ReframeConfig } from "./config";
+import { detectShots } from "./shots";
+import { detectFaces } from "./faces";
+import { buildCropPlan } from "./plan";
+import type { CropPlan } from "./types";
+
+const execFileAsync = promisify(execFile);
+
+export type ReframeFallbackReason =
+  | "scdet_failed"
+  | "detector_failed"
+  | "detector_invalid_json"
+  | "timeout"
+  | "plan_empty";
+
+export interface ReframeResult {
+  plan: CropPlan | null;
+  fallbackReason?: ReframeFallbackReason;
+  detectMs: number;
+  shotCount: number;
+}
+
+// execFile kills on timeout with error.killed=true
+function isTimeout(error: unknown): boolean {
+  return Boolean((error as { killed?: boolean } | null)?.killed);
+}
+
+async function probeDimensions(
+  path: string
+): Promise<{ width: number; height: number }> {
+  const { stdout } = await execFileAsync("ffprobe", [
+    "-v", "error",
+    "-select_streams", "v:0",
+    "-show_entries", "stream=width,height",
+    "-of", "csv=s=x:p=0",
+    path,
+  ]);
+  const [width, height] = stdout.trim().split("x").map(Number);
+  if (!width || !height) throw new Error("probe_failed");
+  return { width, height };
+}
+
+/**
+ * Shots -> faces -> layout, under one wall-clock budget (cfg.maxDetectSec).
+ * Never throws: every failure returns plan:null with a machine-readable
+ * reason, and the caller falls back to the legacy center crop (spec §8).
+ */
+export async function computeCropPlan(
+  sourcePath: string,
+  startSec: number,
+  endSec: number,
+  cfg: ReframeConfig = loadReframeConfig()
+): Promise<ReframeResult> {
+  const startedAt = Date.now();
+  const deadline = startedAt + cfg.maxDetectSec * 1000;
+  const remaining = () => Math.max(1000, deadline - Date.now());
+  const fail = (
+    fallbackReason: ReframeFallbackReason,
+    shotCount: number
+  ): ReframeResult => ({
+    plan: null,
+    fallbackReason,
+    shotCount,
+    detectMs: Date.now() - startedAt,
+  });
+
+  let shotCount = 0;
+  try {
+    const { width, height } = await probeDimensions(sourcePath);
+    const shots = await detectShots(sourcePath, startSec, endSec, cfg, remaining());
+    shotCount = shots.length;
+    let tracks;
+    try {
+      tracks = await detectFaces(
+        sourcePath, startSec, endSec, shots, width, height, cfg, remaining()
+      );
+    } catch (error) {
+      if (isTimeout(error)) return fail("timeout", shotCount);
+      if ((error as Error).message === "detector_invalid_json") {
+        return fail("detector_invalid_json", shotCount);
+      }
+      return fail("detector_failed", shotCount);
+    }
+    const plan = buildCropPlan(shots, tracks, width, height);
+    if (!plan) return fail("plan_empty", shotCount);
+    return { plan, shotCount, detectMs: Date.now() - startedAt };
+  } catch (error) {
+    return fail(isTimeout(error) ? "timeout" : "scdet_failed", shotCount);
+  }
+}
