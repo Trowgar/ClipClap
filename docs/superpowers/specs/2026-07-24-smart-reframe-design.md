@@ -66,7 +66,7 @@ apps/worker/assets/reframe/
 
 ### 5.1 Shot detection (TS + ffmpeg)
 
-- `ffmpeg -ss <start> -to <end> -i source -vf "scale=320:-2,select='gte(scene,T)',showinfo" -f null -` on the highlight window only; parse frame times from showinfo. Threshold `REFRAME_SCENE_THRESHOLD` (default 0.4, 0..1 scale).
+- `ffmpeg -ss <start> -to <end> -i source -vf "scale=320:-2,select='gte(scene,T)',showinfo" -f null -` on the highlight window only; parse frame times from showinfo. Threshold `REFRAME_SCENE_THRESHOLD` (default 0.3, 0..1 scale; a zero-cut window of 15s+ retries once at half the threshold - quiet same-studio cuts score 0.3-0.4 and a missed cut is worse than over-segmentation, which the merge pass heals).
 - Shots shorter than `REFRAME_MIN_SHOT_SEC` (default 1.0) merge into their predecessor (anti-flicker).
 - Zero detected cuts -> the whole clip is one shot (the common close-up case degrades to one detection pass and one static crop).
 - All timestamps are clip-relative (`-ss` before `-i` resets PTS to ~0), the same convention the ASS cues already use, so filter `t` expressions and subtitle timing share one timeline.
@@ -141,7 +141,7 @@ Prisma migration (migrations only, no `db push`):
 |---|---|---|
 | `REFRAME_ENGINE` | `off` | `off` = legacy center crop; `faces` = this design |
 | `REFRAME_SAMPLE_FPS` | `2` | face-detection sampling rate |
-| `REFRAME_SCENE_THRESHOLD` | `0.4` | scdet scene score cut (0..1) |
+| `REFRAME_SCENE_THRESHOLD` | `0.3` | scdet scene score cut (0..1); zero-cut 15s+ windows retry at half |
 | `REFRAME_MIN_SHOT_SEC` | `1.0` | micro-shots below this merge into the predecessor |
 | `REFRAME_FACE_MIN_SCORE` | `0.7` | YuNet confidence floor |
 | `REFRAME_MAX_DETECT_SEC` | `30` | wall cap for shots+faces per clip; overrun -> fallback |

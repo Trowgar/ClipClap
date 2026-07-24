@@ -39,7 +39,17 @@ export function cutsToShots(
 /**
  * Runs ffmpeg scene detection on the highlight window only, at 320px width.
  * Timestamps in showinfo output are clip-relative because -ss precedes -i.
+ *
+ * A long window with ZERO cuts is retried once at half the threshold: dark
+ * same-studio podcast cuts score in the 0.3-0.4 band and a missed cut merges
+ * different camera angles into one mega-shot whose mixed face tracks force a
+ * center layout (the empty-frame bug). Over-segmentation is self-healing -
+ * adjacent same-geometry shots merge back in the plan pass - while
+ * under-segmentation is not, so the retry only ever errs on the safe side.
  */
+const LONG_TAKE_RETRY_SEC = 15;
+const RETRY_THRESHOLD_FLOOR = 0.15;
+
 export async function detectShots(
   sourcePath: string,
   startSec: number,
@@ -47,6 +57,26 @@ export async function detectShots(
   cfg: ReframeConfig,
   timeoutMs: number
 ): Promise<Shot[]> {
+  let cuts = await scdetPass(sourcePath, startSec, endSec, cfg.sceneThreshold, timeoutMs);
+  if (cuts.length === 0 && endSec - startSec >= LONG_TAKE_RETRY_SEC) {
+    cuts = await scdetPass(
+      sourcePath,
+      startSec,
+      endSec,
+      Math.max(RETRY_THRESHOLD_FLOOR, cfg.sceneThreshold / 2),
+      timeoutMs
+    );
+  }
+  return cutsToShots(cuts, endSec - startSec, cfg.minShotSec);
+}
+
+async function scdetPass(
+  sourcePath: string,
+  startSec: number,
+  endSec: number,
+  threshold: number,
+  timeoutMs: number
+): Promise<number[]> {
   const { stderr } = await execFileAsync(
     "ffmpeg",
     [
@@ -54,13 +84,12 @@ export async function detectShots(
       "-ss", String(startSec),
       "-to", String(endSec),
       "-i", sourcePath,
-      "-vf", `scale=320:-2,select='gte(scene,${cfg.sceneThreshold})',showinfo`,
+      "-vf", `scale=320:-2,select='gte(scene,${threshold})',showinfo`,
       "-f", "null", "-",
     ],
     { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }
   );
-  const cuts = [...stderr.matchAll(/pts_time:([0-9]+(?:\.[0-9]+)?)/g)].map(
-    (m) => Number(m[1])
+  return [...stderr.matchAll(/pts_time:([0-9]+(?:\.[0-9]+)?)/g)].map((m) =>
+    Number(m[1])
   );
-  return cutsToShots(cuts, endSec - startSec, cfg.minShotSec);
 }

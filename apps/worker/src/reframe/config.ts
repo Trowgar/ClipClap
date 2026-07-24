@@ -18,7 +18,7 @@ export function loadReframeConfig(
   return {
     engine: env.REFRAME_ENGINE === "faces" ? "faces" : "off",
     sampleFps: positive(env.REFRAME_SAMPLE_FPS, 2),
-    sceneThreshold: positive(env.REFRAME_SCENE_THRESHOLD, 0.4),
+    sceneThreshold: positive(env.REFRAME_SCENE_THRESHOLD, 0.3),
     minShotSec: positive(env.REFRAME_MIN_SHOT_SEC, 1.0),
     faceMinScore: positive(env.REFRAME_FACE_MIN_SCORE, 0.7),
     maxDetectSec: positive(env.REFRAME_MAX_DETECT_SEC, 30),
