@@ -201,10 +201,34 @@ async function openSupport(
   });
 }
 
-async function closeSupport(
+function supportSenderName(from: TelegramUser): string {
+  const rawName = [from.first_name, from.last_name].filter(Boolean).join(" ");
+  const name = rawName.replace(/#uid\d+/g, "").trim() || String(from.id);
+  const username = from.username ? ` (@${from.username})` : "";
+  return `${name}${username}`;
+}
+
+async function notifyOperatorClosed(
+  client: TelegramClient,
+  chatId: number,
+  from: TelegramUser
+) {
+  const supportChat = getSupportChatId();
+  if (supportChat && String(chatId) !== supportChat) {
+    await client
+      .sendMessage(
+        supportChat,
+        `❌ Пользователь ${supportSenderName(from)} (id ${from.id}) закрыл диалог поддержки.`
+      )
+      .catch(() => undefined);
+  }
+}
+
+export async function closeSupport(
   client: TelegramClient,
   chatId: number,
   userId: string,
+  from: TelegramUser,
   dict: Dict
 ) {
   await prisma.user.update({
@@ -214,6 +238,7 @@ async function closeSupport(
   await client.sendMessage(chatId, dict.supportClosed, {
     replyMarkup: buildMainMenu(dict),
   });
+  await notifyOperatorClosed(client, chatId, from);
 }
 
 export async function relaySupportMessage(
@@ -228,10 +253,7 @@ export async function relaySupportMessage(
     );
     return;
   }
-  const rawName = [from.first_name, from.last_name].filter(Boolean).join(" ");
-  const name = rawName.replace(/#uid\d+/g, "").trim() || String(from.id);
-  const username = from.username ? ` (@${from.username})` : "";
-  const header = `${SUPPORT_MARKER}${from.id} ${name}${username}`;
+  const header = `${SUPPORT_MARKER}${from.id} ${supportSenderName(from)}`;
   await client
     .sendMessage(chat, `${header}\n\n${text}`)
     .catch((e) => {
@@ -251,11 +273,8 @@ export async function relaySupportMedia(
     );
     return true;
   }
-  const rawName = [from.first_name, from.last_name].filter(Boolean).join(" ");
-  const name = rawName.replace(/#uid\d+/g, "").trim() || String(from.id);
-  const username = from.username ? ` (@${from.username})` : "";
   const caption =
-    `${SUPPORT_MARKER}${from.id} ${name}${username}` +
+    `${SUPPORT_MARKER}${from.id} ${supportSenderName(from)}` +
     (message.caption ? `\n\n${message.caption}` : "");
   try {
     await client.copyMessage(chat, message.chat.id, message.message_id, {
@@ -379,7 +398,7 @@ export async function handleUpdate(
   // Close the support session from its reply-keyboard button.
   if (matchSupportAction(text) === "close") {
     const user = await resolveTelegramUser(from);
-    await closeSupport(client, message.chat.id, user.id, dict);
+    await closeSupport(client, message.chat.id, user.id, from, dict);
     return;
   }
 
@@ -396,6 +415,7 @@ export async function handleUpdate(
         .update({ where: { id: existing!.id }, data: { supportOpen: false } })
         .catch(() => undefined);
       supportOpen = false;
+      await notifyOperatorClosed(client, message.chat.id, from);
     }
   }
 

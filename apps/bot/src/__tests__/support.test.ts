@@ -22,6 +22,7 @@ import {
   relaySupportMessage,
   deliverSupportReply,
   relaySupportMedia,
+  closeSupport,
 } from "../handlers";
 
 const origEnv = { ...process.env };
@@ -178,5 +179,37 @@ describe("relaySupportMedia", () => {
     const ok = await relaySupportMedia(client, { id: 1 } as never, { message_id: 2, chat: { id: 1 } } as never);
     expect(ok).toBe(true);
     expect((client as unknown as { copyMessage: ReturnType<typeof vi.fn> }).copyMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("closeSupport", () => {
+  it("notifies the operator that the user closed the chat", async () => {
+    process.env.SUPPORT_CHAT_ID = "777";
+    mocks.update.mockResolvedValue({});
+    const client = { sendMessage: vi.fn().mockResolvedValue(undefined) } as never;
+    await closeSupport(
+      client,
+      42,
+      "u1",
+      { id: 42, first_name: "Ann", username: "ann" } as never,
+      t("en")
+    );
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "u1" }, data: { supportOpen: false } })
+    );
+    const sm = (client as unknown as { sendMessage: ReturnType<typeof vi.fn> }).sendMessage;
+    const opCall = sm.mock.calls.find((c) => c[0] === "777");
+    expect(opCall).toBeTruthy();
+    expect(opCall?.[1]).toContain("Ann");
+    expect(opCall?.[1]).toContain("42");
+  });
+
+  it("does not send a separate operator notice when the closer is the operator's own chat", async () => {
+    process.env.SUPPORT_CHAT_ID = "42";
+    mocks.update.mockResolvedValue({});
+    const client = { sendMessage: vi.fn().mockResolvedValue(undefined) } as never;
+    await closeSupport(client, 42, "u1", { id: 42 } as never, t("en"));
+    const sm = (client as unknown as { sendMessage: ReturnType<typeof vi.fn> }).sendMessage;
+    expect(sm.mock.calls).toHaveLength(1); // only the user-facing "chat closed" message
   });
 });
