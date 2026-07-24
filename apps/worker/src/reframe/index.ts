@@ -28,15 +28,20 @@ function isTimeout(error: unknown): boolean {
 }
 
 async function probeDimensions(
-  path: string
+  path: string,
+  timeoutMs: number
 ): Promise<{ width: number; height: number }> {
-  const { stdout } = await execFileAsync("ffprobe", [
-    "-v", "error",
-    "-select_streams", "v:0",
-    "-show_entries", "stream=width,height",
-    "-of", "csv=s=x:p=0",
-    path,
-  ]);
+  const { stdout } = await execFileAsync(
+    "ffprobe",
+    [
+      "-v", "error",
+      "-select_streams", "v:0",
+      "-show_entries", "stream=width,height",
+      "-of", "csv=s=x:p=0",
+      path,
+    ],
+    { timeout: timeoutMs }
+  );
   const [width, height] = stdout.trim().split("x").map(Number);
   if (!width || !height) throw new Error("probe_failed");
   return { width, height };
@@ -68,7 +73,7 @@ export async function computeCropPlan(
 
   let shotCount = 0;
   try {
-    const { width, height } = await probeDimensions(sourcePath);
+    const { width, height } = await probeDimensions(sourcePath, remaining());
     const shots = await detectShots(sourcePath, startSec, endSec, cfg, remaining());
     shotCount = shots.length;
     let tracks;
