@@ -160,7 +160,17 @@ export function sliceCropPlan(
   start: number,
   end: number
 ): CropPlan | null {
-  if (plan.version !== 1 || !(end > start)) return null;
+  if (
+    !plan ||
+    plan.version !== 1 ||
+    !Array.isArray(plan.shots) ||
+    !plan.source ||
+    typeof plan.source.width !== "number" ||
+    typeof plan.source.height !== "number" ||
+    !(end > start)
+  ) {
+    return null;
+  }
   const shots = plan.shots
     .filter((s) => s.end > start && s.start < end)
     .map((s) => ({

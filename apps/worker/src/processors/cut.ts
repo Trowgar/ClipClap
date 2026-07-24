@@ -41,7 +41,7 @@ export function buildCutArgs(
       ...head,
       "-filter_complex", filterSpec.graph,
       "-map", "[vout]",
-      "-map", "0:a?",
+      "-map", "0:a:0?",
       ...encode,
       outPath,
       "-y",

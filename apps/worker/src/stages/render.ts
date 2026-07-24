@@ -9,7 +9,7 @@ import type { Prisma } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { unlink } from "fs/promises";
 import { downloadVideo } from "../processors/download";
-import { cutClips, trimClipFile } from "../processors/cut";
+import { cutClips, trimClipFile, type CutResult } from "../processors/cut";
 import { probeTimeline } from "../processors/normalize";
 import { generateThumbnail } from "../processors/thumbnail";
 import {
@@ -98,6 +98,10 @@ async function renderClips(
       layouts?: Record<"single" | "split" | "center", number>;
       fallbackReason?: string;
     }> = [];
+    // Detection has a wall-clock budget per highlight; when a source is too
+    // heavy it times out repeatedly. Stop paying that cost for the rest of the
+    // job after two timeouts in a row (reset on any non-timeout result).
+    let consecutiveTimeouts = 0;
 
     for (const highlight of highlights) {
       // Derived even when subtitles are off so the editor can enable them later
@@ -119,35 +123,75 @@ async function renderClips(
       let filterSpec: FilterSpec | null = null;
       let cropPlan: CropPlan | null = null;
       if (reframeCfg.engine === "faces") {
-        const reframe = await computeCropPlan(
-          sourcePath,
-          highlight.start,
-          highlight.end,
-          reframeCfg
-        );
-        cropPlan = reframe.plan;
-        if (reframe.plan) {
-          filterSpec = buildFiltergraph(reframe.plan, assFilter?.filter);
+        if (consecutiveTimeouts >= 2) {
+          // Two detection timeouts in a row: skip the remaining highlights of
+          // this job so we stop burning the wall-clock budget. Each skipped
+          // highlight takes the legacy center crop (filterSpec stays null).
+          reframeChecks.push({
+            shotCount: 0,
+            detectMs: 0,
+            fallbackReason: "skipped_after_timeouts",
+          });
         } else {
-          console.warn(
-            `[render] reframe fallback on job ${payload.jobId}: ${reframe.fallbackReason}`
+          const reframe = await computeCropPlan(
+            sourcePath,
+            highlight.start,
+            highlight.end,
+            reframeCfg
           );
+          cropPlan = reframe.plan;
+          if (reframe.plan) {
+            filterSpec = buildFiltergraph(reframe.plan, assFilter?.filter);
+          } else {
+            console.warn(
+              `[render] reframe fallback on job ${payload.jobId}: ${reframe.fallbackReason}`
+            );
+          }
+          if (reframe.fallbackReason === "timeout") {
+            consecutiveTimeouts++;
+          } else {
+            consecutiveTimeouts = 0;
+          }
+          reframeChecks.push({
+            shotCount: reframe.shotCount,
+            detectMs: reframe.detectMs,
+            ...(reframe.plan ? { layouts: planLayoutCounts(reframe.plan) } : {}),
+            ...(reframe.fallbackReason
+              ? { fallbackReason: reframe.fallbackReason }
+              : {}),
+          });
         }
-        reframeChecks.push({
-          shotCount: reframe.shotCount,
-          detectMs: reframe.detectMs,
-          ...(reframe.plan ? { layouts: planLayoutCounts(reframe.plan) } : {}),
-          ...(reframe.fallbackReason
-            ? { fallbackReason: reframe.fallbackReason }
-            : {}),
-        });
       }
-      const [cutResult] = await cutClips(
-        sourcePath,
-        [highlight],
-        assFilter?.filter,
-        filterSpec
-      );
+      // A filterSpec must never fail the render: if the reframe encode throws,
+      // fall back once to the legacy center crop and record the degradation.
+      let cutResult: CutResult;
+      try {
+        [cutResult] = await cutClips(
+          sourcePath,
+          [highlight],
+          assFilter?.filter,
+          filterSpec
+        );
+      } catch (error) {
+        if (!filterSpec) throw error;
+        console.warn(
+          `[render] reframe encode fallback on job ${payload.jobId}:`,
+          error
+        );
+        filterSpec = null;
+        cropPlan = null;
+        const check = reframeChecks[reframeChecks.length - 1];
+        if (check) {
+          delete check.layouts;
+          check.fallbackReason = "encode_failed";
+        }
+        [cutResult] = await cutClips(
+          sourcePath,
+          [highlight],
+          assFilter?.filter,
+          null
+        );
+      }
       tempFiles.push(cutResult.clipPath);
       // duration error and A/V start skew are DIFFERENT failures: a clip can
       // have perfect duration and 400ms lip-sync offset (spec §10)
@@ -302,35 +346,64 @@ async function renderTrim(
       const reframeCfg = loadReframeConfig();
       let filterSpec: FilterSpec | null = null;
       if (reframeCfg.engine === "faces") {
-        const clipRow = await prisma.clip.findUnique({
-          where: { id: payload.clipId },
-          select: { cropPlan: true },
-        });
-        if (clipRow?.cropPlan) {
-          slicedPlan = sliceCropPlan(
-            clipRow.cropPlan as unknown as CropPlan,
-            payload.start,
-            payload.end
-          );
-          if (slicedPlan) {
-            // assFilter is null when subtitles are off, so this composes correctly
-            filterSpec = buildFiltergraph(slicedPlan, assFilter?.filter);
+        // Defense in depth on top of sliceCropPlan's own guard: a malformed
+        // stored cropPlan must never fail the trim - degrade to legacy crop.
+        try {
+          const clipRow = await prisma.clip.findUnique({
+            where: { id: payload.clipId },
+            select: { cropPlan: true },
+          });
+          if (clipRow?.cropPlan) {
+            slicedPlan = sliceCropPlan(
+              clipRow.cropPlan as unknown as CropPlan,
+              payload.start,
+              payload.end
+            );
+            if (slicedPlan) {
+              // assFilter is null when subtitles are off, so this composes correctly
+              filterSpec = buildFiltergraph(slicedPlan, assFilter?.filter);
+            }
           }
+        } catch (error) {
+          console.warn(
+            `[render] trim reframe reuse failed on job ${payload.jobId}:`,
+            error
+          );
+          filterSpec = null;
+          slicedPlan = null;
         }
       }
-      const [cutResult] = await cutClips(
-        sourcePath,
-        [
-          {
-            start: payload.sourceStart!,
-            end: payload.sourceEnd!,
-            title: "edit",
-            reason: "re-render",
-          },
-        ],
-        assFilter?.filter,
-        filterSpec
-      );
+      const trimHighlight = {
+        start: payload.sourceStart!,
+        end: payload.sourceEnd!,
+        title: "edit",
+        reason: "re-render",
+      };
+      // A filterSpec must never fail the render: on an encode throw, fall back
+      // once to the legacy center crop (see the clips path for the rationale).
+      let cutResult: CutResult;
+      try {
+        [cutResult] = await cutClips(
+          sourcePath,
+          [trimHighlight],
+          assFilter?.filter,
+          filterSpec
+        );
+      } catch (error) {
+        if (!filterSpec) throw error;
+        console.warn(
+          `[render] reframe encode fallback on job ${payload.jobId}:`,
+          error
+        );
+        filterSpec = null;
+        slicedPlan = null;
+        [cutResult] = await cutClips(
+          sourcePath,
+          [trimHighlight],
+          assFilter?.filter,
+          null
+        );
+      }
       finalPath = cutResult.clipPath;
       tempFiles.push(finalPath);
     } else {

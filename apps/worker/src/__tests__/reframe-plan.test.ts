@@ -258,6 +258,32 @@ describe("sliceCropPlan (trim re-render)", () => {
     expect(sliceCropPlan(plan, 100, 120)).toBeNull();
     expect(sliceCropPlan({ ...plan, version: 2 as unknown as 1 }, 0, 10)).toBeNull();
   });
+
+  it("returns null for a foreign/corrupt stored Json instead of throwing", () => {
+    // A version:1 shell with no shots array must not blow up downstream.
+    expect(sliceCropPlan({ version: 1 } as unknown as CropPlan, 0, 10)).toBeNull();
+    // shots present but not an array (foreign Json shape).
+    expect(
+      sliceCropPlan(
+        {
+          version: 1,
+          engine: "faces",
+          source: { width: 1920, height: 1080 },
+          shots: "garbage",
+        } as unknown as CropPlan,
+        0,
+        10
+      )
+    ).toBeNull();
+    // missing source dimensions.
+    expect(
+      sliceCropPlan(
+        { version: 1, engine: "faces", shots: [] } as unknown as CropPlan,
+        0,
+        10
+      )
+    ).toBeNull();
+  });
 });
 
 describe("planLayoutCounts", () => {

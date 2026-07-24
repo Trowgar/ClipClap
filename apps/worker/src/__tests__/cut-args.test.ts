@@ -36,7 +36,7 @@ describe("buildCutArgs", () => {
     expect(args[args.indexOf("-filter_complex") + 1]).toBe("[0:v]split=3[a][b][c]");
     const firstMap = args.indexOf("-map");
     expect(args[firstMap + 1]).toBe("[vout]");
-    expect(args[args.indexOf("-map", firstMap + 1) + 1]).toBe("0:a?");
+    expect(args[args.indexOf("-map", firstMap + 1) + 1]).toBe("0:a:0?");
     expect(args).not.toContain("-vf");
   });
 
