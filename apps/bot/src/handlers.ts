@@ -80,7 +80,7 @@ export function parseLangCallback(
   return null;
 }
 
-export type MenuAction = "account" | "help" | "settings" | "affiliate";
+export type MenuAction = "account" | "help" | "settings" | "affiliate" | "plans";
 
 export function matchMenuAction(text: string): MenuAction | null {
   for (const loc of ["en", "ru"] as const) {
@@ -89,6 +89,7 @@ export function matchMenuAction(text: string): MenuAction | null {
     if (text === d.menuHelp) return "help";
     if (text === d.menuSettings) return "settings";
     if (text === d.menuAffiliate) return "affiliate";
+    if (text === d.menuPlans) return "plans";
   }
   return null;
 }
@@ -96,8 +97,9 @@ export function matchMenuAction(text: string): MenuAction | null {
 function buildMainMenu(dict: Dict): ReplyKeyboardMarkup {
   return {
     keyboard: [
-      [{ text: dict.menuAccount }, { text: dict.menuAffiliate }],
-      [{ text: dict.menuHelp }, { text: dict.menuSettings }],
+      [{ text: dict.menuPlans }, { text: dict.menuAccount }],
+      [{ text: dict.menuAffiliate }, { text: dict.menuHelp }],
+      [{ text: dict.menuSettings }],
     ],
     is_persistent: true,
     resize_keyboard: true,
@@ -203,7 +205,7 @@ export async function handleUpdate(
 }
 
 function parseMenuCommand(text: string): MenuAction | null {
-  const m = /^\/(account|help|settings)(@\S+)?(\s|$)/.exec(text);
+  const m = /^\/(account|help|settings|plans)(@\S+)?(\s|$)/.exec(text);
   if (!m) return null;
   return m[1] as MenuAction;
 }
@@ -235,7 +237,20 @@ async function handleMenuAction(
       await handleReferral(client, message, message.from!, dict, config);
       return;
     }
+    case "plans": {
+      await sendPlansView(client, message, dict, config, existing);
+      return;
+    }
   }
+}
+
+function manageSubscriptionUrl(
+  paymentProvider: string | null | undefined,
+  config: BotRuntimeConfig
+): string {
+  return paymentProvider === "tribute"
+    ? "https://t.me/tribute"
+    : `${config.appUrl}/dashboard/plans`;
 }
 
 async function sendAccountView(
@@ -260,12 +275,7 @@ async function sendAccountView(
       retentionDays: 0,
       clipsTotal: 0,
     });
-    const keyboard = plansKeyboard(dict);
-    await client.sendMessage(
-      message.chat.id,
-      text,
-      keyboard ? { replyMarkup: keyboard } : undefined
-    );
+    await client.sendMessage(message.chat.id, `${text}\n\n${dict.noPlanNudge}`);
     return;
   }
 
@@ -302,25 +312,53 @@ async function sendAccountView(
   });
 
   if (usage.plan === "NONE") {
-    const keyboard = plansKeyboard(dict);
-    await client.sendMessage(
-      message.chat.id,
-      text,
-      keyboard ? { replyMarkup: keyboard } : undefined
-    );
+    await client.sendMessage(message.chat.id, `${text}\n\n${dict.noPlanNudge}`);
     return;
   }
 
-  const manageUrl =
-    usage.paymentProvider === "tribute"
-      ? "https://t.me/tribute"
-      : `${config.appUrl}/dashboard/plans`;
+  const manageUrl = manageSubscriptionUrl(usage.paymentProvider, config);
 
   await client.sendMessage(message.chat.id, text, {
     replyMarkup: {
       inline_keyboard: [
         [{ text: dict.manageSubscriptionBtn, url: manageUrl }],
       ],
+    },
+  });
+}
+
+export async function sendPlansView(
+  client: TelegramClient,
+  message: TelegramMessage,
+  dict: Dict,
+  config: BotRuntimeConfig,
+  existing: { id: string } | null
+) {
+  // No account, or no live subscription -> show the plans + subscribe buttons.
+  if (!existing) {
+    await client.sendMessage(message.chat.id, dict.plansText, {
+      replyMarkup: plansKeyboard(dict),
+    });
+    return;
+  }
+
+  const usage = await getUsageForUser(existing.id);
+  if (usage.plan === "NONE" || !usage.subscriptionState.live) {
+    await client.sendMessage(message.chat.id, dict.plansText, {
+      replyMarkup: plansKeyboard(dict),
+    });
+    return;
+  }
+
+  // Live subscriber -> status + a single Manage button (-> Tribute). No buy buttons.
+  const periodEnd = usage.currentPeriodEnd
+    ? usage.currentPeriodEnd.toISOString().slice(0, 10)
+    : null;
+  const manageUrl = manageSubscriptionUrl(usage.paymentProvider, config);
+
+  await client.sendMessage(message.chat.id, dict.plansSubscribed(usage.plan, periodEnd), {
+    replyMarkup: {
+      inline_keyboard: [[{ text: dict.manageSubscriptionBtn, url: manageUrl }]],
     },
   });
 }
@@ -414,12 +452,9 @@ async function handleStart(
     if (isNew) {
       const { referralService } = await import("@clipclap/shared");
       await referralService.attachReferral(user.id, payload.code);
-      const keyboard = plansKeyboard(dict);
-      await client.sendMessage(
-        message.chat.id,
-        dict.newAccountCreated(config.appUrl),
-        keyboard ? { replyMarkup: keyboard } : undefined
-      );
+      // The persistent menu (below) carries the 💳 Plans button; no inline
+      // plan buttons needed here.
+      await client.sendMessage(message.chat.id, dict.newAccountCreated);
       await client.sendMessage(message.chat.id, dict.menuHint, {
         replyMarkup: buildMainMenu(dict),
       });
@@ -440,15 +475,9 @@ async function handleStart(
   const usage = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
 
   if (usage.plan === "NONE") {
-    const keyboard = plansKeyboard(dict);
-    await client.sendMessage(
-      message.chat.id,
-      dict.welcomeNeedsPlan(config.appUrl),
-      keyboard ? { replyMarkup: keyboard } : undefined
-    );
-    // Attach the persistent reply menu in a separate follow-up so the user has
-    // access to Account/Help/Language even before they pick a plan.
-    await client.sendMessage(message.chat.id, dict.menuHint, {
+    // The persistent menu (below) carries the 💳 Plans button; welcomeNeedsPlan
+    // nudges the user to it, so no inline plan buttons here.
+    await client.sendMessage(message.chat.id, dict.welcomeNeedsPlan, {
       replyMarkup: buildMainMenu(dict),
     });
     return;
@@ -489,13 +518,11 @@ async function handleCallbackQuery(
   switch (query.data) {
     case CALLBACK_NEW_ACCOUNT: {
       await resolveTelegramUser(query.from);
-      const keyboard = plansKeyboard(dict);
       await client
         .editMessageText(
           query.message.chat.id,
           query.message.message_id,
-          dict.newAccountCreated(config.appUrl),
-          keyboard ? { replyMarkup: keyboard } : undefined
+          dict.newAccountCreated
         )
         .catch(() => undefined);
       await client
@@ -819,7 +846,7 @@ async function handleVideo(
   if (blockedReason) {
     await client.sendMessage(
       message.chat.id,
-      dict.blocked(blockedReason, config.appUrl)
+      dict.blocked(blockedReason)
     );
     return;
   }
@@ -899,7 +926,7 @@ async function handleVideoUrl(
   if (blockedReason) {
     await client.sendMessage(
       message.chat.id,
-      dict.blocked(blockedReason, config.appUrl)
+      dict.blocked(blockedReason)
     );
     return;
   }

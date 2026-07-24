@@ -26,10 +26,10 @@ export interface Dict {
   welcomeNew: string;
   welcomeFirstChoice: string;
   welcomeBack: string;
-  welcomeNeedsPlan: (url: string) => string;
+  welcomeNeedsPlan: string;
   newAccountBtn: string;
   linkAccountBtn: string;
-  newAccountCreated: (url: string) => string;
+  newAccountCreated: string;
   linkAccountInstructions: (code: string, url: string) => string;
   callbackAck: string;
   linkCodePrompt: (code: string, url: string) => string;
@@ -47,7 +47,7 @@ export interface Dict {
   done: (n: number) => string;
   doneNoClips: (reason: string) => string;
   lowQualityNote: string;
-  blocked: (reason: string, url: string) => string;
+  blocked: (reason: string) => string;
   langUsage: string;
   langSetEn: string;
   langSetRu: string;
@@ -60,6 +60,10 @@ export interface Dict {
   menuHelp: string;
   menuSettings: string;
   menuAffiliate: string;
+  menuPlans: string;
+  plansText: string;
+  plansSubscribed: (plan: string, periodEnd: string | null) => string;
+  noPlanNudge: string;
   helpText: (url: string) => string;
   accountText: (params: {
     plan: string;
@@ -101,12 +105,12 @@ const en: Dict = {
   welcomeFirstChoice:
     "Hi! I turn long videos into vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nHow it works:\n1. Pick a plan\n2. Send a video (up to 3 hours)\n3. Get back the strongest short clips (up to 12 - depends on the video)\n\nFirst - how do you want to set up?\n\n• New account - use this Telegram as your ClipClap account.\n• I already have an account - link this Telegram to your existing clipclap.io account.",
   welcomeBack: "Welcome back! Send a video and I'll generate clips.",
-  welcomeNeedsPlan: (url) =>
-    `Send a video and I'll generate clips. To enable processing, pick a plan: ${url}/dashboard/plans`,
+  welcomeNeedsPlan:
+    "Send a video and I'll generate clips. To enable processing, tap 💳 Plans and pick a plan.",
   newAccountBtn: "✨ Create new account",
   linkAccountBtn: "🔗 I already have an account",
-  newAccountCreated: (url) =>
-    `Account created. Send a video here and I'll start clipping.\n\nPick a plan to enable processing: ${url}/dashboard/plans`,
+  newAccountCreated:
+    "Account created. Send a video here and I'll start clipping.\n\nTo enable processing, tap 💳 Plans and pick a plan.",
   linkAccountInstructions: (code, url) =>
     `Your linking code: ${code}\n\n1. Open ${url}/dashboard/settings on the device where you're logged in.\n2. Paste this code within 10 minutes.\n\nThis Telegram will be connected to that account.`,
   callbackAck: "Got it",
@@ -138,7 +142,7 @@ const en: Dict = {
         ? "Done, but part of the video could not be processed and no strong moments were found in the rest."
         : "Done. I watched the whole video but did not find moments strong enough for clips - no clips this time. Try a video with more talk, emotion, or story.",
   lowQualityNote: "Heads up: no strong moments found - this is the best available.",
-  blocked: (reason, url) => `${reason}\n\nManage your plan: ${url}/dashboard/plans`,
+  blocked: (reason) => `${reason}\n\n💳 Plans - choose or manage your subscription.`,
   langUsage:
     "Usage: /lang en - English, /lang ru - Russian, /lang auto - follow Telegram language.",
   langSetEn: "Language set to English.",
@@ -152,6 +156,18 @@ const en: Dict = {
   menuHelp: "❓ Help",
   menuSettings: "⚙️ Settings",
   menuAffiliate: "🤝 Affiliate",
+  menuPlans: "💳 Plans",
+  plansText:
+    "💳 ClipClap Plans\nPay once - start using. Cancel anytime in Tribute.\n\n" +
+    "🌱 Starter - €3/wk · €9/mo - 75 / 270 min\n" +
+    "🚀 Plus - €29/mo - 1000 min\n" +
+    "👑 Max - €89/mo - 3500 min\n\n" +
+    "Pick a plan below 👇",
+  plansSubscribed: (plan, periodEnd) =>
+    periodEnd
+      ? `You're on ${plan} ✅ Active until ${periodEnd}.\nManage or cancel your subscription in Tribute.`
+      : `You're on ${plan} ✅\nManage or cancel your subscription in Tribute.`,
+  noPlanNudge: "👉 Tap 💳 Plans to subscribe.",
   helpText: (url) =>
     `Send me a video - I'll cut it into vertical clips with subtitles.\nYou can also paste a URL (YouTube, Twitch, TikTok, Vimeo, X and more).\n\nLimits: up to 3 hours source, up to 2 GB file size.\n\nCommands:\n• /start - main menu\n• /link - connect an existing clipclap.io account\n• /referral - your referral link & earnings\n• /lang en|ru|auto - switch language\n\nWebsite: ${url}/dashboard`,
   accountText: ({
@@ -239,12 +255,12 @@ const ru: Dict = {
   welcomeFirstChoice:
     "Привет! Нарезаю длинные видео на вертикальные клипы с субтитрами - для TikTok, Reels и Shorts.\n\nКак это работает:\n1. Выбери тариф\n2. Пришли видео (до 3 часов)\n3. Получи самые сильные короткие клипы (до 12 - зависит от видео)\n\nСначала - как тебе удобнее начать?\n\n• Новый аккаунт - Telegram станет твоим аккаунтом ClipClap.\n• Уже есть аккаунт - привяжем этот Telegram к существующему аккаунту на clipclap.io.",
   welcomeBack: "С возвращением! Пришли видео - сделаю клипы.",
-  welcomeNeedsPlan: (url) =>
-    `Пришли видео - сделаю клипы. Чтобы запустить обработку, выбери тариф: ${url}/dashboard/plans`,
+  welcomeNeedsPlan:
+    "Пришли видео - сделаю клипы. Чтобы запустить обработку, нажми 💳 Тарифы и выбери план.",
   newAccountBtn: "✨ Создать новый аккаунт",
   linkAccountBtn: "🔗 У меня уже есть аккаунт",
-  newAccountCreated: (url) =>
-    `Аккаунт создан. Пришли видео - начну нарезку.\n\nЧтобы запустить обработку, выбери тариф: ${url}/dashboard/plans`,
+  newAccountCreated:
+    "Аккаунт создан. Пришли видео - начну нарезку.\n\nЧтобы запустить обработку, нажми 💳 Тарифы и выбери план.",
   linkAccountInstructions: (code, url) =>
     `Код привязки: ${code}\n\n1. Открой ${url}/dashboard/settings на устройстве, где ты залогинен.\n2. Вставь код в течение 10 минут.\n\nЭтот Telegram привяжется к тому аккаунту.`,
   callbackAck: "Принято",
@@ -278,7 +294,7 @@ const ru: Dict = {
         ? "Готово, но часть видео не удалось обработать, а в остальном сильных моментов не нашлось."
         : "Готово. Я просмотрел всё видео, но не нашёл достаточно сильных моментов - клипов в этот раз нет. Попробуй видео с большим количеством речи, эмоций или истории.",
   lowQualityNote: "Внимание: сильных моментов не нашлось - это лучшее из доступного.",
-  blocked: (reason, url) => `${reason}\n\nУправление тарифом: ${url}/dashboard/plans`,
+  blocked: (reason) => `${reason}\n\n💳 Тарифы - выбрать или управлять подпиской.`,
   langUsage:
     "Использование: /lang ru - русский, /lang en - английский, /lang auto - по языку Telegram.",
   langSetEn: "Language set to English.",
@@ -292,6 +308,18 @@ const ru: Dict = {
   menuHelp: "❓ Помощь",
   menuSettings: "⚙️ Настройки",
   menuAffiliate: "🤝 Рефералы",
+  menuPlans: "💳 Тарифы",
+  plansText:
+    "💳 Тарифы ClipClap\nОплатил - пользуешься. Отменить можно в любой момент в Tribute.\n\n" +
+    "🌱 Starter - €3/нед · €9/мес - 75 / 270 мин\n" +
+    "🚀 Plus - €29/мес - 1000 мин\n" +
+    "👑 Max - €89/мес - 3500 мин\n\n" +
+    "Выбери план ниже 👇",
+  plansSubscribed: (plan, periodEnd) =>
+    periodEnd
+      ? `Ты на плане ${plan} ✅ Активен до ${periodEnd}.\nУправление и отмена - в Tribute.`
+      : `Ты на плане ${plan} ✅\nУправление и отмена - в Tribute.`,
+  noPlanNudge: "👉 Нажми 💳 Тарифы, чтобы оформить подписку.",
   helpText: (url) =>
     `Пришли видео - нарежу вертикальные клипы с субтитрами.\nМожно также прислать ссылку (YouTube, Twitch, TikTok, Vimeo, X и др.).\n\nЛимиты: до 3 часов исходник, до 2 ГБ размер файла.\n\nКоманды:\n• /start - главное меню\n• /link - привязать существующий аккаунт clipclap.io\n• /referral - реферальная ссылка и доход\n• /lang en|ru|auto - сменить язык\n\nСайт: ${url}/dashboard`,
   accountText: ({
