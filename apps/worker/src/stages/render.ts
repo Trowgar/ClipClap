@@ -24,6 +24,11 @@ import {
   requireString,
   type RenderStagePayload,
 } from "./types";
+import { computeCropPlan } from "../reframe";
+import { loadReframeConfig } from "../reframe/config";
+import { buildFiltergraph } from "../reframe/filtergraph";
+import { planLayoutCounts, sliceCropPlan } from "../reframe/plan";
+import type { CropPlan, FilterSpec } from "../reframe/types";
 
 export async function runRenderStage(
   payload: RenderStagePayload
@@ -86,6 +91,13 @@ async function renderClips(
       renderDurationErrorMs: number;
       renderAvStartSkewMs: number | null;
     }> = [];
+    const reframeCfg = loadReframeConfig();
+    const reframeChecks: Array<{
+      shotCount: number;
+      detectMs: number;
+      layouts?: Record<"single" | "split" | "center", number>;
+      fallbackReason?: string;
+    }> = [];
 
     for (const highlight of highlights) {
       // Derived even when subtitles are off so the editor can enable them later
@@ -102,10 +114,39 @@ async function renderClips(
         assFilter = await createAssFilter(cues);
         tempFiles.push(assFilter.assPath);
       }
+      // Smart reframe: per-shot face-aware crop (spec 2026-07-24). Any
+      // failure degrades to the legacy center crop - never fails the render.
+      let filterSpec: FilterSpec | null = null;
+      let cropPlan: CropPlan | null = null;
+      if (reframeCfg.engine === "faces") {
+        const reframe = await computeCropPlan(
+          sourcePath,
+          highlight.start,
+          highlight.end,
+          reframeCfg
+        );
+        cropPlan = reframe.plan;
+        if (reframe.plan) {
+          filterSpec = buildFiltergraph(reframe.plan, assFilter?.filter);
+        } else {
+          console.warn(
+            `[render] reframe fallback on job ${payload.jobId}: ${reframe.fallbackReason}`
+          );
+        }
+        reframeChecks.push({
+          shotCount: reframe.shotCount,
+          detectMs: reframe.detectMs,
+          ...(reframe.plan ? { layouts: planLayoutCounts(reframe.plan) } : {}),
+          ...(reframe.fallbackReason
+            ? { fallbackReason: reframe.fallbackReason }
+            : {}),
+        });
+      }
       const [cutResult] = await cutClips(
         sourcePath,
         [highlight],
-        assFilter?.filter
+        assFilter?.filter,
+        filterSpec
       );
       tempFiles.push(cutResult.clipPath);
       // duration error and A/V start skew are DIFFERENT failures: a clip can
@@ -162,6 +203,9 @@ async function renderClips(
           endTime: highlight.end,
           subtitles: job.subtitles,
           subtitleTrack: { cues } as unknown as Prisma.InputJsonValue,
+          cropPlan: cropPlan
+            ? (cropPlan as unknown as Prisma.InputJsonValue)
+            : undefined,
           expiresAt: clipExpiresAt,
         },
       });
@@ -204,6 +248,10 @@ async function renderClips(
           clipsGenerated,
           clipKeys,
           renderChecks,
+          reframe: {
+            engine: reframeCfg.engine,
+            checks: reframeChecks,
+          },
         } as Prisma.InputJsonValue,
       },
     });
@@ -240,6 +288,7 @@ async function renderTrim(
     const wantSubs = payload.subtitles && windowedCues.length > 0;
 
     let finalPath: string;
+    let slicedPlan: CropPlan | null = null;
     if (cleanSource) {
       const sourcePath = await downloadVideo(undefined, payload.sourceArtifactKey!);
       tempFiles.push(sourcePath);
@@ -247,6 +296,27 @@ async function renderTrim(
       if (wantSubs) {
         assFilter = await createAssFilter(windowedCues);
         tempFiles.push(assFilter.assPath);
+      }
+      // Reuse the stored crop plan re-windowed to the trim range (clip-relative,
+      // exactly like sliceCues) so trims keep the face-aware framing.
+      const reframeCfg = loadReframeConfig();
+      let filterSpec: FilterSpec | null = null;
+      if (reframeCfg.engine === "faces") {
+        const clipRow = await prisma.clip.findUnique({
+          where: { id: payload.clipId },
+          select: { cropPlan: true },
+        });
+        if (clipRow?.cropPlan) {
+          slicedPlan = sliceCropPlan(
+            clipRow.cropPlan as unknown as CropPlan,
+            payload.start,
+            payload.end
+          );
+          if (slicedPlan) {
+            // assFilter is null when subtitles are off, so this composes correctly
+            filterSpec = buildFiltergraph(slicedPlan, assFilter?.filter);
+          }
+        }
       }
       const [cutResult] = await cutClips(
         sourcePath,
@@ -258,7 +328,8 @@ async function renderTrim(
             reason: "re-render",
           },
         ],
-        assFilter?.filter
+        assFilter?.filter,
+        filterSpec
       );
       finalPath = cutResult.clipPath;
       tempFiles.push(finalPath);
@@ -286,6 +357,9 @@ async function renderTrim(
         storageKey,
         duration: Math.round(payload.end - payload.start),
         subtitleTrack: { cues: windowedCues } as unknown as Prisma.InputJsonValue,
+        cropPlan: slicedPlan
+          ? (slicedPlan as unknown as Prisma.InputJsonValue)
+          : undefined,
       },
     });
   } finally {
