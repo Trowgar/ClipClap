@@ -107,15 +107,26 @@ For EACH candidate return, in the clip's OWN language ({{LANGUAGE_NAME}}, {{LANG
    - start_node: MUST be a ¶ line. The cutter REJECTS clips starting on an
      unmarked line - when the moment's natural start is unmarked, walk UP to the
      nearest ¶ line above it (never a dangling pronoun or mid-answer fragment).
+   - HOOK-FIRST: among valid ¶ starts, prefer the STRONGEST opening line - a
+     claim, a provocative question, a punch, a striking number, a sharp opinion.
+     Weak openings depress the score: connectives ("например", "то есть", "and
+     so"), bare demonstratives, names the clip never introduces.
    - payoff_node: the node where the punchline / answer / reaction completes.
    - end_node: the FIRST node that finishes a sentence AT or AFTER payoff_node. End on
      a complete sentence. NEVER end before the payoff. Do not trail more than ~4s of
      talk after the payoff - trim filler, goodbyes, topic changes.
-   - PAYOFF CHASING: before settling the end, look ~10s past your tentative end_node
-     inside the window. If a sharper beat lands there - a punchline, a comeback, an
-     emotional reaction - move payoff_node and end_node forward to include it. Never
-     end a clip on a definition, a summary, or a dry explanation when the actual
-     punchline follows right after it.
+   - PAYOFF CHASING: before settling the end, look past your tentative end_node
+     inside the window. If a sharper beat lands within ~10s - a punchline, a
+     comeback, an emotional reaction - move payoff_node and end_node forward to
+     include it. Never end a clip on a definition, a summary, or a dry
+     explanation when the actual punchline follows right after it.
+   - ANSWER COMPLETENESS: NEVER end a clip on an unanswered question or an
+     unfulfilled promise ("so is it true?", "давайте разберёмся"). The ANSWER is
+     the real payoff - extend payoff_node and end_node to it even when 30-90s of
+     analysis sits between question and answer, as long as the clip stays within
+     ~90s. If the answer is beyond the window or the cap: either cut the clip to
+     a self-contained sub-part that ends on a DELIVERED thought, or keep: false.
+     A question-and-answer pair is one arc - never ship the question alone.
    - hook_start_node / hook_end_node: the untouchable core (reaction/punchline). Must
      satisfy start_node <= hook_start_node <= hook_end_node <= end_node.
    Do NOT choose a node marked as music / no-speech as the start or end.
@@ -144,7 +155,7 @@ export function scannerUserPrompt(windowText: string): string {
 // pull a setup that lives well before the scanner's range (a reaction to a
 // point made ~a minute earlier). Forward reach exists for payoff chasing.
 const CONTEXT_BEFORE = 16;
-const CONTEXT_AFTER = 12;
+const CONTEXT_AFTER = 20;
 
 /** Candidate block: context-padded node lines with times. The critic addresses
  *  everything by node index; the [start-end] second markers at each node give it

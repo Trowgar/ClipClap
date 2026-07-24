@@ -170,6 +170,7 @@ export function snapNodes(
       payoffSec: p.end,
       shortMoment: duration < cfg.targetMinSec,
       boundaryConfidence,
+      endsOnQuestion: /[?？]["»')\]]*\s*$/u.test(e.text.trim()),
     },
   };
 }

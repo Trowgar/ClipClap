@@ -67,6 +67,9 @@ export interface SnappedClip {
   /** "segment" when an edge rode an opaque node's segment boundary (word
    *  timings unreliable there - e.g. a punchline drowned in laughter). */
   boundaryConfidence?: "word" | "segment";
+  /** The clip's final sentence is interrogative - selection charges these a
+   *  score surcharge (answer-completeness backstop). */
+  endsOnQuestion?: boolean;
 }
 
 export type DropReason =

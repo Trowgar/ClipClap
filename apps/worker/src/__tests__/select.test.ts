@@ -91,6 +91,14 @@ describe("selectAndOrder", () => {
     expect(ranges).not.toContain("217-224");
   });
 
+  it("charges clips ending on an unanswered question", () => {
+    // "so is it true?" at 0.7 dies; a deliberate cliffhanger at 0.8 survives
+    const dangling = { ...clip(87, 117, 0.7), endsOnQuestion: true };
+    const cliffhanger = { ...clip(300, 340, 0.8), endsOnQuestion: true };
+    const r = selectAndOrder([dangling, cliffhanger], cfg);
+    expect(r.selected.map((c) => c.startSec)).toEqual([300]);
+  });
+
   it("applies the surcharge in the weak tier too", () => {
     const shortWeak = clip(0, 8, 0.45); // 0.45 < 0.35 + 0.15
     const longWeak = clip(100, 140, 0.45);

@@ -527,6 +527,7 @@ clipKind     String?  // TS union ClipKind in shared types; DB stays String for 
 | Duration < 6s | Drop (never extend); 6-8s ships flagged `shortMoment` |
 | Duration > 90s | Start moves forward on strong boundaries only (hook+payoff intact), else drop |
 | All below 0.6 | Weak tier: top 1-2 with floor 0.35 + full eligibility; else 0 clips `NO_VIABLE_MOMENTS` |
+| Lone reaction fragment / unanswered-question ending | Deterministic score surcharges in selection: clips < SHORT_CLIP_STRICT_SEC (12s) and clips whose final sentence is interrogative each pay +0.15 to the tier threshold - LLM rules (bare demonstratives, answer completeness) are the first line, surcharges are the backstop |
 | Whisper chunk failure | Retry; coverage < 0.9 -> retryable technical FAILED; else proceed with explicit `missingRanges`, candidates never cross holes |
 | Critic model down (terminal) | Retryable technical FAILED; kill switch `ANALYZE_ENGINE=legacy` |
 

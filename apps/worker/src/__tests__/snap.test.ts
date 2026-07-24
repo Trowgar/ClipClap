@@ -203,6 +203,18 @@ describe("snapNodes", () => {
     expect(r).toEqual({ ok: false, reason: "no_clean_end" });
   });
 
+  it("flags clips whose final sentence is a question", () => {
+    const nodes = strongNodes().map((n, i) =>
+      i === 7 ? { ...n, text: "Так ли это? Самые ли мы страшные?" } : n
+    );
+    const r = snapNodes(verdict({}), nodes, cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.endsOnQuestion).toBe(true);
+    const r2 = snapNodes(verdict({}), strongNodes(), cfg);
+    if (!r2.ok) throw new Error("unexpected drop");
+    expect(r2.clip.endsOnQuestion).toBe(false);
+  });
+
   it("compresses >90s clips from the start along strong boundaries, keeping the hook", () => {
     const nodes: SentenceNode[] = Array.from({ length: 60 }, (_, i) => ({
       index: i,

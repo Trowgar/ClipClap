@@ -13,6 +13,9 @@ export interface AnalyzeConfig {
    *  ("этот контент - экстремизм", 7s) need to EARN their brevity. */
   shortClipStrictSec: number;
   shortClipScoreBonus: number;
+  /** Clips ENDING on a question pay this surcharge - a dropped "so is it
+   *  true?" with no answer inside is an unfinished clip, not a cliffhanger. */
+  questionEndScoreBonus: number;
   softCap: number;
   hardMinSec: number;
   targetMinSec: number;
@@ -56,6 +59,7 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     weakFallbackMinScore: num(env, "WEAK_FALLBACK_MIN_SCORE", 0.35),
     shortClipStrictSec: num(env, "SHORT_CLIP_STRICT_SEC", 12),
     shortClipScoreBonus: num(env, "SHORT_CLIP_SCORE_BONUS", 0.15),
+    questionEndScoreBonus: num(env, "QUESTION_END_SCORE_BONUS", 0.15),
     softCap: num(env, "CLIP_SOFT_CAP", 12),
     hardMinSec: num(env, "CLIP_HARD_MIN_SEC", 6),
     targetMinSec: num(env, "CLIP_TARGET_MIN_SEC", 8),

@@ -17,7 +17,8 @@ export function selectAndOrder(
   // reject short clips without their target inside, but LLM discipline is not
   // a guarantee - very short clips must beat a raised bar instead.
   const surcharge = (c: SnappedClip) =>
-    c.endSec - c.startSec < cfg.shortClipStrictSec ? cfg.shortClipScoreBonus : 0;
+    (c.endSec - c.startSec < cfg.shortClipStrictSec ? cfg.shortClipScoreBonus : 0) +
+    (c.endsOnQuestion ? cfg.questionEndScoreBonus : 0);
   const strong = clips.filter(
     (c) => c.verdict.score >= cfg.scoreThreshold + surcharge(c)
   );
