@@ -5,28 +5,42 @@ describe("renderPaymentNotification", () => {
   const periodEnd = new Date("2026-06-24T00:00:00Z");
   const graceEndsAt = new Date("2026-06-01T00:00:00Z");
 
-  it("renders subscription_activated in EN with plan and period", () => {
-    const text = renderPaymentNotification("en", {
-      kind: "subscription_activated",
-      plan: "MAX",
-      periodEnd,
-    });
+  it("renders subscription_activated in EN with plan title, period, minutes and instructions", () => {
+    const text = renderPaymentNotification(
+      "en",
+      { kind: "subscription_activated", plan: "MAX", periodEnd },
+      { minutes: 3500 }
+    );
     expect(text).toContain("🎉");
-    expect(text).toContain("MAX");
+    expect(text).toContain("Max"); // title-cased, not "MAX"
     expect(text).toContain("2026-06-24");
-    expect(text).toContain("Send a video");
+    expect(text).toContain("3500");
+    expect(text).toContain("Available");
+    expect(text).toContain("send a video");
   });
 
-  it("renders subscription_activated in RU with plan and period", () => {
-    const text = renderPaymentNotification("ru", {
+  it("renders subscription_activated in RU with plan title, period, minutes and instructions", () => {
+    const text = renderPaymentNotification(
+      "ru",
+      { kind: "subscription_activated", plan: "STARTER", periodEnd },
+      { minutes: 75 }
+    );
+    expect(text).toContain("🎉");
+    expect(text).toContain("Starter");
+    expect(text).toContain("2026-06-24");
+    expect(text).toContain("75");
+    expect(text).toContain("Доступно");
+    expect(text).toContain("пришли видео");
+  });
+
+  it("omits the quota line when minutes are unavailable", () => {
+    const text = renderPaymentNotification("en", {
       kind: "subscription_activated",
-      plan: "STARTER",
+      plan: "PLUS",
       periodEnd,
     });
-    expect(text).toContain("🎉");
-    expect(text).toContain("STARTER");
-    expect(text).toContain("2026-06-24");
-    expect(text).toContain("Пришли видео");
+    expect(text).toContain("Plus");
+    expect(text).not.toContain("Available:");
   });
 
   it("renders subscription_renewed in both locales", () => {
