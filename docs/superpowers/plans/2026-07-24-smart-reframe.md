@@ -1947,11 +1947,13 @@ git commit -m "feat(reframe): render integration - clips, trim reuse, manifest t
 
 Pick any downloaded source (or a small test mp4) and run a one-off script:
 
+Note: tsx resolves relative imports against the SCRIPT's directory, so a script in /tmp must import by absolute path.
+
 ```bash
 docker compose exec worker-render sh -c 'cd /app/apps/worker && cat > /tmp/smoke-reframe.ts <<"EOF"
-import { computeCropPlan } from "./src/reframe";
-import { loadReframeConfig } from "./src/reframe/config";
-import { buildFiltergraph } from "./src/reframe/filtergraph";
+import { computeCropPlan } from "/app/apps/worker/src/reframe";
+import { loadReframeConfig } from "/app/apps/worker/src/reframe/config";
+import { buildFiltergraph } from "/app/apps/worker/src/reframe/filtergraph";
 
 async function main() {
   const [src, start, end] = process.argv.slice(2);
