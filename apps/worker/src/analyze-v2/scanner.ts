@@ -40,9 +40,9 @@ export async function runScanner(
   const maxNode = nodes.length - 1;
   const candidatesPerWindow: number[] = new Array(windows.length).fill(0);
   let windowsFailed = 0;
-  const all: ScanCandidate[] = [];
 
-  await mapWithConcurrency(windows, cfg.maxConcurrency, async (window) => {
+  const perWindow = await mapWithConcurrency(windows, cfg.maxConcurrency, async (window) => {
+    const windowCandidates: ScanCandidate[] = [];
     const result = await callJsonSchema<{ candidates: ScanRow[] }>(client, usage, {
       model: cfg.scanModel,
       system: SCANNER_PROMPT,
@@ -57,7 +57,7 @@ export async function runScanner(
       console.warn(
         `[analyze-v2] scanner window ${window.index} failed: ${"error" in result ? result.error : result.kind}`
       );
-      return;
+      return windowCandidates;
     }
     for (const row of result.data.candidates ?? []) {
       if (
@@ -75,7 +75,7 @@ export async function runScanner(
         row.payoff_node <= row.end_node
           ? row.payoff_node
           : row.start_node;
-      all.push({
+      windowCandidates.push({
         startNode: row.start_node,
         endNode: row.end_node,
         payoffNode: payoff,
@@ -86,7 +86,13 @@ export async function runScanner(
       });
       candidatesPerWindow[window.index] += 1;
     }
+    return windowCandidates;
   });
+
+  // Deterministic order: window index, not API completion order. Candidate ids
+  // are assigned by position downstream and mergeCandidates sorts stably, so a
+  // latency-dependent order changed merges, critic batches and which clips shipped.
+  const all = perWindow.flat();
 
   return {
     candidates: all,

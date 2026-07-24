@@ -64,6 +64,48 @@ describe("runScanner", () => {
     expect(r.candidates[0].interest).toBe(1);
   });
 
+  it("orders candidates by window index even when a later window answers first", async () => {
+    // 20 nodes at these window/overlap settings produce exactly 2 windows:
+    // nodes 0-13 and nodes 10-19. Window 0 is deliberately the SLOW one.
+    const resolved: number[] = [];
+    const client = {
+      chat: {
+        completions: {
+          create: vi.fn(async (body: any) => {
+            const user: string = body.messages.find((m: any) => m.role === "user").content;
+            const isFirstWindow = user.includes("#0 n0.");
+            const w = isFirstWindow ? 0 : 1;
+            await new Promise((r) => setTimeout(r, isFirstWindow ? 40 : 1));
+            resolved.push(w);
+            return ok(
+              isFirstWindow
+                ? [
+                    { start_node: 12, end_node: 13, payoff_node: 12, interest: 0.9, type: "funny", thread: null },
+                    { start_node: 13, end_node: 13, payoff_node: 13, interest: 0.8, type: "story", thread: null },
+                  ]
+                : [
+                    { start_node: 10, end_node: 11, payoff_node: 10, interest: 0.7, type: "funny", thread: null },
+                    { start_node: 11, end_node: 12, payoff_node: 11, interest: 0.6, type: "story", thread: null },
+                  ]
+            );
+          }),
+        },
+      },
+    } as any;
+
+    const r = await runScanner(client, newUsage(), nodes(20), { ...cfg, maxConcurrency: 2 });
+
+    // premise of the test: the API really did answer window 1 before window 0
+    expect(resolved).toEqual([1, 0]);
+    expect(r.telemetry.windowsTotal).toBe(2);
+    expect(r.candidates.map((c) => c.windowIndex)).toEqual([0, 0, 1, 1]);
+    expect(r.candidates.map((c) => c.startNode)).toEqual([12, 13, 10, 11]);
+    for (let i = 1; i < r.candidates.length; i++) {
+      expect(r.candidates[i].windowIndex).toBeGreaterThanOrEqual(r.candidates[i - 1].windowIndex);
+    }
+    expect(r.telemetry.candidatesPerWindow).toEqual([2, 2]);
+  });
+
   it("skips a window whose call fails twice and keeps going", async () => {
     let call = 0;
     const client = {
