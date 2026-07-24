@@ -4,6 +4,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import type { Highlight } from "@clipclap/shared";
+import type { FilterSpec } from "../reframe/types";
 
 const execFileAsync = promisify(execFile);
 
@@ -12,41 +13,62 @@ export interface CutResult {
   clipPath: string;
 }
 
+/**
+ * Pure argv builder so the filter wiring is unit-testable. When a FilterSpec
+ * is present it wins outright - its graph already contains the subtitle
+ * snippet, so extraFilter is ignored. Complex specs must label their video
+ * output [vout].
+ */
+export function buildCutArgs(
+  videoPath: string,
+  start: number,
+  end: number,
+  outPath: string,
+  extraFilter?: string,
+  filterSpec?: FilterSpec | null
+): string[] {
+  const head = ["-nostdin", "-ss", String(start), "-to", String(end), "-i", videoPath];
+  const encode = [
+    "-c:v", "libx264",
+    "-preset", "veryfast",
+    "-crf", "23",
+    "-c:a", "aac",
+    "-b:a", "128k",
+    "-movflags", "+faststart",
+  ];
+  if (filterSpec?.kind === "complex") {
+    return [
+      ...head,
+      "-filter_complex", filterSpec.graph,
+      "-map", "[vout]",
+      "-map", "0:a?",
+      ...encode,
+      outPath,
+      "-y",
+    ];
+  }
+  const vf = filterSpec
+    ? filterSpec.graph
+    : extraFilter
+      ? `${buildCropFilter()},${extraFilter}`
+      : buildCropFilter();
+  return [...head, "-vf", vf, ...encode, outPath, "-y"];
+}
+
 export async function cutClips(
   videoPath: string,
   highlights: Highlight[],
-  extraFilter?: string
+  extraFilter?: string,
+  filterSpec?: FilterSpec | null
 ): Promise<CutResult[]> {
   const results: CutResult[] = [];
 
   for (const highlight of highlights) {
     const clipPath = join(tmpdir(), `clipclap-clip-${randomUUID()}.mp4`);
-
-    await execFileAsync("ffmpeg", [
-      "-ss",
-      String(highlight.start),
-      "-to",
-      String(highlight.end),
-      "-i",
-      videoPath,
-      "-vf",
-      extraFilter ? `${buildCropFilter()},${extraFilter}` : buildCropFilter(),
-      "-c:v",
-      "libx264",
-      "-preset",
-      "veryfast",
-      "-crf",
-      "23",
-      "-c:a",
-      "aac",
-      "-b:a",
-      "128k",
-      "-movflags",
-      "+faststart",
-      clipPath,
-      "-y",
-    ]);
-
+    await execFileAsync(
+      "ffmpeg",
+      buildCutArgs(videoPath, highlight.start, highlight.end, clipPath, extraFilter, filterSpec)
+    );
     results.push({ highlight, clipPath });
   }
 
@@ -61,24 +83,15 @@ export async function trimClipFile(
   const clipPath = join(tmpdir(), `clipclap-trim-${randomUUID()}.mp4`);
 
   await execFileAsync("ffmpeg", [
-    "-ss",
-    String(start),
-    "-to",
-    String(end),
-    "-i",
-    videoPath,
-    "-c:v",
-    "libx264",
-    "-preset",
-    "veryfast",
-    "-crf",
-    "23",
-    "-c:a",
-    "aac",
-    "-b:a",
-    "128k",
-    "-movflags",
-    "+faststart",
+    "-ss", String(start),
+    "-to", String(end),
+    "-i", videoPath,
+    "-c:v", "libx264",
+    "-preset", "veryfast",
+    "-crf", "23",
+    "-c:a", "aac",
+    "-b:a", "128k",
+    "-movflags", "+faststart",
     clipPath,
     "-y",
   ]);
@@ -88,10 +101,9 @@ export async function trimClipFile(
 
 /**
  * Builds an FFmpeg filter to crop video to 9:16 vertical format.
- * Centers the crop on the original video.
+ * Centers the crop on the original video. Legacy fallback path - kept
+ * verbatim as the REFRAME_ENGINE=off behavior and the failure fallback.
  */
 function buildCropFilter(): string {
-  // crop to 9:16 from center of original video
-  // if source is 16:9 (1920x1080) → crop to 607x1080 center
   return "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920";
 }
