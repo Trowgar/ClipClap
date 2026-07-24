@@ -56,14 +56,14 @@ describe("bot i18n", () => {
     expect(parseLangCommand("/lang@clipclapbot")).toBe("usage");
   });
 
-  it("parses explicit en/ru/auto in either language", () => {
+  it("parses explicit en/ru in either language", () => {
     expect(parseLangCommand("/lang en")).toBe("en");
     expect(parseLangCommand("/lang EN")).toBe("en");
     expect(parseLangCommand("/lang английский")).toBe("en");
     expect(parseLangCommand("/lang ru")).toBe("ru");
     expect(parseLangCommand("/lang Русский")).toBe("ru");
-    expect(parseLangCommand("/lang auto")).toBe("auto");
-    expect(parseLangCommand("/lang авто")).toBe("auto");
+    expect(parseLangCommand("/lang auto")).toBe("usage");
+    expect(parseLangCommand("/lang авто")).toBe("usage");
     expect(parseLangCommand("/lang@clipclapbot en")).toBe("en");
   });
 
@@ -84,8 +84,8 @@ describe("bot i18n", () => {
   });
 
   it("exposes settingsMenuPrompt in both locales", () => {
-    expect(t("en").settingsMenuPrompt).toBe("Settings:");
-    expect(t("ru").settingsMenuPrompt).toBe("Настройки:");
+    expect(t("en").settingsMenuPrompt).toBe("⚙️ Settings");
+    expect(t("ru").settingsMenuPrompt).toBe("⚙️ Настройки");
   });
 
   it("keeps bot description within Telegram's 512-char limit per locale", () => {
@@ -145,10 +145,8 @@ describe("bot i18n", () => {
   it("exposes localized language-button labels", () => {
     expect(t("en").langBtnEn).toContain("English");
     expect(t("en").langBtnRu).toContain("Русский");
-    expect(t("en").langBtnAuto.toLowerCase()).toContain("auto");
     expect(t("ru").langBtnEn).toContain("English");
     expect(t("ru").langBtnRu).toContain("Русский");
-    expect(t("ru").langBtnAuto.toLowerCase()).toContain("авто");
   });
 
   it("renders accountText NONE variant in both locales", () => {

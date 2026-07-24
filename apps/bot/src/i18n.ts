@@ -7,7 +7,7 @@ export function detectLocale(languageCode?: string | null): Locale {
   return "en";
 }
 
-export type LangChoice = "en" | "ru" | "auto";
+export type LangChoice = "en" | "ru";
 
 export function parseLangCommand(text: string): LangChoice | "usage" | null {
   if (!/^\/lang(@\S+)?(\s|$)/.test(text)) return null;
@@ -18,7 +18,6 @@ export function parseLangCommand(text: string): LangChoice | "usage" | null {
   if (!arg) return "usage";
   if (arg === "en" || arg === "english" || arg === "англ" || arg === "английский") return "en";
   if (arg === "ru" || arg === "russian" || arg === "рус" || arg === "русский") return "ru";
-  if (arg === "auto" || arg === "авто") return "auto";
   return "usage";
 }
 
@@ -51,7 +50,6 @@ export interface Dict {
   langUsage: string;
   langSetEn: string;
   langSetRu: string;
-  langSetAuto: string;
   planStarterWeeklyBtn: string;
   planStarterBtn: string;
   planPlusBtn: string;
@@ -81,13 +79,19 @@ export interface Dict {
   }) => string;
   planNone: string;
   settingsMenuPrompt: string;
+  settingsLangBtn: string;
+  settingsVideoBtn: string;
+  settingsBackBtn: string;
+  langMenuPrompt: string;
+  videoSettingsPrompt: string;
+  subtitlesToggleBtn: (enabled: boolean) => string;
+  subtitlesAck: (enabled: boolean) => string;
   menuHint: string;
   botDescription: string;
   botShortDescription: string;
   commands: Array<{ command: string; description: string }>;
   langBtnEn: string;
   langBtnRu: string;
-  langBtnAuto: string;
   manageSubscriptionBtn: string;
   editInBrowserBtn: string;
   checkingLink: string;
@@ -145,11 +149,9 @@ const en: Dict = {
         : "Done. I watched the whole video but did not find moments strong enough for clips - no clips this time. Try a video with more talk, emotion, or story.",
   lowQualityNote: "Heads up: no strong moments found - this is the best available.",
   blocked: (reason) => `${reason}\n\n💳 Plans - choose or manage your subscription.`,
-  langUsage:
-    "Usage: /lang en - English, /lang ru - Russian, /lang auto - follow Telegram language.",
+  langUsage: "Usage: /lang en - English, /lang ru - Russian.",
   langSetEn: "Language set to English.",
   langSetRu: "Язык установлен: русский.",
-  langSetAuto: "Auto language detection enabled.",
   planStarterWeeklyBtn: "🌱 Starter - €3 / week",
   planStarterBtn: "💎 Starter - €9 / month",
   planPlusBtn: "🚀 Plus - €29 / month",
@@ -171,7 +173,7 @@ const en: Dict = {
       : `You're on ${plan} ✅\nManage or cancel your subscription in Tribute.`,
   noPlanNudge: "👉 Tap 💳 Plans to subscribe.",
   helpText: (url) =>
-    `Send me a video - I'll cut it into vertical clips with subtitles.\nYou can also paste a URL (YouTube, Twitch, TikTok, Vimeo, X and more).\n\nLimits: up to 3 hours source, up to 2 GB file size.\n\nCommands:\n• /start - main menu\n• /link - connect an existing clipclap.io account\n• /referral - your referral link & earnings\n• /lang en|ru|auto - switch language\n\nWebsite: ${url}/dashboard`,
+    `Send me a video - I'll cut it into vertical clips with subtitles.\nYou can also paste a URL (YouTube, Twitch, TikTok, Vimeo, X and more).\n\nLimits: up to 3 hours source, up to 2 GB file size.\n\nCommands:\n• /start - main menu\n• /link - connect an existing clipclap.io account\n• /referral - your referral link & earnings\n• /lang en|ru - switch language\n\nWebsite: ${url}/dashboard`,
   accountText: ({
     plan,
     billingCycle,
@@ -219,7 +221,18 @@ const en: Dict = {
     return `${planLine}\n${renewLine}\n\n${minutesLine}\n${topUpLine}\n${storageLine}\n${totalLine}`.replace(/\n\n\n+/g, "\n\n");
   },
   planNone: "no active plan",
-  settingsMenuPrompt: "Settings:",
+  settingsMenuPrompt: "⚙️ Settings",
+  settingsLangBtn: "🌐 Language",
+  settingsVideoBtn: "🎬 Video settings",
+  settingsBackBtn: "⬅️ Menu",
+  langMenuPrompt: "Choose your language:",
+  videoSettingsPrompt: "🎬 Video settings",
+  subtitlesToggleBtn: (enabled) =>
+    enabled ? "Subtitles: on ✅" : "Subtitles: off ⬜",
+  subtitlesAck: (enabled) =>
+    enabled
+      ? "Subtitles turned on."
+      : "Subtitles turned off. New videos won't have burned-in subtitles.",
   menuHint: "Tap the menu buttons below for quick actions.",
   botDescription:
     "ClipClap turns long videos into short vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nSend a video (up to 3 hours) - I'll find the highlights, cut them and burn in subtitles automatically.\n\nHow it works:\n1. Pick a plan\n2. Send a video\n3. Receive your clips\n\nTap START to begin.",
@@ -236,7 +249,6 @@ const en: Dict = {
   ],
   langBtnEn: "🇬🇧 English",
   langBtnRu: "🇷🇺 Русский",
-  langBtnAuto: "🤖 Auto-detect",
   manageSubscriptionBtn: "🔧 Manage subscription",
   editInBrowserBtn: "✂️ Edit in browser",
   checkingLink: "Checking link…",
@@ -300,11 +312,9 @@ const ru: Dict = {
         : "Готово. Я просмотрел всё видео, но не нашёл достаточно сильных моментов - клипов в этот раз нет. Попробуй видео с большим количеством речи, эмоций или истории.",
   lowQualityNote: "Внимание: сильных моментов не нашлось - это лучшее из доступного.",
   blocked: (reason) => `${reason}\n\n💳 Тарифы - выбрать или управлять подпиской.`,
-  langUsage:
-    "Использование: /lang ru - русский, /lang en - английский, /lang auto - по языку Telegram.",
+  langUsage: "Использование: /lang ru - русский, /lang en - английский.",
   langSetEn: "Language set to English.",
   langSetRu: "Язык установлен: русский.",
-  langSetAuto: "Авто-определение языка включено.",
   planStarterWeeklyBtn: "🌱 Starter - €3 / неделя",
   planStarterBtn: "💎 Starter - €9 / мес",
   planPlusBtn: "🚀 Plus - €29 / мес",
@@ -326,7 +336,7 @@ const ru: Dict = {
       : `Ты на плане ${plan} ✅\nУправление и отмена - в Tribute.`,
   noPlanNudge: "👉 Нажми 💳 Тарифы, чтобы оформить подписку.",
   helpText: (url) =>
-    `Пришли видео - нарежу вертикальные клипы с субтитрами.\nМожно также прислать ссылку (YouTube, Twitch, TikTok, Vimeo, X и др.).\n\nЛимиты: до 3 часов исходник, до 2 ГБ размер файла.\n\nКоманды:\n• /start - главное меню\n• /link - привязать существующий аккаунт clipclap.io\n• /referral - реферальная ссылка и доход\n• /lang en|ru|auto - сменить язык\n\nСайт: ${url}/dashboard`,
+    `Пришли видео - нарежу вертикальные клипы с субтитрами.\nМожно также прислать ссылку (YouTube, Twitch, TikTok, Vimeo, X и др.).\n\nЛимиты: до 3 часов исходник, до 2 ГБ размер файла.\n\nКоманды:\n• /start - главное меню\n• /link - привязать существующий аккаунт clipclap.io\n• /referral - реферальная ссылка и доход\n• /lang en|ru - сменить язык\n\nСайт: ${url}/dashboard`,
   accountText: ({
     plan,
     billingCycle,
@@ -381,7 +391,18 @@ const ru: Dict = {
     return `${planLine}\n${renewLine}\n\n${minutesLine}\n${topUpLine}\n${storageLine}\n${totalLine}`.replace(/\n\n\n+/g, "\n\n");
   },
   planNone: "нет активного",
-  settingsMenuPrompt: "Настройки:",
+  settingsMenuPrompt: "⚙️ Настройки",
+  settingsLangBtn: "🌐 Язык",
+  settingsVideoBtn: "🎬 Настройки видео",
+  settingsBackBtn: "⬅️ Меню",
+  langMenuPrompt: "Выбери язык:",
+  videoSettingsPrompt: "🎬 Настройки видео",
+  subtitlesToggleBtn: (enabled) =>
+    enabled ? "Субтитры: вкл ✅" : "Субтитры: выкл ⬜",
+  subtitlesAck: (enabled) =>
+    enabled
+      ? "Субтитры включены."
+      : "Субтитры выключены. На новых видео субтитров не будет.",
   menuHint: "Кнопки меню снизу - быстрый доступ к действиям.",
   botDescription:
     "ClipClap нарезает длинные видео на короткие вертикальные клипы с субтитрами - для TikTok, Reels и Shorts.\n\nПришли видео (до 3 часов) - найду самые цепляющие моменты, нарежу и наложу субтитры автоматически.\n\nКак это работает:\n1. Выбери тариф\n2. Пришли видео\n3. Получи клипы\n\nЖми START.",
@@ -398,7 +419,6 @@ const ru: Dict = {
   ],
   langBtnEn: "🇬🇧 English",
   langBtnRu: "🇷🇺 Русский",
-  langBtnAuto: "🤖 Авто-определение",
   manageSubscriptionBtn: "🔧 Управление подпиской",
   editInBrowserBtn: "✂️ Редактировать в браузере",
   checkingLink: "Проверяю ссылку…",

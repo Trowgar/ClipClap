@@ -56,7 +56,6 @@ export const CALLBACK_LINK_ACCOUNT = "link_acc";
 
 export const CALLBACK_LANG_EN = "lang_en";
 export const CALLBACK_LANG_RU = "lang_ru";
-export const CALLBACK_LANG_AUTO = "lang_auto";
 
 export function isReferralAdmin(
   telegramId: string,
@@ -70,13 +69,10 @@ export function isReferralAdmin(
     .includes(telegramId);
 }
 
-export function parseLangCallback(
-  data: string | undefined
-): "en" | "ru" | "auto" | null {
+export function parseLangCallback(data: string | undefined): "en" | "ru" | null {
   if (!data) return null;
   if (data === CALLBACK_LANG_EN) return "en";
   if (data === CALLBACK_LANG_RU) return "ru";
-  if (data === CALLBACK_LANG_AUTO) return "auto";
   return null;
 }
 
@@ -543,16 +539,11 @@ async function handleCallbackQuery(
       return;
     }
     case CALLBACK_LANG_EN:
-    case CALLBACK_LANG_RU:
-    case CALLBACK_LANG_AUTO: {
+    case CALLBACK_LANG_RU: {
       const choice = parseLangCallback(query.data)!;
       const ack = await applyLangChoice(query.from, choice);
       await client
-        .editMessageText(
-          query.message.chat.id,
-          query.message.message_id,
-          ack
-        )
+        .editMessageText(query.message.chat.id, query.message.message_id, ack)
         .catch(() => undefined);
       return;
     }
@@ -570,12 +561,11 @@ function firstChoiceKeyboard(dict: Dict): InlineKeyboardMarkup {
   };
 }
 
-function languageKeyboard(dict: Dict): InlineKeyboardMarkup {
+export function languageKeyboard(dict: Dict): InlineKeyboardMarkup {
   return {
     inline_keyboard: [
       [{ text: dict.langBtnEn, callback_data: CALLBACK_LANG_EN }],
       [{ text: dict.langBtnRu, callback_data: CALLBACK_LANG_RU }],
-      [{ text: dict.langBtnAuto, callback_data: CALLBACK_LANG_AUTO }],
     ],
   };
 }
@@ -707,31 +697,15 @@ export async function handleSubscribeCallback(
 
 async function applyLangChoice(
   from: TelegramUser,
-  choice: "en" | "ru" | "auto"
+  choice: "en" | "ru"
 ): Promise<string> {
   const user = await resolveTelegramUser(from);
-  const stored: string | null = choice === "auto" ? null : choice;
   await prisma.user.update({
     where: { id: user.id },
-    data: { telegramLocale: stored },
+    data: { telegramLocale: choice },
   });
-
-  const effectiveLocale: Locale =
-    choice === "en"
-      ? "en"
-      : choice === "ru"
-        ? "ru"
-        : detectLocale(from.language_code);
-  const dict = t(effectiveLocale);
-
-  const ack =
-    choice === "en"
-      ? dict.langSetEn
-      : choice === "ru"
-        ? dict.langSetRu
-        : dict.langSetAuto;
-
-  return ack;
+  const dict = t(choice);
+  return choice === "en" ? dict.langSetEn : dict.langSetRu;
 }
 
 async function handleLang(
