@@ -95,8 +95,10 @@ export interface Dict {
   referralInfo: (web: string, tg: string, earned: string, pending: string) => string;
   balanceInfo: (available: string, clearing: string) => string;
   payBtn: string;
-  checkoutReady: string;
+  checkoutReady: (plan: string) => string;
   checkoutError: string;
+  cycleWeekly: string;
+  cycleMonthly: string;
 }
 
 const en: Dict = {
@@ -158,10 +160,10 @@ const en: Dict = {
   menuAffiliate: "🤝 Affiliate",
   menuPlans: "💳 Plans",
   plansText:
-    "💳 ClipClap Plans\nPay once - start using. Cancel anytime in Tribute.\n\n" +
-    "🌱 Starter - €3/wk · €9/mo - 75 / 270 min\n" +
-    "🚀 Plus - €29/mo - 1000 min\n" +
-    "👑 Max - €89/mo - 3500 min\n\n" +
+    "💳 <b>ClipClap Plans</b>\nPay once - start using. Cancel anytime in Tribute.\n\n" +
+    "🌱 <b>Starter</b> - €3/wk · €9/mo\n   • 75 min/wk (270 min/mo)\n   • 20 clips stored\n   • 7-day retention\n\n" +
+    "🚀 <b>Plus</b> - €29/mo\n   • 1000 min/mo\n   • 150 clips\n   • 30-day retention\n\n" +
+    "👑 <b>Max</b> - €89/mo\n   • 3500 min/mo\n   • 1000 clips\n   • 90-day retention\n   • ⚡ priority queue\n\n" +
     "Pick a plan below 👇",
   plansSubscribed: (plan, periodEnd) =>
     periodEnd
@@ -245,8 +247,11 @@ const en: Dict = {
   balanceInfo: (available, clearing) =>
     `Wallet balance:\nAvailable: $${available}\nClearing: $${clearing} (commissions still in a 14-day hold)\n\nWithdraw on clipclap.io/dashboard/payouts`,
   payBtn: "💳 Pay",
-  checkoutReady: "Tap Pay to complete your subscription. You'll return to the bot after payment.",
+  checkoutReady: (plan) =>
+    `Tap "Pay" to subscribe to ${plan}. You'll return to the bot after payment.`,
   checkoutError: "Could not start checkout. Please try again in a moment.",
+  cycleWeekly: "weekly",
+  cycleMonthly: "monthly",
 };
 
 const ru: Dict = {
@@ -310,10 +315,10 @@ const ru: Dict = {
   menuAffiliate: "🤝 Рефералы",
   menuPlans: "💳 Тарифы",
   plansText:
-    "💳 Тарифы ClipClap\nОплатил - пользуешься. Отменить можно в любой момент в Tribute.\n\n" +
-    "🌱 Starter - €3/нед · €9/мес - 75 / 270 мин\n" +
-    "🚀 Plus - €29/мес - 1000 мин\n" +
-    "👑 Max - €89/мес - 3500 мин\n\n" +
+    "💳 <b>Тарифы ClipClap</b>\nОплатил - пользуешься. Отменить можно в любой момент в Tribute.\n\n" +
+    "🌱 <b>Starter</b> - €3/нед · €9/мес\n   • 75 мин/нед (270 мин/мес)\n   • 20 клипов в хранилище\n   • хранение 7 дней\n\n" +
+    "🚀 <b>Plus</b> - €29/мес\n   • 1000 мин/мес\n   • 150 клипов\n   • хранение 30 дней\n\n" +
+    "👑 <b>Max</b> - €89/мес\n   • 3500 мин/мес\n   • 1000 клипов\n   • хранение 90 дней\n   • ⚡ приоритетная очередь\n\n" +
     "Выбери план ниже 👇",
   plansSubscribed: (plan, periodEnd) =>
     periodEnd
@@ -404,8 +409,11 @@ const ru: Dict = {
   balanceInfo: (available, clearing) =>
     `Баланс кошелька:\nДоступно: $${available}\nВ обработке: $${clearing} (комиссии ещё в 14-дневном холде)\n\nВывод на clipclap.io/dashboard/payouts`,
   payBtn: "💳 Оплатить",
-  checkoutReady: "Нажми «Оплатить», чтобы оформить подписку. После оплаты вернёшься в бота.",
+  checkoutReady: (plan) =>
+    `Нажми «Оплатить», чтобы оформить подписку ${plan}. После оплаты вернёшься в бота.`,
   checkoutError: "Не удалось начать оплату. Попробуй ещё раз через минуту.",
+  cycleWeekly: "недельный",
+  cycleMonthly: "месячный",
 };
 
 const dictionaries: Record<Locale, Dict> = { en, ru };

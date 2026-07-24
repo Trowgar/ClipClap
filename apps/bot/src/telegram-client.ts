@@ -30,13 +30,14 @@ export class TelegramClient {
   async sendMessage(
     chatId: string | number,
     text: string,
-    options?: { replyMarkup?: ReplyMarkup }
+    options?: { replyMarkup?: ReplyMarkup; parseMode?: "HTML" | "MarkdownV2" }
   ) {
     return this.request("sendMessage", {
       chat_id: chatId,
       text,
       disable_web_page_preview: true,
       reply_markup: options?.replyMarkup,
+      parse_mode: options?.parseMode,
     });
   }
 

@@ -333,6 +333,7 @@ export async function sendPlansView(
   if (!existing) {
     await client.sendMessage(message.chat.id, dict.plansText, {
       replyMarkup: plansKeyboard(dict),
+      parseMode: "HTML",
     });
     return;
   }
@@ -341,6 +342,7 @@ export async function sendPlansView(
   if (usage.plan === "NONE" || !usage.subscriptionState.live) {
     await client.sendMessage(message.chat.id, dict.plansText, {
       replyMarkup: plansKeyboard(dict),
+      parseMode: "HTML",
     });
     return;
   }
@@ -592,6 +594,8 @@ export function plansKeyboard(dict: Dict): InlineKeyboardMarkup {
 export type SubPlan = "STARTER" | "PLUS" | "MAX";
 export type SubCycle = "WEEKLY" | "MONTHLY";
 
+const PLAN_TITLES: Record<SubPlan, string> = { STARTER: "Starter", PLUS: "Plus", MAX: "Max" };
+
 export function parseSubCallback(
   data: string | undefined
 ): { plan: SubPlan; cycle: SubCycle } | null {
@@ -688,8 +692,11 @@ export async function handleSubscribeCallback(
       payUrl = result.webappPaymentUrl;
     }
 
+    const planLabel = `${PLAN_TITLES[parsed.plan]} (${
+      parsed.cycle === "WEEKLY" ? dict.cycleWeekly : dict.cycleMonthly
+    })`;
     await client
-      .editMessageText(chatId, messageId, dict.checkoutReady, {
+      .editMessageText(chatId, messageId, dict.checkoutReady(planLabel), {
         replyMarkup: { inline_keyboard: [[{ text: dict.payBtn, url: payUrl }]] },
       })
       .catch(() => undefined);

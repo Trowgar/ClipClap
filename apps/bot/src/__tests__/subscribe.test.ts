@@ -71,6 +71,8 @@ describe("handleSubscribeCallback", () => {
     expect(flowMocks.orderCreate).toHaveBeenCalled();
     const editArgs = (client as unknown as { editMessageText: ReturnType<typeof vi.fn> }).editMessageText.mock.calls[0];
     expect(JSON.stringify(editArgs)).toContain("https://pay");
+    // The checkout message names the plan the user is subscribing to.
+    expect(JSON.stringify(editArgs)).toContain("Max");
   });
 
   it("reuses a fresh PENDING order instead of creating a new one", async () => {
