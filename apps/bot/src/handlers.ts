@@ -104,6 +104,24 @@ export function matchSettingsAction(text: string): SettingsAction | null {
   return null;
 }
 
+export function matchReferralAction(text: string): "withdraw" | null {
+  for (const loc of ["en", "ru"] as const) {
+    if (text === t(loc).referralWithdrawBtn) return "withdraw";
+  }
+  return null;
+}
+
+function referralKeyboard(dict: Dict): ReplyKeyboardMarkup {
+  return {
+    keyboard: [
+      [{ text: dict.referralWithdrawBtn }],
+      [{ text: dict.settingsBackBtn }],
+    ],
+    is_persistent: true,
+    resize_keyboard: true,
+  };
+}
+
 function settingsKeyboard(dict: Dict): ReplyKeyboardMarkup {
   return {
     keyboard: [
@@ -213,6 +231,11 @@ export async function handleUpdate(
   const settingsAction = matchSettingsAction(text);
   if (settingsAction) {
     await handleSettingsAction(client, message, settingsAction, dict);
+    return;
+  }
+
+  if (matchReferralAction(text) === "withdraw") {
+    await client.sendMessage(message.chat.id, dict.referralWithdrawStub);
     return;
   }
 
@@ -1129,7 +1152,8 @@ async function handleReferral(
       tg,
       stats.earnedUsd.toFixed(2),
       stats.pendingUsd.toFixed(2)
-    )
+    ),
+    { replyMarkup: referralKeyboard(dict) }
   );
 }
 

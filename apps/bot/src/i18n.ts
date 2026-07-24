@@ -97,6 +97,8 @@ export interface Dict {
   checkingLink: string;
   urlAccessFailed: string;
   referralInfo: (web: string, tg: string, earned: string, pending: string) => string;
+  referralWithdrawBtn: string;
+  referralWithdrawStub: string;
   balanceInfo: (available: string, clearing: string) => string;
   payBtn: string;
   checkoutReady: (plan: string) => string;
@@ -255,9 +257,11 @@ const en: Dict = {
   urlAccessFailed:
     "Couldn't access the video at that link. Try a different URL or upload the file directly.",
   referralInfo: (web, tg, earned, pending) =>
-    `Your referral links:\nWeb: ${web}\nTelegram: ${tg}\n\nReferral earnings: $${earned}\nPending (14-day hold): $${pending}\n\nWithdraw on clipclap.io/dashboard/payouts`,
+    `Your referral links:\nWeb: ${web}\nTelegram: ${tg}\n\nReferral earnings: $${earned}\nPending (14-day hold): $${pending}`,
+  referralWithdrawBtn: "💸 Request withdrawal",
+  referralWithdrawStub: "You don't have enough funds to withdraw yet.",
   balanceInfo: (available, clearing) =>
-    `Wallet balance:\nAvailable: $${available}\nClearing: $${clearing} (commissions still in a 14-day hold)\n\nWithdraw on clipclap.io/dashboard/payouts`,
+    `Wallet balance:\nAvailable: $${available}\nClearing: $${clearing} (commissions still in a 14-day hold)`,
   payBtn: "💳 Pay",
   checkoutReady: (plan) =>
     `Tap "Pay" to subscribe to ${plan}. You'll return to the bot after payment.`,
@@ -425,9 +429,11 @@ const ru: Dict = {
   urlAccessFailed:
     "Не удалось получить видео по этой ссылке. Попробуй другую ссылку или загрузи файл напрямую.",
   referralInfo: (web, tg, earned, pending) =>
-    `Ваши реферальные ссылки:\nСайт: ${web}\nTelegram: ${tg}\n\nЗаработано с рефералов: $${earned}\nВ ожидании (14-дневный холд): $${pending}\n\nВывод на clipclap.io/dashboard/payouts`,
+    `Ваши реферальные ссылки:\nСайт: ${web}\nTelegram: ${tg}\n\nЗаработано с рефералов: $${earned}\nВ ожидании (14-дневный холд): $${pending}`,
+  referralWithdrawBtn: "💸 Запросить вывод средств",
+  referralWithdrawStub: "У вас недостаточно средств для вывода.",
   balanceInfo: (available, clearing) =>
-    `Баланс кошелька:\nДоступно: $${available}\nВ обработке: $${clearing} (комиссии ещё в 14-дневном холде)\n\nВывод на clipclap.io/dashboard/payouts`,
+    `Баланс кошелька:\nДоступно: $${available}\nВ обработке: $${clearing} (комиссии ещё в 14-дневном холде)`,
   payBtn: "💳 Оплатить",
   checkoutReady: (plan) =>
     `Нажми «Оплатить», чтобы оформить подписку ${plan}. После оплаты вернёшься в бота.`,
