@@ -82,3 +82,17 @@ describe("handleSubtitlesToggle", () => {
     expect(JSON.stringify(edit)).toContain("off"); // toggled to off
   });
 });
+
+import { matchSettingsAction } from "../handlers";
+
+describe("matchSettingsAction", () => {
+  it("matches the three sub-menu buttons in both locales", () => {
+    expect(matchSettingsAction("🌐 Language")).toBe("lang");
+    expect(matchSettingsAction("🌐 Язык")).toBe("lang");
+    expect(matchSettingsAction("🎬 Video settings")).toBe("video");
+    expect(matchSettingsAction("🎬 Настройки видео")).toBe("video");
+    expect(matchSettingsAction("⬅️ Menu")).toBe("menu");
+    expect(matchSettingsAction("⬅️ Меню")).toBe("menu");
+    expect(matchSettingsAction("something else")).toBeNull();
+  });
+});

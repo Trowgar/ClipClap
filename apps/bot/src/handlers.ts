@@ -92,6 +92,29 @@ export function matchMenuAction(text: string): MenuAction | null {
   return null;
 }
 
+export type SettingsAction = "lang" | "video" | "menu";
+
+export function matchSettingsAction(text: string): SettingsAction | null {
+  for (const loc of ["en", "ru"] as const) {
+    const d = t(loc);
+    if (text === d.settingsLangBtn) return "lang";
+    if (text === d.settingsVideoBtn) return "video";
+    if (text === d.settingsBackBtn) return "menu";
+  }
+  return null;
+}
+
+function settingsKeyboard(dict: Dict): ReplyKeyboardMarkup {
+  return {
+    keyboard: [
+      [{ text: dict.settingsLangBtn }, { text: dict.settingsVideoBtn }],
+      [{ text: dict.settingsBackBtn }],
+    ],
+    is_persistent: true,
+    resize_keyboard: true,
+  };
+}
+
 function buildMainMenu(dict: Dict): ReplyKeyboardMarkup {
   return {
     keyboard: [
@@ -187,6 +210,12 @@ export async function handleUpdate(
     return;
   }
 
+  const settingsAction = matchSettingsAction(text);
+  if (settingsAction) {
+    await handleSettingsAction(client, message, settingsAction, dict);
+    return;
+  }
+
   const source = getVideoSource(message);
   if (source) {
     await handleVideo(client, message, from, source, dict, config);
@@ -227,7 +256,7 @@ async function handleMenuAction(
     }
     case "settings": {
       await client.sendMessage(message.chat.id, dict.settingsMenuPrompt, {
-        replyMarkup: languageKeyboard(dict),
+        replyMarkup: settingsKeyboard(dict),
       });
       return;
     }
@@ -237,6 +266,35 @@ async function handleMenuAction(
     }
     case "plans": {
       await sendPlansView(client, message, dict, config, existing);
+      return;
+    }
+  }
+}
+
+async function handleSettingsAction(
+  client: TelegramClient,
+  message: TelegramMessage,
+  action: SettingsAction,
+  dict: Dict
+) {
+  switch (action) {
+    case "lang": {
+      await client.sendMessage(message.chat.id, dict.langMenuPrompt, {
+        replyMarkup: languageKeyboard(dict),
+      });
+      return;
+    }
+    case "video": {
+      const user = await resolveTelegramUser(message.from!);
+      await client.sendMessage(message.chat.id, dict.videoSettingsPrompt, {
+        replyMarkup: subtitlesKeyboard(dict, user.subtitlesEnabled),
+      });
+      return;
+    }
+    case "menu": {
+      await client.sendMessage(message.chat.id, dict.welcomeBack, {
+        replyMarkup: buildMainMenu(dict),
+      });
       return;
     }
   }
