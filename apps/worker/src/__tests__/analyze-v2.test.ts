@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { analyzeHighlightsV2 } from "../analyze-v2";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
-import { AnalyzeRefusalError, AnalyzeTechnicalError } from "../analyze-v2/critic";
+import { AnalyzeTechnicalError } from "../analyze-v2/critic";
 import type { TranscriptionResult, WhisperSegment } from "@clipclap/shared";
 
 const cfg = loadAnalyzeConfig({});
@@ -347,7 +347,12 @@ describe("analyzeHighlightsV2", () => {
     await expect(run).rejects.toThrow(/0 .*1 candidate/);
   });
 
-  it("throws AnalyzeRefusalError when EVERY candidate is refused", async () => {
+  it("throws AnalyzeTechnicalError when EVERY candidate is refused", async () => {
+    // Genuinely refusal-only, unlike the fixture 6434d4d gave that name to.
+    // Nothing was judged, so the empty result is not an answer and the job must
+    // fail (FAILED bills nothing). It stays the ordinary retryable failure: the
+    // retry re-rolls the scanner, so the next attempt does not even present the
+    // same candidate windows.
     const refusal = {
       choices: [{ message: { refusal: "I cannot help with that." }, finish_reason: "stop" }],
       usage: { prompt_tokens: 200, completion_tokens: 5 },
@@ -360,7 +365,7 @@ describe("analyzeHighlightsV2", () => {
       retryDelayMs: 1,
     });
 
-    await expect(run).rejects.toThrow(AnalyzeRefusalError);
+    await expect(run).rejects.toThrow(AnalyzeTechnicalError);
   });
 
   it("real verdicts that all say keep:false stay a content outcome", async () => {
@@ -770,33 +775,82 @@ describe("analyzeHighlightsV2", () => {
     await expect(run).rejects.toThrow(/truncated 2/);
   });
 
-  it("a refusal-only run fails as a refusal, not as a temporary problem", async () => {
-    // Rewritten from 6db3070's "throws when a refused candidate is the only one
-    // missing", which asserted nothing but `AnalyzeTechnicalError`.
+  it("one refusal among judged candidates fails, and stays retryable", async () => {
+    // Renamed from "a refusal-only run fails as a refusal, not as a temporary
+    // problem" (6434d4d), which never was refusal-only: it returned a real
+    // keep:false verdict for c0 and refused only c1, so the name and the
+    // rationale under it described a population the fixture did not build.
+    // Widened to 3 judged + 1 refused, which is the shape that made the point
+    // unmissable: 39-of-40 read and rejected is not "we could not read this".
     //
-    // The THROW is still right and is unchanged: a refusal is not a verdict, so
+    // The THROW is unchanged and still right: a refusal is not a verdict, so
     // "no viable moments" cannot speak for that candidate, and DONE would bill
-    // the user for a claim about material the model declined to read.
+    // the user for a claim about material nobody judged.
     //
-    // What that assertion left free is the half the user actually sees. Every
-    // AnalyzeTechnicalError is tagged ANALYSIS_UNAVAILABLE by stages/analyze.ts,
-    // and that copy says "a temporary problem on our side - I'm retrying
-    // automatically... send it again in a few minutes". None of it is true here:
-    // critic.ts only reaches dropRefused() after the SAME batch refused TWICE on
-    // the same prompt, and every BullMQ attempt re-reads the cached transcript,
-    // so the promised retry re-sends material the model has already refused
-    // twice, and the instruction to resend costs the user a second job.
-    //
-    // So the run keeps failing (FAILED bills nothing) but must be
-    // DISTINGUISHABLE, which is what this now pins. AnalyzeRefusalError extends
-    // AnalyzeTechnicalError, so the FAILED-status path is unchanged.
+    // What must NOT happen is the run being called settled. Most of this video
+    // WAS judged, and judged against; the honest answer is the weak-video one,
+    // and the one candidate that was refused could come back differently on the
+    // next attempt - the scanner is itself a model call, so a re-run does not
+    // even put the same windows in front of the critic. The error class is
+    // therefore the plain retryable one, exactly, not a subclass that some
+    // caller could promote into a cancelled retry.
     const refusing = {
       chat: {
         completions: {
           create: vi.fn(async (body: any) => {
-            if (body.model === cfg.scanModel) return twoCandidateScan();
+            if (body.model === cfg.scanModel) return fourCandidateScan();
             const user: string = body.messages.find((m: any) => m.role === "user").content;
-            if (user.includes("c0")) return criticRows(verdictRow("c0", { keep: false }));
+            const ids = [...user.matchAll(/CANDIDATE (c\d+)/g)].map((m) => m[1]);
+            if (ids.includes("c3")) {
+              return {
+                choices: [
+                  { message: { refusal: "I cannot help with that." }, finish_reason: "stop" },
+                ],
+                usage: { prompt_tokens: 200, completion_tokens: 5 },
+              };
+            }
+            return criticRows(...ids.map((id) => verdictRow(id, { keep: false })));
+          }),
+        },
+      },
+    };
+
+    const error = await analyzeHighlightsV2(transcript(), {
+      client: refusing as any,
+      cfg: { ...cfg, criticBatchSize: 1 },
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    }).catch((e) => e);
+
+    // exactly AnalyzeTechnicalError - a subclass would be a distinction the
+    // stage boundary is free to act on, and the only act available there is
+    // cancelling the retries this failure needs
+    expect(error.constructor.name).toBe("AnalyzeTechnicalError");
+    expect(error).toBeInstanceOf(AnalyzeTechnicalError);
+    expect(error.message).toMatch(/1 of 4 candidate\(s\) never got a verdict/);
+    expect(error.message).toMatch(/refused 1/);
+  });
+
+  it("an upstream outage answered by a fallback refusal stays retryable", async () => {
+    // The path that has nothing to do with the material at all. The primary
+    // critic model is down: llm.ts retries the 503 itself, gives up with kind
+    // "error", and critic.ts degrades to the fallback model - which refuses
+    // once. Nothing has been refused twice; the primary model never expressed
+    // an opinion about this video. If that lands in the refusal bucket and the
+    // refusal bucket cancels retries, a 503 has permanently condemned a
+    // perfectly good video with the attempts that would have rescued it unspent.
+    let primaryCalls = 0;
+    let fallbackCalls = 0;
+    const outage = {
+      chat: {
+        completions: {
+          create: vi.fn(async (body: any) => {
+            if (body.model === cfg.scanModel) return twoCandidateScan();
+            if (body.model === cfg.criticModel) {
+              primaryCalls += 1;
+              throw new Error("503 Service Unavailable");
+            }
+            fallbackCalls += 1;
             return {
               choices: [{ message: { refusal: "I cannot help with that." }, finish_reason: "stop" }],
               usage: { prompt_tokens: 200, completion_tokens: 5 },
@@ -806,26 +860,26 @@ describe("analyzeHighlightsV2", () => {
       },
     };
 
-    const run = analyzeHighlightsV2(transcript(), {
-      client: refusing as any,
-      cfg: { ...cfg, criticBatchSize: 1 },
+    const error = await analyzeHighlightsV2(transcript(), {
+      client: outage as any,
+      cfg: { ...cfg, criticBatchSize: 2 },
       transcriptPartial: false,
       retryDelayMs: 1,
-    });
+    }).catch((e) => e);
 
-    await expect(run).rejects.toThrow(AnalyzeRefusalError);
-    // still a technical failure: FAILED, quota untouched
-    await expect(run).rejects.toThrow(AnalyzeTechnicalError);
-    await expect(run).rejects.toThrow(/1 of 2 candidate\(s\) never got a verdict/);
-    await expect(run).rejects.toThrow(/refused 1/);
+    expect(primaryCalls).toBeGreaterThan(1); // llm.ts retried the 503 on its own
+    expect(fallbackCalls).toBeGreaterThan(0); // and the fallback model answered
+    expect(error.constructor.name).toBe("AnalyzeTechnicalError");
+    expect(error).toBeInstanceOf(AnalyzeTechnicalError);
+    expect(error.message).toMatch(/0 usable verdicts for 2 candidates/);
+    expect(error.message).toMatch(/refused 2/);
   });
 
-  it("truncation alone stays the retryable failure, not a refusal", async () => {
-    // The truncation half of the same guard must NOT move. critic.ts's budget
-    // note records per-call variance the same order as the headroom (2184
-    // completion tokens at 6/6000 on one run, below the 2857 seen at 6/5000),
-    // so a candidate that truncated at the margin really can complete on the
-    // next roll - "we are retrying automatically" is true for it.
+  it("truncation alone stays the retryable failure", async () => {
+    // critic.ts's budget note records per-call variance the same order as the
+    // headroom (2184 completion tokens at 6/6000 on one run, below the 2857
+    // seen at 6/5000), so a candidate that truncated at the margin really can
+    // complete on the next roll and ship a clip.
     const truncating = {
       chat: {
         completions: {
@@ -849,17 +903,15 @@ describe("analyzeHighlightsV2", () => {
       retryDelayMs: 1,
     }).catch((e) => e);
 
-    expect(error).toBeInstanceOf(AnalyzeTechnicalError);
-    expect(error).not.toBeInstanceOf(AnalyzeRefusalError);
+    expect(error.constructor.name).toBe("AnalyzeTechnicalError");
     expect(error.message).toMatch(/truncated 1/);
   });
 
   it("a refusal mixed with a truncation stays the retryable failure", async () => {
-    // Retry only when something in the unjudged population can actually change.
-    // The refused candidate will refuse again, but the truncated one may
-    // complete on the next attempt and ship a clip, so the run as a whole is
-    // still worth re-running - and telling the user "try a different file" here
-    // would send them away from a video that may well work.
+    // Every unjudged population is retryable, and this one visibly so: the
+    // truncated candidate may complete on the next attempt and ship a clip, so
+    // telling the user "try a different file" would send them away from a video
+    // that may well work.
     const mixed = {
       chat: {
         completions: {
@@ -888,8 +940,7 @@ describe("analyzeHighlightsV2", () => {
       retryDelayMs: 1,
     }).catch((e) => e);
 
-    expect(error).toBeInstanceOf(AnalyzeTechnicalError);
-    expect(error).not.toBeInstanceOf(AnalyzeRefusalError);
+    expect(error.constructor.name).toBe("AnalyzeTechnicalError");
     expect(error.message).toMatch(/refused 1/);
     expect(error.message).toMatch(/truncated 1/);
   });

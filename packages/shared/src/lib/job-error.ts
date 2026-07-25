@@ -20,19 +20,19 @@
  *     missing translation is a compile error).
  */
 export const JOB_ERROR_CODES = [
-  /** Technical analysis failure: models unavailable, nothing was ever judged.
-   *  Retryable - BullMQ re-runs the stage and the quota stays untouched. */
+  /** Analysis produced nothing anyone judged - models unavailable, batches
+   *  truncated, candidates silently omitted, or the model refusing to answer.
+   *  The stage does not distinguish them: the counters that would have to carry
+   *  the difference do not (a "refusal" also covers an upstream outage whose
+   *  fallback call refused), so the code covers the lot. Status FAILED, quota
+   *  untouched, and BullMQ keeps all three attempts.
+   *
+   *  It is NOT a promise of a retry, though: markJobFailed writes FAILED on
+   *  every attempt, so this code renders on attempt 1 of 3 and on the last one
+   *  alike, and the copy cannot tell which. Same rule as the generic bucket -
+   *  assert neither transience nor permanence, and never instruct an action
+   *  that could bill the same video twice. */
   "ANALYSIS_UNAVAILABLE",
-  /** The analysis model REFUSED to judge the material, twice on the same prompt
-   *  (analyze-v2/critic.ts dropRefused), and no other candidate was left
-   *  unjudged for a re-roll to rescue. Distinct from ANALYSIS_UNAVAILABLE
-   *  because it is not transient: the analyze stage re-reads a cached
-   *  transcript, so every remaining attempt re-sends what was already refused.
-   *  The stage therefore throws it as a BullMQ UnrecoverableError - status stays
-   *  FAILED (the quota is untouched, exactly as with ANALYSIS_UNAVAILABLE) but
-   *  the attempts are not burned, and the copy must offer a different video
-   *  rather than promise a retry or ask for the same file again. */
-  "ANALYSIS_REFUSED",
   /** The upload itself cannot be clipped (audio-only file). Permanent: a retry
    *  cannot change it, so the copy must ask for a different file. */
   "UNSUPPORTED_INPUT",

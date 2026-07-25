@@ -59,7 +59,7 @@ vi.mock("../processors/analyze", () => ({
   analyzeHighlightsV1: mocks.analyzeHighlightsV1,
 }));
 
-import { AnalyzeRefusalError, AnalyzeTechnicalError } from "../analyze-v2/critic";
+import { AnalyzeTechnicalError } from "../analyze-v2/critic";
 import {
   SourceTooLargeError,
   SourceUnavailableError,
@@ -205,7 +205,11 @@ describe("stage handlers", () => {
     });
   });
 
-  it("tags a repeated model refusal with its own code, not the transient one", async () => {
+  it("tags a refusal-shaped analyze failure with the same retryable code", async () => {
+    // Replaces 6434d4d's "tags a repeated model refusal with its own code".
+    // There is no second code any more: whatever kind of hole left candidates
+    // unjudged, the stage knows only that nothing was judged, and the honest
+    // handling of that is the same one - fail, bill nothing, retry.
     vi.stubEnv("ANALYZE_ENGINE", "recall-critic");
     mocks.jobFind.mockResolvedValue({
       id: "job1",
@@ -214,27 +218,24 @@ describe("stage handlers", () => {
     });
     const raw =
       "no clip survived and 1 of 2 candidate(s) never got a verdict (omitted 0, refused 1, truncated 0, invariant 0) - the empty result is not a complete answer";
-    mocks.analyzeHighlightsV2.mockRejectedValue(new AnalyzeRefusalError(raw));
+    mocks.analyzeHighlightsV2.mockRejectedValue(new AnalyzeTechnicalError(raw));
 
     await expect(runAnalyzeStage({ jobId: "job1", userId: "u1" })).rejects.toThrow();
 
-    // FAILED, so usage.service (which sums every job that is not FAILED) bills
-    // nothing - but the code is NOT ANALYSIS_UNAVAILABLE, whose copy promises a
-    // retry that re-sends a prompt the model already refused twice.
     expect(mocks.jobUpdate).toHaveBeenCalledWith({
       where: { id: "job1" },
-      data: { status: "FAILED", error: `[ANALYSIS_REFUSED] ${raw}` },
+      data: { status: "FAILED", error: `[ANALYSIS_UNAVAILABLE] ${raw}` },
     });
   });
 
-  it("stops BullMQ from retrying a repeated refusal, but keeps retrying everything else", async () => {
-    // BullMQ decides on the error the processor throws: job.shouldRetryJob()
-    // skips the remaining attempts when `err instanceof UnrecoverableError ||
-    // err.name === "UnrecoverableError"`. On a cached transcript the remaining
-    // attempts re-run scanner + critic to re-send a prompt the model already
-    // refused twice, so for a refusal they are pure model spend for a
-    // guaranteed identical failure; for every other technical failure they are
-    // the whole point and must survive.
+  it("never cancels the BullMQ attempts for an analyze failure", async () => {
+    // Replaces 6434d4d's "stops BullMQ from retrying a repeated refusal".
+    // job.shouldRetryJob() skips the remaining attempts when `err instanceof
+    // UnrecoverableError || err.name === "UnrecoverableError"`, and the stage
+    // must hand it nothing of the sort. The retry is the whole reason a
+    // technical failure is not billed, and the stage cannot tell a settled
+    // refusal from a 503 that the fallback model happened to refuse - so it
+    // does not try, and every analyze failure keeps all three attempts.
     vi.stubEnv("ANALYZE_ENGINE", "recall-critic");
     mocks.jobFind.mockResolvedValue({
       id: "job1",
@@ -242,9 +243,12 @@ describe("stage handlers", () => {
       transcriptPartial: false,
     });
 
-    mocks.analyzeHighlightsV2.mockRejectedValue(new AnalyzeRefusalError("refused 2"));
+    mocks.analyzeHighlightsV2.mockRejectedValue(
+      new AnalyzeTechnicalError("no clip survived and 2 of 2 candidate(s) never got a verdict (omitted 0, refused 2, truncated 0, invariant 0)")
+    );
     const refusal = await runAnalyzeStage({ jobId: "job1", userId: "u1" }).catch((e) => e);
-    expect(refusal.name).toBe("UnrecoverableError");
+    expect(refusal.name).not.toBe("UnrecoverableError");
+    expect(refusal).toBeInstanceOf(AnalyzeTechnicalError);
     // the diagnostics still travel with it
     expect(refusal.message).toContain("refused 2");
 

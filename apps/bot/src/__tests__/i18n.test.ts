@@ -394,35 +394,27 @@ describe("bot i18n", () => {
     expect(t("ru").helpText("https://clipclap.io").toLowerCase()).toContain("ссылк");
   });
 
-  it("explains a technical analysis failure in both locales", () => {
+  it("an analysis failure asserts neither transience nor permanence, in both locales", () => {
+    // Replaces the pair of tests 6434d4d left here (one pinning "retrying
+    // automatically" on ANALYSIS_UNAVAILABLE, one pinning a settled refusal on
+    // ANALYSIS_REFUSED, which no longer exists). Neither claim is available to
+    // this code: it is written on attempt 1 of 3 and on the last burned attempt
+    // alike, so a promised retry is often already spent, and an instruction to
+    // resend creates a second Job row that usage.service bills while the first
+    // may still heal into a delivery.
     const en = t("en").processingFailed("ANALYSIS_UNAVAILABLE");
-    expect(en).toContain("Could not analyze this video right now");
-    expect(en).toContain("retrying automatically");
-    const ru = t("ru").processingFailed("ANALYSIS_UNAVAILABLE");
-    expect(ru).toContain("Не получилось проанализировать это видео");
-    expect(ru).toContain("минуты не списаны");
-  });
-
-  it("does not call a repeated model refusal temporary in either locale", () => {
-    // The model refused the same batch twice on the same prompt, and every
-    // BullMQ attempt re-reads the cached transcript - so this copy may not
-    // promise a retry, and it may not tell the user to send the same video
-    // again (a re-send is a second Job row that usage.service bills).
-    const en = t("en").processingFailed("ANALYSIS_REFUSED");
-    expect(en).toContain("could not read part of this video");
     expect(en).toContain("minutes were not used");
-    expect(en).toContain("different video");
+    expect(en).toContain("wait a few minutes");
+    expect(en).toContain("does not use your minutes twice");
     expect(en).not.toContain("retrying");
     expect(en).not.toContain("temporary");
-    expect(en).not.toMatch(/send it again/i);
 
-    const ru = t("ru").processingFailed("ANALYSIS_REFUSED");
-    expect(ru).toContain("не смогла разобрать");
+    const ru = t("ru").processingFailed("ANALYSIS_UNAVAILABLE");
     expect(ru).toContain("минуты не списаны");
-    expect(ru).toContain("другое видео");
+    expect(ru).toContain("подожди несколько минут");
+    expect(ru).toContain("дважды");
     expect(ru).not.toContain("Пробую автоматически");
     expect(ru).not.toContain("временная");
-    expect(ru).not.toMatch(/пришли (его )?снова|пришли его ещё раз/i);
   });
 
   it("asks for a different file on unsupported input in both locales", () => {

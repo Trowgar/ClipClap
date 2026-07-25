@@ -4,7 +4,7 @@ import { loadAnalyzeConfig, type AnalyzeConfig } from "./config";
 import { buildSentenceGraph } from "./sentence-graph";
 import { runScanner } from "./scanner";
 import { mergeCandidates, selectCriticCandidates } from "./candidates";
-import { AnalyzeRefusalError, AnalyzeTechnicalError, runCritic, repairCopy } from "./critic";
+import { AnalyzeTechnicalError, runCritic, repairCopy } from "./critic";
 import { snapNodes } from "./snap";
 import { evidenceGate, snippetFallbackCopy, lexicalOverlap } from "./gates";
 import { dominantScript, scriptMismatch } from "./language";
@@ -160,22 +160,17 @@ export async function analyzeHighlightsV2(
   // for output no model ever looked at, while FAILED leaves the quota untouched
   // and BullMQ retries. Never ship unjudged emptiness.
   //
-  // Which failure it is follows the same rule as the zero-survivor guard far
-  // below (see the long note there): with no verdict at all the unjudged
-  // population IS every candidate, so refusals being the whole of it means
-  // `refusalDrops === candidates.length` - the model refused every single batch
-  // twice over. That fails as AnalyzeRefusalError: same FAILED status and
-  // untouched quota, but the user is not told to wait for a retry that cannot
-  // help.
+  // One failure class for every reason, refusals included - see the zero-
+  // survivor guard far below for why. The counts still travel in the message,
+  // so a failed job stays diagnosable without the shape of the hole deciding
+  // anything the user hears.
   if (critic.verdicts.length === 0) {
     const t = critic.telemetry;
-    const detail =
+    throw new AnalyzeTechnicalError(
       `critic produced 0 usable verdicts for ${candidates.length} candidates ` +
-      `(omitted ${t.omittedDrops}, refused ${t.refusalDrops}, truncated ${t.truncatedDrops}, ` +
-      `invariant ${t.invariantDrops}) - nothing was judged`;
-    throw t.refusalDrops === candidates.length
-      ? new AnalyzeRefusalError(detail)
-      : new AnalyzeTechnicalError(detail);
+        `(omitted ${t.omittedDrops}, refused ${t.refusalDrops}, truncated ${t.truncatedDrops}, ` +
+        `invariant ${t.invariantDrops}) - nothing was judged`
+    );
   }
 
   // eligibility: keep + evidence gate + snap + copy language
@@ -338,32 +333,35 @@ export async function analyzeHighlightsV2(
     // candidate, so a video whose moments really were judged still ships its
     // honest "no".
     //
-    // The two reasons diverge on ONE thing - whether a re-run can change the
-    // outcome - and that is what picks the error class:
-    //   - Truncation and silent omission can heal. The re-run re-rolls the
-    //     critic and truncation sits at the margin of the token budget, so the
-    //     retryable AnalyzeTechnicalError (-> ANALYSIS_UNAVAILABLE, "we are
-    //     retrying") is TRUE for them.
-    //   - A refusal has already been re-rolled: critic.ts reaches dropRefused()
-    //     only after the same batch refused twice on the same prompt, and the
-    //     stage re-reads a cached transcript, so the remaining BullMQ attempts
-    //     re-send what was refused. When refusals are the WHOLE unjudged
-    //     population there is nothing left that a retry could rescue, so the
-    //     failure is raised as AnalyzeRefusalError: same FAILED status and the
-    //     same untouched quota, but honest copy and no burned attempts.
-    // Mixed populations stay retryable on purpose - the truncated candidate can
-    // still complete next time and ship a clip, and "try a different video"
-    // would send the user away from a video that may well work.
+    // ONE error class for all three reasons, and no promotion of any subset to
+    // an unrecoverable failure. 6434d4d tried the opposite - refusals being the
+    // whole unjudged population raised a distinct error that cancelled the
+    // remaining BullMQ attempts - and it was wrong in both directions:
+    //   - The predicate was `unjudged === refusalDrops`, i.e. "refusals are the
+    //     whole UNJUDGED population", not the whole population. 39 candidates
+    //     judged keep:false and 1 refused satisfied it, and the user was told we
+    //     could not read their video when 39/40 of it had been read and found
+    //     weak - with no attempts left to prove otherwise.
+    //   - refusalDrops does not even mean "the model refused this material
+    //     twice". critic.ts's catch-all also lands there when the primary model
+    //     died with a hard error and the FALLBACK model refused once (see the
+    //     note on dropRefused) - an upstream outage, permanently condemning a
+    //     good video.
+    // Both are the same mistake: asserting something about the cause from a
+    // counter that does not carry it. So we assert nothing. Every unjudged
+    // population fails the same way, keeps all three attempts, and bills the
+    // user nothing - three retries of a cheap failure cost far less than one
+    // wrong claim that someone's video is unusable, and the retry can genuinely
+    // rescue a refusal too, because the scanner is itself a model call and the
+    // next attempt does not present the same candidate windows.
     const t = critic.telemetry;
     const unjudged = t.omittedDrops + t.truncatedDrops + t.refusalDrops;
     if (unjudged > 0) {
-      const detail =
+      throw new AnalyzeTechnicalError(
         `no clip survived and ${unjudged} of ${candidates.length} candidate(s) never got a verdict ` +
-        `(omitted ${t.omittedDrops}, refused ${t.refusalDrops}, truncated ${t.truncatedDrops}, ` +
-        `invariant ${t.invariantDrops}) - the empty result is not a complete answer`;
-      throw unjudged === t.refusalDrops
-        ? new AnalyzeRefusalError(detail)
-        : new AnalyzeTechnicalError(detail);
+          `(omitted ${t.omittedDrops}, refused ${t.refusalDrops}, truncated ${t.truncatedDrops}, ` +
+          `invariant ${t.invariantDrops}) - the empty result is not a complete answer`
+      );
     }
 
     // Every candidate survived the holes, every one came back with a real

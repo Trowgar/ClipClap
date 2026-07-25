@@ -3,32 +3,23 @@ import { JOB_ERROR_CODES, parseJobErrorCode, tagJobError } from "@clipclap/share
 import { jobErrorText } from "../../lib/job-error-text";
 
 describe("web job failure copy", () => {
-  it("explains a technical analysis failure", () => {
+  it("an analysis failure asserts neither transience nor permanence", () => {
+    // Same rule as GENERIC, and for the same reason - see the note above the
+    // string. The old copy called it "a temporary problem on our side" and
+    // promised an automatic retry; this code renders on the last burned attempt
+    // too, and "try again in a few minutes" buys the user a second billed job.
     const text = jobErrorText("ANALYSIS_UNAVAILABLE");
-    expect(text).toContain("could not analyze this video right now");
-    expect(text).toContain("retrying it automatically");
     expect(text).toContain("minutes were not used");
+    expect(text).toContain("wait a few minutes");
+    expect(text).toContain("does not use your minutes twice");
+    expect(text).not.toContain("retrying");
+    expect(text).not.toContain("temporary");
   });
 
   it("asks for a different file on unsupported input, without promising a retry", () => {
     const text = jobErrorText("UNSUPPORTED_INPUT");
     expect(text).toContain("no video track");
     expect(text).not.toContain("retrying");
-  });
-
-  it("does not call a repeated model refusal temporary", () => {
-    // The analysis model refused the same batch twice on the same prompt, and
-    // every remaining attempt re-reads the cached transcript. So this copy may
-    // promise no retry, and it may not tell the user to upload the same file
-    // again - that would be a second Job row, and usage.service bills every job
-    // that is not FAILED.
-    const text = jobErrorText("ANALYSIS_REFUSED");
-    expect(text).toContain("could not read part of this video");
-    expect(text).toContain("minutes were not used");
-    expect(text).toContain("different video");
-    expect(text).not.toContain("retrying");
-    expect(text).not.toContain("temporary");
-    expect(text).not.toMatch(/upload it again|try again in a few minutes/i);
   });
 
   it("falls back to the generic message for unknown or missing codes", () => {

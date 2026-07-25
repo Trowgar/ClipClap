@@ -27,8 +27,8 @@ import type { JobErrorCode } from "@clipclap/shared";
 //
 // So the line states the outcome as unknown, and spends its one imperative on
 // the fact that actually protects the user's minutes: wait and look before
-// re-uploading. Only a code that KNOWS the failure is transient
-// (ANALYSIS_UNAVAILABLE) may promise a retry.
+// re-uploading. Only a code that KNOWS which way the failure went may say so -
+// UNSUPPORTED_INPUT and the two SOURCE_* codes do; no analysis code does.
 //
 // This is copy doing a job the UI should be doing - see the note in
 // hooks/use-jobs.ts. Once a non-final attempt is distinguishable from a final
@@ -38,18 +38,16 @@ const GENERIC =
   "Something went wrong while processing this video and your minutes were not used. We cannot tell yet whether this one will finish - wait a few minutes and check back here before uploading it again, so the same video does not use your minutes twice. If nothing has changed by then, upload it again or send us a different file.";
 
 const TEXT: Record<JobErrorCode, string> = {
+  // GENERIC's rule, applied to the one thing this code does know: the failure
+  // was in analysis. Everything past that is unknown at render time. The old
+  // line called it "a temporary problem on our side" and promised "we are
+  // retrying it automatically... try again in a few minutes" - two claims the
+  // code cannot support. It renders on the last burned attempt as readily as on
+  // the first, so the promise of a retry is often already false; and "try again
+  // in a few minutes" invites a re-upload that becomes a second Job row, which
+  // usage.service bills, right when the first one may still heal.
   ANALYSIS_UNAVAILABLE:
-    "We could not analyze this video right now - a temporary problem on our side. We are retrying it automatically and your minutes were not used. If nothing arrives, try again in a few minutes.",
-  // The counterpart to ANALYSIS_UNAVAILABLE, and the reason the two cannot share
-  // a line: the model declined to analyse this material and repeated it on a
-  // second, identical request, so "we are retrying" and "try again in a few
-  // minutes" are both false, and re-uploading the same file would only create a
-  // second job. So the copy states the outcome as settled, names the one
-  // remedy that can change it, and stays hedged about the cause - we know the
-  // model declined, not why, and telling someone their ordinary video was
-  // rejected as unacceptable is worse than saying nothing.
-  ANALYSIS_REFUSED:
-    "We could not read part of this video, so we cannot say which moments are worth clipping. This does not change if you upload the same file again, and your minutes were not used. Try a different video, or trim this one to the part you want clipped and upload that.",
+    "We could not work out which moments to clip from this video, and your minutes were not used. We cannot tell yet whether this one will finish - wait a few minutes and check back here before uploading it again, so the same video does not use your minutes twice. If nothing has changed by then, upload it again or send us a different file.",
   UNSUPPORTED_INPUT:
     "This file has no video track - only sound. Upload a video file and we will clip it.",
   // Hedged on purpose. All we know is that the download produced no file; the
