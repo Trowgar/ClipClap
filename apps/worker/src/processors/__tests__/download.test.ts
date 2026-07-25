@@ -6,10 +6,14 @@ vi.mock("child_process", () => ({
   execFile: execFileMock,
 }));
 
+const downloadFileMock = vi.hoisted(() => vi.fn());
+
 vi.mock("@clipclap/shared", () => ({
-  downloadFile: vi.fn(),
+  downloadFile: downloadFileMock,
 }));
 
+import { readFile, unlink } from "fs/promises";
+import { Readable } from "stream";
 import { downloadVideo } from "../download";
 import { SourceUnavailableError } from "../errors";
 
@@ -142,5 +146,49 @@ describe("downloadFromUrl", () => {
   it("returns an mp4 temp path on success", async () => {
     const out = await downloadVideo(URL);
     expect(out).toMatch(/clipclap-.*\.mp4$/);
+  });
+});
+
+describe("source routing", () => {
+  beforeEach(() => {
+    execFileMock.mockReset();
+    downloadFileMock.mockReset();
+    execFileMock.mockImplementation((_file, _args, _opts, cb) => {
+      const done = typeof _opts === "function" ? _opts : cb;
+      done(null, { stdout: "", stderr: "" });
+    });
+  });
+
+  // The uploaded-file path is the primary workload and the stage mocks
+  // downloadVideo wholesale, so nothing else in the suite ever streams an R2
+  // object to disk. A body that resolved the path without writing it would hand
+  // the next stage a file that does not exist, and the job would fail as a
+  // generic ffmpeg error long after the real fault.
+  it("streams the R2 object to the temp file and returns its path", async () => {
+    downloadFileMock.mockResolvedValue(Readable.from([Buffer.from("videobytes")]));
+
+    const out = await downloadVideo(undefined, "uploads/u1/clip.mp4");
+
+    expect(downloadFileMock).toHaveBeenCalledWith("uploads/u1/clip.mp4");
+    expect(execFileMock).not.toHaveBeenCalled();
+    await expect(readFile(out, "utf8")).resolves.toBe("videobytes");
+    await unlink(out).catch(() => {});
+  });
+
+  it("prefers the pasted url over a storage key", async () => {
+    await downloadVideo(URL, "uploads/u1/clip.mp4");
+
+    expect(execFileMock).toHaveBeenCalled();
+    expect(downloadFileMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a job with neither a url nor a key instead of inventing a path", async () => {
+    // Without the guard this returns a path to a file that was never created,
+    // and the failure surfaces several stages downstream as an unreadable file.
+    await expect(downloadVideo()).rejects.toThrow(
+      "No source URL or storage key provided"
+    );
+    expect(execFileMock).not.toHaveBeenCalled();
+    expect(downloadFileMock).not.toHaveBeenCalled();
   });
 });
