@@ -15,10 +15,20 @@ import { isTeaserCandidate } from "../analyze-v2/teaser";
  * when the fixtures are re-recorded. Exact output is pinned separately by
  * eval-snapshot.test.ts; this file is about behaviour that must stay true.
  *
- * Every rule here was verified load-bearing: its enforcing guard was disabled by
- * hand and the case was watched go red. Where a rule has NO enforcing guard, or
- * is violated by the engine today, the test comment says so out loud - a green
- * test that cannot fail is worse than no test.
+ * PROVENANCE. Every claim below was re-measured at HEAD on 2026-07-25 by
+ * disabling the named guard by hand and watching the case. What a comment is
+ * allowed to say is exactly what that measurement showed, which in this file
+ * means four different verdicts, none of them dressed up as another:
+ *   - ONE GUARD: the case reds when that guard alone is disabled.
+ *   - TWO GUARDS: the case needs BOTH disabled to red. Stated in full, with the
+ *     single-knob runs that stayed green. Two guards over one defect is good
+ *     engineering; a comment claiming a single-knob proof that no longer
+ *     reproduces is not, and that is how the numbers below went stale before.
+ *   - NO GUARD: the rule holds by luck, or is violated today. Said loudly.
+ *   - UNFIRED TRIPWIRE: an assertion no reachable knob can turn red on today's
+ *     fixtures. Kept, but never cited as proof of anything.
+ * A green test that cannot fail is worse than no test; a green test that LIES
+ * about why it is green is worse again.
  */
 
 const CASES = ["podcast-ecology", "podcast-answer-arc"] as const;
@@ -133,9 +143,22 @@ describe("named regressions", () => {
     // these transcripts carry NO punctuation, so the TERMINAL regex never fires
     // and every node boundary here is a 0.8 pause boundary. Capitalization is
     // the ONLY signal separating a real sentence onset from a hesitation pause.
-    // Proven load-bearing: dropping the `&& !startsLowercase(n.text)` term from
-    // snap's clean-start walk makes podcast-ecology ship 2128.05-2147.42
-    // "Почему эволюция не успеет нас спасти", which opens on the word "слишком".
+    //
+    // ONE GUARD - the only case in this file with a single enforcing guard.
+    // Re-measured 2026-07-25: dropping the `&& !startsLowercase(n.text)` term
+    // from snap's clean-start walk reds this case ALONE (the other six stay
+    // green), on podcast-answer-arc 865.15-900.46 "Почему нынешнее потепление
+    // опаснее прошлых катастроф", which opens on the word "приводит". The
+    // podcast-ecology 2128.05-2147.42 / "слишком" offender this comment used to
+    // name is gone - that output moved when the teaser filter landed. Same
+    // guard, different victim; the guard is what matters.
+    //
+    // HOW to disable it, because the obvious way proves nothing: inline
+    // isCleanStart into snap's `cleanStartAt` WITHOUT the lowercase veto.
+    // Deleting the term from isCleanStart itself also changes the critic's ¶
+    // window markers, so the prompt text changes, the replay fixture has no
+    // recording for it, and all seven cases die on "critic failed for batch
+    // [...]" - a stale-fixture error, not the rule being violated.
     const offenders: string[] = [];
     for (const name of CASES) {
       const { result, words } = await run(name);
@@ -160,11 +183,19 @@ describe("named regressions", () => {
   //
   // THIS RULE IS VIOLATED TODAY, so it is pinned with .fails: the case is green
   // while the defect exists and turns RED the moment it is fixed, at which point
-  // the `.fails` is deleted and this becomes an ordinary never-again test. It is
-  // NOT asserted green on podcast-answer-arc either, because nothing enforces it
-  // there: disabling snap's clean-end repair does move one answer-arc clip
-  // (882.8-934.1 -> 882.8-931.9) but produces no comma ending, i.e. that fixture
-  // passes the rule by luck, not by guard.
+  // the `.fails` is deleted and this becomes an ordinary never-again test.
+  // Re-measured 2026-07-25: the body still throws, on exactly the two clips
+  // named above and on no others.
+  //
+  // NO GUARD. Snap's clean-end repair (block 2b) is the only candidate, and it
+  // is INERT on both fixtures: short-circuiting the
+  // `if (e.hasWords && !isCleanEnd(nodes, e.index))` branch leaves BOTH
+  // fixtures' clip lists byte-identical to baseline and leaves this offender
+  // list unchanged at the same two entries. The earlier note here - that
+  // disabling it moved one answer-arc clip 882.8-934.1 -> 882.8-931.9 - no
+  // longer reproduces at all; that clip is not in answer-arc's output any more.
+  // So podcast-answer-arc's silence on this rule is luck rather than a guard,
+  // and podcast-ecology's failure is the engine rather than a threshold.
   //
   // Root cause found while writing this file: isCleanEnd() treats "the next node
   // has no word timings" as end-of-speech ("music follows"), but hasWords=false
@@ -200,24 +231,35 @@ describe("named regressions", () => {
   it("no clip is shorter than the product floor", async () => {
     // Owner's complaint: two-second stingers shipped as clips.
     //
-    // Enforced by the `duration < cfg.hardMinSec` drop in snap.ts. Proven
-    // load-bearing: with hardMinSec=0 podcast-ecology ships a 3.03s clip at
-    // 36.53-39.56.
+    // TWO GUARDS, and this case needs BOTH disabled to fail. All four
+    // combinations were run on 2026-07-25:
+    //   hardMinSec=0 alone       all seven cases green - and both fixtures'
+    //                            output is byte-identical to baseline, so the
+    //                            duration floor is not currently dropping
+    //                            anything at all.
+    //   teaser filter off alone  this case green; shortest shipped clip is
+    //                            26.93s (ecology) / 24.56s (answer-arc).
+    //   both                     RED: "podcast-ecology 36.53-39.56 "Что на
+    //                            самом деле убьёт человечество" is 3.03s".
+    // Those guards are the `duration < cfg.hardMinSec` drop in snap.ts and
+    // isTeaserCandidate() in analyze-v2/teaser.ts, covering one defect from two
+    // directions: the only sub-6s clip either fixture can produce happens to be
+    // a montage fragment, so the montage filter removes it before the floor is
+    // ever consulted. Neither is redundant - the floor is the only thing that
+    // would catch a short NON-montage clip, and no fixture produces one today.
+    // Read a failure here as "both guards are gone", not as a knob tweak.
     //
-    // It used to be the ONLY thing standing between the intro montage and the
-    // output as well - which is why that 3.03s clip is a montage fragment. The
-    // teaser filter (analyze-v2/teaser.ts) now removes the montage candidate
-    // before the critic ever sees it, so the two cases below no longer lean on
-    // this one, and the duration floor is back to guarding only duration.
+    // An earlier version of this comment claimed hardMinSec=0 alone ships the
+    // 3.03s clip. That was true before the teaser filter landed and is false
+    // now; it is written out in full above so the next edit re-measures rather
+    // than trusting the prose.
     //
     // MIN_CLIP_SEC is deliberately a LITERAL and NOT cfg.hardMinSec: the knob is
     // what the engine compares against, so reading it here would make the test
-    // move with the defect instead of catching it. Dropping the default to 0
-    // ships that 3.03s clip and this case stayed green, its message reading
-    // "a clip is shorter than 0s". The realistic way the stingers come back is
-    // exactly that - a knob edit, or a CLIP_HARD_MIN_SEC override in prod - so
-    // the number below states the PRODUCT rule and only a product decision may
-    // change it. (The default itself is pinned separately in
+    // move with the defect instead of catching it. The realistic way the
+    // stingers come back is a knob edit or a CLIP_HARD_MIN_SEC override in prod,
+    // so the number below states the PRODUCT rule and only a product decision
+    // may change it. (The default itself is pinned separately in
     // analyze-config.test.ts; this case pins the shipped output.)
     const MIN_CLIP_SEC = 6;
     const offenders: string[] = [];
@@ -238,17 +280,30 @@ describe("named regressions", () => {
     // Owner's complaint: two clips in one batch that start with the identical
     // sentence - one of them the intro montage's copy of the other.
     //
-    // NO DEDICATED DEDUP GUARD EXISTS - but the specific duplicate the owner hit
-    // is now prevented upstream. In podcast-ecology the montage copy c2
-    // (36.7-39.3, "Что убьет человечество / Собственная глупость конечно") and
-    // the real moment c29 (2806.87, same opening words) were BOTH kept by the
-    // critic, at 0.80 and 0.92, and only snap's too_short drop stopped the pair
-    // from shipping. The teaser filter now drops c2 before selection, so with
-    // hardMinSec=0 podcast-ecology ships the real moment ALONE (measured
-    // 2026-07-25: the 36.53-39.56 copy is gone, 87.43-156.96 is untouched).
-    // Paraphrase duplicates - the same claim in different words - still have no
-    // guard and wait on the finalizer; treat a failure here as the duplicate
-    // defect returning, not as noise.
+    // NO DEDICATED DEDUP GUARD EXISTS IN THE SHIPPED V2 PATH. Re-checked
+    // 2026-07-25: analyze-v2/dedup.ts landed this week but has NO consumer -
+    // it is pure primitives waiting on the finalizer - and select.ts's
+    // post-critic NMS compares TIME overlap only (>30% of the shorter clip), so
+    // it can never notice that a clip at 36.5s and a clip at 2806.9s are the
+    // same spoken line. Nothing in the engine compares opening lines today.
+    //
+    // What actually keeps the owner's duplicate out is the same TWO GUARDS as
+    // the case above, and this case likewise needs BOTH gone to fail:
+    //   hardMinSec=0 alone       green - ecology ships the real moment ALONE
+    //                            (output identical to baseline: the 36.53-39.56
+    //                            copy is absent, 87.43-156.96 is untouched).
+    //   teaser filter off alone  green - no duplicate pair either.
+    //   both                     RED: "36.53-39.56 repeats the opening of
+    //                            2806.87-2850.16: что убьет человечество
+    //                            собственная глупость".
+    // In podcast-ecology the montage copy c2 (36.7-39.3) and the real moment
+    // c29 (2806.87, same opening words) were BOTH kept by the critic, at 0.80
+    // and 0.92; the teaser filter now drops c2 before selection and the duration
+    // floor would still catch it afterwards.
+    //
+    // Paraphrase duplicates - the same claim in different words - have no guard
+    // at any layer and wait on the finalizer; treat a failure here as the
+    // duplicate defect returning, not as noise.
     const OPENING_WORDS = 5;
     for (const name of CASES) {
       const { result, words } = await run(name);
@@ -278,24 +333,40 @@ describe("named regressions", () => {
     // detectable without an LLM: its word 5-grams occur again further on.
     //
     // Enforced by isTeaserCandidate() in analyze-v2/teaser.ts, applied to merged
-    // candidates BEFORE selectCriticCandidates. Proven load-bearing: with the
-    // filter disabled (teaserRecurrenceFrac > 1) and hardMinSec=0 to strip the
-    // duration floor that used to hide it, podcast-ecology ships 36.53-39.56
-    // "Что на самом деле убьёт человечество" at 0.80 - a 3.03s copy of the
-    // moment it ships properly at 2807s. With the filter on, the same run does
-    // not. The legitimate opening question (87.43-156.96 in podcast-ecology,
-    // 86.33-155.18 in podcast-answer-arc) survives BOTH runs: it is inside the
-    // 120s teaser window and is spoken once, so its recurrence is exactly 0.000.
+    // candidates BEFORE selectCriticCandidates. TWO GUARDS again, measured
+    // 2026-07-25:
+    //   teaser filter off alone (teaserRecurrenceFrac > 1)  this case green.
+    //   hardMinSec=0 alone                                  this case green.
+    //   both      RED: "podcast-ecology 36.53-39.56 ... repeats later speech
+    //             (100%)" - a 3.03s copy, shipped at 0.80, of the moment that
+    //             ships properly at 2807s.
+    // The duration floor is the second guard only because THIS montage fragment
+    // is short; a longer montage would be caught by the filter alone, which is
+    // why the filter is not redundant with a duration check.
+    //
+    // The legitimate cold open at ~87s is inside the 120s teaser window and is
+    // spoken once, so the filter scores it exactly 0.0000 on both fixtures.
+    // podcast-ecology's (87.43-156.96) ships in all four runs above.
+    // podcast-answer-arc's (86.33-155.18) ships in the baseline but NOT with the
+    // filter off - not because anything ate it, but because it then competes for
+    // critic budget with the montage candidates that are no longer being
+    // dropped. Whether that moment ships is a selection outcome and moves
+    // between recordings; that the FILTER never touches it is pinned
+    // deterministically by the last case in this file.
     //
     // MAX_RECURRENCE is a LITERAL, not cfg.teaserRecurrenceFrac, and it is
     // measured with a plain 5-gram fraction here rather than by calling
     // montageScore, for the reason spelled out on MIN_CLIP_SEC above: reading
     // the knob - or the implementation - would make the test move with the
-    // defect. It states the PRODUCT rule, that a shipped clip must not be a copy
-    // of later speech, in terms that do not depend on how the filter decides.
-    // Kept at 0.35 even though the filter's own bar is now 0.5 on a different
-    // metric: this is the ceiling the product must stay under, not the trigger
-    // the engine fires on, and the two are allowed to drift apart.
+    // defect. It states the PRODUCT rule - a shipped clip must not be a copy of
+    // later speech - in terms that do not depend on how the filter decides.
+    //
+    // It is a CEILING, not a tripwire on the knob, and it must not be sold as
+    // one: measured, raising the shipped default from 0.5 to 0.9 or even 1.1
+    // leaves THIS case green. A loosened knob surfaces two cases down, where the
+    // drops themselves are asserted, and in teaser.test.ts's literal default
+    // pin. (0.35 also no longer matches the filter's 0.5 bar, which is fine -
+    // they are different metrics on different jobs and may drift apart.)
     const NGRAM = 5;
     const MAX_RECURRENCE = 0.35;
     for (const name of CASES) {
@@ -339,11 +410,26 @@ describe("named regressions", () => {
         drops.length,
         `${name}: the intro montage was not detected at all`
       ).toBeGreaterThan(0);
-      // Every drop must be a real copy, not a marginal one scraping the bar.
-      // 0.35 used to say that; with the bar itself at 0.5 it says nothing, so
-      // it is pinned above the bar instead. The five real montage fragments
-      // measure 0.833-1.000 (2026-07-25) - a drop landing between 0.5 and 0.75
-      // would mean the filter had started deciding on thin evidence.
+      // The drops.length assertion above is ONE GUARD and it is the case in
+      // this file that catches a loosened knob: measured 2026-07-25, raising the
+      // shipped TEASER_RECURRENCE_FRAC default to 0.9 reds it on
+      // podcast-answer-arc (whose drops score 0.88 and 0.83), and anything above
+      // 1.0 reds it on both fixtures. The absence case above does NOT catch
+      // that, so do not rely on it for this.
+      //
+      // The >= 0.75 evidence floor below is an UNFIRED TRIPWIRE and is kept as
+      // one, not cited as proof. Measured: exactly seven merged candidates ever
+      // start inside the 120s window across both fixtures, and their
+      // montageScores are quantised with nothing in between -
+      // 1.0000/1.0000/1.0000/0.0000 (ecology) and 0.8750/0.8333/0.0000
+      // (answer-arc); telemetry rounds to 2dp, which is what this reads, so the
+      // five real montage fragments arrive here as 1.00/1.00/1.00/0.88/0.83.
+      // Nothing reachable puts a drop in [bar, 0.75): lowering the bar to
+      // 0.35/0.2/0.1 admits no new candidate, weakening the evidence rule
+      // (TEASER_MIN_RUN 5->3, TEASER_MIN_ALIGNED 5->2) RAISES every drop to
+      // 1.0000 instead of lowering it, and removing the ё-folding leaves them
+      // unchanged. It guards a future montageScore that starts deciding on thin
+      // evidence - a real risk, just not one today's fixtures can demonstrate.
       for (const drop of drops) {
         expect(
           drop.recurrence,
@@ -353,7 +439,11 @@ describe("named regressions", () => {
       // The montage is the first 45 seconds; the host's own "Всем привет, это
       // подкаст сортировочный" at ~45.5s is where the real episode starts.
       // Nothing past it may be called a teaser - a drop that reached in there
-      // would be the filter eating real conversation.
+      // would be the filter eating real conversation. Also an UNFIRED TRIPWIRE:
+      // the latest drop on either fixture ends at 44.6s, and no bar setting
+      // admits a candidate that starts later, so this has never been red. Kept
+      // because overreach is the expensive failure mode, not because it is
+      // proven.
       const MONTAGE_ENDS_SEC = 50;
       const overreach = drops
         .filter((d) => d.endSec > MONTAGE_ENDS_SEC)
@@ -371,9 +461,22 @@ describe("named regressions", () => {
     //
     // Asserted against the PREDICATE rather than against the shipped clips on
     // purpose. Whether that moment ships is a critic decision that moves between
-    // recordings (it was gate-dropped in podcast-answer-arc's previous roll and
-    // ships in this one); whether the filter would eat it is a deterministic
-    // property of the transcript, and that is the thing this change can break.
+    // recordings and between knob settings (it does not ship in answer-arc once
+    // the filter is switched off - see the montage case above); whether the
+    // filter would eat it is a deterministic property of the transcript, and
+    // that is the thing this change can break.
+    //
+    // The two halves have very different strengths, measured 2026-07-25, and
+    // the comment should not flatter the weaker one:
+    //   NEGATIVE half (cold open not flagged) - robust rather than
+    //   load-bearing. It scores exactly 0.0000 on both fixtures and stays
+    //   0.0000 with TEASER_MIN_RUN weakened to 4 or 3. No knob reachable from
+    //   here makes the filter wrong about it; that is the filter being right,
+    //   which is worth pinning but is not a proven-red assertion.
+    //   POSITIVE half (bait line flagged) - ONE GUARD, genuinely load-bearing:
+    //   raising the shipped teaserRecurrenceFrac default past 1.0 reds it
+    //   (measured at 1.1). It is what stops a filter that has been switched off
+    //   entirely from leaving the negative half green forever.
     for (const name of CASES) {
       const { fixture } = await run(name);
       const cfg = loadAnalyzeConfig({});
