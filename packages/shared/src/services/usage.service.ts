@@ -199,6 +199,21 @@ export type SubmissionBlockCode =
   | "FREE_TRIAL_ATTEMPTS"
   | "FREE_SOURCE_TOO_LONG";
 
+/** The numbers behind a QUOTA refusal, so a presentation layer can say them
+ *  in its own language instead of reprinting `reason`. */
+export interface QuotaBlockDetail {
+  usedMinutes: number;
+  limitMinutes: number;
+  topUpMinutes: number;
+}
+
+/**
+ * `reason` is English prose for logs and for the web UI. It is NOT a message
+ * for a Telegram chat: the bot's audience is majority non-English and renders
+ * refusals through its own dictionary. Everything a translation needs is
+ * therefore also carried structurally - `code` always, plus `trial` / `phase`
+ * / `quota` for the codes whose wording depends on more than the code itself.
+ */
 export type JobSubmissionCheck =
   | { allowed: true }
   | {
@@ -206,6 +221,11 @@ export type JobSubmissionCheck =
       reason: string;
       code: SubmissionBlockCode;
       trial?: FreeTrialStatus;
+      /** Set for code LIFECYCLE: which phase refused. "canceled" and "the
+       *  period ran out" are different sentences to a user. */
+      phase?: SubscriptionPhase;
+      /** Set for code QUOTA. */
+      quota?: QuotaBlockDetail;
     };
 
 // Block messages by phase. ACTIVE/DUNNING entries are never read (guarded by
@@ -251,6 +271,7 @@ export async function canSubmitJob(
       allowed: false,
       reason: LIFECYCLE_BLOCK_REASON[state.phase],
       code: "LIFECYCLE",
+      phase: state.phase,
     };
   }
 
@@ -269,6 +290,11 @@ export async function canSubmitJob(
       allowed: false,
       reason: `This job would exceed your minute limit (${used}/${limits.minutesPerPeriod} used, ${user.topUpMinutesRemaining} top-up available).`,
       code: "QUOTA",
+      quota: {
+        usedMinutes: used,
+        limitMinutes: limits.minutesPerPeriod,
+        topUpMinutes: user.topUpMinutesRemaining,
+      },
     };
   }
 

@@ -75,6 +75,34 @@ export interface Dict {
   /** Source is longer than the free run allows. Names both caps so the choice
    *  - trim it, or pay for length - is visible. */
   freeSourceTooLong: (freeMaxMinutes: number, planMaxMinutes: number) => string;
+  /* ---- Refusals on a paid plan ------------------------------------------
+   * Everything below used to be an English sentence built inline in
+   * handlers.ts, or the raw `reason` that canSubmitJob writes for logs and
+   * for the web UI. Both reached Telegram untranslated. They are rendered
+   * from a block code now, so each one says the same thing in Russian.
+   * Every one of them names the number it refused on: a refusal the user
+   * cannot act on is only a wall. */
+  /** Source longer than the plan's hard cap. */
+  planSourceTooLong: (maxMinutes: number) => string;
+  /** Lifecycle: has a plan on the account but no subscription behind it. */
+  planNotActive: string;
+  /** Lifecycle: subscription canceled (with or without grace left). */
+  planCanceled: string;
+  /** Lifecycle: the paid period ran out. Different from canceled - nothing
+   *  was refused by the user, so the copy asks for a renewal, not a return. */
+  planPeriodEnded: string;
+  /** The period's minutes are spent. Top-up is mentioned only when some is
+   *  left, so the message never advertises a balance of zero. */
+  planQuotaExceeded: (
+    usedMinutes: number,
+    limitMinutes: number,
+    topUpMinutes: number
+  ) => string;
+  /** The per-day job cap. Anti-abuse, and it resets - say so. */
+  planDailyLimit: (limit: number) => string;
+  /** Already processing. The user has to do nothing except wait, which is
+   *  the whole point of saying it in a language they read. */
+  planConcurrentLimit: (active: number, limit: number) => string;
   langUsage: string;
   langSetEn: string;
   langSetRu: string;
@@ -268,6 +296,24 @@ const en: Dict = {
     `I've processed ${attempts} videos on your free trial and none of them produced clips - so you haven't really seen what this does yet. That usually means the source had little clear speech.\n\nFree attempts are used up. If you want to keep trying, Starter is €${planPriceEur} a week for ${planMinutes} minutes of video.`,
   freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
     `Your free run covers videos up to ${freeMaxMinutes} minutes, and this one is longer. Send a shorter video - or a ${freeMaxMinutes}-minute section of this one - to try it free. A plan takes sources up to ${planMaxMinutes} minutes.`,
+  planSourceTooLong: (maxMinutes) =>
+    `This video is longer than ${maxMinutes} minutes, which is the longest source I can take. Send a shorter cut and I'll clip it.`,
+  planNotActive:
+    "There is no active subscription on this account, so I cannot process videos yet. Pick a plan and I'll start right away.",
+  planCanceled:
+    "Your subscription is canceled, so processing is off. Resubscribe and everything carries on from where you left it - your clips are still there.",
+  planPeriodEnded:
+    "Your paid period has ended, so processing is paused. Renew and I'll pick this video up straight away.",
+  planQuotaExceeded: (usedMinutes, limitMinutes, topUpMinutes) =>
+    `You have used ${usedMinutes} of your ${limitMinutes} minutes this period, and this video does not fit in what is left.${
+      topUpMinutes > 0
+        ? ` Your ${topUpMinutes} top-up minutes are not enough for it either.`
+        : ""
+    } Wait for the period to renew, or top up minutes or move to a bigger plan.`,
+  planDailyLimit: (limit) =>
+    `You have hit the daily limit of ${limit} videos. It resets at midnight - send this one again then.`,
+  planConcurrentLimit: (active, limit) =>
+    `I am still working on ${active === 1 ? "your video" : `${active} of your videos`}, and your plan processes ${limit} at a time. Send this one again once that is done - I'll message you when it is.`,
   langUsage: "Usage: /lang en - English, /lang ru - Russian.",
   langSetEn: "Language set to English.",
   langSetRu: "Язык установлен: русский.",
@@ -492,6 +538,24 @@ const ru: Dict = {
     `Я обработал ${attempts} ${pluralizeRu(attempts, "видео", "видео", "видео")} на бесплатном пробном запуске, и ни одно не дало клипов - то есть толком показать продукт не вышло. Обычно так бывает, когда в исходнике мало разборчивой речи.\n\nБесплатные попытки закончились. Если хочешь попробовать ещё - Starter, €${planPriceEur} в неделю за ${planMinutes} минут видео.`,
   freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
     `Бесплатный запуск - это видео до ${freeMaxMinutes} минут, а это длиннее. Пришли видео покороче или фрагмент этого на ${freeMaxMinutes} минут, чтобы попробовать бесплатно. На тарифе исходники до ${planMaxMinutes} минут.`,
+  planSourceTooLong: (maxMinutes) =>
+    `Это видео длиннее ${maxMinutes} минут - это максимальная длина исходника, которую я беру. Пришли фрагмент покороче, и я нарежу клипы.`,
+  planNotActive:
+    "На аккаунте нет активной подписки, поэтому обработка пока недоступна. Выбери тариф - и я сразу возьмусь за работу.",
+  planCanceled:
+    "Подписка отменена, обработка выключена. Оформи подписку заново - всё продолжится с того же места, клипы никуда не делись.",
+  planPeriodEnded:
+    "Оплаченный период закончился, обработка на паузе. Продли подписку - и я сразу возьму это видео в работу.",
+  planQuotaExceeded: (usedMinutes, limitMinutes, topUpMinutes) =>
+    `За этот период израсходовано ${usedMinutes} ${pluralizeRu(usedMinutes, "минута", "минуты", "минут")} из ${limitMinutes}, и это видео в остаток не помещается.${
+      topUpMinutes > 0
+        ? ` Докупленных минут (${topUpMinutes}) на него тоже не хватает.`
+        : ""
+    } Дождись обновления периода, докупи минуты или перейди на тариф побольше.`,
+  planDailyLimit: (limit) =>
+    `Достигнут дневной лимит - ${limit} ${pluralizeRu(limit, "видео", "видео", "видео")} в сутки. Лимит обнулится в полночь, тогда пришли это видео снова.`,
+  planConcurrentLimit: (active, limit) =>
+    `Я ещё обрабатываю ${active === 1 ? "твоё видео" : `твои видео (${active})`}, а на твоём тарифе одновременно обрабатывается ${limit}. Пришли это видео снова, когда закончу - я напишу.`,
   langUsage: "Использование: /lang ru - русский, /lang en - английский.",
   langSetEn: "Language set to English.",
   langSetRu: "Язык установлен: русский.",

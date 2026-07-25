@@ -28,6 +28,7 @@ import {
   telegramDeliveryService,
   uploadFile,
 } from "@clipclap/shared";
+import type { SubscriptionPhase } from "@clipclap/shared";
 import type { User } from "@prisma/client";
 import type { TelegramClient } from "./telegram-client";
 import { extractVideoUrl, probeVideoUrl } from "./url-probe";
@@ -1582,7 +1583,7 @@ export async function getSubmissionBlocker(
           limits.maxSourceDurationMinutes,
           STARTER_WEEKLY.maxSourceDurationMinutes
         )
-      : `Source exceeds max duration (${limits.maxSourceDurationMinutes} min).`;
+      : dict.planSourceTooLong(limits.maxSourceDurationMinutes);
   }
 
   const submission = await canSubmitJob(userId, durationMinutes);
@@ -1605,8 +1606,23 @@ export async function getSubmissionBlocker(
           getPlanLimits("NONE").maxSourceDurationMinutes,
           STARTER_WEEKLY.maxSourceDurationMinutes
         );
+      case "LIFECYCLE":
+        return renderLifecycleBlock(submission.phase, dict);
+      case "QUOTA":
+        // The numbers come off the structured `quota` detail, never off
+        // `reason` - that string is written for a log line. If a future code
+        // path omits it, fall back to the plan's own limits rather than to
+        // English prose.
+        return dict.planQuotaExceeded(
+          submission.quota?.usedMinutes ?? limits.minutesPerPeriod,
+          submission.quota?.limitMinutes ?? limits.minutesPerPeriod,
+          submission.quota?.topUpMinutes ?? 0
+        );
       default:
-        return submission.reason;
+        // Unreachable while SubmissionBlockCode is fully covered above; the
+        // exhaustiveness assignment below makes a new code a compile error
+        // rather than a new English sentence in a Russian chat.
+        return assertBlockCodeHandled(submission.code, dict);
     }
   }
 
@@ -1616,17 +1632,52 @@ export async function getSubmissionBlocker(
     where: { userId, createdAt: { gte: dayStart } },
   });
   if (jobsToday >= limits.maxJobsPerDay) {
-    return `Daily job limit reached (${limits.maxJobsPerDay}).`;
+    return dict.planDailyLimit(limits.maxJobsPerDay);
   }
 
   const inFlight = await prisma.job.count({
     where: { userId, status: { in: [...ACTIVE_STATUSES] } },
   });
   if (inFlight >= limits.concurrentJobsLimit) {
-    return `You have ${inFlight} active jobs (limit: ${limits.concurrentJobsLimit}).`;
+    return dict.planConcurrentLimit(inFlight, limits.concurrentJobsLimit);
   }
 
   return null;
+}
+
+/**
+ * The lifecycle phase decides the sentence: "canceled" and "the period ran
+ * out" ask the user for different things, and a user who never had a plan is
+ * a third case again. ACTIVE and DUNNING never reach here (canSubmitJob only
+ * emits LIFECYCLE when the state is not live) but the map is total so a
+ * future phase cannot silently fall through to English.
+ */
+function renderLifecycleBlock(
+  phase: SubscriptionPhase | undefined,
+  dict: Dict
+): string {
+  switch (phase) {
+    case "CANCELED":
+    case "CANCELED_GRACE":
+      return dict.planCanceled;
+    case "PERIOD_ENDED":
+      return dict.planPeriodEnded;
+    // NONE, ACTIVE, DUNNING and an absent phase all land on the same honest
+    // statement: there is nothing active on this account right now.
+    default:
+      return dict.planNotActive;
+  }
+}
+
+/**
+ * Compile-time guard: adding a SubmissionBlockCode without giving it words
+ * fails typecheck here instead of shipping an English log string to a chat.
+ * At runtime it degrades to the generic "no active plan" line, which is the
+ * safest thing to say when we do not know why we refused.
+ */
+function assertBlockCodeHandled(code: never, dict: Dict): string {
+  console.error(`getSubmissionBlocker: no copy for block code ${code}`);
+  return dict.planNotActive;
 }
 
 interface VideoSource {
