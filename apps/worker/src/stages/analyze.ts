@@ -2,10 +2,12 @@ import {
   getStageQueue,
   jobStepService,
   prisma,
+  tagJobError,
 } from "@clipclap/shared";
 import type { Prisma } from "@prisma/client";
 import { analyzeHighlightsV1 } from "../processors/analyze";
 import { analyzeHighlightsV2 } from "../analyze-v2";
+import { AnalyzeTechnicalError } from "../analyze-v2/critic";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { resolveEngine } from "../analyze-v2/dispatch";
 import { asTranscription, type AnalyzeStagePayload } from "./types";
@@ -129,11 +131,19 @@ export async function runAnalyzeStage(
 }
 
 async function markJobFailed(jobId: string, error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  // Job.error is shown to the user verbatim by the bot and the web app, so the
+  // stage that persists it attaches the code the UI translates. Tagging happens
+  // HERE, not at the throw sites: the engine keeps raising plain domain errors
+  // with their full diagnostics, and the boundary that turns one into a stored,
+  // user-visible failure decides what the user is told. Anything else (a DB
+  // error, a bug) stays untagged and renders as the generic message.
+  const tagged =
+    error instanceof AnalyzeTechnicalError
+      ? tagJobError("ANALYSIS_UNAVAILABLE", message)
+      : message;
   await prisma.job.update({
     where: { id: jobId },
-    data: {
-      status: "FAILED",
-      error: error instanceof Error ? error.message : String(error),
-    },
+    data: { status: "FAILED", error: tagged },
   });
 }

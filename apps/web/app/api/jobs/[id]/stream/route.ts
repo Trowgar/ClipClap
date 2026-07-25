@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { auth } from "@/lib/auth";
-import { prisma } from "@clipclap/shared";
+import { parseJobErrorCode, prisma } from "@clipclap/shared";
 
 export async function GET(
   _req: NextRequest,
@@ -38,9 +38,11 @@ export async function GET(
             return;
           }
 
+          // Only the code crosses the wire: Job.error is engineer prose the UI
+          // must never render (and the browser has no business holding it).
           send({
             status: job.status,
-            error: job.error,
+            errorCode: parseJobErrorCode(job.error),
             clipCount: job.clips.length,
           });
 

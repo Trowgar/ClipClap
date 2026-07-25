@@ -17,6 +17,7 @@ import {
   jobService,
   markTelegramDeliveryFailed,
   markTelegramDeliverySent,
+  parseJobErrorCode,
   prisma,
   redeemLinkFromBot,
   telegramDeliveryService,
@@ -743,9 +744,11 @@ export async function deliverReadyTelegramJobs(
       const dict = t(locale);
 
       if (delivery.job.status === "FAILED") {
+        // The user gets localized copy for the parsed code; the raw engine
+        // message stays in the DB (Job.error and the delivery row) for support.
         await client.sendMessage(
           delivery.chatId,
-          dict.processingFailed(delivery.job.error || "Unknown error")
+          dict.processingFailed(parseJobErrorCode(delivery.job.error))
         );
         await markTelegramDeliveryFailed(
           delivery.id,

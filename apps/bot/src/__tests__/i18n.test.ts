@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parseJobErrorCode } from "@clipclap/shared";
 import { detectLocale, parseLangCommand, t } from "../i18n";
 
 describe("bot i18n", () => {
@@ -391,6 +392,47 @@ describe("bot i18n", () => {
   it("helpText mentions URL support in both locales", () => {
     expect(t("en").helpText("https://clipclap.io").toLowerCase()).toContain("url");
     expect(t("ru").helpText("https://clipclap.io").toLowerCase()).toContain("ссылк");
+  });
+
+  it("explains a technical analysis failure in both locales", () => {
+    const en = t("en").processingFailed("ANALYSIS_UNAVAILABLE");
+    expect(en).toContain("Could not analyze this video right now");
+    expect(en).toContain("retrying automatically");
+    const ru = t("ru").processingFailed("ANALYSIS_UNAVAILABLE");
+    expect(ru).toContain("Не получилось проанализировать это видео");
+    expect(ru).toContain("минуты не списаны");
+  });
+
+  it("asks for a different file on unsupported input in both locales", () => {
+    // permanent failure: the copy must NOT promise an automatic retry
+    const en = t("en").processingFailed("UNSUPPORTED_INPUT");
+    expect(en).toContain("no video track");
+    expect(en).not.toContain("retrying");
+    const ru = t("ru").processingFailed("UNSUPPORTED_INPUT");
+    expect(ru).toContain("нет видеодорожки");
+    expect(ru).not.toContain("Пробую автоматически");
+  });
+
+  it("falls back to a generic message when there is no known code", () => {
+    const en = t("en").processingFailed(null);
+    expect(en).toBe(
+      "Something went wrong while processing this video. I'm retrying automatically and your minutes were not used. If nothing arrives, send it again in a few minutes."
+    );
+    const ru = t("ru").processingFailed(null);
+    expect(ru).toBe(
+      "Что-то пошло не так при обработке видео. Пробую автоматически ещё раз, минуты не списаны. Если ничего не придёт, пришли видео снова через несколько минут."
+    );
+  });
+
+  it("never leaks raw engine prose - the copy cannot even receive it", () => {
+    const raw = "critic produced 0 usable verdicts for 12 candidates";
+    for (const locale of ["en", "ru"] as const) {
+      // parseJobErrorCode returns null for untagged prose (see shared/job-error)
+      const text = t(locale).processingFailed(parseJobErrorCode(raw));
+      expect(text).not.toContain(raw);
+      expect(text).not.toContain("critic");
+      expect(text).toBe(t(locale).processingFailed(null));
+    }
   });
 
 });

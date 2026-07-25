@@ -3,6 +3,7 @@ import { promisify } from "util";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
+import { UnsupportedInputError } from "./errors";
 
 const execFileAsync = promisify(execFile);
 
@@ -57,7 +58,9 @@ export async function normalizeSource(localPath: string): Promise<NormalizeOutco
   if (!probe.hasVideo) {
     // clear user-facing outcome instead of a confusing downstream failure;
     // a video WITHOUT audio proceeds and ends at the degenerate 0-clip guard
-    throw new Error("Audio-only input is not supported - please upload a video file");
+    throw new UnsupportedInputError(
+      "Audio-only input is not supported - please upload a video file"
+    );
   }
   if (!needsNormalization(probe)) {
     return { path: localPath, action: "none" };

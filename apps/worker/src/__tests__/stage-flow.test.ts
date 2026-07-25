@@ -13,9 +13,10 @@ const mocks = vi.hoisted(() => ({
   queueAdd: vi.fn(),
   jobFind: vi.fn(),
   jobUpdate: vi.fn(),
+  analyzeHighlightsV2: vi.fn(),
 }));
 
-vi.mock("@clipclap/shared", () => ({
+vi.mock("@clipclap/shared", async () => ({
   jobStepService: {
     startJobStep: mocks.startJobStep,
     completeJobStep: mocks.completeJobStep,
@@ -23,12 +24,23 @@ vi.mock("@clipclap/shared", () => ({
   },
   getStageQueue: mocks.getStageQueue,
   uploadFile: mocks.uploadFile,
+  // real implementation: the stored prefix IS the contract the bot and the web
+  // app parse, so a mock format would test nothing
+  tagJobError: (
+    await vi.importActual<typeof import("@clipclap/shared/lib/job-error")>(
+      "@clipclap/shared/lib/job-error"
+    )
+  ).tagJobError,
   prisma: {
     job: {
       findUniqueOrThrow: mocks.jobFind,
       update: mocks.jobUpdate,
     },
   },
+}));
+
+vi.mock("../analyze-v2", () => ({
+  analyzeHighlightsV2: mocks.analyzeHighlightsV2,
 }));
 
 vi.mock("../processors/download", () => ({
@@ -47,6 +59,8 @@ vi.mock("../processors/analyze", () => ({
   analyzeHighlightsV1: mocks.analyzeHighlightsV1,
 }));
 
+import { AnalyzeTechnicalError } from "../analyze-v2/critic";
+import { UnsupportedInputError } from "../processors/errors";
 import { runAnalyzeStage } from "../stages/analyze";
 import { runDownloadStage } from "../stages/download";
 import { runFinalizeStage } from "../stages/finalize";
@@ -163,6 +177,65 @@ describe("stage handlers", () => {
       jobId: "job1",
       userId: "u1",
       mode: "clips",
+    });
+  });
+
+  it("tags a technical analyze failure with a user-facing code", async () => {
+    vi.stubEnv("ANALYZE_ENGINE", "recall-critic");
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      transcriptJson: { text: "hello", segments: [] },
+      transcriptPartial: false,
+    });
+    const raw = "scanner failed on all 4 windows (4/4 windows) - analysis models unavailable";
+    mocks.analyzeHighlightsV2.mockRejectedValue(new AnalyzeTechnicalError(raw));
+
+    await expect(
+      runAnalyzeStage({ jobId: "job1", userId: "u1" })
+    ).rejects.toThrow(AnalyzeTechnicalError);
+
+    // the raw diagnostics survive in the DB behind the code
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: "job1" },
+      data: { status: "FAILED", error: `[ANALYSIS_UNAVAILABLE] ${raw}` },
+    });
+  });
+
+  it("leaves a non-technical analyze failure untagged, so the UI shows generic copy", async () => {
+    vi.stubEnv("ANALYZE_ENGINE", "recall-critic");
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      transcriptJson: { text: "hello", segments: [] },
+      transcriptPartial: false,
+    });
+    mocks.analyzeHighlightsV2.mockRejectedValue(new Error("connection reset"));
+
+    await expect(runAnalyzeStage({ jobId: "job1", userId: "u1" })).rejects.toThrow();
+
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: "job1" },
+      data: { status: "FAILED", error: "connection reset" },
+    });
+  });
+
+  it("tags an audio-only upload as unsupported input", async () => {
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      userId: "u1",
+      sourceUrl: null,
+      sourceKey: "uploads/u1/audio.m4a",
+    });
+    mocks.downloadVideo.mockResolvedValue("/tmp/source.m4a");
+    const raw = "Audio-only input is not supported - please upload a video file";
+    mocks.normalizeSource.mockRejectedValue(new UnsupportedInputError(raw));
+
+    await expect(
+      runDownloadStage({ jobId: "job1", userId: "u1" })
+    ).rejects.toThrow(UnsupportedInputError);
+
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: "job1" },
+      data: { status: "FAILED", error: `[UNSUPPORTED_INPUT] ${raw}` },
     });
   });
 

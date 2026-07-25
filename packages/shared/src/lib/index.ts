@@ -10,6 +10,8 @@ export {
 } from "./queues";
 export type { StageName } from "./queues";
 export { computeClipExpiresAt } from "./retention";
+export { JOB_ERROR_CODES, tagJobError, parseJobErrorCode } from "./job-error";
+export type { JobErrorCode } from "./job-error";
 export {
   getReferralQueue,
   registerReferralSchedules,

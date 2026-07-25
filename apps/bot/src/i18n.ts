@@ -1,4 +1,4 @@
-import type { SubscriptionPhase } from "@clipclap/shared";
+import type { JobErrorCode, SubscriptionPhase } from "@clipclap/shared";
 
 export type Locale = "en" | "ru";
 
@@ -42,7 +42,10 @@ export interface Dict {
   uploading: string;
   queued: string;
   fileTooLarge: (url: string) => string;
-  processingFailed: (error: string) => string;
+  /** Takes the code parsed out of Job.error, NEVER the raw message: the stored
+   *  text is engineer prose in English and must not reach a user. Unknown or
+   *  untagged (null) falls back to the generic line. */
+  processingFailed: (code: JobErrorCode | null) => string;
   done: (n: number) => string;
   doneNoClips: (reason: string) => string;
   lowQualityNote: string;
@@ -151,7 +154,12 @@ const en: Dict = {
   queued: "Queued. I'll send the clips back here when rendering finishes.",
   fileTooLarge: (url) =>
     `This video is over 20 MB - Telegram's Bot API limit. For now, upload longer videos on the website: ${url}/dashboard. We're working on lifting this limit soon.`,
-  processingFailed: (error) => `Processing failed: ${error}`,
+  processingFailed: (code) =>
+    code === "UNSUPPORTED_INPUT"
+      ? "This file has no video track - only sound. Send a video file and I'll clip it."
+      : code === "ANALYSIS_UNAVAILABLE"
+        ? "Could not analyze this video right now - a temporary problem on our side. I'm retrying automatically and your minutes were not used. If nothing arrives, send it again in a few minutes."
+        : "Something went wrong while processing this video. I'm retrying automatically and your minutes were not used. If nothing arrives, send it again in a few minutes.",
   done: (n) => `Done. ${n} clip${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} ready.`,
   doneNoClips: (reason) =>
     reason === "NO_USABLE_SPEECH"
@@ -328,7 +336,12 @@ const ru: Dict = {
   queued: "В очереди. Пришлю клипы сюда, когда рендер закончится.",
   fileTooLarge: (url) =>
     `Видео больше 20 МБ - это лимит Telegram Bot API. Пока что для длинных видео используй сайт: ${url}/dashboard. Скоро снимем это ограничение.`,
-  processingFailed: (error) => `Обработка не удалась: ${error}`,
+  processingFailed: (code) =>
+    code === "UNSUPPORTED_INPUT"
+      ? "В этом файле нет видеодорожки - только звук. Пришли видеофайл, и я нарежу клипы."
+      : code === "ANALYSIS_UNAVAILABLE"
+        ? "Не получилось проанализировать это видео - временная проблема на нашей стороне. Пробую автоматически ещё раз, минуты не списаны. Если ничего не придёт, пришли видео снова через несколько минут."
+        : "Что-то пошло не так при обработке видео. Пробую автоматически ещё раз, минуты не списаны. Если ничего не придёт, пришли видео снова через несколько минут.",
   done: (n) =>
     `Готово. ${n} ${pluralizeRu(n, "клип", "клипа", "клипов")} ${pluralizeRu(n, "готов", "готовы", "готовы")}.`,
   doneNoClips: (reason) =>

@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma";
 import { deleteFile, getPresignedDownloadUrl } from "../lib/r2";
+import { parseJobErrorCode, type JobErrorCode } from "../lib/job-error";
 import type { JobStatus, NoClipsReason } from "@prisma/client";
 
 export interface ProjectClipSummary {
@@ -42,7 +43,11 @@ export interface ProjectDetail {
   sourceUrl: string | null;
   sourceKey: string | null;
   status: JobStatus;
+  /** Raw engine message - diagnostics only, never render it. */
   error: string | null;
+  /** What the UI renders instead of `error`: null means "no code we know", and
+   *  the caller must show its generic failure copy. */
+  errorCode: JobErrorCode | null;
   sourceDurationSec: number | null;
   createdAt: Date;
   clipsGenerated: number;
@@ -140,6 +145,7 @@ export async function getProjectDetail(
     sourceKey: job.sourceKey,
     status: job.status,
     error: job.error,
+    errorCode: parseJobErrorCode(job.error),
     sourceDurationSec: job.sourceDurationSec,
     createdAt: job.createdAt,
     clipsGenerated: job.clipsGenerated,

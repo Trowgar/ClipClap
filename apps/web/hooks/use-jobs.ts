@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import type { JobErrorCode } from "@clipclap/shared";
 import { api, type JobWithClips } from "@/lib/api";
 
 export function useJobs() {
@@ -27,7 +28,11 @@ export function useJobs() {
 
 export function useJobProgress(jobId: string) {
   const [status, setStatus] = useState<string>("PENDING");
+  // `error` is a stream-level message written by us (e.g. "Job not found").
+  // A FAILED job reports `errorCode` instead - its raw engine message never
+  // leaves the server, and the UI renders localized copy for the code.
   const [error, setError] = useState<string | null>(null);
+  const [errorCode, setErrorCode] = useState<JobErrorCode | null>(null);
   const [clipCount, setClipCount] = useState(0);
   const [done, setDone] = useState(false);
 
@@ -43,7 +48,7 @@ export function useJobProgress(jobId: string) {
       }
       setStatus(data.status);
       setClipCount(data.clipCount || 0);
-      if (data.error) setError(data.error);
+      if (data.errorCode) setErrorCode(data.errorCode);
       if (data.status === "DONE" || data.status === "FAILED") {
         setDone(true);
         eventSource.close();
@@ -58,5 +63,5 @@ export function useJobProgress(jobId: string) {
     return () => eventSource.close();
   }, [jobId]);
 
-  return { status, error, clipCount, done };
+  return { status, error, errorCode, clipCount, done };
 }

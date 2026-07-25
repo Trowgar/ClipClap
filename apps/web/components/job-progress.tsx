@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { useJobProgress } from "@/hooks/use-jobs";
+import { jobErrorText } from "@/lib/job-error-text";
 import { Badge } from "@/components/ui/badge";
 import { CircleNotch, CheckCircle, XCircle } from "@phosphor-icons/react";
 
@@ -28,7 +29,7 @@ export function JobProgress({
   onDone,
   onClipCount,
 }: JobProgressProps) {
-  const { status, error, clipCount, done } = useJobProgress(jobId);
+  const { status, error, errorCode, clipCount, done } = useJobProgress(jobId);
   const currentStatus = status || initialStatus;
 
   useEffect(() => {
@@ -75,8 +76,10 @@ export function JobProgress({
         ))}
       </div>
 
-      {error && (
-        <p className="text-sm text-destructive">{error}</p>
+      {(error || isFailed) && (
+        <p className="text-sm text-muted-foreground">
+          {error ?? jobErrorText(errorCode)}
+        </p>
       )}
     </div>
   );

@@ -16,6 +16,7 @@ import { ClipCard } from "@/components/clip-card";
 import { JobProgress } from "@/components/job-progress";
 import { Button } from "@/components/ui/button";
 import { formatDuration } from "@/lib/utils";
+import { jobErrorText } from "@/lib/job-error-text";
 import { LocalDate } from "@/components/local-date";
 
 export type SerializedProjectDetail = Omit<
@@ -174,9 +175,12 @@ export function ProjectDetail({
         </div>
       ) : (
         <div className="rounded-lg border border-destructive/25 bg-destructive/5 p-4">
-          <div className="text-sm text-destructive">
-            Failed: {project.error || "Unknown error"}
+          <div className="text-sm font-medium text-destructive">
+            Processing failed
           </div>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {jobErrorText(project.errorCode)}
+          </p>
         </div>
       )}
 
