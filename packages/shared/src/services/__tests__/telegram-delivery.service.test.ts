@@ -19,9 +19,12 @@ vi.mock("../../lib/prisma", () => ({
 import {
   createTelegramDelivery,
   getPendingTelegramDeliveries,
+  isPermanentTelegramError,
+  markTelegramDeliveryAttemptFailed,
   markTelegramDeliveryFailed,
   markTelegramDeliveryFailureNotified,
   markTelegramDeliverySent,
+  MAX_TELEGRAM_DELIVERY_ATTEMPTS,
 } from "../telegram-delivery.service";
 
 describe("telegram-delivery.service", () => {
@@ -94,6 +97,7 @@ describe("telegram-delivery.service", () => {
       data: {
         status: "DELIVERED",
         deliveredAt: expect.any(Date),
+        attempts: 0,
         error: null,
       },
     });
@@ -121,8 +125,93 @@ describe("telegram-delivery.service", () => {
       where: { id: "delivery1" },
       data: {
         status: "FAILURE_NOTIFIED",
+        // this pass ended in a real outcome, so the clips delivery that may
+        // follow it starts from a full budget
+        attempts: 0,
         error: "boom",
       },
+    });
+  });
+
+  describe("the attempt budget", () => {
+    // getPendingTelegramDeliveries takes 20 rows and has no other drain, so a
+    // pre-send failure that never goes terminal holds a twentieth of the whole
+    // bot's delivery capacity for ever.
+    it("keeps the row re-pickable while the budget lasts", async () => {
+      mocks.telegramDeliveryUpdate.mockResolvedValue({});
+
+      const { terminal } = await markTelegramDeliveryAttemptFailed(
+        "delivery1",
+        "connection reset",
+        0
+      );
+
+      expect(terminal).toBe(false);
+      expect(mocks.telegramDeliveryUpdate).toHaveBeenCalledWith({
+        where: { id: "delivery1" },
+        // increment, not a computed absolute: the read and the write are not
+        // one transaction
+        data: { attempts: { increment: 1 }, error: "connection reset" },
+      });
+    });
+
+    it("retires the row on the last attempt", async () => {
+      mocks.telegramDeliveryUpdate.mockResolvedValue({});
+
+      const { terminal } = await markTelegramDeliveryAttemptFailed(
+        "delivery1",
+        "connection reset",
+        MAX_TELEGRAM_DELIVERY_ATTEMPTS - 1
+      );
+
+      expect(terminal).toBe(true);
+      expect(mocks.telegramDeliveryUpdate).toHaveBeenCalledWith({
+        where: { id: "delivery1" },
+        data: {
+          attempts: { increment: 1 },
+          error: "connection reset",
+          status: "FAILED",
+        },
+      });
+    });
+
+    it("spans more than a minute of polling, and stays bounded", () => {
+      // The poller runs every 10s. The budget must outlast a Telegram 429
+      // backoff (~60s) and a Postgres failover, without letting one dead row
+      // hold a window slot for anything like the user's patience.
+      expect(MAX_TELEGRAM_DELIVERY_ATTEMPTS * 10).toBeGreaterThanOrEqual(120);
+      expect(MAX_TELEGRAM_DELIVERY_ATTEMPTS * 10).toBeLessThanOrEqual(300);
+    });
+  });
+
+  describe("permanent Telegram errors", () => {
+    it("recognises the chats that will never accept a message", () => {
+      for (const message of [
+        "Forbidden: bot was blocked by the user",
+        "Forbidden: bot was kicked from the group chat",
+        "Forbidden: user is deactivated",
+        "Bad Request: chat not found",
+        "Bad Request: PEER_ID_INVALID",
+        "Bad Request: CHAT_WRITE_FORBIDDEN",
+        "Bad Request: have no rights to send a message",
+      ]) {
+        expect(isPermanentTelegramError(message)).toBe(true);
+      }
+    });
+
+    it("does not condemn the faults that really do heal", () => {
+      // Spending clips on a false positive is worse than spending 12 polls on
+      // a true negative: these all come back.
+      for (const message of [
+        "429: Too Many Requests: retry after 30",
+        "Bad Request: failed to get HTTP URL content",
+        "Bad Request: wrong file identifier/HTTP URL specified",
+        "Internal Server Error",
+        "connection reset by peer",
+        "Timed out fetching a new connection from the connection pool",
+      ]) {
+        expect(isPermanentTelegramError(message)).toBe(false);
+      }
     });
   });
 });

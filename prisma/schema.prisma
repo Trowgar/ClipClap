@@ -388,6 +388,13 @@ model TelegramDelivery {
   user        User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   chatId      String
   status      TelegramDeliveryStatus @default(PENDING)
+  // Pre-send failures only: the poller bumps this when a pass threw before
+  // anything reached the chat, and retires the row once it reaches
+  // MAX_TELEGRAM_DELIVERY_ATTEMPTS. Without a bound a row that can never
+  // succeed sits in the 20-row pickup window for ever and starves everyone
+  // queued behind it. Reset to 0 whenever a pass ends in a real outcome, so
+  // each stage of a delivery gets its own budget.
+  attempts    Int                    @default(0)
   error       String?
   deliveredAt DateTime?
   createdAt   DateTime               @default(now())

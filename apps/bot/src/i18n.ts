@@ -47,6 +47,7 @@ export interface Dict {
    *  untagged (null) falls back to the generic line. */
   processingFailed: (code: JobErrorCode | null) => string;
   done: (n: number) => string;
+  donePartial: (sent: number, total: number) => string;
   doneNoClips: (reason: string) => string;
   lowQualityNote: string;
   blocked: (reason: string) => string;
@@ -220,6 +221,8 @@ const en: Dict = {
     `This video is over 20 MB - Telegram's Bot API limit. For now, upload longer videos on the website: ${url}/dashboard. We're working on lifting this limit soon.`,
   processingFailed: (code) => (code && enFailure[code]) || enFailureGeneric,
   done: (n) => `Done. ${n} clip${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} ready.`,
+  donePartial: (sent, total) =>
+    `Sent ${sent} of ${total} clips - something went wrong before the rest could be delivered. All ${total} are ready in your dashboard.`,
   doneNoClips: (reason) =>
     reason === "NO_USABLE_SPEECH"
       ? "Done, but I could not find usable speech in this video - no clips this time."
@@ -425,6 +428,8 @@ const ru: Dict = {
   processingFailed: (code) => (code && ruFailure[code]) || ruFailureGeneric,
   done: (n) =>
     `Готово. ${n} ${pluralizeRu(n, "клип", "клипа", "клипов")} ${pluralizeRu(n, "готов", "готовы", "готовы")}.`,
+  donePartial: (sent, total) =>
+    `Отправил ${sent} из ${total} ${pluralizeRu(total, "клипа", "клипов", "клипов")} - остальные доставить не удалось. Все ${total} готовы в личном кабинете.`,
   doneNoClips: (reason) =>
     reason === "NO_USABLE_SPEECH"
       ? "Готово, но в этом видео не нашлось пригодной речи - клипов не будет."

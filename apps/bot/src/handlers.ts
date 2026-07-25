@@ -14,10 +14,13 @@ import {
   getPresignedDownloadUrl,
   getTributeCatalogEntry,
   getUsageForUser,
+  isPermanentTelegramError,
   jobService,
+  markTelegramDeliveryAttemptFailed,
   markTelegramDeliveryFailed,
   markTelegramDeliveryFailureNotified,
   markTelegramDeliverySent,
+  MAX_TELEGRAM_DELIVERY_ATTEMPTS,
   parseJobErrorCode,
   prisma,
   redeemLinkFromBot,
@@ -733,6 +736,57 @@ export async function sendPlansView(
   });
 }
 
+/**
+ * What the chat has ALREADY been told, for a row whose status write then threw.
+ *
+ * The two halves of a delivery pass are not equally repeatable: a Telegram send
+ * cannot be taken back, a prisma update can be retried for ever. So when the
+ * send succeeds and the write fails we are left owing only the write - and the
+ * guard that stops the next poll re-sending the identical message cannot live
+ * in the database, because the database is the thing that is broken. It lives
+ * here, in the poller process, and the next poll flushes the owed write in
+ * silence.
+ *
+ * Bounded by the rows currently in flight: every entry is deleted the moment
+ * its write lands, and only a row whose write keeps failing keeps one.
+ *
+ * A process restart loses the memo, so a crash in exactly that window can still
+ * repeat one message once. That is the residue, not the bug: the bug was
+ * repeating it every 10 seconds for ever.
+ */
+type OwedWrite =
+  | { kind: "FAILURE_NOTIFIED"; error: string }
+  | { kind: "DELIVERED" }
+  | { kind: "FAILED"; error: string };
+
+const owedWrites = new Map<string, OwedWrite>();
+
+function flushOwedWrite(deliveryId: string, owed: OwedWrite): Promise<unknown> {
+  if (owed.kind === "DELIVERED") return markTelegramDeliverySent(deliveryId);
+  if (owed.kind === "FAILURE_NOTIFIED") {
+    return markTelegramDeliveryFailureNotified(deliveryId, owed.error);
+  }
+  return markTelegramDeliveryFailed(deliveryId, owed.error);
+}
+
+/**
+ * Record the outcome, then write it. Never throws: a status write that escaped
+ * the batch loop used to abort every row queued behind it AND leave this one
+ * PENDING with a video already in the chat - a second copy on every poll.
+ */
+async function settleDelivery(deliveryId: string, owed: OwedWrite) {
+  owedWrites.set(deliveryId, owed);
+  try {
+    await flushOwedWrite(deliveryId, owed);
+    owedWrites.delete(deliveryId);
+  } catch (error) {
+    console.error(
+      `Telegram delivery ${deliveryId} is ${owed.kind} in the chat but the status write failed; will retry the write only:`,
+      error instanceof Error ? error.message : error
+    );
+  }
+}
+
 export async function deliverReadyTelegramJobs(
   client: TelegramClient,
   appUrl: string
@@ -740,18 +794,39 @@ export async function deliverReadyTelegramJobs(
   const deliveries = await telegramDeliveryService.getPendingTelegramDeliveries();
 
   for (const delivery of deliveries) {
+    // This row already said its piece; only the bookkeeping is outstanding.
+    // Retry that and nothing else - re-sending is the one thing that cannot be
+    // undone.
+    const owed = owedWrites.get(delivery.id);
+    if (owed) {
+      try {
+        await flushOwedWrite(delivery.id, owed);
+        owedWrites.delete(delivery.id);
+      } catch (error) {
+        console.error(
+          `Telegram delivery ${delivery.id}: owed ${owed.kind} write still failing:`,
+          error instanceof Error ? error.message : error
+        );
+      }
+      continue;
+    }
+
     // The only irreversible act in this loop is putting a video in the chat:
     // it cannot be taken back, and re-running the row would give the user a
     // second copy. Everything before it - the locale read, signing the URLs,
     // any message send - leaves the chat exactly as it was, so a throw there
     // means "we never got as far as delivering", and the row must stay
     // re-pickable. Closing it there is what billed a healed job and delivered
-    // nothing. A row that keeps throwing costs one poll's work every 10s and
-    // says nothing to the user; that is the cheaper of the two mistakes.
-    let clipInChat = false;
+    // nothing.
+    //
+    // Re-pickable, but not for ever: the pickup window is 20 rows wide and has
+    // no other drain, so each such throw spends one of
+    // MAX_TELEGRAM_DELIVERY_ATTEMPTS and the last one retires the row.
+    let dict: Dict | null = null;
+    let clipsInChat = 0;
     try {
       const locale = await getUserLocale(delivery.userId);
-      const dict = t(locale);
+      dict = t(locale);
 
       if (delivery.job.status === "FAILED") {
         // The user gets localized copy for the parsed code; the raw engine
@@ -766,10 +841,10 @@ export async function deliverReadyTelegramJobs(
           delivery.chatId,
           dict.processingFailed(parseJobErrorCode(delivery.job.error))
         );
-        await markTelegramDeliveryFailureNotified(
-          delivery.id,
-          delivery.job.error || "Job failed"
-        );
+        await settleDelivery(delivery.id, {
+          kind: "FAILURE_NOTIFIED",
+          error: delivery.job.error || "Job failed",
+        });
         continue;
       }
 
@@ -778,7 +853,7 @@ export async function deliverReadyTelegramJobs(
           delivery.chatId,
           dict.doneNoClips(delivery.job.noClipsReason ?? "NO_VIABLE_MOMENTS")
         );
-        await markTelegramDeliverySent(delivery.id);
+        await settleDelivery(delivery.id, { kind: "DELIVERED" });
         continue;
       }
 
@@ -807,30 +882,84 @@ export async function deliverReadyTelegramJobs(
             [{ text: dict.editInBrowserBtn, url: video.editUrl }],
           ],
         });
-        clipInChat = true;
+        clipsInChat++;
       }
 
       // After the clips, not before: it is a summary of what has arrived, and
-      // sending it first made it a promise this code could fail to keep.
+      // sending it first made it a promise this code could fail to keep - a
+      // standing "Done. 3 clips are ready." above an empty chat.
       await client.sendMessage(
         delivery.chatId,
         dict.done(delivery.job.clips.length)
       );
 
-      await markTelegramDeliverySent(delivery.id);
+      await settleDelivery(delivery.id, { kind: "DELIVERED" });
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Delivery failed";
-      if (!clipInChat) {
-        // Nothing reached the chat, so nothing is owed and nothing can be
-        // duplicated. Leave the row as it is and let the next poll try again.
-        console.error(
-          `Telegram delivery ${delivery.id} could not start; will retry:`,
-          message
-        );
+
+      if (clipsInChat > 0) {
+        // Videos are in the chat, so this row is terminal either way. But
+        // moving the summary after the clips left a failure mid-batch saying
+        // NOTHING at all: one bare video, a job the user was billed for in
+        // full, and no way to learn that two more clips existed. The summary
+        // does not go back before the clips - that is the promise-we-cannot-
+        // keep bug - it becomes an honest report of what actually landed.
+        const total = delivery.job.clips.length;
+        try {
+          await client.sendMessage(
+            delivery.chatId,
+            clipsInChat < total
+              ? dict!.donePartial(clipsInChat, total)
+              : // every clip arrived and only the summary itself failed; the
+                // user is owed the plain confirmation, not a "3 of 3"
+                dict!.done(total)
+          );
+        } catch (reportError) {
+          console.error(
+            `Telegram delivery ${delivery.id}: could not report the partial result:`,
+            reportError instanceof Error ? reportError.message : reportError
+          );
+        }
+        await settleDelivery(delivery.id, { kind: "FAILED", error: message });
         continue;
       }
-      await markTelegramDeliveryFailed(delivery.id, message);
+
+      // Nothing reached the chat, so nothing is owed and nothing can be
+      // duplicated.
+      if (isPermanentTelegramError(message)) {
+        // A blocked bot, a deleted chat: no amount of waiting fixes this, and
+        // every retry is a doomed API call charged against the bot's global
+        // rate limit. Retire it now rather than let it hold a slot in the
+        // 20-row window for the whole attempt budget.
+        console.error(
+          `Telegram delivery ${delivery.id} can never be delivered:`,
+          message
+        );
+        await settleDelivery(delivery.id, { kind: "FAILED", error: message });
+        continue;
+      }
+
+      try {
+        const { terminal } = await markTelegramDeliveryAttemptFailed(
+          delivery.id,
+          message,
+          delivery.attempts
+        );
+        console.error(
+          terminal
+            ? `Telegram delivery ${delivery.id} gave up after ${MAX_TELEGRAM_DELIVERY_ATTEMPTS} attempts:`
+            : `Telegram delivery ${delivery.id} could not start; will retry:`,
+          message
+        );
+      } catch (countError) {
+        // Even the attempt counter can fail. Log and move on - the rows behind
+        // this one are not to blame.
+        console.error(
+          `Telegram delivery ${delivery.id}: could not record the failed attempt:`,
+          countError instanceof Error ? countError.message : countError
+        );
+      }
     }
   }
 }
