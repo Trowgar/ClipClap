@@ -31,15 +31,37 @@ import type { CriticVerdict, LlmUsage, MergedCandidate, SentenceNode } from "./t
 // while the visible JSON is a stable ~150 tokens per verdict. The allowance has
 // to scale with batch size because the dominant term does.
 //
-// Headroom is safe to be generous with: max_completion_tokens is a CAP, not a
-// reservation - unused tokens are never billed, and a request that stops at 2857
-// costs 2857 whether the cap was 5000 or 14000. It is not unlimited-free though:
-// the model does expand its reasoning into room it is given (size 6: 1979 tokens
-// at cap 5000 -> 2159 at 9000 -> 2677 at 14000), so the cap is chosen to clear
-// the worst observed completion at every size without inviting a ramble.
-//   1 candidate  -> 2000 (2.6x the worst 762)
-//   3 candidates -> 3600 (1.9x the worst 1931)
-//   6 candidates -> 6000 (1.7x the worst 3506)
+// Headroom is cheap but NOT free, and the two costs differ:
+//   - Billing: max_completion_tokens is a cap, not a reservation. A request that
+//     stops at 2857 costs 2857 whether the cap was 5000 or 14000. Note this
+//     makes the fix cost-POSITIVE: a truncated completion is billed in full, so
+//     the old 6@2400 -> 2x3@1200 -> singles cascade billed more tokens for zero
+//     verdicts than one 6@6000 call that actually returns 6.
+//   - Rate limiting: OpenAI has historically estimated a request's TPM draw as
+//     prompt_tokens + max_completion_tokens, so against TPM the cap IS a
+//     reservation. At CRITIC_CONCURRENCY 4 and batch 6 that is ~4x(9.3k+6k) =
+//     ~61k in flight, up from ~47k. Do NOT read "unused tokens are never billed"
+//     as licence to set this to 14000; a 429 degrades to the fallback model and
+//     then to AnalyzeTechnicalError.
+// The model also expands its reasoning into room it is given (size 6: 1979
+// tokens at cap 5000 -> 2159 at 9000 -> 2677 at 14000). So each cap is the
+// smallest round number that clears a cap already OBSERVED TO COMPLETE at that
+// size, which is the load-bearing property:
+//   1 candidate  -> 2000 (> 1200, which completed)
+//   3 candidates -> 3600 (> 3000, which completed)
+//   6 candidates -> 6000 (> 5000, which completed)
+//
+// CAVEAT: every number above is one sample per cell on one fixture, and per-call
+// variance is the same order as the headroom (a later live run measured 2184
+// completion at 6/6000, BELOW the 2857 seen at 6/5000). Treat "worst seen" as
+// "only seen once".
+//
+// CONDITIONAL ON reasoning_effort = "low", which is env-tunable via
+// SELECTION_REASONING_EFFORT (config.ts) and passed straight through below.
+// Raising it multiplies reasoning tokens, which is the dominant term here, and
+// re-creates the starvation this constant exists to prevent: truncation ->
+// split cascade -> dropTruncated() -> thin or (at zero verdicts) failed jobs.
+// Re-measure this table before shipping a higher effort.
 const CRITIC_BASE_TOKENS = 1200; // shared rubric/JSON-scaffold pass + flat headroom
 const CRITIC_TOKENS_PER_CANDIDATE = 800; // ~450 reasoning + ~150 JSON + ~200 headroom
 const CRITIC_CONCURRENCY = 4;

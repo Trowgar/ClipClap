@@ -168,7 +168,7 @@ Every window is represented, no region floods the critic, and cost stays linear 
 | Model | `OPENAI_CRITIC_MODEL`, default `gpt-5.1` (budget lever: `gpt-5-mini`) |
 | Calls | candidates batched `CRITIC_BATCH_SIZE=6`, parallel, concurrency 4 |
 | Reasoning | `reasoning_effort: "low"` (`SELECTION_REASONING_EFFORT` env) |
-| Output cap | `max_output_tokens ≈ CRITIC_BATCH_SIZE * 400` (covers JSON + evidence arrays + reasoning tokens) |
+| Output cap | `max_output_tokens = 1200 + CRITIC_BATCH_SIZE * 800` (`criticMaxOutputTokens`, doubled once as the single-candidate truncation retry). A reasoning model spends the cap on reasoning FIRST, then on the visible JSON: measured at `reasoning_effort=low` reasoning alone is ~330-450 tokens per candidate on top of ~150 tokens of JSON per verdict, so a flat per-candidate figure below that starves the call into `finish_reason:"length"` with zero verdicts. **The sizing is conditional on `reasoning_effort=low`** - raising `SELECTION_REASONING_EFFORT` multiplies reasoning tokens and this constant must be re-measured with it. |
 | response_format | `json_schema`, `strict: true` |
 | Input per candidate | local node window `[start_node-16 .. end_node+12]` (clamped; backward reach feeds the COLD VIEWER RULE - the critic must be able to pull a setup from ~a minute earlier; forward reach feeds payoff chasing) as `#<idx> [<start>s-<end>s] <text>`, with ¶ markers on clean-start lines (shared `isCleanStart` semantics with snap - the critic picks starts the cutter will accept); plus a one-line `thread:` note when the candidate references a collated thread |
 | Output | `{results: [{id, keep, score, grounded, self_contained, start_node, payoff_node, end_node, hook_start_node, hook_end_node, title, description, title_evidence_nodes, description_evidence_nodes, language}]}` - node indices, never seconds |
@@ -535,13 +535,13 @@ Code is the final authority for: index validity, monotonic times, duration bound
 
 ### Cost and latency (per 1h source; prices per 1M tokens: gpt-4o-mini $0.15/$0.60, gpt-5-mini $0.25/$2.00, gpt-5.1 $1.25/$10.00)
 
-Assumptions: ~11k words -> ~2000 nodes -> ~26k node tokens; 7 scan windows (~28k in with overlap); K≈28 candidates in ~5 critic batches. Critic output budget raised to ~400 tokens/candidate (JSON + evidence arrays + reasoning at `reasoning_effort=low`).
+Assumptions: ~11k words -> ~2000 nodes -> ~26k node tokens; 7 scan windows (~28k in with overlap); K≈28 candidates in ~5 critic batches. Critic output *cap* is `1200 + 800/candidate` (see the critic table above), but billing follows the actual completion, which measured ~2.2-2.9k per batch of 6 at `reasoning_effort=low` - the unused headroom is never charged.
 
 | Call | Model | In | Out (incl. reasoning) | Cost |
 |---|---|---|---|---|
 | Scanner x7 | gpt-4o-mini | 28k | 3.5k | $0.0063 |
-| Critic x5 | gpt-5.1 | 18k | ~8k | $0.1025 |
-| **Total (recommended)** | | | | **≈ $0.11/hr** (worst, with repair retries ≈ $0.14) |
+| Critic x5 | gpt-5.1 | 18k | ~13k | $0.1525 |
+| **Total (recommended)** | | | | **≈ $0.16/hr** (worst, with repair retries ≈ $0.19) |
 | Total (budget: gpt-5-mini critic) | | | | ≈ $0.024/hr |
 
 3h scales sub-linearly (K capped): ≈ $0.16 total ≈ $0.055/hr. Latency: analyze ≈ 20-25s at 1h (vs ~5s today), ≈ 30-35s at 3h - acceptable in an async stage; parallel Whisper chunking claws time back on long videos. Replace the flat `ANALYSIS_COST_PER_MINUTE` estimate in `cost-telemetry.ts` with real `usage` token accounting.
