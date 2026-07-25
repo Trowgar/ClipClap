@@ -251,14 +251,26 @@ export async function runCritic(
       row.hook_start_node,
       row.hook_end_node,
     ];
+    // Copy is only load-bearing for a clip we would actually ship: the
+    // orchestrator skips a keep:false verdict before it ever reads title or
+    // description. The live model writes neither for a clip it is killing -
+    // there is no title for a moment you are rejecting - and every rejection in
+    // the podcast-answer-arc eval fixture came back title:"" description:"".
+    // Demanding copy here dropped those rows, which filed the critic's
+    // considered "no" under "the critic never answered about this candidate"
+    // and made a weak video look like a protocol failure.
+    const copyOk =
+      row.keep !== true ||
+      (typeof row.title === "string" &&
+        row.title.trim().length > 0 &&
+        typeof row.description === "string" &&
+        row.description.trim().length > 0);
     if (
+      typeof row.keep !== "boolean" ||
       !Number.isFinite(row.score) ||
       row.score < 0 ||
       row.score > 1 ||
-      typeof row.title !== "string" ||
-      row.title.trim().length === 0 ||
-      typeof row.description !== "string" ||
-      row.description.trim().length === 0 ||
+      !copyOk ||
       nodeRefs.some((n) => !Number.isInteger(n) || n < 0 || n > maxNode)
     ) {
       telemetry.invariantDrops += 1;
@@ -276,8 +288,8 @@ export async function runCritic(
       endNode: row.end_node,
       hookStartNode: row.hook_start_node,
       hookEndNode: row.hook_end_node,
-      title: truncateTitle(row.title),
-      description: row.description.trim(),
+      title: typeof row.title === "string" ? truncateTitle(row.title) : "",
+      description: typeof row.description === "string" ? row.description.trim() : "",
       titleEvidenceNodes: row.title_evidence_nodes ?? [],
       descriptionEvidenceNodes: row.description_evidence_nodes ?? [],
       language: row.language,

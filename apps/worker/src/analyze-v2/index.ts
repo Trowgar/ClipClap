@@ -258,11 +258,11 @@ export async function analyzeHighlightsV2(
   if (highlights.length === 0) {
     // Zero clips is only an ANSWER if every candidate actually got answered.
     // The critic's contract is one verdict per candidate id - it has keep:false
-    // for "not worth clipping", so returning fewer rows than it was given is a
-    // protocol failure (silent omission, refusal, truncation, malformed row),
-    // not an opinion. With survivors that is mere recall loss and we ship what
-    // we have; with nothing left it becomes the whole answer, and "no viable
-    // moments" would assert something about moments no model ever judged.
+    // for "not worth clipping", so a candidate that comes back with no verdict
+    // at all was not judged, it was skipped. With survivors that is mere recall
+    // loss and we ship what we have; with nothing left it becomes the whole
+    // answer, and "no viable moments" would assert something about moments no
+    // model ever looked at.
     // Same quota rule as the guards above: DONE with 0 clips burns the user's
     // minutes (usage sums every job that is not FAILED) while FAILED leaves the
     // quota untouched and BullMQ retries - and unlike a cached transcript, a
@@ -275,7 +275,25 @@ export async function analyzeHighlightsV2(
     // reasons. Hole-dropped candidates are excluded too - `candidates` is
     // already post-hole - because a re-run reads the same cached transcript and
     // 4c3fc05 settled that case as content.
-    const unjudged = candidates.length - critic.verdicts.length;
+    // Counted as omittedDrops, NOT as `candidates.length - verdicts.length`.
+    // Those two are not the same number and the difference is the whole
+    // correctness of this guard: verdicts are rows that SURVIVED the critic's
+    // invariant filter, so any accounted or malformed row would inflate the
+    // subtraction into a phantom protocol failure. omittedDrops is the exact
+    // population we mean - a candidate id that came back with no usable verdict
+    // and no attributed drop, i.e. the critic silently skipped it or answered
+    // in a shape we could not read. A re-run genuinely re-rolls the critic, so
+    // FAILED can heal this, and the quota stays untouched meanwhile.
+    //
+    // Truncated and refused candidates are deliberately NOT counted. The critic
+    // classifies both as content-shaped anomalies of the candidate itself and
+    // has already spent its own retry ladder on them; they reproduce on a
+    // re-run, so promoting them here would burn all three BullMQ attempts and
+    // still never hand the user an answer. If they take out EVERY candidate
+    // there is no verdict at all and the "nothing was judged" guard above
+    // already catches it - what falls through to here is a video most of whose
+    // moments really were judged, and that is an answer worth shipping.
+    const unjudged = critic.telemetry.omittedDrops;
     if (unjudged > 0) {
       const t = critic.telemetry;
       throw new AnalyzeTechnicalError(

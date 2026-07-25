@@ -142,6 +142,34 @@ describe("runCritic", () => {
     expect(r.telemetry.invariantDrops).toBe(3);
   });
 
+  it("keeps a rejection that carries no copy - blank title is the live reject shape", async () => {
+    // There is no title to write for a clip you are killing, and the real model
+    // says so: all three rejections in the podcast-answer-arc eval fixture came
+    // back with title:"" description:"". The orchestrator never reads copy off a
+    // keep:false verdict, so demanding it here silently converted the critic's
+    // "no" into "the critic never answered".
+    const client = seqClient([
+      () => ok([
+        verdictRow("a", { keep: false, score: 0.5, grounded: false, self_contained: false, title: "", description: "" }),
+        verdictRow("b", { id: "b" }),
+      ]),
+    ]);
+    const r = await runCritic(client, newUsage(), nodes(10), [cand("a", 0), cand("b", 4)], "ru", cfg);
+    expect(r.verdicts).toHaveLength(2);
+    expect(r.verdicts[0]).toMatchObject({ id: "a", keep: false, title: "", description: "" });
+    expect(r.telemetry.invariantDrops).toBe(0);
+    expect(r.telemetry.omittedDrops).toBe(0);
+  });
+
+  it("still drops a KEEP whose copy is blank - a clip we would ship needs a name", async () => {
+    const client = seqClient([
+      () => ok([verdictRow("a", { title: "  ", description: "ok" }), verdictRow("b", { id: "b" })]),
+    ]);
+    const r = await runCritic(client, newUsage(), nodes(10), [cand("a", 0), cand("b", 4)], "ru", cfg);
+    expect(r.verdicts.map((v) => v.id)).toEqual(["b"]);
+    expect(r.telemetry.invariantDrops).toBe(1);
+  });
+
   it("splits the batch on truncation down to singles", async () => {
     const truncated = () => ({
       choices: [{ message: { content: "{" }, finish_reason: "length" }],

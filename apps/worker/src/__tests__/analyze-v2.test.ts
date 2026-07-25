@@ -582,6 +582,83 @@ describe("analyzeHighlightsV2", () => {
     expect(r.telemetry.omittedDrops).toBe(0);
   });
 
+  it("does NOT throw when the critic rejects everything in its live blank-copy shape", async () => {
+    // The real model writes no title/description for a clip it is killing -
+    // there is nothing to name. Every rejection in the recorded eval fixture
+    // podcast-answer-arc (c0, c7, c16) came back exactly like this. Those rows
+    // ARE verdicts: the critic looked at each candidate and said no. Treating
+    // blank copy on keep:false as a malformed row turns the commonest content
+    // answer there is - a weak video - into a hard FAILED that 3 retries can
+    // never heal, because the critic will reject the same moments every time.
+    const rejected = (id: string, over: Record<string, unknown> = {}) =>
+      verdictRow(id, {
+        keep: false,
+        grounded: false,
+        self_contained: false,
+        score: 0.5,
+        title: "",
+        description: "",
+        title_evidence_nodes: [],
+        description_evidence_nodes: [],
+        ...over,
+      });
+
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: client(
+        twoCandidateScan(),
+        criticRows(
+          rejected("c0"),
+          rejected("c1", { start_node: 25, payoff_node: 28, end_node: 30, hook_start_node: 26, hook_end_node: 28 })
+        )
+      ),
+      cfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    expect(r.highlights).toHaveLength(0);
+    expect(r.noClipsReason).toBe("NO_VIABLE_MOMENTS");
+    expect(r.telemetry.criticVerdicts).toBe(2);
+    expect(r.telemetry.invariantDrops).toBe(0);
+    expect(r.telemetry.omittedDrops).toBe(0);
+  });
+
+  it("does NOT throw when a truncated candidate is the only one missing", async () => {
+    // Truncation is accounted at the critic as a content-shaped anomaly of the
+    // candidate (critic.ts dropTruncated). It is not a silent omission and a
+    // retry re-rolls into the same oversized candidate, so it must not turn a
+    // judged-and-rejected video into an unhealable FAILED.
+    const truncating = {
+      chat: {
+        completions: {
+          create: vi.fn(async (body: any) => {
+            if (body.model === cfg.scanModel) return twoCandidateScan();
+            // critic batches are single-candidate under this cfg: answer for
+            // c0, truncate forever on c1 (initial + doubled retry both cut off)
+            const user: string = body.messages.find((m: any) => m.role === "user").content;
+            if (user.includes("c0")) return criticRows(verdictRow("c0", { keep: false }));
+            return {
+              choices: [{ message: { content: '{"results":[{"id":"c1"' }, finish_reason: "length" }],
+              usage: { prompt_tokens: 200, completion_tokens: 80 },
+            };
+          }),
+        },
+      },
+    };
+
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: truncating as any,
+      cfg: { ...cfg, criticBatchSize: 1 },
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    expect(r.highlights).toHaveLength(0);
+    expect(r.noClipsReason).toBe("NO_VIABLE_MOMENTS");
+    expect(r.telemetry.truncatedDrops).toBe(1);
+    expect(r.telemetry.omittedDrops).toBe(0);
+  });
+
   it("does NOT throw when every judged clip is dropped by snap for content reasons", async () => {
     // both verdicts are keeps the critic believes in; both collapse to a single
     // sentence and snap refuses them as too short. That is the engine's own
