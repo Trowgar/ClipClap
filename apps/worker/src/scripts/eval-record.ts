@@ -4,7 +4,10 @@
  *   docker compose exec worker-analyze sh -c \
  *     "cd /app/apps/worker && npx tsx src/scripts/eval-record.ts <jobId> <case-name>"
  *
- * Writes apps/worker/src/__tests__/fixtures/eval/<case-name>/{transcript,responses,snapshot}.json
+ * Writes apps/worker/src/__tests__/fixtures/eval/<case-name>/{transcript,responses,snapshot,meta}.json
+ * meta.json pins the engine-config fingerprint the responses were captured
+ * under, so a later knob change fails the replay instead of silently reusing
+ * recordings the current engine would never have produced.
  * Costs real API calls - run it deliberately, not in a loop.
  */
 import { mkdirSync, writeFileSync } from "fs";
@@ -15,6 +18,7 @@ import { analyzeHighlightsV2 } from "../analyze-v2";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { requestKey } from "../__tests__/helpers/replay-client";
 import { toShape } from "../__tests__/helpers/eval-fixture";
+import { computeFingerprint } from "../__tests__/helpers/eval-fingerprint";
 
 async function main() {
   const [jobId, caseName] = process.argv.slice(2);
@@ -69,9 +73,10 @@ async function main() {
     },
   } as unknown as OpenAI;
 
+  const cfg = { ...loadAnalyzeConfig(), engine: "recall-critic" as const };
   const result = await analyzeHighlightsV2(transcript, {
     client,
-    cfg: { ...loadAnalyzeConfig(), engine: "recall-critic" },
+    cfg,
     transcriptPartial: job.transcriptPartial ?? false,
   });
 
@@ -82,6 +87,10 @@ async function main() {
   write("transcript.json", transcript);
   write("responses.json", responses);
   write("snapshot.json", toShape(result));
+  write("meta.json", {
+    recordedAt: new Date().toISOString(),
+    engine: computeFingerprint(cfg),
+  });
 
   console.log(
     `recorded ${caseName}: ${Object.keys(responses).length} responses, ${result.highlights.length} clips`

@@ -1,0 +1,12 @@
+{
+  "recordedAt": "2026-07-25T13:07:55.111Z",
+  "engine": {
+    "scanModel": "gpt-4o-mini",
+    "criticModel": "gpt-5.1",
+    "criticModelFallback": "gpt-5-mini",
+    "reasoningEffort": "low",
+    "criticBatchSize": 6,
+    "criticMaxOutputTokensBase": 1200,
+    "criticMaxOutputTokensPerCandidate": 800
+  }
+}

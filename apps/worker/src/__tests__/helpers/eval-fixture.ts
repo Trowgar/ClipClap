@@ -5,6 +5,11 @@ import { analyzeHighlightsV2 } from "../../analyze-v2";
 import { loadAnalyzeConfig, type AnalyzeConfig } from "../../analyze-v2/config";
 import type { V2Result } from "../../analyze-v2/types";
 import { createReplayClient } from "./replay-client";
+import {
+  assertFingerprintMatches,
+  computeFingerprint,
+  type EngineFingerprint,
+} from "./eval-fingerprint";
 
 export const FIXTURES_DIR = join(__dirname, "..", "fixtures", "eval");
 
@@ -41,17 +46,21 @@ export interface Fixture {
   transcript: TranscriptionResult;
   responses: Record<string, string>;
   snapshot: EvalShape | null;
+  /** Engine config the responses were recorded under; null for pre-fingerprint fixtures. */
+  fingerprint: Partial<EngineFingerprint> | null;
 }
 
 export function loadFixture(name: string): Fixture {
   const dir = join(FIXTURES_DIR, name);
   const read = (file: string) => JSON.parse(readFileSync(join(dir, file), "utf-8"));
   const snapshotPath = join(dir, "snapshot.json");
+  const metaPath = join(dir, "meta.json");
   return {
     name,
     transcript: read("transcript.json"),
     responses: read("responses.json"),
     snapshot: existsSync(snapshotPath) ? read("snapshot.json") : null,
+    fingerprint: existsSync(metaPath) ? read("meta.json").engine ?? null : null,
   };
 }
 
@@ -69,10 +78,18 @@ export async function runFixture(
   overrides: Partial<AnalyzeConfig> = {},
   extraResponses: Record<string, string> = {}
 ): Promise<V2Result> {
+  const cfg: AnalyzeConfig = {
+    ...loadAnalyzeConfig({}),
+    engine: "recall-critic",
+    ...overrides,
+  };
+  // Compared against the EFFECTIVE config: an override of a fingerprinted knob
+  // invalidates the recording exactly as an edit to the default would.
+  assertFingerprintMatches(fixture.name, fixture.fingerprint, computeFingerprint(cfg));
   const client = createReplayClient({ ...fixture.responses, ...extraResponses });
   const result = await analyzeHighlightsV2(fixture.transcript, {
     client,
-    cfg: { ...loadAnalyzeConfig({}), engine: "recall-critic", ...overrides },
+    cfg,
     retryDelayMs: 1,
   });
   if (client.missing.length > 0) {
