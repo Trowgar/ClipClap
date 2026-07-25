@@ -3,6 +3,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import {
+  BOT_FUNNEL_EVENTS,
   buildClipCaption,
   cancelShopOrder,
   canSubmitJob,
@@ -24,6 +25,7 @@ import {
   MAX_TELEGRAM_DELIVERY_ATTEMPTS,
   parseJobErrorCode,
   prisma,
+  recordBotFunnelEvent,
   redeemLinkFromBot,
   telegramDeliveryService,
   uploadFile,
@@ -1041,6 +1043,16 @@ async function handleStart(
     await client.sendMessage(message.chat.id, dict.welcomeFirstChoice, {
       replyMarkup: firstChoiceKeyboard(dict),
     });
+    // This screen creates no User row - a stranger who reads it and leaves
+    // used to be recorded nowhere at all, which is why the size of the
+    // population behind our 95 accounts is unknown. Recorded AFTER the reply
+    // is out, and recordBotFunnelEvent never throws, so the first thing this
+    // person sees cannot be broken by a telemetry write.
+    await recordBotFunnelEvent(
+      BOT_FUNNEL_EVENTS.FIRST_SCREEN,
+      message.from!.id,
+      message.from!.language_code
+    );
     return;
   }
 
@@ -1104,6 +1116,14 @@ async function handleCallbackQuery(
           replyMarkup: buildMainMenu(dict),
         })
         .catch(() => undefined);
+      // The other half of the funnel: this person went PAST the first screen.
+      // Counted here rather than inferred from users.createdAt so both halves
+      // are one query against one table, and so the two doors stay apart.
+      await recordBotFunnelEvent(
+        BOT_FUNNEL_EVENTS.NEW_ACCOUNT,
+        query.from.id,
+        query.from.language_code
+      );
       return;
     }
     case CALLBACK_LINK_ACCOUNT: {
@@ -1117,6 +1137,11 @@ async function handleCallbackQuery(
           dict.linkAccountInstructions(code, config.appUrl)
         )
         .catch(() => undefined);
+      await recordBotFunnelEvent(
+        BOT_FUNNEL_EVENTS.LINK_ACCOUNT,
+        query.from.id,
+        query.from.language_code
+      );
       return;
     }
     case CALLBACK_LANG_EN:
