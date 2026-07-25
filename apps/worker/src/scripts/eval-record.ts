@@ -73,7 +73,16 @@ async function main() {
     },
   } as unknown as OpenAI;
 
-  const cfg = { ...loadAnalyzeConfig(), engine: "recall-critic" as const };
+  // Recorded against the env-BLIND defaults on purpose, because that is what
+  // runFixture replays with (loadAnalyzeConfig({})). Reading process.env here
+  // instead would make a fixture inherit whatever the recording container
+  // happened to export - set CRITIC_MODEL_FALLBACK or SELECTION_REASONING_EFFORT
+  // and the fixture is born with a fingerprint replay can never match, whose
+  // only advertised remedy (re-record) reproduces the same mismatch forever.
+  // Pinning both sides to the defaults makes a recording reproducible from any
+  // container. To capture a fixture for a different model, change the default
+  // in config.ts - that is the thing the fixture is supposed to certify.
+  const cfg = { ...loadAnalyzeConfig({}), engine: "recall-critic" as const };
   const result = await analyzeHighlightsV2(transcript, {
     client,
     cfg,
