@@ -20,6 +20,7 @@ import {
   createTelegramDelivery,
   getPendingTelegramDeliveries,
   markTelegramDeliveryFailed,
+  markTelegramDeliveryFailureNotified,
   markTelegramDeliverySent,
 } from "../telegram-delivery.service";
 
@@ -46,13 +47,27 @@ describe("telegram-delivery.service", () => {
     });
   });
 
-  it("loads pending deliveries with completed or failed jobs", async () => {
+  it("loads pending deliveries with completed or failed jobs, and re-picks a notified failure whose job has since healed", async () => {
+    // A stage writes Job.status FAILED on EVERY BullMQ attempt, not only the
+    // last one, so a delivery can be notified of a failure that attempt 2 then
+    // heals. FAILURE_NOTIFIED rows must come back once the job reaches DONE -
+    // otherwise the user is billed for clips the bot never sends. They must NOT
+    // come back while the job is still FAILED (that would re-notify every 10s),
+    // and a terminal FAILED row (the send itself threw) is never re-picked.
     await getPendingTelegramDeliveries(10);
 
     expect(mocks.telegramDeliveryFindMany).toHaveBeenCalledWith({
       where: {
-        status: "PENDING",
-        job: { status: { in: ["DONE", "FAILED"] } },
+        OR: [
+          {
+            status: "PENDING",
+            job: { status: { in: ["DONE", "FAILED"] } },
+          },
+          {
+            status: "FAILURE_NOTIFIED",
+            job: { status: "DONE" },
+          },
+        ],
       },
       include: {
         job: {
@@ -92,6 +107,21 @@ describe("telegram-delivery.service", () => {
       data: {
         status: "FAILED",
         error: "send failed",
+      },
+    });
+  });
+
+  it("marks a delivered failure notice as FAILURE_NOTIFIED, not FAILED", async () => {
+    // Two different events used to share the FAILED state: "the job failed and
+    // we told the user" (which a retry can still turn into clips) and "our own
+    // send threw" (terminal). Only the first may be re-picked.
+    await markTelegramDeliveryFailureNotified("delivery1", "boom");
+
+    expect(mocks.telegramDeliveryUpdate).toHaveBeenCalledWith({
+      where: { id: "delivery1" },
+      data: {
+        status: "FAILURE_NOTIFIED",
+        error: "boom",
       },
     });
   });

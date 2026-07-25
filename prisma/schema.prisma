@@ -97,6 +97,12 @@ enum NoClipsReason {
 enum TelegramDeliveryStatus {
   PENDING
   DELIVERED
+  // The user was told the job failed. Not terminal: a stage writes Job.status
+  // FAILED on every BullMQ attempt, so the job may still heal to DONE - and
+  // then this row is picked up again and the clips are sent.
+  FAILURE_NOTIFIED
+  // The delivery itself threw (Telegram or R2). Terminal: re-running it would
+  // duplicate whatever already reached the chat.
   FAILED
 }
 

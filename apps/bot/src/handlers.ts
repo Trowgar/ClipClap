@@ -16,6 +16,7 @@ import {
   getUsageForUser,
   jobService,
   markTelegramDeliveryFailed,
+  markTelegramDeliveryFailureNotified,
   markTelegramDeliverySent,
   parseJobErrorCode,
   prisma,
@@ -746,11 +747,17 @@ export async function deliverReadyTelegramJobs(
       if (delivery.job.status === "FAILED") {
         // The user gets localized copy for the parsed code; the raw engine
         // message stays in the DB (Job.error and the delivery row) for support.
+        //
+        // FAILURE_NOTIFIED, not FAILED: Job.status FAILED is written on every
+        // BullMQ attempt, so this may be attempt 1 of 3. If a retry heals the
+        // job, getPendingTelegramDeliveries hands this row back once - with the
+        // job DONE - and the clips are sent below. That is what makes the
+        // failure copy's "wait a few minutes to see if the clips arrive" true.
         await client.sendMessage(
           delivery.chatId,
           dict.processingFailed(parseJobErrorCode(delivery.job.error))
         );
-        await markTelegramDeliveryFailed(
+        await markTelegramDeliveryFailureNotified(
           delivery.id,
           delivery.job.error || "Job failed"
         );

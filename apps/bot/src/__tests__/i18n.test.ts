@@ -463,6 +463,21 @@ describe("bot i18n", () => {
     expect(ru).toContain("дважды");
   });
 
+  it("only tells the user to wait for the clips because a healed job now delivers", () => {
+    // This is the one promise the generic line does make, and it is only
+    // honest because a delivery notified of a job failure is parked in
+    // FAILURE_NOTIFIED and re-picked when the job reaches DONE - see
+    // delivery.test.ts "delivers the clips when a job heals after a failed
+    // attempt". Drop that pickup and this sentence becomes advice to sit and
+    // wait for clips that will never be sent, so the two move together.
+    expect(t("en").processingFailed(null)).toContain(
+      "wait a few minutes to see if the clips arrive"
+    );
+    expect(t("ru").processingFailed(null)).toContain(
+      "если клипы всё-таки придут"
+    );
+  });
+
   it("has a distinct string for every code in both locales", () => {
     // the Record<JobErrorCode, string> makes a missing translation a compile
     // error; this catches the other half - a code copy-pasted onto two entries

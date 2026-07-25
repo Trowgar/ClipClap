@@ -150,6 +150,15 @@ const enFailure: Record<JobErrorCode, string> = {
 // it again" is false too: the original heals on attempt 2, the re-send is a
 // second job, and usage.service bills both. So: state the outcome as unknown
 // and spend the imperative on not paying twice.
+//
+// "wait a few minutes to see if the clips arrive" is a promise the product now
+// keeps: a delivery is parked in FAILURE_NOTIFIED rather than FAILED, and
+// getPendingTelegramDeliveries re-picks it the moment the job reaches DONE
+// (packages/shared/src/services/telegram-delivery.service.ts). Before that, a
+// healed job was billed and silently never delivered, which made this sentence
+// the worst kind of copy - the one that talks a user out of the only action
+// that would have got them their clips. If that pickup is ever removed, this
+// line has to go with it.
 const enFailureGeneric =
   "Something went wrong while processing this video and your minutes were not used. I cannot tell yet whether this one will finish - wait a few minutes to see if the clips arrive before sending it again, so the same video does not use your minutes twice. If nothing arrives by then, send it again or send a different file.";
 
@@ -340,7 +349,9 @@ const ruFailure: Record<JobErrorCode, string> = {
 
 // Same rule as enFailureGeneric: neither "жди, я повторяю" nor "пришли заново"
 // may be stated as fact - the first is false on a permanent failure, the second
-// double-charges when attempt 2 of 3 heals.
+// double-charges when attempt 2 of 3 heals. "подожди несколько минут: если
+// клипы всё-таки придут" holds for the same reason as in EN - the delivery row
+// is re-picked once the job heals to DONE.
 const ruFailureGeneric =
   "Что-то пошло не так при обработке видео, минуты не списаны. Пока непонятно, получится ли доделать это видео - подожди несколько минут: если клипы всё-таки придут, а ты пришлёшь видео заново, минуты спишутся дважды за одно и то же. Если ничего не пришло, пришли его ещё раз или другой файл.";
 
