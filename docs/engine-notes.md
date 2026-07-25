@@ -1,0 +1,239 @@
+# Engine notes
+
+Working notes on the ANALYZE and RENDER engines, written for whoever picks this up next - including a future
+me. This is not a spec. Specs say what should be true; this says what IS true, what was measured, and what
+was tried and failed. Its purpose is to stop the next session re-deriving what this one paid for.
+
+Rules for this file: every number here came from a measurement, not from reasoning. When a claim is
+reproduced, say how. When something is believed but unmeasured, mark it. Delete an entry when it stops being
+true - a stale note is worse than none, and this file has already caught two of its own.
+
+Last substantive update: 2026-07-25.
+
+---
+
+## 1. What the product is, in one paragraph
+
+ClipClap turns a long video into short vertical clips with burned-in subtitles. The audience is "clippers"
+who cut viral shorts from streams, podcasts and VODs. Two engines matter: **ANALYZE** picks the moments from
+the transcript, **RENDER** frames them into 9:16. Both assume humans talking on camera - ANALYZE picks by
+WORDS, RENDER frames by FACES. Everything else degrades: gameplay and anime get a blind centre crop and only
+verbal moments; speechless content yields zero clips.
+
+---
+
+## 2. ANALYZE: the pipeline and where each decision lives
+
+```
+transcript (Whisper verbose_json, word + segment timings)
+  -> buildSentenceGraph      nodes with leading/trailingStrength, hasWords (opaque = music/crosstalk)
+  -> runScanner              gpt-4o-mini, windowed, recall-oriented, returns NODE INDICES
+  -> teaser filter           [code] drops intro-montage neighbourhoods
+  -> mergeCandidates         overlap merge + span guard + split
+  -> selectCriticCandidates  stratified: per-window quota, then global by interest, region-capped
+  -> runCritic               gpt-5.1, batches of 6, strict json_schema, returns NODE INDICES
+  -> evidenceGate            [code] title/description must cite nodes inside the range
+  -> snapNodes               [code] OWNS ALL BOUNDARIES - clean start, payoff containment, clean end
+  -> selectAndOrder          [code] tier thresholds + surcharges + time-overlap NMS + soft cap
+```
+
+**The invariant that makes this safe:** models emit node indices only, never timestamps. Every cut lands on a
+real word or segment edge because the code, not the model, converts indices to seconds. Mid-word cuts and
+hallucinated timestamps are impossible by construction. Mid-*thought* cuts are only minimised, not
+impossible.
+
+**Where to put a new rule.** Every LLM rule needs a deterministic backstop; that pattern is the reason the
+engine survived a hundred prompt-level failures. But put the *policy* in `index.ts` (the orchestrator owns
+"technical failure versus content outcome") and the *mechanism* in the module that owns the data. `snapNodes`
+owns boundaries - never let a model move a boundary without re-running snap on the result.
+
+---
+
+## 3. Measured facts about the engine
+
+Numbers a future session should not have to re-derive.
+
+**Critic token budget.** gpt-5.1 spends `max_completion_tokens` on reasoning BEFORE writing any JSON. On the
+real critic prompt at `reasoning_effort: low`, reasoning costs **330-450 tokens per candidate** (measured:
+354-603 for one candidate, 918-1478 for three, 1979-2677 for six). The visible JSON is small and stable, about
+**150 tokens per verdict**. The original budget of 400 tokens per candidate was BELOW the reasoning floor at
+every batch size, so roughly half of all critic calls truncated, the batch-splitting recovery inherited the
+same starvation, and candidates were silently dropped. After sizing the budget from these numbers, truncations
+per fixture went **7 -> 0**, batch splits **6 -> 0**, API calls **18 -> 6**, and shipped clips went **5 -> 6**
+and **7 -> 10** with the survivors spread across the whole source instead of clustering on weak early
+material. Per-call variance is the same order as the headroom (a later run measured 2184 completion at a 6000
+budget, below the 2857 seen at 5000), which is why a truncation can genuinely heal on a retry.
+
+**Scanner order used to be non-deterministic.** `runScanner` pushed candidates into a shared array from
+inside `mapWithConcurrency`, so their order was API completion order. `mergeCandidates` sorts stably, so ties
+preserved input order, which changed merges, ids, batch composition and ultimately which clips shipped. The
+same transcript produced different clips run to run purely from network timing. Fixed by returning per-window
+arrays and flattening in index order. This was the third distinct source of the "clip lottery" the owner
+reported; the earlier two (evidence gate rejecting opaque nodes, snap gate) were fixed before it.
+
+**Transcription jitter between two runs of the same audio** (LCS-aligned, 7047 vs 7050 tokens):
+**14 substitutions, 28 insertions, 25 deletions.** Indels outnumber substitutions 3.8:1 and are almost all
+discourse particles - значит, вот, да, ну, там, если, допустим. Any text-matching heuristic must survive
+indels, not just respellings. ё/е is a coin flip: one fixture has zero ё tokens, the other has ten, and the
+same lemma appears both ways within one run (всё/все, ещё/еще).
+
+**Hook geometry is critic variance, not signal.** `payoffAt <= hookEnd` fires on 5 of 6 clips in one fixture
+and 2 of 10 in the other - same video, same engine, same config, different transcription run. It fires on the
+highest-scoring clip in the set. Do not build a rule on it; a plan task that did was dropped for this reason.
+
+---
+
+## 4. Approaches that were tried and failed
+
+The expensive part of this session. Do not retry these without new information.
+
+**Per-candidate similarity for intro-montage detection - failed twice.** The idea: an intro teaser montage is
+copied from later speech, so a candidate whose text recurs later is a montage fragment. It cannot work:
+
+- The motivating defect (a 3.03s clip, "Что убьет человечество / Собственная глупость конечно") is six words
+  that occur **exactly once** in the 52-minute episode. It scores 0.000 on verbatim recurrence at full
+  strength. There is nothing to match, so no threshold could ever flag it.
+- A substitution-tolerant scorer built to rescue short fragments voted on a fixed word offset. One inserted
+  word split the vote and took the score from 1.0000 to 0.0000 - defeated by the dominant jitter mode.
+- Most fundamentally, per-candidate similarity cannot separate "montage copy" from "the speaker said it
+  twice", because at the text level those are the same phenomenon. A cold open constructed from a sentence
+  the guest genuinely repeats scored 1.0000 and was dropped on both fixtures.
+
+**What works instead:** the unit of decision is the NEIGHBOURHOOD, not the candidate. A montage is a video
+that OPENS with a run of sentences each reproducing speech from far away. Measured: the intro region has
+**11 of 14 sentences** recurring later, identically across two independent transcriptions; the most any
+ordinary stretch of conversation produced across 1623 offsets is **2**; a constructed legitimate cold open
+gives **1**. The defect is dropped for where it sits, not for what it looks like. Separation 11 versus 2, not
+a 0.059 margin.
+
+**Guards that turn a content answer into a technical failure - got it wrong four times.** Every round that
+ADDED a failure-classification mechanism shipped a user-facing defect on its first attempt: a guard too loose
+that billed unjudged work; a guard too tight that failed weak videos (the commonest honest answer there is,
+and retries cannot heal it); copy that induced double billing; and an unrecoverable-error mechanism that
+cancelled retries on a predicate that was wrong in two independent ways. **Prefer removing mechanism over
+adding it, and when torn between asserting something about a failure and staying quiet and retrying, stay
+quiet.** But note the one place that instruction went too far: removing the terminal state from the delivery
+queue removed its only drain, and 20 permanently-failing rows starved every delivery for everyone. Bounded
+mechanism, not no mechanism.
+
+**Fake tests - shipped three times.** A test that re-implements the rule inside its own mock proves nothing;
+a test that asserts against the same config constant the code reads is tautological. The discipline that
+works: disable the guard by hand (copy the file to /tmp, edit in place, restore, md5-verify - never git) and
+watch the test go red. If it stays green it is not a test. `apps/worker/src/__tests__/eval-regressions.test.ts`
+carries a provenance comment per rule saying exactly which guard was disabled and what was observed; those
+comments have themselves been falsified once and re-verified, so re-check them when the guards change.
+
+---
+
+## 5. The regression harness
+
+The only end-to-end proof this engine has. Live under `apps/worker/src/__tests__/`.
+
+**How it works.** The engine's only non-determinism is two LLM calls. They are recorded per fixture, keyed by
+a hash of (model, system, user) - order-independent, because the scanner runs windows concurrently - and
+replayed through a stub client. Every deterministic layer runs for real, at zero cost, in milliseconds.
+
+- `helpers/replay-client.ts` - the stub. Records `truncated` and `refusal` outcomes as markers, because the
+  critic's batch-splitting depends on them and a recording without them is unreplayable.
+- `helpers/eval-fixture.ts` - `loadFixture`, `runFixture` (throws on a stale fixture), `toShape`.
+- `helpers/eval-fingerprint.ts` - fingerprints the engine config into the fixture. Without it a knob change
+  silently invalidates every recording while the suite stays green - which happened, and the harness
+  certified an already-fixed bug as correct.
+- `eval-snapshot.test.ts` - replays both fixtures and compares to the blessed shape.
+- `eval-regressions.test.ts` - the named defects the owner found in real clips, each with its provenance.
+- `scripts/eval-record.ts` - records a fixture from a real job against the LIVE API. Costs money. Manual.
+- `scripts/eval-bless.ts` - prints a readable diff before rewriting a snapshot. The diff is the review
+  artefact: a human decides from it whether a change is desirable.
+
+**The fixtures.** `podcast-ecology` (job `cmrzcqhl6000138lkg41n8bs0`) and `podcast-answer-arc`
+(job `cmrvawjxs00129pvw0oe1c1kv`). **They are two transcription runs of the SAME 52-minute episode.** The
+regression net therefore stands on ONE piece of source content - any content-level claim is single-sample. A
+genuinely different third source (a gameplay stream, a solo talk, another language) would add more than any
+number of further assertions on this one. The upside is that the pair is an honest A/B on transcription
+jitter, and it is unflattering: the same moment ships clean in one run and broken in the other, and the two
+runs yield 6 versus 10 clips from identical audio.
+
+**What the harness cannot do.** Replay uses the OLD recorded LLM responses, so it verifies that deterministic
+layers did not regress - it cannot measure a prompt change. For that, re-record and read the diff, or upload
+a real video. A green run is not "quality is fine".
+
+---
+
+## 6. Invariants that must not break
+
+**Billing.** `usage.service.getMinutesUsedInPeriod` sums jobs whose status is NOT `FAILED`. So a job that
+completes DONE with zero clips BILLS the user, and one stuck in a processing status bills forever. Therefore a
+technical failure must never present as a content answer. The converse matters just as much: a weak video is
+the commonest honest answer there is, and turning it into FAILED denies the user a real reply and burns three
+retries that cannot help, because the critic rejects the same moments every time.
+
+**Boundaries are code-owned.** Any boundary a model proposes goes back through `snapNodes` and is discarded
+if snap rejects it. A rewritten title must cite evidence nodes inside the final range - and be re-checked
+AFTER any accepted trim, because a trim can move the evidence outside.
+
+**`lexicalOverlap` is telemetry, never a gate.** It penalises paraphrase and inflected languages; using it to
+gate Russian copy would reject legitimate rewrites. This is documented at its definition; it has been
+proposed as a gate once and rejected.
+
+**Never touch `apps/web/lib/auth.ts` or `apps/web/lib/telegram-provider.ts`** while the owner's Telegram OIDC
+work is uncommitted there (67 insertions / 9 deletions as of 2026-07-25). `git stash` disturbed them once.
+
+---
+
+## 7. RENDER: smart reframe
+
+Per-shot 9:16 framing. `apps/worker/src/reframe/`: ffmpeg `scdet` shot detection -> YuNet face tracks via a
+thin Python sidecar -> pure-TS layout decision (single face-crop / split-screen stack / centre) -> one
+ffmpeg filtergraph, single encode pass with the subtitle burn.
+
+**Measured gotchas.**
+- scdet at threshold 0.4 found ZERO cuts in a 44-second window that visibly contains five. Dark same-studio
+  podcast cuts score 0.3-0.4. Default is now 0.3 with a half-threshold retry for zero-cut windows of 15s+.
+  Under-segmentation is invisible and merges different camera angles into one mega-shot whose mixed face
+  tracks force a centre crop - the "empty middle" the owner reported. Over-segmentation self-heals in the
+  merge pass.
+- ffmpeg's `av_expr` nesting fails at 100 segments (99 parses, 100 does not), so plans are capped at 90 shots.
+- A split tile needs `ih*9/8` of width, roughly twice the single-crop width, so sources narrower than 9:8
+  cannot split - they would emit `crop w > iw` and fail the ENCODE, bypassing every detection-time fallback.
+- YuNet is trained on real human faces. Anime and stylised faces are expected to miss (believed, not
+  measured). Faceless content gets a centre crop; a saliency or motion-based crop would serve gameplay,
+  anime, sports and screencasts at once, and is the highest-value next step for RENDER.
+- Known open defect: a human face inside an on-screen photo or infographic is detected as a second speaker
+  and can trigger a false split. A static-face guard (a photo has zero mouth motion and zero box variance)
+  would close it.
+
+---
+
+## 8. Operational facts
+
+- Prod IS this host. Plain `docker compose up -d` (dev target) is production mode. **Do not use
+  `TARGET=production`** - the production images lack the `next` CLI and the bind mounts shadow `dist/`.
+- Source is bind-mounted and `tsx` hot-reloads, so a commit is live for the worker and bot immediately;
+  `packages/shared` needs `npm run build -w @clipclap/shared` before consumers see a change. The web
+  container reads the built `shared` dist - a change there is live as soon as it is built.
+- After any container recreate: `prisma generate` per container, then rebuild shared.
+- Host Node is v18 and cannot run vitest. Everything runs in containers. Bot tests MUST run in the `bot`
+  container - the `web` container holds a stale `apps/bot` copy that silently passes.
+- Prisma migrations only, never `db push`. Postgres is reachable only inside the compose network.
+- `ANALYZE_ENGINE=recall-critic` and `REFRAME_ENGINE=faces` are set in the live `.env` (not in git).
+
+---
+
+## 9. Where the product actually stands
+
+Measured 2026-07-25: **95 registered users, 3 have ever run a job, 8 jobs total, 38 clips ever made.** 92 of
+95 never made a clip because `NONE_LIMITS` is zero on every field - there is no free tier, so a registered
+user cannot process one second of video before paying. Every competitor examined offers a trial.
+
+This matters for prioritisation more than any engine work: nobody except the owner has ever used this product,
+so every quality judgement in this repo rests on one person's taste. The reliability work in
+`docs/known-issues.md` is real but its expected cost is near zero at this scale - those bugs need many users
+or an infrastructure outage to fire.
+
+A free trial shipped briefly on 2026-07-25 and was **disabled the same day** (`d1ee79a`): it turned an
+unauthenticated, unrate-limited `POST /api/register` into an unbounded compute faucet, its 30-minute cap was
+enforced on a client-supplied duration that is absent on every URL submission, and `DELETE /api/projects/:id`
+hard-deletes the Job rows that ARE the trial's ledger, so one account can reset itself forever. Zero
+exploitation occurred (0 signups, 0 jobs in the window). Re-enabling needs those three holes closed AND the
+owner's explicit approval of the commercial terms - it changes what customers are charged, which is not a
+decision to infer from a brief reply.
