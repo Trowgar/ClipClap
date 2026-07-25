@@ -287,11 +287,15 @@ describe("named regressions", () => {
     // 86.33-155.18 in podcast-answer-arc) survives BOTH runs: it is inside the
     // 120s teaser window and is spoken once, so its recurrence is exactly 0.000.
     //
-    // MAX_RECURRENCE is a LITERAL, not cfg.teaserRecurrenceFrac, for the reason
-    // spelled out on MIN_CLIP_SEC above: reading the knob would make the test
-    // move with the defect. It states the PRODUCT rule - a shipped clip must not
-    // be a copy of later speech - and is set to the same 0.35 the filter uses so
-    // that loosening the knob shows up here instead of passing silently.
+    // MAX_RECURRENCE is a LITERAL, not cfg.teaserRecurrenceFrac, and it is
+    // measured with a plain 5-gram fraction here rather than by calling
+    // montageScore, for the reason spelled out on MIN_CLIP_SEC above: reading
+    // the knob - or the implementation - would make the test move with the
+    // defect. It states the PRODUCT rule, that a shipped clip must not be a copy
+    // of later speech, in terms that do not depend on how the filter decides.
+    // Kept at 0.35 even though the filter's own bar is now 0.5 on a different
+    // metric: this is the ceiling the product must stay under, not the trigger
+    // the engine fires on, and the two are allowed to drift apart.
     const NGRAM = 5;
     const MAX_RECURRENCE = 0.35;
     for (const name of CASES) {
@@ -336,11 +340,15 @@ describe("named regressions", () => {
         `${name}: the intro montage was not detected at all`
       ).toBeGreaterThan(0);
       // Every drop must be a real copy, not a marginal one scraping the bar.
+      // 0.35 used to say that; with the bar itself at 0.5 it says nothing, so
+      // it is pinned above the bar instead. The five real montage fragments
+      // measure 0.833-1.000 (2026-07-25) - a drop landing between 0.5 and 0.75
+      // would mean the filter had started deciding on thin evidence.
       for (const drop of drops) {
         expect(
           drop.recurrence,
           `${name}: ${drop.id} was dropped on a recurrence of only ${drop.recurrence}`
-        ).toBeGreaterThanOrEqual(0.35);
+        ).toBeGreaterThanOrEqual(0.75);
       }
       // The montage is the first 45 seconds; the host's own "Всем привет, это
       // подкаст сортировочный" at ~45.5s is where the real episode starts.

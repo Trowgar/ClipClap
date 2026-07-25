@@ -37,11 +37,17 @@ export interface AnalyzeConfig {
   /** Intro teaser montages quote later speech verbatim; candidates STARTING
    *  inside this window are recurrence-tested (spec 2026-07-24 §4.1). */
   teaserWindowSec: number;
-  /** Share of a candidate's word 5-grams that must reappear after its own end
-   *  for it to be a montage copy. Measured on both eval fixtures (2026-07-25):
-   *  every one of the 61 ordinary candidates scores exactly 0.000, the five real
-   *  montage fragments score 0.409-1.000. 0.35 sits inside that void, below the
-   *  weakest real montage fragment and far above ordinary speech. */
+  /** Share of a candidate's WORDS that must be backed by later speech for it to
+   *  be a montage copy (see montageScore). Measured on both eval fixtures
+   *  (2026-07-25): every one of the 61 ordinary candidates scores exactly 0.000
+   *  and the five real montage fragments score 0.833-1.000, so anything in
+   *  between separates them. 0.5 is chosen inside that void rather than at its
+   *  edge: sweeping the bar, 0.5 keeps all five montage fragments immune to any
+   *  single respelled word while halving the number of ordinary sentences that
+   *  score at all (8 -> 4 outside the window), and 0.6 starts costing
+   *  robustness. NOTE the units changed on 2026-07-25 - this used to be a share
+   *  of 5-gram windows and defaulted to 0.35; a value tuned against the old
+   *  metric does not transfer. */
   teaserRecurrenceFrac: number;
 }
 
@@ -88,6 +94,6 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     tailHoldSec: num(env, "TAIL_HOLD_SEC", 0.3),
     payoffMaxTailSec: num(env, "PAYOFF_MAX_TAIL_SEC", 4),
     teaserWindowSec: num(env, "TEASER_WINDOW_SEC", 120),
-    teaserRecurrenceFrac: num(env, "TEASER_RECURRENCE_FRAC", 0.35),
+    teaserRecurrenceFrac: num(env, "TEASER_RECURRENCE_FRAC", 0.5),
   };
 }

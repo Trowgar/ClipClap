@@ -9,7 +9,7 @@ import { snapNodes } from "./snap";
 import { evidenceGate, snippetFallbackCopy, lexicalOverlap } from "./gates";
 import { dominantScript, scriptMismatch } from "./language";
 import { selectAndOrder } from "./select";
-import { isTeaserCandidate, recurrenceFraction } from "./teaser";
+import { isTeaserCandidate, montageScore } from "./teaser";
 import { newUsage } from "./llm";
 import type {
   MergedCandidate,
@@ -122,7 +122,7 @@ export async function analyzeHighlightsV2(
       teaserDrops.push({
         id: c.id,
         recurrence:
-          Math.round(recurrenceFraction(nodes, c.startNode, c.endNode) * 100) / 100,
+          Math.round(montageScore(nodes, c.startNode, c.endNode) * 100) / 100,
         startSec: Math.round(nodes[c.startNode].start * 10) / 10,
         endSec: Math.round(nodes[c.endNode].end * 10) / 10,
       });
