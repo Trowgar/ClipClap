@@ -1014,7 +1014,27 @@ git commit -m "feat(analyze): drop intro teaser montage candidates by recurrence
 
 ---
 
-### Task 8: Question-title surcharge
+### Task 8: DROPPED (2026-07-25) - the predicate carries no information
+
+Measured on both fixtures after they were re-recorded: `payoffSec <= hookEndSec + EPS` fires on 5 of 6 clips
+in `podcast-ecology` and 2 of 10 in `podcast-answer-arc` - the same video, the same engine, the same config,
+differing only by transcription run. It fires on the highest-scoring clip in the set (0.92). It is not
+measuring the teaser shape it was designed for; it is measuring critic variance in how hook and payoff nodes
+get labelled.
+
+Consequence had it shipped: any question-titled clip below 0.75 would be dropped by a coin flip. Two real
+clips sit in that blast radius - "Человек - зло или шанс на бессмертие биосферы?" (0.90) and "Люди - самые
+страшные хищники и зло для планеты?" (0.83), the latter being the answer-completeness exemplar this whole
+plan was written around.
+
+The teaser it was meant to kill (the 7.2s intro fragment at 0.86) is caught precisely by Task 7's
+recurrence test, which uses a real signal - the montage quotes speech that appears again later - instead of a
+proxy. Task 7 makes Task 8 unnecessary and Task 8 was never sound. Removed rather than retuned.
+
+<details>
+<summary>Original Task 8 text, kept for the record</summary>
+
+### Task 8 (superseded): Question-title surcharge
 
 **Files:**
 - Modify: `apps/worker/src/analyze-v2/select.ts`, `apps/worker/src/analyze-v2/config.ts`, `apps/worker/src/analyze-v2/types.ts`, `apps/worker/src/analyze-v2/snap.ts`
@@ -1110,6 +1130,10 @@ Expected: select tests pass. If `eval-snapshot` changes, review and bless the di
 git add apps/worker/src/analyze-v2/select.ts apps/worker/src/analyze-v2/config.ts apps/worker/src/__tests__/select.test.ts
 git commit -m "feat(analyze): surcharge question titles whose hook spans the clip"
 ```
+
+---
+
+</details>
 
 ---
 
