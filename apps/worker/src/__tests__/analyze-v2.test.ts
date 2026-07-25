@@ -256,6 +256,94 @@ describe("analyzeHighlightsV2", () => {
     expect(r.telemetry.windowsFailed).toBe(1);
   });
 
+  it("throws AnalyzeTechnicalError when the critic judges NOTHING at all", async () => {
+    // API answers 200 but the results array is empty: every candidate lands in
+    // "omitted" and nothing was ever judged
+    const emptyCritic = {
+      choices: [{ message: { content: JSON.stringify({ results: [] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 200, completion_tokens: 5 },
+    };
+
+    const run = analyzeHighlightsV2(transcript(), {
+      client: client(scanResponse(), emptyCritic),
+      cfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    await expect(run).rejects.toThrow(AnalyzeTechnicalError);
+    // the message must name the counts so the failed job is diagnosable
+    await expect(run).rejects.toThrow(/0 .*1 candidate/);
+  });
+
+  it("throws AnalyzeTechnicalError when EVERY candidate is refused", async () => {
+    const refusal = {
+      choices: [{ message: { refusal: "I cannot help with that." }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 200, completion_tokens: 5 },
+    };
+
+    const run = analyzeHighlightsV2(transcript(), {
+      client: client(scanResponse(), refusal),
+      cfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    await expect(run).rejects.toThrow(AnalyzeTechnicalError);
+  });
+
+  it("real verdicts that all say keep:false stay a content outcome", async () => {
+    // the critic DID judge every candidate and rejected them - that is an
+    // opinion about the video, not an infrastructure failure
+    const rejected = JSON.parse(criticResponse(0.9).choices[0].message.content);
+    rejected.results[0].keep = false;
+    const criticRejects = {
+      choices: [{ message: { content: JSON.stringify(rejected) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 200, completion_tokens: 80 },
+    };
+
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: client(scanResponse(), criticRejects),
+      cfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    expect(r.highlights).toHaveLength(0);
+    expect(r.noClipsReason).toBe("NO_VIABLE_MOMENTS");
+    expect(r.telemetry.criticVerdicts).toBe(1);
+  });
+
+  it("a partial critic omission stays a content outcome", async () => {
+    // two scanned candidates, the critic answers about c0 only -> c1 is omitted
+    const twoCandidateScan = {
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            candidates: [
+              { start_node: 10, end_node: 14, payoff_node: 13, interest: 0.8, type: "story", thread: null },
+              { start_node: 25, end_node: 30, payoff_node: 28, interest: 0.7, type: "story", thread: null },
+            ],
+          }),
+        },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 100, completion_tokens: 30 },
+    };
+
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: client(twoCandidateScan, criticResponse(0.85)),
+      cfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    expect(r.telemetry.criticCandidates).toBe(2);
+    expect(r.telemetry.criticVerdicts).toBe(1);
+    expect(r.telemetry.omittedDrops).toBe(1);
+    expect(r.highlights).toHaveLength(1);
+  });
+
   it("healthy windows returning zero candidates stays a content outcome", async () => {
     const emptyScan = {
       choices: [{ message: { content: JSON.stringify({ candidates: [] }) }, finish_reason: "stop" }],

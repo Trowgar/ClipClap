@@ -137,6 +137,23 @@ export async function analyzeHighlightsV2(
     retryDelayMs: options.retryDelayMs,
   });
 
+  // A critic that judged the candidates and rejected them returns REAL verdicts
+  // with keep:false - that is a content outcome and falls through below. Zero
+  // verdicts for a non-empty candidate set means nothing was judged at all: the
+  // API answered but every row was empty/unknown/invalid, or every batch was
+  // refused. Same quota rule as the scanner guard above: shipping DONE with 0
+  // clips burns the user's minutes (usage sums every job that is not FAILED)
+  // for output no model ever looked at, while FAILED leaves the quota untouched
+  // and BullMQ retries. Never ship unjudged emptiness.
+  if (critic.verdicts.length === 0) {
+    const t = critic.telemetry;
+    throw new AnalyzeTechnicalError(
+      `critic produced 0 usable verdicts for ${candidates.length} candidates ` +
+        `(omitted ${t.omittedDrops}, refused ${t.refusalDrops}, truncated ${t.truncatedDrops}, ` +
+        `invariant ${t.invariantDrops}) - nothing was judged`
+    );
+  }
+
   // eligibility: keep + evidence gate + snap + copy language
   const eligible: SnappedClip[] = [];
   let evidenceDrops = 0;
