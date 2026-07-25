@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import type { SubtitleWord } from "@clipclap/shared";
-import { loadAnalyzeConfig } from "../analyze-v2/config";
 import type { V2Result } from "../analyze-v2/types";
 import { loadFixture, runFixture, type Fixture } from "./helpers/eval-fixture";
 
@@ -182,7 +181,7 @@ describe("named regressions", () => {
   }
 
   // -------------------------------------------------------------------------
-  it("no clip is shorter than the hard minimum", async () => {
+  it("no clip is shorter than the product floor", async () => {
     // Owner's complaint: two-second stingers shipped as clips. This is also the
     // ONLY guard currently standing between the intro montage and the output
     // (see the two cases below), so it is load-bearing three times over.
@@ -190,18 +189,28 @@ describe("named regressions", () => {
     // Enforced by the `duration < cfg.hardMinSec` drop in snap.ts. Proven
     // load-bearing: with hardMinSec=0 podcast-ecology ships a 3.03s clip at
     // 36.53-39.56.
-    const hardMinSec = loadAnalyzeConfig({}).hardMinSec;
+    //
+    // MIN_CLIP_SEC is deliberately a LITERAL and NOT cfg.hardMinSec: the knob is
+    // what the engine compares against, so reading it here would make the test
+    // move with the defect instead of catching it. Dropping the default to 0
+    // ships that 3.03s clip and this case stayed green, its message reading
+    // "a clip is shorter than 0s". The realistic way the stingers come back is
+    // exactly that - a knob edit, or a CLIP_HARD_MIN_SEC override in prod - so
+    // the number below states the PRODUCT rule and only a product decision may
+    // change it. (The default itself is pinned separately in
+    // analyze-config.test.ts; this case pins the shipped output.)
+    const MIN_CLIP_SEC = 6;
     const offenders: string[] = [];
     for (const name of CASES) {
       const { result } = await run(name);
       for (const clip of result.highlights) {
         const duration = clip.end - clip.start;
-        if (duration < hardMinSec) {
+        if (duration < MIN_CLIP_SEC) {
           offenders.push(`${label(name, clip)} is ${duration.toFixed(2)}s`);
         }
       }
     }
-    expect(offenders, `a clip is shorter than ${hardMinSec}s`).toEqual([]);
+    expect(offenders, `a clip is shorter than ${MIN_CLIP_SEC}s`).toEqual([]);
   });
 
   // -------------------------------------------------------------------------
