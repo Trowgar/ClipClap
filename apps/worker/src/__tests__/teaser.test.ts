@@ -1,290 +1,473 @@
 import { describe, expect, it } from "vitest";
 import {
-  montageScore,
-  isTeaserCandidate,
+  buildRecurrenceIndex,
+  nodeRecurrence,
+  detectTeaserRegion,
+  isInTeaserRegion,
   TEASER_MIN_RUN,
-  TEASER_SHORT_WORDS,
-  TEASER_MIN_ALIGNED,
+  TEASER_RECUR_BAR,
+  TEASER_MIN_GAP_SEC,
+  TEASER_MAX_HIT_GAP_SEC,
+  TEASER_REGION_PAD_SEC,
 } from "../analyze-v2/teaser";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import type { SentenceNode } from "../analyze-v2/types";
 
-function nodes(texts: string[]): SentenceNode[] {
-  return texts.map((text, i) => ({
+/**
+ * The detector decides on WHERE recurring sentences cluster, so every graph
+ * here carries real timings. `dur` defaults to 2s, which is about the length of
+ * a montage fragment.
+ */
+interface Line {
+  start: number;
+  text: string;
+  dur?: number;
+}
+
+function graph(lines: Line[]): SentenceNode[] {
+  return lines.map((l, i) => ({
     index: i,
-    start: i * 5,
-    end: i * 5 + 4.5,
-    text,
+    start: l.start,
+    end: l.start + (l.dur ?? 2),
+    text: l.text,
     hasWords: true,
     trailingStrength: 1,
     leadingStrength: 1,
   }));
 }
 
-const cfg = { teaserWindowSec: 120, teaserRecurrenceFrac: 0.5 };
-
 /** n distinct filler words - padding that can never match anything. */
 function filler(n: number, tag = "ф"): string {
   return Array.from({ length: n }, (_, i) => `${tag}${i}`).join(" ");
 }
 
-describe("montageScore", () => {
-  it("is 1 when the whole candidate reappears later", () => {
-    const graph = nodes([
-      "человек это зло для планеты земля",
-      "мусорная фраза посередине",
-      "человек это зло для планеты земля",
+/** A sentence of `words` words, every one of them unique to `tag`. */
+function line(tag: string, words = 6): string {
+  return Array.from({ length: words }, (_, i) => `сл${i}${tag}`).join(" ");
+}
+
+const cfg = { teaserWindowSec: 120, teaserMinHits: 3 };
+
+/**
+ * The real montage's shape, sentence by sentence.
+ *
+ * podcast-ecology / podcast-answer-arc, measured 2026-07-25: fourteen sentence
+ * nodes from 0.00s to 44.64s, eleven of which reproduce speech from 724-3099s.
+ * Word counts and recurring-word counts below are the MEASURED ones, not round
+ * numbers - the shape is what the tests are about, and a montage of uniform
+ * six-word fragments would be a different (and much more fragile) artefact than
+ * the one that shipped. Every origin sits past TEASER_MIN_GAP_SEC, as in the
+ * fixtures, where the nearest real origin is 724s away.
+ *
+ *   idx  start   words  recurring   idx  start   words  recurring
+ *    0    0.00     6        6        7   22.20    12       12
+ *    1    2.26    13       13        8   27.16    10       10
+ *    2    7.24     8        8        9   31.98     7        5
+ *    3    9.52    15        9       10   34.74     5        5
+ *    4   15.00     6        6       11   36.68     3        0   <- the defect
+ *    5   17.48     5        0       12   38.22     3        0   <- the defect
+ *    6   19.64     8        8       13   39.56    15       15
+ */
+const FRAGMENTS = [
+  { start: 0.0, words: 6, recurring: 6 },
+  { start: 2.26, words: 13, recurring: 13 },
+  { start: 7.24, words: 8, recurring: 8 },
+  { start: 9.52, words: 15, recurring: 9 },
+  { start: 15.0, words: 6, recurring: 6 },
+  { start: 17.48, words: 5, recurring: 0 },
+  { start: 19.64, words: 8, recurring: 8 },
+  { start: 22.2, words: 12, recurring: 12 },
+  { start: 27.16, words: 10, recurring: 10 },
+  { start: 31.98, words: 7, recurring: 5 },
+  { start: 34.74, words: 5, recurring: 5 },
+  { start: 39.56, words: 15, recurring: 15 },
+];
+
+/** Index of the first node of the real show - everything after the montage. */
+const SHOW_NODE = 15;
+
+function realMontage(): SentenceNode[] {
+  const lines: Line[] = [];
+  FRAGMENTS.forEach((f, i) => {
+    if (f.start === 39.56) return; // appended after the defect, below
+    const pad = f.words - f.recurring;
+    lines.push({
+      start: f.start,
+      text: [f.recurring > 0 ? line(`m${i}`, f.recurring) : "", pad > 0 ? filler(pad, `у${i}`) : ""]
+        .filter(Boolean)
+        .join(" "),
+    });
+  });
+  // The defect: two fragments that recur nowhere, inside the montage.
+  lines.push({ start: 36.68, text: "что убьет человечество" });
+  lines.push({ start: 38.22, text: "собственная глупость конечно" });
+  lines.push({ start: 39.56, text: line("m11", 15) });
+  // The real show starts here (node SHOW_NODE onwards are its sentences).
+  lines.push({ start: 45.52, text: "всем привет это подкаст сортировочный сегодня" });
+  FRAGMENTS.forEach((f, i) => {
+    if (f.recurring === 0) return;
+    const tag = f.start === 39.56 ? "m11" : `m${i}`;
+    lines.push({
+      start: 200 + i * 240,
+      text: `${filler(5, `п${i}`)} ${line(tag, f.recurring)} ${filler(5, `с${i}`)}`,
+    });
+  });
+  return graph(lines);
+}
+
+describe("nodeRecurrence", () => {
+  const share = (nodes: SentenceNode[], i: number) =>
+    nodeRecurrence(buildRecurrenceIndex(nodes), i).share;
+
+  it("is 1 when the whole sentence is spoken again far away", () => {
+    const g = graph([
+      { start: 0, text: line("a") },
+      { start: 900, text: line("a") },
     ]);
-    expect(montageScore(graph, 0, 0)).toBe(1);
+    expect(share(g, 0)).toBe(1);
   });
 
-  it("is 0 when nothing reappears", () => {
-    const graph = nodes(["уникальная мысль про экологию", "совсем другая тема разговора"]);
-    expect(montageScore(graph, 0, 0)).toBe(0);
-  });
-
-  it("ignores recurrence INSIDE the candidate itself", () => {
-    const graph = nodes([
-      "одна и та же фраза повторяется",
-      "одна и та же фраза повторяется",
-      "дальше идет совершенно другой текст",
+  it("is symmetric - the later original scores as high as the early copy", () => {
+    // The montage's own first fragment originates 31 minutes in, so a
+    // later-only test would have to guess which occurrence is the copy. The
+    // region's anchor at t=0 is what makes a symmetric primitive safe.
+    const g = graph([
+      { start: 0, text: line("a") },
+      { start: 900, text: line("a") },
     ]);
-    expect(montageScore(graph, 0, 1)).toBe(0);
+    expect(share(g, 1)).toBe(1);
   });
 
-  it("does not count the candidate's own earlier copy - only later text", () => {
-    const graph = nodes([
-      "человек это зло для планеты земля",
-      "заполнитель между ними",
-      "человек это зло для планеты земля",
+  it(`ignores an echo closer than ${TEASER_MIN_GAP_SEC}s - that is a speaker repeating himself`, () => {
+    const g = graph([
+      { start: 0, text: line("a") },
+      { start: TEASER_MIN_GAP_SEC - 1, text: line("a") },
     ]);
-    expect(montageScore(graph, 2, 2)).toBe(0);
+    expect(share(g, 0)).toBe(0);
   });
 
-  it("tolerates punctuation and case differences", () => {
-    const graph = nodes([
-      "Человек - это ЗЛО для планеты Земля!",
-      "другое",
-      "человек это зло для планеты земля",
+  it("counts the share of WORDS backed by evidence, not the share of n-grams", () => {
+    const cand = `${line("a")} ${filler(5, "х")}`; // 11 words, 6 recur
+    const g = graph([
+      { start: 0, text: cand },
+      { start: 900, text: `${filler(4)} ${line("a")} ${filler(4, "г")}` },
     ]);
-    expect(montageScore(graph, 0, 0)).toBe(1);
-  });
-
-  it("returns 0 for text too short to carry evidence", () => {
-    expect(montageScore(nodes(["да", "да"]), 0, 0)).toBe(0);
-  });
-
-  it("is 0 for an out-of-range slice", () => {
-    expect(montageScore(nodes(["одна фраза здесь и сейчас"]), 5, 9)).toBe(0);
-  });
-
-  // --- what the score MEASURES ------------------------------------------------
-
-  it("scores the share of WORDS backed by evidence, not the share of n-grams", () => {
-    // 11 words; the first 5 recur verbatim. Five of eleven words are evidenced.
-    // (The old 5-gram fraction called this 1/7 = 0.14 - it divided by n-gram
-    // windows, which under-counts a run at the very edge of a candidate.)
-    const graph = nodes([
-      "человек это зло для планеты и мы все в этом виноваты",
-      `${filler(3)} человек это зло для планеты ${filler(3)}`,
-    ]);
-    expect(montageScore(graph, 0, 0)).toBeCloseTo(5 / 11, 5);
-  });
-
-  it("sums evidence from fragments copied from DIFFERENT later places", () => {
-    // A montage is a splice: each fragment comes from its own moment further on.
-    // One aligned window can never cover it - the runs must add up.
-    const graph = nodes([
-      "первая приманка про экологию планеты земля",
-      "вторая приманка про будущее цивилизации людей",
-      `первая приманка про экологию планеты земля ${filler(20)}`,
-      `${filler(20, "г")} вторая приманка про будущее цивилизации людей`,
-    ]);
-    expect(montageScore(graph, 0, 1)).toBe(1);
+    expect(share(g, 0)).toBeCloseTo(6 / 11, 5);
   });
 
   it(`ignores matching runs shorter than ${TEASER_MIN_RUN} words`, () => {
     expect(TEASER_MIN_RUN).toBe(5);
-    // "и так далее" style filler: four words in a row recur by chance in any
-    // long conversation, so four words are not evidence of a copy.
-    const graph = nodes([
-      "мы говорим про экологию и климат",
-      `${filler(8)} мы говорим про экологию ${filler(8, "д")}`,
+    // NOT "four words never recur by chance" - they do, and so do five. The
+    // same episode says "серы азота и так далее" verbatim at 717.2s and
+    // 1888.9s. Five is where the FALSE-POSITIVE SURFACE of the region rule
+    // stops shrinking: measured 2026-07-25 over 1623 later offsets on both
+    // fixtures, the clustered-hit ceiling is 2 at both k=4 and k=5, but k=4
+    // triples the number of offsets that reach it (17-19 vs 6-8). Chance
+    // recurrence is not what k buys; margin is.
+    const g = graph([
+      { start: 0, text: "альфа бета гамма дельта эпсилон" },
+      { start: 900, text: `${filler(8)} альфа бета гамма дельта ${filler(8, "д")}` },
     ]);
-    expect(montageScore(graph, 0, 0)).toBe(0);
+    expect(share(g, 0)).toBe(0);
   });
 
-  // --- surviving transcription jitter ----------------------------------------
+  it("is 0 for a sentence too short to carry a run", () => {
+    const g = graph([
+      { start: 0, text: "да конечно" },
+      { start: 900, text: "да конечно" },
+    ]);
+    expect(share(g, 0)).toBe(0);
+  });
 
   it("folds ё to е: the same word spelled two ways is the same word", () => {
-    // MEASURED: the two eval fixtures are two Whisper runs of one 52-minute
-    // episode - one contains 10 ё-tokens, the other 0. Inside a single run the
-    // same lemma appears both ways (всё/все, ещё/еще, её/ее). ё carries no
-    // lexical information in ordinary Russian orthography, so a copy spelled
-    // the other way is still a copy.
-    const graph = nodes([
-      "что убьёт человечество собственная глупость конечно",
-      "заполнитель",
-      "что убьет человечество собственная глупость конечно",
+    // MEASURED: the two eval fixtures are two Whisper runs of one episode - one
+    // contains 10 ё-tokens, the other 0, and inside a single run the same lemma
+    // appears both ways (всё/все, ещё/еще). ё carries no lexical information in
+    // ordinary Russian orthography.
+    const g = graph([
+      { start: 0, text: "что убьёт человечество собственная глупость конечно" },
+      { start: 900, text: "что убьет человечество собственная глупость конечно" },
     ]);
-    expect(montageScore(graph, 0, 0)).toBe(1);
+    expect(share(g, 0)).toBe(1);
   });
 
-  it("detects the REAL failure: the montage still matches when one later word is respelled", () => {
-    // podcast-ecology, nodes 11-12 at 36.7-39.3s - the montage fragment this
-    // filter exists to kill. Its original is node 783 at 2807s. Respelling that
-    // one word took the shipped 5-gram fraction from 1.000 to 0.000 and let the
-    // montage through; six words are exactly two 5-grams, so any interior word
-    // erased both.
-    const graph = nodes([
-      "Что убьет человечество",
-      "Собственная глупость конечно",
-      filler(40),
-      "Что убьёт человечество Собственная глупость конечно",
+  it("tolerates punctuation and case", () => {
+    const g = graph([
+      { start: 0, text: "Человек - это ЗЛО для планеты Земля!" },
+      { start: 900, text: "человек это зло для планеты земля" },
     ]);
-    expect(montageScore(graph, 0, 1)).toBe(1);
-    expect(isTeaserCandidate(graph, { startNode: 0, endNode: 1 }, cfg)).toBe(true);
-  });
-
-  it("a short candidate survives ONE substituted word anywhere in it", () => {
-    // Six words is the smallest real montage fragment and the fragile case: no
-    // verbatim 5-word run can survive a change in the middle. Every position
-    // must stay above the bar, not just the edges.
-    const words = ["альфа", "бета", "гамма", "дельта", "эпсилон", "дзета"];
-    for (let i = 0; i < words.length; i++) {
-      const respelled = words.map((w, j) => (i === j ? `${w}х` : w));
-      const graph = nodes([respelled.join(" "), filler(30), words.join(" ")]);
-      expect(
-        montageScore(graph, 0, 0),
-        `word ${i} respelled`
-      ).toBeCloseTo(5 / 6, 5);
-      expect(isTeaserCandidate(graph, { startNode: 0, endNode: 0 }, cfg)).toBe(true);
-    }
-  });
-
-  it(`needs ${TEASER_MIN_ALIGNED} words to line up - four is not a montage`, () => {
-    expect(TEASER_MIN_ALIGNED).toBe(5);
-    const graph = nodes([
-      "альфа бета гамма дельта эпсилон дзета",
-      filler(30),
-      "альфа бета гамма дельта ЧУЖОЕ ДРУГОЕ",
-    ]);
-    expect(montageScore(graph, 0, 0)).toBe(0);
-  });
-
-  it("requires the aligned words to sit in ONE later passage, not scattered", () => {
-    // The measured false-positive shape: ordinary short speech whose stock
-    // phrases each recur somewhere. Three words here, three words there is not
-    // a copy of anything - only one later passage reproducing the utterance is.
-    const graph = nodes([
-      "альфа бета гамма дельта эпсилон дзета",
-      `${filler(20)} альфа бета гамма ${filler(20, "д")}`,
-      `${filler(20, "е")} дельта эпсилон дзета ${filler(20, "ж")}`,
-    ]);
-    expect(montageScore(graph, 0, 0)).toBe(0);
-  });
-
-  it(`gives the aligned path only to candidates of at most ${TEASER_SHORT_WORDS} words`, () => {
-    // 12 words matching later at 6 alternating positions: no run reaches 5, so
-    // there is no verbatim evidence. A candidate this long CAN carry a real run
-    // around a respelled word, so it does not get the looser test - which is
-    // what keeps "same topic, same stock phrases" from scoring.
-    const cand = Array.from({ length: 12 }, (_, i) => `сл${i}`);
-    const echo = cand.map((w, i) => (i % 2 === 0 ? w : `иное${i}`));
-    const graph = nodes([cand.join(" "), filler(30), echo.join(" ")]);
-    expect(montageScore(graph, 0, 0)).toBe(0);
-  });
-
-  it("a candidate of 11 words carries a respelled word on runs alone", () => {
-    // The arithmetic behind the cutoff: a substitution at position i leaves a
-    // prefix of i and a suffix of w-1-i, and only runs of 5 count. The worst
-    // position costs everything up to w=9, exactly half at w=10, and from 11
-    // words up both halves survive - which is where the looser test stops.
-    const cand = Array.from({ length: 11 }, (_, i) => `сл${i}`);
-    const echo = cand.map((w, i) => (i === 5 ? "подмена" : w));
-    const graph = nodes([cand.join(" "), filler(30), echo.join(" ")]);
-    expect(montageScore(graph, 0, 0)).toBeCloseTo(10 / 11, 5);
-  });
-
-  it("a candidate of exactly 10 words would sit ON the bar without the aligned path", () => {
-    // The reason the cutoff is 10 and not 9: at ten words the worst-placed
-    // respelling leaves one surviving run of five, i.e. coverage 0.500 - equal
-    // to the default bar, with no margin at all. The aligned reading lifts the
-    // same candidate to 0.900.
-    const cand = Array.from({ length: 10 }, (_, i) => `сл${i}`);
-    const echo = cand.map((w, i) => (i === 4 ? "подмена" : w));
-    const graph = nodes([cand.join(" "), filler(30), echo.join(" ")]);
-    expect(TEASER_SHORT_WORDS).toBe(10);
-    expect(montageScore(graph, 0, 0)).toBeCloseTo(9 / 10, 5);
+    expect(share(g, 0)).toBe(1);
   });
 });
 
-describe("isTeaserCandidate", () => {
-  const graph = nodes([
-    "человек это зло для планеты земля",
-    "заполнитель между ними",
-    "человек это зло для планеты земля",
-  ]);
-
-  it("flags a montage copy inside the opening window", () => {
-    expect(isTeaserCandidate(graph, { startNode: 0, endNode: 0 }, cfg)).toBe(true);
+describe("detectTeaserRegion - the real montage", () => {
+  it("finds all eleven recurring fragments and ends the region after the last one", () => {
+    const region = detectTeaserRegion(realMontage(), cfg);
+    expect(region).not.toBeNull();
+    expect(region!.hits).toBe(11);
+    // last hit is the node at 39.56s (2s long); the pad carries the region past it
+    expect(region!.lastHitEndSec).toBeCloseTo(41.56, 5);
+    expect(region!.endSec).toBeCloseTo(41.56 + TEASER_REGION_PAD_SEC, 5);
   });
 
-  it("never flags a candidate that starts past the window", () => {
-    const late = graph.map((n, i) => ({ ...n, start: 300 + i * 5, end: 304 + i * 5 }));
-    expect(isTeaserCandidate(late, { startNode: 0, endNode: 0 }, cfg)).toBe(false);
+  it("catches the owner's defect, which scores ZERO on its own", () => {
+    // podcast-ecology 36.68-39.30s, "Что убьет человечество / Собственная
+    // глупость конечно" - six words that occur exactly once in the episode.
+    // Every per-candidate similarity test scores this 0.000 at full strength;
+    // it is a montage fragment because of where it sits, not because of what
+    // it says. This is the assertion the whole redesign exists for.
+    const nodes = realMontage();
+    const ix = buildRecurrenceIndex(nodes);
+    expect(nodeRecurrence(ix, 11).share).toBe(0);
+    expect(nodeRecurrence(ix, 12).share).toBe(0);
+    const region = detectTeaserRegion(nodes, cfg)!;
+    expect(isInTeaserRegion(region, 36.68)).toBe(true);
   });
 
-  it("flags a candidate sitting exactly on the window edge", () => {
-    const edge = graph.map((n, i) => ({ ...n, start: i === 0 ? 120 : 300, end: 304 }));
-    expect(isTeaserCandidate(edge, { startNode: 0, endNode: 0 }, cfg)).toBe(true);
+  it("leaves the legitimate cold open at 87s alone", () => {
+    // Both fixtures open the real show with "Бытует мнение, что люди - главные
+    // разрушители планеты... Так ли это?" at ~87s, inside the 120s window. The
+    // region must stop 45s short of it.
+    const region = detectTeaserRegion(realMontage(), cfg)!;
+    expect(region.endSec).toBeLessThan(87.43);
+    expect(isInTeaserRegion(region, 87.43)).toBe(false);
   });
 
-  it("does not flag the ORIGINAL later occurrence the montage copied", () => {
-    expect(isTeaserCandidate(graph, { startNode: 2, endNode: 2 }, cfg)).toBe(false);
-  });
-
-  it("does not flag an ordinary opening that merely shares vocabulary", () => {
-    const ordinary = nodes([
-      "сегодня мы обсуждаем экологию и климат",
-      "экология это очень широкая тема",
-      "климат меняется быстрее чем раньше",
+  it("the pad is load-bearing: it reaches a fragment the last hit stops short of", () => {
+    // MEASURED necessity: under "one respelled word in every fragment" the last
+    // surviving hit on podcast-ecology ends at 31.74s while the defect starts
+    // at 36.68s. Without the pad the defect escapes. The measured working range
+    // is [5s, 55s] - 5s to reach the defect, 55s before touching the 87.43s
+    // cold open - and 15s sits inside it. Growing the pad IS the false-positive
+    // direction; if anything ever needs adjusting, adjust it down.
+    const nodes = graph([
+      { start: 0.0, text: line("a") },
+      { start: 3.0, text: line("b") },
+      { start: 6.0, text: line("c") },
+      { start: 12.0, text: "уникальная приманка которая нигде больше не встречается" },
+      { start: 900, text: line("a") },
+      { start: 1200, text: line("b") },
+      { start: 1500, text: line("c") },
     ]);
-    expect(isTeaserCandidate(ordinary, { startNode: 0, endNode: 0 }, cfg)).toBe(false);
+    const region = detectTeaserRegion(nodes, cfg)!;
+    expect(region.lastHitEndSec).toBeCloseTo(8.0, 5);
+    expect(isInTeaserRegion(region, 12.0)).toBe(true);
+    expect(TEASER_REGION_PAD_SEC).toBe(15);
+  });
+});
+
+describe("detectTeaserRegion - what must NOT fire", () => {
+  /** A real show whose speaker genuinely says one thing twice. */
+  function coldOpen(repeats: number): SentenceNode[] {
+    const lines: Line[] = [];
+    for (let i = 0; i < repeats; i++) {
+      lines.push({ start: 0.5 + i * 4, text: line(`q${i}`) });
+    }
+    lines.push({ start: 0.5 + repeats * 4, text: "всем привет это подкаст сортировочный сегодня" });
+    for (let i = 0; i < repeats; i++) {
+      lines.push({ start: 400 + i * 200, text: `${filler(4, `п${i}`)} ${line(`q${i}`)}` });
+    }
+    return graph(lines);
+  }
+
+  it("does not fire on a cold open the speaker really repeats once", () => {
+    // THE CASE ATTEMPT 2 GOT WRONG. Measured on both fixtures: a real sentence
+    // the guest genuinely says at 455.0s ("Один заражает только двугорбового
+    // верблюда в Северной Африке"), placed at 8.0s, scores recurrence 1.0000 at
+    // candidate level and was filtered on both fixtures - rewording three of
+    // its eight words still left it filtered. It produces exactly ONE clustered
+    // hit, and one is not a montage.
+    const nodes = coldOpen(1);
+    expect(nodeRecurrence(buildRecurrenceIndex(nodes), 0).share).toBe(1);
+    expect(detectTeaserRegion(nodes, cfg)).toBeNull();
   });
 
-  it("does not flag a cold open whose thesis is only paraphrased later", () => {
-    // The legitimate shape this filter must never eat: a speaker states a
-    // position early and returns to it later in DIFFERENT words. Shared topic
-    // vocabulary, no reproduced passage.
-    const coldOpen = nodes([
-      "человечество само себя погубит собственной глупостью и жадностью",
-      filler(30),
-      "глупость человечества это то что нас в итоге и погубит наверное",
+  it("does not fire on two genuine repeats either", () => {
+    // The measured false-positive ceiling in ordinary conversation is 2
+    // clustered hits (1623 later offsets, both fixtures, 2026-07-25). Two must
+    // stay below the bar or the ceiling touches it.
+    expect(detectTeaserRegion(coldOpen(2), cfg)).toBeNull();
+  });
+
+  it("fires at exactly teaserMinHits and not one below", () => {
+    expect(cfg.teaserMinHits).toBe(3);
+    expect(detectTeaserRegion(coldOpen(3), cfg)).not.toBeNull();
+    expect(detectTeaserRegion(coldOpen(3), { ...cfg, teaserMinHits: 4 })).toBeNull();
+  });
+
+  it("never fires on a repetition cluster that is not anchored at the video's start", () => {
+    // Free safety from the anchor: the region grows from t=0, so a host who
+    // quotes his guest five times in a row cannot produce a region no matter
+    // how verbatim the quotes are. Placed at 90s - INSIDE the 120s window, so
+    // the window is not what saves this; the anchor is.
+    const lines: Line[] = [{ start: 0, text: "всем привет это подкаст сортировочный сегодня" }];
+    for (let i = 0; i < 5; i++) lines.push({ start: 90 + i * 4, text: line(`q${i}`) });
+    for (let i = 0; i < 5; i++) lines.push({ start: 900 + i * 200, text: line(`q${i}`) });
+    const nodes = graph(lines);
+    // The quotes really do score - it is only their position that saves them.
+    expect(nodeRecurrence(buildRecurrenceIndex(nodes), 1).share).toBe(1);
+    expect(detectTeaserRegion(nodes, cfg)).toBeNull();
+  });
+
+  it("never fires on a mid-video cluster far outside the opening window", () => {
+    const lines: Line[] = [{ start: 0, text: "всем привет это подкаст сортировочный сегодня" }];
+    for (let i = 0; i < 5; i++) lines.push({ start: 1200 + i * 4, text: line(`q${i}`) });
+    for (let i = 0; i < 5; i++) lines.push({ start: 2000 + i * 200, text: line(`q${i}`) });
+    expect(detectTeaserRegion(graph(lines), cfg)).toBeNull();
+  });
+
+  it(`never fires on a cluster that starts more than ${TEASER_MAX_HIT_GAP_SEC}s in`, () => {
+    const lines: Line[] = [{ start: 0, text: "всем привет это подкаст сортировочный сегодня" }];
+    for (let i = 0; i < 5; i++) {
+      lines.push({ start: TEASER_MAX_HIT_GAP_SEC + 1 + i * 4, text: line(`q${i}`) });
+    }
+    for (let i = 0; i < 5; i++) lines.push({ start: 900 + i * 200, text: line(`q${i}`) });
+    expect(detectTeaserRegion(graph(lines), cfg)).toBeNull();
+  });
+
+  it(`stops the region at a hit gap wider than ${TEASER_MAX_HIT_GAP_SEC}s`, () => {
+    const lines: Line[] = [
+      { start: 0, text: line("a") },
+      { start: 3, text: line("b") },
+      { start: 6, text: line("c") },
+      // ordinary speech past the tolerance, then more recurring material: a
+      // separate event, not part of the montage.
+      { start: 8 + TEASER_MAX_HIT_GAP_SEC + 1, text: line("d") },
+      { start: 8 + TEASER_MAX_HIT_GAP_SEC + 4, text: line("e") },
+      { start: 900, text: line("a") },
+      { start: 1100, text: line("b") },
+      { start: 1300, text: line("c") },
+      { start: 1500, text: line("d") },
+      { start: 1700, text: line("e") },
+    ];
+    const region = detectTeaserRegion(graph(lines), cfg)!;
+    expect(region.hits).toBe(3);
+    expect(region.lastHitEndSec).toBeCloseTo(8, 5);
+  });
+
+  it("does not fire when the opening merely shares vocabulary with the body", () => {
+    const nodes = graph([
+      { start: 0, text: "сегодня мы обсуждаем экологию климат и будущее планеты" },
+      { start: 6, text: "экология это очень широкая и сложная тема" },
+      { start: 12, text: "климат меняется намного быстрее чем раньше" },
+      { start: 900, text: "экология климат и будущее это разные вещи на самом деле" },
+      { start: 1200, text: "тема климата очень широкая и сложная сама по себе" },
     ]);
-    expect(isTeaserCandidate(coldOpen, { startNode: 0, endNode: 0 }, cfg)).toBe(false);
+    expect(detectTeaserRegion(nodes, cfg)).toBeNull();
   });
 
-  it("fires exactly AT the threshold and not one step below it", () => {
-    const graph2 = nodes([
-      "человек это зло для планеты и мы все в этом виноваты",
-      `${filler(3)} человек это зло для планеты ${filler(3)}`,
+  it("is disabled by teaserWindowSec = 0 - the kill switch", () => {
+    expect(detectTeaserRegion(realMontage(), { ...cfg, teaserWindowSec: 0 })).toBeNull();
+  });
+
+  it("is inert on an empty graph", () => {
+    expect(detectTeaserRegion([], cfg)).toBeNull();
+  });
+});
+
+describe("detectTeaserRegion - transcription jitter", () => {
+  const PARTICLES = ["значит", "вот", "да", "ну", "там", "если", "надо"];
+
+  /** Insert a discourse particle into the middle of a node's text. */
+  function insert(nodes: SentenceNode[], i: number, seed = 0): SentenceNode[] {
+    return nodes.map((n, j) => {
+      if (j !== i) return n;
+      const w = n.text.split(/\s+/);
+      w.splice(Math.floor(w.length / 2), 0, PARTICLES[seed % PARTICLES.length]);
+      return { ...n, text: w.join(" ") };
+    });
+  }
+
+  /** Delete one interior word from a node's text. */
+  function remove(nodes: SentenceNode[], i: number): SentenceNode[] {
+    return nodes.map((n, j) => {
+      if (j !== i) return n;
+      const w = n.text.split(/\s+/);
+      w.splice(Math.floor(w.length / 2), 1);
+      return { ...n, text: w.join(" ") };
+    });
+  }
+
+  it("survives a particle inserted into the copy", () => {
+    // What killed attempt 2: alignedShare voted on a FIXED offset, so ONE
+    // inserted word shifted every later word into a different bucket and took
+    // the score from 1.0000 to 0.0000. Insertions and deletions outnumber
+    // substitutions 3.8:1 in real Whisper jitter (measured by LCS-aligning the
+    // two fixtures: 14 subs, 28 ins, 25 del).
+    let nodes = realMontage();
+    for (let i = 0; i < SHOW_NODE - 1; i++) nodes = insert(nodes, i, i);
+    const region = detectTeaserRegion(nodes, cfg);
+    expect(region).not.toBeNull();
+    expect(region!.hits).toBeGreaterThanOrEqual(cfg.teaserMinHits);
+    expect(isInTeaserRegion(region!, 36.68)).toBe(true);
+  });
+
+  it("survives a particle deleted from every later original", () => {
+    let nodes = realMontage();
+    for (let i = SHOW_NODE; i < nodes.length; i++) nodes = remove(nodes, i);
+    const region = detectTeaserRegion(nodes, cfg);
+    expect(region).not.toBeNull();
+    expect(region!.hits).toBeGreaterThanOrEqual(cfg.teaserMinHits);
+    expect(isInTeaserRegion(region!, 36.68)).toBe(true);
+  });
+
+  it("survives independent indels in the copies AND the originals at once", () => {
+    // The desynchronising case: the fragment and its origin are edited
+    // differently, which is exactly what two transcription runs of one audio
+    // produce. Insert into the copies, delete from the originals.
+    let nodes = realMontage();
+    for (let i = 0; i < SHOW_NODE - 1; i++) nodes = insert(nodes, i, i);
+    for (let i = SHOW_NODE; i < nodes.length; i++) nodes = remove(nodes, i);
+    const region = detectTeaserRegion(nodes, cfg);
+    expect(region).not.toBeNull();
+    expect(region!.hits).toBeGreaterThanOrEqual(cfg.teaserMinHits);
+    expect(isInTeaserRegion(region!, 36.68)).toBe(true);
+  });
+
+  it("still refuses the single genuine repeat under the same jitter", () => {
+    // The robustness above must not be robustness at admitting anything: the
+    // cold open stays out with the same edits applied.
+    let nodes = graph([
+      { start: 0.5, text: line("q") },
+      { start: 5, text: "всем привет это подкаст сортировочный сегодня" },
+      { start: 400, text: `${filler(4, "п")} ${line("q")}` },
     ]);
-    // 5 of 11 words evidenced
-    const at = { teaserWindowSec: 120, teaserRecurrenceFrac: 5 / 11 };
-    const above = { teaserWindowSec: 120, teaserRecurrenceFrac: 0.46 };
-    expect(isTeaserCandidate(graph2, { startNode: 0, endNode: 0 }, at)).toBe(true);
-    expect(isTeaserCandidate(graph2, { startNode: 0, endNode: 0 }, above)).toBe(false);
+    nodes = insert(nodes, 0, 1);
+    nodes = remove(nodes, 2);
+    expect(detectTeaserRegion(nodes, cfg)).toBeNull();
+  });
+});
+
+describe("isInTeaserRegion", () => {
+  it("drops a candidate starting inside the region and keeps one starting at its end", () => {
+    const region = detectTeaserRegion(realMontage(), cfg)!;
+    expect(isInTeaserRegion(region, region.endSec - 0.01)).toBe(true);
+    expect(isInTeaserRegion(region, region.endSec)).toBe(false);
   });
 
-  it("is inert for a candidate whose start node does not exist", () => {
-    expect(isTeaserCandidate(graph, { startNode: 99, endNode: 99 }, cfg)).toBe(false);
+  it("keeps everything when no region was found", () => {
+    expect(isInTeaserRegion(null, 0)).toBe(false);
   });
+});
 
-  it("reads the shipped defaults from the real config", () => {
+describe("shipped configuration", () => {
+  it("reads the defaults from the real config", () => {
     const real = loadAnalyzeConfig({});
     expect(real.teaserWindowSec).toBe(120);
-    expect(real.teaserRecurrenceFrac).toBe(0.5);
-    expect(isTeaserCandidate(graph, { startNode: 0, endNode: 0 }, real)).toBe(true);
+    expect(real.teaserMinHits).toBe(3);
+    expect(detectTeaserRegion(realMontage(), real)).not.toBeNull();
+  });
+
+  it(`pins the recurrence bar at ${TEASER_RECUR_BAR} and keeps it out of the env`, () => {
+    // Measured 2026-07-25 on both fixtures: the bar is INERT across [0.20,
+    // 0.50] - the clustered-hit ceiling over 1623 later offsets is 2 at every
+    // value in that range, and the montage scores 11 at every value. Exposing
+    // an inert number as a knob is what attempt 2 did with TEASER_MIN_ALIGNED
+    // (provably binary on its own path). The knob that DOES separate the
+    // distributions is the hit count, so that is the one in the config.
+    expect(TEASER_RECUR_BAR).toBe(0.5);
+    expect(loadAnalyzeConfig({}) as unknown as Record<string, unknown>).not.toHaveProperty(
+      "teaserRecurrenceFrac"
+    );
   });
 });

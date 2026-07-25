@@ -9,7 +9,7 @@ import { snapNodes } from "./snap";
 import { evidenceGate, snippetFallbackCopy, lexicalOverlap } from "./gates";
 import { dominantScript, scriptMismatch } from "./language";
 import { selectAndOrder } from "./select";
-import { isTeaserCandidate, montageScore } from "./teaser";
+import { detectTeaserRegion, isInTeaserRegion } from "./teaser";
 import { newUsage } from "./llm";
 import type {
   MergedCandidate,
@@ -109,20 +109,24 @@ export async function analyzeHighlightsV2(
     // is what makes it worth doing: perWindowMinCandidates guarantees the first
     // window a share of the critic budget, so a montage would otherwise be
     // guaranteed to spend it on bait (spec 2026-07-24 §1.1, §4.1).
-    // Seconds travel with the id: in a production log "c2" alone says nothing,
-    // and the first question about a drop is always "what did we cut?".
-    const teaserDrops: Array<{
-      id: string;
-      recurrence: number;
-      startSec: number;
-      endSec: number;
-    }> = [];
+    //
+    // The montage is detected ONCE, as a region of the video, and candidates
+    // are dropped by where they start - see teaser.ts for why per-candidate
+    // similarity was measured unable to do this job.
+    //
+    // The region is published whether or not it fired, because a filter that
+    // deletes candidates leaving no trace makes its own false positives
+    // unfalsifiable: nobody ever reports the clip that was never made. A region
+    // that ended at 90s on a 10-minute video is a bug you can SEE in a job
+    // record. Seconds travel with each dropped id for the same reason - in a
+    // production log "c2" alone says nothing, and the first question about a
+    // drop is always "what did we cut?".
+    const region = detectTeaserRegion(nodes, cfg);
+    const teaserDrops: Array<{ id: string; startSec: number; endSec: number }> = [];
     const withoutTeasers = merged.filter((c) => {
-      if (!isTeaserCandidate(nodes, c, cfg)) return true;
+      if (!isInTeaserRegion(region, nodes[c.startNode].start)) return true;
       teaserDrops.push({
         id: c.id,
-        recurrence:
-          Math.round(montageScore(nodes, c.startNode, c.endNode) * 100) / 100,
         startSec: Math.round(nodes[c.startNode].start * 10) / 10,
         endSec: Math.round(nodes[c.endNode].end * 10) / 10,
       });
@@ -135,6 +139,15 @@ export async function analyzeHighlightsV2(
       ...scan.telemetry,
       rawCandidates: scan.candidates.length,
       mergedCandidates: merged.length,
+      teaserRegion: region
+        ? {
+            endSec: Math.round(region.endSec * 10) / 10,
+            hits: region.hits,
+            firstHitStartSec: Math.round(region.firstHitStartSec * 10) / 10,
+            lastHitEndSec: Math.round(region.lastHitEndSec * 10) / 10,
+            originSpreadSec: Math.round(region.originSpreadSec),
+          }
+        : null,
       teaserDrops,
       criticCandidates: candidates.length,
     };

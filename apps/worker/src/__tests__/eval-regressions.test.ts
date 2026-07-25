@@ -4,7 +4,7 @@ import type { V2Result } from "../analyze-v2/types";
 import { loadFixture, runFixture, type Fixture } from "./helpers/eval-fixture";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { buildSentenceGraph } from "../analyze-v2/sentence-graph";
-import { isTeaserCandidate } from "../analyze-v2/teaser";
+import { detectTeaserRegion, isInTeaserRegion } from "../analyze-v2/teaser";
 
 /**
  * Tier-1 "never again" regressions.
@@ -114,15 +114,32 @@ function label(name: string, clip: { start: number; end: number; title: string }
 
 interface TeaserDrop {
   id: string;
-  recurrence: number;
   startSec: number;
   endSec: number;
+}
+
+interface TeaserRegionTelemetry {
+  endSec: number;
+  hits: number;
+  firstHitStartSec: number;
+  lastHitEndSec: number;
+  originSpreadSec: number;
 }
 
 function teaserDrops(result: V2Result): TeaserDrop[] {
   const drops = (result.telemetry as Record<string, unknown>).teaserDrops;
   expect(Array.isArray(drops), "teaserDrops telemetry is missing").toBe(true);
   return drops as TeaserDrop[];
+}
+
+/** The published montage region, or null when the detector did not fire.
+ *  A missing KEY is a different failure from a null value and must not pass as
+ *  one: the point of publishing the region is that a false positive is visible
+ *  in the job record instead of being an unexplained missing clip. */
+function teaserRegion(result: V2Result): TeaserRegionTelemetry | null {
+  const telemetry = result.telemetry as Record<string, unknown>;
+  expect(telemetry, "teaserRegion telemetry is missing").toHaveProperty("teaserRegion");
+  return telemetry.teaserRegion as TeaserRegionTelemetry | null;
 }
 
 function normalizeWords(words: AlignedWord[]): string[] {
@@ -238,11 +255,11 @@ describe("named regressions", () => {
     //                            duration floor is not currently dropping
     //                            anything at all.
     //   teaser filter off alone  this case green; shortest shipped clip is
-    //                            26.93s (ecology) / 24.56s (answer-arc).
+    //   (TEASER_WINDOW_SEC=0)    26.93s (ecology) / 24.56s (answer-arc).
     //   both                     RED: "podcast-ecology 36.53-39.56 "Что на
     //                            самом деле убьёт человечество" is 3.03s".
     // Those guards are the `duration < cfg.hardMinSec` drop in snap.ts and
-    // isTeaserCandidate() in analyze-v2/teaser.ts, covering one defect from two
+    // detectTeaserRegion() in analyze-v2/teaser.ts, covering one defect from two
     // directions: the only sub-6s clip either fixture can produce happens to be
     // a montage fragment, so the montage filter removes it before the floor is
     // ever consulted. Neither is redundant - the floor is the only thing that
@@ -329,44 +346,40 @@ describe("named regressions", () => {
   it("no clip is cut from the intro teaser montage", async () => {
     // Owner's complaint: the first clip was a fragment of the video's own
     // trailer - three seconds of a line that the guest says properly 47 minutes
-    // later. A teaser montage is literally a copy of later speech, so it is
-    // detectable without an LLM: its word 5-grams occur again further on.
+    // later.
     //
-    // Enforced by isTeaserCandidate() in analyze-v2/teaser.ts, applied to merged
-    // candidates BEFORE selectCriticCandidates. TWO GUARDS again, measured
-    // 2026-07-25:
-    //   teaser filter off alone (teaserRecurrenceFrac > 1)  this case green.
-    //   hardMinSec=0 alone                                  this case green.
+    // Enforced by detectTeaserRegion() in analyze-v2/teaser.ts, whose region is
+    // applied to merged candidates BEFORE selectCriticCandidates. TWO GUARDS
+    // again, re-measured 2026-07-25 against the region filter:
+    //   teaser filter off alone (TEASER_WINDOW_SEC=0)  this case green.
+    //   hardMinSec=0 alone                             this case green.
     //   both      RED: "podcast-ecology 36.53-39.56 ... repeats later speech
-    //             (100%)" - a 3.03s copy, shipped at 0.80, of the moment that
-    //             ships properly at 2807s.
+    //             (100%)" - a 3.03s clip titled "Что на самом деле убьёт
+    //             человечество", the moment that ships properly at 2807s.
     // The duration floor is the second guard only because THIS montage fragment
     // is short; a longer montage would be caught by the filter alone, which is
     // why the filter is not redundant with a duration check.
     //
-    // The legitimate cold open at ~87s is inside the 120s teaser window and is
-    // spoken once, so the filter scores it exactly 0.0000 on both fixtures.
-    // podcast-ecology's (87.43-156.96) ships in all four runs above.
-    // podcast-answer-arc's (86.33-155.18) ships in the baseline but NOT with the
-    // filter off - not because anything ate it, but because it then competes for
-    // critic budget with the montage candidates that are no longer being
-    // dropped. Whether that moment ships is a selection outcome and moves
-    // between recordings; that the FILTER never touches it is pinned
-    // deterministically by the last case in this file.
+    // NOTE what the RED offender proves and what it does NOT. Its own 5-gram
+    // recurrence is 100% only because this test measures the SHIPPED clip after
+    // snapping, and snapping widened it to 36.53-39.56, pulling in words that
+    // do recur. The candidate the filter sees (36.68-39.28) scores 0.0000 on
+    // every text-similarity metric - it occurs exactly once in the episode. That
+    // is why the filter no longer scores candidates at all; see teaser.ts.
     //
-    // MAX_RECURRENCE is a LITERAL, not cfg.teaserRecurrenceFrac, and it is
-    // measured with a plain 5-gram fraction here rather than by calling
-    // montageScore, for the reason spelled out on MIN_CLIP_SEC above: reading
-    // the knob - or the implementation - would make the test move with the
-    // defect. It states the PRODUCT rule - a shipped clip must not be a copy of
-    // later speech - in terms that do not depend on how the filter decides.
+    // The legitimate cold open at ~87s is inside the 120s teaser window and the
+    // region ends at 59.6s, so it is untouched on both fixtures and ships in
+    // every run above (ecology 87.4-157.0, answer-arc 86.3-155.2). That the
+    // FILTER never reaches it is pinned deterministically by the last case in
+    // this file.
     //
-    // It is a CEILING, not a tripwire on the knob, and it must not be sold as
-    // one: measured, raising the shipped default from 0.5 to 0.9 or even 1.1
-    // leaves THIS case green. A loosened knob surfaces two cases down, where the
-    // drops themselves are asserted, and in teaser.test.ts's literal default
-    // pin. (0.35 also no longer matches the filter's 0.5 bar, which is fine -
-    // they are different metrics on different jobs and may drift apart.)
+    // MAX_RECURRENCE is a LITERAL and it is measured with a plain 5-gram
+    // fraction here rather than by calling into teaser.ts, for the reason
+    // spelled out on MIN_CLIP_SEC above: reading the implementation would make
+    // the test move with the defect. It states the PRODUCT rule - a shipped clip
+    // must not be a copy of later speech - in terms that do not depend on how
+    // the filter decides. It is a CEILING, not a tripwire on any knob: no
+    // reachable teaser setting reds it on its own.
     const NGRAM = 5;
     const MAX_RECURRENCE = 0.35;
     for (const name of CASES) {
@@ -400,54 +413,50 @@ describe("named regressions", () => {
     // the positive half: the montage really is found, and it is found in the
     // opening minute where the source editor put it.
     //
-    // Both fixtures are two transcription runs of the same episode, and the
-    // montage text is byte-identical between them, so the drops must agree on
-    // WHERE they are even though the node numbering does not line up.
+    // Both fixtures are two transcription runs of the same episode, so the
+    // region must agree on WHERE it is even though the node numbering does not
+    // line up. Measured 2026-07-25, both fixtures independently: 11 hits,
+    // 0.00-44.64s, endSec 59.6, origin spread 2374-2375s of a 3136s episode.
+    //
+    // ONE GUARD, and it is the case in this file that catches a loosened knob:
+    // measured, raising the shipped TEASER_MIN_HITS default to 12 empties the
+    // region on both fixtures and reds this. (11 leaves it green - the montage
+    // scores exactly 11.) The absence case above does NOT catch that, so do not
+    // rely on it for this.
     for (const name of CASES) {
       const { result } = await run(name);
-      const drops = teaserDrops(result);
+      const region = teaserRegion(result);
+      expect(region, `${name}: the intro montage was not detected at all`).not.toBeNull();
       expect(
-        drops.length,
-        `${name}: the intro montage was not detected at all`
+        teaserDrops(result).length,
+        `${name}: a montage region fired but dropped no candidate`
       ).toBeGreaterThan(0);
-      // The drops.length assertion above is ONE GUARD and it is the case in
-      // this file that catches a loosened knob: measured 2026-07-25, raising the
-      // shipped TEASER_RECURRENCE_FRAC default to 0.9 reds it on
-      // podcast-answer-arc (whose drops score 0.88 and 0.83), and anything above
-      // 1.0 reds it on both fixtures. The absence case above does NOT catch
-      // that, so do not rely on it for this.
-      //
-      // The >= 0.75 evidence floor below is an UNFIRED TRIPWIRE and is kept as
-      // one, not cited as proof. Measured: exactly seven merged candidates ever
-      // start inside the 120s window across both fixtures, and their
-      // montageScores are quantised with nothing in between -
-      // 1.0000/1.0000/1.0000/0.0000 (ecology) and 0.8750/0.8333/0.0000
-      // (answer-arc); telemetry rounds to 2dp, which is what this reads, so the
-      // five real montage fragments arrive here as 1.00/1.00/1.00/0.88/0.83.
-      // Nothing reachable puts a drop in [bar, 0.75): lowering the bar to
-      // 0.35/0.2/0.1 admits no new candidate, weakening the evidence rule
-      // (TEASER_MIN_RUN 5->3, TEASER_MIN_ALIGNED 5->2) RAISES every drop to
-      // 1.0000 instead of lowering it, and removing the ё-folding leaves them
-      // unchanged. It guards a future montageScore that starts deciding on thin
-      // evidence - a real risk, just not one today's fixtures can demonstrate.
-      for (const drop of drops) {
-        expect(
-          drop.recurrence,
-          `${name}: ${drop.id} was dropped on a recurrence of only ${drop.recurrence}`
-        ).toBeGreaterThanOrEqual(0.75);
-      }
+
       // The montage is the first 45 seconds; the host's own "Всем привет, это
-      // подкаст сортировочный" at ~45.5s is where the real episode starts.
-      // Nothing past it may be called a teaser - a drop that reached in there
-      // would be the filter eating real conversation. Also an UNFIRED TRIPWIRE:
-      // the latest drop on either fixture ends at 44.6s, and no bar setting
-      // admits a candidate that starts later, so this has never been red. Kept
-      // because overreach is the expensive failure mode, not because it is
-      // proven.
+      // подкаст сортировочный" at 45.52s is where the real episode starts.
+      // Nothing past it may be called a teaser. This is where OVERREACH shows
+      // up, and overreach is now the whole risk of the design: the region is a
+      // position, so everything starting inside it dies whatever it says.
+      //
+      // Asserted on the REGION rather than on the drops, which is a real
+      // strengthening over what stood here before. The old version checked only
+      // the candidates that happened to exist, so a region that ran to 200s
+      // would have passed unnoticed on a fixture whose scanner proposed nothing
+      // there. UNFIRED TRIPWIRE all the same: lastHitEndSec is 44.6s on both
+      // fixtures and no reachable knob moves it, because nothing in the real
+      // show's opening minutes recurs at all (the first non-zero node after the
+      // montage is at 717s).
       const MONTAGE_ENDS_SEC = 50;
-      const overreach = drops
+      expect(
+        region!.lastHitEndSec,
+        `${name}: the montage region reached past the montage`
+      ).toBeLessThanOrEqual(MONTAGE_ENDS_SEC);
+      expect(region!.firstHitStartSec, `${name}: the region is not anchored at the start`).toBeLessThan(
+        MONTAGE_ENDS_SEC
+      );
+      const overreach = teaserDrops(result)
         .filter((d) => d.endSec > MONTAGE_ENDS_SEC)
-        .map((d) => `${d.id} ${d.startSec}-${d.endSec}s (${d.recurrence})`);
+        .map((d) => `${d.id} ${d.startSec}-${d.endSec}s`);
       expect(overreach, `${name}: a teaser drop reached past the montage`).toEqual([]);
     }
   });
@@ -457,48 +466,48 @@ describe("named regressions", () => {
     // The false positive this filter can commit is dropping a real cold open.
     // Both fixtures contain one at ~87s - "Бытует мнение, что люди - это главные
     // разрушители планеты... Так ли это?" - which sits INSIDE the 120s teaser
-    // window and is therefore recurrence-tested on every run.
+    // window and is therefore exposed to the filter on every run.
     //
     // Asserted against the PREDICATE rather than against the shipped clips on
-    // purpose. Whether that moment ships is a critic decision that moves between
-    // recordings and between knob settings (it does not ship in answer-arc once
-    // the filter is switched off - see the montage case above); whether the
-    // filter would eat it is a deterministic property of the transcript, and
-    // that is the thing this change can break.
+    // purpose: whether that moment ships is a critic decision that moves between
+    // recordings, while whether the filter would eat it is a deterministic
+    // property of the transcript, and that is the thing this change can break.
     //
     // The two halves have very different strengths, measured 2026-07-25, and
     // the comment should not flatter the weaker one:
-    //   NEGATIVE half (cold open not flagged) - robust rather than
-    //   load-bearing. It scores exactly 0.0000 on both fixtures and stays
-    //   0.0000 with TEASER_MIN_RUN weakened to 4 or 3. No knob reachable from
-    //   here makes the filter wrong about it; that is the filter being right,
-    //   which is worth pinning but is not a proven-red assertion.
-    //   POSITIVE half (bait line flagged) - ONE GUARD, genuinely load-bearing:
-    //   raising the shipped teaserRecurrenceFrac default past 1.0 reds it
-    //   (measured at 1.1). It is what stops a filter that has been switched off
-    //   entirely from leaving the negative half green forever.
+    //   NEGATIVE half (cold open outside the region) - robust rather than
+    //   load-bearing. The region ends at 59.6s and the cold open starts at
+    //   88.6s, a 29s margin, and no knob reachable from here closes it: the
+    //   region end is pinned by the last montage hit at 44.64s plus a 15s pad,
+    //   and the show's opening minutes contain no recurring sentence to extend
+    //   it with. That is the filter being right, not a proven-red assertion.
+    //   POSITIVE half (bait line inside the region) - ONE GUARD, genuinely
+    //   load-bearing: TEASER_MIN_HITS=12 reds it. It is what stops a filter that
+    //   has been switched off entirely from leaving the negative half green
+    //   forever.
     for (const name of CASES) {
       const { fixture } = await run(name);
       const cfg = loadAnalyzeConfig({});
       const nodes = buildSentenceGraph(fixture.transcript.segments, cfg);
+      const region = detectTeaserRegion(nodes, cfg);
       const find = (needle: string) => {
         const index = nodes.findIndex((n) => n.text.includes(needle));
         expect(index, `${name}: fixture no longer contains "${needle}"`).toBeGreaterThanOrEqual(0);
         return index;
       };
-      // The real cold open - spoken once, so nothing of it recurs.
+      // The real cold open - spoken once, and 29s clear of the region's end.
       const question = find("главные вообще разрушители планеты");
       expect(
-        isTeaserCandidate(nodes, { startNode: question, endNode: question + 4 }, cfg),
-        `${name}: the legitimate opening question was flagged as a montage copy`
+        isInTeaserRegion(region, nodes[question].start),
+        `${name}: the legitimate opening question was swallowed by the montage region`
       ).toBe(false);
-      // The montage's own opening line, for contrast: same window, same test,
+      // The montage's own opening line, for contrast: same video, same test,
       // opposite answer. Without this the case above could pass on a filter that
       // had stopped working entirely.
       const bait = find("Человек");
       expect(
-        isTeaserCandidate(nodes, { startNode: bait, endNode: bait }, cfg),
-        `${name}: the montage bait line was NOT flagged`
+        isInTeaserRegion(region, nodes[bait].start),
+        `${name}: the montage bait line was NOT inside the region`
       ).toBe(true);
     }
   });
