@@ -952,6 +952,44 @@ export async function deliverReadyTelegramJobs(
             : `Telegram delivery ${delivery.id} could not start; will retry:`,
           message
         );
+
+        if (terminal) {
+          // Retiring the row used to be a console.error and nothing else: the
+          // job is DONE, usage.service bills it (it sums every job that is not
+          // FAILED), the clips sit in the database and on R2 - and the chat was
+          // never told, ever, because a FAILED row never comes back out of
+          // getPendingTelegramDeliveries. This is the last chance to say
+          // anything, so it is taken.
+          //
+          // AFTER the write, never before. The write is what makes the row
+          // terminal, and that transition can happen exactly once - so hanging
+          // the send off it is what bounds the message at one. Sent first, a
+          // write that then threw would leave the row PENDING and re-pickable,
+          // and the next poll would send the identical message, six times a
+          // minute, for as long as the pool stayed down. A write that throws
+          // here simply means nothing is said yet: the attempt is not counted
+          // either, and the retry that lands the write also says the line.
+          //
+          // clips.length, not a promise: on the failure-notice branch it is 0
+          // and the copy claims nothing exists.
+          try {
+            await client.sendMessage(
+              delivery.chatId,
+              (dict ?? t("en")).deliveryGivenUp(
+                appUrl,
+                delivery.job.clips.length
+              )
+            );
+          } catch (noticeError) {
+            // The chat may be exactly what is broken. The row stays terminal:
+            // reopening it would spend a second budget on the same dead send,
+            // and the rows behind this one are not to blame for it.
+            console.error(
+              `Telegram delivery ${delivery.id}: could not tell the user it was given up on:`,
+              noticeError instanceof Error ? noticeError.message : noticeError
+            );
+          }
+        }
       } catch (countError) {
         // Even the attempt counter can fail. Log and move on - the rows behind
         // this one are not to blame.

@@ -40,6 +40,7 @@ vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
   },
 }));
 
+import { MAX_TELEGRAM_DELIVERY_ATTEMPTS } from "@clipclap/shared";
 import { deliverReadyTelegramJobs } from "../handlers";
 import { t } from "../i18n";
 
@@ -602,6 +603,140 @@ describe("a partial delivery is admitted, not hidden", () => {
     expect(client.sendMessage).toHaveBeenCalledTimes(2);
     expect(client.sendMessage).toHaveBeenLastCalledWith("500", t("en").done(3));
     expect(store.row.status).toBe("FAILED");
+  });
+});
+
+describe("a delivery that is given up on is not given up on in silence", () => {
+  // The measured bug: a row that spent its attempt budget was retired to FAILED
+  // with nothing but a console.error. The job is DONE, so usage.service bills
+  // it (it sums every job that is not FAILED), the clips are in the database
+  // and on R2 - and the chat is told absolutely nothing, for ever, because a
+  // FAILED row never re-enters getPendingTelegramDeliveries.
+  const APP_URL = "https://clipclap.io";
+
+  it("tells the user where their clips are when the attempt budget runs out", async () => {
+    store = createStore(doneJob("job1", [clip("c1")]));
+    const client = makeClient();
+    client.sendVideo.mockRejectedValue(new Error("connection reset by peer"));
+
+    for (let i = 0; i <= MAX_TELEGRAM_DELIVERY_ATTEMPTS; i++) await poll(client);
+
+    expect(store.row.status).toBe("FAILED");
+    expect(store.row.attempts).toBe(MAX_TELEGRAM_DELIVERY_ATTEMPTS);
+    expect(client.sendMessage.mock.calls).toEqual([
+      ["500", t("en").deliveryGivenUp(APP_URL, 1)],
+    ]);
+  });
+
+  it("says it exactly once, however long the poller keeps running", async () => {
+    store = createStore(doneJob("job1", [clip("c1"), clip("c2")]));
+    const client = makeClient();
+    client.sendVideo.mockRejectedValue(new Error("connection reset by peer"));
+
+    for (let i = 0; i <= MAX_TELEGRAM_DELIVERY_ATTEMPTS; i++) await poll(client);
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+    const videoCallsAtRetirement = client.sendVideo.mock.calls.length;
+
+    // 30 more polls - five minutes of them
+    for (let i = 0; i < 30; i++) await poll(client);
+
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(client.sendVideo.mock.calls.length).toBe(videoCallsAtRetirement);
+    expect(store.row.status).toBe("FAILED");
+  });
+
+  it("does not speak until the terminal write has actually landed", async () => {
+    // The ordering guarantee. The message is sent AFTER the write that retires
+    // the row, never before: the transition to FAILED happens at most once, so
+    // the send hangs off an event that cannot repeat. Send first and a write
+    // that then throws leaves the row PENDING and re-pickable - and the next
+    // poll sends the identical message, six times a minute, for as long as the
+    // pool is down.
+    store = createStore(doneJob("job1", [clip("c1")]));
+    const client = makeClient();
+    client.sendVideo.mockRejectedValue(new Error("connection reset by peer"));
+
+    for (let i = 0; i < MAX_TELEGRAM_DELIVERY_ATTEMPTS - 1; i++) await poll(client);
+    expect(store.row.attempts).toBe(MAX_TELEGRAM_DELIVERY_ATTEMPTS - 1);
+    expect(store.row.status).toBe("PENDING");
+    expect(client.sendMessage).not.toHaveBeenCalled();
+
+    // the pool saturates exactly on the poll that would have retired the row
+    store.breakWrites(true);
+    for (let i = 0; i < 5; i++) await poll(client);
+
+    expect(client.sendMessage).not.toHaveBeenCalled();
+    expect(store.row.status).toBe("PENDING");
+
+    store.breakWrites(false);
+    await poll(client);
+
+    expect(store.row.status).toBe("FAILED");
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      "500",
+      t("en").deliveryGivenUp(APP_URL, 1)
+    );
+
+    for (let i = 0; i < 5; i++) await poll(client);
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays terminal and keeps the batch alive when that message cannot be sent", async () => {
+    // The chat may be exactly what is broken. Resurrecting the row would spend
+    // a second budget on the same dead send, and a throw escaping the loop
+    // would abandon every row queued behind this one.
+    store = createStore(
+      { job: doneJob("job1", [clip("a1")]), chatId: "chat-a" },
+      { job: doneJob("job2", [clip("b1")]), chatId: "chat-b" }
+    );
+    const client = makeClient();
+    const dead = async (chatId: string) => {
+      if (chatId === "chat-a") throw new Error("connection reset by peer");
+    };
+    client.sendVideo.mockImplementation(dead);
+    client.sendMessage.mockImplementation(dead);
+
+    for (let i = 0; i <= MAX_TELEGRAM_DELIVERY_ATTEMPTS; i++) {
+      await expect(poll(client)).resolves.toBeUndefined();
+    }
+
+    expect(store.rowAt(0).status).toBe("FAILED");
+    expect(store.rowAt(1).status).toBe("DELIVERED");
+  });
+
+  it("tells the user even when it was the failure notice that never got through", async () => {
+    // Same hole on the other branch: the notice 429s until the budget is gone,
+    // the row is retired, and the user hears nothing about a video they sent.
+    // No clips exist here, so the copy may not claim any.
+    store = createStore({
+      id: "job1",
+      status: "FAILED",
+      error: "R2 upload failed",
+      noClipsReason: null,
+      clips: [],
+    });
+    const client = makeClient();
+    let sends = 0;
+    client.sendMessage.mockImplementation(async () => {
+      sends++;
+      if (sends <= MAX_TELEGRAM_DELIVERY_ATTEMPTS) {
+        throw new Error("429 Too Many Requests");
+      }
+    });
+
+    for (let i = 0; i <= MAX_TELEGRAM_DELIVERY_ATTEMPTS; i++) await poll(client);
+
+    expect(store.row.status).toBe("FAILED");
+    expect(client.sendMessage).toHaveBeenLastCalledWith(
+      "500",
+      t("en").deliveryGivenUp(APP_URL, 0)
+    );
+
+    await poll(client);
+    expect(client.sendMessage).toHaveBeenCalledTimes(
+      MAX_TELEGRAM_DELIVERY_ATTEMPTS + 1
+    );
   });
 });
 

@@ -48,6 +48,12 @@ export interface Dict {
   processingFailed: (code: JobErrorCode | null) => string;
   done: (n: number) => string;
   donePartial: (sent: number, total: number) => string;
+  /** The delivery row has spent its attempt budget and has just been retired,
+   *  so this is the LAST thing this job will ever say in the chat - see
+   *  deliverReadyTelegramJobs. `clips` is what actually exists (0 on the
+   *  failure-notice path), because the copy may not claim clips the user does
+   *  not have, and it may not offer a retry the terminal row cannot make. */
+  deliveryGivenUp: (url: string, clips: number) => string;
   doneNoClips: (reason: string) => string;
   lowQualityNote: string;
   blocked: (reason: string) => string;
@@ -223,6 +229,13 @@ const en: Dict = {
   done: (n) => `Done. ${n} clip${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} ready.`,
   donePartial: (sent, total) =>
     `Sent ${sent} of ${total} clips - something went wrong before the rest could be delivered. All ${total} are ready in your dashboard.`,
+  deliveryGivenUp: (url, clips) => {
+    if (clips === 0) {
+      return `I could not deliver the result of this video to this chat and have stopped trying. Open ${url}/dashboard to see how it ended - nothing is lost. Don't send this video again before you have looked there: processing it a second time would use your minutes twice.`;
+    }
+    const them = clips === 1 ? "it" : "them";
+    return `${clips === 1 ? "Your clip is" : `All ${clips} clips are`} ready, but I could not send ${them} to this chat and have stopped trying. Nothing is lost - open ${url}/dashboard to watch or download ${them}. Don't send this video again: the clips already exist, and processing it a second time would use your minutes twice.`;
+  },
   doneNoClips: (reason) =>
     reason === "NO_USABLE_SPEECH"
       ? "Done, but I could not find usable speech in this video - no clips this time."
@@ -430,6 +443,17 @@ const ru: Dict = {
     `Готово. ${n} ${pluralizeRu(n, "клип", "клипа", "клипов")} ${pluralizeRu(n, "готов", "готовы", "готовы")}.`,
   donePartial: (sent, total) =>
     `Отправил ${sent} из ${total} ${pluralizeRu(total, "клипа", "клипов", "клипов")} - остальные доставить не удалось. Все ${total} готовы в личном кабинете.`,
+  deliveryGivenUp: (url, clips) => {
+    if (clips === 0) {
+      return `Не удалось доставить результат по этому видео в этот чат - больше не пытаюсь. Открой ${url}/dashboard, там видно, чем всё закончилось - ничего не потеряно. Не присылай это видео заново, пока не посмотришь: повторная обработка спишет минуты второй раз.`;
+    }
+    const them = clips === 1 ? "его" : "их";
+    const ready =
+      clips === 1
+        ? "Клип готов"
+        : `Все ${clips} ${pluralizeRu(clips, "клип", "клипа", "клипов")} готовы`;
+    return `${ready}, но отправить ${them} в этот чат не получилось - больше не пытаюсь. Ничего не потеряно: открой ${url}/dashboard, там ${them} можно посмотреть и скачать. Не присылай это видео заново: клипы уже есть, а повторная обработка спишет минуты второй раз.`;
+  },
   doneNoClips: (reason) =>
     reason === "NO_USABLE_SPEECH"
       ? "Готово, но в этом видео не нашлось пригодной речи - клипов не будет."
