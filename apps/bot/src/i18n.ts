@@ -149,6 +149,15 @@ const enFailure: Record<JobErrorCode, string> = {
   // names no cause as fact and leads with the remedy that always works.
   SOURCE_UNAVAILABLE:
     "I could not download the video from that link - it may be private, region-locked, removed, or temporarily unavailable. Check that the link opens in a browser, or send me the file directly. Your minutes were not used.",
+  // Not hedged, unlike SOURCE_UNAVAILABLE: yt-dlp measured the file and said in
+  // as many words that it was over the cap, so the cause is stated and the
+  // number is quoted - "too large" alone gives a clipper with a 6-hour VOD
+  // nothing to act on. It also has to take back the sibling's remedy: the same
+  // 2 GB is my own Telegram ceiling (TELEGRAM_BOT_API_DOWNLOAD_LIMIT_BYTES in
+  // handlers.ts) and the plan upload cap, so "send me the file directly" would
+  // send the user off to fail a second time.
+  SOURCE_TOO_LARGE:
+    "That video is over my 2 GB limit, so I could not download it. Your minutes were not used. Sending me the file will not help - the same 2 GB limit applies - so trim the video to the part you want clipped and send that instead.",
 };
 
 // The "unknown failure" line, so it may assert neither transience nor
@@ -360,6 +369,12 @@ const ruFailure: Record<JobErrorCode, string> = {
     "Модель не смогла разобрать часть этого видео, поэтому я не могу сказать, какие моменты стоит нарезать. Тот же самый файл ничего не изменит, минуты не списаны. Попробуй другое видео или обрежь это до нужного куска и пришли то, что получится.",
   SOURCE_UNAVAILABLE:
     "Не получилось скачать видео по этой ссылке - возможно, оно приватное, удалено, недоступно в этом регионе или временно не отдаётся. Проверь, открывается ли ссылка в браузере, или пришли файл напрямую. Минуты не списаны.",
+  // См. комментарий к SOURCE_TOO_LARGE в enFailure: причина известна точно, так
+  // что называем её прямо и приводим число. Совет «пришли файл напрямую» из
+  // SOURCE_UNAVAILABLE здесь надо именно отменить - те же 2 ГБ стоят и на
+  // загрузке, так что это была бы вторая неудачная попытка.
+  SOURCE_TOO_LARGE:
+    "Это видео больше моего лимита в 2 ГБ, скачать его не получилось. Минуты не списаны. Прислать файл напрямую не поможет - лимит те же 2 ГБ. Обрежь видео до той части, которую нужно нарезать, и пришли её.",
 };
 
 // Same rule as enFailureGeneric: neither "жди, я повторяю" nor "пришли заново"

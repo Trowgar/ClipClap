@@ -60,7 +60,11 @@ vi.mock("../processors/analyze", () => ({
 }));
 
 import { AnalyzeRefusalError, AnalyzeTechnicalError } from "../analyze-v2/critic";
-import { SourceUnavailableError, UnsupportedInputError } from "../processors/errors";
+import {
+  SourceTooLargeError,
+  SourceUnavailableError,
+  UnsupportedInputError,
+} from "../processors/errors";
 import { runAnalyzeStage } from "../stages/analyze";
 import { runDownloadStage } from "../stages/download";
 import { runFinalizeStage } from "../stages/finalize";
@@ -305,6 +309,32 @@ describe("stage handlers", () => {
     expect(mocks.jobUpdate).toHaveBeenCalledWith({
       where: { id: "job1" },
       data: { status: "FAILED", error: `[SOURCE_UNAVAILABLE] ${raw}` },
+    });
+  });
+
+  it("tags an oversized source with its own code, not the unavailable bucket", async () => {
+    // SourceTooLargeError is a sibling of SourceUnavailableError, not a
+    // subclass, so an instanceof chain that checks the wrong one first would
+    // silently send an over-the-cap VOD the "it may be private, upload the file
+    // directly" copy - advice that cannot work, since the same 2 GB cap applies
+    // to uploads.
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      userId: "u1",
+      sourceUrl: "https://youtube.com/watch?v=longvod",
+      sourceKey: null,
+    });
+    const raw =
+      "yt-dlp declined https://youtube.com/watch?v=longvod: File is larger than max-filesize (5368709120 bytes > 2147483648 bytes)";
+    mocks.downloadVideo.mockRejectedValue(new SourceTooLargeError(raw));
+
+    await expect(
+      runDownloadStage({ jobId: "job1", userId: "u1" })
+    ).rejects.toThrow(SourceTooLargeError);
+
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: "job1" },
+      data: { status: "FAILED", error: `[SOURCE_TOO_LARGE] ${raw}` },
     });
   });
 

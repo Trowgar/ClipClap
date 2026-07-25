@@ -59,6 +59,18 @@ const TEXT: Record<JobErrorCode, string> = {
   // the remedy that holds whatever the cause was.
   SOURCE_UNAVAILABLE:
     "We could not download the video from that link - it may be private, region-locked, removed, or temporarily unavailable. Check that the link opens in a browser, or upload the file directly. Your minutes were not used.",
+  // The one download failure that is NOT hedged, because yt-dlp measured the
+  // file and told us so. Two things follow. First, the cause is stated flatly -
+  // hedging here would throw away information we actually hold and read as
+  // evasion. Second, this copy must contradict SOURCE_UNAVAILABLE's remedy: the
+  // link opens perfectly in a browser, and "upload the file directly" is the
+  // one action guaranteed to fail, since the upload path enforces the identical
+  // cap (MAX_SOURCE_FILESIZE_BYTES / ABUSE_CAPS.maxFileSizeBytes). Saying so
+  // costs a clause and saves the user a failed 2 GB upload. The number is
+  // quoted because "too large" is unactionable - a clipper with a 6-hour VOD
+  // needs to know what to cut it down to.
+  SOURCE_TOO_LARGE:
+    "That video is over our 2 GB limit, so we could not download it. Your minutes were not used. Uploading the file here will not help - the same 2 GB limit applies - so trim the video to the part you want clipped and use that instead.",
 };
 
 export function jobErrorText(code: JobErrorCode | null | undefined): string {

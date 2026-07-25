@@ -1,4 +1,10 @@
-export { PLAN_LIMITS, getPlanLimits, getPlanFromPriceId, TOPUP_PACKS } from "./plans";
+export {
+  PLAN_LIMITS,
+  getPlanLimits,
+  getPlanFromPriceId,
+  TOPUP_PACKS,
+  MAX_SOURCE_FILESIZE_BYTES,
+} from "./plans";
 export type { PlanLimits, TopupPack } from "./plans";
 export { REFERRAL_CONFIG, REFERRAL_COOKIE_NAME, exchangeRateToUsd } from "./referral";
 export { WALLET_CONFIG, findWalletMethod } from "./wallet";

@@ -500,6 +500,22 @@ describe("bot i18n", () => {
     );
   });
 
+  it("states the cap in both locales for an oversized source, and offers a remedy that works", () => {
+    const en = t("en").processingFailed("SOURCE_TOO_LARGE");
+    expect(en).toContain("2 GB");
+    // The bot's own Telegram cap is the same 2 GB (handlers.ts
+    // TELEGRAM_BOT_API_DOWNLOAD_LIMIT_BYTES), so "send me the file directly" -
+    // the SOURCE_UNAVAILABLE remedy - cannot work for this failure.
+    expect(en).not.toMatch(/send me the file directly/i);
+    expect(en).toMatch(/trim/i);
+    expect(en).toContain("minutes were not used");
+
+    const ru = t("ru").processingFailed("SOURCE_TOO_LARGE");
+    expect(ru).toContain("2 ГБ");
+    expect(ru).toMatch(/обрежь/i);
+    expect(ru).toContain("Минуты не списаны");
+  });
+
   it("has a distinct string for every code in both locales", () => {
     // the Record<JobErrorCode, string> makes a missing translation a compile
     // error; this catches the other half - a code copy-pasted onto two entries

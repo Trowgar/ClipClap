@@ -37,12 +37,20 @@ export const JOB_ERROR_CODES = [
    *  cannot change it, so the copy must ask for a different file. */
   "UNSUPPORTED_INPUT",
   /** The pasted link did not yield a file. The downloader cannot tell the cause
-   *  apart (private, removed, region-locked, login-walled, over the size cap, a
-   *  stale extractor), so the copy names none of them as fact. Permanent for
-   *  the same reason as UNSUPPORTED_INPUT: every attempt re-fetches the
-   *  identical URL, so the copy must give the user a way out rather than
-   *  promise an automatic retry. */
+   *  apart (private, removed, region-locked, login-walled, a stale extractor),
+   *  so the copy names none of them as fact. Permanent for the same reason as
+   *  UNSUPPORTED_INPUT: every attempt re-fetches the identical URL, so the copy
+   *  must give the user a way out rather than promise an automatic retry. */
   "SOURCE_UNAVAILABLE",
+  /** The source is over MAX_SOURCE_FILESIZE_BYTES: yt-dlp measured it and
+   *  declined to download it. Split out of SOURCE_UNAVAILABLE because it is the
+   *  one download failure whose cause we actually KNOW - yt-dlp prints its own
+   *  verdict with both numbers - and because the SOURCE_UNAVAILABLE remedy is
+   *  wrong here in both halves: the link opens fine in a browser, and the
+   *  identical cap rejects the direct upload it recommends. The copy may
+   *  therefore state the cause, state the limit as a number, and ask for a
+   *  trimmed source. Permanent in the same sense as its sibling. */
+  "SOURCE_TOO_LARGE",
 ] as const;
 
 export type JobErrorCode = (typeof JOB_ERROR_CODES)[number];

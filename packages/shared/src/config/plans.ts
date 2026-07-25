@@ -15,9 +15,18 @@ export interface PlanLimits {
 const MB = 1024 * 1024;
 const GB = 1024 * MB;
 
+/** The one size cap in the product, in bytes. It is enforced in three places
+ *  that must agree, because the failure copy states the number as fact:
+ *  the presigned-upload check (apps/web/app/api/uploads/route.ts, via
+ *  maxFileSizeBytes below), the bot's Telegram download limit
+ *  (apps/bot/src/handlers.ts), and yt-dlp's --max-filesize for a pasted link
+ *  (apps/worker/src/processors/download.ts). If they drift, SOURCE_TOO_LARGE
+ *  tells a user to do something the next surface will also refuse. */
+export const MAX_SOURCE_FILESIZE_BYTES = 2 * GB;
+
 const ABUSE_CAPS = {
   maxSourceDurationMinutes: 180,
-  maxFileSizeBytes: 2 * GB,
+  maxFileSizeBytes: MAX_SOURCE_FILESIZE_BYTES,
 } as const;
 
 export const PLAN_LIMITS: Record<

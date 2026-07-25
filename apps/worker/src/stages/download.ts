@@ -8,7 +8,11 @@ import { randomUUID } from "crypto";
 import { unlink } from "fs/promises";
 import { downloadVideo } from "../processors/download";
 import { normalizeSource } from "../processors/normalize";
-import { SourceUnavailableError, UnsupportedInputError } from "../processors/errors";
+import {
+  SourceTooLargeError,
+  SourceUnavailableError,
+  UnsupportedInputError,
+} from "../processors/errors";
 import { safeTagJobError } from "./job-error";
 import type { DownloadStagePayload } from "./types";
 
@@ -80,12 +84,19 @@ async function markJobFailed(jobId: string, error: unknown) {
   // the identical URL - so the copy has to hand the user something to do
   // instead of promising a rescue that is not coming. Everything else (R2,
   // ffmpeg, disk) stays untagged and renders as the generic message.
+  //
+  // SourceTooLargeError is a sibling of SourceUnavailableError, not a subclass,
+  // so this chain cannot silently mis-file it - but keep it first anyway, so
+  // that turning it into a subclass later fails loudly in the stage test rather
+  // than quietly downgrading an over-the-cap VOD to the hedged copy.
   const tagged =
     error instanceof UnsupportedInputError
       ? safeTagJobError("UNSUPPORTED_INPUT", message)
-      : error instanceof SourceUnavailableError
-        ? safeTagJobError("SOURCE_UNAVAILABLE", message)
-        : message;
+      : error instanceof SourceTooLargeError
+        ? safeTagJobError("SOURCE_TOO_LARGE", message)
+        : error instanceof SourceUnavailableError
+          ? safeTagJobError("SOURCE_UNAVAILABLE", message)
+          : message;
   await prisma.job.update({
     where: { id: jobId },
     data: { status: "FAILED", error: tagged },

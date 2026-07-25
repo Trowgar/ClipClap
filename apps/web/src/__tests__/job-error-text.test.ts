@@ -80,6 +80,22 @@ describe("web job failure copy", () => {
     expect(generic).toContain("minutes were not used");
   });
 
+  it("states the actual cap for an oversized source and does not send the user to upload it", () => {
+    const text = jobErrorText("SOURCE_TOO_LARGE");
+    // The one code where we know the cause exactly, because yt-dlp prints its
+    // own verdict - so the copy names it and states the number instead of
+    // hedging the way SOURCE_UNAVAILABLE has to.
+    expect(text).toContain("2 GB");
+    // SOURCE_UNAVAILABLE's remedy is actively wrong here: the link DOES open in
+    // a browser, and the same 2 GB cap (ABUSE_CAPS.maxFileSizeBytes) rejects
+    // the upload, so "upload the file directly" is the one thing guaranteed to
+    // fail. Trimming is the remedy that works.
+    expect(text).not.toMatch(/upload the file directly/i);
+    expect(text).not.toMatch(/private|region-locked/i);
+    expect(text).toMatch(/trim/i);
+    expect(text).toContain("minutes were not used");
+  });
+
   it("has copy for every code the worker can emit", () => {
     for (const code of JOB_ERROR_CODES) {
       expect(jobErrorText(code)).not.toBe(jobErrorText(null));

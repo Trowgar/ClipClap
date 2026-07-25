@@ -1,12 +1,13 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { createWriteStream } from "fs";
+import { stat } from "fs/promises";
 import { pipeline } from "stream/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
-import { downloadFile } from "@clipclap/shared";
-import { SourceUnavailableError } from "./errors";
+import { downloadFile, MAX_SOURCE_FILESIZE_BYTES } from "@clipclap/shared";
+import { SourceTooLargeError, SourceUnavailableError } from "./errors";
 import type { Readable } from "stream";
 
 const execFileAsync = promisify(execFile);
@@ -49,8 +50,12 @@ async function downloadFromUrl(
         "-o",
         outputPath,
         "--no-playlist",
+        // The shared constant, not a literal "2G", because the SOURCE_TOO_LARGE
+        // copy quotes this number to the user and the upload path enforces the
+        // same one. yt-dlp accepts a plain byte count (verified against
+        // 2026.07.04 in the worker image).
         "--max-filesize",
-        "2G",
+        String(MAX_SOURCE_FILESIZE_BYTES),
       ],
       // yt-dlp streams progress to stdout for the whole download and we buffer
       // all of it. Node's default cap is 1 MiB, which a multi-hour VOD - the
@@ -78,11 +83,15 @@ async function downloadFromUrl(
     // actually looked at the URL and could not produce a file.
     //
     // Even then the exit code does not say WHY: private, removed,
-    // region-locked, login-walled, over --max-filesize, or an extractor too old
-    // for the site all exit non-zero alike. So SourceUnavailableError claims
-    // only "this link did not yield a file" and the copy hedges the cause. Do
-    // not sharpen it without reading stderr for yt-dlp's "Private video" /
-    // "Video unavailable" / "Sign in to confirm" markers.
+    // region-locked, login-walled, or an extractor too old for the site all
+    // exit non-zero alike. So SourceUnavailableError claims only "this link did
+    // not yield a file" and the copy hedges the cause. Do not sharpen it
+    // without reading stderr for yt-dlp's "Private video" / "Video
+    // unavailable" / "Sign in to confirm" markers.
+    //
+    // NOTE: an earlier version of this comment listed "over --max-filesize"
+    // among the non-zero exits. That was wrong and is the whole of F3 - an
+    // over-the-cap source exits ZERO and is handled after this block, not here.
     const detail = error instanceof Error ? error.message : String(error);
     if (isProcessExitFailure(error)) {
       throw new SourceUnavailableError(
@@ -95,7 +104,75 @@ async function downloadFromUrl(
   }
 
   console.log("yt-dlp output:", stdout);
+
+  // A zero exit from yt-dlp is NOT a promise that a file exists. yt-dlp splits
+  // "failed" from "declined", and only the first is an error: when it decides
+  // to SKIP a download it prints its reason on stdout, writes nothing, and
+  // exits 0. Verified by hand against yt-dlp 2026.07.04 in the worker-download
+  // image, each of these exiting 0 with no file at -o:
+  //
+  //   --max-filesize exceeded   "[download] File is larger than max-filesize
+  //                              (300000 bytes > 1024 bytes). Aborting."
+  //   --min-filesize undershot  "File is smaller than min-filesize ..."
+  //   --match-filter rejected   "... does not pass filter (...), skipping .."
+  //   --download-archive dup    "... has already been recorded in the archive"
+  //   --skip-download           (silent)
+  //
+  // Only --max-filesize is in the argument list above, but the class of bug is
+  // what matters: returning outputPath here for a file that was never written
+  // sends an ENOENT out of uploadFile two calls later in stages/download.ts,
+  // untagged, so a clipper who pasted a link to an over-the-cap VOD - the core
+  // workload - got the generic "something went wrong" copy on all 3 attempts.
+  //
+  // Existence is the trigger and stdout only sharpens the diagnosis, never the
+  // other way round: matching on message text alone would be a false positive
+  // waiting to happen, whereas if a future yt-dlp rewords its abort line we
+  // degrade to SourceUnavailableError - still honest, still coded, never back
+  // to the generic bucket.
+  const bytes = await fileSizeOrNull(outputPath);
+  if (bytes === null || bytes === 0) {
+    const size = parseMaxFilesizeAbort(stdout);
+    if (size) {
+      throw new SourceTooLargeError(
+        `yt-dlp declined ${url}: source is ${size.actualBytes} bytes, over the ` +
+          `${size.limitBytes} byte limit`
+      );
+    }
+    throw new SourceUnavailableError(
+      `yt-dlp exited 0 but wrote no file for ${url}: ${lastLine(stdout)}`
+    );
+  }
+
   return outputPath;
+}
+
+async function fileSizeOrNull(path: string): Promise<number | null> {
+  try {
+    return (await stat(path)).size;
+  } catch {
+    return null;
+  }
+}
+
+/** yt-dlp's own verdict, on stdout, e.g.
+ *  "[download] File is larger than max-filesize (5368709120 bytes > 2147483648 bytes). Aborting."
+ *  Both numbers are worth keeping: the limit proves which cap bit, and the
+ *  actual size is the only record of how far over the source was. */
+function parseMaxFilesizeAbort(
+  stdout: string
+): { actualBytes: string; limitBytes: string } | null {
+  const match =
+    /larger than max-filesize\s*\((\d+)\s*bytes\s*>\s*(\d+)\s*bytes\)/i.exec(
+      stdout
+    );
+  if (!match) return null;
+  return { actualBytes: match[1], limitBytes: match[2] };
+}
+
+/** yt-dlp's reason is the last thing it printed; the rest is progress noise. */
+function lastLine(stdout: string): string {
+  const lines = stdout.trim().split("\n").filter((l) => l.trim());
+  return lines[lines.length - 1]?.trim() ?? "(no output)";
 }
 
 /** True only when the child process ran and exited with a non-zero status.
