@@ -34,6 +34,15 @@ export interface AnalyzeConfig {
   leadInSec: number;
   tailHoldSec: number;
   payoffMaxTailSec: number;
+  /** Intro teaser montages quote later speech verbatim; candidates STARTING
+   *  inside this window are recurrence-tested (spec 2026-07-24 §4.1). */
+  teaserWindowSec: number;
+  /** Share of a candidate's word 5-grams that must reappear after its own end
+   *  for it to be a montage copy. Measured on both eval fixtures (2026-07-25):
+   *  every one of the 61 ordinary candidates scores exactly 0.000, the five real
+   *  montage fragments score 0.409-1.000. 0.35 sits inside that void, below the
+   *  weakest real montage fragment and far above ordinary speech. */
+  teaserRecurrenceFrac: number;
 }
 
 type Env = Record<string, string | undefined>;
@@ -78,5 +87,7 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     leadInSec: num(env, "LEAD_IN_SEC", 0.15),
     tailHoldSec: num(env, "TAIL_HOLD_SEC", 0.3),
     payoffMaxTailSec: num(env, "PAYOFF_MAX_TAIL_SEC", 4),
+    teaserWindowSec: num(env, "TEASER_WINDOW_SEC", 120),
+    teaserRecurrenceFrac: num(env, "TEASER_RECURRENCE_FRAC", 0.35),
   };
 }

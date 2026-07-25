@@ -9,6 +9,7 @@ import { snapNodes } from "./snap";
 import { evidenceGate, snippetFallbackCopy, lexicalOverlap } from "./gates";
 import { dominantScript, scriptMismatch } from "./language";
 import { selectAndOrder } from "./select";
+import { isTeaserCandidate, recurrenceFraction } from "./teaser";
 import { newUsage } from "./llm";
 import type {
   MergedCandidate,
@@ -102,13 +103,39 @@ export async function analyzeHighlightsV2(
     }
 
     const merged = mergeCandidates(scan.candidates, nodes, cfg);
+    // Intro montage fragments quote later speech verbatim and are truncated by
+    // the source editor, so every clean-start/clean-end guard passes on them.
+    // Dropping them HERE - before stratified selection, not after the critic -
+    // is what makes it worth doing: perWindowMinCandidates guarantees the first
+    // window a share of the critic budget, so a montage would otherwise be
+    // guaranteed to spend it on bait (spec 2026-07-24 §1.1, §4.1).
+    // Seconds travel with the id: in a production log "c2" alone says nothing,
+    // and the first question about a drop is always "what did we cut?".
+    const teaserDrops: Array<{
+      id: string;
+      recurrence: number;
+      startSec: number;
+      endSec: number;
+    }> = [];
+    const withoutTeasers = merged.filter((c) => {
+      if (!isTeaserCandidate(nodes, c, cfg)) return true;
+      teaserDrops.push({
+        id: c.id,
+        recurrence:
+          Math.round(recurrenceFraction(nodes, c.startNode, c.endNode) * 100) / 100,
+        startSec: Math.round(nodes[c.startNode].start * 10) / 10,
+        endSec: Math.round(nodes[c.endNode].end * 10) / 10,
+      });
+      return false;
+    });
     const sourceMinutes = speechSec / 60;
-    candidates = selectCriticCandidates(merged, nodes, cfg, sourceMinutes);
+    candidates = selectCriticCandidates(withoutTeasers, nodes, cfg, sourceMinutes);
     scannerTelemetry = {
       path: "full",
       ...scan.telemetry,
       rawCandidates: scan.candidates.length,
       mergedCandidates: merged.length,
+      teaserDrops,
       criticCandidates: candidates.length,
     };
   }

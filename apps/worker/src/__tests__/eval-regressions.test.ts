@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { SubtitleWord } from "@clipclap/shared";
 import type { V2Result } from "../analyze-v2/types";
 import { loadFixture, runFixture, type Fixture } from "./helpers/eval-fixture";
+import { loadAnalyzeConfig } from "../analyze-v2/config";
+import { buildSentenceGraph } from "../analyze-v2/sentence-graph";
+import { isTeaserCandidate } from "../analyze-v2/teaser";
 
 /**
  * Tier-1 "never again" regressions.
@@ -99,6 +102,19 @@ function label(name: string, clip: { start: number; end: number; title: string }
   return `${name} ${clip.start.toFixed(2)}-${clip.end.toFixed(2)} "${clip.title}"`;
 }
 
+interface TeaserDrop {
+  id: string;
+  recurrence: number;
+  startSec: number;
+  endSec: number;
+}
+
+function teaserDrops(result: V2Result): TeaserDrop[] {
+  const drops = (result.telemetry as Record<string, unknown>).teaserDrops;
+  expect(Array.isArray(drops), "teaserDrops telemetry is missing").toBe(true);
+  return drops as TeaserDrop[];
+}
+
 function normalizeWords(words: AlignedWord[]): string[] {
   return words
     .map((w) => w.text.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ""))
@@ -182,13 +198,17 @@ describe("named regressions", () => {
 
   // -------------------------------------------------------------------------
   it("no clip is shorter than the product floor", async () => {
-    // Owner's complaint: two-second stingers shipped as clips. This is also the
-    // ONLY guard currently standing between the intro montage and the output
-    // (see the two cases below), so it is load-bearing three times over.
+    // Owner's complaint: two-second stingers shipped as clips.
     //
     // Enforced by the `duration < cfg.hardMinSec` drop in snap.ts. Proven
     // load-bearing: with hardMinSec=0 podcast-ecology ships a 3.03s clip at
     // 36.53-39.56.
+    //
+    // It used to be the ONLY thing standing between the intro montage and the
+    // output as well - which is why that 3.03s clip is a montage fragment. The
+    // teaser filter (analyze-v2/teaser.ts) now removes the montage candidate
+    // before the critic ever sees it, so the two cases below no longer lean on
+    // this one, and the duration floor is back to guarding only duration.
     //
     // MIN_CLIP_SEC is deliberately a LITERAL and NOT cfg.hardMinSec: the knob is
     // what the engine compares against, so reading it here would make the test
@@ -218,13 +238,17 @@ describe("named regressions", () => {
     // Owner's complaint: two clips in one batch that start with the identical
     // sentence - one of them the intro montage's copy of the other.
     //
-    // NO DEDICATED GUARD EXISTS. In podcast-ecology the montage copy c2
+    // NO DEDICATED DEDUP GUARD EXISTS - but the specific duplicate the owner hit
+    // is now prevented upstream. In podcast-ecology the montage copy c2
     // (36.7-39.3, "Что убьет человечество / Собственная глупость конечно") and
     // the real moment c29 (2806.87, same opening words) were BOTH kept by the
-    // critic, at 0.80 and 0.92; only snap's too_short drop stopped the pair from
-    // shipping. Proven by that: with hardMinSec=0 both ship and this test goes
-    // red. Until a hook-dedup pass exists, this rule passes by side effect -
-    // treat a failure here as the duplicate defect returning, not as noise.
+    // critic, at 0.80 and 0.92, and only snap's too_short drop stopped the pair
+    // from shipping. The teaser filter now drops c2 before selection, so with
+    // hardMinSec=0 podcast-ecology ships the real moment ALONE (measured
+    // 2026-07-25: the 36.53-39.56 copy is gone, 87.43-156.96 is untouched).
+    // Paraphrase duplicates - the same claim in different words - still have no
+    // guard and wait on the finalizer; treat a failure here as the duplicate
+    // defect returning, not as noise.
     const OPENING_WORDS = 5;
     for (const name of CASES) {
       const { result, words } = await run(name);
@@ -253,13 +277,23 @@ describe("named regressions", () => {
     // later. A teaser montage is literally a copy of later speech, so it is
     // detectable without an LLM: its word 5-grams occur again further on.
     //
-    // NO DEDICATED GUARD EXISTS (the teaser filter is not built yet). Proven by
-    // the same experiment as above: with hardMinSec=0 podcast-ecology ships
-    // 36.53-39.56 with a recurrence fraction of 1.0 and this test goes red.
-    // The legitimate opening question at 87.43-156.96 stays under the threshold
-    // in the same run - it is spoken once, so nothing of it recurs later.
+    // Enforced by isTeaserCandidate() in analyze-v2/teaser.ts, applied to merged
+    // candidates BEFORE selectCriticCandidates. Proven load-bearing: with the
+    // filter disabled (teaserRecurrenceFrac > 1) and hardMinSec=0 to strip the
+    // duration floor that used to hide it, podcast-ecology ships 36.53-39.56
+    // "Что на самом деле убьёт человечество" at 0.80 - a 3.03s copy of the
+    // moment it ships properly at 2807s. With the filter on, the same run does
+    // not. The legitimate opening question (87.43-156.96 in podcast-ecology,
+    // 86.33-155.18 in podcast-answer-arc) survives BOTH runs: it is inside the
+    // 120s teaser window and is spoken once, so its recurrence is exactly 0.000.
+    //
+    // MAX_RECURRENCE is a LITERAL, not cfg.teaserRecurrenceFrac, for the reason
+    // spelled out on MIN_CLIP_SEC above: reading the knob would make the test
+    // move with the defect. It states the PRODUCT rule - a shipped clip must not
+    // be a copy of later speech - and is set to the same 0.35 the filter uses so
+    // that loosening the knob shows up here instead of passing silently.
     const NGRAM = 5;
-    const MAX_RECURRENCE = 0.5;
+    const MAX_RECURRENCE = 0.35;
     for (const name of CASES) {
       const { result, words } = await run(name);
       const offenders: string[] = [];
@@ -280,6 +314,81 @@ describe("named regressions", () => {
         }
       }
       expect(offenders, `${name}: a montage fragment shipped as a clip`).toEqual([]);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  it("the teaser filter actually fires on both real intros", async () => {
+    // The case above asserts an ABSENCE, and an absence can be produced by
+    // anything - a filter that silently stopped matching would leave it green
+    // for as long as no montage happened to survive selection. This case pins
+    // the positive half: the montage really is found, and it is found in the
+    // opening minute where the source editor put it.
+    //
+    // Both fixtures are two transcription runs of the same episode, and the
+    // montage text is byte-identical between them, so the drops must agree on
+    // WHERE they are even though the node numbering does not line up.
+    for (const name of CASES) {
+      const { result } = await run(name);
+      const drops = teaserDrops(result);
+      expect(
+        drops.length,
+        `${name}: the intro montage was not detected at all`
+      ).toBeGreaterThan(0);
+      // Every drop must be a real copy, not a marginal one scraping the bar.
+      for (const drop of drops) {
+        expect(
+          drop.recurrence,
+          `${name}: ${drop.id} was dropped on a recurrence of only ${drop.recurrence}`
+        ).toBeGreaterThanOrEqual(0.35);
+      }
+      // The montage is the first 45 seconds; the host's own "Всем привет, это
+      // подкаст сортировочный" at ~45.5s is where the real episode starts.
+      // Nothing past it may be called a teaser - a drop that reached in there
+      // would be the filter eating real conversation.
+      const MONTAGE_ENDS_SEC = 50;
+      const overreach = drops
+        .filter((d) => d.endSec > MONTAGE_ENDS_SEC)
+        .map((d) => `${d.id} ${d.startSec}-${d.endSec}s (${d.recurrence})`);
+      expect(overreach, `${name}: a teaser drop reached past the montage`).toEqual([]);
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  it("the legitimate opening question is never mistaken for the montage", async () => {
+    // The false positive this filter can commit is dropping a real cold open.
+    // Both fixtures contain one at ~87s - "Бытует мнение, что люди - это главные
+    // разрушители планеты... Так ли это?" - which sits INSIDE the 120s teaser
+    // window and is therefore recurrence-tested on every run.
+    //
+    // Asserted against the PREDICATE rather than against the shipped clips on
+    // purpose. Whether that moment ships is a critic decision that moves between
+    // recordings (it was gate-dropped in podcast-answer-arc's previous roll and
+    // ships in this one); whether the filter would eat it is a deterministic
+    // property of the transcript, and that is the thing this change can break.
+    for (const name of CASES) {
+      const { fixture } = await run(name);
+      const cfg = loadAnalyzeConfig({});
+      const nodes = buildSentenceGraph(fixture.transcript.segments, cfg);
+      const find = (needle: string) => {
+        const index = nodes.findIndex((n) => n.text.includes(needle));
+        expect(index, `${name}: fixture no longer contains "${needle}"`).toBeGreaterThanOrEqual(0);
+        return index;
+      };
+      // The real cold open - spoken once, so nothing of it recurs.
+      const question = find("главные вообще разрушители планеты");
+      expect(
+        isTeaserCandidate(nodes, { startNode: question, endNode: question + 4 }, cfg),
+        `${name}: the legitimate opening question was flagged as a montage copy`
+      ).toBe(false);
+      // The montage's own opening line, for contrast: same window, same test,
+      // opposite answer. Without this the case above could pass on a filter that
+      // had stopped working entirely.
+      const bait = find("Человек");
+      expect(
+        isTeaserCandidate(nodes, { startNode: bait, endNode: bait }, cfg),
+        `${name}: the montage bait line was NOT flagged`
+      ).toBe(true);
     }
   });
 });
