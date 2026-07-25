@@ -16,6 +16,21 @@ describe("web job failure copy", () => {
     expect(text).not.toContain("retrying");
   });
 
+  it("does not call a repeated model refusal temporary", () => {
+    // The analysis model refused the same batch twice on the same prompt, and
+    // every remaining attempt re-reads the cached transcript. So this copy may
+    // promise no retry, and it may not tell the user to upload the same file
+    // again - that would be a second Job row, and usage.service bills every job
+    // that is not FAILED.
+    const text = jobErrorText("ANALYSIS_REFUSED");
+    expect(text).toContain("could not read part of this video");
+    expect(text).toContain("minutes were not used");
+    expect(text).toContain("different video");
+    expect(text).not.toContain("retrying");
+    expect(text).not.toContain("temporary");
+    expect(text).not.toMatch(/upload it again|try again in a few minutes/i);
+  });
+
   it("falls back to the generic message for unknown or missing codes", () => {
     const generic = jobErrorText(null);
     expect(generic).toContain("Something went wrong while processing this");

@@ -135,6 +135,16 @@ const enFailure: Record<JobErrorCode, string> = {
     "This file has no video track - only sound. Send a video file and I'll clip it.",
   ANALYSIS_UNAVAILABLE:
     "Could not analyze this video right now - a temporary problem on our side. I'm retrying automatically and your minutes were not used. If nothing arrives, send it again in a few minutes.",
+  // The counterpart to ANALYSIS_UNAVAILABLE. The analysis model declined this
+  // material and repeated it on a second, identical request, and every
+  // remaining attempt re-reads the same cached transcript - so this copy may
+  // not promise a retry, and it must not ask for the same video again: that
+  // would be a second job, and a second charge, for a request that already has
+  // its answer. It stays hedged on the cause (we know the model declined, not
+  // why) and spends its imperative on the only thing that can change the
+  // outcome.
+  ANALYSIS_REFUSED:
+    "I could not read part of this video, so I can't say which moments are worth clipping. Sending the same file will not change that, and your minutes were not used. Try a different video, or trim this one down to the part you want clipped and send that.",
   // Hedged on purpose: a non-zero yt-dlp exit does not say why, so the copy
   // names no cause as fact and leads with the remedy that always works.
   SOURCE_UNAVAILABLE:
@@ -343,6 +353,11 @@ const ruFailure: Record<JobErrorCode, string> = {
     "В этом файле нет видеодорожки - только звук. Пришли видеофайл, и я нарежу клипы.",
   ANALYSIS_UNAVAILABLE:
     "Не получилось проанализировать это видео - временная проблема на нашей стороне. Пробую автоматически ещё раз, минуты не списаны. Если ничего не придёт, пришли видео снова через несколько минут.",
+  // См. комментарий к ANALYSIS_REFUSED в enFailure: повторный отказ модели не
+  // временный, поэтому здесь нельзя обещать повтор и нельзя просить прислать
+  // то же самое видео - это был бы второй джоб и второе списание.
+  ANALYSIS_REFUSED:
+    "Модель не смогла разобрать часть этого видео, поэтому я не могу сказать, какие моменты стоит нарезать. Тот же самый файл ничего не изменит, минуты не списаны. Попробуй другое видео или обрежь это до нужного куска и пришли то, что получится.",
   SOURCE_UNAVAILABLE:
     "Не получилось скачать видео по этой ссылке - возможно, оно приватное, удалено, недоступно в этом регионе или временно не отдаётся. Проверь, открывается ли ссылка в браузере, или пришли файл напрямую. Минуты не списаны.",
 };

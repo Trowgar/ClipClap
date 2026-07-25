@@ -6,7 +6,8 @@ import {
 import type { Prisma } from "@prisma/client";
 import { analyzeHighlightsV1 } from "../processors/analyze";
 import { analyzeHighlightsV2 } from "../analyze-v2";
-import { AnalyzeTechnicalError } from "../analyze-v2/critic";
+import { UnrecoverableError } from "bullmq";
+import { AnalyzeRefusalError, AnalyzeTechnicalError } from "../analyze-v2/critic";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { resolveEngine } from "../analyze-v2/dispatch";
 import { safeTagJobError } from "./job-error";
@@ -126,8 +127,31 @@ export async function runAnalyzeStage(
     // retryable FAILED, quota untouched, BullMQ retries the stage
     await jobStepService.failJobStep(payload.jobId, "ANALYZE", error);
     await markJobFailed(payload.jobId, error);
-    throw error;
+    throw asQueueError(error);
   }
+}
+
+/** What BullMQ sees. The Job row is already FAILED at this point either way -
+ *  this only decides whether the remaining attempts are spent.
+ *
+ *  Job.shouldRetryJob() skips them for `err instanceof UnrecoverableError ||
+ *  err.name === "UnrecoverableError"`, and a refusal is the one analyze failure
+ *  we KNOW re-running cannot fix: the critic already refused the same prompt
+ *  twice and this stage re-reads the cached transcript, so attempts 2 and 3
+ *  re-run the whole scanner+critic pass - real model spend and analyze
+ *  concurrency - to arrive at the identical error. The user is not spared
+ *  anything by them either: the failure notification goes out on the first
+ *  FAILED write (telegram-delivery.service parks the row in FAILURE_NOTIFIED
+ *  and only revisits it if the job later reaches DONE, which this one cannot).
+ *  Every other error keeps all three attempts; that retry is the whole reason a
+ *  technical failure is not billed. The message travels along so the queue's
+ *  failedReason still carries the diagnostics, and `cause` keeps the original
+ *  for anything that inspects it. */
+function asQueueError(error: unknown): unknown {
+  if (!(error instanceof AnalyzeRefusalError)) return error;
+  const terminal = new UnrecoverableError(error.message);
+  terminal.cause = error;
+  return terminal;
 }
 
 async function markJobFailed(jobId: string, error: unknown) {
@@ -138,10 +162,15 @@ async function markJobFailed(jobId: string, error: unknown) {
   // with their full diagnostics, and the boundary that turns one into a stored,
   // user-visible failure decides what the user is told. Anything else (a DB
   // error, a bug) stays untagged and renders as the generic message.
+  // AnalyzeRefusalError is checked FIRST - it extends AnalyzeTechnicalError, so
+  // the order is what keeps a refusal out of the "temporary problem, we are
+  // retrying" copy.
   const tagged =
-    error instanceof AnalyzeTechnicalError
-      ? safeTagJobError("ANALYSIS_UNAVAILABLE", message)
-      : message;
+    error instanceof AnalyzeRefusalError
+      ? safeTagJobError("ANALYSIS_REFUSED", message)
+      : error instanceof AnalyzeTechnicalError
+        ? safeTagJobError("ANALYSIS_UNAVAILABLE", message)
+        : message;
   await prisma.job.update({
     where: { id: jobId },
     data: { status: "FAILED", error: tagged },

@@ -40,6 +40,16 @@ const GENERIC =
 const TEXT: Record<JobErrorCode, string> = {
   ANALYSIS_UNAVAILABLE:
     "We could not analyze this video right now - a temporary problem on our side. We are retrying it automatically and your minutes were not used. If nothing arrives, try again in a few minutes.",
+  // The counterpart to ANALYSIS_UNAVAILABLE, and the reason the two cannot share
+  // a line: the model declined to analyse this material and repeated it on a
+  // second, identical request, so "we are retrying" and "try again in a few
+  // minutes" are both false, and re-uploading the same file would only create a
+  // second job. So the copy states the outcome as settled, names the one
+  // remedy that can change it, and stays hedged about the cause - we know the
+  // model declined, not why, and telling someone their ordinary video was
+  // rejected as unacceptable is worse than saying nothing.
+  ANALYSIS_REFUSED:
+    "We could not read part of this video, so we cannot say which moments are worth clipping. This does not change if you upload the same file again, and your minutes were not used. Try a different video, or trim this one to the part you want clipped and upload that.",
   UNSUPPORTED_INPUT:
     "This file has no video track - only sound. Upload a video file and we will clip it.",
   // Hedged on purpose. All we know is that the download produced no file; the

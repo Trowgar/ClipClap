@@ -74,6 +74,28 @@ export function criticMaxOutputTokens(batchSize: number, capMultiplier = 1): num
 /** Terminal infrastructure failure - the job must fail retryable, never ship unjudged. */
 export class AnalyzeTechnicalError extends Error {}
 
+/** The subset of AnalyzeTechnicalError that a retry cannot fix: the model
+ *  refused to judge the material and nothing else was left unjudged.
+ *
+ *  Still an AnalyzeTechnicalError, deliberately - "nothing was judged, so the
+ *  empty result is not an answer" is unchanged, and so is everything that hangs
+ *  off it (status FAILED, quota untouched, the raw diagnostics stored behind a
+ *  code). What changes is only what the user is told and whether the remaining
+ *  BullMQ attempts are worth spending: dropRefused() is reached only after the
+ *  SAME batch was refused twice on the same prompt, and the analyze stage
+ *  re-reads a cached transcript, so a re-run puts the same material back in
+ *  front of the same model. (The scanner is itself a model call, so the next
+ *  attempt's candidate windows are not guaranteed identical - but the refusal
+ *  is a reaction to the material, and the material is fixed.) Calling that "a
+ *  temporary problem, send it again in a few minutes" is false, and acting on
+ *  it costs the user a second job.
+ *
+ *  Raised ONLY when refusals are the whole unjudged population. Mixed with a
+ *  truncation the run stays plainly retryable: per-call variance is the same
+ *  order as the token headroom (see the budget note above), so the truncated
+ *  candidate really can complete next time and ship a clip. */
+export class AnalyzeRefusalError extends AnalyzeTechnicalError {}
+
 interface CriticRow {
   id: string;
   keep: boolean;

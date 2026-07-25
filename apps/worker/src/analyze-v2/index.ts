@@ -4,7 +4,7 @@ import { loadAnalyzeConfig, type AnalyzeConfig } from "./config";
 import { buildSentenceGraph } from "./sentence-graph";
 import { runScanner } from "./scanner";
 import { mergeCandidates, selectCriticCandidates } from "./candidates";
-import { AnalyzeTechnicalError, runCritic, repairCopy } from "./critic";
+import { AnalyzeRefusalError, AnalyzeTechnicalError, runCritic, repairCopy } from "./critic";
 import { snapNodes } from "./snap";
 import { evidenceGate, snippetFallbackCopy, lexicalOverlap } from "./gates";
 import { dominantScript, scriptMismatch } from "./language";
@@ -159,13 +159,23 @@ export async function analyzeHighlightsV2(
   // clips burns the user's minutes (usage sums every job that is not FAILED)
   // for output no model ever looked at, while FAILED leaves the quota untouched
   // and BullMQ retries. Never ship unjudged emptiness.
+  //
+  // Which failure it is follows the same rule as the zero-survivor guard far
+  // below (see the long note there): with no verdict at all the unjudged
+  // population IS every candidate, so refusals being the whole of it means
+  // `refusalDrops === candidates.length` - the model refused every single batch
+  // twice over. That fails as AnalyzeRefusalError: same FAILED status and
+  // untouched quota, but the user is not told to wait for a retry that cannot
+  // help.
   if (critic.verdicts.length === 0) {
     const t = critic.telemetry;
-    throw new AnalyzeTechnicalError(
+    const detail =
       `critic produced 0 usable verdicts for ${candidates.length} candidates ` +
-        `(omitted ${t.omittedDrops}, refused ${t.refusalDrops}, truncated ${t.truncatedDrops}, ` +
-        `invariant ${t.invariantDrops}) - nothing was judged`
-    );
+      `(omitted ${t.omittedDrops}, refused ${t.refusalDrops}, truncated ${t.truncatedDrops}, ` +
+      `invariant ${t.invariantDrops}) - nothing was judged`;
+    throw t.refusalDrops === candidates.length
+      ? new AnalyzeRefusalError(detail)
+      : new AnalyzeTechnicalError(detail);
   }
 
   // eligibility: keep + evidence gate + snap + copy language
@@ -327,14 +337,33 @@ export async function analyzeHighlightsV2(
     // that was never obtained. Note the guard needs zero survivors AND a missing
     // candidate, so a video whose moments really were judged still ships its
     // honest "no".
+    //
+    // The two reasons diverge on ONE thing - whether a re-run can change the
+    // outcome - and that is what picks the error class:
+    //   - Truncation and silent omission can heal. The re-run re-rolls the
+    //     critic and truncation sits at the margin of the token budget, so the
+    //     retryable AnalyzeTechnicalError (-> ANALYSIS_UNAVAILABLE, "we are
+    //     retrying") is TRUE for them.
+    //   - A refusal has already been re-rolled: critic.ts reaches dropRefused()
+    //     only after the same batch refused twice on the same prompt, and the
+    //     stage re-reads a cached transcript, so the remaining BullMQ attempts
+    //     re-send what was refused. When refusals are the WHOLE unjudged
+    //     population there is nothing left that a retry could rescue, so the
+    //     failure is raised as AnalyzeRefusalError: same FAILED status and the
+    //     same untouched quota, but honest copy and no burned attempts.
+    // Mixed populations stay retryable on purpose - the truncated candidate can
+    // still complete next time and ship a clip, and "try a different video"
+    // would send the user away from a video that may well work.
     const t = critic.telemetry;
     const unjudged = t.omittedDrops + t.truncatedDrops + t.refusalDrops;
     if (unjudged > 0) {
-      throw new AnalyzeTechnicalError(
+      const detail =
         `no clip survived and ${unjudged} of ${candidates.length} candidate(s) never got a verdict ` +
-          `(omitted ${t.omittedDrops}, refused ${t.refusalDrops}, truncated ${t.truncatedDrops}, ` +
-          `invariant ${t.invariantDrops}) - the empty result is not a complete answer`
-      );
+        `(omitted ${t.omittedDrops}, refused ${t.refusalDrops}, truncated ${t.truncatedDrops}, ` +
+        `invariant ${t.invariantDrops}) - the empty result is not a complete answer`;
+      throw unjudged === t.refusalDrops
+        ? new AnalyzeRefusalError(detail)
+        : new AnalyzeTechnicalError(detail);
     }
 
     // Every candidate survived the holes, every one came back with a real

@@ -23,6 +23,16 @@ export const JOB_ERROR_CODES = [
   /** Technical analysis failure: models unavailable, nothing was ever judged.
    *  Retryable - BullMQ re-runs the stage and the quota stays untouched. */
   "ANALYSIS_UNAVAILABLE",
+  /** The analysis model REFUSED to judge the material, twice on the same prompt
+   *  (analyze-v2/critic.ts dropRefused), and no other candidate was left
+   *  unjudged for a re-roll to rescue. Distinct from ANALYSIS_UNAVAILABLE
+   *  because it is not transient: the analyze stage re-reads a cached
+   *  transcript, so every remaining attempt re-sends what was already refused.
+   *  The stage therefore throws it as a BullMQ UnrecoverableError - status stays
+   *  FAILED (the quota is untouched, exactly as with ANALYSIS_UNAVAILABLE) but
+   *  the attempts are not burned, and the copy must offer a different video
+   *  rather than promise a retry or ask for the same file again. */
+  "ANALYSIS_REFUSED",
   /** The upload itself cannot be clipped (audio-only file). Permanent: a retry
    *  cannot change it, so the copy must ask for a different file. */
   "UNSUPPORTED_INPUT",

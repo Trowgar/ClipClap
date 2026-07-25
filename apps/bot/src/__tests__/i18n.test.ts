@@ -403,6 +403,28 @@ describe("bot i18n", () => {
     expect(ru).toContain("минуты не списаны");
   });
 
+  it("does not call a repeated model refusal temporary in either locale", () => {
+    // The model refused the same batch twice on the same prompt, and every
+    // BullMQ attempt re-reads the cached transcript - so this copy may not
+    // promise a retry, and it may not tell the user to send the same video
+    // again (a re-send is a second Job row that usage.service bills).
+    const en = t("en").processingFailed("ANALYSIS_REFUSED");
+    expect(en).toContain("could not read part of this video");
+    expect(en).toContain("minutes were not used");
+    expect(en).toContain("different video");
+    expect(en).not.toContain("retrying");
+    expect(en).not.toContain("temporary");
+    expect(en).not.toMatch(/send it again/i);
+
+    const ru = t("ru").processingFailed("ANALYSIS_REFUSED");
+    expect(ru).toContain("не смогла разобрать");
+    expect(ru).toContain("минуты не списаны");
+    expect(ru).toContain("другое видео");
+    expect(ru).not.toContain("Пробую автоматически");
+    expect(ru).not.toContain("временная");
+    expect(ru).not.toMatch(/пришли (его )?снова|пришли его ещё раз/i);
+  });
+
   it("asks for a different file on unsupported input in both locales", () => {
     // permanent failure: the copy must NOT promise an automatic retry
     const en = t("en").processingFailed("UNSUPPORTED_INPUT");
