@@ -4,7 +4,7 @@ import { loadAnalyzeConfig, type AnalyzeConfig } from "./config";
 import { buildSentenceGraph } from "./sentence-graph";
 import { runScanner } from "./scanner";
 import { mergeCandidates, selectCriticCandidates } from "./candidates";
-import { runCritic, repairCopy } from "./critic";
+import { AnalyzeTechnicalError, runCritic, repairCopy } from "./critic";
 import { snapNodes } from "./snap";
 import { evidenceGate, snippetFallbackCopy, lexicalOverlap } from "./gates";
 import { dominantScript, scriptMismatch } from "./language";
@@ -87,6 +87,20 @@ export async function analyzeHighlightsV2(
     const scan = await runScanner(client, usage, nodes, cfg, {
       retryDelayMs: options.retryDelayMs,
     });
+
+    // A dead window costs recall (runScanner's contract); EVERY window dead is
+    // the analysis models being unavailable, which is a technical failure, not
+    // "this video has no good moments". The distinction is the user's quota:
+    // a DONE 0-clip job burns their minutes (usage sums every job that is not
+    // FAILED), while a FAILED one leaves the quota untouched and BullMQ retries
+    // it. Never ship silent emptiness we never actually judged.
+    const { windowsTotal, windowsFailed } = scan.telemetry;
+    if (windowsTotal > 0 && windowsFailed === windowsTotal) {
+      throw new AnalyzeTechnicalError(
+        `scanner failed on all ${windowsTotal} windows (${windowsFailed}/${windowsTotal} windows) - analysis models unavailable`
+      );
+    }
+
     const merged = mergeCandidates(scan.candidates, nodes, cfg);
     const sourceMinutes = speechSec / 60;
     candidates = selectCriticCandidates(merged, nodes, cfg, sourceMinutes);

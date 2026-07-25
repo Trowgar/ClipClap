@@ -1,9 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import { analyzeHighlightsV2 } from "../analyze-v2";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
+import { AnalyzeTechnicalError } from "../analyze-v2/critic";
 import type { TranscriptionResult, WhisperSegment } from "@clipclap/shared";
 
 const cfg = loadAnalyzeConfig({});
+
+/** The 40-node transcript below is one window at default settings; shrinking the
+ *  window splits it into 4, so "every window died" and "one window died" are
+ *  distinguishable outcomes. */
+const multiWindowCfg = loadAnalyzeConfig({ SCAN_WINDOW_SEC: "60", SCAN_OVERLAP_SEC: "10" });
 
 /** 40 sentences x ~5s with word timings - enough for one window. */
 function transcript(): TranscriptionResult {
@@ -193,5 +199,78 @@ describe("analyzeHighlightsV2", () => {
     expect(r.telemetry.droppedVerdicts).toEqual([
       { id: "c0", stage: "gate", reason: "title_evidence_out_of_range", score: 0.9 },
     ]);
+  });
+
+  it("throws AnalyzeTechnicalError when EVERY scanner window fails", async () => {
+    // total OpenAI outage: no window ever answers
+    const dead = {
+      chat: {
+        completions: {
+          create: vi.fn(async () => {
+            throw Object.assign(new Error("upstream unavailable"), { status: 503 });
+          }),
+        },
+      },
+    } as any;
+
+    const run = analyzeHighlightsV2(transcript(), {
+      client: dead,
+      cfg: multiWindowCfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    await expect(run).rejects.toThrow(AnalyzeTechnicalError);
+    // the message must name the counts so the failed job is diagnosable
+    await expect(run).rejects.toThrow(/4\/4 windows/);
+  });
+
+  it("does NOT throw when only SOME scanner windows fail", async () => {
+    // window 0 is dead, windows 1-3 answer normally -> recall loss, not a failure
+    const client = {
+      chat: {
+        completions: {
+          create: vi.fn(async (body: any) => {
+            const user: string = body.messages.find((m: any) => m.role === "user").content;
+            if (body.model === multiWindowCfg.scanModel) {
+              if (user.includes("#0 Это")) {
+                throw Object.assign(new Error("upstream unavailable"), { status: 503 });
+              }
+              return scanResponse();
+            }
+            return criticResponse(0.85);
+          }),
+        },
+      },
+    } as any;
+
+    const r = await analyzeHighlightsV2(transcript(), {
+      client,
+      cfg: multiWindowCfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    expect(r).toBeTruthy();
+    expect(r.telemetry.windowsTotal).toBe(4);
+    expect(r.telemetry.windowsFailed).toBe(1);
+  });
+
+  it("healthy windows returning zero candidates stays a content outcome", async () => {
+    const emptyScan = {
+      choices: [{ message: { content: JSON.stringify({ candidates: [] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    };
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: client(emptyScan),
+      cfg: multiWindowCfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    expect(r.highlights).toHaveLength(0);
+    expect(r.noClipsReason).toBe("NO_VIABLE_MOMENTS");
+    expect(r.telemetry.windowsFailed).toBe(0);
+    expect(r.telemetry.windowsTotal).toBe(4);
   });
 });
