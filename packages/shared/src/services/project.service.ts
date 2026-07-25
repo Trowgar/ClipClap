@@ -27,7 +27,8 @@ export interface ProjectSummary {
   sourceUrl: string | null;
   sourceKey: string | null;
   status: JobStatus;
-  error: string | null;
+  /** Same rule as ProjectDetail: code only, never the raw engine prose. */
+  errorCode: JobErrorCode | null;
   sourceDurationSec: number | null;
   createdAt: Date;
   clipCount: number;
@@ -43,10 +44,14 @@ export interface ProjectDetail {
   sourceUrl: string | null;
   sourceKey: string | null;
   status: JobStatus;
-  /** Raw engine message - diagnostics only, never render it. */
-  error: string | null;
-  /** What the UI renders instead of `error`: null means "no code we know", and
-   *  the caller must show its generic failure copy. */
+  /** The ONLY failure signal that crosses into the UI. Raw Job.error is engineer
+   *  prose ("critic produced 0 usable verdicts...") and is deliberately absent
+   *  from this DTO: the project page serializes the whole object into the RSC
+   *  payload of a client component, so anything carried here is shipped to the
+   *  browser whether or not a component renders it. Keeping the raw string out
+   *  of the type makes "never render it" a fact instead of a convention. Read
+   *  Job.error straight from the database for diagnostics.
+   *  null means "no code we know" - the caller shows its generic failure copy. */
   errorCode: JobErrorCode | null;
   sourceDurationSec: number | null;
   createdAt: Date;
@@ -144,7 +149,6 @@ export async function getProjectDetail(
     sourceUrl: job.sourceUrl,
     sourceKey: job.sourceKey,
     status: job.status,
-    error: job.error,
     errorCode: parseJobErrorCode(job.error),
     sourceDurationSec: job.sourceDurationSec,
     createdAt: job.createdAt,
@@ -229,7 +233,7 @@ async function toProjectSummary(job: {
     sourceUrl: job.sourceUrl,
     sourceKey: job.sourceKey,
     status: job.status,
-    error: job.error,
+    errorCode: parseJobErrorCode(job.error),
     sourceDurationSec: job.sourceDurationSec,
     createdAt: job.createdAt,
     clipCount: job.clips.length,
