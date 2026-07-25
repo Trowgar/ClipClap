@@ -116,20 +116,33 @@ export async function analyzeHighlightsV2(
   // candidates must not span a transcript hole (spec §9) - a clip cut across
   // audio we never heard cannot be verified
   const missingRanges = transcription.missingRanges ?? [];
+  let holeDrops = 0;
   if (missingRanges.length > 0) {
+    const before = candidates.length;
     candidates = candidates.filter((c) => {
       const startSec = nodes[c.startNode].start;
       const endSec = nodes[c.endNode].end;
       return !missingRanges.some((r) => startSec < r.end && endSec > r.start);
     });
+    holeDrops = before - candidates.length;
   }
 
   if (candidates.length === 0) {
-    if (partial) throw partialTranscriptError("scanner", missingRanges);
+    // Nothing left to judge AND the audio we lost is why: every moment the
+    // scanner found straddled a transcript hole and was removed unheard. That
+    // is the same unjudged emptiness the scanner and critic guards above catch,
+    // so the same quota rule applies - a DONE 0-clip job burns the user's
+    // minutes (usage sums every job that is not FAILED) while FAILED leaves the
+    // quota untouched and BullMQ retries.
+    if (holeDrops > 0) throw unheardAudioError(holeDrops, missingRanges);
     return {
       highlights: [],
-      noClipsReason: "NO_VIABLE_MOMENTS",
-      telemetry: { ...scannerTelemetry, keptVerdicts: 0 },
+      // No hole removed anything: the scanner looked at the audio we heard and
+      // found nothing. That is a content answer, and the transcribe stage has
+      // already ruled this coverage shippable (TRANSCRIPT_MIN_COVERAGE), so we
+      // say so honestly rather than failing a job a retry could never change.
+      noClipsReason: partial ? "PARTIAL_TRANSCRIPT" : "NO_VIABLE_MOMENTS",
+      telemetry: { ...scannerTelemetry, keptVerdicts: 0, holeDrops },
       usage,
     };
   }
@@ -243,10 +256,14 @@ export async function analyzeHighlightsV2(
   };
 
   if (highlights.length === 0) {
-    if (partial) throw partialTranscriptError("critic", missingRanges);
+    // Reaching here means candidates survived the holes and the critic returned
+    // real verdicts (the guard above proves >= 1). The emptiness is therefore a
+    // judgement - keep:false, or our own evidence/snap/selection bar - made on
+    // audio we really heard. Never technical: PARTIAL_TRANSCRIPT tells the user
+    // both halves (we lost some audio, and the rest held no strong moments).
     return {
       highlights: [],
-      noClipsReason: "NO_VIABLE_MOMENTS",
+      noClipsReason: partial ? "PARTIAL_TRANSCRIPT" : "NO_VIABLE_MOMENTS",
       telemetry,
       usage,
     };
@@ -255,25 +272,28 @@ export async function analyzeHighlightsV2(
   return { highlights, telemetry, usage };
 }
 
-/** Zero clips out of a transcript we only partly heard is not a statement about
- *  the video: with audio missing we cannot tell "this video has no good moments"
- *  from "the good moments were in the chunks we never heard". Same quota rule as
- *  the scanner and critic guards - DONE with 0 clips burns the user's minutes
- *  (usage sums every job that is not FAILED), while FAILED leaves the quota
- *  untouched and BullMQ retries the stage. Never ship unjudged emptiness.
- *  A partial transcript that DOES yield clips still ships them: those were
- *  judged on audio we really heard. */
-function partialTranscriptError(
-  stage: "scanner" | "critic",
+/** Every candidate the scanner found was thrown away for crossing a transcript
+ *  hole, so nothing was ever judged and the audio we lost is the reason. That
+ *  is the branch's established technical shape ("nothing was judged"), not a
+ *  verdict about the video - the same rule the scanner and critic guards apply.
+ *
+ *  Deliberately NOT triggered by mere partialness. A partial transcript whose
+ *  surviving candidates the critic actually judged and rejected is a content
+ *  answer about audio we really heard: the transcribe stage has already ruled
+ *  that coverage >= TRANSCRIPT_MIN_COVERAGE is good enough to ship clips from,
+ *  and PARTIAL_TRANSCRIPT is the user-facing copy for exactly that outcome.
+ *  Failing it instead would burn three attempts on a cached transcript that
+ *  cannot change and replace translated copy with this engineer prose. */
+function unheardAudioError(
+  holeDrops: number,
   missingRanges: Array<{ start: number; end: number }>
 ): AnalyzeTechnicalError {
   const lostSec = Math.round(
     missingRanges.reduce((sum, r) => sum + Math.max(0, r.end - r.start), 0)
   );
   return new AnalyzeTechnicalError(
-    `0 clips after ${stage} on a partial transcript ` +
-      `(${missingRanges.length} missing range(s), ~${lostSec}s of audio never heard) - ` +
-      `cannot distinguish "no good moments" from "moments in the audio we lost"`
+    `all ${holeDrops} candidate(s) crossed audio we never heard ` +
+      `(${missingRanges.length} missing range(s), ~${lostSec}s lost) - nothing was judged`
   );
 }
 

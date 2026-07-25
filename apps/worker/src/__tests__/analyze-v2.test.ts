@@ -113,26 +113,88 @@ describe("analyzeHighlightsV2", () => {
     expect(r.telemetry.tier).toBe("weak");
   });
 
-  it("0 viable moments on a partial transcript throws AnalyzeTechnicalError", async () => {
-    // we heard only part of the audio and found nothing: "no good moments" and
-    // "the good moments were in the chunk we lost" are indistinguishable, so
-    // this is technical - FAILED (quota untouched, BullMQ retries), never DONE
-    const run = analyzeHighlightsV2(transcript(), {
+  it("a judged rejection on a partial transcript stays a content outcome", async () => {
+    // the critic heard every surviving candidate and rejected it. The transcribe
+    // stage already ruled that this coverage is good enough to ship clips from
+    // (TRANSCRIPT_MIN_COVERAGE), so a negative answer about audio we DID hear is
+    // an opinion about the video - PARTIAL_TRANSCRIPT tells the user both halves
+    const rejected = JSON.parse(criticResponse(0.9).choices[0].message.content);
+    rejected.results[0].keep = false;
+    const criticRejects = {
+      choices: [{ message: { content: JSON.stringify(rejected) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 200, completion_tokens: 80 },
+    };
+
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: client(scanResponse(), criticRejects),
+      cfg,
+      transcriptPartial: true,
+      retryDelayMs: 1,
+    });
+
+    expect(r.highlights).toHaveLength(0);
+    expect(r.noClipsReason).toBe("PARTIAL_TRANSCRIPT");
+    expect(r.telemetry.criticVerdicts).toBe(1);
+  });
+
+  it("a partial transcript whose clips die in OUR filters stays a content outcome", async () => {
+    // keep:true but score 0.1 - the critic judged it, selectAndOrder dropped it.
+    // Our own quality bar rejecting a judged clip is not a technical failure
+    const r = await analyzeHighlightsV2(transcript(), {
       client: client(scanResponse(), criticResponse(0.1)),
       cfg,
       transcriptPartial: true,
       retryDelayMs: 1,
     });
 
-    await expect(run).rejects.toThrow(AnalyzeTechnicalError);
-    await expect(run).rejects.toThrow(/partial transcript/i);
+    expect(r.highlights).toHaveLength(0);
+    expect(r.noClipsReason).toBe("PARTIAL_TRANSCRIPT");
   });
 
-  it("filters candidates crossing missing transcript ranges", async () => {
+  it("a partial transcript with 0 candidates from healthy windows stays a content outcome", async () => {
+    // no transcript hole removed anything - the scanner simply found nothing in
+    // the audio we heard, which is the same content answer a complete transcript
+    // would give. Only the lost audio itself can turn this technical
+    const emptyScan = {
+      choices: [{ message: { content: JSON.stringify({ candidates: [] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    };
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: client(emptyScan),
+      cfg,
+      transcriptPartial: true,
+      retryDelayMs: 1,
+    });
+
+    expect(r.highlights).toHaveLength(0);
+    expect(r.noClipsReason).toBe("PARTIAL_TRANSCRIPT");
+  });
+
+  it("a degenerate partial transcript stays a content outcome", async () => {
+    // on record as a decision, not an oversight: <5 words in the audio we DID
+    // hear is a measurement, and re-running reads the same cached transcript,
+    // so FAILED could never heal - it would just burn 3 attempts
+    const c = client();
+    const r = await analyzeHighlightsV2(
+      {
+        text: "hi",
+        segments: [{ start: 0, end: 1, text: "hi", words: [{ text: "hi", start: 0, end: 0.5 }] }],
+        missingRanges: [{ start: 100, end: 1300, reason: "chunk_failed" }],
+      },
+      { client: c, cfg, transcriptPartial: true }
+    );
+
+    expect(r.highlights).toHaveLength(0);
+    expect(r.noClipsReason).toBe("NO_USABLE_SPEECH");
+    expect(c.chat.completions.create).not.toHaveBeenCalled();
+  });
+
+  it("throws when a transcript hole removes EVERY candidate unheard", async () => {
     const t = transcript();
     t.missingRanges = [{ start: 60, end: 70, reason: "chunk_failed" }]; // nodes 12-13 territory
     // the scanned candidate spans nodes 10-14 (50s-74.5s) which crosses 60-70 ->
-    // filtered pre-critic, leaving zero candidates on a partial transcript
+    // filtered pre-critic. Nothing was judged, and the audio we lost is WHY:
+    // technical, so FAILED leaves quota untouched instead of shipping DONE
     const run = analyzeHighlightsV2(t, {
       client: client(scanResponse(), criticResponse(0.9)),
       cfg,
@@ -141,7 +203,8 @@ describe("analyzeHighlightsV2", () => {
     });
 
     await expect(run).rejects.toThrow(AnalyzeTechnicalError);
-    await expect(run).rejects.toThrow(/partial transcript/i);
+    // the message must carry real counts - a FAILED job has to be diagnosable
+    await expect(run).rejects.toThrow(/all 1 candidate\(s\) .*1 missing range\(s\), ~10s/);
   });
 
   it("repairs wrong-script copy via repairCopy then snippet fallback", async () => {
