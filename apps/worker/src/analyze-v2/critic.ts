@@ -6,8 +6,48 @@ import { CRITIC_SCHEMA, REPAIR_SCHEMA } from "./schemas";
 import { isoToLanguageName } from "./language";
 import type { CriticVerdict, LlmUsage, MergedCandidate, SentenceNode } from "./types";
 
-const OUTPUT_TOKENS_PER_CANDIDATE = 400;
+// Output budget for one critic batch.
+//
+// gpt-5.1 is a reasoning model: max_completion_tokens pays for the reasoning
+// tokens FIRST and only then for the visible JSON. The old constant (400 per
+// candidate, a non-reasoning-model number) sat below the reasoning floor at
+// every batch size, so calls died mid-reasoning with content == null and zero
+// verdicts - and the split-in-half recovery inherited the same starvation,
+// which is how a budget bug turned into dropped candidates.
+//
+// Measured on the podcast-ecology critic prompts, live gpt-5.1,
+// reasoning_effort "low" (batch / cap -> completion / reasoning / verdicts):
+//     6 /  2400 -> 2400 / 2400 / 0   (truncated: killed mid-reasoning)
+//     6 /  5000 -> 2857 / 1979 / 6
+//     6 / 14000 -> 3506 / 2677 / 6   (worst seen at size 6)
+//     3 /  1200 -> 1200 / 1200 / 0   (truncated)
+//     3 /  3000 -> 1338 /  918 / 3
+//     3 /  6000 -> 1931 / 1478 / 3   (worst seen at size 3)
+//     1 /   400 ->  400 /  400 / 0   (truncated)
+//     1 /  1200 ->  762 /  603 / 1   (worst seen at size 1)
+//     1 /  3000 ->  501 /  354 / 1
+//
+// So reasoning is ~330-450 tokens PER CANDIDATE with only a small fixed part,
+// while the visible JSON is a stable ~150 tokens per verdict. The allowance has
+// to scale with batch size because the dominant term does.
+//
+// Headroom is safe to be generous with: max_completion_tokens is a CAP, not a
+// reservation - unused tokens are never billed, and a request that stops at 2857
+// costs 2857 whether the cap was 5000 or 14000. It is not unlimited-free though:
+// the model does expand its reasoning into room it is given (size 6: 1979 tokens
+// at cap 5000 -> 2159 at 9000 -> 2677 at 14000), so the cap is chosen to clear
+// the worst observed completion at every size without inviting a ramble.
+//   1 candidate  -> 2000 (2.6x the worst 762)
+//   3 candidates -> 3600 (1.9x the worst 1931)
+//   6 candidates -> 6000 (1.7x the worst 3506)
+const CRITIC_BASE_TOKENS = 1200; // shared rubric/JSON-scaffold pass + flat headroom
+const CRITIC_TOKENS_PER_CANDIDATE = 800; // ~450 reasoning + ~150 JSON + ~200 headroom
 const CRITIC_CONCURRENCY = 4;
+
+/** Output cap for a batch. capMultiplier is the single-candidate retry hatch. */
+export function criticMaxOutputTokens(batchSize: number, capMultiplier = 1): number {
+  return (CRITIC_BASE_TOKENS + batchSize * CRITIC_TOKENS_PER_CANDIDATE) * capMultiplier;
+}
 
 /** Terminal infrastructure failure - the job must fail retryable, never ship unjudged. */
 export class AnalyzeTechnicalError extends Error {}
@@ -91,7 +131,7 @@ export async function runCritic(
       system,
       user: criticUserPrompt(batch, nodes),
       schema: CRITIC_SCHEMA,
-      maxOutputTokens: batch.length * OUTPUT_TOKENS_PER_CANDIDATE * capMultiplier,
+      maxOutputTokens: criticMaxOutputTokens(batch.length, capMultiplier),
       reasoningEffort: cfg.reasoningEffort,
       retryDelayMs: options.retryDelayMs,
     });
@@ -101,7 +141,9 @@ export async function runCritic(
 
     const split = async (): Promise<TaggedRow[]> => {
       // split in half and recurse - each half gets its own budget and
-      // starts over on the primary model
+      // starts over on the primary model. With the budget sized above this is
+      // a genuine last resort: truncation at 1200 + 800n is a content anomaly,
+      // not the systematic starvation the old flat 400/candidate produced.
       telemetry.batchSplits += 1;
       const mid = Math.ceil(batch.length / 2);
       const first = await processBatch(batch.slice(0, mid));

@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { runCritic, repairCopy, AnalyzeTechnicalError } from "../analyze-v2/critic";
+import {
+  runCritic,
+  repairCopy,
+  criticMaxOutputTokens,
+  AnalyzeTechnicalError,
+} from "../analyze-v2/critic";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { newUsage } from "../analyze-v2/llm";
 import type { CriticVerdict, MergedCandidate, SentenceNode } from "../analyze-v2/types";
@@ -69,7 +74,53 @@ function seqClient(handlers: Array<(body: any) => any>) {
   } as any;
 }
 
+describe("criticMaxOutputTokens", () => {
+  // gpt-5.1 spends the cap on reasoning before emitting JSON. Live measurements
+  // on the podcast-ecology critic prompts (reasoning_effort "low") - worst
+  // completion_tokens observed per batch size: 1 -> 762, 3 -> 1931, 6 -> 3506.
+  it("clears the worst measured completion at every production batch size", () => {
+    expect(criticMaxOutputTokens(1)).toBe(2000);
+    expect(criticMaxOutputTokens(3)).toBe(3600);
+    expect(criticMaxOutputTokens(6)).toBe(6000);
+    expect(criticMaxOutputTokens(1)).toBeGreaterThan(762);
+    expect(criticMaxOutputTokens(3)).toBeGreaterThan(1931);
+    expect(criticMaxOutputTokens(6)).toBeGreaterThan(3506);
+  });
+
+  it("scales per candidate - reasoning cost is per candidate, not fixed", () => {
+    const perCandidate = criticMaxOutputTokens(6) - criticMaxOutputTokens(5);
+    expect(perCandidate).toBe(800);
+    // every split child must still clear the ~330-450 reasoning tokens per
+    // candidate that made the old flat 400/candidate starve at every size
+    for (const n of [1, 2, 3, 4, 5, 6]) {
+      expect(criticMaxOutputTokens(n) / n).toBeGreaterThan(450 + 150);
+    }
+  });
+
+  it("keeps the capMultiplier escape hatch multiplicative", () => {
+    expect(criticMaxOutputTokens(1, 2)).toBe(criticMaxOutputTokens(1) * 2);
+    expect(criticMaxOutputTokens(6, 2)).toBe(criticMaxOutputTokens(6) * 2);
+  });
+});
+
 describe("runCritic", () => {
+  it("sends the sized budget as max_completion_tokens for a full batch", async () => {
+    const caps: number[] = [];
+    const client = {
+      chat: {
+        completions: {
+          create: vi.fn(async (body: any) => {
+            caps.push(body.max_completion_tokens);
+            return ok([verdictRow("a")]);
+          }),
+        },
+      },
+    } as any;
+    const batch = [cand("a", 0), cand("b", 4), cand("c", 8)];
+    await runCritic(client, newUsage(), nodes(20), batch, "ru", { ...cfg, criticBatchSize: 3 });
+    expect(caps).toEqual([criticMaxOutputTokens(3)]);
+  });
+
   it("returns camelCase verdicts for every candidate id, kind from candidate type", async () => {
     const client = seqClient([() => ok([verdictRow("a"), verdictRow("b", { id: "b" })])]);
     const r = await runCritic(client, newUsage(), nodes(10), [cand("a", 0), cand("b", 4)], "ru", cfg);
