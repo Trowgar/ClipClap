@@ -1,5 +1,16 @@
-import { describe, expect, it } from "vitest";
-import { needsNormalization, parseTimelineProbe } from "../processors/normalize";
+import { describe, expect, it, vi } from "vitest";
+import { needsNormalization, normalizeSource, parseTimelineProbe } from "../processors/normalize";
+import { UnsupportedInputError } from "../processors/errors";
+
+// normalizeSource shells out to ffprobe; only the probe leg matters here.
+const ffprobeOutput = vi.hoisted(() => ({ json: "" }));
+vi.mock("child_process", () => ({
+  execFile: (
+    _cmd: string,
+    _args: string[],
+    cb: (err: Error | null, res: { stdout: string; stderr: string }) => void
+  ) => cb(null, { stdout: ffprobeOutput.json, stderr: "" }),
+}));
 
 const probeJson = (videoStart: string, audioStart: string, formatStart = "0.000000") =>
   JSON.stringify({
@@ -35,6 +46,29 @@ describe("parseTimelineProbe", () => {
       JSON.stringify({ format: { start_time: "0" }, streams: [{ index: 0, codec_type: "audio", start_time: "0" }] })
     );
     expect(p.hasVideo).toBe(false);
+  });
+});
+
+describe("normalizeSource", () => {
+  it("rejects an audio-only file with UnsupportedInputError", async () => {
+    // The download stage keys the UNSUPPORTED_INPUT tag off this exact class,
+    // and that tag is what stops the UI promising an automatic retry for a file
+    // no retry can fix. The stage test injects the class itself, so without this
+    // assertion the production throw site could silently degrade to a plain
+    // Error and audio-only uploads would start getting the retry copy.
+    ffprobeOutput.json = JSON.stringify({
+      format: { start_time: "0" },
+      streams: [{ index: 0, codec_type: "audio", start_time: "0" }],
+    });
+    await expect(normalizeSource("/tmp/audio.m4a")).rejects.toBeInstanceOf(UnsupportedInputError);
+  });
+
+  it("passes a clean video through untouched", async () => {
+    ffprobeOutput.json = probeJson("0.000000", "0.010000");
+    await expect(normalizeSource("/tmp/clean.mp4")).resolves.toEqual({
+      path: "/tmp/clean.mp4",
+      action: "none",
+    });
   });
 });
 
