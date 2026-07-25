@@ -49,6 +49,19 @@ export function useJobProgress(jobId: string) {
       setStatus(data.status);
       setClipCount(data.clipCount || 0);
       if (data.errorCode) setErrorCode(data.errorCode);
+      // FAILED is treated as terminal here, but it is not: markJobFailed writes
+      // status FAILED on every BullMQ attempt and attempts is 3, so a job that
+      // heals on attempt 2 has already shown the user a dead-looking failure
+      // and closed the stream, which never reopens. The generic copy currently
+      // absorbs that by refusing to assert either outcome (lib/job-error-text).
+      //
+      // The real fix is a non-final attempt the UI can see: markJobFailed would
+      // have to persist BullMQ's attemptsMade (or a boolean "final") on the Job
+      // row, /api/jobs/[id]/stream would emit it, and this handler would keep
+      // the EventSource open and render "still working" while attempts remain -
+      // with the bot's delivery notifier holding its failure message back for
+      // the same reason. That is a schema + stage + stream + bot change and is
+      // out of scope here.
       if (data.status === "DONE" || data.status === "FAILED") {
         setDone(true);
         eventSource.close();

@@ -433,22 +433,34 @@ describe("bot i18n", () => {
   it("falls back to a generic message when there is no known code", () => {
     const en = t("en").processingFailed(null);
     expect(en).toBe(
-      "Something went wrong while processing this video and your minutes were not used. Try sending it again, or send a different file if it keeps failing."
+      "Something went wrong while processing this video and your minutes were not used. I cannot tell yet whether this one will finish - wait a few minutes to see if the clips arrive before sending it again, so the same video does not use your minutes twice. If nothing arrives by then, send it again or send a different file."
     );
     const ru = t("ru").processingFailed(null);
     expect(ru).toBe(
-      "Что-то пошло не так при обработке видео, минуты не списаны. Попробуй прислать его ещё раз или пришли другой файл, если ошибка повторяется."
+      "Что-то пошло не так при обработке видео, минуты не списаны. Пока непонятно, получится ли доделать это видео - подожди несколько минут: если клипы всё-таки придут, а ты пришлёшь видео заново, минуты спишутся дважды за одно и то же. Если ничего не пришло, пришли его ещё раз или другой файл."
     );
   });
 
-  it("the generic line promises no automatic retry - it also covers permanent failures", () => {
-    // GENERIC is the "unknown failure" bucket and catches yt-dlp/ffmpeg/coverage
-    // failures a retry cannot heal, plus the state after the last attempt when
-    // no retry is running at all. Promising one there loops the user forever.
-    expect(t("en").processingFailed(null)).not.toContain("retrying");
-    expect(t("en").processingFailed(null)).not.toContain("few minutes");
-    expect(t("ru").processingFailed(null)).not.toContain("Пробую автоматически");
-    expect(t("ru").processingFailed(null)).not.toContain("через несколько минут");
+  it("the generic line asserts neither transience nor permanence", () => {
+    // GENERIC is the "unknown failure" bucket and both answers are live when it
+    // is sent: it catches ffmpeg/coverage failures a retry cannot heal AND
+    // attempt 1 of 3, because markJobFailed writes FAILED on every attempt.
+    // "I'm retrying, resend in a few minutes" is false in the first case;
+    // "try sending it again" is false in the second - the original heals on
+    // attempt 2 and usage.service bills the re-send as a second job.
+    const en = t("en").processingFailed(null);
+    const ru = t("ru").processingFailed(null);
+
+    expect(en).not.toContain("retrying");
+    expect(en).not.toMatch(/Try sending it again/);
+    expect(en).toMatch(/cannot tell yet/i);
+    expect(en).toContain("before sending it again");
+    expect(en).toContain("twice");
+
+    expect(ru).not.toContain("Пробую автоматически");
+    expect(ru).not.toContain("Попробуй прислать его ещё раз");
+    expect(ru).toContain("Пока непонятно");
+    expect(ru).toContain("дважды");
   });
 
   it("has a distinct string for every code in both locales", () => {

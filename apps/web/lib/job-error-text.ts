@@ -13,14 +13,29 @@ import type { JobErrorCode } from "@clipclap/shared";
  * from @clipclap/shared, which pulls Prisma/Redis and must not reach a client
  * bundle - the code itself is parsed server-side.
  */
-// Deliberately promises no automatic retry. GENERIC is the "we do not know what
-// broke" bucket, and it covers permanent failures too - an undecodable codec, a
-// transcript below the coverage floor. Telling those users to wait for a retry
-// and resend in a few minutes is false twice over: the retry cannot help, and
-// after the last attempt no retry is running at all. Only a code that KNOWS the
-// failure is transient (ANALYSIS_UNAVAILABLE) may make that promise.
+// GENERIC is the "we do not know what broke" bucket, so it may assert neither
+// answer - and both are live at the moment it renders:
+//
+//  - Permanent: an undecodable codec, a transcript below the coverage floor, or
+//    the third BullMQ attempt already burned. "We are retrying, try again in a
+//    few minutes" is false there and loops the user.
+//  - Transient: markJobFailed writes status FAILED on EVERY attempt and
+//    attempts is 3, so this copy is shown on attempt 1 of 3 as well. "Try
+//    uploading it again" is equally false there - the original heals on attempt
+//    2, the re-upload is a second Job row, and usage.service bills both because
+//    it counts every job whose status is not FAILED.
+//
+// So the line states the outcome as unknown, and spends its one imperative on
+// the fact that actually protects the user's minutes: wait and look before
+// re-uploading. Only a code that KNOWS the failure is transient
+// (ANALYSIS_UNAVAILABLE) may promise a retry.
+//
+// This is copy doing a job the UI should be doing - see the note in
+// hooks/use-jobs.ts. Once a non-final attempt is distinguishable from a final
+// one, the non-final case should not render a failure at all and this line can
+// shrink back to the permanent case.
 const GENERIC =
-  "Something went wrong while processing this video and your minutes were not used. Try uploading it again, or send us a different file if it keeps failing.";
+  "Something went wrong while processing this video and your minutes were not used. We cannot tell yet whether this one will finish - wait a few minutes and check back here before uploading it again, so the same video does not use your minutes twice. If nothing has changed by then, upload it again or send us a different file.";
 
 const TEXT: Record<JobErrorCode, string> = {
   ANALYSIS_UNAVAILABLE:

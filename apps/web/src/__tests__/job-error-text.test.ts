@@ -18,7 +18,7 @@ describe("web job failure copy", () => {
 
   it("falls back to the generic message for unknown or missing codes", () => {
     const generic = jobErrorText(null);
-    expect(generic).toContain("Something went wrong while processing this video");
+    expect(generic).toContain("Something went wrong while processing this");
     expect(jobErrorText(undefined)).toBe(generic);
     // a code from a newer worker this build does not know
     expect(
@@ -37,13 +37,31 @@ describe("web job failure copy", () => {
     expect(text).toContain("upload the file directly");
   });
 
-  it("the generic line promises no automatic retry", () => {
-    // GENERIC also covers permanent failures (yt-dlp, undecodable codec,
-    // transcript coverage floor) and the state after the final attempt, where
-    // "we are retrying, try again in a few minutes" is simply false.
+  it("the generic line asserts neither transience nor permanence", () => {
+    // GENERIC is by definition the "we do not know whether this is transient"
+    // bucket, and both answers are live at the moment it renders:
+    //
+    //  - permanent (undecodable codec, coverage floor, or the final attempt has
+    //    already burned) -> "we are retrying, try again in a few minutes" is
+    //    false and loops the user;
+    //  - transient (attempt 1 of 3 - markJobFailed writes FAILED on EVERY
+    //    attempt) -> "try uploading it again" is false too. The original heals
+    //    on attempt 2, the re-upload is a second Job row, and usage.service
+    //    bills both because it counts every job that is not FAILED.
+    //
+    // So the copy may assert neither, and it owes the user the one fact that
+    // protects their minutes: do not re-send yet.
     const generic = jobErrorText(null);
     expect(generic).not.toContain("retrying");
-    expect(generic).not.toContain("few minutes");
+    expect(generic).not.toContain("We are retrying");
+    // no imperative to re-upload as the immediate next action
+    expect(generic).not.toMatch(/Try uploading it again/);
+    expect(generic).not.toMatch(/Try sending it again/);
+    // the outcome is stated as unknown, not as either answer
+    expect(generic).toMatch(/cannot tell yet/i);
+    // and the double-charge risk of acting too early is named
+    expect(generic).toMatch(/before uploading it again/i);
+    expect(generic).toContain("twice");
     expect(generic).toContain("minutes were not used");
   });
 

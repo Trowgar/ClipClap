@@ -141,12 +141,17 @@ const enFailure: Record<JobErrorCode, string> = {
     "I could not download the video from that link - it may be private, region-locked, removed, or temporarily unavailable. Check that the link opens in a browser, or send me the file directly. Your minutes were not used.",
 };
 
-// No retry promise here on purpose: this is the "unknown failure" line and it
-// also covers permanent ones (undecodable codec, transcript below the coverage
-// floor), where "I'm retrying, resend in a few minutes" is false and loops the
-// user. Only a code that knows the failure is transient may promise a retry.
+// The "unknown failure" line, so it may assert neither transience nor
+// permanence - both are live when it is sent. It covers permanent failures
+// (undecodable codec, transcript below the coverage floor, or the last of the 3
+// BullMQ attempts already burned), where "I'm retrying, resend in a few
+// minutes" is false and loops the user. It equally covers attempt 1 of 3,
+// because markJobFailed writes FAILED on every attempt - and there "try sending
+// it again" is false too: the original heals on attempt 2, the re-send is a
+// second job, and usage.service bills both. So: state the outcome as unknown
+// and spend the imperative on not paying twice.
 const enFailureGeneric =
-  "Something went wrong while processing this video and your minutes were not used. Try sending it again, or send a different file if it keeps failing.";
+  "Something went wrong while processing this video and your minutes were not used. I cannot tell yet whether this one will finish - wait a few minutes to see if the clips arrive before sending it again, so the same video does not use your minutes twice. If nothing arrives by then, send it again or send a different file.";
 
 const en: Dict = {
   welcomeNew:
@@ -333,8 +338,11 @@ const ruFailure: Record<JobErrorCode, string> = {
     "Не получилось скачать видео по этой ссылке - возможно, оно приватное, удалено, недоступно в этом регионе или временно не отдаётся. Проверь, открывается ли ссылка в браузере, или пришли файл напрямую. Минуты не списаны.",
 };
 
+// Same rule as enFailureGeneric: neither "жди, я повторяю" nor "пришли заново"
+// may be stated as fact - the first is false on a permanent failure, the second
+// double-charges when attempt 2 of 3 heals.
 const ruFailureGeneric =
-  "Что-то пошло не так при обработке видео, минуты не списаны. Попробуй прислать его ещё раз или пришли другой файл, если ошибка повторяется.";
+  "Что-то пошло не так при обработке видео, минуты не списаны. Пока непонятно, получится ли доделать это видео - подожди несколько минут: если клипы всё-таки придут, а ты пришлёшь видео заново, минуты спишутся дважды за одно и то же. Если ничего не пришло, пришли его ещё раз или другой файл.";
 
 const ru: Dict = {
   welcomeNew:
