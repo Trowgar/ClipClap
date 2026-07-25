@@ -72,6 +72,32 @@ export interface SnappedClip {
   endsOnQuestion?: boolean;
 }
 
+/** Closed set of reasons the FINALIZE judge may drop a shipped clip. Mirrored
+ *  in FINALIZER_SCHEMA's enum and explained one-by-one in the finalizer prompt;
+ *  finalizer-prompt.test.ts holds those three in sync. */
+export type FinalizerDropReason =
+  | "duplicate"
+  | "unanswered_title"
+  | "broken_opening"
+  | "no_payoff"
+  | "redundant"
+  | "teaser_montage"
+  | "incoherent";
+
+/** One finalizer verdict, normalized from the model's snake_case row. Every
+ *  field here is a PROPOSAL - none of it changes a clip until the code gates in
+ *  finalize.ts accept it (spec §4.4). */
+export interface FinalizerEntry {
+  id: string;
+  verdict: "ship" | "drop";
+  dropReason: FinalizerDropReason | null;
+  duplicateOf: string | null;
+  sharedClaim: string | null;
+  title: string | null;
+  titleEvidenceNodes: number[] | null;
+  trimStartNode: number | null;
+}
+
 export type DropReason =
   | "no_clean_start"
   | "no_clean_end"

@@ -50,6 +50,20 @@ export interface AnalyzeConfig {
    *  the units are hit COUNTS now, not a similarity share, and a value tuned
    *  against the old metric does not transfer. */
   teaserMinHits: number;
+  /** FINALIZE: one judge over the whole shipped set (spec 2026-07-24 §4.3).
+   *  `off` skips the LLM call only - hook dedup and every other deterministic
+   *  layer still run, so the kill switch degrades quality without reverting
+   *  the code half of the pair. */
+  finalizerEnabled: boolean;
+  /** Defaults to the critic model: the finalizer is a harder evaluative task
+   *  than the critic's (cross-clip, full speech, veto authority) and runs ONCE
+   *  per job, so it is the cheapest place in the engine to buy judgement. */
+  finalizerModel: string;
+  /** Extra clips selection hands the finalizer above softCap, so its drops are
+   *  absorbed by the surplus instead of thinning the shipped set. */
+  finalizerHeadroom: number;
+  /** Jaccard floor for the deterministic opening-line dedup pass. */
+  hookDedupSimilarity: number;
 }
 
 type Env = Record<string, string | undefined>;
@@ -96,5 +110,10 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     payoffMaxTailSec: num(env, "PAYOFF_MAX_TAIL_SEC", 4),
     teaserWindowSec: num(env, "TEASER_WINDOW_SEC", 120),
     teaserMinHits: num(env, "TEASER_MIN_HITS", 3),
+    finalizerEnabled: env.ANALYZE_FINALIZER !== "off",
+    finalizerModel:
+      env.OPENAI_FINALIZER_MODEL || env.OPENAI_CRITIC_MODEL || "gpt-5.1",
+    finalizerHeadroom: num(env, "FINALIZER_HEADROOM", 4),
+    hookDedupSimilarity: num(env, "HOOK_DEDUP_SIMILARITY", 0.8),
   };
 }

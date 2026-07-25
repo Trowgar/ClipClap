@@ -39,6 +39,39 @@ describe("loadAnalyzeConfig", () => {
     expect(loadAnalyzeConfig({ ANALYZE_V2_PCT: "-5" }).v2Pct).toBe(0);
   });
 
+  it("defaults the finalizer on, at the critic's model and chain", () => {
+    const cfg = loadAnalyzeConfig({});
+    expect(cfg.finalizerEnabled).toBe(true);
+    expect(cfg.finalizerModel).toBe(cfg.criticModel);
+    expect(cfg.finalizerHeadroom).toBe(4);
+    expect(cfg.hookDedupSimilarity).toBe(0.8);
+  });
+
+  it("follows OPENAI_CRITIC_MODEL unless the finalizer is pinned separately", () => {
+    expect(loadAnalyzeConfig({ OPENAI_CRITIC_MODEL: "gpt-6" }).finalizerModel).toBe(
+      "gpt-6",
+    );
+    expect(
+      loadAnalyzeConfig({
+        OPENAI_CRITIC_MODEL: "gpt-6",
+        OPENAI_FINALIZER_MODEL: "gpt-5-mini",
+      }).finalizerModel,
+    ).toBe("gpt-5-mini");
+  });
+
+  it("kills the finalizer only on the exact 'off' switch", () => {
+    expect(loadAnalyzeConfig({ ANALYZE_FINALIZER: "off" }).finalizerEnabled).toBe(
+      false,
+    );
+    expect(loadAnalyzeConfig({ ANALYZE_FINALIZER: "on" }).finalizerEnabled).toBe(
+      true,
+    );
+    // a typo must not silently disable the stage
+    expect(loadAnalyzeConfig({ ANALYZE_FINALIZER: "0" }).finalizerEnabled).toBe(
+      true,
+    );
+  });
+
   it("falls back to legacy for unknown engines and accepts shadow", () => {
     expect(loadAnalyzeConfig({ ANALYZE_ENGINE: "garbage" }).engine).toBe(
       "legacy",

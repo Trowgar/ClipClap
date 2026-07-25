@@ -76,6 +76,56 @@ export const CRITIC_SCHEMA = {
   },
 } as const;
 
+/** FINALIZE: one verdict per shipped clip, judged as a set (spec §4.3).
+ *
+ *  Strict mode cannot express "drop_reason is required WHEN verdict is drop",
+ *  so every field is required and nullable, and the conditional half is carried
+ *  by the prompt and enforced by the code gates in finalize.ts. The enum is the
+ *  part strict mode CAN enforce: an invented drop reason is impossible, so the
+ *  telemetry histogram has a closed vocabulary by construction. */
+export const FINALIZER_SCHEMA = {
+  name: "clip_finalizer",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["clips"],
+    properties: {
+      clips: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: [
+            "id", "verdict", "drop_reason", "duplicate_of",
+            "shared_claim", "title", "title_evidence_nodes", "trim_start_node",
+          ],
+          properties: {
+            id: { type: "string" },
+            verdict: { type: "string", enum: ["ship", "drop"] },
+            drop_reason: {
+              type: ["string", "null"],
+              enum: [
+                "duplicate", "unanswered_title", "broken_opening",
+                "no_payoff", "redundant", "teaser_montage", "incoherent", null,
+              ],
+            },
+            duplicate_of: { type: ["string", "null"] },
+            shared_claim: { type: ["string", "null"] },
+            title: { type: ["string", "null"] },
+            title_evidence_nodes: {
+              type: ["array", "null"],
+              items: { type: "integer" },
+              maxItems: 3,
+            },
+            trim_start_node: { type: ["integer", "null"] },
+          },
+        },
+      },
+    },
+  },
+} as const;
+
 /** Single-candidate copy repair (same stage-2 model, spec §8). */
 export const REPAIR_SCHEMA = {
   name: "copy_repair",
