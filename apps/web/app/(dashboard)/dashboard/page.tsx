@@ -13,8 +13,8 @@ export default async function DashboardPage() {
     userService.getUsage(session.user.id),
   ]);
 
-  // getPlanLimits returns NONE_LIMITS (zeros) for plan="NONE", so the
-  // upload zone renders disabled with a clear "subscribe first" banner.
+  // NONE now carries the free allowance rather than zeros, so the upload zone
+  // renders enabled for a new account with the free caps applied.
   const limits = getPlanLimits(usage.plan, usage.billingCycle ?? "MONTHLY");
 
   const serializedProjects = JSON.parse(JSON.stringify(recentProjects.projects));
@@ -29,7 +29,6 @@ export default async function DashboardPage() {
       </div>
 
       <UploadZone
-        plan={usage.plan}
         minutesUsed={usage.minutesUsed}
         minutesLimit={usage.minutesLimit}
         topUpMinutesRemaining={usage.topUpMinutesRemaining}

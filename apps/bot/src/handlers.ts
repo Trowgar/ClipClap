@@ -10,6 +10,7 @@ import {
   createShopOrder,
   createTelegramDelivery,
   findOrCreateTelegramUser,
+  FREE_TIER,
   getPlanLimits,
   getPresignedDownloadUrl,
   getTributeCatalogEntry,
@@ -1428,7 +1429,7 @@ async function handleVideo(
   config: BotRuntimeConfig
 ) {
   const user = await resolveTelegramUser(from);
-  const blockedReason = await getSubmissionBlocker(user.id, source.duration);
+  const blockedReason = await getSubmissionBlocker(user.id, dict, source.duration);
   if (blockedReason) {
     await client.sendMessage(
       message.chat.id,
@@ -1508,7 +1509,7 @@ async function handleVideoUrl(
   }
 
   const user = await resolveTelegramUser(from);
-  const blockedReason = await getSubmissionBlocker(user.id, probe.durationSec);
+  const blockedReason = await getSubmissionBlocker(user.id, dict, probe.durationSec);
   if (blockedReason) {
     await client.sendMessage(
       message.chat.id,
@@ -1544,11 +1545,27 @@ async function resolveTelegramUser(from: TelegramUser): Promise<User> {
   });
 }
 
-async function getSubmissionBlocker(userId: string, durationSec?: number) {
+/** Paid-plan Starter numbers quoted in the free-tier block copy, so the
+ *  "what a plan gives you" half of those messages cannot drift from the real
+ *  prices. Weekly is quoted because it is the cheapest way in. */
+const STARTER_WEEKLY = getPlanLimits("STARTER", "WEEKLY");
+
+/**
+ * Returns the text to show the user, or null to let the submission through.
+ *
+ * The decision itself belongs to canSubmitJob in the shared service - this
+ * function only chooses the WORDS. That split matters: this used to return the
+ * bare English sentence "Active subscription required to process videos."
+ * straight to the chat, past the EN/RU dictionary, to an audience whose
+ * largest single locale is Russian. Blocks now arrive as a code and are
+ * rendered from `dict`, so a Russian user reads Russian.
+ */
+export async function getSubmissionBlocker(
+  userId: string,
+  dict: Dict,
+  durationSec?: number
+) {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-  if (user.plan === "NONE") {
-    return "Active subscription required to process videos.";
-  }
 
   const limits = getPlanLimits(user.plan, user.billingCycle ?? "MONTHLY");
   const durationMinutes =
@@ -1560,11 +1577,38 @@ async function getSubmissionBlocker(userId: string, durationSec?: number) {
     durationMinutes > 0 &&
     durationMinutes > limits.maxSourceDurationMinutes
   ) {
-    return `Source exceeds max duration (${limits.maxSourceDurationMinutes} min).`;
+    return user.plan === "NONE"
+      ? dict.freeSourceTooLong(
+          limits.maxSourceDurationMinutes,
+          STARTER_WEEKLY.maxSourceDurationMinutes
+        )
+      : `Source exceeds max duration (${limits.maxSourceDurationMinutes} min).`;
   }
 
   const submission = await canSubmitJob(userId, durationMinutes);
-  if (!submission.allowed) return submission.reason;
+  if (!submission.allowed) {
+    switch (submission.code) {
+      case "FREE_TRIAL_USED":
+        return dict.freeTrialUsed(
+          submission.trial?.runsUsed ?? FREE_TIER.runs,
+          STARTER_WEEKLY.minutesPerPeriod,
+          STARTER_WEEKLY.priceUsd
+        );
+      case "FREE_TRIAL_ATTEMPTS":
+        return dict.freeTrialAttemptsUsed(
+          submission.trial?.attemptsUsed ?? FREE_TIER.attempts,
+          STARTER_WEEKLY.minutesPerPeriod,
+          STARTER_WEEKLY.priceUsd
+        );
+      case "FREE_SOURCE_TOO_LONG":
+        return dict.freeSourceTooLong(
+          getPlanLimits("NONE").maxSourceDurationMinutes,
+          STARTER_WEEKLY.maxSourceDurationMinutes
+        );
+      default:
+        return submission.reason;
+    }
+  }
 
   const dayStart = new Date();
   dayStart.setHours(0, 0, 0, 0);

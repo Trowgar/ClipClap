@@ -4,6 +4,7 @@ export {
   getPlanFromPriceId,
   TOPUP_PACKS,
   MAX_SOURCE_FILESIZE_BYTES,
+  FREE_TIER,
 } from "./plans";
 export type { PlanLimits, TopupPack } from "./plans";
 export { REFERRAL_CONFIG, REFERRAL_COOKIE_NAME, exchangeRateToUsd } from "./referral";

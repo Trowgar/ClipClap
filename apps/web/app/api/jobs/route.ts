@@ -46,13 +46,9 @@ export async function POST(req: NextRequest) {
     }),
   ]);
 
-  if (user.plan === "NONE") {
-    return NextResponse.json(
-      { error: "Active subscription required to create jobs" },
-      { status: 402 }
-    );
-  }
-
+  // No flat refusal for NONE any more: a never-subscribed account has a free
+  // allowance, and canSubmitJob is the single place that decides whether this
+  // particular submission fits inside it.
   const limits = getPlanLimits(user.plan, user.billingCycle ?? "MONTHLY");
 
   if (durationMinutes > limits.maxSourceDurationMinutes) {

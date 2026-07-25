@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { computeClipExpiresAt } from "../retention";
+import { getPlanLimits } from "../../config/plans";
 
 describe("computeClipExpiresAt", () => {
   const now = new Date("2026-04-01T00:00:00Z");
@@ -34,10 +35,14 @@ describe("computeClipExpiresAt", () => {
     expect(days).toBe(30);
   });
 
-  it("returns 24h for NONE plan (defensive - orphaned clips)", () => {
+  // NONE clips are real output now - the free run produces them - so they get
+  // the NONE plan's retention like every other plan, not a 24h orphan sweep.
+  // A free user needs long enough to watch what we made and show someone.
+  it("uses the NONE plan's retention for free-run clips", () => {
     const expires = computeClipExpiresAt("NONE", null, now);
-    const hours = (expires.getTime() - now.getTime()) / (60 * 60 * 1000);
-    expect(hours).toBe(24);
+    const days = (expires.getTime() - now.getTime()) / (24 * 60 * 60 * 1000);
+    expect(days).toBe(getPlanLimits("NONE").retentionDays);
+    expect(days).toBeGreaterThan(1);
   });
 
   it("propagates the underlying error for invalid plan/cycle combos", () => {

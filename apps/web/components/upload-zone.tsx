@@ -5,10 +5,8 @@ import { ArrowRight, CircleNotch, Paperclip, X, LinkSimple } from "@phosphor-ico
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import type { Plan } from "@prisma/client";
 
 interface UploadZoneProps {
-  plan: Plan;
   minutesUsed: number;
   minutesLimit: number;
   topUpMinutesRemaining: number;
@@ -55,7 +53,6 @@ function formatBytes(bytes: number): string {
 }
 
 export function UploadZone({
-  plan,
   minutesUsed,
   minutesLimit,
   topUpMinutesRemaining,
@@ -81,8 +78,10 @@ export function UploadZone({
     ? Math.ceil(sourceDurationSec / 60)
     : 0;
 
-  // Submission gates
-  const planRequired = plan === "NONE";
+  // Submission gates. NONE is no longer a gate of its own: a never-subscribed
+  // account has a free run, and whether this submission fits inside it is the
+  // API's call (canSubmitJob), not something this component can know. The
+  // duration/size/quota caps below already carry the free plan's numbers.
   const overDurationCap =
     sourceDurationSec !== null && durationMinutes > maxSourceDurationMinutes;
   const overFileSize = file !== null && file.size > maxFileSizeBytes;
@@ -91,16 +90,13 @@ export function UploadZone({
 
   const canSubmit =
     !loading &&
-    !planRequired &&
     !overDurationCap &&
     !overFileSize &&
     !overQuota &&
     hasInput;
 
   let blockedReason: string | null = null;
-  if (planRequired) {
-    blockedReason = "Subscribe to a plan to start clipping.";
-  } else if (overDurationCap) {
+  if (overDurationCap) {
     blockedReason = `Source exceeds ${maxSourceDurationMinutes} min upload cap. Trim before uploading.`;
   } else if (overFileSize) {
     const maxGb = (maxFileSizeBytes / 1024 ** 3).toFixed(1);
@@ -242,7 +238,7 @@ export function UploadZone({
               type="text"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
-              disabled={loading || planRequired}
+              disabled={loading}
               placeholder={
                 dragActive
                   ? "Drop your video to upload…"

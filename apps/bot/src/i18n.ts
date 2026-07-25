@@ -57,6 +57,24 @@ export interface Dict {
   doneNoClips: (reason: string) => string;
   lowQualityNote: string;
   blocked: (reason: string) => string;
+  /** The free allowance is spent. Must state what they used AND what a plan
+   *  gives - "subscription required" tells a user nothing they can act on. */
+  freeTrialUsed: (
+    runs: number,
+    planMinutes: number,
+    planPriceEur: number
+  ) => string;
+  /** Every free attempt was spent without a single clip coming out. Different
+   *  message from freeTrialUsed on purpose: this person has seen nothing, so
+   *  selling to them as if they had is dishonest. */
+  freeTrialAttemptsUsed: (
+    attempts: number,
+    planMinutes: number,
+    planPriceEur: number
+  ) => string;
+  /** Source is longer than the free run allows. Names both caps so the choice
+   *  - trim it, or pay for length - is visible. */
+  freeSourceTooLong: (freeMaxMinutes: number, planMaxMinutes: number) => string;
   langUsage: string;
   langSetEn: string;
   langSetRu: string;
@@ -195,14 +213,14 @@ const en: Dict = {
   welcomeNew:
     "Welcome to ClipClap! Send me a video and I'll turn it into vertical clips with subtitles.\n\nLanguage: /lang ru - switch to Russian.",
   welcomeFirstChoice:
-    "Hi! I turn long videos into vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nHow it works:\n1. Pick a plan\n2. Send a video (up to 3 hours)\n3. Get back the strongest short clips (up to 12 - depends on the video)\n\nFirst - how do you want to set up?\n\n• New account - use this Telegram as your ClipClap account.\n• I already have an account - link this Telegram to your existing clipclap.io account.",
+    "Hi! I turn long videos into vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nYour first video is free - no card, no plan. If it comes back with no clips, it doesn't count.\n\nHow it works:\n1. Send a video (up to 30 minutes on the free run)\n2. I find the strongest moments and cut them\n3. Your clips come back here - up to 12, depending on the video\n\nFirst - how do you want to set up?\n\n• New account - use this Telegram as your ClipClap account.\n• I already have an account - link this Telegram to your existing clipclap.io account.",
   welcomeBack: "Welcome back! Send a video and I'll generate clips.",
   welcomeNeedsPlan:
-    "Send a video and I'll generate clips. To enable processing, tap 💳 Plans and pick a plan.",
+    "Send a video and I'll generate clips. A new account gets one free run - no card needed, up to 30 minutes of video.",
   newAccountBtn: "✨ Create new account",
   linkAccountBtn: "🔗 I already have an account",
   newAccountCreated:
-    "Account created. Send a video here and I'll start clipping.\n\nTo enable processing, tap 💳 Plans and pick a plan.",
+    "Account created. Send a video now - the first one is free, no card needed.\n\nUp to 30 minutes. If it comes back with no clips, it doesn't count against your free run.",
   linkAccountInstructions: (code, url) =>
     `Your linking code: ${code}\n\n1. Open ${url}/dashboard/settings on the device where you're logged in.\n2. Paste this code within 10 minutes.\n\nThis Telegram will be connected to that account.`,
   callbackAck: "Got it",
@@ -244,6 +262,12 @@ const en: Dict = {
         : "Done. I watched the whole video but did not find moments strong enough for clips - no clips this time. Try a video with more talk, emotion, or story.",
   lowQualityNote: "Heads up: no strong moments found - this is the best available.",
   blocked: (reason) => `${reason}\n\n💳 Plans - choose or manage your subscription.`,
+  freeTrialUsed: (runs, planMinutes, planPriceEur) =>
+    `That was your free run - ${runs} video, free and without a card. The clips from it are yours to keep.\n\nTo carry on: Starter is €${planPriceEur} a week for ${planMinutes} minutes of video, sources up to 3 hours, and 20 clips kept for 7 days.`,
+  freeTrialAttemptsUsed: (attempts, planMinutes, planPriceEur) =>
+    `I've processed ${attempts} videos on your free trial and none of them produced clips - so you haven't really seen what this does yet. That usually means the source had little clear speech.\n\nFree attempts are used up. If you want to keep trying, Starter is €${planPriceEur} a week for ${planMinutes} minutes of video.`,
+  freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
+    `Your free run covers videos up to ${freeMaxMinutes} minutes, and this one is longer. Send a shorter video - or a ${freeMaxMinutes}-minute section of this one - to try it free. A plan takes sources up to ${planMaxMinutes} minutes.`,
   langUsage: "Usage: /lang en - English, /lang ru - Russian.",
   langSetEn: "Language set to English.",
   langSetRu: "Язык установлен: русский.",
@@ -407,14 +431,14 @@ const ru: Dict = {
   welcomeNew:
     "Привет! Это ClipClap. Пришли видео - нарежу вертикальные клипы с субтитрами.\n\nЯзык: /lang en - переключиться на английский.",
   welcomeFirstChoice:
-    "Привет! Нарезаю длинные видео на вертикальные клипы с субтитрами - для TikTok, Reels и Shorts.\n\nКак это работает:\n1. Выбери тариф\n2. Пришли видео (до 3 часов)\n3. Получи самые сильные короткие клипы (до 12 - зависит от видео)\n\nСначала - как тебе удобнее начать?\n\n• Новый аккаунт - Telegram станет твоим аккаунтом ClipClap.\n• Уже есть аккаунт - привяжем этот Telegram к существующему аккаунту на clipclap.io.",
+    "Привет! Нарезаю длинные видео на вертикальные клипы с субтитрами - для TikTok, Reels и Shorts.\n\nПервое видео - бесплатно, без карты и подписки. Если клипов не получится, попытка не засчитается.\n\nКак это работает:\n1. Пришли видео (до 30 минут на бесплатном запуске)\n2. Найду самые сильные моменты и вырежу их\n3. Клипы придут сюда - до 12, зависит от видео\n\nСначала - как тебе удобнее начать?\n\n• Новый аккаунт - Telegram станет твоим аккаунтом ClipClap.\n• Уже есть аккаунт - привяжем этот Telegram к существующему аккаунту на clipclap.io.",
   welcomeBack: "С возвращением! Пришли видео - сделаю клипы.",
   welcomeNeedsPlan:
-    "Пришли видео - сделаю клипы. Чтобы запустить обработку, нажми 💳 Тарифы и выбери план.",
+    "Пришли видео - сделаю клипы. Новому аккаунту даю один бесплатный запуск - карта не нужна, видео до 30 минут.",
   newAccountBtn: "✨ Создать новый аккаунт",
   linkAccountBtn: "🔗 У меня уже есть аккаунт",
   newAccountCreated:
-    "Аккаунт создан. Пришли видео - начну нарезку.\n\nЧтобы запустить обработку, нажми 💳 Тарифы и выбери план.",
+    "Аккаунт создан. Пришли видео прямо сейчас - первое бесплатно, карта не нужна.\n\nДо 30 минут. Если клипов не получится, бесплатный запуск не сгорит.",
   linkAccountInstructions: (code, url) =>
     `Код привязки: ${code}\n\n1. Открой ${url}/dashboard/settings на устройстве, где ты залогинен.\n2. Вставь код в течение 10 минут.\n\nЭтот Telegram привяжется к тому аккаунту.`,
   callbackAck: "Принято",
@@ -462,6 +486,12 @@ const ru: Dict = {
         : "Готово. Я просмотрел всё видео, но не нашёл достаточно сильных моментов - клипов в этот раз нет. Попробуй видео с большим количеством речи, эмоций или истории.",
   lowQualityNote: "Внимание: сильных моментов не нашлось - это лучшее из доступного.",
   blocked: (reason) => `${reason}\n\n💳 Тарифы - выбрать или управлять подпиской.`,
+  freeTrialUsed: (runs, planMinutes, planPriceEur) =>
+    `Это был бесплатный запуск - ${runs} ${pluralizeRu(runs, "видео", "видео", "видео")}, бесплатно и без карты. Готовые клипы остаются у тебя.\n\nЧтобы продолжить: Starter - €${planPriceEur} в неделю за ${planMinutes} минут видео, исходники до 3 часов и 20 клипов, которые хранятся 7 дней.`,
+  freeTrialAttemptsUsed: (attempts, planMinutes, planPriceEur) =>
+    `Я обработал ${attempts} ${pluralizeRu(attempts, "видео", "видео", "видео")} на бесплатном пробном запуске, и ни одно не дало клипов - то есть толком показать продукт не вышло. Обычно так бывает, когда в исходнике мало разборчивой речи.\n\nБесплатные попытки закончились. Если хочешь попробовать ещё - Starter, €${planPriceEur} в неделю за ${planMinutes} минут видео.`,
+  freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
+    `Бесплатный запуск - это видео до ${freeMaxMinutes} минут, а это длиннее. Пришли видео покороче или фрагмент этого на ${freeMaxMinutes} минут, чтобы попробовать бесплатно. На тарифе исходники до ${planMaxMinutes} минут.`,
   langUsage: "Использование: /lang ru - русский, /lang en - английский.",
   langSetEn: "Language set to English.",
   langSetRu: "Язык установлен: русский.",

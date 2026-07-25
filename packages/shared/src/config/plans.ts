@@ -87,15 +87,69 @@ export const PLAN_LIMITS: Record<
   },
 };
 
+/** The free allowance on a brand-new account.
+ *
+ *  It is LIFETIME, not per-period. A recurring free tier renews forever and is
+ *  farmable by anyone patient enough to wait for the reset; the point of this
+ *  allowance is only "see one real result before paying", which is a thing you
+ *  need once. Lifetime is also the only shape the data can express honestly:
+ *  usage.service's minute accounting is windowed by billing period and can
+ *  never answer "ever", so the gate counts jobs with no date filter instead.
+ *
+ *  `runs` is denominated in jobs that ACTUALLY PRODUCED CLIPS, not in minutes.
+ *  Minutes are the wrong unit for a free tier: the per-job cost is dominated by
+ *  fixed work (a transcript, then several analysis passes over it), so thirty
+ *  one-minute videos cost far more than one thirty-minute video while spending
+ *  the same "minutes". Counting delivered runs bounds the thing that actually
+ *  costs money.
+ *
+ *  `attempts` is the backstop that makes the above safe. Because a run only
+ *  counts once it produced clips, a user submitting unclippable video would
+ *  otherwise never exhaust the trial while still costing a transcript every
+ *  time. Attempts cap the total jobs a free account may ever start. FAILED
+ *  jobs are excluded from that count - our own breakages must not consume a
+ *  stranger's only look at the product. */
+export const FREE_TIER = {
+  runs: 1,
+  attempts: 3,
+} as const;
+
+/** Not a plan - a sample. Every field is the smallest value that still lets one
+ *  real video through end to end, because each zero here is a wall a new user
+ *  hits before seeing anything.
+ *
+ *  maxSourceDurationMinutes (30) is the cost lever. Whisper plus the analysis
+ *  passes run about $0.36 per source hour, so a 30-minute ceiling caps one free
+ *  run near $0.18 and the whole lifetime allowance near $0.54 in the worst case
+ *  where all three attempts transcribe and none produce clips. A 3-hour VOD
+ *  trial would be six times that and slow enough that the user leaves before it
+ *  finishes. 30 minutes is still a real podcast segment or stream chunk rather
+ *  than a toy, which matters: the trial has to run on the content the user
+ *  actually wants clipped or it proves nothing. It also stays far under the
+ *  180-minute paid cap, so length remains a reason to subscribe. */
 const NONE_LIMITS: PlanLimits = {
-  minutesPerPeriod: 0,
-  storageClips: 0,
-  retentionDays: 0,
+  // Enough for one full-length free source. The real gate is the run counter
+  // below, not this number; it exists so the minute arithmetic shared with the
+  // paid plans cannot refuse a source the trial is meant to accept.
+  minutesPerPeriod: 30,
+  // One run can yield up to 12 clips, so anything less would silently discard
+  // part of the only result this user will ever see for free.
+  storageClips: 12,
+  // Long enough to watch the clips, show someone, and come back; short enough
+  // that free output is not indefinite storage. Retention is a paid feature -
+  // 7/30/90 days is part of what a plan buys.
+  retentionDays: 3,
   priorityQueue: false,
-  concurrentJobsLimit: 0,
-  maxSourceDurationMinutes: 0,
-  maxFileSizeBytes: 0,
-  maxJobsPerDay: 0,
+  // Exactly one: a free account never needs to run two jobs at once, and 0
+  // would block every submission.
+  concurrentJobsLimit: 1,
+  maxSourceDurationMinutes: 30,
+  // 500 MB comfortably holds 30 minutes of ordinary upload while keeping the
+  // 2 GB path a paid one.
+  maxFileSizeBytes: 500 * MB,
+  // Same number as the lifetime attempt backstop, so the daily gate can never
+  // be the looser of the two and let a burst outrun it.
+  maxJobsPerDay: FREE_TIER.attempts,
   priceUsd: 0,
 };
 
