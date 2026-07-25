@@ -113,27 +113,35 @@ describe("analyzeHighlightsV2", () => {
     expect(r.telemetry.tier).toBe("weak");
   });
 
-  it("0 viable moments on a partial transcript reports PARTIAL_TRANSCRIPT", async () => {
-    const r = await analyzeHighlightsV2(transcript(), {
+  it("0 viable moments on a partial transcript throws AnalyzeTechnicalError", async () => {
+    // we heard only part of the audio and found nothing: "no good moments" and
+    // "the good moments were in the chunk we lost" are indistinguishable, so
+    // this is technical - FAILED (quota untouched, BullMQ retries), never DONE
+    const run = analyzeHighlightsV2(transcript(), {
       client: client(scanResponse(), criticResponse(0.1)),
       cfg,
       transcriptPartial: true,
+      retryDelayMs: 1,
     });
-    expect(r.highlights).toHaveLength(0);
-    expect(r.noClipsReason).toBe("PARTIAL_TRANSCRIPT");
+
+    await expect(run).rejects.toThrow(AnalyzeTechnicalError);
+    await expect(run).rejects.toThrow(/partial transcript/i);
   });
 
   it("filters candidates crossing missing transcript ranges", async () => {
     const t = transcript();
     t.missingRanges = [{ start: 60, end: 70, reason: "chunk_failed" }]; // nodes 12-13 territory
-    const r = await analyzeHighlightsV2(t, {
+    // the scanned candidate spans nodes 10-14 (50s-74.5s) which crosses 60-70 ->
+    // filtered pre-critic, leaving zero candidates on a partial transcript
+    const run = analyzeHighlightsV2(t, {
       client: client(scanResponse(), criticResponse(0.9)),
       cfg,
       transcriptPartial: true,
+      retryDelayMs: 1,
     });
-    // the scanned candidate spans nodes 10-14 (50s-74.5s) which crosses 60-70 -> filtered pre-critic
-    expect(r.highlights).toHaveLength(0);
-    expect(r.noClipsReason).toBe("PARTIAL_TRANSCRIPT");
+
+    await expect(run).rejects.toThrow(AnalyzeTechnicalError);
+    await expect(run).rejects.toThrow(/partial transcript/i);
   });
 
   it("repairs wrong-script copy via repairCopy then snippet fallback", async () => {
@@ -360,5 +368,47 @@ describe("analyzeHighlightsV2", () => {
     expect(r.noClipsReason).toBe("NO_VIABLE_MOMENTS");
     expect(r.telemetry.windowsFailed).toBe(0);
     expect(r.telemetry.windowsTotal).toBe(4);
+  });
+
+  it("a partial transcript that DOES yield clips ships them", async () => {
+    // those clips were judged on audio we really heard - losing a chunk costs
+    // recall, it does not invalidate what survived
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: client(scanResponse(), criticResponse(0.85)),
+      cfg,
+      transcriptPartial: true,
+      retryDelayMs: 1,
+    });
+
+    expect(r.highlights).toHaveLength(1);
+    expect(r.noClipsReason).toBeUndefined();
+  });
+
+  it("a COMPLETE transcript with 0 viable moments stays a content outcome", async () => {
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: client(scanResponse(), criticResponse(0.1)),
+      cfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    expect(r.highlights).toHaveLength(0);
+    expect(r.noClipsReason).toBe("NO_VIABLE_MOMENTS");
+  });
+
+  it("a COMPLETE transcript with 0 candidates pre-critic stays a content outcome", async () => {
+    const emptyScan = {
+      choices: [{ message: { content: JSON.stringify({ candidates: [] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 5 },
+    };
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: client(emptyScan),
+      cfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    expect(r.highlights).toHaveLength(0);
+    expect(r.noClipsReason).toBe("NO_VIABLE_MOMENTS");
   });
 });

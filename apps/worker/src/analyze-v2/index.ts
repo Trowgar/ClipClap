@@ -125,9 +125,10 @@ export async function analyzeHighlightsV2(
   }
 
   if (candidates.length === 0) {
+    if (partial) throw partialTranscriptError("scanner", missingRanges);
     return {
       highlights: [],
-      noClipsReason: partial ? "PARTIAL_TRANSCRIPT" : "NO_VIABLE_MOMENTS",
+      noClipsReason: "NO_VIABLE_MOMENTS",
       telemetry: { ...scannerTelemetry, keptVerdicts: 0 },
       usage,
     };
@@ -242,15 +243,38 @@ export async function analyzeHighlightsV2(
   };
 
   if (highlights.length === 0) {
+    if (partial) throw partialTranscriptError("critic", missingRanges);
     return {
       highlights: [],
-      noClipsReason: partial ? "PARTIAL_TRANSCRIPT" : "NO_VIABLE_MOMENTS",
+      noClipsReason: "NO_VIABLE_MOMENTS",
       telemetry,
       usage,
     };
   }
 
   return { highlights, telemetry, usage };
+}
+
+/** Zero clips out of a transcript we only partly heard is not a statement about
+ *  the video: with audio missing we cannot tell "this video has no good moments"
+ *  from "the good moments were in the chunks we never heard". Same quota rule as
+ *  the scanner and critic guards - DONE with 0 clips burns the user's minutes
+ *  (usage sums every job that is not FAILED), while FAILED leaves the quota
+ *  untouched and BullMQ retries the stage. Never ship unjudged emptiness.
+ *  A partial transcript that DOES yield clips still ships them: those were
+ *  judged on audio we really heard. */
+function partialTranscriptError(
+  stage: "scanner" | "critic",
+  missingRanges: Array<{ start: number; end: number }>
+): AnalyzeTechnicalError {
+  const lostSec = Math.round(
+    missingRanges.reduce((sum, r) => sum + Math.max(0, r.end - r.start), 0)
+  );
+  return new AnalyzeTechnicalError(
+    `0 clips after ${stage} on a partial transcript ` +
+      `(${missingRanges.length} missing range(s), ~${lostSec}s of audio never heard) - ` +
+      `cannot distinguish "no good moments" from "moments in the audio we lost"`
+  );
 }
 
 function toHighlight(clip: SnappedClip): V2Highlight {
