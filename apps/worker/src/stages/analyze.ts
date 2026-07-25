@@ -2,7 +2,6 @@ import {
   getStageQueue,
   jobStepService,
   prisma,
-  tagJobError,
 } from "@clipclap/shared";
 import type { Prisma } from "@prisma/client";
 import { analyzeHighlightsV1 } from "../processors/analyze";
@@ -10,6 +9,7 @@ import { analyzeHighlightsV2 } from "../analyze-v2";
 import { AnalyzeTechnicalError } from "../analyze-v2/critic";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { resolveEngine } from "../analyze-v2/dispatch";
+import { safeTagJobError } from "./job-error";
 import { asTranscription, type AnalyzeStagePayload } from "./types";
 
 export async function runAnalyzeStage(
@@ -140,7 +140,7 @@ async function markJobFailed(jobId: string, error: unknown) {
   // error, a bug) stays untagged and renders as the generic message.
   const tagged =
     error instanceof AnalyzeTechnicalError
-      ? tagJobError("ANALYSIS_UNAVAILABLE", message)
+      ? safeTagJobError("ANALYSIS_UNAVAILABLE", message)
       : message;
   await prisma.job.update({
     where: { id: jobId },
