@@ -175,6 +175,12 @@ const enFailure: Record<JobErrorCode, string> = {
 // the worst kind of copy - the one that talks a user out of the only action
 // that would have got them their clips. If that pickup is ever removed, this
 // line has to go with it.
+//
+// The second half of the promise is in deliverReadyTelegramJobs: a delivery
+// that throws before a clip reaches the chat - a locale read, a signed URL, a
+// 429 on this very message - leaves the row where it is instead of closing it,
+// so the re-pick above still has something to pick up. Both halves are needed
+// for this sentence to be true.
 const enFailureGeneric =
   "Something went wrong while processing this video and your minutes were not used. I cannot tell yet whether this one will finish - wait a few minutes to see if the clips arrive before sending it again, so the same video does not use your minutes twice. If nothing arrives by then, send it again or send a different file.";
 

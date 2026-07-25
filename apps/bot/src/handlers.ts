@@ -740,6 +740,15 @@ export async function deliverReadyTelegramJobs(
   const deliveries = await telegramDeliveryService.getPendingTelegramDeliveries();
 
   for (const delivery of deliveries) {
+    // The only irreversible act in this loop is putting a video in the chat:
+    // it cannot be taken back, and re-running the row would give the user a
+    // second copy. Everything before it - the locale read, signing the URLs,
+    // any message send - leaves the chat exactly as it was, so a throw there
+    // means "we never got as far as delivering", and the row must stay
+    // re-pickable. Closing it there is what billed a healed job and delivered
+    // nothing. A row that keeps throwing costs one poll's work every 10s and
+    // says nothing to the user; that is the cheaper of the two mistakes.
+    let clipInChat = false;
     try {
       const locale = await getUserLocale(delivery.userId);
       const dict = t(locale);
@@ -773,37 +782,55 @@ export async function deliverReadyTelegramJobs(
         continue;
       }
 
+      // Sign everything BEFORE the chat sees a word. An R2 outage in the
+      // middle of the loop used to leave "Done. 3 clips are ready." standing
+      // in the chat with no clips behind it - and re-picking the row would
+      // repeat that line on every poll. Prepared first, the same outage costs
+      // nothing: nothing has been said, and the row is still deliverable.
+      const videos = [];
+      for (const clip of delivery.job.clips) {
+        videos.push({
+          url: await getPresignedDownloadUrl(clip.storageKey),
+          caption: buildClipCaption({
+            title: clip.title,
+            description: clip.description,
+            lowQuality: clip.lowQuality,
+            lowQualityNote: dict.lowQualityNote,
+          }),
+          editUrl: `${appUrl}/dashboard/editor?clip=${clip.id}`,
+        });
+      }
+
+      for (const video of videos) {
+        await client.sendVideo(delivery.chatId, video.url, video.caption, {
+          inline_keyboard: [
+            [{ text: dict.editInBrowserBtn, url: video.editUrl }],
+          ],
+        });
+        clipInChat = true;
+      }
+
+      // After the clips, not before: it is a summary of what has arrived, and
+      // sending it first made it a promise this code could fail to keep.
       await client.sendMessage(
         delivery.chatId,
         dict.done(delivery.job.clips.length)
       );
 
-      for (const clip of delivery.job.clips) {
-        const url = await getPresignedDownloadUrl(clip.storageKey);
-        const caption = buildClipCaption({
-          title: clip.title,
-          description: clip.description,
-          lowQuality: clip.lowQuality,
-          lowQualityNote: dict.lowQualityNote,
-        });
-        await client.sendVideo(delivery.chatId, url, caption, {
-          inline_keyboard: [
-            [
-              {
-                text: dict.editInBrowserBtn,
-                url: `${appUrl}/dashboard/editor?clip=${clip.id}`,
-              },
-            ],
-          ],
-        });
-      }
-
       await markTelegramDeliverySent(delivery.id);
     } catch (error) {
-      await markTelegramDeliveryFailed(
-        delivery.id,
-        error instanceof Error ? error.message : "Delivery failed"
-      );
+      const message =
+        error instanceof Error ? error.message : "Delivery failed";
+      if (!clipInChat) {
+        // Nothing reached the chat, so nothing is owed and nothing can be
+        // duplicated. Leave the row as it is and let the next poll try again.
+        console.error(
+          `Telegram delivery ${delivery.id} could not start; will retry:`,
+          message
+        );
+        continue;
+      }
+      await markTelegramDeliveryFailed(delivery.id, message);
     }
   }
 }

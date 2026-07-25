@@ -36,8 +36,11 @@ export async function createTelegramDelivery(
  * What is deliberately NOT here:
  *   - FAILURE_NOTIFIED while the job is still FAILED - that would repeat the
  *     failure message every 10 seconds;
- *   - FAILED, ever - that state means the send itself threw, and re-running it
- *     would duplicate the videos already in the chat;
+ *   - FAILED, ever - that state now means one thing only: a video is already in
+ *     the chat and the delivery then threw, so re-running it would give the
+ *     user a second copy. A delivery that threw BEFORE any video was sent is
+ *     left in its current status instead (see deliverReadyTelegramJobs), which
+ *     is what brings it back here;
  *   - DELIVERED, ever.
  * Every pickup ends in DELIVERED or FAILED (both terminal) or, for a still
  * FAILED job, back in FAILURE_NOTIFIED - which only re-enters this set when
@@ -105,7 +108,12 @@ export async function markTelegramDeliveryFailureNotified(
   });
 }
 
-/** The delivery itself threw. Terminal - see getPendingTelegramDeliveries. */
+/**
+ * A video had already reached the chat when the delivery threw. Terminal - see
+ * getPendingTelegramDeliveries. Only the caller that has actually sent a video
+ * may use this: for anything that failed earlier, leaving the row untouched is
+ * correct, because nothing was delivered and nothing can be duplicated.
+ */
 export async function markTelegramDeliveryFailed(
   deliveryId: string,
   error: string
