@@ -474,4 +474,160 @@ describe("analyzeHighlightsV2", () => {
     expect(r.highlights).toHaveLength(0);
     expect(r.noClipsReason).toBe("NO_VIABLE_MOMENTS");
   });
+
+  // ---- unanswered candidates with zero survivors ------------------------
+  // Two scanned candidates so "the critic answered about all of them" and "the
+  // critic skipped one" are distinguishable outcomes.
+  const twoCandidateScan = () => ({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          candidates: [
+            { start_node: 10, end_node: 14, payoff_node: 13, interest: 0.8, type: "story", thread: null },
+            { start_node: 25, end_node: 30, payoff_node: 28, interest: 0.7, type: "story", thread: null },
+          ],
+        }),
+      },
+      finish_reason: "stop",
+    }],
+    usage: { prompt_tokens: 100, completion_tokens: 30 },
+  });
+
+  const verdictRow = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    keep: true,
+    score: 0.85,
+    grounded: true,
+    self_contained: true,
+    start_node: 10, payoff_node: 13, end_node: 14,
+    hook_start_node: 12, hook_end_node: 13,
+    title: "Он назвал номер",
+    description: "Спикер называет номер предложения.",
+    title_evidence_nodes: [13],
+    description_evidence_nodes: [13],
+    language: "ru",
+    ...over,
+  });
+
+  const criticRows = (...rows: Array<Record<string, unknown>>) => ({
+    choices: [{ message: { content: JSON.stringify({ results: rows }) }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 200, completion_tokens: 80 },
+  });
+
+  it("throws when a candidate went unanswered and nothing survived", async () => {
+    // the critic answered about c0 only and rejected it; c1 was never judged by
+    // anything. "No viable moments" would be a statement about a video half of
+    // whose best moments no model ever looked at - and it would bill the user
+    const run = analyzeHighlightsV2(transcript(), {
+      client: client(twoCandidateScan(), criticRows(verdictRow("c0", { keep: false }))),
+      cfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    await expect(run).rejects.toThrow(AnalyzeTechnicalError);
+    // diagnosable counts, same as the sibling guards
+    await expect(run).rejects.toThrow(/1 of 2 candidate\(s\) never got a verdict/);
+  });
+
+  it("throws when the one judged verdict dies at a gate and a candidate went unanswered", async () => {
+    // c0 is kept by the critic but its cited evidence sits far outside the clip,
+    // so our grounding bar drops it; c1 never came back at all -> zero clips
+    const run = analyzeHighlightsV2(transcript(), {
+      client: client(
+        twoCandidateScan(),
+        criticRows(verdictRow("c0", { title_evidence_nodes: [4] }))
+      ),
+      cfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    await expect(run).rejects.toThrow(AnalyzeTechnicalError);
+    await expect(run).rejects.toThrow(/omitted 1/);
+  });
+
+  it("throws on a partial transcript too when a candidate went unanswered", async () => {
+    // partialness is orthogonal: a candidate the critic never answered about is
+    // unjudged whether or not we also lost audio elsewhere
+    const run = analyzeHighlightsV2(transcript(), {
+      client: client(twoCandidateScan(), criticRows(verdictRow("c0", { keep: false }))),
+      cfg,
+      transcriptPartial: true,
+      retryDelayMs: 1,
+    });
+
+    await expect(run).rejects.toThrow(AnalyzeTechnicalError);
+  });
+
+  // ---- GUARDS: every candidate judged, clips lost for content reasons ----
+
+  it("does NOT throw when every candidate was judged and rejected", async () => {
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: client(
+        twoCandidateScan(),
+        criticRows(
+          verdictRow("c0", { keep: false }),
+          verdictRow("c1", { keep: false, start_node: 25, payoff_node: 28, end_node: 30, hook_start_node: 26, hook_end_node: 28, title_evidence_nodes: [28], description_evidence_nodes: [28] })
+        )
+      ),
+      cfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    expect(r.highlights).toHaveLength(0);
+    expect(r.noClipsReason).toBe("NO_VIABLE_MOMENTS");
+    expect(r.telemetry.criticVerdicts).toBe(2);
+    expect(r.telemetry.omittedDrops).toBe(0);
+  });
+
+  it("does NOT throw when every judged clip is dropped by snap for content reasons", async () => {
+    // both verdicts are keeps the critic believes in; both collapse to a single
+    // sentence and snap refuses them as too short. That is the engine's own
+    // quality bar on moments it really judged - a content answer, not a failure
+    const single = (node: number) => ({
+      start_node: node, payoff_node: node, end_node: node,
+      hook_start_node: node, hook_end_node: node,
+      title_evidence_nodes: [node], description_evidence_nodes: [node],
+    });
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: client(
+        twoCandidateScan(),
+        criticRows(verdictRow("c0", single(13)), verdictRow("c1", single(28)))
+      ),
+      cfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    expect(r.highlights).toHaveLength(0);
+    expect(r.noClipsReason).toBe("NO_VIABLE_MOMENTS");
+    expect(r.telemetry.snapDrops).toBe(2);
+    expect(r.telemetry.droppedVerdicts).toEqual([
+      { id: "c0", stage: "snap", reason: "too_short", score: 0.85 },
+      { id: "c1", stage: "snap", reason: "too_short", score: 0.85 },
+    ]);
+  });
+
+  it("does NOT throw when every judged clip is dropped by the evidence gate", async () => {
+    // far-outside evidence is a grounding failure our gate is DESIGNED to catch;
+    // every candidate still got a real verdict, so the emptiness is an answer
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: client(
+        twoCandidateScan(),
+        criticRows(
+          verdictRow("c0", { title_evidence_nodes: [4] }),
+          verdictRow("c1", { start_node: 25, payoff_node: 28, end_node: 30, hook_start_node: 26, hook_end_node: 28, title_evidence_nodes: [4], description_evidence_nodes: [28] })
+        )
+      ),
+      cfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    expect(r.highlights).toHaveLength(0);
+    expect(r.noClipsReason).toBe("NO_VIABLE_MOMENTS");
+    expect(r.telemetry.evidenceDrops).toBe(2);
+  });
 });

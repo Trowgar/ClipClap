@@ -256,11 +256,40 @@ export async function analyzeHighlightsV2(
   };
 
   if (highlights.length === 0) {
-    // Reaching here means candidates survived the holes and the critic returned
-    // real verdicts (the guard above proves >= 1). The emptiness is therefore a
-    // judgement - keep:false, or our own evidence/snap/selection bar - made on
-    // audio we really heard. Never technical: PARTIAL_TRANSCRIPT tells the user
-    // both halves (we lost some audio, and the rest held no strong moments).
+    // Zero clips is only an ANSWER if every candidate actually got answered.
+    // The critic's contract is one verdict per candidate id - it has keep:false
+    // for "not worth clipping", so returning fewer rows than it was given is a
+    // protocol failure (silent omission, refusal, truncation, malformed row),
+    // not an opinion. With survivors that is mere recall loss and we ship what
+    // we have; with nothing left it becomes the whole answer, and "no viable
+    // moments" would assert something about moments no model ever judged.
+    // Same quota rule as the guards above: DONE with 0 clips burns the user's
+    // minutes (usage sums every job that is not FAILED) while FAILED leaves the
+    // quota untouched and BullMQ retries - and unlike a cached transcript, a
+    // re-run genuinely re-rolls the critic, so the retry can heal this.
+    //
+    // Deliberately measured as candidates-without-a-verdict, NOT as gate/snap
+    // drops: a clip that cannot be snapped to clean boundaries or whose copy is
+    // not grounded WAS judged, and our own quality bar rejecting it is the
+    // engine working as designed (spec §7-§8). Those keep shipping content
+    // reasons. Hole-dropped candidates are excluded too - `candidates` is
+    // already post-hole - because a re-run reads the same cached transcript and
+    // 4c3fc05 settled that case as content.
+    const unjudged = candidates.length - critic.verdicts.length;
+    if (unjudged > 0) {
+      const t = critic.telemetry;
+      throw new AnalyzeTechnicalError(
+        `no clip survived and ${unjudged} of ${candidates.length} candidate(s) never got a verdict ` +
+          `(omitted ${t.omittedDrops}, refused ${t.refusalDrops}, truncated ${t.truncatedDrops}, ` +
+          `invariant ${t.invariantDrops}) - the empty result is not a complete answer`
+      );
+    }
+
+    // Every candidate survived the holes, every one came back with a real
+    // verdict, and the emptiness is therefore a judgement - keep:false, or our
+    // own evidence/snap/selection bar - made on audio we really heard. Never
+    // technical: PARTIAL_TRANSCRIPT tells the user both halves (we lost some
+    // audio, and the rest held no strong moments).
     return {
       highlights: [],
       noClipsReason: partial ? "PARTIAL_TRANSCRIPT" : "NO_VIABLE_MOMENTS",
