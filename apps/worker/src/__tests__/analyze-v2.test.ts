@@ -493,6 +493,27 @@ describe("analyzeHighlightsV2", () => {
     usage: { prompt_tokens: 100, completion_tokens: 30 },
   });
 
+  /** Four candidates so the critic runs TWO batches at criticBatchSize 2 - the
+   *  only way to have one batch die whole while the other answers normally.
+   *  Interest order fixes the batching: selectCriticCandidates takes the top
+   *  perWindowMinCandidates (c1, c2) first, then the extras (c0, c3). */
+  const fourCandidateScan = () => ({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          candidates: [
+            { start_node: 0, end_node: 5, payoff_node: 3, interest: 0.7, type: "story", thread: null },
+            { start_node: 10, end_node: 14, payoff_node: 13, interest: 0.9, type: "story", thread: null },
+            { start_node: 25, end_node: 30, payoff_node: 28, interest: 0.85, type: "story", thread: null },
+            { start_node: 33, end_node: 38, payoff_node: 36, interest: 0.6, type: "story", thread: null },
+          ],
+        }),
+      },
+      finish_reason: "stop",
+    }],
+    usage: { prompt_tokens: 100, completion_tokens: 30 },
+  });
+
   const verdictRow = (id: string, over: Record<string, unknown> = {}) => ({
     id,
     keep: true,
@@ -582,6 +603,39 @@ describe("analyzeHighlightsV2", () => {
     expect(r.telemetry.omittedDrops).toBe(0);
   });
 
+  it("does NOT throw when EVERY candidate across both batches was judged and rejected", async () => {
+    // The honest content answer, and the one this guard must never break: the
+    // critic read all four candidates over two batches and said no to each. No
+    // truncation, no refusal, no omission - nothing to promote. A weak video is
+    // the commonest answer there is and a retry could never change it.
+    const answering = {
+      chat: {
+        completions: {
+          create: vi.fn(async (body: any) => {
+            if (body.model === cfg.scanModel) return fourCandidateScan();
+            const user: string = body.messages.find((m: any) => m.role === "user").content;
+            const ids = [...user.matchAll(/CANDIDATE (c\d+)/g)].map((m) => m[1]);
+            return criticRows(...ids.map((id) => verdictRow(id, { keep: false })));
+          }),
+        },
+      },
+    };
+
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: answering as any,
+      cfg: { ...cfg, criticBatchSize: 2 },
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    expect(r.highlights).toHaveLength(0);
+    expect(r.noClipsReason).toBe("NO_VIABLE_MOMENTS");
+    expect(r.telemetry.criticVerdicts).toBe(4);
+    expect(r.telemetry.omittedDrops).toBe(0);
+    expect(r.telemetry.truncatedDrops).toBe(0);
+    expect(r.telemetry.refusalDrops).toBe(0);
+  });
+
   it("does NOT throw when the critic rejects everything in its live blank-copy shape", async () => {
     // The real model writes no title/description for a clip it is killing -
     // there is nothing to name. Every rejection in the recorded eval fixture
@@ -623,11 +677,20 @@ describe("analyzeHighlightsV2", () => {
     expect(r.telemetry.omittedDrops).toBe(0);
   });
 
-  it("does NOT throw when a truncated candidate is the only one missing", async () => {
-    // Truncation is accounted at the critic as a content-shaped anomaly of the
-    // candidate (critic.ts dropTruncated). It is not a silent omission and a
-    // retry re-rolls into the same oversized candidate, so it must not turn a
-    // judged-and-rejected video into an unhealable FAILED.
+  it("throws when a truncated candidate is the only one missing", async () => {
+    // REVERSED on purpose (was "does NOT throw"). The old expectation encoded
+    // the reasoning of 2bb036b: truncation is a content-shaped anomaly of the
+    // candidate that reproduces on a re-run, so promoting it would burn three
+    // BullMQ attempts for nothing. Two facts sank that reasoning:
+    //   - it is not reliably reproducible. critic.ts's own measurement note
+    //     records per-call variance the same order as the budget headroom (2184
+    //     completion at 6/6000, BELOW the 2857 seen at 6/5000), so a candidate
+    //     that truncates at the margin can complete on the next roll.
+    //   - the user pays either way. DONE with 0 clips bills the job
+    //     (usage.service sums every non-FAILED job) and hands back "no viable
+    //     moments" - a claim about a moment no model ever read. FAILED bills
+    //     nothing and retries.
+    // A wasted retry is cheap; charging for an answer we never obtained is not.
     const truncating = {
       chat: {
         completions: {
@@ -646,6 +709,113 @@ describe("analyzeHighlightsV2", () => {
       },
     };
 
+    const run = analyzeHighlightsV2(transcript(), {
+      client: truncating as any,
+      cfg: { ...cfg, criticBatchSize: 1 },
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    await expect(run).rejects.toThrow(AnalyzeTechnicalError);
+    await expect(run).rejects.toThrow(/1 of 2 candidate\(s\) never got a verdict/);
+    await expect(run).rejects.toThrow(/truncated 1/);
+  });
+
+  it("throws when a whole critic batch truncates away and the rest all say no", async () => {
+    // The hole 2bb036b re-opened, in the shape it takes in production: batch A
+    // truncates, splits, and every single still truncates, so all of its
+    // candidates land in truncatedDrops AND in accountedDropIds - which means
+    // omittedDrops never sees them. Batch B answers with real keep:false rows,
+    // so verdicts.length > 0 and the upstream "nothing was judged" guard does
+    // not fire either. Result under the old guard: highlights 0, omittedDrops
+    // 0, job DONE, user BILLED, and told "no viable moments" about half a video
+    // no model ever read.
+    const truncating = {
+      chat: {
+        completions: {
+          create: vi.fn(async (body: any) => {
+            if (body.model === cfg.scanModel) return fourCandidateScan();
+            const user: string = body.messages.find((m: any) => m.role === "user").content;
+            const ids = [...user.matchAll(/CANDIDATE (c\d+)/g)].map((m) => m[1]);
+            // c1/c2 are the batch that dies; whatever they are batched with on
+            // the way down the split cascade dies with them
+            if (ids.some((id) => id === "c1" || id === "c2")) {
+              return {
+                choices: [{ message: { content: '{"results":[{"id":"c1"' }, finish_reason: "length" }],
+                usage: { prompt_tokens: 200, completion_tokens: 80 },
+              };
+            }
+            return criticRows(...ids.map((id) => verdictRow(id, { keep: false })));
+          }),
+        },
+      },
+    };
+
+    const run = analyzeHighlightsV2(transcript(), {
+      client: truncating as any,
+      cfg: { ...cfg, criticBatchSize: 2 },
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    await expect(run).rejects.toThrow(AnalyzeTechnicalError);
+    await expect(run).rejects.toThrow(/2 of 4 candidate\(s\) never got a verdict/);
+    await expect(run).rejects.toThrow(/truncated 2/);
+  });
+
+  it("throws when a refused candidate is the only one missing", async () => {
+    // A refusal is not a verdict. It may well be a reaction to the material
+    // rather than a fault, but either way the model said nothing about whether
+    // that moment is worth clipping, so "no viable moments" cannot speak for
+    // it. Same billing asymmetry as truncation: DONE bills, FAILED does not.
+    const refusing = {
+      chat: {
+        completions: {
+          create: vi.fn(async (body: any) => {
+            if (body.model === cfg.scanModel) return twoCandidateScan();
+            const user: string = body.messages.find((m: any) => m.role === "user").content;
+            if (user.includes("c0")) return criticRows(verdictRow("c0", { keep: false }));
+            return {
+              choices: [{ message: { refusal: "I cannot help with that." }, finish_reason: "stop" }],
+              usage: { prompt_tokens: 200, completion_tokens: 5 },
+            };
+          }),
+        },
+      },
+    };
+
+    const run = analyzeHighlightsV2(transcript(), {
+      client: refusing as any,
+      cfg: { ...cfg, criticBatchSize: 1 },
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    await expect(run).rejects.toThrow(AnalyzeTechnicalError);
+    await expect(run).rejects.toThrow(/1 of 2 candidate\(s\) never got a verdict/);
+    await expect(run).rejects.toThrow(/refused 1/);
+  });
+
+  it("does NOT throw when a candidate was skipped but a clip survived", async () => {
+    // The guard is about the WHOLE answer being empty. With a shipped clip an
+    // unjudged candidate is ordinary recall loss - we hand the user something
+    // real and say nothing false about the moment we missed.
+    const truncating = {
+      chat: {
+        completions: {
+          create: vi.fn(async (body: any) => {
+            if (body.model === cfg.scanModel) return twoCandidateScan();
+            const user: string = body.messages.find((m: any) => m.role === "user").content;
+            if (user.includes("c0")) return criticRows(verdictRow("c0"));
+            return {
+              choices: [{ message: { content: '{"results":[{"id":"c1"' }, finish_reason: "length" }],
+              usage: { prompt_tokens: 200, completion_tokens: 80 },
+            };
+          }),
+        },
+      },
+    };
+
     const r = await analyzeHighlightsV2(transcript(), {
       client: truncating as any,
       cfg: { ...cfg, criticBatchSize: 1 },
@@ -653,10 +823,8 @@ describe("analyzeHighlightsV2", () => {
       retryDelayMs: 1,
     });
 
-    expect(r.highlights).toHaveLength(0);
-    expect(r.noClipsReason).toBe("NO_VIABLE_MOMENTS");
+    expect(r.highlights).toHaveLength(1);
     expect(r.telemetry.truncatedDrops).toBe(1);
-    expect(r.telemetry.omittedDrops).toBe(0);
   });
 
   it("does NOT throw when every judged clip is dropped by snap for content reasons", async () => {

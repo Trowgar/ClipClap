@@ -275,27 +275,61 @@ export async function analyzeHighlightsV2(
     // reasons. Hole-dropped candidates are excluded too - `candidates` is
     // already post-hole - because a re-run reads the same cached transcript and
     // 4c3fc05 settled that case as content.
-    // Counted as omittedDrops, NOT as `candidates.length - verdicts.length`.
-    // Those two are not the same number and the difference is the whole
-    // correctness of this guard: verdicts are rows that SURVIVED the critic's
-    // invariant filter, so any accounted or malformed row would inflate the
-    // subtraction into a phantom protocol failure. omittedDrops is the exact
-    // population we mean - a candidate id that came back with no usable verdict
-    // and no attributed drop, i.e. the critic silently skipped it or answered
-    // in a shape we could not read. A re-run genuinely re-rolls the critic, so
-    // FAILED can heal this, and the quota stays untouched meanwhile.
     //
-    // Truncated and refused candidates are deliberately NOT counted. The critic
-    // classifies both as content-shaped anomalies of the candidate itself and
-    // has already spent its own retry ladder on them; they reproduce on a
-    // re-run, so promoting them here would burn all three BullMQ attempts and
-    // still never hand the user an answer. If they take out EVERY candidate
-    // there is no verdict at all and the "nothing was judged" guard above
-    // already catches it - what falls through to here is a video most of whose
-    // moments really were judged, and that is an answer worth shipping.
-    const unjudged = critic.telemetry.omittedDrops;
+    // The sum below is exactly "candidates that never produced a real verdict",
+    // and the three terms are the three, mutually exclusive, ways that happens
+    // (critic.ts):
+    //   - truncatedDrops: dropTruncated() gave up on a batch and put its ids in
+    //     accountedDropIds.
+    //   - refusalDrops:   dropRefused() did the same.
+    //   - omittedDrops:   every remaining candidate with no verdict, computed as
+    //     `candidates - verdictIds - accountedDropIds`. Because it subtracts
+    //     accountedDropIds it can never re-count the first two, and because it
+    //     subtracts verdict IDS (not rows) it DOES already include a candidate
+    //     whose only row died in the invariant filter.
+    // No candidate lands in two of them: accountedDropIds is filled only by the
+    // two terminal drop paths, each of which returns immediately, and the
+    // per-batch id guard stops another batch's row from ever answering for a
+    // dropped id.
+    //
+    // invariantDrops is deliberately NOT added. It counts ROWS, not candidates:
+    // a hallucinated foreign id belongs to no candidate at all, and a duplicate
+    // row belongs to a candidate that already has its verdict. Adding it would
+    // invent unjudged candidates that do not exist. (The comment 2bb036b left
+    // here claimed malformed rows were the difference between this sum and
+    // `candidates.length - verdicts.length`. They are not - a candidate whose
+    // row was malformed is counted by both, since it has no verdict id.)
+    //
+    // Why not `candidates.length - verdicts.length`, which today yields the same
+    // number: it only does so as long as candidate ids stay unique and every
+    // verdict maps back to an input candidate. It measures the population by
+    // accident rather than by name, and it cannot say WHY anything went
+    // unjudged, so the error message below could not either. The sum reconciles
+    // against telemetry the critic already publishes and each term has its own
+    // test.
+    //
+    // Truncated and refused candidates ARE counted, reversing 2bb036b. Both
+    // reasons were "content-shaped anomaly of the candidate, reproduces on a
+    // re-run, so failing burns three BullMQ attempts for nothing":
+    //   - Truncation does not reliably reproduce. critic.ts's own measurement
+    //     note records per-call variance the same order as the budget headroom
+    //     (a live run measured 2184 completion tokens at 6/6000, below the 2857
+    //     seen at 6/5000), so a candidate that truncates at the margin can
+    //     complete on the next roll. a4590ce made this rare, not impossible.
+    //   - A refusal may well be the model reacting to the material rather than a
+    //     fault, and it may indeed repeat. It is still not a judgement: the
+    //     critic said nothing about whether that moment is worth clipping, so
+    //     "no viable moments" cannot speak for it. The choice is between a
+    //     wasted retry ending in FAILED (free to the user) and billing them for
+    //     a claim about material we declined to read.
+    // The asymmetry decides it: over-failing costs three cheap retries and a
+    // diagnosable error; under-failing takes the user's minutes for an answer
+    // that was never obtained. Note the guard needs zero survivors AND a missing
+    // candidate, so a video whose moments really were judged still ships its
+    // honest "no".
+    const t = critic.telemetry;
+    const unjudged = t.omittedDrops + t.truncatedDrops + t.refusalDrops;
     if (unjudged > 0) {
-      const t = critic.telemetry;
       throw new AnalyzeTechnicalError(
         `no clip survived and ${unjudged} of ${candidates.length} candidate(s) never got a verdict ` +
           `(omitted ${t.omittedDrops}, refused ${t.refusalDrops}, truncated ${t.truncatedDrops}, ` +
