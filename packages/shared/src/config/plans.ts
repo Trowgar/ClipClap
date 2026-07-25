@@ -128,28 +128,22 @@ export const FREE_TIER = {
  *  actually wants clipped or it proves nothing. It also stays far under the
  *  180-minute paid cap, so length remains a reason to subscribe. */
 const NONE_LIMITS: PlanLimits = {
-  // Enough for one full-length free source. The real gate is the run counter
-  // below, not this number; it exists so the minute arithmetic shared with the
-  // paid plans cannot refuse a source the trial is meant to accept.
-  minutesPerPeriod: 30,
-  // One run can yield up to 12 clips, so anything less would silently discard
-  // part of the only result this user will ever see for free.
-  storageClips: 12,
-  // Long enough to watch the clips, show someone, and come back; short enough
-  // that free output is not indefinite storage. Retention is a paid feature -
-  // 7/30/90 days is part of what a plan buys.
-  retentionDays: 3,
+  // DISABLED 2026-07-25. The free trial shipped in 767a54b was live in prod for
+  // a short window and is an unbounded compute faucet: POST /api/register is
+  // unauthenticated and unrate-limited, the 30-minute cap is enforced on a
+  // client-supplied sourceDurationSec that is absent (and therefore 0) on every
+  // URL submission, and DELETE /api/projects/:id hard-deletes the Job rows that
+  // ARE the trial's ledger, so a single account can reset itself forever.
+  // Zeroed until those three holes are closed AND the owner has approved the
+  // commercial terms. Do not re-enable by editing these numbers alone.
+  minutesPerPeriod: 0,
+  storageClips: 0,
+  retentionDays: 0,
   priorityQueue: false,
-  // Exactly one: a free account never needs to run two jobs at once, and 0
-  // would block every submission.
-  concurrentJobsLimit: 1,
-  maxSourceDurationMinutes: 30,
-  // 500 MB comfortably holds 30 minutes of ordinary upload while keeping the
-  // 2 GB path a paid one.
-  maxFileSizeBytes: 500 * MB,
-  // Same number as the lifetime attempt backstop, so the daily gate can never
-  // be the looser of the two and let a burst outrun it.
-  maxJobsPerDay: FREE_TIER.attempts,
+  concurrentJobsLimit: 0,
+  maxSourceDurationMinutes: 0,
+  maxFileSizeBytes: 0,
+  maxJobsPerDay: 0,
   priceUsd: 0,
 };
 
