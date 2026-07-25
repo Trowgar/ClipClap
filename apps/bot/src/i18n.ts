@@ -120,6 +120,34 @@ export interface Dict {
   cycleMonthly: string;
 }
 
+/** Keyed by the full JobErrorCode union so adding a code to the shared list is
+ *  a compile error here until this locale has a string for it - which is what
+ *  the job-error module promises consumers. A nested ternary silently fell
+ *  through to the generic line instead.
+ *
+ *  The lookup still falls back at runtime: the bot and @clipclap/shared are
+ *  built separately, so a deploy can pair a fresh shared that tags a brand-new
+ *  code with a bot binary whose dictionary predates it. An index miss there
+ *  would hand grammY an undefined message text and the user would hear nothing
+ *  at all about the failed job. */
+const enFailure: Record<JobErrorCode, string> = {
+  UNSUPPORTED_INPUT:
+    "This file has no video track - only sound. Send a video file and I'll clip it.",
+  ANALYSIS_UNAVAILABLE:
+    "Could not analyze this video right now - a temporary problem on our side. I'm retrying automatically and your minutes were not used. If nothing arrives, send it again in a few minutes.",
+  // Hedged on purpose: a non-zero yt-dlp exit does not say why, so the copy
+  // names no cause as fact and leads with the remedy that always works.
+  SOURCE_UNAVAILABLE:
+    "I could not download the video from that link - it may be private, region-locked, removed, or temporarily unavailable. Check that the link opens in a browser, or send me the file directly. Your minutes were not used.",
+};
+
+// No retry promise here on purpose: this is the "unknown failure" line and it
+// also covers permanent ones (undecodable codec, transcript below the coverage
+// floor), where "I'm retrying, resend in a few minutes" is false and loops the
+// user. Only a code that knows the failure is transient may promise a retry.
+const enFailureGeneric =
+  "Something went wrong while processing this video and your minutes were not used. Try sending it again, or send a different file if it keeps failing.";
+
 const en: Dict = {
   welcomeNew:
     "Welcome to ClipClap! Send me a video and I'll turn it into vertical clips with subtitles.\n\nLanguage: /lang ru - switch to Russian.",
@@ -154,12 +182,7 @@ const en: Dict = {
   queued: "Queued. I'll send the clips back here when rendering finishes.",
   fileTooLarge: (url) =>
     `This video is over 20 MB - Telegram's Bot API limit. For now, upload longer videos on the website: ${url}/dashboard. We're working on lifting this limit soon.`,
-  processingFailed: (code) =>
-    code === "UNSUPPORTED_INPUT"
-      ? "This file has no video track - only sound. Send a video file and I'll clip it."
-      : code === "ANALYSIS_UNAVAILABLE"
-        ? "Could not analyze this video right now - a temporary problem on our side. I'm retrying automatically and your minutes were not used. If nothing arrives, send it again in a few minutes."
-        : "Something went wrong while processing this video. I'm retrying automatically and your minutes were not used. If nothing arrives, send it again in a few minutes.",
+  processingFailed: (code) => (code && enFailure[code]) || enFailureGeneric,
   done: (n) => `Done. ${n} clip${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} ready.`,
   doneNoClips: (reason) =>
     reason === "NO_USABLE_SPEECH"
@@ -301,6 +324,18 @@ const en: Dict = {
   cycleMonthly: "monthly",
 };
 
+const ruFailure: Record<JobErrorCode, string> = {
+  UNSUPPORTED_INPUT:
+    "В этом файле нет видеодорожки - только звук. Пришли видеофайл, и я нарежу клипы.",
+  ANALYSIS_UNAVAILABLE:
+    "Не получилось проанализировать это видео - временная проблема на нашей стороне. Пробую автоматически ещё раз, минуты не списаны. Если ничего не придёт, пришли видео снова через несколько минут.",
+  SOURCE_UNAVAILABLE:
+    "Не получилось скачать видео по этой ссылке - возможно, оно приватное, удалено, недоступно в этом регионе или временно не отдаётся. Проверь, открывается ли ссылка в браузере, или пришли файл напрямую. Минуты не списаны.",
+};
+
+const ruFailureGeneric =
+  "Что-то пошло не так при обработке видео, минуты не списаны. Попробуй прислать его ещё раз или пришли другой файл, если ошибка повторяется.";
+
 const ru: Dict = {
   welcomeNew:
     "Привет! Это ClipClap. Пришли видео - нарежу вертикальные клипы с субтитрами.\n\nЯзык: /lang en - переключиться на английский.",
@@ -336,12 +371,7 @@ const ru: Dict = {
   queued: "В очереди. Пришлю клипы сюда, когда рендер закончится.",
   fileTooLarge: (url) =>
     `Видео больше 20 МБ - это лимит Telegram Bot API. Пока что для длинных видео используй сайт: ${url}/dashboard. Скоро снимем это ограничение.`,
-  processingFailed: (code) =>
-    code === "UNSUPPORTED_INPUT"
-      ? "В этом файле нет видеодорожки - только звук. Пришли видеофайл, и я нарежу клипы."
-      : code === "ANALYSIS_UNAVAILABLE"
-        ? "Не получилось проанализировать это видео - временная проблема на нашей стороне. Пробую автоматически ещё раз, минуты не списаны. Если ничего не придёт, пришли видео снова через несколько минут."
-        : "Что-то пошло не так при обработке видео. Пробую автоматически ещё раз, минуты не списаны. Если ничего не придёт, пришли видео снова через несколько минут.",
+  processingFailed: (code) => (code && ruFailure[code]) || ruFailureGeneric,
   done: (n) =>
     `Готово. ${n} ${pluralizeRu(n, "клип", "клипа", "клипов")} ${pluralizeRu(n, "готов", "готовы", "готовы")}.`,
   doneNoClips: (reason) =>

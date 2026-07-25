@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseJobErrorCode, tagJobError } from "@clipclap/shared";
+import { JOB_ERROR_CODES, parseJobErrorCode, tagJobError } from "@clipclap/shared";
 import { jobErrorText } from "../../lib/job-error-text";
 
 describe("web job failure copy", () => {
@@ -24,6 +24,33 @@ describe("web job failure copy", () => {
     expect(
       jobErrorText("SOMETHING_NEW" as unknown as null)
     ).toBe(generic);
+  });
+
+  it("asks the user to check the link when the source could not be fetched", () => {
+    const text = jobErrorText("SOURCE_UNAVAILABLE");
+    expect(text).toContain("could not download the video from that link");
+    expect(text).not.toContain("retrying");
+    // A non-zero yt-dlp exit cannot tell a private video from a stale extractor
+    // or a rate limit, so the copy may not assert a cause - it hedges ("may
+    // be") and leads with the remedy that works for every one of them.
+    expect(text).toContain("may be");
+    expect(text).toContain("upload the file directly");
+  });
+
+  it("the generic line promises no automatic retry", () => {
+    // GENERIC also covers permanent failures (yt-dlp, undecodable codec,
+    // transcript coverage floor) and the state after the final attempt, where
+    // "we are retrying, try again in a few minutes" is simply false.
+    const generic = jobErrorText(null);
+    expect(generic).not.toContain("retrying");
+    expect(generic).not.toContain("few minutes");
+    expect(generic).toContain("minutes were not used");
+  });
+
+  it("has copy for every code the worker can emit", () => {
+    for (const code of JOB_ERROR_CODES) {
+      expect(jobErrorText(code)).not.toBe(jobErrorText(null));
+    }
   });
 
   it("never renders the raw engine message", () => {

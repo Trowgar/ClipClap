@@ -26,6 +26,13 @@ export const JOB_ERROR_CODES = [
   /** The upload itself cannot be clipped (audio-only file). Permanent: a retry
    *  cannot change it, so the copy must ask for a different file. */
   "UNSUPPORTED_INPUT",
+  /** The pasted link did not yield a file. The downloader cannot tell the cause
+   *  apart (private, removed, region-locked, login-walled, over the size cap, a
+   *  stale extractor), so the copy names none of them as fact. Permanent for
+   *  the same reason as UNSUPPORTED_INPUT: every attempt re-fetches the
+   *  identical URL, so the copy must give the user a way out rather than
+   *  promise an automatic retry. */
+  "SOURCE_UNAVAILABLE",
 ] as const;
 
 export type JobErrorCode = (typeof JOB_ERROR_CODES)[number];

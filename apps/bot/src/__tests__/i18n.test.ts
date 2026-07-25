@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseJobErrorCode } from "@clipclap/shared";
+import { JOB_ERROR_CODES, parseJobErrorCode } from "@clipclap/shared";
 import { detectLocale, parseLangCommand, t } from "../i18n";
 
 describe("bot i18n", () => {
@@ -413,15 +413,65 @@ describe("bot i18n", () => {
     expect(ru).not.toContain("Пробую автоматически");
   });
 
+  it("asks the user to check the link when the source could not be fetched", () => {
+    // permanent: all three attempts re-fetch the same dead URL
+    const en = t("en").processingFailed("SOURCE_UNAVAILABLE");
+    expect(en).toContain("could not download the video from that link");
+    expect(en).not.toContain("retrying");
+    // The exit code cannot tell a private video from a stale extractor or a
+    // rate limit, so no cause may be stated as fact - hedge, then offer the
+    // remedy that holds whatever went wrong.
+    expect(en).toContain("may be");
+    expect(en).toContain("send me the file directly");
+    const ru = t("ru").processingFailed("SOURCE_UNAVAILABLE");
+    expect(ru).toContain("скачать видео по этой ссылке");
+    expect(ru).not.toContain("Пробую автоматически");
+    expect(ru).toContain("возможно");
+    expect(ru).toContain("пришли файл напрямую");
+  });
+
   it("falls back to a generic message when there is no known code", () => {
     const en = t("en").processingFailed(null);
     expect(en).toBe(
-      "Something went wrong while processing this video. I'm retrying automatically and your minutes were not used. If nothing arrives, send it again in a few minutes."
+      "Something went wrong while processing this video and your minutes were not used. Try sending it again, or send a different file if it keeps failing."
     );
     const ru = t("ru").processingFailed(null);
     expect(ru).toBe(
-      "Что-то пошло не так при обработке видео. Пробую автоматически ещё раз, минуты не списаны. Если ничего не придёт, пришли видео снова через несколько минут."
+      "Что-то пошло не так при обработке видео, минуты не списаны. Попробуй прислать его ещё раз или пришли другой файл, если ошибка повторяется."
     );
+  });
+
+  it("the generic line promises no automatic retry - it also covers permanent failures", () => {
+    // GENERIC is the "unknown failure" bucket and catches yt-dlp/ffmpeg/coverage
+    // failures a retry cannot heal, plus the state after the last attempt when
+    // no retry is running at all. Promising one there loops the user forever.
+    expect(t("en").processingFailed(null)).not.toContain("retrying");
+    expect(t("en").processingFailed(null)).not.toContain("few minutes");
+    expect(t("ru").processingFailed(null)).not.toContain("Пробую автоматически");
+    expect(t("ru").processingFailed(null)).not.toContain("через несколько минут");
+  });
+
+  it("has a distinct string for every code in both locales", () => {
+    // the Record<JobErrorCode, string> makes a missing translation a compile
+    // error; this catches the other half - a code copy-pasted onto two entries
+    for (const locale of ["en", "ru"] as const) {
+      const texts = JOB_ERROR_CODES.map((c) => t(locale).processingFailed(c));
+      expect(new Set(texts).size).toBe(JOB_ERROR_CODES.length);
+      for (const text of texts) expect(text).not.toBe(t(locale).processingFailed(null));
+    }
+  });
+
+  it("falls back to the generic line for a code this build has never heard of", () => {
+    // The bot and @clipclap/shared are built separately, so a deploy can pair a
+    // fresh shared (which knows a new code and tags jobs with it) with a bot
+    // whose dictionary predates it - the same build-order skew safeTagJobError
+    // exists to survive. An index miss must not reach sendMessage: grammY
+    // rejects on an undefined text, the delivery loop swallows it, and the user
+    // is told nothing at all about a job that failed.
+    for (const locale of ["en", "ru"] as const) {
+      const text = t(locale).processingFailed("A_CODE_FROM_THE_FUTURE" as never);
+      expect(text).toBe(t(locale).processingFailed(null));
+    }
   });
 
   it("never leaks raw engine prose - the copy cannot even receive it", () => {

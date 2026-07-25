@@ -60,7 +60,7 @@ vi.mock("../processors/analyze", () => ({
 }));
 
 import { AnalyzeTechnicalError } from "../analyze-v2/critic";
-import { UnsupportedInputError } from "../processors/errors";
+import { SourceUnavailableError, UnsupportedInputError } from "../processors/errors";
 import { runAnalyzeStage } from "../stages/analyze";
 import { runDownloadStage } from "../stages/download";
 import { runFinalizeStage } from "../stages/finalize";
@@ -236,6 +236,26 @@ describe("stage handlers", () => {
     expect(mocks.jobUpdate).toHaveBeenCalledWith({
       where: { id: "job1" },
       data: { status: "FAILED", error: `[UNSUPPORTED_INPUT] ${raw}` },
+    });
+  });
+
+  it("tags an unfetchable link as an unavailable source", async () => {
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      userId: "u1",
+      sourceUrl: "https://youtube.com/watch?v=private",
+      sourceKey: null,
+    });
+    const raw = "yt-dlp could not fetch https://youtube.com/watch?v=private: Private video";
+    mocks.downloadVideo.mockRejectedValue(new SourceUnavailableError(raw));
+
+    await expect(
+      runDownloadStage({ jobId: "job1", userId: "u1" })
+    ).rejects.toThrow(SourceUnavailableError);
+
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: "job1" },
+      data: { status: "FAILED", error: `[SOURCE_UNAVAILABLE] ${raw}` },
     });
   });
 

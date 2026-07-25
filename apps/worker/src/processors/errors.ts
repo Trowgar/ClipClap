@@ -7,3 +7,12 @@
 /** The input itself cannot be clipped, e.g. an audio-only file. Permanent: a
  *  BullMQ retry re-runs the exact same file, so the user must send another. */
 export class UnsupportedInputError extends Error {}
+
+/** yt-dlp could not produce a file from the pasted link. The exit code alone
+ *  does not say why - private, removed, region-locked, login-walled, over the
+ *  size cap, or an extractor too old for the site - so this class claims only
+ *  that the fetch failed. Permanent in the same sense as UnsupportedInputError:
+ *  all three BullMQ attempts re-fetch the identical URL with the identical
+ *  binary, so the copy must offer the user a way out (check the link, or send
+ *  the file directly) instead of promising an automatic retry. */
+export class SourceUnavailableError extends Error {}

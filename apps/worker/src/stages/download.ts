@@ -2,14 +2,14 @@ import {
   getStageQueue,
   jobStepService,
   prisma,
-  tagJobError,
   uploadFile,
 } from "@clipclap/shared";
 import { randomUUID } from "crypto";
 import { unlink } from "fs/promises";
 import { downloadVideo } from "../processors/download";
 import { normalizeSource } from "../processors/normalize";
-import { UnsupportedInputError } from "../processors/errors";
+import { SourceUnavailableError, UnsupportedInputError } from "../processors/errors";
+import { safeTagJobError } from "./job-error";
 import type { DownloadStagePayload } from "./types";
 
 export async function runDownloadStage(
@@ -75,14 +75,17 @@ async function markJobFailed(jobId: string, error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   // Same rule as the analyze stage: the boundary that stores a user-visible
   // failure tags it, and the raw diagnostics stay in the message behind the
-  // code. Untagged (yt-dlp output, R2, ffmpeg) renders as the generic message -
-  // "audio-only" is coded because it is the one download failure a retry can
-  // never fix, so the copy has to ask for a different file instead of promising
-  // an automatic retry.
+  // code. The two coded cases are the download failures a BullMQ retry can
+  // never fix, because every attempt re-reads the identical file or re-fetches
+  // the identical URL - so the copy has to hand the user something to do
+  // instead of promising a rescue that is not coming. Everything else (R2,
+  // ffmpeg, disk) stays untagged and renders as the generic message.
   const tagged =
     error instanceof UnsupportedInputError
-      ? tagJobError("UNSUPPORTED_INPUT", message)
-      : message;
+      ? safeTagJobError("UNSUPPORTED_INPUT", message)
+      : error instanceof SourceUnavailableError
+        ? safeTagJobError("SOURCE_UNAVAILABLE", message)
+        : message;
   await prisma.job.update({
     where: { id: jobId },
     data: { status: "FAILED", error: tagged },
