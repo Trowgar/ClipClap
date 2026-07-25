@@ -106,6 +106,26 @@ ordinary stretch of conversation produced across 1623 offsets is **2**; a constr
 gives **1**. The defect is dropped for where it sits, not for what it looks like. Separation 11 versus 2, not
 a 0.059 margin.
 
+The region is anchored at node 0, so a mid-video repetition cluster can never fire the rule by construction -
+and the false-positive sweep was run UNANCHORED from all 1623 offsets, which is strictly more permissive, and
+still fired zero times. Acceptance: the rule drops **6 of 6** real montage candidates across both fixtures,
+**6 of 6** again under each of two adversarial jitter models (respell every fragment, insert filler into every
+later original), and touches the constructed legitimate cold open **0 of 6** times. The previous per-candidate
+filter dropped 14 of 18 and missed the owner's original defect under a single respelling.
+
+The region is published as telemetry (`teaserRegion`, `teaserDrops` with seconds), which matters more than it
+looks: this filter's failure mode is an invisible loss, so the decision has to leave a trace in the job record.
+
+**The transferable lesson, and the reason two attempts failed:** conservatism belongs in the STRENGTH OF
+STRUCTURE required to fire, not in the numeric threshold. Both failed attempts were conservative about the bar
+while reckless about the unit of decision - they asked "is this six-word fragment a copy?", a question with no
+reliable answer at any threshold, then tuned the bar. One of those bars was provably inert (on the short path
+the minimum non-zero score is 5/w, always >= 0.5, so any bar in (0, 0.5] behaved identically - the knob was
+theatre). Safety came from nowhere. The asymmetry that drives this: a false positive here is invisible,
+unrecoverable and unfalsifiable in production - nobody ever reports the clip that was never made - while a
+false negative is caught downstream by the finalizer's judge AND by the 6-second duration floor. The good clip
+has no backstop; the bait fragment has two.
+
 **Guards that turn a content answer into a technical failure - got it wrong four times.** Every round that
 ADDED a failure-classification mechanism shipped a user-facing defect on its first attempt: a guard too loose
 that billed unjudged work; a guard too tight that failed weak videos (the commonest honest answer there is,
@@ -179,6 +199,15 @@ proposed as a gate once and rejected.
 work is uncommitted there (67 insertions / 9 deletions as of 2026-07-25). `git stash` disturbed them once.
 
 ---
+
+## 6a. Open follow-ups on ANALYZE
+
+- **Tell the finalizer's judge about the teaser region.** The detector publishes `teaserRegion`; passing it
+  into the finalizer prompt ("the first N seconds of this video are a trailer montage") turns a deterministic
+  drop into a prior the judge can weigh, and helps it reason about clips that start near the boundary.
+  Suggested by the design that produced the detector; not implemented.
+- **The fixtures are one episode.** A genuinely different third source - a gameplay stream, a solo talk,
+  another language - would strengthen the regression net more than any further assertion on this one.
 
 ## 7. RENDER: smart reframe
 
