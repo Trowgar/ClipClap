@@ -126,13 +126,40 @@ export function snapNodes(
   const hookStartSec = nodes[verdict.hookStartNode].start;
   const hookEndSec = nodes[verdict.hookEndNode].end;
 
-  // 5a. over-length compression BEFORE invariants: pull the start forward along
-  //     strong boundaries only, never past the hook; impossible -> drop.
+  // 5a. over-length compression BEFORE invariants: pull the start forward onto
+  //     a legal clip start, never past the hook; impossible -> drop.
+  //
+  //     LEGAL MEANS isCleanStart, the same test as the walk-back at the top of
+  //     this function, as the critic's ¶ window markers, and as the finalizer's
+  //     trim gate. It used to mean `leadingStrength >= STRONG`, which is neither
+  //     necessary nor sufficient, and both errors were measured on job
+  //     cms2c8ahm: node #805 has leadingStrength 0.80 but opens lowercase
+  //     mid-thought ("или отупеть до состояния совсем полена"), while #807 has
+  //     leadingStrength 0.20 and IS a clean start because an opaque node - the
+  //     host's question - precedes it. Compression skipped #807 for its weak
+  //     number and landed on #808, deleting the framing the whole clip answers
+  //     and 30.7s more than the cap required.
+  //
+  //     EARLIEST fitting candidate, not the strongest or the latest: the loop
+  //     walks forward and stops at the first fit, which is by construction the
+  //     one that deletes the least. Preferring the latest fitting start would
+  //     have taken the same clip from #807 to #821 and the neanderthal clip from
+  //     #755 to #756, deleting more of a range the critic had already approved
+  //     for no gain - the cap is a ceiling, not a target.
+  //
+  //     The hook bound is the one thing compression may never eat: the critic
+  //     named those nodes as the moment itself. It is deliberately NOT extended
+  //     to "never delete the setup the critic put before the hook" - that would
+  //     drop the survival clip outright, because its hook sits 19 nodes and 88s
+  //     after its start, and engine-notes §3 measured hook geometry as critic
+  //     variance rather than signal.
   if (endSec - startSec > cfg.maxSec) {
     let compressed = false;
     for (let i = s.index + 1; i <= verdict.hookStartNode; i++) {
       const cand = nodes[i];
-      if (!cand.hasWords || cand.leadingStrength < STRONG) continue;
+      // isCleanStart already requires hasWords - an opaque node has no reliable
+      // onset to cut at - so there is no separate word-bearing test here.
+      if (!isCleanStart(nodes, i)) continue;
       const prev = cand.index > 0 ? nodes[cand.index - 1] : null;
       // same onset clamp as the main start: nested prev.end must not poison the candidate
       const candidateStart = Math.max(Math.min(prev ? prev.end : 0, cand.start), cand.start - cfg.leadInSec);

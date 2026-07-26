@@ -215,6 +215,150 @@ describe("snapNodes", () => {
     expect(r2.clip.endsOnQuestion).toBe(false);
   });
 
+  // ---------------------------------------------------------------------------
+  // Real node tables from job cms2c8ahm000droa7tcqh30ho (the 52-minute podcast
+  // the owner cut by hand). Times, texts, hasWords and the strength pair are
+  // verbatim from buildSentenceGraph on that transcript; only the INDICES are
+  // rebased to 0 so a 25-node array can stand in for an 886-node graph. Each
+  // table starts one node BEFORE the critic's start_node so the lead-in clamp
+  // (prevS.end) reproduces the shipped second exactly - both tables replay the
+  // real startSec to 0.01s, which is the point of using them.
+  // ---------------------------------------------------------------------------
+
+  type Row = [number, number, boolean, number, number, string];
+
+  function table(rows: Row[]): SentenceNode[] {
+    return rows.map(([start, end, hasWords, leading, trailing, text], index) => ({
+      index,
+      start,
+      end,
+      text,
+      hasWords,
+      leadingStrength: leading,
+      trailingStrength: trailing,
+    }));
+  }
+
+  /** Graph nodes 804-828: "Самые живучие на планете". Critic range [804..826]
+   *  = 98.6s against the 90s cap, so compression MUST fire. The interesting
+   *  node is #806 (idx 2): an opaque node carrying the host's question, which
+   *  makes #807 (idx 3) a clean start through isCleanStart's post-opaque
+   *  branch even though its leadingStrength is only 0.20. */
+  function survivalNodes(): SentenceNode[] {
+    return table([
+      [2831.52, 2838.86, true, 0.2, 0.8, "А вот устроить глобальную ядерную войнушку или убить себя совсем запредельным изменением климата"],
+      [2839.46, 2850.16, true, 0.8, 0.8, "или отупеть до состояния совсем полена из за искусственного интеллекта вот это возможные сценарии"],
+      [2850.16, 2856.18, false, 0.8, 0.2, "То есть, ну вообще, мне кажется, люди, наверное, самый живучий вид на планете или все-таки нет?"],
+      [2856.32, 2860.42, true, 0.2, 0.8, "Ну как живучий смотря по каким параметрам сравнивать"],
+      [2862.2, 2864.12, true, 0.8, 0.4, "Люди довольно долго живут"],
+      [2864.56, 2865.66, true, 0.4, 0.8, "дольше других приматов"],
+      [2867.38, 2873.96, false, 0.8, 0.2, "Люди могут размножаться быстрее, чем шимпанзе и гориллы."],
+      [2874.34, 2877.94, false, 0.2, 0.2, "То есть, у шимпанзе и горилл детеныши могут кормить молоком лет до пяти."],
+      [2877.94, 2879.54, true, 0.2, 0.4, "Люди очень выносливые"],
+      [2880.04, 2882.28, true, 0.4, 0.8, "они могут ходить далеко и"],
+      [2882.92, 2891.36, false, 0.8, 0.2, "И вот по выносливости с нами сравнимы только два вида млекопитающих."],
+      [2892.94, 2894.08, true, 0.2, 0.8, "На почве выносливости"],
+      [2894.4, 2897.52, false, 0.8, 0.2, "Ну да, они могут с нами ходить и не устать."],
+      [2898.0, 2902.84, false, 0.2, 0.2, "С другой стороны, у людей довольно слабые мышцы."],
+      [2902.84, 2909.72, false, 0.2, 0.2, "То есть, тот же объем мышечной ткани у нас дает раза в два меньше усилия."],
+      [2910.08, 2913.74, false, 0.2, 0.2, "Люди это компенсировали, соответственно, оружием."],
+      [2914.38, 2916.08, true, 0.2, 0.8, "Начиная с камней дубинок"],
+      [2916.9, 2917.62, true, 0.8, 0.4, "копья луки"],
+      [2917.98, 2918.78, true, 0.4, 0.8, "стрелы и так далее"],
+      [2919.3, 2920.2, true, 0.8, 0.8, "Результат вы видите"],
+      [2921.5, 2923.74, true, 0.8, 0.8, "Те хищники которые копьями не пользовались"],
+      [2925.48, 2927.24, true, 0.8, 0.8, "остались часто в красной книге"],
+      [2927.54, 2930.0, false, 0.8, 0.2, "Ну так в итоге мы самые живучие на планете."],
+      [2930.0, 2931.86, true, 0.2, 0.4, "По части устойчивости к ядам"],
+      [2932.46, 2933.84, true, 0.4, 0.8, "крысы гораздо живучее нас"],
+    ]);
+  }
+
+  /** Critic verdict for the table above: [804..826], payoff 826, hook 823-826. */
+  const survivalVerdict = () =>
+    verdict({ startNode: 0, payoffNode: 22, endNode: 22, hookStartNode: 19, hookEndNode: 22 });
+
+  /** Graph nodes 753-772: "Как неандертальские гены влияют на психику".
+   *  Critic range [754..771] = 91.5s, 1.5s over the cap. */
+  function neanderthalNodes(): SentenceNode[] {
+    return table([
+      [2582.82, 2587.26, false, 0.2, 0.2, "Та часть, которая всегда жила в Африке, у нее неандертальская ДНК взяться неоткуда."],
+      [2587.36, 2592.5, true, 0.2, 0.8, "А вот те которые перешли в Евразию столкнулись там с неандертальцами и в том числе скрестились"],
+      [2592.76, 2599.1, true, 0.8, 0.8, "Поэтому все неафриканское человечество имеет там какие то полпроцента неандертальской ДНК"],
+      [2599.36, 2602.04, true, 0.8, 0.8, "А как это влияет на человека"],
+      [2602.06, 2603.18, true, 0.8, 0.8, "А вот это ученые спорят"],
+      [2603.18, 2608.0, false, 0.8, 0.2, "Потому что там неандертальские варианты генов встречаются в разных генах."],
+      [2608.1, 2612.08, true, 0.2, 0.8, "Многие из которых связаны либо с иммунитетом либо с работой мозга"],
+      [2612.2, 2619.58, false, 0.8, 0.2, "Но и те варианты, которые связаны с иммунитетом, они скорее связаны были со встречей с новым."],
+      [2619.78, 2620.86, false, 0.2, 0.2, "Более холодном, чем в Африке."],
+      [2621.26, 2625.5, false, 0.2, 0.2, "Что-то там было связано с жировой тканью."],
+      [2625.5, 2629.64, true, 0.2, 0.8, "А то что в мозге оно в современных условиях"],
+      [2629.96, 2632.96, true, 0.8, 0.8, "Неандертальские варианты скорее связаны с чем то неприятным"],
+      [2634.3, 2638.24, true, 0.8, 0.8, "какими то неврологическими или психиатрическими расстройствами"],
+      [2638.72, 2642.44, false, 0.8, 0.2, "То есть у меня депрессия из-за неандертальских генов?"],
+      [2642.74, 2646.52, true, 0.2, 0.8, "Вклад конкретно неандертальских генов в депрессию он в среднем очень маленький"],
+      [2646.72, 2649.58, true, 0.8, 0.8, "куча других причин но нет Но он измеримый он есть"],
+      [2649.58, 2658.58, false, 0.8, 0.2, "Ну и судя по тому, что мы знаем про жизнь неандертальцев, группы могли жить обособленно."],
+      [2659.66, 2661.74, false, 0.2, 0.2, "То есть они были менее общительными."],
+      [2662.6, 2678.76, false, 0.2, 0.2, "То есть я видел гипотезы, что неандертальская норма - это ближе к аутистическому спектру."],
+      [2678.76, 2683.38, false, 0.2, 0.2, "А вот как определить, есть у меня гены неандертальца или нет?"],
+    ]);
+  }
+
+  /** Critic verdict for the table above: [754..771], payoff 771, hook 756-765. */
+  const neanderthalVerdict = () =>
+    verdict({ startNode: 1, payoffNode: 18, endNode: 18, hookStartNode: 3, hookEndNode: 12 });
+
+  it("compresses onto a post-opaque clean start the leadingStrength test cannot see", () => {
+    // Job cms2c8ahm, "Самые живучие на планете". The critic's 98.6s range must
+    // lose ~9s. leadingStrength >= 0.8 walks past idx 3 (#807, lead 0.20 behind
+    // an opaque node) and lands on idx 4 (#808, lead 0.80), deleting the framing
+    // the whole clip answers - "смотря по каким параметрам сравнивать" - and
+    // 30.7s more than the cap required. isCleanStart, the definition every other
+    // start decision in the engine uses, accepts idx 3.
+    const nodes = survivalNodes();
+    const r = snapNodes(survivalVerdict(), nodes, cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.startSec).toBeCloseTo(2856.18, 2); // #807 onset, clamped by #806's end
+    expect(r.clip.endSec - r.clip.startSec).toBeCloseTo(73.82, 2);
+  });
+
+  it("takes the EARLIEST legal start that fits - compression deletes the minimum", () => {
+    // Job cms2c8ahm, "Как неандертальские гены влияют на психику": 91.5s against
+    // the 90s cap. Two legal starts fit - idx 2 (86.1s) and idx 3 (79.6s) - and
+    // compression must take the first, because a later one deletes strictly more
+    // of a clip the critic already approved. Preferring the LATEST fitting start
+    // would land here on idx 3 and on idx 21 in the survival table.
+    const nodes = neanderthalNodes();
+    const r = snapNodes(neanderthalVerdict(), nodes, cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.startSec).toBeCloseTo(2592.61, 2);
+    expect(r.clip.endSec - r.clip.startSec).toBeCloseTo(86.15, 2);
+  });
+
+  it("drops an over-length clip with no clean start ahead instead of shipping it broken", () => {
+    // Same real geometry, every forward onset lowercased: isCleanStart refuses
+    // all of them, so there is nothing legal to compress onto. Better lost than
+    // broken - shipping means either a >90s clip or a mid-sentence opening.
+    const nodes = survivalNodes().map((n, i) =>
+      i === 0 ? n : { ...n, text: n.text.toLowerCase() }
+    );
+    const r = snapNodes(survivalVerdict(), nodes, cfg);
+    expect(r).toEqual({ ok: false, reason: "too_long" });
+  });
+
+  it("never compresses past the hook the critic chose", () => {
+    // hookStartNode caps the walk. With the hook at idx 1 the only candidate is
+    // idx 1 itself, which still measures 90.7s, so the clip drops rather than
+    // eating into the hook to make the cap.
+    const r = snapNodes(
+      verdict({ startNode: 0, payoffNode: 22, endNode: 22, hookStartNode: 1, hookEndNode: 22 }),
+      survivalNodes(),
+      cfg
+    );
+    expect(r).toEqual({ ok: false, reason: "too_long" });
+  });
+
   it("compresses >90s clips from the start along strong boundaries, keeping the hook", () => {
     const nodes: SentenceNode[] = Array.from({ length: 60 }, (_, i) => ({
       index: i,
