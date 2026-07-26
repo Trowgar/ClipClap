@@ -8,7 +8,7 @@ Rules for this file: every number here came from a measurement, not from reasoni
 reproduced, say how. When something is believed but unmeasured, mark it. Delete an entry when it stops being
 true - a stale note is worse than none, and this file has already caught two of its own.
 
-Last substantive update: 2026-07-25.
+Last substantive update: 2026-07-26.
 
 ---
 
@@ -76,6 +76,44 @@ reported; the earlier two (evidence gate rejecting opaque nodes, snap gate) were
 discourse particles - значит, вот, да, ну, там, если, допустим. Any text-matching heuristic must survive
 indels, not just respellings. ё/е is a coin flip: one fixture has zero ё tokens, the other has ten, and the
 same lemma appears both ways within one run (всё/все, ещё/еще).
+
+**`speechSec` is not how much speech a source has.** It sums the spans of
+word-bearing nodes only, i.e. speech Whisper gave word timings we trust enough to CUT on. Measured on both
+fixtures (the same 52-minute episode, 2026-07-26):
+
+| | ecology | answer-arc |
+|---|---|---|
+| wall clock | 3136s | 3136s |
+| word-bearing node spans (`speechSec`) | 1603s | 1649s |
+| opaque node spans | 1167s | 1119s |
+| gaps between nodes | 366s | 368s |
+
+**The longest single pause in 52 minutes is 4.3s.** There is no 47% of silence in that episode - the missing
+half is Whisper's word-timing quality, and 36% of the episode sits in opaque nodes that the scanner and critic
+both read and that clips are routinely cut around. Any budget derived from `speechSec` is a budget derived
+from a transcription artefact. `sourceSeconds()` (all node spans, ~2770s here) is the honest measure: it
+excludes real silence, because silence produces no nodes, but keeps speech we merely could not time. Both
+numbers are now published per job as `speechSec` and `sourceSec` precisely because confusing them is what
+caused the critic-budget defect below.
+
+**The critic budget used to judge half the pool.** `K = min(40, max(8, round(speechMin / 2)))` resolved to 13
+and 14 on the two fixtures against pools of 28 and 32 - so 15 and 18 candidates were never judged by the
+strict model, and the cut among them fell to `interest`, a gpt-4o-mini hunch. Two independent errors, both
+halving: the wrong numerator (above) and a rate below the pool's own production rate. Measured production is
+**0.58 and 0.72 candidates per source minute**, against a structural ceiling of ~1.4/min (the scanner schema
+returns at most 12 moments per window, one window per ~510s of speech). The rate is now **1 per source
+minute** - above what real material produces, so K stops binding on ordinary sources, and below the scanner
+ceiling, so a pathological scan is still rationed. After the fix, judged 25/28 and 27/32; the residual is the
+per-region diversity cap, not the budget. Cost at batch size 6 and gpt-5.1 list price: **$0.103 -> $0.195**
+and **$0.110 -> $0.239** per 52-minute job. Shipped clips went **7 -> 12** and **10 -> 12**, and 5 of
+ecology's 12 come from candidates the old budget would have withheld.
+
+**What limits clip count today.** Before this change it was K. After it, on `podcast-answer-arc` it is the
+soft cap: 21 keep-verdicts -> 16 handed to the finalizer (= `softCap + finalizerHeadroom`, binding) -> 15
+survivors -> 12 shipped. On `podcast-ecology` the gate/snap/NMS funnel binds first: 20 keep-verdicts -> 12.
+`criticMaxCandidates` (40) is the spend ceiling and is not reached by a 52-minute source; a 90-minute one
+would reach it. `criticBudgetK` and `criticUnjudgedPool` are published per job so the next binding constraint
+is visible in a job record rather than re-derived.
 
 **Hook geometry is critic variance, not signal.** `payoffAt <= hookEnd` fires on 5 of 6 clips in one fixture
 and 2 of 10 in the other - same video, same engine, same config, different transcription run. It fires on the
@@ -251,6 +289,21 @@ sees one and misses the other, defeated by the same indel jitter as everything e
 - **Clips that open one node after a question, chosen by the CRITIC with no trim involved.** Two ship today.
   The trim gate cannot reach them; closing this means a rule on original critic boundaries, which is snap's
   territory and a strictly larger change than the gate was.
+- **Scan windows are budgeted from `speechSec` too** (`buildScanWindows`, 600s of word-bearing speech per
+  window). Same measurement error as the critic budget had: the window that counted 600s of speech actually
+  renders ~1130s of transcript to the model, so this source yields 3-4 windows where it should yield 7-8.
+  That halves both the per-window quota and the scanner's own 12-moments-per-window ceiling, so it costs
+  recall twice over. NOT fixed with the critic budget: it changes every scanner prompt, roughly doubles the
+  candidate pool, and would put K back into contention - it deserves its own measurement and its own
+  re-record.
+- **`regionMaxCandidates` now costs candidates for no gain on ordinary sources.** It exists to stop one
+  10-minute stretch eating a scarce budget; with K no longer binding it dropped 3 and 5 pool candidates on the
+  two fixtures purely as a diversity rule. Kept as-is because it is still the mechanism that spreads a budget
+  that DOES bind on a long source, but it is now the largest unjudged residual.
+- **The critic may return a node range outside the candidate it was given.** critic.ts validates node refs
+  against `[0, maxNode]`, not against the candidate. Observed on answer-arc: candidate `c16` spans nodes
+  313-319 and its shipped clip spans 324-332. Snap re-validates, so this is not a boundary-safety problem, but
+  it does mean candidate-to-clip attribution is approximate and any analysis keyed on it should say so.
 - **The punchline-outside case has no repair, only a drop.** Extending an end to a reaction the engine can
   already identify would turn a dropped clip into a good one. Blocked on an owner decision, because
   end-trimming was ruled out of scope to protect payoffs.

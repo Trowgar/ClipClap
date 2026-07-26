@@ -3,7 +3,7 @@ import type { TranscriptionResult } from "@clipclap/shared";
 import { loadAnalyzeConfig, type AnalyzeConfig } from "./config";
 import { buildSentenceGraph } from "./sentence-graph";
 import { runScanner } from "./scanner";
-import { mergeCandidates, selectCriticCandidates } from "./candidates";
+import { criticBudget, mergeCandidates, selectCriticCandidates, sourceSeconds } from "./candidates";
 import { AnalyzeTechnicalError, runCritic, repairCopy } from "./critic";
 import { snapNodes } from "./snap";
 import {
@@ -139,8 +139,7 @@ export async function analyzeHighlightsV2(
       });
       return false;
     });
-    const sourceMinutes = speechSec / 60;
-    candidates = selectCriticCandidates(withoutTeasers, nodes, cfg, sourceMinutes);
+    candidates = selectCriticCandidates(withoutTeasers, nodes, cfg);
     scannerTelemetry = {
       path: "full",
       ...scan.telemetry,
@@ -157,6 +156,23 @@ export async function analyzeHighlightsV2(
         : null,
       teaserDrops,
       criticCandidates: candidates.length,
+      // The critic budget and what it left on the table. A candidate the strict
+      // model never saw is an invisible loss - it looks exactly like a candidate
+      // the critic rejected - and the two numbers that explain one are the
+      // budget and the size of the pool it was applied to. `criticUnjudgedPool`
+      // is deliberately the residual of BOTH rationing rules (the budget K and
+      // the per-region diversity cap), because the point of publishing it is to
+      // show that something was rationed, not which rule did it. A job record
+      // with a large residual is the signal to raise CRITIC_MAX_CANDIDATES.
+      criticBudgetK: criticBudget(nodes, cfg),
+      criticUnjudgedPool: withoutTeasers.length - candidates.length,
+      // Both of them, always, and never only one: these two numbers differ by
+      // roughly 2x on a talking-head source (1649 vs 2768 on podcast-answer-arc)
+      // and confusing them is what produced the budget defect above.
+      // `speechSec` is the audio we can CUT on, `sourceSec` the audio that
+      // carries speech at all.
+      speechSec: Math.round(speechSec),
+      sourceSec: Math.round(sourceSeconds(nodes)),
     };
   }
 
