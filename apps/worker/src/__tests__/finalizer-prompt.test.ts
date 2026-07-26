@@ -63,6 +63,8 @@ function clip(
     hookEndSec: nodes[startNode].end,
     payoffSec: nodes[endNode].start,
     shortMoment: false,
+    finalStartNode: startNode,
+    finalEndNode: endNode,
   };
 }
 

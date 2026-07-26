@@ -252,6 +252,65 @@ describe("analyzeHighlightsV2", () => {
     expect(r.highlights[0]._startNode).toBe(8);
   });
 
+  it("re-grounds copy the over-length compression stranded outside the clip", async () => {
+    // The whole of Fix 4 end to end. The critic proposes a 114s range - over the
+    // 90s cap - grounded in node 0. snap compresses the start forward to node 5
+    // to make the cap, and node 0 is now speech the viewer never hears, so the
+    // copy that cites it is void and gets replaced by the clip's own words.
+    // This is what shipped broken on job cms2c8ahm: a description narrating the
+    // previous clip's ending, past an evidence gate that had run before snap.
+    const scanLong = {
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            candidates: [
+              { start_node: 0, end_node: 22, payoff_node: 22, interest: 0.8, type: "story", thread: null },
+            ],
+          }),
+        },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 100, completion_tokens: 30 },
+    };
+    const criticLong = {
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            results: [{
+              id: "c0", keep: true, score: 0.9, grounded: true, self_contained: true,
+              start_node: 0, payoff_node: 22, end_node: 22,
+              hook_start_node: 20, hook_end_node: 21,
+              title: "Он назвал номер ноль",
+              description: "Спикер называет нулевое предложение.",
+              title_evidence_nodes: [0], description_evidence_nodes: [0],
+              language: "ru",
+            }],
+          }),
+        },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 200, completion_tokens: 80 },
+    };
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: client(scanLong, criticLong),
+      cfg,
+      transcriptPartial: false,
+    });
+    expect(r.highlights).toHaveLength(1);
+    const h = r.highlights[0];
+    expect(h.end - h.start).toBeLessThanOrEqual(cfg.maxSec);
+    expect(h._startNode).toBe(5); // compression moved it; the telemetry says so
+    expect(r.telemetry.copyRegrounded).toEqual([
+      { id: "c0", at: "snap", fields: ["title", "description"] },
+    ]);
+    // the copy no longer claims node 0, and cites only nodes inside the clip
+    expect(h.title).not.toContain("ноль");
+    for (const i of [...(h._titleEvidenceNodes ?? []), ...(h._descriptionEvidenceNodes ?? [])]) {
+      expect(i).toBeGreaterThanOrEqual(5);
+      expect(i).toBeLessThanOrEqual(22);
+    }
+  });
+
   it("drops far-outside evidence with a named gate reason", async () => {
     const verdict = JSON.parse(criticResponse(0.9).choices[0].message.content);
     verdict.results[0].title_evidence_nodes = [4]; // 6 nodes before start_node 10

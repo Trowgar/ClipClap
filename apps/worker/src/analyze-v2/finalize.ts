@@ -446,7 +446,11 @@ function tryRewrite(
   if (!Array.isArray(evidence) || evidence.length === 0) {
     return { ok: false, reason: "no_evidence" };
   }
-  const { startNode, endNode } = clip.verdict;
+  // The range that SHIPPED, not the critic's proposal: snap moves boundaries
+  // (and the trim above just re-snapped this clip), so verdict.startNode/endNode
+  // can name nodes the viewer never hears.
+  const startNode = clip.finalStartNode;
+  const endNode = clip.finalEndNode;
   for (const idx of evidence) {
     if (!Number.isInteger(idx) || !nodes[idx] || idx < startNode || idx > endNode) {
       return { ok: false, reason: "evidence_out_of_range" };
@@ -509,7 +513,10 @@ export async function finalizeClips(
     clips.map((c) => ({
       id: c.verdict.id,
       score: c.verdict.score,
-      hook: nodes[c.verdict.startNode]?.text ?? "",
+      // The line the clip actually OPENS on. snap's clean-start walk-back can
+      // move this a node or two off the critic's proposal, and comparing the
+      // proposals would dedup on speech neither clip contains.
+      hook: nodes[c.finalStartNode]?.text ?? "",
     })),
     cfg.hookDedupSimilarity
   );

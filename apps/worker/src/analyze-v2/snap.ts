@@ -192,6 +192,12 @@ export function snapNodes(
       verdict,
       startSec,
       endSec,
+      // The range that shipped, which is what every later "is this node inside
+      // the clip" question has to be answered against. Publishing the critic's
+      // proposal instead is how a description came to narrate a node that four
+      // lines of compression had just deleted (job cms2c8ahm).
+      finalStartNode: s.index,
+      finalEndNode: e.index,
       hookStartSec,
       hookEndSec,
       payoffSec: p.end,

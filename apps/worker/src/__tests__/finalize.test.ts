@@ -69,6 +69,8 @@ function clip(
     hookEndSec: graph[startNode + 1].end,
     payoffSec: e.end,
     shortMoment: false,
+    finalStartNode: startNode,
+    finalEndNode: endNode,
   };
 }
 

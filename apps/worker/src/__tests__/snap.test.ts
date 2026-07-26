@@ -359,6 +359,26 @@ describe("snapNodes", () => {
     expect(r).toEqual({ ok: false, reason: "too_long" });
   });
 
+  it("reports the node range that actually shipped, not the critic's proposal", () => {
+    const r = snapNodes(survivalVerdict(), survivalNodes(), cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    // critic asked for [0..22]; compression moved the start to idx 3
+    expect(r.clip.verdict.startNode).toBe(0);
+    expect(r.clip.finalStartNode).toBe(3);
+    expect(r.clip.finalEndNode).toBe(22);
+  });
+
+  it("reports a final range that tracks an end the payoff rules moved", () => {
+    // endNode 9 drags 6.0s past payoff node 6, more than payoffMaxTailSec, so
+    // the end is pulled back to the payoff's own terminal boundary. The reported
+    // end node must follow it - otherwise the range lies about 3 whole nodes.
+    const r = snapNodes(verdict({ payoffNode: 6, endNode: 9 }), strongNodes(), cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.verdict.endNode).toBe(9);
+    expect(r.clip.finalStartNode).toBe(2);
+    expect(r.clip.finalEndNode).toBe(6);
+  });
+
   it("compresses >90s clips from the start along strong boundaries, keeping the hook", () => {
     const nodes: SentenceNode[] = Array.from({ length: 60 }, (_, i) => ({
       index: i,

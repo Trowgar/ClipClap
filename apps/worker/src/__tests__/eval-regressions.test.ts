@@ -9,6 +9,7 @@ import {
   looksLikeQuestion,
 } from "../analyze-v2/sentence-graph";
 import { detectTeaserRegion, isInTeaserRegion } from "../analyze-v2/teaser";
+import { EVIDENCE_BOUNDARY_SLACK_NODES } from "../analyze-v2/gates";
 
 /**
  * Tier-1 "never again" regressions.
@@ -616,6 +617,99 @@ describe("named regressions", () => {
       }
     }
     expect(offenders, "an applied trim deleted the question it answers").toEqual([]);
+  });
+
+  it("the node range published with a clip is the range that shipped", async () => {
+    // Owner-visible defect on job cms2c8ahm, clip "Самые живучие на планете":
+    // _descriptionEvidenceNodes = [804, 812, 819] where 804 sits OUTSIDE the
+    // clip - snap's over-length compression had moved the start forward after
+    // the evidence gate ran - and the description accordingly narrated the
+    // PREVIOUS clip's ending. The root cause is upstream of the copy: snap moved
+    // the boundaries and kept publishing the critic's proposal as the clip's
+    // range, so every later range check (copy grounding, the finalizer's hook
+    // dedup and trim guards) was answered against nodes the viewer never hears.
+    //
+    // ONE GUARD - measured 2026-07-26 by returning `verdict.startNode` /
+    // `verdict.endNode` from snapNodes' finalStartNode/finalEndNode. Three
+    // podcast-answer-arc rows come back, and they are the three places snap
+    // moved a boundary on that fixture:
+    //   1868.05-1949.98 "Человек — зло для планеты..." says it ends at #585
+    //                   (1954.68s) - the payoff-tail rule pulled the end to #584.
+    //   3057.75-3117.80 "Почему людям так больно думать..." says it starts at
+    //                   #866 (3062.96s) - the clean-start walk-back went to #864.
+    //   907.53-934.08   "«Ждите малярийных комаров...»" says it ends at #289
+    //                   (931.58s) - the clean-end repair walked forward to #290.
+    // podcast-ecology reds on none: snap moved nothing there. One fixture is not
+    // a net.
+    const offenders: string[] = [];
+    for (const name of CASES) {
+      const { fixture, result } = await run(name);
+      const nodes = buildSentenceGraph(fixture.transcript.segments, loadAnalyzeConfig({}));
+      const cfg = loadAnalyzeConfig({});
+      for (const clip of result.highlights) {
+        const from = clip._startNode;
+        const to = clip._endNode;
+        if (from === undefined || to === undefined) {
+          offenders.push(`${label(name, clip)} publishes no node range`);
+          continue;
+        }
+        // startSec is the node onset less at most leadInSec; endSec is the node
+        // end plus at most tailHoldSec (and never less than the node end).
+        const onset = nodes[from].start;
+        const tail = nodes[to].end;
+        if (clip.start < onset - cfg.leadInSec - EPS || clip.start > onset + EPS) {
+          offenders.push(
+            `${label(name, clip)} says it starts at #${from} (${onset.toFixed(2)}s)`
+          );
+        }
+        if (clip.end < tail - EPS || clip.end > tail + cfg.tailHoldSec + EPS) {
+          offenders.push(`${label(name, clip)} says it ends at #${to} (${tail.toFixed(2)}s)`);
+        }
+      }
+    }
+    expect(offenders, "a clip's published node range is not the range it shipped").toEqual([]);
+  });
+
+  it("no shipped clip's copy cites speech the viewer never hears", async () => {
+    // The consequence of the range lie above, and the defect the owner actually
+    // saw. Tolerance is EVIDENCE_BOUNDARY_SLACK_NODES, the same slack
+    // widenRangeToEvidence uses to pull a boundary OUT to swallow a citation
+    // before snap: podcast-ecology's one applied trim (332 -> 334) leaves the
+    // "Плейстоценовый парк" title citing 332, two nodes out, while the title is
+    // still fully grounded in 334 and 348 - a boundary artefact, not a lost
+    // premise. On job cms2c8ahm the same measurement puts node 804 THREE nodes
+    // and 24.8s outside, and the copy carrying it was false.
+    //
+    // TWO GUARDS, both measured 2026-07-26.
+    //   regroundCopy() returning its input unchanged: this case stays GREEN on
+    //   both fixtures, because at the 2-node slack neither fixture has a stale
+    //   citation. It is a floor, not a proof - the case it was built from lives
+    //   in gates.test.ts with the real node table, and the unit tests there red.
+    //   EVIDENCE_BOUNDARY_SLACK_NODES = 0: this case still passes, but
+    //   eval-snapshot reds, because podcast-ecology's "Плейстоценовый парк: как
+    //   в Якутии готовят дом для мамонтов" is replaced by the verbatim snippet
+    //   "Сергей Зимин который пристациновый парк пилит в Ягутии" - transcription
+    //   errors and all - over a citation on #332 that the title never needed.
+    //   That is the false positive the slack exists to avoid.
+    const offenders: string[] = [];
+    for (const name of CASES) {
+      const { result } = await run(name);
+      for (const clip of result.highlights) {
+        const from = (clip._startNode ?? 0) - EVIDENCE_BOUNDARY_SLACK_NODES;
+        const to = (clip._endNode ?? 0) + EVIDENCE_BOUNDARY_SLACK_NODES;
+        for (const [field, cited] of [
+          ["title", clip._titleEvidenceNodes ?? []],
+          ["description", clip._descriptionEvidenceNodes ?? []],
+        ] as const) {
+          for (const i of cited) {
+            if (i < from || i > to) {
+              offenders.push(`${label(name, clip)} ${field} cites #${i}, outside [${from}..${to}]`);
+            }
+          }
+        }
+      }
+    }
+    expect(offenders, "shipped copy is grounded in speech outside the clip").toEqual([]);
   });
 });
 

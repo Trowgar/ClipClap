@@ -60,6 +60,14 @@ export interface SnappedClip {
   verdict: CriticVerdict;
   startSec: number;
   endSec: number;
+  /** The node range the clip ACTUALLY covers. `verdict.startNode`/`endNode` are
+   *  the critic's PROPOSAL; snap owns boundaries and moves them - clean-start
+   *  walk-back, payoff containment, clean-end repair, over-length compression -
+   *  so the two disagree whenever any of those fired. Everything that asks "is
+   *  this node inside the clip" must ask these: the seconds are derived from
+   *  them, and the verdict range is what the critic wanted, not what shipped. */
+  finalStartNode: number;
+  finalEndNode: number;
   hookStartSec: number;
   hookEndSec: number;
   payoffSec: number;

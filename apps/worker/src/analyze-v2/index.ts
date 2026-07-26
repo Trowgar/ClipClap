@@ -6,7 +6,13 @@ import { runScanner } from "./scanner";
 import { mergeCandidates, selectCriticCandidates } from "./candidates";
 import { AnalyzeTechnicalError, runCritic, repairCopy } from "./critic";
 import { snapNodes } from "./snap";
-import { evidenceGate, snippetFallbackCopy, lexicalOverlap } from "./gates";
+import {
+  EVIDENCE_BOUNDARY_SLACK_NODES,
+  evidenceGate,
+  regroundCopy,
+  snippetFallbackCopy,
+  lexicalOverlap,
+} from "./gates";
 import { dominantScript, isoToLanguageName, scriptMismatch } from "./language";
 import { selectAndOrder } from "./select";
 import { finalizeClips } from "./finalize";
@@ -221,6 +227,11 @@ export async function analyzeHighlightsV2(
   let snapDrops = 0;
   let copyRepairs = 0;
   let snippetFallbacks = 0;
+  // Silent copy replacements, at both points where the code stops moving
+  // boundaries. Like every other loss in this engine it has to leave a trace in
+  // the job record: nobody reports the description they never saw, and this
+  // fires precisely when something upstream already went wrong.
+  const copyRegrounded: Array<{ id: string; at: "snap" | "shipped"; fields: string[] }> = [];
   const gateDropReasons: Record<string, number> = {};
   const droppedVerdicts: Array<{ id: string; stage: string; reason: string; score: number }> = [];
 
@@ -247,27 +258,41 @@ export async function analyzeHighlightsV2(
       continue;
     }
 
+    // The evidence gate above judged the critic's PROPOSED range; snap has just
+    // moved the boundaries. Re-checking HERE, and not only after the finalizer,
+    // is what lets the judge repair the damage: the finalizer is the one stage
+    // that rewrites a title against the whole speech, so a clip whose copy this
+    // pass reduces to a verbatim snippet still has a chance of a good one.
+    const reground = regroundCopy(snapped.clip, nodes);
+    if (reground.regrounded.length > 0) {
+      copyRegrounded.push({ id: verdict.id, at: "snap", fields: reground.regrounded });
+    }
+    const clip = reground.clip;
+
+    // The clip's OWN speech - snap's range, not the critic's proposal, because
+    // that is the text the viewer hears and the text the copy must match.
     const clipText = nodes
-      .slice(verdict.startNode, verdict.endNode + 1)
+      .slice(clip.finalStartNode, clip.finalEndNode + 1)
       .filter((n) => n.hasWords)
       .map((n) => n.text)
       .join(" ");
-    if (scriptMismatch(`${verdict.title} ${verdict.description}`, clipText)) {
+    const copy = clip.verdict;
+    if (scriptMismatch(`${copy.title} ${copy.description}`, clipText)) {
       copyRepairs += 1;
-      const repaired = await repairCopy(client, usage, nodes, verdict, languageIso, cfg, {
+      const repaired = await repairCopy(client, usage, nodes, copy, languageIso, cfg, {
         retryDelayMs: options.retryDelayMs,
       });
       if (repaired && !scriptMismatch(`${repaired.title} ${repaired.description}`, clipText)) {
-        verdict.title = repaired.title;
-        verdict.description = repaired.description;
+        copy.title = repaired.title;
+        copy.description = repaired.description;
       } else {
         snippetFallbacks += 1;
-        const snippet = snippetFallbackCopy(nodes, verdict.startNode, verdict.endNode);
-        verdict.title = snippet.title;
-        verdict.description = snippet.description;
+        const snippet = snippetFallbackCopy(nodes, clip.finalStartNode, clip.finalEndNode);
+        copy.title = snippet.title;
+        copy.description = snippet.description;
       }
     }
-    eligible.push(snapped.clip);
+    eligible.push(clip);
   }
 
   // Selection hands FINALIZE more clips than the job ships. The finalizer is the
@@ -291,7 +316,16 @@ export async function analyzeHighlightsV2(
     cfg,
     { retryDelayMs: options.retryDelayMs }
   );
-  const shipped = finalized.clips.slice(0, cfg.softCap);
+  // The backstop for the OTHER thing that moves boundaries: the finalizer's
+  // opening trim re-snaps a clip, and it may move the start arbitrarily far
+  // forward. Same rule, applied where the boundaries finally stop.
+  const shipped = finalized.clips.slice(0, cfg.softCap).map((clip) => {
+    const result = regroundCopy(clip, nodes);
+    if (result.regrounded.length > 0) {
+      copyRegrounded.push({ id: clip.verdict.id, at: "shipped", fields: result.regrounded });
+    }
+    return result.clip;
+  });
   const highlights = shipped.map(toHighlight);
 
   const telemetry = {
@@ -308,6 +342,7 @@ export async function analyzeHighlightsV2(
     snapDrops,
     copyRepairs,
     snippetFallbacks,
+    copyRegrounded,
     tier: selection.tier,
     droppedByNms: selection.droppedByNms,
     // The three numbers that make the finalizer's arithmetic readable in a job
@@ -322,7 +357,7 @@ export async function analyzeHighlightsV2(
       shipped.map((c) =>
         lexicalOverlap(
           c.verdict.title,
-          nodes.slice(c.verdict.startNode, c.verdict.endNode + 1).map((n) => n.text).join(" ")
+          nodes.slice(c.finalStartNode, c.finalEndNode + 1).map((n) => n.text).join(" ")
         )
       )
     ),
@@ -489,8 +524,11 @@ function toHighlight(clip: SnappedClip): V2Highlight {
     lowQuality: v.lowQuality ?? false,
     shortMoment: clip.shortMoment,
     kind: v.kind,
-    _startNode: v.startNode,
-    _endNode: v.endNode,
+    // The range that SHIPPED, not the critic's proposal - these are diagnostics,
+    // and a diagnostic that names nodes the clip does not contain sent a real
+    // investigation (job cms2c8ahm) looking in the wrong place.
+    _startNode: clip.finalStartNode,
+    _endNode: clip.finalEndNode,
     _titleEvidenceNodes: v.titleEvidenceNodes,
     _descriptionEvidenceNodes: v.descriptionEvidenceNodes,
     _grounded: v.grounded,
@@ -498,11 +536,11 @@ function toHighlight(clip: SnappedClip): V2Highlight {
   };
 }
 
-const EVIDENCE_WIDEN_MAX_NODES = 2;
-
-/** Evidence cited at most EVIDENCE_WIDEN_MAX_NODES outside [startNode, endNode]
- *  pulls the boundary out to contain it. Mutates the verdict; returns whether
- *  anything moved. Evidence further out stays a genuine grounding failure. */
+/** Evidence cited at most EVIDENCE_BOUNDARY_SLACK_NODES outside [startNode,
+ *  endNode] pulls the boundary out to contain it. Mutates the verdict; returns
+ *  whether anything moved. Evidence further out stays a genuine grounding
+ *  failure - and the same slack governs the mirror question after the
+ *  boundaries stop moving (gates.ts, regroundCopy). */
 function widenRangeToEvidence(
   verdict: { startNode: number; endNode: number; titleEvidenceNodes: number[]; descriptionEvidenceNodes: number[] },
   maxIdx: number
@@ -513,11 +551,11 @@ function widenRangeToEvidence(
   const min = Math.min(...evidence);
   const max = Math.max(...evidence);
   let widened = false;
-  if (min < verdict.startNode && verdict.startNode - min <= EVIDENCE_WIDEN_MAX_NODES) {
+  if (min < verdict.startNode && verdict.startNode - min <= EVIDENCE_BOUNDARY_SLACK_NODES) {
     verdict.startNode = min;
     widened = true;
   }
-  if (max > verdict.endNode && max - verdict.endNode <= EVIDENCE_WIDEN_MAX_NODES) {
+  if (max > verdict.endNode && max - verdict.endNode <= EVIDENCE_BOUNDARY_SLACK_NODES) {
     verdict.endNode = max;
     widened = true;
   }

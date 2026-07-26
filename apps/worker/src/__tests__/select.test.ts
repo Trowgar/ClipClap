@@ -31,6 +31,8 @@ function clip(startSec: number, endSec: number, score: number, extra?: Partial<C
     hookEndSec: startSec + 3,
     payoffSec: endSec - 2,
     shortMoment: false,
+    finalStartNode: 0,
+    finalEndNode: 2,
   };
 }
 
