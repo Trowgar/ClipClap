@@ -14,13 +14,18 @@ import type {
 
 const cfg = loadAnalyzeConfig({});
 
-/** 20 nodes, 3s apart, every one a clean start and a clean end. */
+/** 20 nodes, 3s apart, every one a clean start and a clean end.
+ *
+ *  The opening token varies deliberately: "Предложение номер 0/1/2..." is a run
+ *  of sentences all opening on the same word, i.e. an anaphoric run, and snap's
+ *  end rule extends a clip off the back of one (sentence-graph.ts). Filler text
+ *  must not accidentally encode a rhetorical figure. */
 function nodes(count = 20, stepSec = 3, spanSec = 2.8): SentenceNode[] {
   return Array.from({ length: count }, (_, i) => ({
     index: i,
     start: i * stepSec,
     end: i * stepSec + spanSec,
-    text: `Предложение номер ${i}.`,
+    text: `П${i} предложение.`,
     hasWords: true,
     trailingStrength: 1,
     leadingStrength: 1,

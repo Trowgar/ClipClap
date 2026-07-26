@@ -5,13 +5,19 @@ import type { CriticVerdict, SentenceNode } from "../analyze-v2/types";
 
 const cfg = loadAnalyzeConfig({});
 
-/** 20 nodes x 2s each, all strong sentence boundaries. */
+/** 20 nodes x 2s each, all strong sentence boundaries.
+ *
+ *  The opening token has to VARY. This table used to read "Sentence 0.",
+ *  "Sentence 1." ... which is twenty consecutive sentences opening on the same
+ *  word - an anaphoric run by any definition, and snap's end rule now extends
+ *  ends off the back of one. Placeholder filler must not accidentally encode a
+ *  rhetorical figure; "S0", "S1" share only one character and never match. */
 function strongNodes(): SentenceNode[] {
   return Array.from({ length: 20 }, (_, i) => ({
     index: i,
     start: i * 2,
     end: i * 2 + 1.8,
-    text: `Sentence ${i}.`,
+    text: `S${i} sentence.`,
     hasWords: true,
     trailingStrength: 1.0,
     leadingStrength: 1.0,
@@ -377,6 +383,118 @@ describe("snapNodes", () => {
     expect(r.clip.verdict.endNode).toBe(9);
     expect(r.clip.finalStartNode).toBe(2);
     expect(r.clip.finalEndNode).toBe(6);
+  });
+
+  // -------------------------------------------------------------------------
+  // Anaphoric runs. Graph nodes 43-51 of the same job, verbatim: the owner's
+  // second-best clip ended at 157.0s, on "Планета еще и не такое видала" - the
+  // FIRST beat of a four-sentence rhetorical build. Every existing check passes
+  // (the sentence is complete, the question at #45 is inside, the answer at #46
+  // is inside), and his verdict was still "it seems to cut off".
+  // -------------------------------------------------------------------------
+
+  /** Graph nodes 43-51 (idx 0-8). idx 3 (#46) is opaque, which is what makes
+   *  idx 4 (#47) a clean start on a leadingStrength of 0.20 - the same
+   *  post-opaque branch as the survival table. */
+  function planetaNodes(): SentenceNode[] {
+    return table([
+      [140.7, 144.26, false, 0.2, 0.2, "В том числе, потому что они нам понравились и мы их приручили."],
+      [144.96, 150.08, true, 0.2, 0.8, "Действительно на суше серьезных хищников способных нам угрожать не осталось"],
+      [150.56, 153.84, true, 0.8, 0.8, "Являемся ли мы при этом страшным злом для планеты"],
+      [154.08, 154.88, false, 0.8, 0.2, "Да нет, конечно."],
+      [155.26, 156.66, true, 0.2, 0.8, "Планета еще и не такое видала"],
+      [157.46, 159.0, true, 0.8, 0.8, "Планета видала вулканические катастрофы"],
+      [159.76, 161.94, true, 0.8, 0.8, "Планета видала астероидные импакты"],
+      [162.54, 164.3, true, 0.8, 0.8, "Планете 4 5 миллиарда лет"],
+      [164.46, 168.92, true, 0.8, 0.8, "И то что один вид стал каким то преобладающим хищником"],
+    ]);
+  }
+
+  /** The shipped verdict's geometry: end on idx 4, the first beat. */
+  const planetaVerdict = () =>
+    verdict({ startNode: 1, payoffNode: 4, endNode: 4, hookStartNode: 2, hookEndNode: 4 });
+
+  it("does not end a clip on the first beat of a rhetorical run", () => {
+    const r = snapNodes(planetaVerdict(), planetaNodes(), cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    // extended to idx 7 ("Планете 4 5 миллиарда лет"), the last beat; the
+    // tail-hold is capped by idx 8's onset at 164.46
+    expect(r.clip.finalEndNode).toBe(7);
+    expect(r.clip.endSec).toBeCloseTo(164.46, 2);
+  });
+
+  it("extends past the payoff-tail bound - the run IS the payoff's completion", () => {
+    // Payoff at idx 2 (the question at 153.84s). The extension puts the end
+    // 10.5s past it, well beyond payoffMaxTailSec (4s), which the tail rule
+    // enforced two steps earlier. That override is the point: the bound exists
+    // to stop aimless padding, and a rhetorical build is not padding.
+    const r = snapNodes(
+      verdict({ startNode: 1, payoffNode: 2, endNode: 4, hookStartNode: 2, hookEndNode: 4 }),
+      planetaNodes(),
+      cfg
+    );
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.finalEndNode).toBe(7);
+    expect(r.clip.endSec - r.clip.payoffSec).toBeGreaterThan(cfg.payoffMaxTailSec);
+  });
+
+  it("leaves a clip that already ends on the LAST beat untouched", () => {
+    const r = snapNodes(
+      verdict({ startNode: 1, payoffNode: 7, endNode: 7, hookStartNode: 2, hookEndNode: 7 }),
+      planetaNodes(),
+      cfg
+    );
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.finalEndNode).toBe(7);
+    expect(r.clip.endSec).toBeCloseTo(164.46, 2);
+  });
+
+  it("does not extend across two beats - a pair is not a figure", () => {
+    // Measured on both fixture transcripts: at a two-sentence minimum the same
+    // detector fires 8 and 9 times per episode, and the extra population is
+    // transcription echo and crosstalk ("Серьезно / Серьезно", "Свой
+    // собственный / Свой Хороший вопрос"), not rhetoric. At three it fires
+    // once - this case. Here beats 3 and 4 are replaced by ordinary speech.
+    const nodes = planetaNodes().map((n, i) =>
+      i === 6
+        ? { ...n, text: "Вулканы взрывались много раз" }
+        : i === 7
+          ? { ...n, text: "Астероиды падали много раз" }
+          : n
+    );
+    const r = snapNodes(planetaVerdict(), nodes, cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.finalEndNode).toBe(4);
+    expect(r.clip.endSec).toBeCloseTo(156.96, 2);
+  });
+
+  it("does not extend across sentences that merely share a function word", () => {
+    // Four consecutive sentences opening on "Это" - a run by any string test,
+    // and not a rhetorical figure. The onset stem floor (4 characters) refuses
+    // it; every Russian and English opener short enough to be a coincidence
+    // ("это", "как", "там", "the", "it") is below it.
+    const nodes = planetaNodes().map((n, i) => {
+      if (i === 4) return { ...n, text: "Это еще не все" };
+      if (i === 5) return { ...n, text: "Это было давно" };
+      if (i === 6) return { ...n, text: "Это уже неважно" };
+      if (i === 7) return { ...n, text: "Это конец" };
+      return n;
+    });
+    const r = snapNodes(planetaVerdict(), nodes, cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.finalEndNode).toBe(4);
+    expect(r.clip.endSec).toBeCloseTo(156.96, 2);
+  });
+
+  it("ships the truncated ending rather than dropping when the run misses the cap", () => {
+    // A run that does not fit is the one case with no good answer. Dropping is
+    // the alternative and it is worse: an invisible loss the owner can never
+    // report, against a visible mediocrity he can. The clip ships as the critic
+    // approved it - the extension is a repair, never a veto.
+    const r = snapNodes(planetaVerdict(), planetaNodes(), { ...cfg, maxSec: 15 });
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.finalEndNode).toBe(4);
+    expect(r.clip.endSec).toBeCloseTo(156.96, 2);
   });
 
   it("compresses >90s clips from the start along strong boundaries, keeping the hook", () => {

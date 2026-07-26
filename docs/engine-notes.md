@@ -115,6 +115,33 @@ survivors -> 12 shipped. On `podcast-ecology` the gate/snap/NMS funnel binds fir
 would reach it. `criticBudgetK` and `criticUnjudgedPool` are published per job so the next binding constraint
 is visible in a job record rather than re-derived.
 
+**Anaphoric runs are rare, legible, and worth a rule.** Three or more consecutive sentences opening on the
+same lemma. Measured over both fixture transcripts (1747 nodes, 1193 word-bearing, 788 clean starts - and
+note `podcast-answer-arc` IS job cms2c8ahm's transcript, identical text, so the owner's real case is
+reproducible in the harness): at **3+ beats the detector fires ONCE per episode**, on the real figure
+("Планета еще и не такое видала / Планета видала вулканические катастрофы / Планета видала астероидные
+импакты / Планете 4 5 миллиарда лет", nodes #47-#50 in both runs). At **2+ beats it fires 8 and 9 times** and
+the extra population is not rhetoric at all - "Серьезно / Серьезно" (echo), "Создаем обороты / Создаем
+культуру да" (self-repair), "Свой собственный / Свой Хороший вопрос" (crosstalk). The third beat is what
+makes a figure, and what makes a cut after the first beat audible. The common-function-word false positive
+("И…/И…", "Это…/Это…") is kept out by a LENGTH floor rather than a stop list: the onset stem must be >= 4
+characters, and every opener short enough to recur by coincidence is itself short. Onsets are compared by
+stem (shared prefix >= 4 chars, <= 3 chars of suffix beyond it on either side) because the real case inflects
+on its last beat - an exact-string test stops one sentence early. Both fixtures put the same run at the same
+node numbers, so this is one sample of one figure, not two.
+
+**A consequence worth knowing before touching it:** extending an end can make a clip collide with its
+neighbour under NMS. Both fixtures shipped a clip ending on beat one (ecology 87.4-157.0, answer-arc
+86.3-157.0) whose neighbour 150.4-197.1 already contained the whole figure; after the extension the overlap
+crosses the 30% NMS threshold (14.05s of a 46.7s clip = 30.1%) and the lower-scored member is dropped rather
+than repaired. So the rule's visible effect on these fixtures is "the truncated clip is replaced by the one
+that contains the build", not "the truncated clip got longer".
+
+**Test filler must vary its opening word.** Two synthetic node tables (`snap.test.ts` `strongNodes`,
+`finalize.test.ts` `nodes`) read "Sentence 0. / Sentence 1. …" and "Предложение номер 0/1/…", i.e. 20 to 100
+consecutive sentences opening on the same word - anaphoric runs by any definition. They went red the moment
+the end rule landed. Placeholder text is not neutral.
+
 **Hook geometry is critic variance, not signal.** `payoffAt <= hookEnd` fires on 5 of 6 clips in one fixture
 and 2 of 10 in the other - same video, same engine, same config, different transcription run. It fires on the
 highest-scoring clip in the set. Do not build a rule on it; a plan task that did was dropped for this reason.
@@ -304,6 +331,12 @@ sees one and misses the other, defeated by the same indel jitter as everything e
   against `[0, maxNode]`, not against the candidate. Observed on answer-arc: candidate `c16` spans nodes
   313-319 and its shipped clip spans 324-332. Snap re-validates, so this is not a boundary-safety problem, but
   it does mean candidate-to-clip attribution is approximate and any analysis keyed on it should say so.
+- **The blind spot is what happens JUST AFTER the cut, and only half of it is closed.** Snap now refuses to
+  end on the first or a middle beat of an anaphoric run and extends to the last beat when it fits the cap
+  (`anaphoricRunEnd`, sentence-graph.ts; step 3b in snap.ts). That covers rhetorical builds. It does NOT
+  cover the malaria case - a clip ending 0.4s before "Летающих пауков? Это откуда?" - because a reaction
+  shares no onset with the line it answers. Same family, different detector; the finalizer's `no_payoff` drop
+  is still the only thing that sees it, and it is a coin flip.
 - **The punchline-outside case has no repair, only a drop.** Extending an end to a reaction the engine can
   already identify would turn a dropped clip into a good one. Blocked on an owner decision, because
   end-trimming was ruled out of scope to protect payoffs.

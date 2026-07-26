@@ -1,5 +1,10 @@
 import type { AnalyzeConfig } from "./config";
-import { endsOnQuestionMark, isCleanEnd, isCleanStart } from "./sentence-graph";
+import {
+  anaphoricRunEnd,
+  endsOnQuestionMark,
+  isCleanEnd,
+  isCleanStart,
+} from "./sentence-graph";
 import type { CriticVerdict, SentenceNode, SnapResult } from "./types";
 
 const EPS = 0.05;
@@ -118,10 +123,53 @@ export function snapNodes(
   // Nested prev.end must never push the start past the sentence onset; worst
   // case we start exactly at s.start with no lead-in.
   let startSec = Math.max(Math.min(prevS ? prevS.end : 0, s.start), s.start - cfg.leadInSec);
-  const nextE = e.index < maxIdx ? nodes[e.index + 1] : null;
-  let endSec = Math.min(e.end + cfg.tailHoldSec, nextE ? nextE.start : Infinity);
-  endSec = Math.max(endSec, e.end); // nested-word ends: the cap must never cut the last word
-  endSec = Math.max(endSec, p.end); // payoff containment outranks the bleed cap - a nested long payoff word extends the clip
+  const endSecFor = (n: SentenceNode) => {
+    const next = n.index < maxIdx ? nodes[n.index + 1] : null;
+    let sec = Math.min(n.end + cfg.tailHoldSec, next ? next.start : Infinity);
+    sec = Math.max(sec, n.end); // nested-word ends: the cap must never cut the last word
+    return Math.max(sec, p.end); // payoff containment outranks the bleed cap - a nested long payoff word extends the clip
+  };
+
+  // 3b. anaphoric run - the mirror of every other guard here, pointed at what
+  //     happens JUST AFTER the cut rather than at the cut itself.
+  //
+  //     A clip must not end on the first or a middle beat of a run of sentences
+  //     opening on the same word. Job cms2c8ahm shipped 87.4-157.0s ending on
+  //     "Планета еще и не такое видала" with "Планета видала вулканические
+  //     катастрофы / Планета видала астероидные импакты / Планете 4 5 миллиарда
+  //     лет" following it; every check in this file passed and the owner still
+  //     said "it seems to cut off". See sentence-graph.ts for the definition and
+  //     the measured base rate (one run per 52-minute episode).
+  //
+  //     THE END RULE OWNS ITSELF and outranks two neighbours on purpose:
+  //     - It runs AFTER the payoff-tail pullback (step 2), so it may put the end
+  //       further past the payoff than payoffMaxTailSec allows. That bound
+  //       exists to stop aimless padding; a rhetorical build is the payoff's own
+  //       completion, not padding.
+  //     - It runs BEFORE the cap (step 5a), so an extension that does not fit is
+  //       never paid for by compressing the start - the fit is tested against
+  //       the start we already have.
+  //     A run whose end sits behind an unclean boundary is left alone rather
+  //     than repaired forward: 2b has already certified the current end, and
+  //     walking further would trade a known-good boundary for an unknown one.
+  //
+  //     WHEN IT DOES NOT FIT the clip ships truncated. Dropping is the
+  //     alternative and it is worse by this engine's standing asymmetry: an
+  //     invisible loss nobody can report beats a visible mediocrity that the
+  //     owner can (and did). The critic already approved this moment; a
+  //     boundary rule with no repair available may not veto it.
+  if (e.hasWords) {
+    const runEnd = anaphoricRunEnd(nodes, e.index);
+    if (
+      runEnd !== null &&
+      isCleanEnd(nodes, runEnd) &&
+      endSecFor(nodes[runEnd]) - startSec <= cfg.maxSec
+    ) {
+      e = nodes[runEnd];
+    }
+  }
+
+  let endSec = endSecFor(e);
 
   const hookStartSec = nodes[verdict.hookStartNode].start;
   const hookEndSec = nodes[verdict.hookEndNode].end;

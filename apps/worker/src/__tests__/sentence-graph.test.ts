@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { buildSentenceGraph } from "../analyze-v2/sentence-graph";
+import { anaphoricRunEnd, buildSentenceGraph } from "../analyze-v2/sentence-graph";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
+import type { SentenceNode } from "../analyze-v2/types";
 import type { WhisperSegment } from "@clipclap/shared";
 
 const cfg = loadAnalyzeConfig({});
@@ -155,5 +156,94 @@ describe("buildSentenceGraph", () => {
     expect(nodes).toHaveLength(1);
     expect(nodes[0].hasWords).toBe(false);
     expect(nodes[0].trailingStrength).toBe(0.2);
+  });
+});
+
+/**
+ * anaphoricRunEnd - the detector behind snap's end rule. The definition and its
+ * two thresholds were derived by measuring candidate runs across both fixture
+ * transcripts (1747 nodes, 1193 word-bearing, 788 clean starts):
+ *
+ *   3+ beats, onset stem >= 4 chars   1 run per episode   the real figure below
+ *   2+ beats, same stem rule          8 and 9 per episode  half of them are
+ *                                     transcription echo, crosstalk and
+ *                                     self-repair, not rhetoric
+ *   3+ beats, stem floor 3 chars      1 and 2 per episode  the extra is noise
+ *
+ * The onset is compared by STEM, not by string: the real case runs "Планета /
+ * Планета / Планета / Планете" and an exact match sees three beats where the
+ * speaker built four.
+ */
+describe("anaphoricRunEnd", () => {
+  function nodesFrom(texts: string[]): SentenceNode[] {
+    return texts.map((text, index) => ({
+      index,
+      start: index * 3,
+      end: index * 3 + 2,
+      text,
+      hasWords: true,
+      leadingStrength: 1.0,
+      trailingStrength: 1.0,
+    }));
+  }
+
+  /** Graph nodes 47-50 of job cms2c8ahm - the owner's real case. */
+  const PLANETA = [
+    "Планета еще и не такое видала",
+    "Планета видала вулканические катастрофы",
+    "Планета видала астероидные импакты",
+    "Планете 4 5 миллиарда лет",
+  ];
+
+  it("matches an inflected onset - Планета/Планете is one lemma", () => {
+    const nodes = nodesFrom(PLANETA);
+    expect(anaphoricRunEnd(nodes, 0)).toBe(3);
+    expect(anaphoricRunEnd(nodes, 1)).toBe(3);
+    expect(anaphoricRunEnd(nodes, 2)).toBe(3);
+  });
+
+  it("returns null on the last beat - that ending is already correct", () => {
+    expect(anaphoricRunEnd(nodesFrom(PLANETA), 3)).toBeNull();
+  });
+
+  it("refuses a pair", () => {
+    const nodes = nodesFrom([PLANETA[0], PLANETA[1], "Вулканы взрывались много раз"]);
+    expect(anaphoricRunEnd(nodes, 0)).toBeNull();
+  });
+
+  it("refuses onsets shorter than the stem floor - Это/Это/Это is not a figure", () => {
+    expect(anaphoricRunEnd(nodesFrom(["Это еще не все", "Это было давно", "Это уже неважно"]), 0)).toBeNull();
+    expect(anaphoricRunEnd(nodesFrom(["Как же так", "Как это вышло", "Как обычно"]), 0)).toBeNull();
+  });
+
+  it("skips discourse particles to find the onset", () => {
+    // The two fixture transcripts render the same sentence with and without a
+    // leading "Ну да" / "Да А" - an anchored first-token test decides
+    // differently on two runs of the same audio.
+    const nodes = nodesFrom(["Ну Планета еще и не такое видала", ...PLANETA.slice(1)]);
+    expect(anaphoricRunEnd(nodes, 0)).toBe(3);
+  });
+
+  it("refuses stems that only share a prefix - планета is not планетарный", () => {
+    const nodes = nodesFrom([
+      "Планета еще и не такое видала",
+      "Планетарные системы бывают разные",
+      "Планетология это наука",
+    ]);
+    expect(anaphoricRunEnd(nodes, 0)).toBeNull();
+  });
+
+  it("breaks a run on a member that is not a sentence onset", () => {
+    // A lowercase continuation is a fragment of the previous sentence, not a
+    // beat - isCleanStart is the same test snap and the critic markers use.
+    const nodes = nodesFrom(PLANETA).map((n, i) =>
+      i === 2 ? { ...n, text: "планета видала астероидные импакты", leadingStrength: 0.4 } : n
+    );
+    expect(anaphoricRunEnd(nodes, 0)).toBeNull();
+  });
+
+  it("ignores an opaque node - no reliable onset to build a beat on", () => {
+    const nodes = nodesFrom(PLANETA).map((n, i) => (i === 1 ? { ...n, hasWords: false } : n));
+    expect(anaphoricRunEnd(nodes, 0)).toBeNull();
   });
 });
