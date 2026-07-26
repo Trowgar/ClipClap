@@ -99,6 +99,16 @@ describe("selectAndOrder", () => {
     expect(r.selected.map((c) => c.startSec)).toEqual([300]);
   });
 
+  it("honors an explicit limit above the soft cap", () => {
+    // FINALIZE needs MORE clips than the job ships, so its drops are absorbed by
+    // the surplus instead of thinning the shipped set (spec §3). Without the
+    // limit the finalizer would only ever see softCap clips and every drop would
+    // cost the user a clip.
+    const clips = Array.from({ length: 20 }, (_, i) => clip(i * 100, i * 100 + 30, 0.9));
+    expect(selectAndOrder(clips, cfg).selected).toHaveLength(cfg.softCap);
+    expect(selectAndOrder(clips, cfg, cfg.softCap + 4).selected).toHaveLength(cfg.softCap + 4);
+  });
+
   it("applies the surcharge in the weak tier too", () => {
     const shortWeak = clip(0, 8, 0.45); // 0.45 < 0.35 + 0.15
     const longWeak = clip(100, 140, 0.45);

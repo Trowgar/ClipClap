@@ -1,5 +1,6 @@
 import type { AnalyzeConfig } from "../../analyze-v2/config";
 import { criticMaxOutputTokens } from "../../analyze-v2/critic";
+import { finalizerMaxOutputTokens } from "../../analyze-v2/finalize";
 
 /**
  * Engine-config fingerprint stored next to every eval fixture (meta.json).
@@ -37,6 +38,27 @@ import { criticMaxOutputTokens } from "../../analyze-v2/critic";
  *                                rather than from the raw constants so that a
  *                                change to the FORMULA is caught as well as a
  *                                change to either constant.
+ *   finalizerEnabled             the worst of the lot, and the reason the
+ *                                finalizer knobs were added here the moment the
+ *                                stage was wired in. Turning the finalizer OFF
+ *                                does not produce an unrecorded request - it
+ *                                produces NO request - so replay stays green
+ *                                while shipping a different, un-judged set.
+ *                                That is a false MATCH, exactly what this file
+ *                                exists to kill.
+ *   finalizerModel               same argument as criticModel: it is inside the
+ *                                requestKey, but a mismatch surfaces there as
+ *                                an opaque hex, and here as the knob's name.
+ *   finalizerMaxOutputTokens*    same argument as the critic budget, only worse:
+ *                                this call cannot split a batch, so starvation
+ *                                costs the whole stage rather than one batch,
+ *                                and the numbers behind the formula are marked
+ *                                ESTIMATED in finalize.ts - i.e. they are
+ *                                expected to move once measured.
+ *
+ * finalizerHeadroom is deliberately NOT here: it changes how many clips reach
+ * the prompt, so it changes the prompt text and the requestKey already fails
+ * loudly on its own - the same reason the windowing knobs are out.
  *
  * WHAT IS DELIBERATELY OUT:
  *   - Scoring/gating/snapping knobs (scoreThreshold, softCap, gap*, hardMinSec,
@@ -61,10 +83,19 @@ export interface EngineFingerprint {
   criticMaxOutputTokensBase: number;
   /** Marginal cap per extra candidate in a critic batch. */
   criticMaxOutputTokensPerCandidate: number;
+  /** Whether the FINALIZE LLM pass ran at all. Off makes no request, so the
+   *  request hash cannot notice it. */
+  finalizerEnabled: boolean;
+  finalizerModel: string;
+  /** finalizerMaxOutputTokens(0) - the flat part of the finalizer budget. */
+  finalizerMaxOutputTokensBase: number;
+  /** Marginal cap per extra clip in the single finalizer call. */
+  finalizerMaxOutputTokensPerClip: number;
 }
 
 export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
   const base = criticMaxOutputTokens(0);
+  const finalizerBase = finalizerMaxOutputTokens(0);
   return {
     scanModel: cfg.scanModel,
     criticModel: cfg.criticModel,
@@ -73,6 +104,10 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     criticBatchSize: cfg.criticBatchSize,
     criticMaxOutputTokensBase: base,
     criticMaxOutputTokensPerCandidate: criticMaxOutputTokens(1) - base,
+    finalizerEnabled: cfg.finalizerEnabled,
+    finalizerModel: cfg.finalizerModel,
+    finalizerMaxOutputTokensBase: finalizerBase,
+    finalizerMaxOutputTokensPerClip: finalizerMaxOutputTokens(1) - finalizerBase,
   };
 }
 

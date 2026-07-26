@@ -29,10 +29,15 @@ export function nmsCollides(
 }
 
 /** Spec selection flow steps 9-12. Input clips have already passed
- *  eligibility (keep, grounded, selfContained, valid boundaries, valid copy). */
+ *  eligibility (keep, grounded, selfContained, valid boundaries, valid copy).
+ *
+ *  `limit` exists for FINALIZE: that stage must see MORE clips than the job
+ *  ships, so its drops come out of the surplus instead of out of the user's
+ *  clip count. The soft cap is then applied to what survives it. */
 export function selectAndOrder(
   clips: SnappedClip[],
-  cfg: AnalyzeConfig
+  cfg: AnalyzeConfig,
+  limit: number = cfg.softCap
 ): SelectionResult {
   // Deterministic backstop for lone reaction fragments: the critic is TOLD to
   // reject short clips without their target inside, but LLM discipline is not
@@ -73,5 +78,5 @@ export function selectAndOrder(
     kept.push(c);
   }
 
-  return { selected: kept.slice(0, cfg.softCap), tier, droppedByNms };
+  return { selected: kept.slice(0, limit), tier, droppedByNms };
 }

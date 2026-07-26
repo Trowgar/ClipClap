@@ -7,12 +7,13 @@ import {
 } from "./helpers/eval-fingerprint";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { criticMaxOutputTokens } from "../analyze-v2/critic";
+import { finalizerMaxOutputTokens } from "../analyze-v2/finalize";
 
 /** Fixture-free: everything here works off a synthetic config. */
 const baseCfg = { ...loadAnalyzeConfig({}), engine: "recall-critic" as const };
 
 describe("computeFingerprint", () => {
-  it("captures the models, reasoning effort, batch size and critic budget", () => {
+  it("captures the models, reasoning effort, batch size and both LLM budgets", () => {
     expect(computeFingerprint(baseCfg)).toEqual({
       scanModel: baseCfg.scanModel,
       criticModel: baseCfg.criticModel,
@@ -21,6 +22,10 @@ describe("computeFingerprint", () => {
       criticBatchSize: baseCfg.criticBatchSize,
       criticMaxOutputTokensBase: criticMaxOutputTokens(0),
       criticMaxOutputTokensPerCandidate: criticMaxOutputTokens(1) - criticMaxOutputTokens(0),
+      finalizerEnabled: baseCfg.finalizerEnabled,
+      finalizerModel: baseCfg.finalizerModel,
+      finalizerMaxOutputTokensBase: finalizerMaxOutputTokens(0),
+      finalizerMaxOutputTokensPerClip: finalizerMaxOutputTokens(1) - finalizerMaxOutputTokens(0),
     });
   });
 });
@@ -68,6 +73,26 @@ describe("assertFingerprintMatches", () => {
     expect(error?.message).toContain(String(current.criticMaxOutputTokensPerCandidate));
   });
 
+  it("fails when the finalizer was switched off, which makes NO request at all", () => {
+    // The nastiest case in this file: a disabled finalizer does not produce an
+    // unrecorded request, it produces no request, so replay-client sees nothing
+    // wrong and the suite ships a different, unjudged set while staying green.
+    const changed = computeFingerprint({ ...baseCfg, finalizerEnabled: false });
+    expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
+      /finalizerEnabled/
+    );
+  });
+
+  it("fails when the finalizer output budget changed", () => {
+    // finalize.ts marks these numbers ESTIMATED, NOT MEASURED - they are meant to
+    // move, and when they do the recordings no longer describe what the judge was
+    // allowed to answer.
+    const recorded: EngineFingerprint = { ...current, finalizerMaxOutputTokensPerClip: 400 };
+    expect(() => assertFingerprintMatches("case", recorded, current, vi.fn())).toThrow(
+      /finalizerMaxOutputTokensPerClip/
+    );
+  });
+
   it("fails when the fallback model changed even though it never reaches the request hash", () => {
     const changed = computeFingerprint({ ...baseCfg, criticModelFallback: "gpt-4o-mini" });
     expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
@@ -92,6 +117,10 @@ describe("assertFingerprintMatches", () => {
       scanWindowSec: 300,
       maxConcurrency: 1,
       gapSentence: 1.5,
+      // headroom changes how many clips reach the finalizer prompt, so the
+      // request hash already fails loudly on it - fingerprinting it too would
+      // demand a paid re-record for a knob replay cannot miss
+      finalizerHeadroom: 9,
     });
     const warn = vi.fn();
     expect(() => assertFingerprintMatches("case", { ...current }, changed, warn)).not.toThrow();

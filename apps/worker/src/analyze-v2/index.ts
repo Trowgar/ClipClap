@@ -7,8 +7,9 @@ import { mergeCandidates, selectCriticCandidates } from "./candidates";
 import { AnalyzeTechnicalError, runCritic, repairCopy } from "./critic";
 import { snapNodes } from "./snap";
 import { evidenceGate, snippetFallbackCopy, lexicalOverlap } from "./gates";
-import { dominantScript, scriptMismatch } from "./language";
+import { dominantScript, isoToLanguageName, scriptMismatch } from "./language";
 import { selectAndOrder } from "./select";
+import { finalizeClips } from "./finalize";
 import { detectTeaserRegion, isInTeaserRegion } from "./teaser";
 import { newUsage } from "./llm";
 import type {
@@ -269,8 +270,29 @@ export async function analyzeHighlightsV2(
     eligible.push(snapped.clip);
   }
 
-  const selection = selectAndOrder(eligible, cfg);
-  const highlights = selection.selected.map(toHighlight);
+  // Selection hands FINALIZE more clips than the job ships. The finalizer is the
+  // only component that sees the shipped set AS A SET - it dedups, trims and
+  // vetoes - and every veto it lands would otherwise come straight out of the
+  // user's clip count. The headroom absorbs them without a second LLM round
+  // (spec §3, §9: backfilling from fresh candidates was rejected for that cost).
+  const selection = selectAndOrder(eligible, cfg, cfg.softCap + cfg.finalizerHeadroom);
+  // NEVER throws: any error, refusal, truncation or malformed output ships the
+  // input set with a reason in telemetry. A stage with veto authority over
+  // already-approved clips must not be able to turn a content answer into a
+  // failed job - that would bill the user nothing but deny them a real reply
+  // (billing invariant, engine-notes §6).
+  const finalized = await finalizeClips(
+    client,
+    usage,
+    selection.selected,
+    nodes,
+    languageIso,
+    isoToLanguageName(languageIso),
+    cfg,
+    { retryDelayMs: options.retryDelayMs }
+  );
+  const shipped = finalized.clips.slice(0, cfg.softCap);
+  const highlights = shipped.map(toHighlight);
 
   const telemetry = {
     ...scannerTelemetry,
@@ -288,9 +310,16 @@ export async function analyzeHighlightsV2(
     snippetFallbacks,
     tier: selection.tier,
     droppedByNms: selection.droppedByNms,
+    // The three numbers that make the finalizer's arithmetic readable in a job
+    // record: what it was given, what it returned, what the soft cap then cut.
+    // Without them a clip lost to the cap looks identical to a clip the judge
+    // vetoed, and this stage's failure mode is an invisible loss.
+    selectedForFinalizer: selection.selected.length,
+    finalizerSurvivors: finalized.clips.length,
+    ...finalized.telemetry,
     kept: highlights.length,
     meanLexicalOverlap: mean(
-      selection.selected.map((c) =>
+      shipped.map((c) =>
         lexicalOverlap(
           c.verdict.title,
           nodes.slice(c.verdict.startNode, c.verdict.endNode + 1).map((n) => n.text).join(" ")
