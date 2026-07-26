@@ -7,6 +7,27 @@ export interface SelectionResult {
   droppedByNms: number;
 }
 
+/** Overlap above this share of the SHORTER clip makes two clips the same
+ *  moment for a viewer. */
+const NMS_OVERLAP_FRAC = 0.3;
+
+/**
+ * The one definition of "these two clips are the same moment".
+ *
+ * Exported because the finalizer can move a start AFTER this selection ran, and
+ * a stage that reshapes a clip behind NMS's back has to be able to ask the same
+ * question NMS asks - with the same numbers, not a second copy of them.
+ */
+export function nmsCollides(
+  a: { startSec: number; endSec: number },
+  b: { startSec: number; endSec: number }
+): boolean {
+  const overlap = Math.min(a.endSec, b.endSec) - Math.max(a.startSec, b.startSec);
+  if (overlap <= 0) return false;
+  const shorter = Math.min(a.endSec - a.startSec, b.endSec - b.startSec);
+  return overlap > shorter * NMS_OVERLAP_FRAC;
+}
+
 /** Spec selection flow steps 9-12. Input clips have already passed
  *  eligibility (keep, grounded, selfContained, valid boundaries, valid copy). */
 export function selectAndOrder(
@@ -45,13 +66,7 @@ export function selectAndOrder(
   const kept: SnappedClip[] = [];
   let droppedByNms = 0;
   for (const c of byScore) {
-    const collides = kept.some((k) => {
-      const overlap = Math.min(k.endSec, c.endSec) - Math.max(k.startSec, c.startSec);
-      if (overlap <= 0) return false;
-      const shorter = Math.min(k.endSec - k.startSec, c.endSec - c.startSec);
-      return overlap > shorter * 0.3;
-    });
-    if (collides) {
+    if (kept.some((k) => nmsCollides(k, c))) {
       droppedByNms += 1;
       continue;
     }
