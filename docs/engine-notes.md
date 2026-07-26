@@ -200,6 +200,46 @@ work is uncommitted there (67 insertions / 9 deletions as of 2026-07-25). `git s
 
 ---
 
+## 5a. FINALIZE, and what it actually did
+
+One LLM call over the whole shipped set, with every model decision code-gated. Landed 2026-07-26. Measured on
+the fixtures by replaying the SAME scanner and critic answers twice, with the stage off and on - a git diff of
+re-recorded snapshots mixes the stage's effect with LLM variance and cannot answer "what did the judge do".
+
+What it earned:
+- It caught the owner's flagship defect verbatim. A 62s malaria clip ends on `"летающих пауков ядовитых"` -
+  grammatically clean, every boundary check passed - and `"Летающих пауков? Это откуда?"` falls **0.4s after
+  the cut**. Dropped as `no_payoff`.
+- It repaired a meandering opening, removing 10.2s of reply grammar and an on-air name search.
+- It rewrote a title the critic had left ungrammatical and truncated mid-word. Nothing else in the engine
+  reads a title back against the finished clip.
+- A code gate refused a trim the judge proposed which would have pushed a question outside its own answer -
+  the gate caught the model trying to fix defect 3 by manufacturing defect 5.
+
+What it got wrong, and this is the useful part:
+- **It created the defect its own rule 5 names.** Trimming answer-arc clip 5 from node 866 to 870 removed
+  `#869 "какие претензии"` and left the clip opening on the answer. Every gate passed; the PROMPT failed,
+  because rule 3 (trim the meandering opening) and rule 5 (do not open on a borrowed answer) are in tension
+  and rule 3 won. Closed in code by `6d24a55`: a trim is refused when the first substantive thing in the
+  removed run is a question.
+- **Rule 5 fired zero times** across both fixtures - including on a clip sitting right there with exactly
+  that defect.
+- **Rule 4 is roughly a coin flip.** The same malaria moment, ending 0.4s before the same reaction, was
+  dropped in one fixture and shipped in the other.
+- **Dropping is expensive medicine.** The malaria clip is otherwise strong; the real repair is three nodes on
+  the END, but end-trimming is out of scope by spec (it protects payoffs), so `drop` is the only verb the
+  stage has. That is a product decision the owner has not made: a broken-ending clip, or no clip.
+
+**Question detection, measured.** Word-bearing node text is virtually punctuation-free - 2 of 609 nodes on one
+fixture, 2 of 584 on the other - because those nodes are assembled from Whisper WORD tokens while only opaque
+nodes carry punctuated segment text. So a question-mark test can never fire on the nodes that matter;
+`какие претензии` has no mark and never could. What works is an interrogative in ONSET position after skipping
+discourse particles. Onset matters: `"Но вернуться к прошлому более высокому почему нет"` contains `почему`
+but is not a question, so a contains-test refuses a correct repair. Particle-skipping matters because the two
+fixtures transcribe the same question as `"какие претензии"` and `"Да А какие претензии"` - an anchored test
+sees one and misses the other, defeated by the same indel jitter as everything else. Capitalization and
+`leadingStrength` were both measured and rejected as signals.
+
 ## 6a. Open follow-ups on ANALYZE
 
 - **Tell the finalizer's judge about the teaser region.** The detector publishes `teaserRegion`; passing it
@@ -208,6 +248,12 @@ work is uncommitted there (67 insertions / 9 deletions as of 2026-07-25). `git s
   Suggested by the design that produced the detector; not implemented.
 - **The fixtures are one episode.** A genuinely different third source - a gameplay stream, a solo talk,
   another language - would strengthen the regression net more than any further assertion on this one.
+- **Clips that open one node after a question, chosen by the CRITIC with no trim involved.** Two ship today.
+  The trim gate cannot reach them; closing this means a rule on original critic boundaries, which is snap's
+  territory and a strictly larger change than the gate was.
+- **The punchline-outside case has no repair, only a drop.** Extending an end to a reaction the engine can
+  already identify would turn a dropped clip into a good one. Blocked on an owner decision, because
+  end-trimming was ruled out of scope to protect payoffs.
 
 ## 7. RENDER: smart reframe
 
