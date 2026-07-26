@@ -29,6 +29,29 @@ import { detectTeaserRegion, isInTeaserRegion } from "../analyze-v2/teaser";
  *     fixtures. Kept, but never cited as proof of anything.
  * A green test that cannot fail is worse than no test; a green test that LIES
  * about why it is green is worse again.
+ *
+ * 2026-07-26: BOTH FIXTURES WERE RE-RECORDED when FINALIZE was wired in, so every
+ * scanner and critic answer behind these cases is a fresh roll and the offenders
+ * named in the 2026-07-25 measurements describe clips that no longer exist. What
+ * was re-measured against the new recordings, and what was not:
+ *   RE-CONFIRMED   the teaser region (11 hits, 0.00-44.64s, endSec 59.64, origin
+ *                  spread ~2374s) is identical on both fixtures; TEASER_MIN_HITS
+ *                  =12 still empties it; the cold open at node #26 is still
+ *                  outside the region and the bait at node #0 still inside.
+ *   RE-CONFIRMED   hardMinSec=0 alone is still inert - same clip count as
+ *                  baseline, no offender in any case, on both fixtures.
+ *   CHANGED        the mid-clause defect stopped reproducing. See that case.
+ *   NOT MEASURABLE ANY MORE, and this is a real loss: every "teaser filter off"
+ *                  arm below. Disabling the filter puts the montage candidates
+ *                  back into the critic batches, which changes the prompt text,
+ *                  which has no recording - the run now dies on "critic failed
+ *                  for batch [...]" instead of producing an answer. The old
+ *                  fixtures could run that arm only because they predated the
+ *                  filter. The TWO GUARDS claims below therefore keep their
+ *                  first arm and have LOST their second; they are not
+ *                  re-verified, and nothing should cite them as if they were.
+ *                  Restoring that arm costs a paid re-record with the filter
+ *                  disabled - worth doing only if the filter is changed.
  */
 
 const CASES = ["podcast-ecology", "podcast-answer-arc"] as const;
@@ -162,13 +185,17 @@ describe("named regressions", () => {
     // the ONLY signal separating a real sentence onset from a hesitation pause.
     //
     // ONE GUARD - the only case in this file with a single enforcing guard.
-    // Re-measured 2026-07-25: dropping the `&& !startsLowercase(n.text)` term
+    // Measured 2026-07-25: dropping the `&& !startsLowercase(n.text)` term
     // from snap's clean-start walk reds this case ALONE (the other six stay
     // green), on podcast-answer-arc 865.15-900.46 "Почему нынешнее потепление
     // опаснее прошлых катастроф", which opens on the word "приводит". The
     // podcast-ecology 2128.05-2147.42 / "слишком" offender this comment used to
     // name is gone - that output moved when the teaser filter landed. Same
-    // guard, different victim; the guard is what matters.
+    // guard, different victim; the guard is what matters - which is just as
+    // well, because the 2026-07-26 re-recording moved it AGAIN: neither named
+    // clip is in either fixture's output now. NOT RE-MEASURED at that date, so
+    // "ONE GUARD" is a 2026-07-25 claim about a guard that has not changed,
+    // carried forward on evidence that no longer reproduces.
     //
     // HOW to disable it, because the obvious way proves nothing: inline
     // isCleanStart into snap's `cleanStartAt` WITHOUT the lowercase veto.
@@ -193,35 +220,36 @@ describe("named regressions", () => {
 
   // -------------------------------------------------------------------------
   // Owner's complaint: a clip that stops on a comma with the predicate left
-  // outside it. podcast-ecology 1866.26-1945.76 ends "...Без разумного вида,
+  // outside it. In the 2026-07-25 recordings, podcast-ecology 1866.26-1945.76 ends "...Без разумного вида,
   // строящего космические корабли," and the sentence's verb ("любая биосфера
   // обречена") is not in the clip; 907.53-952.14 ends "...перестраивать очень
   // много в сельском хозяйстве," with the enumeration still running.
   //
-  // THIS RULE IS VIOLATED TODAY, so it is pinned with .fails: the case is green
-  // while the defect exists and turns RED the moment it is fixed, at which point
-  // the `.fails` is deleted and this becomes an ordinary never-again test.
-  // Re-measured 2026-07-25: the body still throws, on exactly the two clips
-  // named above and on no others.
+  // 2026-07-26: this stopped being `it.fails`. Read the next paragraph before
+  // treating a red here as a regression, because NOTHING WAS FIXED.
   //
-  // NO GUARD. Snap's clean-end repair (block 2b) is the only candidate, and it
-  // is INERT on both fixtures: short-circuiting the
-  // `if (e.hasWords && !isCleanEnd(nodes, e.index))` branch leaves BOTH
-  // fixtures' clip lists byte-identical to baseline and leaves this offender
-  // list unchanged at the same two entries. The earlier note here - that
-  // disabling it moved one answer-arc clip 882.8-934.1 -> 882.8-931.9 - no
-  // longer reproduces at all; that clip is not in answer-arc's output any more.
-  // So podcast-answer-arc's silence on this rule is luck rather than a guard,
-  // and podcast-ecology's failure is the engine rather than a threshold.
+  // NO GUARD, and the rule now holds by LUCK. On the re-recorded fixtures the
+  // offender list is empty on both, so the `.fails` wrapper itself began failing
+  // ("Expect test to fail") and had to go. The defect was NOT repaired: it was
+  // measured off and on the FINALIZE stage on the same recorded critic answers
+  // (finalizerEnabled false vs true) and the list is empty in both runs, so the
+  // new stage is not what removed it - the critic simply rolled different clip
+  // ends this time. The finalizer could not have fixed it in any case: it never
+  // moves an end (spec §9 rules end-boundary trimming out of scope), so the only
+  // way it could clear this list is by dropping the offending clip outright.
   //
-  // Root cause found while writing this file: isCleanEnd() treats "the next node
-  // has no word timings" as end-of-speech ("music follows"), but hasWords=false
-  // only means Whisper's word timings were unreliable - which happens
-  // mid-sentence. Node 576 "Без разумного вида строящего космические корабли" is
-  // certified a clean end purely because node 577 is opaque. Compounding it, the
-  // word objects in these transcripts carry no punctuation at all, so the CLAUSE
-  // regex in buildSentenceGraph never fires and a comma never weakens a boundary.
-  it.fails("KNOWN DEFECT: clips still end mid-clause on a dangling comma", async () => {
+  // So a RED here means the known defect has resurfaced on a re-record, not that
+  // someone broke something. The fix is the root cause below, not a re-bless.
+  //
+  // Root cause, unchanged and still unaddressed: isCleanEnd() treats "the next
+  // node has no word timings" as end-of-speech ("music follows"), but
+  // hasWords=false only means Whisper's word timings were unreliable - which
+  // happens mid-sentence. In the 2026-07-25 recordings node 576 "Без разумного
+  // вида строящего космические корабли" was certified a clean end purely because
+  // node 577 was opaque. Compounding it, the word objects in these transcripts
+  // carry no punctuation at all, so the CLAUSE regex in buildSentenceGraph never
+  // fires and a comma never weakens a boundary.
+  it("no clip ends mid-clause on a dangling comma", async () => {
     const offenders: string[] = [];
     for (const name of CASES) offenders.push(...(await midClauseEndings(name)));
     expect(offenders, "a clip ends mid-clause").toEqual([]);
@@ -258,6 +286,9 @@ describe("named regressions", () => {
     //   (TEASER_WINDOW_SEC=0)    26.93s (ecology) / 24.56s (answer-arc).
     //   both                     RED: "podcast-ecology 36.53-39.56 "Что на
     //                            самом деле убьёт человечество" is 3.03s".
+    //   [2026-07-26] the two "teaser filter off" arms above are NO LONGER
+    //   REPRODUCIBLE on these fixtures - see the dated note in the file
+    //   preamble. The hardMinSec=0 arm was re-measured and is still inert.
     // Those guards are the `duration < cfg.hardMinSec` drop in snap.ts and
     // detectTeaserRegion() in analyze-v2/teaser.ts, covering one defect from two
     // directions: the only sub-6s clip either fixture can produce happens to be
@@ -297,12 +328,18 @@ describe("named regressions", () => {
     // Owner's complaint: two clips in one batch that start with the identical
     // sentence - one of them the intro montage's copy of the other.
     //
-    // NO DEDICATED DEDUP GUARD EXISTS IN THE SHIPPED V2 PATH. Re-checked
-    // 2026-07-25: analyze-v2/dedup.ts landed this week but has NO consumer -
-    // it is pure primitives waiting on the finalizer - and select.ts's
-    // post-critic NMS compares TIME overlap only (>30% of the shorter clip), so
-    // it can never notice that a clip at 36.5s and a clip at 2806.9s are the
-    // same spoken line. Nothing in the engine compares opening lines today.
+    // A DEDICATED DEDUP GUARD NOW EXISTS, as of 2026-07-26: FINALIZE runs
+    // findHookDuplicates over the selected set before any LLM sees it, and
+    // resolveDuplicatesDetailed keeps the higher-scored member of each group.
+    // (Until that stage was wired, analyze-v2/dedup.ts had no consumer at all.)
+    // select.ts's post-critic NMS still compares TIME overlap only (>30% of the
+    // shorter clip), so it remains unable to notice that a clip at 36.5s and a
+    // clip at 2806.9s are the same spoken line - the hook pass is what does.
+    //
+    // UNFIRED on both fixtures today: hookDedupDrops is empty in both runs, so
+    // this case is currently green because no duplicate pair reaches selection,
+    // not because the new pass removed one. Do not cite it as proof the pass
+    // works; finalize.test.ts is where that pass is actually exercised.
     //
     // What actually keeps the owner's duplicate out is the same TWO GUARDS as
     // the case above, and this case likewise needs BOTH gone to fail:
@@ -313,6 +350,9 @@ describe("named regressions", () => {
     //   both                     RED: "36.53-39.56 repeats the opening of
     //                            2806.87-2850.16: что убьет человечество
     //                            собственная глупость".
+    //   [2026-07-26] the two "teaser filter off" arms above are NO LONGER
+    //   REPRODUCIBLE on these fixtures - see the dated note in the file
+    //   preamble. The hardMinSec=0 arm was re-measured and is still inert.
     // In podcast-ecology the montage copy c2 (36.7-39.3) and the real moment
     // c29 (2806.87, same opening words) were BOTH kept by the critic, at 0.80
     // and 0.92; the teaser filter now drops c2 before selection and the duration
@@ -356,6 +396,9 @@ describe("named regressions", () => {
     //   both      RED: "podcast-ecology 36.53-39.56 ... repeats later speech
     //             (100%)" - a 3.03s clip titled "Что на самом деле убьёт
     //             человечество", the moment that ships properly at 2807s.
+    //   [2026-07-26] the two "teaser filter off" arms above are NO LONGER
+    //   REPRODUCIBLE on these fixtures - see the dated note in the file
+    //   preamble. The hardMinSec=0 arm was re-measured and is still inert.
     // The duration floor is the second guard only because THIS montage fragment
     // is short; a longer montage would be caught by the filter alone, which is
     // why the filter is not redundant with a duration check.

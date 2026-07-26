@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-07-25T13:07:55.111Z",
+  "recordedAt": "2026-07-26T00:10:08.543Z",
   "engine": {
     "scanModel": "gpt-4o-mini",
     "criticModel": "gpt-5.1",
@@ -7,6 +7,10 @@
     "reasoningEffort": "low",
     "criticBatchSize": 6,
     "criticMaxOutputTokensBase": 1200,
-    "criticMaxOutputTokensPerCandidate": 800
+    "criticMaxOutputTokensPerCandidate": 800,
+    "finalizerEnabled": true,
+    "finalizerModel": "gpt-5.1",
+    "finalizerMaxOutputTokensBase": 2000,
+    "finalizerMaxOutputTokensPerClip": 700
   }
 }
