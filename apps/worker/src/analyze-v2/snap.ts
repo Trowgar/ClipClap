@@ -1,5 +1,5 @@
 import type { AnalyzeConfig } from "./config";
-import { isCleanEnd, isCleanStart } from "./sentence-graph";
+import { endsOnQuestionMark, isCleanEnd, isCleanStart } from "./sentence-graph";
 import type { CriticVerdict, SentenceNode, SnapResult } from "./types";
 
 const EPS = 0.05;
@@ -170,7 +170,7 @@ export function snapNodes(
       payoffSec: p.end,
       shortMoment: duration < cfg.targetMinSec,
       boundaryConfidence,
-      endsOnQuestion: /[?？]["»')\]]*\s*$/u.test(e.text.trim()),
+      endsOnQuestion: endsOnQuestionMark(e.text),
     },
   };
 }

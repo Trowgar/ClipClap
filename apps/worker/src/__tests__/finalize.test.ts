@@ -405,6 +405,228 @@ describe("applyFinalizerEntries - trims", () => {
   });
 });
 
+/**
+ * Real transcript text, 3s apart, every node a clean start and a clean end.
+ * The strengths are deliberately uniform: these cases must be decided by what
+ * was SAID, not by boundary geometry the other trim gates already own.
+ */
+function textGraph(lines: Array<[string, boolean]>): SentenceNode[] {
+  return lines.map(([text, hasWords], i) => ({
+    index: i,
+    start: i * 3,
+    end: i * 3 + 2.8,
+    text,
+    hasWords,
+    trailingStrength: 1,
+    leadingStrength: 1,
+  }));
+}
+
+/**
+ * podcast-answer-arc clip c36, nodes 866-870 verbatim. The judge trimmed 866 ->
+ * 870 and every existing gate passed it: 870 is a legal clean start, it sits
+ * before the payoff, and the modified verdict re-snapped cleanly. What the trim
+ * actually did was delete the host's question at 869 and open the clip on its
+ * answer - the exact defect the finalizer's own rule 5 forbids.
+ */
+const ANSWER_ARC: Array<[string, boolean]> = [
+  [
+    "Вот с мозгом, там с одной стороны к нему претензии есть, с другой стороны " +
+      "непонятно, как менять, чтобы не сделать еще хуже.",
+    false,
+  ],
+  ["Еще хуже", true],
+  ["Да", true],
+  ["какие претензии", true],
+  ["Вообще то думать это энергозатратно это тяжело", true],
+  ["Если есть возможность не думать то большинство людей выбирают возможность не думать", true],
+  ["Там на это есть фундаментальные причины конечно что и глюкоза расходуется", true],
+  ["и нейропластичность перестройка связей между нейронами", true],
+];
+
+/**
+ * podcast-ecology clip c15, nodes 332-334 verbatim. This trim is a CORRECT
+ * repair - it drops reply grammar and an on-air name search - and must survive.
+ * Note 332 contains "почему": the gate cannot key on the mere presence of an
+ * interrogative word anywhere in the removed text or it would refuse this.
+ */
+const ECOLOGY: Array<[string, boolean]> = [
+  ["Но вернуться к прошлому более высокому почему нет", true],
+  [
+    "Я могу вспомнить, кстати, из восстановления прошлого биоразнообразия, Сергей, что ли,",
+    false,
+  ],
+  ["Сергей Зимин который пристациновый парк пилит в Ягутии", true],
+  ["который пытается восстановить экосистемы как раз максимума ледникового", true],
+  [
+    "Тундра-степь, которой сейчас больше не осталось, потому что охотники выбили крупных животных.",
+    false,
+  ],
+  ["Которая была холодная и сухая", true],
+  ["И там рос не ягель там росли вкусные питательные злаки", true],
+  ["поддерживающие кучу травоядных", true],
+];
+
+describe("applyFinalizerEntries - a trim must not orphan the question it answers", () => {
+  it("refuses the podcast-answer-arc trim that deleted 'какие претензии'", () => {
+    const graph = textGraph(ANSWER_ARC);
+    const r = applyFinalizerEntries(
+      [clip("c36", 0.9, 0, 7, graph)],
+      [entry({ id: "c36", trimStartNode: 4 })],
+      graph,
+      cfg
+    );
+    expect(r.clips[0].verdict.startNode).toBe(0);
+    expect(r.telemetry.openingTrims).toEqual([]);
+    expect(r.telemetry.trimRejected).toEqual([
+      { id: "c36", node: 4, reason: "orphans_question" },
+    ]);
+  });
+
+  it("still accepts the podcast-ecology trim that removed no question", () => {
+    const graph = textGraph(ECOLOGY);
+    const r = applyFinalizerEntries(
+      [clip("c15", 0.9, 0, 7, graph)],
+      [entry({ id: "c15", trimStartNode: 2 })],
+      graph,
+      cfg
+    );
+    expect(r.clips[0].verdict.startNode).toBe(2);
+    expect(r.telemetry.trimRejected).toEqual([]);
+    expect(r.telemetry.openingTrims).toEqual([{ id: "c15", fromNode: 0, toNode: 2 }]);
+  });
+
+  it("refuses the same question as the OTHER transcription run wrote it", () => {
+    // podcast-ecology node 845 is podcast-answer-arc nodes 868+869 merged, with
+    // an "А" inserted: "Да А какие претензии". Same audio, same question, and
+    // the wh-word is no longer the first token - the dominant jitter mode
+    // (engine-notes §3) must not be able to switch this gate off.
+    const graph = textGraph([
+      ["Вот с мозгом, там к нему претензии есть, но непонятно, как менять.", false],
+      ["Да А какие претензии", true],
+      ["Вообще то думать это энергозатратно это тяжело", true],
+      ["Если есть возможность не думать то большинство людей выбирают не думать", true],
+      ["Там на это есть фундаментальные причины конечно", true],
+      ["и нейропластичность перестройка связей между нейронами", true],
+    ]);
+    const r = applyFinalizerEntries(
+      [clip("c36", 0.9, 0, 5, graph)],
+      [entry({ id: "c36", trimStartNode: 2 })],
+      graph,
+      cfg
+    );
+    expect(r.clips[0].verdict.startNode).toBe(0);
+    expect(r.telemetry.trimRejected[0].reason).toBe("orphans_question");
+  });
+
+  it("refuses across an intervening backchannel node", () => {
+    // "Да" between the question and the answer is a discourse particle, not an
+    // answer. Whether it lands before or after the question is transcription
+    // jitter, so adjacency has to see through it.
+    const graph = textGraph([
+      ["Вот с мозгом, там к нему претензии есть, но непонятно, как менять.", false],
+      ["какие претензии", true],
+      ["Ну да", true],
+      ["Вообще то думать это энергозатратно это тяжело", true],
+      ["Если есть возможность не думать то большинство людей выбирают не думать", true],
+      ["Там на это есть фундаментальные причины конечно", true],
+    ]);
+    const r = applyFinalizerEntries(
+      [clip("c36", 0.9, 0, 5, graph)],
+      [entry({ id: "c36", trimStartNode: 3 })],
+      graph,
+      cfg
+    );
+    expect(r.clips[0].verdict.startNode).toBe(0);
+    expect(r.telemetry.trimRejected[0].reason).toBe("orphans_question");
+  });
+
+  it("refuses a question the transcript did punctuate", () => {
+    // Opaque nodes carry Whisper's SEGMENT text, which is punctuated, so the
+    // question-mark branch is the one that fires there.
+    const graph = textGraph([
+      ["Ну и что нибудь подкрутил бы с вкусовыми рецепторами.", true],
+      ["Руки такие же оставим, как сейчас?", false],
+      ["Руки в первом приближении можно такие же оставить", true],
+      ["это точно не худшая часть человека", true],
+      ["Вот с мозгом там с одной стороны к нему претензии есть", true],
+      ["с другой стороны непонятно как менять чтобы не сделать еще хуже", true],
+    ]);
+    const r = applyFinalizerEntries(
+      [clip("a", 0.9, 0, 5, graph)],
+      [entry({ id: "a", trimStartNode: 2 })],
+      graph,
+      cfg
+    );
+    expect(r.clips[0].verdict.startNode).toBe(0);
+    expect(r.telemetry.trimRejected[0].reason).toBe("orphans_question");
+  });
+
+  it("accepts a trim past a question that was already answered inside the removed run", () => {
+    // The question at 0 is answered at 1-2, both of which the trim also removes.
+    // Nothing is orphaned: the viewer never needed that exchange, and refusing
+    // here would leave the meandering opening rule 3 exists to cut.
+    const graph = textGraph([
+      ["какие претензии", true],
+      ["Вообще то думать это энергозатратно это тяжело", true],
+      ["Если есть возможность не думать то большинство людей выбирают не думать", true],
+      ["Спасибо Идеальное завершение подкаста", true],
+      ["Ну а вам спасибо что досмотрели этот выпуск до конца", true],
+      ["Не забудьте подписаться на наш канал", true],
+    ]);
+    const r = applyFinalizerEntries(
+      [clip("a", 0.9, 0, 5, graph)],
+      [entry({ id: "a", trimStartNode: 3 })],
+      graph,
+      cfg
+    );
+    expect(r.clips[0].verdict.startNode).toBe(3);
+    expect(r.telemetry.trimRejected).toEqual([]);
+  });
+
+  it("accepts a meandering trim whose removed run holds no question at all", () => {
+    const graph = textGraph([
+      ["Ну и что нибудь подкрутил бы с вкусовыми рецепторами", true],
+      ["Тоже чтобы зубами проблем меньше было", true],
+      ["Руки в первом приближении можно такие же оставить", true],
+      ["это точно не худшая часть человека", true],
+      ["Вообще то думать это энергозатратно это тяжело", true],
+      ["Если есть возможность не думать то большинство людей выбирают не думать", true],
+    ]);
+    const r = applyFinalizerEntries(
+      [clip("a", 0.9, 0, 5, graph)],
+      [entry({ id: "a", trimStartNode: 2 })],
+      graph,
+      cfg
+    );
+    expect(r.clips[0].verdict.startNode).toBe(2);
+    expect(r.telemetry.trimRejected).toEqual([]);
+    expect(r.telemetry.openingTrims).toEqual([{ id: "a", fromNode: 0, toNode: 2 }]);
+  });
+
+  it("does not read an indefinite pronoun as a question", () => {
+    // "что-то", "когда-то", "какой-то" are indefinites, and this transcript
+    // writes them without the hyphen - so they arrive as a bare wh-token
+    // followed by "то". Refusing on those would cost legitimate trims.
+    const graph = textGraph([
+      ["Ну и что нибудь подкрутил бы с вкусовыми рецепторами", true],
+      ["Когда то Индия также рожала как сейчас Центральная Африка", true],
+      ["Руки в первом приближении можно такие же оставить", true],
+      ["это точно не худшая часть человека", true],
+      ["Вообще то думать это энергозатратно это тяжело", true],
+      ["Если есть возможность не думать то большинство людей выбирают не думать", true],
+    ]);
+    const r = applyFinalizerEntries(
+      [clip("a", 0.9, 0, 5, graph)],
+      [entry({ id: "a", trimStartNode: 2 })],
+      graph,
+      cfg
+    );
+    expect(r.clips[0].verdict.startNode).toBe(2);
+    expect(r.telemetry.trimRejected).toEqual([]);
+  });
+});
+
 describe("applyFinalizerEntries - title rewrites", () => {
   it("applies a grounded title rewrite", () => {
     const r = applyFinalizerEntries(

@@ -49,6 +49,83 @@ export function isCleanStart(nodes: SentenceNode[], index: number): boolean {
   return boundaryOk && !startsLowercase(n.text);
 }
 
+/** Terminal question mark, tolerating a trailing quote or bracket. THE
+ *  punctuation question test - snap's `endsOnQuestion` telemetry and the
+ *  finalizer's orphaned-question gate must agree, so both consume this. */
+export function endsOnQuestionMark(text: string): boolean {
+  return /[?？]["»')\]]*\s*$/u.test(text.trim());
+}
+
+/**
+ * Discourse particles: the class engine-notes §3 measured as the dominant
+ * transcription-jitter mode - indels outnumber substitutions 3.8:1 and are
+ * almost all of these. Anything keying on token position has to see through
+ * them or it decides differently on two runs of the same audio.
+ */
+const PARTICLE: ReadonlySet<string> = new Set([
+  "а", "ага", "ах", "вот", "да", "же", "и", "значит", "короче", "кстати",
+  "ладно", "мм", "но", "ну", "нет", "ой", "окей", "слушай", "так", "там", "угу", "эм",
+  "and", "but", "hey", "no", "oh", "ok", "okay", "so", "uh", "um", "well", "yeah", "yes",
+]);
+
+/** Interrogative pronouns and adverbs. Russian first (the measured language),
+ *  then the English wh-words. Deliberately broad: see orphansQuestion. */
+const INTERROGATIVE: ReadonlySet<string> = new Set([
+  "кто", "кого", "кому", "кем", "что", "чего", "чему", "чем", "чей", "чья", "чьё", "чье", "чьи",
+  "какой", "какая", "какое", "какие", "какого", "какую", "каким", "каких", "какими", "каком",
+  "каков", "какова", "каково", "каковы", "где", "куда", "откуда", "докуда", "когда",
+  "почему", "отчего", "зачем", "как", "сколько", "насколько", "разве", "неужели",
+  "what", "why", "how", "who", "whom", "whose", "where", "when", "which",
+]);
+
+/** `что-то`, `когда-то`, `какой-нибудь` - indefinites, never questions. This
+ *  transcript drops the hyphen, so they arrive as a bare wh-token plus "то". */
+const INDEFINITE_TAIL: ReadonlySet<string> = new Set(["то", "нибудь", "либо"]);
+
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s-]/gu, " ")
+    .split(/[\s-]+/u)
+    .filter(Boolean);
+}
+
+/** Nothing here but discourse particles - "Да", "Ну вот", "" - so this node
+ *  carries no answer, no matter which run of the audio produced it. */
+export function carriesOnlyFiller(text: string): boolean {
+  return tokenize(text).every((w) => PARTICLE.has(w));
+}
+
+/**
+ * A question, judged from what was SAID rather than from how Whisper punctuated
+ * it. Two branches, because neither covers this transcript alone:
+ *
+ * - Terminal "?" - the signal snap already used. It only ever fires on OPAQUE
+ *   nodes, which carry Whisper's punctuated segment text. Word-bearing nodes are
+ *   assembled from word tokens, and those are measured to be virtually
+ *   punctuation-free: 2 of 609 nodes on podcast-answer-arc, 2 of 584 on
+ *   podcast-ecology. A punctuation-only test therefore cannot see a question the
+ *   speaker asked mid-flow, which is exactly the case that motivated this.
+ * - An interrogative in ONSET position, reached after skipping discourse
+ *   particles. "какие претензии" (answer-arc #869) has no question mark at all;
+ *   the same question in the other run reads "Да А какие претензии" (ecology
+ *   #845), so the wh-word is not reliably the first token either.
+ *
+ * Onset, not anywhere: "Но вернуться к прошлому более высокому почему нет"
+ * (ecology #332) is a rhetorical tag, not a question, and a contains-test would
+ * refuse the correct repair that trim performs.
+ */
+export function looksLikeQuestion(text: string): boolean {
+  if (endsOnQuestionMark(text)) return true;
+  const words = tokenize(text);
+  for (let i = 0; i < words.length; i++) {
+    if (PARTICLE.has(words[i])) continue;
+    if (!INTERROGATIVE.has(words[i])) return false;
+    return !(i + 1 < words.length && INDEFINITE_TAIL.has(words[i + 1]));
+  }
+  return false;
+}
+
 /** A node ENDS cleanly when its own trailing boundary is terminal, the
  *  transcript ends, music follows, or the next node opens cleanly. Mirrors
  *  isCleanStart - "…искала ты его потому," followed by a lowercase

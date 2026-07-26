@@ -11,7 +11,7 @@ import { callJsonSchema } from "./llm";
 import { finalizerSystemPrompt, finalizerUserPrompt } from "./prompts";
 import { FINALIZER_SCHEMA } from "./schemas";
 import { nmsCollides } from "./select";
-import { isCleanStart } from "./sentence-graph";
+import { carriesOnlyFiller, isCleanStart, looksLikeQuestion } from "./sentence-graph";
 import { snapNodes } from "./snap";
 import type {
   FinalizerDropReason,
@@ -57,6 +57,7 @@ export type TrimRejectReason =
   | "not_forward"
   | "at_or_past_payoff"
   | "not_clean_start"
+  | "orphans_question"
   | "snap_rejected"
   | "nms_collision";
 
@@ -325,10 +326,62 @@ type TrimAttempt =
   | { ok: false; reason: TrimRejectReason };
 
 /**
+ * Would this trim delete the question its new opening answers?
+ *
+ * The finalizer prompt's rule 3 tells the judge to trim a meandering opening
+ * forward; its rule 5 forbids opening a clip on an answer whose question stayed
+ * outside it. On podcast-answer-arc the two collided and rule 3 won, so the
+ * stage CREATED the defect rule 5 exists to prevent: it trimmed clip c36 from
+ * node 866 to node 870, deleting the host's "какие претензии" (#869) and
+ * opening on "Вообще то думать это энергозатратно" (#870). Every code gate
+ * passed correctly - 870 is a legal clean start, it sits before the payoff, and
+ * the modified verdict re-snapped cleanly. Only a deterministic backstop catches
+ * a prompt that argued itself out of its own rule (engine-notes §2).
+ *
+ * ORPHANED is read as: walking back from the new opening through the nodes this
+ * trim removes, the first thing that is not filler is a question. Then nothing
+ * was said between that question and the new opening, so the new opening IS the
+ * answer. A question with real speech after it inside the removed run was
+ * already answered there and its loss costs the viewer nothing - which is why
+ * the walk stops at the first substantive non-question instead of scanning the
+ * whole run. Proximity is therefore structural, not a node count or a number of
+ * seconds: no threshold to tune, and nothing to re-tune per language.
+ *
+ * COST, measured on both fixtures. `looksLikeQuestion` is deliberately broad and
+ * its onset branch is only about half precise: of the 44 (answer-arc) and 42
+ * (ecology) distinct nodes that can fire this gate, roughly two thirds are real
+ * questions and the rest are subordinate clauses opening on что/когда/как/где.
+ * Swept over every legal (original start, trim target) pair within 8 nodes, the
+ * gate refuses 10.8% and 10.7% of trims; punctuation alone would refuse 2.8% and
+ * 3.1% but never sees the case above. On the trims the finalizer ACTUALLY
+ * proposed - one per fixture - it refuses the answer-arc defect and accepts the
+ * ecology repair, so the measured false-positive cost is 0 of 2.
+ *
+ * That asymmetry is deliberate and it is the cheap direction: a refused trim
+ * ships the clip on the boundaries the critic and snapNodes already approved -
+ * a meandering opening, visible and mediocre. Accepting a bad trim ships a clip
+ * that opens on an answer to a question nobody heard, which is incoherent.
+ */
+function orphansQuestion(
+  nodes: SentenceNode[],
+  startNode: number,
+  target: number
+): boolean {
+  for (let i = target - 1; i >= startNode; i--) {
+    const node = nodes[i];
+    if (!node) continue;
+    if (looksLikeQuestion(node.text)) return true;
+    if (!carriesOnlyFiller(node.text)) return false;
+  }
+  return false;
+}
+
+/**
  * A trim must be a real node index of this clip, move the start FORWARD, land
- * on a legal clip start, sit strictly before the payoff, and survive a fresh
- * snapNodes - which re-checks clean start, payoff containment, the 90s cap, the
- * 6s floor and every boundary invariant. Anything else keeps the original.
+ * on a legal clip start, sit strictly before the payoff, leave no question it
+ * answers behind, and survive a fresh snapNodes - which re-checks clean start,
+ * payoff containment, the 90s cap, the 6s floor and every boundary invariant.
+ * Anything else keeps the original.
  */
 function tryTrim(
   clip: SnappedClip,
@@ -344,6 +397,11 @@ function tryTrim(
   if (target <= v.startNode) return { ok: false, reason: "not_forward" };
   if (target >= v.payoffNode) return { ok: false, reason: "at_or_past_payoff" };
   if (!isCleanStart(nodes, target)) return { ok: false, reason: "not_clean_start" };
+  // After the structural checks and before snap: a trim can be perfectly legal
+  // on every boundary rule and still be wrong on content.
+  if (orphansQuestion(nodes, v.startNode, target)) {
+    return { ok: false, reason: "orphans_question" };
+  }
 
   // The hook cannot stay behind the new start. hookEndNode is clamped to the
   // payoff so the widened hook can never swallow it - snap requires

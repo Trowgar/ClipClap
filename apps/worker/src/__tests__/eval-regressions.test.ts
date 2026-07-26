@@ -3,7 +3,11 @@ import type { SubtitleWord } from "@clipclap/shared";
 import type { V2Result } from "../analyze-v2/types";
 import { loadFixture, runFixture, type Fixture } from "./helpers/eval-fixture";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
-import { buildSentenceGraph } from "../analyze-v2/sentence-graph";
+import {
+  buildSentenceGraph,
+  carriesOnlyFiller,
+  looksLikeQuestion,
+} from "../analyze-v2/sentence-graph";
 import { detectTeaserRegion, isInTeaserRegion } from "../analyze-v2/teaser";
 
 /**
@@ -553,6 +557,65 @@ describe("named regressions", () => {
         `${name}: the montage bait line was NOT inside the region`
       ).toBe(true);
     }
+  });
+
+  // -------------------------------------------------------------------------
+  it("no applied trim orphans the question its new opening answers", async () => {
+    // Owner-visible defect: podcast-answer-arc clip c36 shipped opening on
+    // "Вообще то думать это энергозатратно" (node 870), the answer to the host's
+    // "какие претензии" (node 869) - which the finalizer's own trim had just
+    // deleted. Its prompt rule 3 ("trim a meandering opening forward") beat its
+    // rule 5 ("never open on an answer whose question stayed outside"), and no
+    // code gate objected: 870 is a legal clean start, it is before the payoff,
+    // and the trimmed verdict re-snapped cleanly.
+    //
+    // Asserted over the trims the stage APPLIED rather than over shipped clip
+    // ranges, because that is exactly the decision orphansQuestion() governs -
+    // see the loud caveat below for what it does not.
+    //
+    // ONE GUARD - measured 2026-07-26 by making orphansQuestion() return false
+    // as its first statement. podcast-answer-arc reds here with
+    // "c36 866->870 orphans #869", and eval-snapshot reds alongside it as that
+    // clip's range returns to 3073.2-3117.8 (start +15.5s). podcast-ecology
+    // stays green in both arms: its one applied trim, c15 332->334, removes
+    // reply grammar and an on-air name search and orphans nothing.
+    //
+    // SAID LOUDLY - this gate does NOT make the fixtures free of the defect,
+    // only free of the stage CAUSING it. Measured at HEAD on the same date,
+    // two shipped clips still open one node after a question:
+    //   podcast-ecology  3073.4 opens #846 straight after #845 "Да А какие
+    //                    претензии" - the identical moment, reached by the
+    //                    CRITIC picking that start, with no trim involved.
+    //   podcast-answer-arc 3057.7 opens #864 after #863 "Руки такие же оставим,
+    //                    как сейчас?" - milder, because #864 restates its own
+    //                    subject ("Руки ... можно такие же оставить").
+    // Neither is reachable from here: this gate only ever vetoes a trim. Closing
+    // them means a rule on ORIGINAL critic boundaries, which is snap's territory
+    // and a strictly larger change - and the answer-arc row shows why it needs
+    // its own measurement rather than this predicate, since it would refuse a
+    // start that is genuinely self-contained.
+    const offenders: string[] = [];
+    for (const name of CASES) {
+      const { fixture, result } = await run(name);
+      const nodes = buildSentenceGraph(fixture.transcript.segments, loadAnalyzeConfig({}));
+      const trims = ((result.telemetry as Record<string, unknown>).openingTrims ??
+        []) as Array<{ id: string; fromNode: number; toNode: number }>;
+      for (const trim of trims) {
+        // Walk back from the new opening through the removed run, skipping
+        // discourse particles - the first thing actually said must not be a
+        // question, or the new opening is its answer.
+        for (let i = trim.toNode - 1; i >= trim.fromNode; i--) {
+          if (looksLikeQuestion(nodes[i].text)) {
+            offenders.push(
+              `${name} ${trim.id} ${trim.fromNode}->${trim.toNode} orphans #${i} "${nodes[i].text}"`
+            );
+            break;
+          }
+          if (!carriesOnlyFiller(nodes[i].text)) break;
+        }
+      }
+    }
+    expect(offenders, "an applied trim deleted the question it answers").toEqual([]);
   });
 });
 
