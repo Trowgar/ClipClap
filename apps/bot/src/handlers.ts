@@ -344,16 +344,19 @@ function settingsKeyboard(dict: Dict): ReplyKeyboardMarkup {
   };
 }
 
-function buildMainMenu(dict: Dict): ReplyKeyboardMarkup {
-  return {
-    keyboard: [
-      [{ text: dict.menuPlans }, { text: dict.menuAccount }],
-      [{ text: dict.menuAffiliate }, { text: dict.menuHelp }],
-      [{ text: dict.menuSettings }],
-    ],
-    is_persistent: true,
-    resize_keyboard: true,
-  };
+function buildMainMenu(dict: Dict, adminWebAppUrl?: string): ReplyKeyboardMarkup {
+  const keyboard = [
+    [{ text: dict.menuPlans }, { text: dict.menuAccount }],
+    [{ text: dict.menuAffiliate }, { text: dict.menuHelp }],
+    [{ text: dict.menuSettings }],
+  ];
+  // Admins get the analytics Mini App as part of the keyboard itself rather
+  // than a second message on every menu open. A web_app keyboard button opens
+  // the app without sending its text, so matchMenuAction never sees it.
+  if (adminWebAppUrl) {
+    keyboard.push([{ text: "📊 Analytics", web_app: { url: adminWebAppUrl } }]);
+  }
+  return { keyboard, is_persistent: true, resize_keyboard: true };
 }
 
 /** Sends the main menu and records the app-open exactly once, wherever it is shown. */
@@ -364,27 +367,23 @@ async function sendMainMenu(
   dict: Dict,
   from: { id: number | string; language_code?: string }
 ) {
-  await client
-    .sendMessage(chatId, text, { replyMarkup: buildMainMenu(dict) })
-    .catch(() => undefined);
+  // The analytics entry is part of the keyboard rather than a second message,
+  // and it is built here rather than at the /menu command alone: the menu is
+  // reached from seven places (the keyboard button, /start, the settings back
+  // button, ...), and a button that only appears for one of them reads as
+  // "the button is missing".
+  const appUrl =
+    process.env.APP_URL || process.env.NEXTAUTH_URL || "https://clipclap.io";
+  const adminWebAppUrl = isReferralAdmin(
+    String(from.id),
+    process.env.REFERRAL_ADMIN_TELEGRAM_IDS
+  )
+    ? `${appUrl}/admin`
+    : undefined;
 
-  // The admin's analytics entry lives here rather than on the /menu command
-  // alone: the menu is reached from seven places (the keyboard button, /start,
-  // the settings back button, ...), and a button that only appears for one of
-  // them reads as "the button is missing".
-  if (isReferralAdmin(String(from.id), process.env.REFERRAL_ADMIN_TELEGRAM_IDS)) {
-    const appUrl =
-      process.env.APP_URL || process.env.NEXTAUTH_URL || "https://clipclap.io";
-    await client
-      .sendMessage(chatId, "Analytics", {
-        replyMarkup: {
-          inline_keyboard: [
-            [{ text: "Open analytics", web_app: { url: `${appUrl}/admin` } }],
-          ],
-        },
-      })
-      .catch(() => undefined);
-  }
+  await client
+    .sendMessage(chatId, text, { replyMarkup: buildMainMenu(dict, adminWebAppUrl) })
+    .catch(() => undefined);
 
   // After the reply is out, never before - this is telemetry.
   await recordFunnelEvent("bot", from.id, FUNNEL_EVENTS.APP_OPENED, from.language_code);

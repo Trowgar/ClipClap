@@ -24,6 +24,9 @@ export interface InlineKeyboardMarkup {
 
 export interface KeyboardButton {
   text: string;
+  /** Opens a Telegram Mini App. Private chats only, and tapping it opens the
+   *  app instead of sending the button text, so no command parsing is needed. */
+  web_app?: { url: string };
 }
 
 export interface ReplyKeyboardMarkup {
