@@ -167,15 +167,15 @@ route that does the lookup and the write.
 Flow:
 1. Middleware reads IP (`X-Real-IP` / `X-Forwarded-For`, both already forwarded
    by the host nginx), user-agent, path, referrer.
-2. It calls `/api/_track` through **`event.waitUntil(fetch(...))`** - not a bare
+2. It calls `/api/track` through **`event.waitUntil(fetch(...))`** - not a bare
    un-awaited `fetch`, which the Edge runtime may kill along with the response,
    silently losing visits.
-3. `/api/_track` (`export const runtime = "nodejs"`) verifies the shared secret,
+3. `/api/track` (`export const runtime = "nodejs"`) verifies the shared secret,
    resolves the country, hashes the visitor, and upserts the row.
 
 **Required guards:**
 - **`TRACK_SECRET`** (new env) sent as a header by the middleware and checked by
-  the route. Without it `/api/_track` is a public endpoint that writes to the
+  the route. Without it `/api/track` is a public endpoint that writes to the
   database and anyone could inflate the numbers. On mismatch: return 204 and
   write nothing.
 - **Matcher** widens from `["/", "/dashboard/:path*"]` to all pages but must
@@ -297,7 +297,7 @@ disclosed as a footnote on the page rather than solved with de-duplication.
    `app_opened`, `video_submitted`, `upload_rejected_*` with the right surface.
 3. Web: dashboard load and a refused upload produce the same event names with
    `surface='web'`.
-4. `/api/_track` without the secret writes nothing and returns 204.
+4. `/api/track` without the secret writes nothing and returns 204.
 5. A page visit produces exactly one `site_visits` row; a reload increments
    `hits` instead of adding a row.
 6. A request with a crawler user-agent is stored with `isBot = true` and is

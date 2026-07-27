@@ -25,7 +25,7 @@
 | `apps/bot/src/handlers.ts` | `app_opened`, `video_submitted`, `upload_rejected_*` | Modify |
 | `apps/web/app/api/jobs/route.ts` | `video_submitted` + every refusal branch | Modify |
 | `apps/web/app/(dashboard)/dashboard/page.tsx` | `app_opened` (web) | Modify |
-| `apps/web/app/api/_track/route.ts` | Node runtime, secret check, visit write | Create |
+| `apps/web/app/api/track/route.ts` | Node runtime, secret check, visit write | Create |
 | `apps/web/middleware.ts` | `waitUntil(fetch)` to the track route, wider matcher | Modify |
 | `apps/web/app/admin/page.tsx` | Admin page; `ADMIN_EMAILS` session or Mini App cookie | Create |
 | `apps/web/app/admin/mini-app-gate.tsx` | Client bootstrap that hands Telegram `initData` over | Create |
@@ -1057,15 +1057,15 @@ git -c user.name=Trowgar -c user.email=trowgar@yahoo.com commit -m "feat(analyti
 
 ---
 
-## Task 7: The `/api/_track` route
+## Task 7: The `/api/track` route
 
 **Files:**
-- Create: `apps/web/app/api/_track/route.ts`
+- Create: `apps/web/app/api/track/route.ts`
 - Modify: `.env.example`
 
 - [ ] **Step 1: Write the route**
 
-Create `apps/web/app/api/_track/route.ts`:
+Create `apps/web/app/api/track/route.ts`:
 
 ```ts
 import { NextRequest, NextResponse } from "next/server";
@@ -1118,7 +1118,7 @@ export async function POST(req: NextRequest) {
 Append to `.env.example`:
 
 ```
-# Shared secret between the Edge middleware and /api/_track. Without it the
+# Shared secret between the Edge middleware and /api/track. Without it the
 # tracking endpoint would be a public row-writer. Any random string.
 TRACK_SECRET=
 # Comma-separated emails allowed to open /admin.
@@ -1137,7 +1137,7 @@ Expected: PASS.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add apps/web/app/api/_track/route.ts .env.example
+git add apps/web/app/api/track/route.ts .env.example
 git -c user.name=Trowgar -c user.email=trowgar@yahoo.com commit -m "feat(analytics): node-runtime track endpoint behind a shared secret"
 ```
 
@@ -1165,7 +1165,7 @@ const REFERRAL_COOKIE_NAME = "cc_ref";
 const ATTRIBUTION_WINDOW_DAYS = 30; // REFERRAL_CONFIG.attributionWindowDays
 
 /**
- * Hands the visit to /api/_track, which runs on Node and can reach Prisma.
+ * Hands the visit to /api/track, which runs on Node and can reach Prisma.
  *
  * Wrapped in event.waitUntil because a bare un-awaited fetch may be killed
  * along with the response, silently losing visits.
@@ -1183,7 +1183,7 @@ function trackVisit(req: NextRequest, event: NextFetchEvent): void {
   if (!ip) return;
 
   event.waitUntil(
-    fetch(new URL("/api/_track", req.url), {
+    fetch(new URL("/api/track", req.url), {
       method: "POST",
       headers: { "content-type": "application/json", "x-track-secret": secret },
       body: JSON.stringify({
@@ -2027,7 +2027,7 @@ Expected: one row for `/` with `isBot = false`. Reload the page and confirm `hit
 - [ ] **Step 7: Verify the secret actually guards the endpoint**
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" -X POST https://clipclap.io/api/_track \
+curl -s -o /dev/null -w "%{http_code}\n" -X POST https://clipclap.io/api/track \
   -H 'content-type: application/json' -d '{"ip":"9.9.9.9","path":"/fake"}'
 ```
 Expected: `204`, and **no** new row for `/fake`:

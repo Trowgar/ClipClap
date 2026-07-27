@@ -10,7 +10,11 @@ const REFERRAL_COOKIE_NAME = "cc_ref";
 const ATTRIBUTION_WINDOW_DAYS = 30; // REFERRAL_CONFIG.attributionWindowDays
 
 /**
- * Hands the visit to /api/_track, which runs on Node and can reach Prisma.
+ * Hands the visit to /api/track, which runs on Node and can reach Prisma.
+ *
+ * The route must NOT be named with a leading underscore: Next.js treats
+ * `_folder` as a private folder and excludes it from routing entirely, so
+ * /api/_track silently 404s and every visit is lost.
  *
  * Wrapped in event.waitUntil because a bare un-awaited fetch may be killed
  * along with the response, silently losing visits.
@@ -34,7 +38,7 @@ function trackVisit(req: NextRequest, event: NextFetchEvent): void {
   if (!origin) return;
 
   event.waitUntil(
-    fetch(new URL("/api/_track", origin), {
+    fetch(new URL("/api/track", origin), {
       method: "POST",
       headers: { "content-type": "application/json", "x-track-secret": secret },
       body: JSON.stringify({
