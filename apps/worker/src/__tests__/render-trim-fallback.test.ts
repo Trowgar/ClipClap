@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   downloadVideo: vi.fn(),
   cutClips: vi.fn(),
   trimClipFile: vi.fn(),
+  burnSubtitles: vi.fn(),
 }));
 
 vi.mock("@clipclap/shared", () => ({
@@ -38,6 +39,15 @@ vi.mock("../processors/cut", () => ({
   trimClipFile: mocks.trimClipFile,
 }));
 
+vi.mock("../processors/subtitles", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../processors/subtitles")>();
+  return {
+    ...actual,
+    burnSubtitles: mocks.burnSubtitles,
+  };
+});
+
 import { runRenderStage } from "../stages/render";
 
 const trimPayload = {
@@ -52,6 +62,7 @@ const trimPayload = {
   sourceArtifactKey: "work/u1/job1/source.mp4",
   sourceStart: 10,
   sourceEnd: 15,
+  originalHasBurnedSubtitles: false,
 };
 
 describe("renderTrim degrades when the clean source artifact is gone", () => {
@@ -117,5 +128,123 @@ describe("renderTrim degrades when the clean source artifact is gone", () => {
     );
 
     expect(mocks.trimClipFile).not.toHaveBeenCalled();
+  });
+});
+
+describe("renderTrim fallback avoids double-burning subtitles", () => {
+  const fallbackPayload = {
+    mode: "trim" as const,
+    jobId: "job1",
+    userId: "u1",
+    clipId: "clip1",
+    originalClipStorageKey: "clips/u1/job1/original.mp4",
+    start: 0,
+    end: 5,
+    subtitles: true,
+    subtitleTrack: {
+      cues: [{ id: "c1", start: 0, end: 4, text: "hello" }],
+    },
+    // No sourceArtifactKey: this job has no clean-source route, so the
+    // fallback branch runs directly - same effect as the sweep/expiry cases.
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv("REFRAME_ENGINE", "off");
+    mocks.uploadFile.mockResolvedValue(undefined);
+    mocks.clipUpdate.mockResolvedValue(undefined);
+    mocks.downloadVideo.mockResolvedValue("/tmp/original-clip.mp4");
+    mocks.trimClipFile.mockResolvedValue("/tmp/trimmed-clip.mp4");
+    mocks.burnSubtitles.mockResolvedValue("/tmp/subbed-clip.mp4");
+  });
+
+  it("does not burn subtitles again when the original clip is already subtitled", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await runRenderStage({
+      ...fallbackPayload,
+      originalHasBurnedSubtitles: true,
+    });
+
+    expect(mocks.burnSubtitles).not.toHaveBeenCalled();
+    expect(mocks.uploadFile).toHaveBeenCalledWith(
+      expect.stringContaining("clips/u1/job1/"),
+      "/tmp/trimmed-clip.mp4",
+      "video/mp4"
+    );
+    expect(
+      warnSpy.mock.calls.some(
+        ([msg]) => typeof msg === "string" && msg.includes("clip1")
+      )
+    ).toBe(true);
+
+    warnSpy.mockRestore();
+  });
+
+  it("still burns subtitles when the original clip has none baked in", async () => {
+    await runRenderStage({
+      ...fallbackPayload,
+      originalHasBurnedSubtitles: false,
+    });
+
+    expect(mocks.burnSubtitles).toHaveBeenCalledWith(
+      "/tmp/trimmed-clip.mp4",
+      fallbackPayload.subtitleTrack.cues
+    );
+    expect(mocks.uploadFile).toHaveBeenCalledWith(
+      expect.stringContaining("clips/u1/job1/"),
+      "/tmp/subbed-clip.mp4",
+      "video/mp4"
+    );
+  });
+});
+
+describe("renderTrim clean-source branch still burns subtitles as before", () => {
+  const cleanPayload = {
+    mode: "trim" as const,
+    jobId: "job1",
+    userId: "u1",
+    clipId: "clip1",
+    originalClipStorageKey: "clips/u1/job1/original.mp4",
+    start: 0,
+    end: 5,
+    subtitles: true,
+    subtitleTrack: {
+      cues: [{ id: "c1", start: 0, end: 4, text: "hello" }],
+    },
+    sourceArtifactKey: "work/u1/job1/source.mp4",
+    sourceStart: 10,
+    sourceEnd: 15,
+    // Irrelevant on this branch: the clean source is untouched raw footage,
+    // never subtitled, and the guard added for the fallback must not apply
+    // here regardless of what this says.
+    originalHasBurnedSubtitles: true,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv("REFRAME_ENGINE", "off");
+    mocks.uploadFile.mockResolvedValue(undefined);
+    mocks.clipUpdate.mockResolvedValue(undefined);
+    mocks.downloadVideo.mockResolvedValue("/tmp/source.mp4");
+    mocks.cutClips.mockResolvedValue([{ clipPath: "/tmp/cut-clip.mp4" }]);
+  });
+
+  it("burns the edited cues via the single-pass filter, not via burnSubtitles", async () => {
+    await runRenderStage(cleanPayload);
+
+    expect(mocks.cutClips).toHaveBeenCalledWith(
+      "/tmp/source.mp4",
+      [expect.objectContaining({ start: 10, end: 15 })],
+      expect.stringContaining("ass=filename="),
+      null
+    );
+    expect(mocks.burnSubtitles).not.toHaveBeenCalled();
+    expect(mocks.trimClipFile).not.toHaveBeenCalled();
+    expect(mocks.uploadFile).toHaveBeenCalledWith(
+      expect.stringContaining("clips/u1/job1/"),
+      "/tmp/cut-clip.mp4",
+      "video/mp4"
+    );
   });
 });

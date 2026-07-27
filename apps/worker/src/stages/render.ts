@@ -432,10 +432,21 @@ async function renderTrim(
       const trimmedPath = await trimClipFile(originalPath, payload.start, payload.end);
       tempFiles.push(trimmedPath);
       finalPath = trimmedPath;
-      if (wantSubs) {
+      // originalClipStorageKey's pixels may already have subtitles burned in
+      // (see RenderStagePayload.originalHasBurnedSubtitles). Burned-in pixels
+      // cannot be un-burned, so on this degraded path a subtitle EDIT cannot
+      // be applied, and neither can turning subtitles off: skipping the burn
+      // and keeping the original text is the best available outcome, since
+      // burning the new cues on top would stack two overlapping layers of
+      // text, which is strictly worse.
+      if (wantSubs && !payload.originalHasBurnedSubtitles) {
         const subbedPath = await burnSubtitles(trimmedPath, windowedCues);
         tempFiles.push(subbedPath);
         finalPath = subbedPath;
+      } else if (wantSubs) {
+        console.warn(
+          `[render] trim fallback on job ${payload.jobId}: clip ${payload.clipId} already has subtitles burned in, skipping the requested subtitle edit to avoid double-burning`
+        );
       }
     }
 

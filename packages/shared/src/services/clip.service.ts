@@ -131,6 +131,10 @@ export async function editClip(input: EditClipInput): Promise<Clip> {
       undefined,
     sourceStart: input.start,
     sourceEnd: input.end,
+    // Tells the worker's fallback path (used when the clean source above is
+    // unavailable) whether original.storageKey's pixels already carry burned
+    // subtitles, so it doesn't burn a second layer on top of them.
+    originalHasBurnedSubtitles: original.subtitles,
     mode: "trim",
   });
 

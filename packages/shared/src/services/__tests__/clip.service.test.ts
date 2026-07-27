@@ -128,6 +128,64 @@ describe("clip.service - editClip", () => {
       })
     );
   });
+
+  it("carries the original clip's burned-subtitle state into the render payload, whatever this edit requests", async () => {
+    mocks.clipFindFirstOrThrow.mockResolvedValue({
+      id: "clip_original",
+      jobId: "job1",
+      userId: "u1",
+      title: "Original clip",
+      storageKey: "clips/u1/job1/original.mp4",
+      startTime: 40,
+      endTime: 60,
+      subtitles: true,
+      job: { id: "job1", sourceArtifactKey: "artifacts/job1/source.mp4" },
+    });
+
+    await editClip({
+      clipId: "clip_original",
+      userId: "u1",
+      start: 42,
+      end: 50,
+      subtitles: false,
+    });
+
+    expect(mocks.queueAdd).toHaveBeenCalledWith(
+      "render",
+      expect.objectContaining({
+        originalHasBurnedSubtitles: true,
+      })
+    );
+  });
+
+  it("carries false when the original clip was never subtitled", async () => {
+    mocks.clipFindFirstOrThrow.mockResolvedValue({
+      id: "clip_original",
+      jobId: "job1",
+      userId: "u1",
+      title: "Original clip",
+      storageKey: "clips/u1/job1/original.mp4",
+      startTime: 40,
+      endTime: 60,
+      subtitles: false,
+      job: { id: "job1", sourceArtifactKey: "artifacts/job1/source.mp4" },
+    });
+
+    await editClip({
+      clipId: "clip_original",
+      userId: "u1",
+      start: 42,
+      end: 50,
+      subtitles: true,
+    });
+
+    expect(mocks.queueAdd).toHaveBeenCalledWith(
+      "render",
+      expect.objectContaining({
+        originalHasBurnedSubtitles: false,
+      })
+    );
+  });
 });
 
 describe("clip.service - getDownloadUrl", () => {
