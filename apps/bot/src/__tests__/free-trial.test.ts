@@ -36,6 +36,15 @@ import { t } from "../i18n";
 
 const FREE = getPlanLimits("NONE");
 
+/** The free trial is switched off by zeroing NONE_LIMITS (see the comment above
+ *  NONE_LIMITS in packages/shared/src/config/plans.ts). Tests that assert what a
+ *  user sees while the trial is RUNNING cannot pass while it is off - every cap
+ *  is 0, so the source-too-long refusal fires before any trial logic is reached.
+ *  Gating them on the config rather than deleting them means they come back on
+ *  their own the moment NONE_LIMITS is un-zeroed, which is exactly when their
+ *  protection is wanted. The disabled state has its own always-on test below. */
+const TRIAL_ENABLED = FREE.maxJobsPerDay > 0;
+
 describe("free trial onboarding copy", () => {
   // The wall being removed was literally step 1. What matters is what the
   // numbered instructions tell a new user to DO first: send a video, not pay.
@@ -144,11 +153,26 @@ describe("getSubmissionBlocker on the free tier", () => {
       .mockResolvedValueOnce(inFlight);
   }
 
-  it("lets a brand-new Russian user through with no message at all", async () => {
-    freeUser();
-    counts(0, 0);
-    expect(await getSubmissionBlocker("u1", t("ru"), 600)).toBeNull();
-  });
+  it.runIf(TRIAL_ENABLED)(
+    "lets a brand-new Russian user through with no message at all",
+    async () => {
+      freeUser();
+      counts(0, 0);
+      expect(await getSubmissionBlocker("u1", t("ru"), 600)).toBeNull();
+    }
+  );
+
+  // The mirror of the test above, for the state the product is actually in.
+  // A trial that is switched off must SHUT the gate, not leave it ajar: this is
+  // the assertion that would catch a half-disabled NONE_LIMITS.
+  it.runIf(!TRIAL_ENABLED)(
+    "blocks a brand-new user outright while the trial is disabled",
+    async () => {
+      freeUser();
+      counts(0, 0);
+      expect(await getSubmissionBlocker("u1", t("ru"), 600)).not.toBeNull();
+    }
+  );
 
   it("renders the exhausted trial in Russian, not in English", async () => {
     freeUser();
@@ -181,16 +205,19 @@ describe("getSubmissionBlocker on the free tier", () => {
     expect(msg).toMatch(/[а-яё]/i);
   });
 
-  it("explains the spent attempt backstop when nothing ever produced clips", async () => {
-    freeUser();
-    counts(0, FREE_TIER.attempts);
+  it.runIf(TRIAL_ENABLED)(
+    "explains the spent attempt backstop when nothing ever produced clips",
+    async () => {
+      freeUser();
+      counts(0, FREE_TIER.attempts);
 
-    const msg = await getSubmissionBlocker("u1", t("en"), 600);
+      const msg = await getSubmissionBlocker("u1", t("en"), 600);
 
-    // This user got nothing, so the copy must not talk as if they had clips.
-    expect(msg).toMatch(/none of them produced clips/i);
-    expect(msg).not.toMatch(/clips from it are yours/i);
-  });
+      // This user got nothing, so the copy must not talk as if they had clips.
+      expect(msg).toMatch(/none of them produced clips/i);
+      expect(msg).not.toMatch(/clips from it are yours/i);
+    }
+  );
 
   it("does not block a paying subscriber", async () => {
     freeUser({
