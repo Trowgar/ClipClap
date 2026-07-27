@@ -202,6 +202,29 @@ describe("sweepRedundantSourceCopies", () => {
     expect(result).toEqual({ swept: 0, failed: 1 });
   });
 
+  it("nulls the confirmed-deleted column but withholds the stamp when the other key fails", async () => {
+    // sourceKey's delete fails, sourceArtifactKey's delete succeeds. The row
+    // must still be retried next hour (no sourceSweptAt), but the column whose
+    // object is confirmed gone must not be left pointing at nothing.
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "job5",
+        sourceKey: "uploads/u1/orig2.mp4",
+        sourceArtifactKey: "work/u1/job5/source.mp4",
+        normalizedArtifactKey: "work/u1/job5/normalized.mp4",
+      },
+    ]);
+    mocks.deleteFile.mockRejectedValueOnce(new Error("R2 503"));
+
+    const result = await sweepRedundantSourceCopies(NOW);
+
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: "job5" },
+      data: { sourceArtifactKey: null },
+    });
+    expect(result).toEqual({ swept: 0, failed: 1 });
+  });
+
   it("writes nothing in dry-run mode", async () => {
     mocks.jobFindMany.mockResolvedValue([
       {
@@ -266,7 +289,6 @@ describe("sweepExpiredArtifacts", () => {
     expect(mocks.jobUpdate).toHaveBeenCalledWith({
       where: { id: "job1" },
       data: {
-        sourceKey: null,
         sourceArtifactKey: null,
         normalizedArtifactKey: null,
       },
@@ -288,6 +310,59 @@ describe("sweepExpiredArtifacts", () => {
     const result = await sweepExpiredArtifacts(NOW);
 
     expect(mocks.jobUpdate).not.toHaveBeenCalled();
+    expect(result).toEqual({ swept: 0, failed: 1 });
+  });
+
+  it("nulls only the column of the key that was confirmed deleted, leaving the failed one set", async () => {
+    // sourceKey's delete fails, sourceArtifactKey's delete succeeds. A partial
+    // failure must still null the column whose object is confirmed gone -
+    // otherwise that column outlives its object, which is exactly the state
+    // the invariant forbids.
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "job4",
+        sourceKey: "uploads/u1/orig.mp4",
+        sourceArtifactKey: "work/u1/job4/source.mp4",
+        normalizedArtifactKey: null,
+      },
+    ]);
+    mocks.deleteFile.mockRejectedValueOnce(new Error("R2 503"));
+
+    const result = await sweepExpiredArtifacts(NOW);
+
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: "job4" },
+      data: { sourceArtifactKey: null },
+    });
+    expect(result).toEqual({ swept: 0, failed: 1 });
+  });
+
+  it("nulls both columns sharing a confirmed-deleted key, even when a different key fails", async () => {
+    // sourceArtifactKey and normalizedArtifactKey hold the SAME string (the
+    // "none" normalization case). sourceKey is a distinct key whose delete
+    // fails. The shared key's single delete succeeds, so BOTH columns that
+    // hold it must be nulled in the same patch - nulling only one would leave
+    // a live-looking column pointing at a deleted object.
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "job5",
+        sourceKey: "uploads/u1/orig2.mp4",
+        sourceArtifactKey: "work/u1/job5/source.mp4",
+        normalizedArtifactKey: "work/u1/job5/source.mp4",
+      },
+    ]);
+    mocks.deleteFile.mockRejectedValueOnce(new Error("R2 503"));
+
+    const result = await sweepExpiredArtifacts(NOW);
+
+    expect(mocks.deleteFile.mock.calls.map((c: any[]) => c[0])).toEqual([
+      "uploads/u1/orig2.mp4",
+      "work/u1/job5/source.mp4",
+    ]);
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: "job5" },
+      data: { sourceArtifactKey: null, normalizedArtifactKey: null },
+    });
     expect(result).toEqual({ swept: 0, failed: 1 });
   });
 

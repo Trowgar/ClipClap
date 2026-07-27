@@ -130,11 +130,15 @@ export async function sweepRedundantSourceCopies(
   let failed = 0;
 
   for (const job of jobs) {
+    // Incremental, not all-or-nothing: a column is nulled the moment its own
+    // delete is confirmed, independent of whether the other key's delete
+    // fails. Otherwise a confirmed-deleted object is left behind a live
+    // column - exactly the state the invariant forbids.
     const patch: {
       sourceKey?: null;
       sourceArtifactKey?: null;
-      sourceSweptAt: Date;
-    } = { sourceSweptAt: now };
+      sourceSweptAt?: Date;
+    } = {};
     let ok = true;
 
     if (job.sourceKey) {
@@ -152,18 +156,18 @@ export async function sweepRedundantSourceCopies(
       }
     }
 
-    if (!ok) {
-      // Null nothing. A column pointing at a live object is harmless; a column
-      // pointing at a deleted one makes renderTrim take the clean-source
-      // branch and fail on download instead of degrading to the fallback.
+    if (ok) {
+      // The stamp is the termination condition - only write it once nothing
+      // failed, so a partial failure keeps the row selectable next hour.
+      patch.sourceSweptAt = now;
+      swept++;
+    } else {
       failed++;
-      continue;
     }
 
-    if (!dryRun) {
+    if (!dryRun && Object.keys(patch).length > 0) {
       await prisma.job.update({ where: { id: job.id }, data: patch });
     }
-    swept++;
   }
 
   return { swept, failed };
@@ -222,27 +226,36 @@ export async function sweepExpiredArtifacts(
       ),
     ];
 
+    // Incremental, not all-or-nothing: track which keys' deletes were
+    // actually confirmed, then null every column that holds one of them - the
+    // same key string can live in two columns (the "none" normalization
+    // case), so both must be nulled together when that one delete succeeds.
+    const confirmed = new Set<string>();
     let ok = true;
     for (const key of keys) {
-      if (!(await dropObject(key, dryRun))) ok = false;
+      if (await dropObject(key, dryRun)) confirmed.add(key);
+      else ok = false;
     }
 
-    if (!ok) {
-      failed++;
-      continue;
+    const patch: {
+      sourceKey?: null;
+      sourceArtifactKey?: null;
+      normalizedArtifactKey?: null;
+    } = {};
+    if (job.sourceKey && confirmed.has(job.sourceKey)) patch.sourceKey = null;
+    if (job.sourceArtifactKey && confirmed.has(job.sourceArtifactKey)) {
+      patch.sourceArtifactKey = null;
+    }
+    if (job.normalizedArtifactKey && confirmed.has(job.normalizedArtifactKey)) {
+      patch.normalizedArtifactKey = null;
     }
 
-    if (!dryRun) {
-      await prisma.job.update({
-        where: { id: job.id },
-        data: {
-          sourceKey: null,
-          sourceArtifactKey: null,
-          normalizedArtifactKey: null,
-        },
-      });
+    if (ok) swept++;
+    else failed++;
+
+    if (!dryRun && Object.keys(patch).length > 0) {
+      await prisma.job.update({ where: { id: job.id }, data: patch });
     }
-    swept++;
   }
 
   return { swept, failed };
