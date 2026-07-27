@@ -367,6 +367,25 @@ async function sendMainMenu(
   await client
     .sendMessage(chatId, text, { replyMarkup: buildMainMenu(dict) })
     .catch(() => undefined);
+
+  // The admin's analytics entry lives here rather than on the /menu command
+  // alone: the menu is reached from seven places (the keyboard button, /start,
+  // the settings back button, ...), and a button that only appears for one of
+  // them reads as "the button is missing".
+  if (isReferralAdmin(String(from.id), process.env.REFERRAL_ADMIN_TELEGRAM_IDS)) {
+    const appUrl =
+      process.env.APP_URL || process.env.NEXTAUTH_URL || "https://clipclap.io";
+    await client
+      .sendMessage(chatId, "Analytics", {
+        replyMarkup: {
+          inline_keyboard: [
+            [{ text: "Open analytics", web_app: { url: `${appUrl}/admin` } }],
+          ],
+        },
+      })
+      .catch(() => undefined);
+  }
+
   // After the reply is out, never before - this is telemetry.
   await recordFunnelEvent("bot", from.id, FUNNEL_EVENTS.APP_OPENED, from.language_code);
 }
@@ -459,18 +478,8 @@ export async function handleUpdate(
   }
 
   if (text === "/menu" || text.startsWith("/menu ") || text.startsWith("/menu@")) {
+    // sendMainMenu carries the admin analytics button for every entry point.
     await sendMainMenu(client, message.chat.id, dict.welcomeBack, dict, from);
-    if (isReferralAdmin(String(from.id), process.env.REFERRAL_ADMIN_TELEGRAM_IDS)) {
-      await client
-        .sendMessage(message.chat.id, "Analytics", {
-          replyMarkup: {
-            inline_keyboard: [
-              [{ text: "Open analytics", web_app: { url: `${config.appUrl}/admin` } }],
-            ],
-          },
-        })
-        .catch(() => undefined);
-    }
     return;
   }
 
