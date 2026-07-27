@@ -31,7 +31,7 @@ import {
   uploadFile,
   uploadRejectedEvent,
 } from "@clipclap/shared";
-import type { SubscriptionPhase } from "@clipclap/shared";
+import type { SubscriptionPhase, UploadRejectionCode } from "@clipclap/shared";
 import type { User } from "@prisma/client";
 import type { TelegramClient } from "./telegram-client";
 import { extractVideoUrl, probeVideoUrl } from "./url-probe";
@@ -245,9 +245,7 @@ export async function closeSupport(
     where: { id: userId },
     data: { supportOpen: false },
   });
-  await client.sendMessage(chatId, dict.supportClosed, {
-    replyMarkup: buildMainMenu(dict),
-  });
+  await sendMainMenu(client, chatId, dict.supportClosed, dict, from);
   await notifyOperatorClosed(client, chatId, from);
 }
 
@@ -358,6 +356,21 @@ function buildMainMenu(dict: Dict): ReplyKeyboardMarkup {
   };
 }
 
+/** Sends the main menu and records the app-open exactly once, wherever it is shown. */
+async function sendMainMenu(
+  client: TelegramClient,
+  chatId: number | string,
+  text: string,
+  dict: Dict,
+  from: { id: number | string; language_code?: string }
+) {
+  await client
+    .sendMessage(chatId, text, { replyMarkup: buildMainMenu(dict) })
+    .catch(() => undefined);
+  // After the reply is out, never before - this is telemetry.
+  await recordFunnelEvent("bot", from.id, FUNNEL_EVENTS.APP_OPENED, from.language_code);
+}
+
 export interface BotRuntimeConfig {
   appUrl: string;
 }
@@ -446,9 +459,7 @@ export async function handleUpdate(
   }
 
   if (text === "/menu" || text.startsWith("/menu ") || text.startsWith("/menu@")) {
-    await client.sendMessage(message.chat.id, dict.welcomeBack, {
-      replyMarkup: buildMainMenu(dict),
-    });
+    await sendMainMenu(client, message.chat.id, dict.welcomeBack, dict, from);
     return;
   }
 
@@ -617,15 +628,7 @@ async function handleSettingsAction(
       return;
     }
     case "menu": {
-      await client.sendMessage(message.chat.id, dict.welcomeBack, {
-        replyMarkup: buildMainMenu(dict),
-      });
-      await recordFunnelEvent(
-        "bot",
-        message.from!.id,
-        FUNNEL_EVENTS.APP_OPENED,
-        message.from!.language_code
-      );
+      await sendMainMenu(client, message.chat.id, dict.welcomeBack, dict, message.from!);
       return;
     }
   }
@@ -1038,9 +1041,7 @@ async function handleStart(
       // The persistent menu (below) carries the 💳 Plans button; no inline
       // plan buttons needed here.
       await client.sendMessage(message.chat.id, dict.newAccountCreated);
-      await client.sendMessage(message.chat.id, dict.menuHint, {
-        replyMarkup: buildMainMenu(dict),
-      });
+      await sendMainMenu(client, message.chat.id, dict.menuHint, dict, from);
       return; // bypass the two-button onboarding screen (deep-link)
     }
     // existing user: fall through to the normal welcome flow below
@@ -1071,15 +1072,11 @@ async function handleStart(
   if (usage.plan === "NONE") {
     // The persistent menu (below) carries the 💳 Plans button; welcomeNeedsPlan
     // nudges the user to it, so no inline plan buttons here.
-    await client.sendMessage(message.chat.id, dict.welcomeNeedsPlan, {
-      replyMarkup: buildMainMenu(dict),
-    });
+    await sendMainMenu(client, message.chat.id, dict.welcomeNeedsPlan, dict, from);
     return;
   }
 
-  await client.sendMessage(message.chat.id, dict.welcomeBack, {
-    replyMarkup: buildMainMenu(dict),
-  });
+  await sendMainMenu(client, message.chat.id, dict.welcomeBack, dict, from);
 }
 
 async function handleCallbackQuery(
@@ -1119,11 +1116,6 @@ async function handleCallbackQuery(
           dict.newAccountCreated
         )
         .catch(() => undefined);
-      await client
-        .sendMessage(query.message.chat.id, dict.menuHint, {
-          replyMarkup: buildMainMenu(dict),
-        })
-        .catch(() => undefined);
       // The other half of the funnel: this person went PAST the first screen.
       // Counted here rather than inferred from users.createdAt so both halves
       // are one query against one table, and so the two doors stay apart.
@@ -1133,12 +1125,7 @@ async function handleCallbackQuery(
         FUNNEL_EVENTS.NEW_ACCOUNT,
         query.from.language_code
       );
-      await recordFunnelEvent(
-        "bot",
-        query.from.id,
-        FUNNEL_EVENTS.APP_OPENED,
-        query.from.language_code
-      );
+      await sendMainMenu(client, query.message.chat.id, dict.menuHint, dict, query.from);
       return;
     }
     case CALLBACK_LINK_ACCOUNT: {
@@ -1470,6 +1457,11 @@ async function handleVideo(
   dict: Dict,
   config: BotRuntimeConfig
 ) {
+  // The ack goes out before anything is awaited on Postgres - an upload must
+  // not wait on telemetry (or on the blocker's own reads) before the user
+  // hears anything back.
+  await client.sendMessage(message.chat.id, dict.uploading);
+
   const user = await resolveTelegramUser(from);
   await recordFunnelEvent(
     "bot",
@@ -1477,10 +1469,8 @@ async function handleVideo(
     FUNNEL_EVENTS.VIDEO_SUBMITTED,
     from.language_code
   );
-  const blockedReason = await getSubmissionBlocker(user.id, dict, source.duration, {
-    telegramId: from.id,
-    locale: from.language_code,
-  });
+  const subject = { telegramId: from.id, locale: from.language_code };
+  const blockedReason = await getSubmissionBlocker(user.id, dict, source.duration, subject);
   if (blockedReason) {
     await client.sendMessage(
       message.chat.id,
@@ -1496,8 +1486,6 @@ async function handleVideo(
     await client.sendMessage(message.chat.id, dict.fileTooLarge(config.appUrl));
     return;
   }
-
-  await client.sendMessage(message.chat.id, dict.uploading);
 
   const tempDir = join(tmpdir(), "clipclap-telegram");
   await mkdir(tempDir, { recursive: true });
@@ -1552,6 +1540,14 @@ async function handleVideoUrl(
   config: BotRuntimeConfig
 ) {
   await client.sendMessage(message.chat.id, dict.checkingLink);
+  // Recorded here - not after the probe - so a dead or unsupported link still
+  // counts as an attempt. That is the distinction this event exists to keep.
+  await recordFunnelEvent(
+    "bot",
+    from.id,
+    FUNNEL_EVENTS.VIDEO_SUBMITTED,
+    from.language_code
+  );
 
   const probe = await probeVideoUrl(url);
   if (!probe.ok) {
@@ -1560,16 +1556,8 @@ async function handleVideoUrl(
   }
 
   const user = await resolveTelegramUser(from);
-  await recordFunnelEvent(
-    "bot",
-    from.id,
-    FUNNEL_EVENTS.VIDEO_SUBMITTED,
-    from.language_code
-  );
-  const blockedReason = await getSubmissionBlocker(user.id, dict, probe.durationSec, {
-    telegramId: from.id,
-    locale: from.language_code,
-  });
+  const subject = { telegramId: from.id, locale: from.language_code };
+  const blockedReason = await getSubmissionBlocker(user.id, dict, probe.durationSec, subject);
   if (blockedReason) {
     await client.sendMessage(
       message.chat.id,
@@ -1634,37 +1622,34 @@ export async function getSubmissionBlocker(
       ? Math.ceil(durationSec / 60)
       : 0;
 
+  // NOTE: this still records before the reply this text goes into is sent -
+  // it can't be deferred to the call site without widening this function's
+  // return type from string|null to something structured, which would also
+  // touch every other test that calls getSubmissionBlocker directly. Recorded
+  // here, ahead of the reply, as the accepted compromise.
+  const recordRejection = (code: UploadRejectionCode) =>
+    subject
+      ? recordFunnelEvent("bot", subject.telegramId, uploadRejectedEvent(code), subject.locale)
+      : Promise.resolve();
+
   if (
     durationMinutes > 0 &&
     durationMinutes > limits.maxSourceDurationMinutes
   ) {
     if (user.plan === "NONE") {
+      await recordRejection("FREE_SOURCE_TOO_LONG");
       return dict.freeSourceTooLong(
         limits.maxSourceDurationMinutes,
         STARTER_WEEKLY.maxSourceDurationMinutes
       );
     }
-    if (subject) {
-      await recordFunnelEvent(
-        "bot",
-        subject.telegramId,
-        uploadRejectedEvent("TOO_LONG"),
-        subject.locale
-      );
-    }
+    await recordRejection("TOO_LONG");
     return dict.planSourceTooLong(limits.maxSourceDurationMinutes);
   }
 
   const submission = await canSubmitJob(userId, durationMinutes);
   if (!submission.allowed) {
-    if (subject) {
-      await recordFunnelEvent(
-        "bot",
-        subject.telegramId,
-        uploadRejectedEvent(submission.code),
-        subject.locale
-      );
-    }
+    await recordRejection(submission.code);
     switch (submission.code) {
       case "FREE_TRIAL_USED":
         return dict.freeTrialUsed(

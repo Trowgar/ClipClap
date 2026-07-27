@@ -22,6 +22,8 @@ const mocks = vi.hoisted(() => ({
   accountCreate: vi.fn(),
   linkTokenCreate: vi.fn(),
   funnelUpsert: vi.fn(),
+  jobCount: vi.fn(),
+  probeVideoUrl: vi.fn(),
 }));
 
 vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
@@ -37,10 +39,19 @@ vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
     },
     telegramLinkToken: { create: mocks.linkTokenCreate },
     funnelEvent: { upsert: mocks.funnelUpsert },
+    job: { count: mocks.jobCount },
   },
 }));
 
-import { FUNNEL_EVENTS } from "@clipclap/shared";
+vi.mock("../url-probe", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../url-probe")>();
+  return {
+    ...actual,
+    probeVideoUrl: mocks.probeVideoUrl,
+  };
+});
+
+import { FUNNEL_EVENTS, uploadRejectedEvent } from "@clipclap/shared";
 import {
   CALLBACK_LINK_ACCOUNT,
   CALLBACK_NEW_ACCOUNT,
@@ -98,6 +109,8 @@ describe("first-screen telemetry", () => {
     mocks.accountCreate.mockResolvedValue({});
     mocks.linkTokenCreate.mockResolvedValue({});
     mocks.userFindUniqueOrThrow.mockResolvedValue({ id: "u1", plan: "NONE" });
+    mocks.jobCount.mockResolvedValue(0);
+    mocks.probeVideoUrl.mockReset();
   });
 
   it("records that a stranger reached the first screen", async () => {
@@ -225,5 +238,128 @@ describe("first-screen telemetry", () => {
     ).resolves.toBeUndefined();
 
     expect(client.editMessageText).toHaveBeenCalled();
+  });
+});
+
+describe("app-open and video-submitted telemetry", () => {
+  const EXISTING_USER = {
+    id: "u1",
+    telegramId: "4242",
+    telegramLocale: "ru",
+    supportOpen: false,
+    plan: "NONE",
+    billingCycle: null,
+    subtitlesEnabled: false,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.SUPPORT_CHAT_ID;
+    delete process.env.REFERRAL_ADMIN_TELEGRAM_IDS;
+    mocks.userFindUnique.mockResolvedValue(EXISTING_USER);
+    mocks.funnelUpsert.mockResolvedValue({});
+    mocks.userCreate.mockResolvedValue(EXISTING_USER);
+    mocks.accountFindUnique.mockResolvedValue(null);
+    mocks.accountCreate.mockResolvedValue({});
+    mocks.linkTokenCreate.mockResolvedValue({});
+    mocks.userFindUniqueOrThrow.mockResolvedValue({
+      id: "u1",
+      plan: "NONE",
+      billingCycle: null,
+    });
+    mocks.jobCount.mockResolvedValue(0);
+    mocks.probeVideoUrl.mockReset();
+  });
+
+  function menuUpdate() {
+    return {
+      update_id: 10,
+      message: { message_id: 10, chat: CHAT, from: FROM, text: "/menu" },
+    };
+  }
+
+  function videoUrlUpdate(url: string) {
+    return {
+      update_id: 11,
+      message: { message_id: 11, chat: CHAT, from: FROM, text: url },
+    };
+  }
+
+  it("records app_opened when /menu shows the main menu", async () => {
+    const { client } = harness();
+
+    await handleUpdate(client as never, menuUpdate() as never, CONFIG);
+
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      CHAT.id,
+      t("ru").welcomeBack,
+      expect.anything()
+    );
+    const appOpened = eventsRecorded().filter(
+      (e) => e === FUNNEL_EVENTS.APP_OPENED
+    );
+    expect(appOpened).toHaveLength(1);
+  });
+
+  it("records app_opened exactly once (not twice) for a brand-new account", async () => {
+    mocks.userFindUnique.mockResolvedValue(null);
+    mocks.userCreate.mockResolvedValue({ id: "u1", telegramId: "4242" });
+    const { client } = harness();
+
+    await handleUpdate(
+      client as never,
+      {
+        update_id: 12,
+        callback_query: {
+          id: "cb",
+          from: FROM,
+          data: CALLBACK_NEW_ACCOUNT,
+          message: { message_id: 7, chat: CHAT },
+        },
+      } as never,
+      CONFIG
+    );
+
+    expect(eventsRecorded()).toContain(FUNNEL_EVENTS.NEW_ACCOUNT);
+    const appOpened = eventsRecorded().filter(
+      (e) => e === FUNNEL_EVENTS.APP_OPENED
+    );
+    expect(appOpened).toHaveLength(1);
+  });
+
+  it("records video_submitted for a URL whose probe fails", async () => {
+    mocks.probeVideoUrl.mockResolvedValue({ ok: false, reason: "yt-dlp-error" });
+    const { client } = harness();
+
+    await handleUpdate(
+      client as never,
+      videoUrlUpdate("https://example.com/watch?v=dead-link") as never,
+      CONFIG
+    );
+
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      CHAT.id,
+      t("ru").urlAccessFailed
+    );
+    expect(eventsRecorded()).toContain(FUNNEL_EVENTS.VIDEO_SUBMITTED);
+  });
+
+  it("records upload_rejected_too_long for a free-tier user whose source is too long", async () => {
+    mocks.probeVideoUrl.mockResolvedValue({
+      ok: true,
+      durationSec: 600,
+      title: "A ten-minute video",
+    });
+    const { client } = harness();
+
+    await handleUpdate(
+      client as never,
+      videoUrlUpdate("https://example.com/watch?v=long-video") as never,
+      CONFIG
+    );
+
+    expect(eventsRecorded()).toContain(
+      uploadRejectedEvent("FREE_SOURCE_TOO_LONG")
+    );
   });
 });
