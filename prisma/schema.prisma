@@ -376,6 +376,12 @@ model Job {
   languageRaw           String?
   noClipsReason         NoClipsReason?
   normalizedArtifactKey String?
+  /// Stamped by the retention sweep once a terminal job's redundant source
+  /// copies have been dealt with. It is a TERMINATION MARKER, not a log: a job
+  /// whose sourceArtifactKey equals its normalizedArtifactKey has nothing for
+  /// that rule to delete, and without this column it would match the rule's
+  /// selector on every hourly run for ever.
+  sourceSweptAt         DateTime?
   analyzeEngine         AnalyzeEngine?
   highlightsVersion     Int            @default(1)
   transcriptCoverage    Float?
@@ -392,6 +398,7 @@ model Job {
   @@index([status])
   @@index([userId, status])
   @@index([userId, createdAt])
+  @@index([status, createdAt])
   @@map("jobs")
 }
 
