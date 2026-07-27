@@ -35,14 +35,13 @@ describe("computeClipExpiresAt", () => {
     expect(days).toBe(30);
   });
 
-  // NONE clips are real output now - the free run produces them - so they get
-  // the NONE plan's retention like every other plan, not a 24h orphan sweep.
-  // A free user needs long enough to watch what we made and show someone.
+  // NONE clips are whatever the NONE plan says, no special case. The free trial
+  // is disabled (NONE_LIMITS is all zeros as of 2026-07-25), so the honest
+  // assertion is "tracks the plan", not a floor from the era when it was live.
   it("uses the NONE plan's retention for free-run clips", () => {
     const expires = computeClipExpiresAt("NONE", null, now);
     const days = (expires.getTime() - now.getTime()) / (24 * 60 * 60 * 1000);
     expect(days).toBe(getPlanLimits("NONE").retentionDays);
-    expect(days).toBeGreaterThan(1);
   });
 
   it("propagates the underlying error for invalid plan/cycle combos", () => {
