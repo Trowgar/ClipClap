@@ -262,18 +262,27 @@ export async function deleteProject(
       id: true,
       sourceKey: true,
       sourceArtifactKey: true,
+      normalizedArtifactKey: true,
       thumbnailKey: true,
       clips: { select: { storageKey: true } },
     },
   });
   if (!job) return { status: "not_found" };
 
+  // A Set, not an array: normalizeSource returning "none" stores the SAME key
+  // in sourceArtifactKey and normalizedArtifactKey, and deleting it twice logs
+  // a failure for an object that is already gone.
   const r2Keys = [
-    job.sourceKey,
-    job.sourceArtifactKey,
-    job.thumbnailKey,
-    ...job.clips.map((c) => c.storageKey),
-  ].filter((key): key is string => Boolean(key));
+    ...new Set(
+      [
+        job.sourceKey,
+        job.sourceArtifactKey,
+        job.normalizedArtifactKey,
+        job.thumbnailKey,
+        ...job.clips.map((c) => c.storageKey),
+      ].filter((key): key is string => Boolean(key))
+    ),
+  ];
 
   // Delete DB record first - Prisma cascades to clips, steps, deliveries.
   await prisma.job.delete({ where: { id: job.id } });

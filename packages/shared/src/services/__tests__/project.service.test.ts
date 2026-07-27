@@ -3,21 +3,28 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   jobFindMany: vi.fn(),
   getPresignedDownloadUrl: vi.fn(),
+  jobFindFirst: vi.fn(),
+  jobDelete: vi.fn(),
+  deleteFile: vi.fn(),
 }));
 
 vi.mock("../../lib/prisma", () => ({
   prisma: {
     job: {
       findMany: mocks.jobFindMany,
+      findFirst: mocks.jobFindFirst,
+      delete: mocks.jobDelete,
     },
   },
 }));
 
 vi.mock("../../lib/r2", () => ({
   getPresignedDownloadUrl: mocks.getPresignedDownloadUrl,
+  deleteFile: mocks.deleteFile,
 }));
 
 import {
+  deleteProject,
   getProjectDetail,
   getRecentProjects,
   getUserProjects,
@@ -81,6 +88,50 @@ describe("project.service", () => {
       })
     );
     expect(result?.clips[0]).not.toHaveProperty("storageKey");
+  });
+});
+
+describe("deleteProject - R2 keys", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.deleteFile.mockResolvedValue(undefined);
+    mocks.jobDelete.mockResolvedValue({});
+  });
+
+  it("deletes the normalized artifact, which is the largest object in the job", async () => {
+    mocks.jobFindFirst.mockResolvedValue({
+      id: "job1",
+      sourceKey: "uploads/u1/original.mp4",
+      sourceArtifactKey: "work/u1/job1/source.mp4",
+      normalizedArtifactKey: "work/u1/job1/normalized.mp4",
+      thumbnailKey: "thumbs/job1.jpg",
+      clips: [{ storageKey: "clips/u1/job1/a.mp4" }],
+    });
+
+    await deleteProject("job1", "u1");
+
+    const deleted = mocks.deleteFile.mock.calls.map((c: any[]) => c[0]);
+    expect(deleted).toContain("work/u1/job1/normalized.mp4");
+    expect(deleted).toHaveLength(5);
+  });
+
+  it("does not delete the same key twice when normalization was a no-op", async () => {
+    // normalizeSource returning action "none" stores the SAME key in both
+    // columns. Deleting it twice logs a spurious failure for a key that is
+    // already gone.
+    mocks.jobFindFirst.mockResolvedValue({
+      id: "job2",
+      sourceKey: null,
+      sourceArtifactKey: "work/u1/job2/source.mp4",
+      normalizedArtifactKey: "work/u1/job2/source.mp4",
+      thumbnailKey: null,
+      clips: [],
+    });
+
+    await deleteProject("job2", "u1");
+
+    const deleted = mocks.deleteFile.mock.calls.map((c: any[]) => c[0]);
+    expect(deleted).toEqual(["work/u1/job2/source.mp4"]);
   });
 });
 
