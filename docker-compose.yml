@@ -39,6 +39,8 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
       target: ${TARGET:-development}
+      args:
+        MAXMIND_LICENSE_KEY: ${MAXMIND_LICENSE_KEY:-}
     command: ["npx", "next", "dev", "--turbo", "--hostname", "0.0.0.0"]
     expose:
       - "3000"
