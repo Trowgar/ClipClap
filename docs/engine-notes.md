@@ -8,7 +8,7 @@ Rules for this file: every number here came from a measurement, not from reasoni
 reproduced, say how. When something is believed but unmeasured, mark it. Delete an entry when it stops being
 true - a stale note is worse than none, and this file has already caught two of its own.
 
-Last substantive update: 2026-07-26.
+Last substantive update: 2026-07-27.
 
 ---
 
@@ -243,27 +243,6 @@ a real video. A green run is not "quality is fine".
 
 ---
 
-## 6. Invariants that must not break
-
-**Billing.** `usage.service.getMinutesUsedInPeriod` sums jobs whose status is NOT `FAILED`. So a job that
-completes DONE with zero clips BILLS the user, and one stuck in a processing status bills forever. Therefore a
-technical failure must never present as a content answer. The converse matters just as much: a weak video is
-the commonest honest answer there is, and turning it into FAILED denies the user a real reply and burns three
-retries that cannot help, because the critic rejects the same moments every time.
-
-**Boundaries are code-owned.** Any boundary a model proposes goes back through `snapNodes` and is discarded
-if snap rejects it. A rewritten title must cite evidence nodes inside the final range - and be re-checked
-AFTER any accepted trim, because a trim can move the evidence outside.
-
-**`lexicalOverlap` is telemetry, never a gate.** It penalises paraphrase and inflected languages; using it to
-gate Russian copy would reject legitimate rewrites. This is documented at its definition; it has been
-proposed as a gate once and rejected.
-
-**Never touch `apps/web/lib/auth.ts` or `apps/web/lib/telegram-provider.ts`** while the owner's Telegram OIDC
-work is uncommitted there (67 insertions / 9 deletions as of 2026-07-25). `git stash` disturbed them once.
-
----
-
 ## 5a. FINALIZE, and what it actually did
 
 One LLM call over the whole shipped set, with every model decision code-gated. Landed 2026-07-26. Measured on
@@ -304,7 +283,87 @@ fixtures transcribe the same question as `"какие претензии"` and `
 sees one and misses the other, defeated by the same indel jitter as everything else. Capitalization and
 `leadingStrength` were both measured and rejected as signals.
 
+## 5b. The only real-world verdict we have
+
+2026-07-26. The owner uploaded a 52-minute Russian podcast (job `cms2c8ahm000droa7tcqh30ho`) and got 8 clips.
+This is the only judgement of shipped output by anyone other than the engine's own tests, so treat it as the
+scoreboard.
+
+**He would post 2 of 8.** The reframing he called a clear win - wide two-person shots are stitched properly
+now, and that half of the product is settled. On the clips: one he would definitely post ("Что на самом деле
+может уничтожить человечество", 0.80, 43.3s), one probably ("Главные разрушители планеты?", 0.80, 69.5s), and
+of the rest, in his words: **"either uninteresting, or the beginning or end is unclear."**
+
+Two facts to carry forward from that:
+
+**The score does not rank by postability.** The clip he would post scored 0.80, joint fourth. Two clips scored
+higher and he would not post either. Whatever the critic's score tracks, it is not "would a clipper publish
+this".
+
+**Even his second pick was broken, and he spotted what no check did.** It ends on `"Планета еще и не такое
+видала"` - grammatically complete, the question's answer inside the clip, payoff present, every gate happy -
+and three sentences later the speaker delivers the specifics that substantiate it. His words: "it seems to cut
+off". See §4 for the rule that tried to fix this and had to be reverted.
+
+**The diagnosis, and its headline: the engine damages clips the critic gets right.** Three of the six weak
+clips were broken AFTER the critic had approved a coherent arc - two by the over-length compression walking the
+start forward and deleting the premise, one by end selection. The critic is doing better work than the code
+that follows it. Fixed since: compression now uses the shared `isCleanStart` (it had its own weaker test), copy
+evidence is re-checked against the boundaries that actually shipped, and the critic budget no longer withholds
+half the pool.
+
+### Defect vocabulary from that job
+
+Names for things the engine could not previously talk about. Each has a real example in that transcript.
+
+| Name | What it is | Real case |
+|---|---|---|
+| Orphaned cause | Opens on a consequence marker whose antecedent the length cap deleted | `"Поэтому все неафриканское человечество имеет…"`, its premise 0.1s outside |
+| Orphaned premise | The question the clip answers was cut by compression | Survivability clip: compression walked the start forward 4 nodes / 30.7s past the question |
+| Refuted conclusion | Ends on a claim the source overturns immediately after | `"мы самые живучие на планете"`, then `"по части устойчивости к ядам, крысы гораздо живучее нас"` |
+| Cut inside an anaphoric run | Ends on the first beat of a rhetorical build | The `"Планета… Планета… Планете"` figure |
+| Drag | An interior clarification ping-pong nothing can see - the critic reads a padded window, the finalizer has no verb for interior content | `"Надежда на эволюцию для кого? - Для человека. - Для человека? - Или только на прогресс?"` |
+| Arc stacking | One clip carries several complete arguments; a viewer who came for one question is asked to sit through three | The 0.90, 86.9s clip: successful species -> closing the carbon cycle -> spaceflight as biosphere immortality |
+
+**Arc stacking and drag are the "uninteresting" half of his complaint, and NOTHING in the engine measures
+them.** `maxSec` of 90 is a platform limit, not a taste bound. Every fix shipped so far addresses edges. If the
+hit rate is to move, this is where the next work goes - the shape of the question would be "one clip, one
+question" rather than another boundary rule.
+
+## 6. Invariants that must not break
+
+**Billing.** `usage.service.getMinutesUsedInPeriod` sums jobs whose status is NOT `FAILED`. So a job that
+completes DONE with zero clips BILLS the user, and one stuck in a processing status bills forever. Therefore a
+technical failure must never present as a content answer. The converse matters just as much: a weak video is
+the commonest honest answer there is, and turning it into FAILED denies the user a real reply and burns three
+retries that cannot help, because the critic rejects the same moments every time.
+
+**Boundaries are code-owned.** Any boundary a model proposes goes back through `snapNodes` and is discarded
+if snap rejects it. A rewritten title must cite evidence nodes inside the final range - and be re-checked
+AFTER any accepted trim, because a trim can move the evidence outside.
+
+**`lexicalOverlap` is telemetry, never a gate.** It penalises paraphrase and inflected languages; using it to
+gate Russian copy would reject legitimate rewrites. This is documented at its definition; it has been
+proposed as a gate once and rejected.
+
+**Never touch `apps/web/lib/auth.ts` or `apps/web/lib/telegram-provider.ts`** while the owner's Telegram OIDC
+work is uncommitted there (67 insertions / 9 deletions as of 2026-07-25). `git stash` disturbed them once.
+
+---
+
 ## 6a. Open follow-ups on ANALYZE
+
+Ordered by expected effect on the owner's 2-of-8 hit rate, most valuable first.
+
+- **Arc stacking and drag - the "uninteresting" half.** See §5b. No mechanism measures either. This is the
+  only item here that plausibly moves the hit rate rather than the polish.
+- **Compression and trims enforce contradictory policies on the same structure.** `tryTrim` refuses a boundary
+  move that orphans a question (`orphansQuestion`, shipped `6d24a55`); `snapNodes` compression performs one -
+  its headline repair opens on `"Ну как живучий смотря по каким параметрам сравнивать"` while the question
+  `"…самый живучий вид на планете или все-таки нет?"` sits immediately outside. Unify them.
+- **The punchline-outside case has only a drop, not a repair.** Extending an end to a reaction the engine can
+  already identify would turn a dropped clip into a good one. Blocked on an owner decision: end-trimming was
+  ruled out of scope to protect payoffs, and lifting that is his call.
 
 - **Tell the finalizer's judge about the teaser region.** The detector publishes `teaserRegion`; passing it
   into the finalizer prompt ("the first N seconds of this video are a trailer montage") turns a deterministic
