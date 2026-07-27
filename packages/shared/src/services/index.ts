@@ -29,7 +29,7 @@ export * from "./tribute.service";
 export * from "./tribute-shop.service";
 export * from "./subscription-reconcile.service";
 export * from "./referral.service";
-export * from "./bot-funnel.service";
+export * from "./funnel.service";
 // Named re-exports for error classes that callers need to instanceof-check
 export { UnsupportedPlanCycleError } from "./billing.service";
 export type { InvoiceRow, InvoicePage } from "./billing.service";
