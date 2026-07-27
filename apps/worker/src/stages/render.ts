@@ -333,9 +333,26 @@ async function renderTrim(
 
     let finalPath: string;
     let slicedPlan: CropPlan | null = null;
+    // The queue payload snapshots sourceArtifactKey at enqueue time, so it can
+    // point at an object the retention sweep has since deleted. That is a
+    // failure to OBTAIN the source, not a render failure - degrade to the
+    // clip-file fallback below rather than throwing. An encode error further
+    // down keeps its own existing behaviour.
+    let cleanSourcePath: string | null = null;
     if (cleanSource) {
-      const sourcePath = await downloadVideo(undefined, payload.sourceArtifactKey!);
-      tempFiles.push(sourcePath);
+      try {
+        cleanSourcePath = await downloadVideo(undefined, payload.sourceArtifactKey!);
+        tempFiles.push(cleanSourcePath);
+      } catch (error) {
+        console.warn(
+          `[render] trim source artifact unavailable on job ${payload.jobId} (key=${payload.sourceArtifactKey}), falling back to clip file:`,
+          error
+        );
+        cleanSourcePath = null;
+      }
+    }
+    if (cleanSourcePath) {
+      const sourcePath = cleanSourcePath;
       let assFilter: { filter: string; assPath: string } | null = null;
       if (wantSubs) {
         assFilter = await createAssFilter(windowedCues);
