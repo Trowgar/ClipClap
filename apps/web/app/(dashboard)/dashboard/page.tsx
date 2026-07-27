@@ -1,6 +1,12 @@
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { projectService, userService, getPlanLimits } from "@clipclap/shared";
+import {
+  projectService,
+  userService,
+  getPlanLimits,
+  recordFunnelEvent,
+  FUNNEL_EVENTS,
+} from "@clipclap/shared";
 import { UploadZone } from "@/components/upload-zone";
 import { RecentProjects } from "@/components/project-list";
 
@@ -12,6 +18,11 @@ export default async function DashboardPage() {
     projectService.getRecentProjects(session.user.id),
     userService.getUsage(session.user.id),
   ]);
+
+  // After the page's own data is resolved, never before: this is telemetry and
+  // must not sit in front of what the user came for. recordFunnelEvent never
+  // throws, so a failing write cannot break the dashboard.
+  await recordFunnelEvent("web", session.user.id, FUNNEL_EVENTS.APP_OPENED);
 
   // NONE now carries the free allowance rather than zeros, so the upload zone
   // renders enabled for a new account with the free caps applied.

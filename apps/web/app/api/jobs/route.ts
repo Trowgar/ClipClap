@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { jobService, prisma, getPlanLimits, canSubmitJob } from "@clipclap/shared";
+import {
+  jobService,
+  prisma,
+  getPlanLimits,
+  canSubmitJob,
+  recordFunnelEvent,
+  uploadRejectedEvent,
+  FUNNEL_EVENTS,
+} from "@clipclap/shared";
 
 export const dynamic = "force-dynamic";
 
@@ -29,6 +37,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  await recordFunnelEvent("web", userId, FUNNEL_EVENTS.VIDEO_SUBMITTED);
+
   const durationMinutes =
     typeof sourceDurationSec === "number" && sourceDurationSec > 0
       ? Math.ceil(sourceDurationSec / 60)
@@ -52,6 +62,7 @@ export async function POST(req: NextRequest) {
   const limits = getPlanLimits(user.plan, user.billingCycle ?? "MONTHLY");
 
   if (durationMinutes > limits.maxSourceDurationMinutes) {
+    await recordFunnelEvent("web", userId, uploadRejectedEvent("TOO_LONG"));
     return NextResponse.json(
       {
         error: `Source exceeds max duration (${limits.maxSourceDurationMinutes} min). Trim before uploading.`,
@@ -61,10 +72,12 @@ export async function POST(req: NextRequest) {
   }
 
   if (!submission.allowed) {
+    await recordFunnelEvent("web", userId, uploadRejectedEvent(submission.code));
     return NextResponse.json({ error: submission.reason }, { status: 402 });
   }
 
   if (jobsToday >= limits.maxJobsPerDay) {
+    await recordFunnelEvent("web", userId, uploadRejectedEvent("DAILY_LIMIT"));
     return NextResponse.json(
       {
         error: `Daily job limit reached (${limits.maxJobsPerDay}). Try again tomorrow or upgrade.`,
@@ -73,6 +86,7 @@ export async function POST(req: NextRequest) {
     );
   }
   if (inFlight >= limits.concurrentJobsLimit) {
+    await recordFunnelEvent("web", userId, uploadRejectedEvent("CONCURRENT"));
     return NextResponse.json(
       {
         error: `You have ${inFlight} active jobs (limit: ${limits.concurrentJobsLimit}). Wait for one to finish.`,
