@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * The bot's first screen was a hole in the funnel.
@@ -361,5 +361,79 @@ describe("app-open and video-submitted telemetry", () => {
     expect(eventsRecorded()).toContain(
       uploadRejectedEvent("FREE_SOURCE_TOO_LONG")
     );
+  });
+});
+
+/**
+ * Who can SEE the analytics entry, which is a separate question from who can
+ * read the data behind it. The data is gated by initData at /api/admin/enter;
+ * the button is gated here.
+ */
+describe("admin analytics button visibility", () => {
+  const EXISTING_USER = {
+    id: "u1",
+    telegramId: "4242",
+    telegramLocale: "ru",
+    supportOpen: false,
+    plan: "NONE",
+    billingCycle: null,
+    subtitlesEnabled: false,
+  };
+
+  const GROUP = { id: -100500, type: "supergroup" as const };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.SUPPORT_CHAT_ID;
+    process.env.REFERRAL_ADMIN_TELEGRAM_IDS = "4242";
+    mocks.userFindUnique.mockResolvedValue(EXISTING_USER);
+    mocks.funnelUpsert.mockResolvedValue({});
+  });
+
+  afterEach(() => {
+    delete process.env.REFERRAL_ADMIN_TELEGRAM_IDS;
+  });
+
+  function menuIn(chat: { id: number; type: string }) {
+    return {
+      update_id: 20,
+      message: { message_id: 20, chat, from: FROM, text: "/menu" },
+    };
+  }
+
+  function keyboardText(client: { sendMessage: { mock: { calls: unknown[][] } } }) {
+    const opts = client.sendMessage.mock.calls[0][2] as {
+      replyMarkup?: { keyboard: { text: string }[][] };
+    };
+    return (opts.replyMarkup?.keyboard ?? []).flat().map((b) => b.text);
+  }
+
+  it("shows the analytics button to an admin in a private chat", async () => {
+    const { client } = harness();
+
+    await handleUpdate(client as never, menuIn(CHAT) as never, CONFIG);
+
+    expect(keyboardText(client)).toContain("📊 Analytics");
+  });
+
+  it("hides it in a group even when the sender is the admin", async () => {
+    // A reply keyboard is attached to the CHAT, not the sender: without
+    // `selective` every member of the group would get the button on their own
+    // keyboard. They cannot read the data, but the entry point is not theirs
+    // to see either.
+    const { client } = harness();
+
+    await handleUpdate(client as never, menuIn(GROUP) as never, CONFIG);
+
+    expect(keyboardText(client)).not.toContain("📊 Analytics");
+  });
+
+  it("hides it from a non-admin in their own private chat", async () => {
+    process.env.REFERRAL_ADMIN_TELEGRAM_IDS = "999";
+    const { client } = harness();
+
+    await handleUpdate(client as never, menuIn(CHAT) as never, CONFIG);
+
+    expect(keyboardText(client)).not.toContain("📊 Analytics");
   });
 });
