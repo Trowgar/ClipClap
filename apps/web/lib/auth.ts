@@ -41,7 +41,11 @@ const nextAuth = NextAuth({
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) return null;
 
-        const email = credentials.email as string;
+        // Lowercase to match /api/register, which normalizes before storing.
+        // The unique index is case-sensitive in Postgres, so without this an
+        // address typed with different capitalisation than it was registered
+        // with simply fails to log in.
+        const email = (credentials.email as string).trim().toLowerCase();
         const password = credentials.password as string;
 
         const user = await prisma.user.findUnique({ where: { email } });

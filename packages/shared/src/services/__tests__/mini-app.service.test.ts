@@ -57,6 +57,25 @@ describe("verifyTelegramInitData", () => {
     expect(verifyTelegramInitData(initData, BOT_TOKEN).ok).toBe(false);
   });
 
+  it("expires an hour-old signature - a captured initData is not a day pass", () => {
+    // Still correctly signed by Telegram; only old. The window used to be 24h,
+    // which meant one leaked initData could mint admin sessions all day.
+    const justOver = String(nowSec - 60 * 61);
+    expect(
+      verifyTelegramInitData(
+        makeInitData({ auth_date: justOver, user: userJson }),
+        BOT_TOKEN
+      ).ok
+    ).toBe(false);
+    const justUnder = String(nowSec - 60 * 59);
+    expect(
+      verifyTelegramInitData(
+        makeInitData({ auth_date: justUnder, user: userJson }),
+        BOT_TOKEN
+      ).ok
+    ).toBe(true);
+  });
+
   it("rejects empty input and a missing hash", () => {
     expect(verifyTelegramInitData("", BOT_TOKEN).ok).toBe(false);
     expect(verifyTelegramInitData("auth_date=1&user=%7B%7D", BOT_TOKEN).ok).toBe(false);

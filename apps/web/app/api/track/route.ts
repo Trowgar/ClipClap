@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { recordSiteVisit } from "@clipclap/shared";
+import { normalizeTrackedPath, recordSiteVisit } from "@clipclap/shared";
 
 // Prisma and the GeoIP reader both need Node APIs, which the Edge runtime does
 // not have - this is exactly why the middleware hands off to this route rather
@@ -39,10 +39,11 @@ export async function POST(req: NextRequest) {
 
   if (!body.ip || !body.path) return new NextResponse(null, { status: 204 });
 
-  // Cap the path: the unique key includes it, so an attacker walking distinct
-  // URLs would otherwise create unlimited rows per day, and a pathname beyond
-  // the btree limit fails the insert silently.
-  const path = body.path.slice(0, 200);
+  // Collapse onto the routes the site actually has: the unique key includes the
+  // path, so an attacker walking distinct URLs would otherwise create unlimited
+  // rows per day. The slice is the belt to that braces - a pathname beyond the
+  // btree limit fails the insert silently.
+  const path = normalizeTrackedPath(body.path).slice(0, 200);
 
   await recordSiteVisit({
     ip: body.ip,

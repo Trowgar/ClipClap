@@ -15,6 +15,10 @@ import { MiniAppGate } from "./mini-app-gate";
 
 export const dynamic = "force-dynamic";
 
+// The route answers 200 to anonymous visitors (it renders the Mini App gate,
+// not a 404), so without this a crawler would list /admin as a real page.
+export const metadata = { robots: { index: false, follow: false } };
+
 const SURFACES = [
   { key: "", label: "Combined" },
   { key: "bot", label: "Telegram" },
@@ -145,9 +149,16 @@ export default async function AdminAnalyticsPage({
             your own accounts and cancelled subscriptions are excluded
           </p>
         )}
+        {/* External figures lead, totals follow in parentheses. This section
+            exists to refuse to flatter: showing `jobs` here read as 9 when 8 of
+            them were the owner's own. */}
         <p className="mt-3 text-sm opacity-70">
-          {totals.users} total users · {totals.externalUsers} external ·{" "}
-          {totals.jobs} jobs · {totals.clips} clips
+          {totals.externalUsers} external users · {totals.externalJobs} jobs ·{" "}
+          {totals.externalClips} clips
+        </p>
+        <p className="mt-1 text-xs opacity-50">
+          including your own accounts: {totals.users} users · {totals.jobs} jobs
+          · {totals.clips} clips
         </p>
       </section>
 

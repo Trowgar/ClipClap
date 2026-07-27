@@ -15,13 +15,28 @@ export function isAdminEmail(
 }
 
 /**
+ * Providers that PROVE the address: only Google, which verified the mailbox
+ * before issuing the identity, and which @auth/core refuses to link onto an
+ * existing same-email user (allowDangerousEmailAccountLinking is off).
+ *
+ * `telegram` deliberately does NOT count. A telegram account row says nothing
+ * about the email, and any logged-in user can mint one for themselves through
+ * /api/auth/telegram/link/redeem - so accepting it turned the gate back into
+ * "email alone", one link away: register an unclaimed ADMIN_EMAILS address at
+ * /api/register (open, self-service), link any telegram account, be admin.
+ * Telegram admins do not need this path anyway - they enter through the Mini
+ * App, which checks the id against REFERRAL_ADMIN_TELEGRAM_IDS.
+ */
+const ADMIN_PROOF_PROVIDERS = ["google"];
+
+/**
  * Whether this user may see the admin page by email.
  *
  * The email alone is NOT sufficient: registration is open and self-service, so
  * anyone could claim an address (the unique index is case-sensitive while this
  * check is not, so even a case variant of the owner's address would pass). We
- * additionally require a federated identity - a google/telegram account row -
- * which a self-registered credentials account does not have.
+ * additionally require an identity that proves the address - see
+ * ADMIN_PROOF_PROVIDERS for why that list is exactly one provider long.
  */
 export async function isAdminUser(
   userId: string | undefined,
@@ -30,7 +45,7 @@ export async function isAdminUser(
 ): Promise<boolean> {
   if (!userId || !isAdminEmail(email, adminEmails)) return false;
   const federated = await prisma.account.count({
-    where: { userId, provider: { in: ["google", "telegram"] } },
+    where: { userId, provider: { in: ADMIN_PROOF_PROVIDERS } },
   });
   return federated > 0;
 }
@@ -172,8 +187,13 @@ export async function getTraffic(days = 30): Promise<TrafficSummary> {
   since.setUTCHours(0, 0, 0, 0);
   const where = { isBot: false, day: { gte: since } };
 
-  const [rows, byCountry, topPaths, topReferrers] = await Promise.all([
-    prisma.siteVisit.findMany({ where, select: { visitorHash: true, hits: true } }),
+  const [visitors, totals, byCountry, topPaths, topReferrers] = await Promise.all([
+    // Grouped, not findMany: one row per visitor-day rather than one per
+    // (visitor, path, day). The path is attacker-influenced - every extensionless
+    // URL on the site is tracked, including 404s - so a row-per-path read grows
+    // without a bound anyone controls.
+    prisma.siteVisit.groupBy({ by: ["visitorHash"], where }),
+    prisma.siteVisit.aggregate({ where, _sum: { hits: true } }),
     // Grouped with visitorHash and reduced below: _count._all would count
     // site_visits ROWS (one per visitor per path per day), not visitors - one
     // guest viewing 5 pages would otherwise look like 5 guests.
@@ -205,8 +225,8 @@ export async function getTraffic(days = 30): Promise<TrafficSummary> {
   const referrerCounts = countByKey(topReferrers, "referrerHost");
 
   return {
-    visitorDays: new Set(rows.map((r) => r.visitorHash)).size,
-    pageviews: rows.reduce((sum, r) => sum + r.hits, 0),
+    visitorDays: visitors.length,
+    pageviews: totals._sum.hits ?? 0,
     byCountry: [...countryCounts.entries()]
       .map(([country, guests]) => ({ country: country as string | null, guests }))
       .sort((a, b) => b.guests - a.guests),
@@ -282,6 +302,8 @@ export interface Totals {
   jobs: number;
   externalJobs: number;
   clips: number;
+  /** Clips owned by someone other than the owner - the honest one. */
+  externalClips: number;
 }
 
 /** Surface-scoped totals: bot = users with a telegramId, web = with an email. */
@@ -293,19 +315,37 @@ export async function getTotals(
   const own = parseOwnAccounts(ownAccounts);
   const externalWhere = { ...userWhere, ...excludeOwnAccountsWhere(own) };
 
-  const [users, externalUsers, paying, externalPayingActive, jobs, externalJobs, clips] =
-    await Promise.all([
-      prisma.user.count({ where: userWhere }),
-      prisma.user.count({ where: externalWhere }),
-      prisma.user.count({ where: { ...userWhere, plan: { not: "NONE" } } }),
-      prisma.user.count({
-        where: { ...externalWhere, plan: { not: "NONE" }, subscriptionStatus: "ACTIVE" },
-      }),
-      prisma.job.count({ where: { user: userWhere } }),
-      prisma.job.count({ where: { user: externalWhere } }),
-      prisma.clip.count({ where: { user: userWhere } }),
-    ]);
-  return { users, externalUsers, paying, externalPayingActive, jobs, externalJobs, clips };
+  const [
+    users,
+    externalUsers,
+    paying,
+    externalPayingActive,
+    jobs,
+    externalJobs,
+    clips,
+    externalClips,
+  ] = await Promise.all([
+    prisma.user.count({ where: userWhere }),
+    prisma.user.count({ where: externalWhere }),
+    prisma.user.count({ where: { ...userWhere, plan: { not: "NONE" } } }),
+    prisma.user.count({
+      where: { ...externalWhere, plan: { not: "NONE" }, subscriptionStatus: "ACTIVE" },
+    }),
+    prisma.job.count({ where: { user: userWhere } }),
+    prisma.job.count({ where: { user: externalWhere } }),
+    prisma.clip.count({ where: { user: userWhere } }),
+    prisma.clip.count({ where: { user: externalWhere } }),
+  ]);
+  return {
+    users,
+    externalUsers,
+    paying,
+    externalPayingActive,
+    jobs,
+    externalJobs,
+    clips,
+    externalClips,
+  };
 }
 
 export interface PulseWindow {

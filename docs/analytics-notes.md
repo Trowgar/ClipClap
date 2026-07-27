@@ -5,7 +5,8 @@ this up next - including a future me. Same rules as `engine-notes.md`: every num
 measurement, not from reasoning; when a claim is reproduced, say how; when something is believed but
 unmeasured, mark it. Delete an entry when it stops being true - a stale note is worse than none.
 
-Shipped and live in production since 2026-07-27. Last substantive update: 2026-07-27.
+Shipped and live in production since 2026-07-27. Last substantive update: 2026-07-27 (security review,
+traps 7-10).
 
 ---
 
@@ -54,8 +55,9 @@ One row per person per step, not one per press: `count(*)` is the answer to "how
 
 **Guest traffic** - `site_visits`. One row per visitor per path per day; a reload increments `hits`.
 `visitorHash` = `sha256(ip + ua + sha256(TRACK_SECRET + YYYY-MM-DD))`. **No raw IP is ever stored**, and the
-daily salt means the same person is unlinkable across days. Service:
-`packages/shared/src/services/site-visit.service.ts`.
+daily salt means the same person is unlinkable across days. The path is not the raw pathname but
+`normalizeTrackedPath` of it - the site's real routes, ids stripped, everything else bucketed as `/_other`
+(see trap 8). Service: `packages/shared/src/services/site-visit.service.ts`.
 
 Collected by the Edge middleware handing off to a Node route, because Next.js middleware cannot use Prisma -
 the codebase already documented this before analytics existed ("the Edge runtime is not compatible with
@@ -96,6 +98,10 @@ what makes "tried and was refused" distinguishable from "never tried". Do not mo
 - **`externalPayingActive` is the only honest revenue number.** It excludes cancelled subscriptions and the
   owner's own accounts (`ANALYTICS_OWN_ACCOUNTS`). The raw `paying` count says 3 and means nothing: two are
   Oleg's own accounts and the third cancelled on 2026-07-20. As of 2026-07-27 the honest number is **0**.
+- **The Reality check line shows the EXTERNAL jobs and clips**, with the totals demoted to a footnote.
+  It briefly showed the raw ones: `externalJobs` was computed and never rendered, and `externalClips` did
+  not exist, so the section built to refuse to flatter read "9 jobs · 46 clips" when the external truth was
+  **1 job · 5 clips**. Fixed 2026-07-27. If you add a figure here, add its external twin in the same commit.
 - **`visitorDays`, not unique visitors.** The salt rotates daily by design, so somebody who visits on ten
   days counts ten times. This is the price of not being able to follow a person across days, and it is the
   right trade. Do not rename it back to "guests".
@@ -130,8 +136,8 @@ invisible in unit tests.
 index is case-SENSITIVE, and the admin check was case-INSENSITIVE. So registering `Olegs@linearis.io`
 against an existing `olegs@linearis.io` passed the duplicate check and granted `/admin`. If the configured
 admin address had no user row at all, the plain address worked directly. Fixed: the gate requires a
-**federated identity** (a `google`/`telegram` row in `accounts`), and registration lowercases the address.
-Note `emailVerified` is NULL for every user in this database, so it cannot be used as the gate.
+**federated identity**, and registration lowercases the address. Note `emailVerified` is NULL for every user
+in this database, so it cannot be used as the gate. See trap 7 for why that identity is Google only.
 
 **2. Never build a middleware fetch URL from `req.url`.** The host nginx uses `proxy_set_header Host $host`,
 i.e. it forwards the client's Host. `curl -H 'Host: attacker.tld' https://clipclap.io/` made the Edge
@@ -164,6 +170,40 @@ documented in the code: the refusal record inside `getSubmissionBlocker` lands j
 because decoupling it would mean changing that function's return type and rippling into two other test
 files.
 
+Traps 7-10 came out of a deliberate security pass on 2026-07-27, after the rest of the stack was already
+live. All four are fixed and covered by tests.
+
+**7. "Has a federated account" is not "is who they say they are".** The trap-1 fix accepted a `google` OR
+`telegram` row as proof of the address. But a telegram row says nothing about an email, and **any** logged-in
+user can mint one for themselves through `/api/auth/telegram/link/redeem`. So the gate was one link away from
+being email-alone again: register an unclaimed `ADMIN_EMAILS` address at `/api/register` (open, self-service,
+and `/api/auth/check-email` will even tell you for free whether it is claimable), link any telegram account,
+open `/admin`. Not exploitable as configured - `ikscerato@gmail.com` already holds a `google` row, checked
+against the live table - but it would have gone live the moment a second address joined the list before its
+account existed. Fixed: only `google` counts (it verified the mailbox, and @auth/core refuses to link it onto
+an existing same-email user). Telegram admins never needed this path - they enter through the Mini App, which
+checks the id against `REFERRAL_ADMIN_TELEGRAM_IDS`.
+
+**8. The tracked path was attacker-chosen.** The unique key is `(day, visitorHash, path)` and the middleware
+tracks every extensionless URL *including ones that 404* - so an anonymous visitor walking `/a1`, `/a2`,
+`/a3`... minted one row per URL per day, no secret and no login required, and `getTraffic` then read every
+one of those rows into memory with `findMany` to compute two numbers. Unbounded table, admin page slower with
+every scanner. Fixed at both ends: `normalizeTrackedPath` collapses onto the routes that exist (`/_other` for
+the rest, ids stripped), and the two totals are a `groupBy` and an `aggregate` instead of a full read.
+Verified live: two distinct 404 URLs now land as one `/_other` row with `hits = 2`.
+
+**9. A reply keyboard belongs to the chat, not to the sender.** The admin check for the "📊 Analytics" button
+was `from.id`, which is right, but the keyboard goes to `chat.id` - and without `selective` Telegram shows it
+to *every member* of a group. One `/menu` in any group would have put the analytics button on everyone's
+keyboard. The data behind it stays shut (initData is checked per user, and the page renders a blank gate to
+anyone else), but the entry point is not theirs to see either. `sendMainMenu` now builds the button only when
+`chatId === from.id`, which is exactly the private-chat test.
+
+**10. A captured `initData` was a 24-hour day pass.** `MAX_AUTH_AGE_SEC` was 86400, so one leaked initData -
+a screenshot, a proxy log, a borrowed phone - could mint fresh one-hour admin cookies all day. The gate posts
+initData the instant the Mini App loads, so nothing legitimate needs more than the hour it now gets; an admin
+who left the app open overnight just reopens it and Telegram issues a new `auth_date`.
+
 ---
 
 ## 6. Operational facts
@@ -175,16 +215,20 @@ Env (all in `.env`, none in git):
 | `TRACK_SECRET` | shared secret between middleware and `/api/track`; without it that endpoint would be a public row-writer |
 | `NEXT_PUBLIC_APP_URL` | trusted origin for the tracking POST - never `req.url` (see trap 2) |
 | `NEXT_PUBLIC_APP_HOST` | bare host used to recognise our own referrers as internal |
-| `ADMIN_EMAILS` | who may open `/admin` by session (plus a federated account row) |
+| `ADMIN_EMAILS` | who may open `/admin` by session - **and only with a `google` account row**, see trap 7 |
 | `REFERRAL_ADMIN_TELEGRAM_IDS` | who gets the Mini App button and may enter via `initData` |
 | `ANALYTICS_OWN_ACCOUNTS` | Oleg's own accounts, excluded from every "external" figure |
 | `MAXMIND_LICENSE_KEY` | optional; absent = visits still recorded, `country` is null |
 
 **Two ways into `/admin`:**
-1. Desktop: a session whose email is in `ADMIN_EMAILS` **and** which has a `google`/`telegram` account row.
-2. Phone: the reply-keyboard "📊 Analytics" Mini App button -> Telegram injects `initData` ->
-   `/api/admin/enter` validates the HMAC and sets a signed one-hour `cc_admin` cookie -> the page renders.
-   No login at all.
+1. Desktop: a session whose email is in `ADMIN_EMAILS` **and** which has a `google` account row (trap 7).
+2. Phone: the reply-keyboard "📊 Analytics" Mini App button, shown in **private chats only** (trap 9) ->
+   Telegram injects `initData`, valid for one hour (trap 10) -> `/api/admin/enter` validates the HMAC and
+   sets a signed one-hour `cc_admin` cookie -> the page renders. No login at all.
+
+The `cc_admin` cookie is scoped `path=/admin`, so a future `/api/admin/*` route will NOT see it and would
+have to re-verify initData itself. That is deliberate, and it is the kind of thing that reads as a bug when
+you hit it.
 
 The Mini App HMAC uses `HMAC_SHA256("WebAppData", botToken)` as the secret. The Login Widget uses
 `sha256(botToken)`. Mixing those up is the classic "the signature never matches" bug.
@@ -219,6 +263,18 @@ Open, roughly in order of value:
    talking-head videos currently in the corpus.
 4. **The payment funnel** (plans screen -> pay link -> paid) is out of scope so far. With
    `externalPayingActive` at 0 there is nothing to measure yet; revisit when somebody reaches the paywall.
+
+Found in the 2026-07-27 security pass, judged real but **not** fixed, so nobody rediscovers them as news:
+
+- **The web runs the Next.js dev target in production.** That is deliberate on this host (see `CLAUDE.md`),
+  but it is why `/admin` ships the turbopack HMR client, the devtools bundle and server-side chunk paths like
+  `/app/apps/web/.next/server/chunks/ssr/...` in its RSC payload, and why an unhandled error returns a full
+  stack trace rather than a generic page.
+- **`/api/auth/check-email` is an unauthenticated account oracle.** It answers `exists` and `hasPassword` for
+  any address. Harmless on its own, it is the reconnaissance half of trap 7.
+- **`/admin` answers 200 to anonymous visitors**, because the Mini App gate has to run in their browser to be
+  able to post initData. It renders no data - only the gate - and now carries `robots: noindex`, but the
+  route is not a 404 and cannot be made one without breaking the phone path.
 
 What this instrumentation cannot tell you: whether the clips are any good. That question belongs to
 `engine-notes.md`, and it is still the one that decides whether any of these 98 people stay.

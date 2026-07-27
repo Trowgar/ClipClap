@@ -1,6 +1,14 @@
 import { createHmac, timingSafeEqual } from "crypto";
 
-const MAX_AUTH_AGE_SEC = 60 * 60 * 24;
+/**
+ * How long a captured initData stays usable. One hour, matching the admin
+ * cookie TTL: the gate posts initData the moment the Mini App loads, so nothing
+ * legitimate needs a longer window, while the 24h it used to be meant one
+ * leaked initData (a screenshot, a proxy log, a shared device) could mint a
+ * fresh admin session for a whole day. Re-opening the Mini App issues a new
+ * auth_date, so an admin who left it open overnight just reopens it.
+ */
+const MAX_AUTH_AGE_SEC = 60 * 60;
 
 export type InitDataResult = { ok: true; telegramId: string } | { ok: false };
 

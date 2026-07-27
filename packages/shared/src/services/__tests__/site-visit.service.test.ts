@@ -8,10 +8,42 @@ vi.mock("../../lib/prisma", () => ({
 
 import {
   isBotUserAgent,
+  normalizeTrackedPath,
+  OTHER_PATH,
   referrerHost,
   visitorHash,
   recordSiteVisit,
 } from "../site-visit.service";
+
+describe("normalizeTrackedPath", () => {
+  it("keeps the routes the site really has", () => {
+    expect(normalizeTrackedPath("/")).toBe("/");
+    expect(normalizeTrackedPath("/login")).toBe("/login");
+    expect(normalizeTrackedPath("/dashboard")).toBe("/dashboard");
+    expect(normalizeTrackedPath("/dashboard/billing")).toBe("/dashboard/billing");
+  });
+
+  it("strips ids so one path does not become one per clip", () => {
+    expect(normalizeTrackedPath("/dashboard/clips/abc-123")).toBe("/dashboard/clips");
+    expect(normalizeTrackedPath("/dashboard/jobs/xyz")).toBe("/dashboard/jobs");
+  });
+
+  it("buckets anything unrecognised", () => {
+    // The unique key is (day, visitorHash, path) and the middleware tracks
+    // every extensionless URL including 404s - so without this bucket, an
+    // anonymous visitor walking /a1, /a2, /a3... mints one row per URL per day
+    // with no secret and no login.
+    expect(normalizeTrackedPath("/a1")).toBe(OTHER_PATH);
+    expect(normalizeTrackedPath("/dashboard/not-a-page")).toBe(OTHER_PATH);
+    expect(normalizeTrackedPath("/cgi-bin/ViewLog.asp")).toBe(OTHER_PATH);
+  });
+
+  it("normalises trailing slashes and query junk onto the same row", () => {
+    expect(normalizeTrackedPath("/login/")).toBe("/login");
+    expect(normalizeTrackedPath("/?ref=abc")).toBe("/");
+    expect(normalizeTrackedPath("")).toBe("/");
+  });
+});
 
 describe("isBotUserAgent", () => {
   it("flags the crawlers that actually hit this host", () => {

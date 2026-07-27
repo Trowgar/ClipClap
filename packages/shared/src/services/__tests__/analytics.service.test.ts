@@ -33,8 +33,18 @@ describe("isAdminUser", () => {
   it("passes a listed email that has a federated account", async () => {
     mocks.count.mockResolvedValue(1);
     await expect(isAdminUser("u1", "me@example.com", "me@example.com")).resolves.toBe(true);
+  });
+
+  it("counts ONLY google as proof of the address", async () => {
+    // A telegram account row proves nothing about the email, and any logged-in
+    // user can mint one for themselves via /api/auth/telegram/link/redeem. If
+    // "telegram" ever reappears in this list, the gate collapses back to
+    // "email alone": register an unclaimed ADMIN_EMAILS address at
+    // /api/register, link any telegram account, and the analytics page opens.
+    mocks.count.mockResolvedValue(1);
+    await isAdminUser("u1", "me@example.com", "me@example.com");
     expect(mocks.count).toHaveBeenCalledWith({
-      where: { userId: "u1", provider: { in: ["google", "telegram"] } },
+      where: { userId: "u1", provider: { in: ["google"] } },
     });
   });
 
