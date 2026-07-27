@@ -1496,19 +1496,47 @@ Run: `docker compose exec -w /app/apps/web web npx vitest run --root ../.. packa
 
 Expected: PASS, 1 passed.
 
-- [ ] **Step 5: Rebuild shared and restart the scheduler worker**
+- [ ] **Step 5: Arm the dry run BEFORE the schedule exists**
+
+This step is not optional and not reorderable. The moment `worker-finalize` restarts with
+the schedule registered, the sweep runs at the top of every hour against a production
+bucket - and the dry run that is supposed to precede the first real deletion does not
+happen until Task 14. Set the flag first:
+
+```bash
+grep -q '^RETENTION_SWEEP_DRY_RUN=' .env || echo 'RETENTION_SWEEP_DRY_RUN=1' >> .env
+grep -n 'RETENTION_SWEEP_DRY_RUN' .env
+```
+
+Expected: exactly one line, `RETENTION_SWEEP_DRY_RUN=1`. If the value is empty, set it to
+`1` - an empty value is a LIVE run.
+
+- [ ] **Step 6: Rebuild shared and restart the scheduler worker**
 
 Run:
 ```bash
 docker compose exec -w /app web npm run build -w @clipclap/shared
-docker compose restart worker-finalize
+docker compose up -d worker-finalize
 docker compose logs --tail 30 worker-finalize
 ```
+
+(`up -d`, not `restart`: the container must pick up the new `.env` value, which `restart`
+does not re-read.)
 
 Expected: the worker boots with `role=finalize` and no errors. (Only the `finalize` role
 registers schedules - see `apps/worker/src/index.ts:12`.)
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Confirm the first scheduled pass is inert**
+
+At the next top of the hour, or immediately via the forced-pass command in
+`docs/runbooks/retention-sweep.md`, the log line MUST carry the `[dry-run]` marker:
+
+Run: `docker compose logs --tail 50 worker-finalize | grep retention`
+
+Expected: a line beginning `[retention][dry-run]`. A line without `[dry-run]` means the
+flag did not reach the container - stop and fix that before doing anything else.
+
+- [ ] **Step 8: Commit**
 
 ```bash
 git add packages/shared/src/lib/referral-queue.ts packages/shared/src/lib/index.ts packages/shared/src/lib/__tests__/referral-queue.test.ts apps/worker/src/referral-scheduler.ts
@@ -2021,6 +2049,10 @@ git -c user.name=Trowgar -c user.email=trowgar@yahoo.com commit -m "fix(telegram
 - Modify: `.env.example`
 - Modify: `.env` (this host - not in git)
 - Create: `docs/runbooks/retention-sweep.md`
+
+The flag itself was already set in this host's `.env` back in Task 9, Step 5 - it had to
+be, because Task 9 is where the hourly schedule starts firing. This task documents it and
+performs the cross-check that lets it come off.
 
 - [ ] **Step 1: Document the flag in `.env.example`**
 
