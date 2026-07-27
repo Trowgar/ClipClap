@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
+import type { NextFetchEvent, NextRequest } from "next/server";
 
 // Inlined from @clipclap/shared config/referral.ts.
 // We cannot import from the @clipclap/shared barrel here because it re-exports
@@ -9,7 +9,41 @@ import type { NextRequest } from "next/server";
 const REFERRAL_COOKIE_NAME = "cc_ref";
 const ATTRIBUTION_WINDOW_DAYS = 30; // REFERRAL_CONFIG.attributionWindowDays
 
-export function middleware(req: NextRequest) {
+/**
+ * Hands the visit to /api/_track, which runs on Node and can reach Prisma.
+ *
+ * Wrapped in event.waitUntil because a bare un-awaited fetch may be killed
+ * along with the response, silently losing visits.
+ */
+function trackVisit(req: NextRequest, event: NextFetchEvent): void {
+  const secret = process.env.TRACK_SECRET;
+  if (!secret) return;
+
+  // The owner's own analytics visits must not pollute the numbers he reads.
+  if (req.nextUrl.pathname.startsWith("/admin")) return;
+
+  const ip =
+    req.headers.get("x-real-ip") ??
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  if (!ip) return;
+
+  event.waitUntil(
+    fetch(new URL("/api/_track", req.url), {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-track-secret": secret },
+      body: JSON.stringify({
+        ip,
+        userAgent: req.headers.get("user-agent") ?? "",
+        path: req.nextUrl.pathname,
+        referrer: req.headers.get("referer") ?? "",
+      }),
+    }).catch(() => undefined)
+  );
+}
+
+export function middleware(req: NextRequest, event: NextFetchEvent) {
+  trackVisit(req, event);
+
   const ref = req.nextUrl.searchParams.get("ref");
 
   // Auth guard only for /dashboard.
@@ -38,6 +72,8 @@ export function middleware(req: NextRequest) {
   return res;
 }
 
+// Every page, but never /api (the track route would record itself in a loop),
+// _next internals, or files with an extension.
 export const config = {
-  matcher: ["/", "/dashboard/:path*"],
+  matcher: ["/((?!api|_next/static|_next/image|favicon.ico|.*\\..*).*)"],
 };
