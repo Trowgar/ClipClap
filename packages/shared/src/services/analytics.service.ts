@@ -35,25 +35,116 @@ export async function isAdminUser(
   return federated > 0;
 }
 
+/** @deprecated kept for callers that have not moved to FunnelStep yet. */
 export interface FunnelRow {
   event: string;
   people: number;
   repeats: number;
 }
 
-/** People per funnel step for one surface, or both when surface is undefined. */
-export async function getFunnel(surface?: FunnelSurface): Promise<FunnelRow[]> {
+/** Funnel steps in the order a person actually passes them. Refusals are not
+ *  steps - they are branches off `video_submitted` and are reported separately
+ *  by getRefusals. */
+const FUNNEL_ORDER = [
+  "start_first_screen",
+  "first_screen_new_account",
+  "first_screen_link_account",
+  "app_opened",
+  "video_submitted",
+] as const;
+
+const FUNNEL_LABELS: Record<(typeof FUNNEL_ORDER)[number], string> = {
+  start_first_screen: "Saw the first screen",
+  first_screen_new_account: "Created an account",
+  first_screen_link_account: "Linked an account",
+  app_opened: "Opened the app",
+  video_submitted: "Submitted a video",
+};
+
+export interface FunnelStep {
+  event: string;
+  label: string;
+  people: number;
+  repeats: number;
+  /** % of the previous non-zero step, null for the first one. */
+  pctOfPrev: number | null;
+  /** True for the step with the largest absolute drop from its predecessor. */
+  biggestDrop: boolean;
+}
+
+/**
+ * Funnel steps for one surface (or both), in true funnel order with the
+ * drop-off from each step's predecessor. Steps with no rows are skipped
+ * entirely rather than shown as a hard zero.
+ */
+export async function getFunnel(surface?: FunnelSurface): Promise<FunnelStep[]> {
   const grouped = await prisma.funnelEvent.groupBy({
     by: ["event"],
     where: surface ? { surface } : undefined,
     _count: { _all: true },
     _sum: { occurrences: true },
   });
+  const byEvent = new Map(
+    grouped.map((g) => [
+      g.event,
+      { people: g._count._all, repeats: (g._sum.occurrences ?? 0) - g._count._all },
+    ])
+  );
+
+  const steps: FunnelStep[] = [];
+  let prevPeople: number | null = null;
+  for (const event of FUNNEL_ORDER) {
+    const row = byEvent.get(event);
+    if (!row || row.people === 0) continue;
+    const pctOfPrev =
+      prevPeople === null || prevPeople === 0
+        ? null
+        : Math.round((row.people / prevPeople) * 100);
+    steps.push({
+      event,
+      label: FUNNEL_LABELS[event],
+      people: row.people,
+      repeats: row.repeats,
+      pctOfPrev,
+      biggestDrop: false,
+    });
+    prevPeople = row.people;
+  }
+
+  // Largest absolute drop between two consecutive surviving steps.
+  let biggestDropIdx = -1;
+  let biggestDropAmount = 0;
+  for (let i = 1; i < steps.length; i++) {
+    const drop = Math.abs(steps[i - 1].people - steps[i].people);
+    if (drop > biggestDropAmount) {
+      biggestDropAmount = drop;
+      biggestDropIdx = i;
+    }
+  }
+  if (biggestDropIdx >= 0) steps[biggestDropIdx].biggestDrop = true;
+
+  return steps;
+}
+
+export interface RefusalRow {
+  reason: string;
+  people: number;
+}
+
+/** Upload refusals by reason - branches off video_submitted, not funnel steps. */
+export async function getRefusals(surface?: FunnelSurface): Promise<RefusalRow[]> {
+  const grouped = await prisma.funnelEvent.groupBy({
+    by: ["event"],
+    where: {
+      ...(surface ? { surface } : {}),
+      event: { startsWith: "upload_rejected_" },
+    },
+    _count: { _all: true },
+  });
   return grouped
     .map((g) => ({
-      event: g.event,
+      reason: g.event.replace(/^upload_rejected_/, ""),
       people: g._count._all,
-      repeats: (g._sum.occurrences ?? 0) - g._count._all,
     }))
     .sort((a, b) => b.people - a.people);
 }
@@ -130,27 +221,118 @@ export async function getTraffic(days = 30): Promise<TrafficSummary> {
   };
 }
 
+/** Splits the comma-separated own-accounts list into emails and telegram ids. */
+export function parseOwnAccounts(raw: string | undefined): {
+  emails: string[];
+  telegramIds: string[];
+} {
+  const parts = (raw ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return {
+    emails: parts.filter((p) => p.includes("@")).map((p) => p.toLowerCase()),
+    telegramIds: parts.filter((p) => !p.includes("@")),
+  };
+}
+
+/** Surface scoping shared by getTotals and getPulse: bot = telegramId set, web = email set. */
+function surfaceWhere(surface?: FunnelSurface) {
+  return surface === "bot"
+    ? { telegramId: { not: null } }
+    : surface === "web"
+      ? { email: { not: null } }
+      : {};
+}
+
+/** A Prisma User where-clause excluding the owner's own accounts, empty when none configured. */
+function excludeOwnAccountsWhere(own: { emails: string[]; telegramIds: string[] }) {
+  if (own.emails.length === 0 && own.telegramIds.length === 0) return {};
+  return {
+    NOT: {
+      OR: [
+        ...(own.emails.length
+          ? [{ email: { in: own.emails, mode: "insensitive" as const } }]
+          : []),
+        ...(own.telegramIds.length ? [{ telegramId: { in: own.telegramIds } }] : []),
+      ],
+    },
+  };
+}
+
 export interface Totals {
+  /** All users, including the owner's own. */
   users: number;
+  /** Users excluding the owner's own accounts. */
+  externalUsers: number;
+  /** plan != NONE, all users. */
   paying: number;
+  /** plan != NONE AND subscriptionStatus = ACTIVE AND not an own account. */
+  externalPayingActive: number;
   jobs: number;
+  externalJobs: number;
   clips: number;
 }
 
 /** Surface-scoped totals: bot = users with a telegramId, web = with an email. */
-export async function getTotals(surface?: FunnelSurface): Promise<Totals> {
-  const userWhere =
-    surface === "bot"
-      ? { telegramId: { not: null } }
-      : surface === "web"
-        ? { email: { not: null } }
-        : {};
+export async function getTotals(
+  surface?: FunnelSurface,
+  ownAccounts?: string
+): Promise<Totals> {
+  const userWhere = surfaceWhere(surface);
+  const own = parseOwnAccounts(ownAccounts);
+  const externalWhere = { ...userWhere, ...excludeOwnAccountsWhere(own) };
 
-  const [users, paying, jobs, clips] = await Promise.all([
-    prisma.user.count({ where: userWhere }),
-    prisma.user.count({ where: { ...userWhere, plan: { not: "NONE" } } }),
-    prisma.job.count({ where: { user: userWhere } }),
-    prisma.clip.count({ where: { user: userWhere } }),
+  const [users, externalUsers, paying, externalPayingActive, jobs, externalJobs, clips] =
+    await Promise.all([
+      prisma.user.count({ where: userWhere }),
+      prisma.user.count({ where: externalWhere }),
+      prisma.user.count({ where: { ...userWhere, plan: { not: "NONE" } } }),
+      prisma.user.count({
+        where: { ...externalWhere, plan: { not: "NONE" }, subscriptionStatus: "ACTIVE" },
+      }),
+      prisma.job.count({ where: { user: userWhere } }),
+      prisma.job.count({ where: { user: externalWhere } }),
+      prisma.clip.count({ where: { user: userWhere } }),
+    ]);
+  return { users, externalUsers, paying, externalPayingActive, jobs, externalJobs, clips };
+}
+
+export interface PulseWindow {
+  newUsers: number;
+  jobs: number;
+  clips: number;
+}
+export interface Pulse {
+  today: PulseWindow;
+  last7: PulseWindow;
+  last30: PulseWindow;
+}
+
+/** New users / jobs / clips in the last 1, 7 and 30 days, EXTERNAL only. */
+export async function getPulse(
+  surface: FunnelSurface | undefined,
+  ownAccounts: string | undefined
+): Promise<Pulse> {
+  const own = parseOwnAccounts(ownAccounts);
+  const externalWhere = { ...surfaceWhere(surface), ...excludeOwnAccountsWhere(own) };
+
+  const todayStart = new Date();
+  todayStart.setUTCHours(0, 0, 0, 0);
+  const last7Start = new Date(Date.now() - 7 * 86_400_000);
+  const last30Start = new Date(Date.now() - 30 * 86_400_000);
+
+  const windowFor = async (since: Date): Promise<PulseWindow> => {
+    const [newUsers, jobs, clips] = await Promise.all([
+      prisma.user.count({ where: { ...externalWhere, createdAt: { gte: since } } }),
+      prisma.job.count({ where: { createdAt: { gte: since }, user: externalWhere } }),
+      prisma.clip.count({ where: { createdAt: { gte: since }, user: externalWhere } }),
+    ]);
+    return { newUsers, jobs, clips };
+  };
+
+  const [today, last7, last30] = await Promise.all([
+    windowFor(todayStart),
+    windowFor(last7Start),
+    windowFor(last30Start),
   ]);
-  return { users, paying, jobs, clips };
+
+  return { today, last7, last30 };
 }
