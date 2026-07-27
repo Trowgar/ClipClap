@@ -13,9 +13,26 @@ Refactored 2026-07-27 from a shape where "add a language" meant eight hand-edits
 `packages/shared/src/i18n/locales.ts` holds the single list:
 
 ```ts
-export const LOCALES = ["en", "ru"] as const;
+export const LOCALES = ["en", "ru", "es", "pt", "id"] as const;
 export type Locale = (typeof LOCALES)[number];
 ```
+
+Spanish, Portuguese and Indonesian shipped 2026-07-27. The pick was a market
+bet, not a reading of the numbers: at 63 Telegram accounts with a locale, the
+gap between Indonesian (6), Persian (5) and Arabic (4) is noise, and only one
+external user has ever run a job. What made these three defensible is that
+Indonesia is the second-largest TikTok audience and Brazil plus LatAm the
+largest short-form market after the US, all three are Latin script (no RTL
+work), and Whisper handles them well. Persian was rejected despite ranking
+third: Iranian cards clear through neither Tribute nor Stripe, so a translated
+funnel would dead-end at checkout.
+
+**Portuguese is `pt`, not `pt-BR`.** `detectLocale` resolves on the primary
+subtag, so the registry holds primary subtags only; a client reporting `pt-BR`
+- which is what both existing Portuguese accounts report - lands on `pt`, whose
+copy is written in Brazilian Portuguese. Adding a region-tagged locale would
+mean teaching `detectLocale` to match on the full tag first, which nothing
+needs yet.
 
 Everything locale-shaped derives from it - the `Locale` union, the bot's `Record<Locale, Dict>`
 registry, the reply-keyboard matchers, the `/lang` keyboard, the Telegram profile sync, and the payment
@@ -33,15 +50,27 @@ importing its locale vocabulary from one place.
 ## 2. Adding a language
 
 1. Add the code to `LOCALES` in `packages/shared/src/i18n/locales.ts`.
-2. Run the typechecker. Two `Record<Locale, ...>` maps now fail to compile, and they are the whole job:
-   - `dictionaries` in `apps/bot/src/i18n.ts` - the ~92-key `Dict` (interface strings, buttons,
-     `commands` for the Telegram menu, `botDescription`, the per-`JobErrorCode` failure map).
+2. Write `apps/bot/src/i18n/<code>.ts` - one file per language, exporting a default `Dict`. Copy the
+   nearest existing one for shape: the ~92-key `Dict` (interface strings, buttons, `commands` for the
+   Telegram menu, `botDescription`, the per-`JobErrorCode` failure map) plus its own plural helper.
+3. Run the typechecker. Three `Record<Locale, ...>` maps now fail to compile, and they are the rest of
+   the job:
+   - `dictionaries` in `apps/bot/src/i18n/index.ts` - import and register the new file.
    - `PAYMENT_COPY` in `telegram-notification.service.ts` - four billing messages.
-   - `LANG_ALIASES` in `apps/bot/src/i18n.ts` - what someone might type after `/lang` besides the bare
-     code. Aliases belong to the locale they **select**, not the one they are written in: "английский"
-     is a Russian word and sits under `en`.
-3. Nothing else. The `/lang` keyboard, the `/lang` usage text, the reply-keyboard matchers and the
+   - `LANG_ALIASES` in `apps/bot/src/i18n/index.ts` - what someone might type after `/lang` besides the
+     bare code. Aliases belong to the locale they **select**, not the one they are written in:
+     "английский" is a Russian word and sits under `en`.
+4. Nothing else. The `/lang` keyboard, the `/lang` usage text, the reply-keyboard matchers and the
    Telegram profile sync all iterate `LOCALES`.
+
+Two tests do work no compiler can. **"has no keyboard label meaning two different things across
+locales"** guards the matchers: buttons are resolved by text across every locale at once, so two
+languages may share a label only if it means the same thing - "⬅️ Menu" in English and Indonesian is
+harmless, a label that means Help in one language and Plans in another routes users to the wrong
+screen with nothing to report it. **"gives every locale a full, non-empty keyboard and command set"**
+holds the Telegram API's own limits: command descriptions max 256 characters, short description 120,
+description 512 - exceed one and `setMyCommands` rejects the whole call for that language, leaving it
+with an English command menu.
 
 There is no database migration: `User.telegramLocale` is a free-text `String?`. `detectLocale` accepts
 whatever is in it, including raw IETF tags written by `telegram-auth.service` (`en-US`, `pt-BR`) and

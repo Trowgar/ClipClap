@@ -12,7 +12,7 @@
  *  notifications are rendered here too (telegram-notification.service). A
  *  second private copy of `"en" | "ru"` is how a new language degrades back to
  *  English on the one message a paying user is guaranteed to read. */
-export const LOCALES = ["en", "ru"] as const;
+export const LOCALES = ["en", "ru", "es", "pt", "id"] as const;
 
 export type Locale = (typeof LOCALES)[number];
 

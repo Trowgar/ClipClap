@@ -49,7 +49,7 @@ import {
   handleUpdate,
   langCallbackData,
 } from "../handlers";
-import { t } from "../i18n";
+import { LOCALES, t } from "../i18n";
 
 const CONFIG = { appUrl: "https://clipclap.io" };
 const CHAT = { id: 4242, type: "private" as const };
@@ -139,6 +139,29 @@ describe("automatic locale detection for a stranger", () => {
       t("ru").welcomeFirstChoice,
       expect.anything()
     );
+  });
+
+  // The three added 2026-07-27. pt-BR matters most: it is what both existing
+  // Portuguese-speaking accounts actually report, and the registry stores the
+  // primary subtag `pt`, so the region tag has to resolve rather than fall
+  // through to English.
+  it("answers Spanish, Portuguese and Indonesian clients in their own language", async () => {
+    for (const [tag, locale] of [
+      ["es", "es"],
+      ["es-MX", "es"],
+      ["pt", "pt"],
+      ["pt-BR", "pt"],
+      ["id", "id"],
+      ["id-ID", "id"],
+    ] as const) {
+      const client = harness();
+      await handleUpdate(client as never, message("/start", tag) as never, CONFIG);
+      expect(client.sendMessage).toHaveBeenCalledWith(
+        CHAT.id,
+        t(locale).welcomeFirstChoice,
+        expect.anything()
+      );
+    }
   });
 
   it("falls back to English for a language we do not speak", async () => {
@@ -239,10 +262,9 @@ describe("changing the language from the settings menu", () => {
       t("ru").langMenuPrompt,
       expect.objectContaining({
         replyMarkup: expect.objectContaining({
-          inline_keyboard: [
-            [{ text: t("en").langBtn, callback_data: "lang_en" }],
-            [{ text: t("ru").langBtn, callback_data: "lang_ru" }],
-          ],
+          inline_keyboard: LOCALES.map((loc) => [
+            { text: t(loc).langBtn, callback_data: langCallbackData(loc) },
+          ]),
         }),
       })
     );

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { configureBotProfile } from "../setup";
-import { t } from "../i18n";
+import { LOCALES, t } from "../i18n";
 
 function makeStubClient() {
   return {
@@ -11,33 +11,29 @@ function makeStubClient() {
 }
 
 describe("configureBotProfile", () => {
-  it("syncs description, short description and commands for en and ru", async () => {
+  // Driven off LOCALES rather than a pair of literals: a language added to the
+  // registry but missing from the Telegram profile sync shows up as an English
+  // description and command list in a client set to that language, which no
+  // other test would catch.
+  it("syncs description, short description and commands for every locale", async () => {
     const client = makeStubClient();
     await configureBotProfile(client as never);
 
-    expect(client.setMyDescription).toHaveBeenCalledTimes(2);
-    expect(client.setMyDescription).toHaveBeenCalledWith(
-      t("en").botDescription,
-      "en"
-    );
-    expect(client.setMyDescription).toHaveBeenCalledWith(
-      t("ru").botDescription,
-      "ru"
-    );
+    expect(client.setMyDescription).toHaveBeenCalledTimes(LOCALES.length);
+    expect(client.setMyShortDescription).toHaveBeenCalledTimes(LOCALES.length);
+    expect(client.setMyCommands).toHaveBeenCalledTimes(LOCALES.length);
 
-    expect(client.setMyShortDescription).toHaveBeenCalledTimes(2);
-    expect(client.setMyShortDescription).toHaveBeenCalledWith(
-      t("en").botShortDescription,
-      "en"
-    );
-    expect(client.setMyShortDescription).toHaveBeenCalledWith(
-      t("ru").botShortDescription,
-      "ru"
-    );
-
-    expect(client.setMyCommands).toHaveBeenCalledTimes(2);
-    expect(client.setMyCommands).toHaveBeenCalledWith(t("en").commands, "en");
-    expect(client.setMyCommands).toHaveBeenCalledWith(t("ru").commands, "ru");
+    for (const loc of LOCALES) {
+      expect(client.setMyDescription).toHaveBeenCalledWith(
+        t(loc).botDescription,
+        loc
+      );
+      expect(client.setMyShortDescription).toHaveBeenCalledWith(
+        t(loc).botShortDescription,
+        loc
+      );
+      expect(client.setMyCommands).toHaveBeenCalledWith(t(loc).commands, loc);
+    }
   });
 
   it("does not throw when the client fails - logs a warning instead", async () => {

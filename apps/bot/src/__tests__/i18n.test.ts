@@ -219,6 +219,74 @@ describe("bot i18n", () => {
     expect(ru).not.toContain("Хранилище:");
   });
 
+  // Reply-keyboard buttons are matched by their TEXT, across every locale at
+  // once (matchMenuAction and friends loop LOCALES). So two locales may share
+  // a label only if it means the same thing: "⬅️ Menu" in English and
+  // Indonesian is harmless, but a label that means "Help" in one language and
+  // "Plans" in another would silently route one locale's users to the wrong
+  // screen, with nothing anywhere to report it.
+  it("has no keyboard label meaning two different things across locales", () => {
+    const seen = new Map<string, string>();
+    const collisions: string[] = [];
+    const buttons = [
+      "menuAccount",
+      "menuHelp",
+      "menuSettings",
+      "menuAffiliate",
+      "menuPlans",
+      "settingsLangBtn",
+      "settingsVideoBtn",
+      "settingsBackBtn",
+      "helpHowBtn",
+      "helpSupportBtn",
+      "referralWithdrawBtn",
+      "supportCloseBtn",
+    ] as const;
+
+    for (const loc of LOCALES) {
+      for (const key of buttons) {
+        const label = t(loc)[key];
+        const previous = seen.get(label);
+        if (previous && previous !== key) {
+          collisions.push(`"${label}" is ${previous} and ${key} (${loc})`);
+        }
+        seen.set(label, key);
+      }
+    }
+
+    expect(collisions).toEqual([]);
+  });
+
+  it("gives every locale a full, non-empty keyboard and command set", () => {
+    const commandNames = t("en").commands.map((c) => c.command);
+    for (const loc of LOCALES) {
+      const d = t(loc);
+      expect(d.commands.map((c) => c.command)).toEqual(commandNames);
+      for (const c of d.commands) {
+        expect(c.description.trim().length).toBeGreaterThan(0);
+        // Telegram rejects a command description longer than 256 characters,
+        // and rejects the whole setMyCommands call with it.
+        expect(c.description.length).toBeLessThanOrEqual(256);
+      }
+      // Telegram caps the bot's short description at 120 characters.
+      expect(d.botShortDescription.length).toBeLessThanOrEqual(120);
+      expect(d.botDescription.length).toBeLessThanOrEqual(512);
+      expect(new Set([d.langName, d.langBtn, d.langSet]).size).toBe(3);
+    }
+  });
+
+  it("names each of the five languages distinctly", () => {
+    const names = LOCALES.map((loc) => t(loc).langName);
+    expect(names).toEqual([
+      "English",
+      "Русский",
+      "Español",
+      "Português",
+      "Bahasa Indonesia",
+    ]);
+    expect(new Set(names).size).toBe(LOCALES.length);
+  });
+
   const activeBase = {
     plan: "STARTER",
     billingCycleLabel: null as string | null,

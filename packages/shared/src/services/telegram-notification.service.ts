@@ -73,6 +73,60 @@ const PAYMENT_COPY: Record<Locale, PaymentCopy> = {
           : `⚠️ Подписка отменена. Доступ к обработке прекращён.`;
     }
   },
+  es: (event, opts) => {
+    switch (event.kind) {
+      case "subscription_activated": {
+        const avail = opts?.minutes
+          ? `\nDisponible: ${opts.minutes} minutos de procesamiento este periodo.`
+          : "";
+        return `🎉 ¡Suscripción ${planTitle(event.plan)} activada!\nActiva hasta ${formatDate(event.periodEnd)}.${avail}\n\nPara empezar: envía un archivo de video o pega un enlace (YouTube, Twitch, TikTok, etc.) y corto clips verticales con subtítulos.`;
+      }
+      case "subscription_renewed":
+        return `🔄 Suscripción renovada hasta ${formatDate(event.periodEnd)}.`;
+      case "payment_failed":
+        return `⚠️ El pago falló. Actualiza tu método de pago o la suscripción caducará.\n\n${event.manageUrl}`;
+      case "subscription_canceled":
+        return event.graceEndsAt
+          ? `⚠️ Suscripción cancelada. Mantienes el acceso hasta ${formatDate(event.graceEndsAt)}.`
+          : `⚠️ Suscripción cancelada. El procesamiento queda desactivado.`;
+    }
+  },
+  pt: (event, opts) => {
+    switch (event.kind) {
+      case "subscription_activated": {
+        const avail = opts?.minutes
+          ? `\nDisponível: ${opts.minutes} minutos de processamento neste período.`
+          : "";
+        return `🎉 Assinatura ${planTitle(event.plan)} ativada!\nAtiva até ${formatDate(event.periodEnd)}.${avail}\n\nPara começar: mande um arquivo de vídeo ou cole um link (YouTube, Twitch, TikTok etc.) e eu corto clipes verticais com legendas.`;
+      }
+      case "subscription_renewed":
+        return `🔄 Assinatura renovada até ${formatDate(event.periodEnd)}.`;
+      case "payment_failed":
+        return `⚠️ O pagamento falhou. Atualize sua forma de pagamento ou a assinatura vai expirar.\n\n${event.manageUrl}`;
+      case "subscription_canceled":
+        return event.graceEndsAt
+          ? `⚠️ Assinatura cancelada. O acesso continua até ${formatDate(event.graceEndsAt)}.`
+          : `⚠️ Assinatura cancelada. O processamento está desativado.`;
+    }
+  },
+  id: (event, opts) => {
+    switch (event.kind) {
+      case "subscription_activated": {
+        const avail = opts?.minutes
+          ? `\nTersedia: ${opts.minutes} menit pemrosesan di periode ini.`
+          : "";
+        return `🎉 Langganan ${planTitle(event.plan)} aktif!\nAktif sampai ${formatDate(event.periodEnd)}.${avail}\n\nUntuk mulai: kirim file video atau tempel tautan (YouTube, Twitch, TikTok, dll.) dan aku potong jadi klip vertikal bersubtitle.`;
+      }
+      case "subscription_renewed":
+        return `🔄 Langganan diperpanjang sampai ${formatDate(event.periodEnd)}.`;
+      case "payment_failed":
+        return `⚠️ Pembayaran gagal. Perbarui metode pembayaranmu atau langganannya akan berakhir.\n\n${event.manageUrl}`;
+      case "subscription_canceled":
+        return event.graceEndsAt
+          ? `⚠️ Langganan dibatalkan. Aksesmu tetap ada sampai ${formatDate(event.graceEndsAt)}.`
+          : `⚠️ Langganan dibatalkan. Akses pemrosesan dimatikan.`;
+    }
+  },
 };
 
 export function renderPaymentNotification(

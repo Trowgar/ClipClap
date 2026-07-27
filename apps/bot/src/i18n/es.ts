@@ -1,0 +1,241 @@
+import type { JobErrorCode } from "@clipclap/shared";
+import { plural } from "@clipclap/shared";
+import type { Dict } from "./types";
+
+/** Spanish distinguishes one/other only. `other` carries the plural and also
+ *  covers CLDR's `many`, which Spanish selects for large round numbers. */
+function pluralEs(n: number, one: string, other: string): string {
+  return plural("es", n, { one, other });
+}
+
+const esFailure: Record<JobErrorCode, string> = {
+  UNSUPPORTED_INPUT:
+    "Este archivo no tiene pista de video, solo sonido. Envía un archivo de video y lo corto.",
+  ANALYSIS_UNAVAILABLE:
+    "No pude determinar qué momentos cortar de este video, y no se usaron tus minutos. Todavía no puedo saber si este va a terminar: espera unos minutos por si llegan los clips antes de enviarlo otra vez, así el mismo video no gasta tus minutos dos veces. Si no llega nada, envíalo de nuevo o prueba con otro archivo.",
+  SOURCE_UNAVAILABLE:
+    "No pude descargar el video de ese enlace: puede ser privado, estar bloqueado por región, eliminado o no disponible temporalmente. Comprueba que el enlace se abre en un navegador, o envíame el archivo directamente. No se usaron tus minutos.",
+  SOURCE_TOO_LARGE:
+    "Ese video supera mi límite de 2 GB, así que no pude descargarlo. No se usaron tus minutos. Enviarme el archivo no ayudará porque se aplica el mismo límite de 2 GB: recorta el video a la parte que quieres cortar y envía eso.",
+};
+
+const esFailureGeneric =
+  "Algo salió mal al procesar este video y no se usaron tus minutos. Todavía no puedo saber si este va a terminar: espera unos minutos por si llegan los clips antes de enviarlo otra vez, así el mismo video no gasta tus minutos dos veces. Si no llega nada, envíalo de nuevo o prueba con otro archivo.";
+
+const es: Dict = {
+  welcomeNew:
+    "¡Bienvenido a ClipClap! Envíame un video y lo convierto en clips verticales con subtítulos.\n\nIdioma: envía /lang para cambiarlo.",
+  welcomeFirstChoice:
+    "¡Hola! Convierto videos largos en clips verticales con subtítulos, listos para TikTok, Reels y Shorts.\n\nTu primer video es gratis: sin tarjeta y sin plan. Si vuelve sin clips, no cuenta.\n\nCómo funciona:\n1. Envía un video (hasta 30 minutos en la prueba gratis)\n2. Busco los mejores momentos y los corto\n3. Tus clips vuelven aquí: hasta 12, según el video\n\nPrimero, ¿cómo prefieres empezar?\n\n• Cuenta nueva: usa este Telegram como tu cuenta de ClipClap.\n• Ya tengo cuenta: conecta este Telegram a tu cuenta de clipclap.io.",
+  welcomeBack: "¡Hola de nuevo! Envía un video y te genero los clips.",
+  welcomeNeedsPlan:
+    "Envía un video y te genero los clips. Una cuenta nueva tiene una prueba gratis: sin tarjeta, hasta 30 minutos de video.",
+  newAccountBtn: "✨ Crear cuenta nueva",
+  linkAccountBtn: "🔗 Ya tengo cuenta",
+  newAccountCreated:
+    "Cuenta creada. Envía un video ya: el primero es gratis y sin tarjeta.\n\nHasta 30 minutos. Si vuelve sin clips, no cuenta contra tu prueba gratis.",
+  linkAccountInstructions: (code, url) =>
+    `Tu código de conexión: ${code}\n\n1. Abre ${url}/dashboard/settings en el dispositivo donde tienes la sesión iniciada.\n2. Pega este código antes de 10 minutos.\n\nEste Telegram quedará conectado a esa cuenta.`,
+  callbackAck: "Listo",
+  linkCodePrompt: (code, url) =>
+    `Tu código de conexión: ${code}\n\nAbre ${url}/dashboard/settings, pégalo antes de 10 minutos y tu Telegram quedará conectado a tu cuenta de ClipClap.`,
+  linkSuccess: (n) =>
+    n > 0
+      ? `Telegram conectado. Importé ${n} ${pluralEs(n, "clip", "clips")} de tu historial del bot.`
+      : "Telegram conectado a tu cuenta.",
+  linkAlready: "Este Telegram ya está conectado a tu cuenta.",
+  linkInvalid: "El código de conexión no es válido.",
+  linkExpired:
+    "El código de conexión caducó. Genera uno nuevo en clipclap.io/dashboard/settings.",
+  linkConflict:
+    "Tu cuenta de ClipClap ya está conectada a otro Telegram. Desconéctalo primero en el sitio web.",
+  linkWrongDirection:
+    "Este código no se puede usar aquí. Usa /link para generar uno nuevo para este Telegram.",
+  sendVideoHint:
+    "Envíame un video y lo convierto en clips verticales. Usa /start para empezar.",
+  uploading: "Subiendo tu video...",
+  queued: "En cola. Te envío los clips aquí cuando termine el renderizado.",
+  fileTooLarge: (url) =>
+    `Este video supera los 20 MB, el límite de la Bot API de Telegram. Por ahora, sube los videos largos en el sitio web: ${url}/dashboard. Estamos trabajando para quitar este límite pronto.`,
+  processingFailed: (code) => (code && esFailure[code]) || esFailureGeneric,
+  done: (n) =>
+    `Listo. ${n} ${pluralEs(n, "clip", "clips")} ${n === 1 ? "está listo" : "están listos"}.`,
+  donePartial: (sent, total) =>
+    `Envié ${sent} de ${total} clips: algo falló antes de poder entregar el resto. Los ${total} están listos en tu panel.`,
+  deliveryGivenUp: (url, clips) => {
+    if (clips === 0) {
+      return `No pude entregar el resultado de este video en este chat y dejé de intentarlo. Abre ${url}/dashboard para ver cómo terminó: no se perdió nada. No envíes este video otra vez antes de mirar ahí, porque procesarlo de nuevo gastaría tus minutos dos veces.`;
+    }
+    const lo = clips === 1 ? "lo" : "los";
+    return `${clips === 1 ? "Tu clip está listo" : `Los ${clips} clips están listos`}, pero no pude entregar${lo} en este chat y dejé de intentarlo. No se perdió nada: abre ${url}/dashboard para ver${lo} o descargar${lo}. No envíes este video otra vez, porque los clips ya existen y procesarlo de nuevo gastaría tus minutos dos veces.`;
+  },
+  doneNoClips: (reason) =>
+    reason === "NO_USABLE_SPEECH"
+      ? "Terminé, pero no encontré habla aprovechable en este video: esta vez no hay clips."
+      : reason === "PARTIAL_TRANSCRIPT"
+        ? "Terminé, pero una parte del video no se pudo procesar y en el resto no encontré momentos fuertes."
+        : "Terminé. Vi el video entero, pero no encontré momentos lo bastante fuertes para hacer clips. Prueba con un video con más conversación, emoción o historia.",
+  lowQualityNote:
+    "Aviso: no encontré momentos fuertes, esto es lo mejor disponible.",
+  blocked: (reason) => `${reason}\n\n💳 Planes: elige o gestiona tu suscripción.`,
+  freeTrialUsed: (runs, planMinutes, planPriceEur) =>
+    `Esa era tu prueba gratis: ${runs} ${pluralEs(runs, "video", "videos")}, gratis y sin tarjeta. Los clips que salieron son tuyos.\n\nPara seguir: Starter cuesta €${planPriceEur} por semana e incluye ${planMinutes} minutos de video, fuentes de hasta 3 horas y 20 clips guardados 7 días.`,
+  freeTrialAttemptsUsed: (attempts, planMinutes, planPriceEur) =>
+    `Procesé ${attempts} ${pluralEs(attempts, "video", "videos")} en tu prueba gratis y ninguno dio clips, así que todavía no has visto de verdad lo que esto hace. Suele pasar cuando la fuente tiene poca habla clara.\n\nSe acabaron los intentos gratis. Si quieres seguir probando, Starter cuesta €${planPriceEur} por semana e incluye ${planMinutes} minutos de video.`,
+  freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
+    `Tu prueba gratis admite videos de hasta ${freeMaxMinutes} minutos, y este es más largo. Envía un video más corto, o un fragmento de ${freeMaxMinutes} minutos de este, para probarlo gratis. Con un plan acepto fuentes de hasta ${planMaxMinutes} minutos.`,
+  planSourceTooLong: (maxMinutes) =>
+    `Este video dura más de ${maxMinutes} minutos, que es la fuente más larga que puedo aceptar. Envía un corte más breve y lo proceso.`,
+  planNotActive:
+    "No hay ninguna suscripción activa en esta cuenta, así que todavía no puedo procesar videos. Elige un plan y empiezo enseguida.",
+  planCanceled:
+    "Tu suscripción está cancelada, así que el procesamiento está desactivado. Vuelve a suscribirte y todo sigue donde lo dejaste: tus clips siguen ahí.",
+  planPeriodEnded:
+    "Tu periodo de pago terminó, así que el procesamiento está en pausa. Renueva y me pongo con este video enseguida.",
+  planQuotaExceeded: (usedMinutes, limitMinutes, topUpMinutes) =>
+    `Has usado ${usedMinutes} de tus ${limitMinutes} minutos de este periodo, y este video no cabe en lo que queda.${
+      topUpMinutes > 0
+        ? ` Tus ${topUpMinutes} minutos adicionales tampoco alcanzan.`
+        : ""
+    } Espera a que se renueve el periodo, recarga minutos o pasa a un plan mayor.`,
+  planDailyLimit: (limit) =>
+    `Llegaste al límite diario de ${limit} ${pluralEs(limit, "video", "videos")}. Se reinicia a medianoche: envía este otra vez entonces.`,
+  planConcurrentLimit: (active, limit) =>
+    `Todavía estoy trabajando en ${active === 1 ? "tu video" : `${active} de tus videos`}, y tu plan procesa ${limit} a la vez. Envía este otra vez cuando termine: te aviso cuando pase.`,
+  langUsage: (options) => `Uso: ${options}.`,
+  langSet: "Idioma configurado: español.",
+  langName: "Español",
+  langBtn: "🇪🇸 Español",
+  planStarterWeeklyBtn: "🌱 Starter - €3 / semana",
+  planStarterBtn: "💎 Starter - €9 / mes",
+  planPlusBtn: "🚀 Plus - €29 / mes",
+  planMaxBtn: "👑 Max - €89 / mes",
+  menuAccount: "📊 Cuenta",
+  menuHelp: "❓ Ayuda",
+  menuSettings: "⚙️ Ajustes",
+  menuAffiliate: "🤝 Afiliados",
+  menuPlans: "💳 Planes",
+  plansText:
+    "💳 <b>Planes de ClipClap</b>\nPaga una vez y empieza a usarlo. Cancela cuando quieras en Tribute.\n\n" +
+    "🌱 <b>Starter</b> - €3/sem · €9/mes\n   • 75 min/sem (270 min/mes)\n   • 20 clips guardados\n   • 7 días de retención\n\n" +
+    "🚀 <b>Plus</b> - €29/mes\n   • 1000 min/mes\n   • 150 clips\n   • 30 días de retención\n\n" +
+    "👑 <b>Max</b> - €89/mes\n   • 3500 min/mes\n   • 1000 clips\n   • 90 días de retención\n   • ⚡ cola prioritaria\n\n" +
+    "Elige un plan abajo 👇",
+  plansSubscribed: (plan, periodEnd) =>
+    periodEnd
+      ? `Tienes ${plan} ✅ Activo hasta ${periodEnd}.\nGestiona o cancela tu suscripción en Tribute.`
+      : `Tienes ${plan} ✅\nGestiona o cancela tu suscripción en Tribute.`,
+  noPlanNudge: "👉 Pulsa 💳 Planes para suscribirte.",
+  helpText: (url) =>
+    `Envíame un video y lo corto en clips verticales con subtítulos.\nTambién puedes pegar un enlace (YouTube, Twitch, TikTok, Vimeo, X y más).\n\nLímites: hasta 3 horas de fuente, hasta 2 GB por archivo.\n\nComandos:\n• /start - menú principal\n• /link - conectar una cuenta de clipclap.io\n• /referral - tu enlace de referidos y ganancias\n• /lang - cambiar idioma\n\nSitio web: ${url}/dashboard`,
+  helpMenuPrompt: "❓ Ayuda: elige",
+  helpHowBtn: "❓ Cómo funciona",
+  helpSupportBtn: "💬 Soporte",
+  supportPrompt:
+    "Escribe tu mensaje: se lo pasamos a soporte y te respondemos aquí mismo.",
+  supportCloseBtn: "⬅️ Cerrar chat",
+  supportClosed: "Chat cerrado. Envía un video cuando quieras para hacer clips.",
+  supportReplyPrefix: "💬 Soporte:",
+  supportUnavailable:
+    "Soporte no está disponible temporalmente. Inténtalo de nuevo más tarde.",
+  supportVideoInSession:
+    '⚠️ Ahora mismo estás en el chat de soporte.\n\n• Para hacer un clip, pulsa "⬅️ Cerrar chat" abajo y envía el video otra vez.\n• Para describir tu problema, envía texto o una captura.',
+  supportMediaUnsupported:
+    "No pude enviar eso. Manda una captura de pantalla o descríbelo por texto.",
+  accountText: ({
+    plan,
+    billingCycleLabel,
+    periodEnd,
+    daysUntilPeriodEnd,
+    phase,
+    minutesUsed,
+    minutesLimit,
+    topUpMinutes,
+    clipsStored,
+    storageClipsLimit,
+    retentionDays,
+    clipsTotal,
+  }) => {
+    if (plan === "NONE" || phase === "NONE") {
+      return `Plan: ninguno activo\n\nElige un plan para empezar a cortar clips.\nClips creados en total: ${clipsTotal}`;
+    }
+    const planLabel = `${plan}${billingCycleLabel ? ` (${billingCycleLabel})` : ""}`;
+    let planLine: string;
+    let renewLine: string;
+    if (phase === "PERIOD_ENDED") {
+      planLine = `Plan: ${planLabel} - terminó${periodEnd ? ` el ${periodEnd}` : ""}`;
+      renewLine = "Renueva para seguir cortando clips.";
+    } else if (phase === "CANCELED" || phase === "CANCELED_GRACE") {
+      planLine = `Plan: ${planLabel} - cancelado`;
+      renewLine = "Vuelve a suscribirte para seguir cortando clips.";
+    } else {
+      planLine = `Plan: ${planLabel}`;
+      const renewSuffix =
+        daysUntilPeriodEnd === null
+          ? ""
+          : daysUntilPeriodEnd === 0
+            ? " (hoy)"
+            : ` (en ${daysUntilPeriodEnd} ${pluralEs(daysUntilPeriodEnd, "día", "días")})`;
+      renewLine = periodEnd ? `Se renueva: ${periodEnd}${renewSuffix}` : "";
+      if (phase === "DUNNING") {
+        renewLine = `${renewLine ? `${renewLine}\n` : ""}Problema con el pago: actualiza tu método de pago.`;
+      }
+    }
+    const minutesLeft = Math.max(0, minutesLimit - minutesUsed);
+    const minutesLine = `Minutos: ${minutesUsed} / ${minutesLimit} este periodo (quedan ${minutesLeft})`;
+    const topUpLine =
+      topUpMinutes > 0 ? `+ Minutos adicionales: ${topUpMinutes}\n` : "";
+    const storageLine = `Almacenamiento: ${clipsStored} / ${storageClipsLimit} clips (se guardan ${retentionDays} ${pluralEs(retentionDays, "día", "días")})`;
+    const totalLine = `Clips creados en total: ${clipsTotal}`;
+    return `${planLine}\n${renewLine}\n\n${minutesLine}\n${topUpLine}\n${storageLine}\n${totalLine}`.replace(
+      /\n\n\n+/g,
+      "\n\n"
+    );
+  },
+  planNone: "ningún plan activo",
+  settingsMenuPrompt: "⚙️ Ajustes",
+  settingsLangBtn: "🌐 Idioma",
+  settingsVideoBtn: "🎬 Ajustes de video",
+  settingsBackBtn: "⬅️ Menú",
+  langMenuPrompt: "Elige tu idioma:",
+  videoSettingsPrompt: "🎬 Ajustes de video",
+  subtitlesToggleBtn: (enabled) =>
+    enabled ? "Subtítulos: activados ✅" : "Subtítulos: desactivados ⬜",
+  subtitlesAck: (enabled) =>
+    enabled
+      ? "Subtítulos activados."
+      : "Subtítulos desactivados. Los videos nuevos saldrán sin subtítulos incrustados.",
+  menuHint: "Usa los botones del menú de abajo para acciones rápidas.",
+  botDescription:
+    "ClipClap convierte videos largos en clips verticales cortos con subtítulos, listos para TikTok, Reels y Shorts.\n\nEnvía un video (hasta 3 horas) y busco los mejores momentos, los corto e incrusto los subtítulos automáticamente.\n\nCómo funciona:\n1. Elige un plan\n2. Envía un video\n3. Recibe tus clips\n\nPulsa START para empezar.",
+  botShortDescription:
+    "Video largo → clips verticales con subtítulos. Envía un video para empezar.",
+  commands: [
+    { command: "start", description: "Menú principal" },
+    { command: "account", description: "Tu plan y estadísticas" },
+    { command: "help", description: "Límites y cómo funciona" },
+    { command: "settings", description: "Abrir ajustes" },
+    { command: "lang", description: "Cambiar idioma" },
+    { command: "link", description: "Conectar tu cuenta de clipclap.io" },
+    { command: "referral", description: "Tu enlace de referidos y ganancias" },
+  ],
+  manageSubscriptionBtn: "🔧 Gestionar suscripción",
+  editInBrowserBtn: "✂️ Editar en el navegador",
+  checkingLink: "Comprobando el enlace…",
+  urlAccessFailed:
+    "No pude acceder al video de ese enlace. Prueba con otro enlace o sube el archivo directamente.",
+  referralInfo: (web, tg, earned, pending) =>
+    `Tus enlaces de referidos:\nWeb: ${web}\nTelegram: ${tg}\n\nGanancias por referidos: $${earned}\nPendiente (retención de 14 días): $${pending}`,
+  referralWithdrawBtn: "💸 Solicitar retiro",
+  referralWithdrawStub: "Todavía no tienes fondos suficientes para retirar.",
+  balanceInfo: (available, clearing) =>
+    `Saldo de la cartera:\nDisponible: $${available}\nEn proceso: $${clearing} (comisiones aún en retención de 14 días)`,
+  payBtn: "💳 Pagar",
+  checkoutReady: (plan) =>
+    `Pulsa "Pagar" para suscribirte a ${plan}. Volverás al bot después del pago.`,
+  checkoutError: "No pude iniciar el pago. Inténtalo de nuevo en un momento.",
+  cycleWeekly: "semanal",
+  cycleMonthly: "mensual",
+};
+
+export default es;
