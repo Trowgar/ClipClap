@@ -76,6 +76,7 @@ describe("telegram-delivery.service", () => {
         job: {
           include: {
             clips: {
+              where: { deletedAt: null },
               orderBy: [
                 { score: { sort: "desc", nulls: "last" } },
                 { startTime: "asc" },
@@ -87,6 +88,15 @@ describe("telegram-delivery.service", () => {
       orderBy: { createdAt: "asc" },
       take: 10,
     });
+  });
+
+  it("never hands the poller a clip the retention sweep already dropped", async () => {
+    mocks.telegramDeliveryFindMany.mockResolvedValue([]);
+
+    await getPendingTelegramDeliveries();
+
+    const args = mocks.telegramDeliveryFindMany.mock.calls[0][0];
+    expect(args.include.job.include.clips.where).toEqual({ deletedAt: null });
   });
 
   it("marks delivery as sent", async () => {

@@ -74,6 +74,11 @@ export async function getPendingTelegramDeliveries(take = 20) {
       job: {
         include: {
           clips: {
+            // Defensive: a delivery normally runs minutes after render and the
+            // shortest retention is 3 days. In a backlog long enough to cross
+            // that, the alternative is the bot sending a signed URL for an
+            // object the sweep already dropped.
+            where: { deletedAt: null },
             orderBy: [
               { score: { sort: "desc", nulls: "last" } },
               { startTime: "asc" },
