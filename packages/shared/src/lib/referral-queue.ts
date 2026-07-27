@@ -4,6 +4,10 @@ import { getRedis } from "./redis";
 export const REFERRAL_QUEUE_NAME = "referral-maintenance";
 export const HOLD_RELEASE_JOB = "hold-release";
 export const SUBSCRIPTION_RECONCILE_JOB = "subscription-reconcile";
+/** Storage retention sweep. It shares this queue because it is the same kind
+ *  of work - hourly, idempotent, nobody is waiting for it - and a second queue
+ *  would mean a second Worker and a second shutdown path for no gain. */
+export const RETENTION_SWEEP_JOB = "retention-sweep";
 
 let referralQueue: Queue | null = null;
 
@@ -29,6 +33,7 @@ export async function registerReferralSchedules(): Promise<void> {
   const queue = getReferralQueue();
   await queue.add(HOLD_RELEASE_JOB, {}, { repeat: { pattern: "0 * * * *" }, jobId: HOLD_RELEASE_JOB });
   await queue.add(SUBSCRIPTION_RECONCILE_JOB, {}, { repeat: { pattern: "0 * * * *" }, jobId: SUBSCRIPTION_RECONCILE_JOB });
+  await queue.add(RETENTION_SWEEP_JOB, {}, { repeat: { pattern: "0 * * * *" }, jobId: RETENTION_SWEEP_JOB });
   // Retire the old 1st/15th payout batch if still scheduled in Redis.
   for (const job of await queue.getRepeatableJobs()) {
     if (job.name === "payout-batch") await queue.removeRepeatableByKey(job.key);
