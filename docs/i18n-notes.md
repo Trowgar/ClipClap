@@ -144,6 +144,30 @@ Russian, `de` and a missing `language_code` answered in English, the raw tag wri
 creation, the settings picker persisting a choice and confirming it in the newly chosen language, and
 the stored choice beating the client language on later messages.
 
+### Switching language has to SEND a message
+
+A reply keyboard is bound to a message at send time. Telegram offers no way to edit one, so changing
+every label on it - which is exactly what a language switch does - requires sending a message. This is
+not optional polish: the persistent keyboard is the bot's main navigation, and until 2026-07-27 it
+kept the labels of the language the user had just left until something else happened to re-send it,
+usually the "Menu" button several taps later.
+
+Both switch paths now carry the refresh:
+
+- **The settings picker** edits its own message to the confirmation, then sends the settings screen
+  with `settingsKeyboard` in the new language. Settings rather than the main menu because that is
+  where the user actually is, and because `sendMainMenu` records an APP_OPENED - a keyboard refresh is
+  a side effect of the switch, not a menu anyone opened, and counting it would inflate the funnel by
+  one per language change. `mainMenuKeyboard` exists to build the same keyboard without that
+  telemetry.
+- **The `/lang <code>` command** attaches the main menu to the confirmation itself, so it costs no
+  extra message. The main menu is the only keyboard that is correct here, since the command can be
+  typed from any screen.
+
+Both are tested in `locale-detection.test.ts`, including the assertion that no funnel event is written
+for the refresh - which is what stops the next person from "simplifying" this into a `sendMainMenu`
+call.
+
 **Fixed during the check:** linking an existing clipclap.io account dropped the language. The bot-side
 row is the only place `telegramLocale` exists - a web account has none - and `linkTelegramToUser`
 deletes that row after moving jobs, clips and deliveries, writing only `telegramId` onto the target.

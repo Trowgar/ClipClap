@@ -292,6 +292,72 @@ describe("changing the language from the settings menu", () => {
     );
   });
 
+  // A reply keyboard cannot be edited - Telegram binds it to a message at send
+  // time - so switching language has to SEND one, or every label on the
+  // persistent keyboard stays in the language the user just left. It did:
+  // until this, the settings keyboard kept its old labels until the user
+  // pressed "Menu" and something happened to re-send it.
+  it("re-sends the settings keyboard in the new language after the picker", async () => {
+    const client = harness();
+
+    await handleUpdate(
+      client as never,
+      callback(langCallbackData("en"), "ru") as never,
+      CONFIG
+    );
+
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      CHAT.id,
+      t("en").settingsMenuPrompt,
+      expect.objectContaining({
+        replyMarkup: expect.objectContaining({
+          keyboard: [
+            [{ text: t("en").settingsLangBtn }, { text: t("en").settingsVideoBtn }],
+            [{ text: t("en").settingsBackBtn }],
+          ],
+        }),
+      })
+    );
+  });
+
+  // The keyboard send is a side effect of the switch, not a menu the user
+  // opened. Counting it would inflate APP_OPENED by one per language change.
+  it("records no app-open for the keyboard refresh", async () => {
+    const client = harness();
+
+    await handleUpdate(
+      client as never,
+      callback(langCallbackData("en"), "ru") as never,
+      CONFIG
+    );
+
+    expect(mocks.funnelUpsert).not.toHaveBeenCalled();
+  });
+
+  it("attaches the new language's main menu to the /lang command ack", async () => {
+    const client = harness();
+
+    await handleUpdate(
+      client as never,
+      message("/lang en", "ru") as never,
+      CONFIG
+    );
+
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      CHAT.id,
+      t("en").langSet,
+      expect.objectContaining({
+        replyMarkup: expect.objectContaining({
+          keyboard: expect.arrayContaining([
+            [{ text: t("en").menuPlans }, { text: t("en").menuAccount }],
+          ]),
+        }),
+      })
+    );
+    // One message, not an ack followed by a second one carrying the keyboard.
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("lets the stored choice beat the client language on later messages", async () => {
     const client = harness();
     // Client still reports Russian; the account says English on purpose.

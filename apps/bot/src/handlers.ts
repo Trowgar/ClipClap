@@ -379,20 +379,19 @@ function buildMainMenu(dict: Dict, adminWebAppUrl?: string): ReplyKeyboardMarkup
   return { keyboard, is_persistent: true, resize_keyboard: true };
 }
 
-/** Sends the main menu and records the app-open exactly once, wherever it is shown. */
-async function sendMainMenu(
-  client: TelegramClient,
-  chatId: number | string,
-  text: string,
+/** The main menu's reply keyboard on its own, WITHOUT the app-open telemetry
+ *  that sendMainMenu records.
+ *
+ *  Needed because a reply keyboard cannot be edited: Telegram binds it to a
+ *  message, so changing every label on it - which is exactly what a language
+ *  switch does - means sending one. That send is a side effect of the switch,
+ *  not a menu the user opened, and counting it as an app-open would inflate a
+ *  funnel metric with events nobody caused. */
+function mainMenuKeyboard(
   dict: Dict,
-  from: { id: number | string; language_code?: string }
-) {
-  // The analytics entry is part of the keyboard rather than a second message,
-  // and it is built here rather than at the /menu command alone: the menu is
-  // reached from seven places (the keyboard button, /start, the settings back
-  // button, ...), and a button that only appears for one of them reads as
-  // "the button is missing".
-  //
+  chatId: number | string,
+  from: { id: number | string }
+): ReplyKeyboardMarkup {
   // Private chats ONLY. A reply keyboard is attached to the CHAT, not to the
   // sender: without `selective` every member of a group sees it, so an admin
   // running /menu in a group would put "📊 Analytics" on everyone's keyboard.
@@ -407,9 +406,27 @@ async function sendMainMenu(
     isReferralAdmin(String(from.id), process.env.REFERRAL_ADMIN_TELEGRAM_IDS)
       ? `${appUrl}/admin`
       : undefined;
+  return buildMainMenu(dict, adminWebAppUrl);
+}
 
+/** Sends the main menu and records the app-open exactly once, wherever it is shown. */
+async function sendMainMenu(
+  client: TelegramClient,
+  chatId: number | string,
+  text: string,
+  dict: Dict,
+  from: { id: number | string; language_code?: string }
+) {
+  // The analytics entry is part of the keyboard rather than a second message,
+  // and it is built here rather than at the /menu command alone: the menu is
+  // reached from seven places (the keyboard button, /start, the settings back
+  // button, ...), and a button that only appears for one of them reads as
+  // "the button is missing". The private-chat rule that governs it lives in
+  // mainMenuKeyboard.
   await client
-    .sendMessage(chatId, text, { replyMarkup: buildMainMenu(dict, adminWebAppUrl) })
+    .sendMessage(chatId, text, {
+      replyMarkup: mainMenuKeyboard(dict, chatId, from),
+    })
     .catch(() => undefined);
 
   // After the reply is out, never before - this is telemetry.
@@ -1164,6 +1181,22 @@ async function handleCallbackQuery(
     await client
       .editMessageText(query.message.chat.id, query.message.message_id, ack)
       .catch(() => undefined);
+    // The edit above changes the message the picker was in - it cannot touch
+    // the reply keyboard, which Telegram binds to a message at send time. The
+    // picker is only ever reached from the settings screen, so that keyboard
+    // is sitting there in the language the user just left, and every one of
+    // its labels is now stale. It used to stay stale until the user pressed
+    // "Menu" and something happened to re-send it.
+    //
+    // Re-sent as the settings screen rather than the main menu: it is where
+    // the user actually is, and unlike sendMainMenu it records no app-open for
+    // a menu nobody opened.
+    const chosen = t(langChoice);
+    await client
+      .sendMessage(query.message.chat.id, chosen.settingsMenuPrompt, {
+        replyMarkup: settingsKeyboard(chosen),
+      })
+      .catch(() => undefined);
     return;
   }
 
@@ -1417,7 +1450,14 @@ async function handleLang(
   }
 
   const ack = await applyLangChoice(from, choice);
-  await client.sendMessage(message.chat.id, ack);
+  // The ack carries the refreshed keyboard rather than being followed by a
+  // second message: /lang is a top-level command that can be typed from any
+  // screen, so the main menu is the only keyboard that is right from all of
+  // them - and attaching it here costs no extra message at all. Without this
+  // the labels stayed in the old language until something else re-sent them.
+  await client.sendMessage(message.chat.id, ack, {
+    replyMarkup: mainMenuKeyboard(t(choice), message.chat.id, from),
+  });
 }
 
 async function handleStartLink(
