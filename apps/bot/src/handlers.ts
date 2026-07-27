@@ -460,6 +460,17 @@ export async function handleUpdate(
 
   if (text === "/menu" || text.startsWith("/menu ") || text.startsWith("/menu@")) {
     await sendMainMenu(client, message.chat.id, dict.welcomeBack, dict, from);
+    if (isReferralAdmin(String(from.id), process.env.REFERRAL_ADMIN_TELEGRAM_IDS)) {
+      await client
+        .sendMessage(message.chat.id, "Analytics", {
+          replyMarkup: {
+            inline_keyboard: [
+              [{ text: "Open analytics", web_app: { url: `${config.appUrl}/admin` } }],
+            ],
+          },
+        })
+        .catch(() => undefined);
+    }
     return;
   }
 
