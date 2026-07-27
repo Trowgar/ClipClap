@@ -42,6 +42,16 @@ To force a pass instead of waiting for the top of the hour:
     docker compose exec -w /app worker-finalize node -e \
       "require('/app/packages/shared/dist/index.js').runRetentionSweep().then(r=>console.log(r))"
 
+If the pass throws `Unknown argument 'sourceSweptAt'`, the container is running a
+Prisma client generated before that column existed. `docker compose up -d`
+recreates the container from the image and discards the generated client, so any
+restart of `worker-finalize` needs:
+
+    docker compose exec -w /app worker-finalize npx prisma generate
+
+This is not hypothetical - it happened the first time the sweep was scheduled,
+and the hourly pass would have thrown every hour until the dry run surfaced it.
+
 ### 2. Cross-check the counts against the database
 
     docker compose exec -T postgres psql -U clipclap -d clipclap \
