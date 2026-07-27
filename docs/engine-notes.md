@@ -342,6 +342,16 @@ retries that cannot help, because the critic rejects the same moments every time
 if snap rejects it. A rewritten title must cite evidence nodes inside the final range - and be re-checked
 AFTER any accepted trim, because a trim can move the evidence outside.
 
+**`NAME_TO_ISO` must cover everything Whisper can emit.** `analyze-v2/language.ts` maps Whisper's full
+English language name onto the ISO code stored in `Job.language`. A missing name is not cosmetic: the lookup
+returns null, `Job.language` stays unset, and `isoToLanguageName` then feeds ANALYZE and the critic
+`"the transcript language"` instead of naming it - the one place the output language is stated explicitly
+degrades to a hint. It held 41 names until 2026-07-27, silently dropping Persian, Malay, Urdu, Tagalog,
+Bengali, Tamil and ~50 more; it now holds Whisper's whole set, with alternative spellings (castilian,
+mandarin, burmese…) resolved through a separate alias map so they can never become the name used in a
+prompt. One name per code - the map is reversed for `isoToLanguageName`, so a duplicate code would let key
+order decide what the model is told.
+
 **`lexicalOverlap` is telemetry, never a gate.** It penalises paraphrase and inflected languages; using it to
 gate Russian copy would reject legitimate rewrites. This is documented at its definition; it has been
 proposed as a gate once and rejected.
