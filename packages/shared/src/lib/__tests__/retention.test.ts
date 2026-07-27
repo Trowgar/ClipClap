@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { computeClipExpiresAt } from "../retention";
+import {
+  computeClipExpiresAt,
+  SOURCE_ARTIFACT_RETENTION_DAYS,
+  REDUNDANT_SOURCE_GRACE_HOURS,
+  sourceArtifactCutoff,
+  redundantSourceCutoff,
+} from "../retention";
 import { getPlanLimits } from "../../config/plans";
 
 describe("computeClipExpiresAt", () => {
@@ -49,5 +55,19 @@ describe("computeClipExpiresAt", () => {
     // computeClipExpiresAt should not silently swallow it. Caller is
     // responsible for not constructing invalid combinations.
     expect(() => computeClipExpiresAt("PLUS", "WEEKLY", now)).toThrow(/no weekly/i);
+  });
+});
+
+describe("source artifact windows", () => {
+  const now = new Date("2026-04-08T00:00:00Z");
+
+  it("keeps the edit window at 7 days for every plan", () => {
+    expect(SOURCE_ARTIFACT_RETENTION_DAYS).toBe(7);
+    expect(sourceArtifactCutoff(now)).toEqual(new Date("2026-04-01T00:00:00Z"));
+  });
+
+  it("gives a terminal job 24 hours before its redundant copies go", () => {
+    expect(REDUNDANT_SOURCE_GRACE_HOURS).toBe(24);
+    expect(redundantSourceCutoff(now)).toEqual(new Date("2026-04-07T00:00:00Z"));
   });
 });

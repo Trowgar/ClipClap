@@ -9,7 +9,13 @@ export {
   parseWorkerRole,
 } from "./queues";
 export type { StageName } from "./queues";
-export { computeClipExpiresAt } from "./retention";
+export {
+  computeClipExpiresAt,
+  SOURCE_ARTIFACT_RETENTION_DAYS,
+  REDUNDANT_SOURCE_GRACE_HOURS,
+  sourceArtifactCutoff,
+  redundantSourceCutoff,
+} from "./retention";
 export { JOB_ERROR_CODES, tagJobError, parseJobErrorCode } from "./job-error";
 export type { JobErrorCode } from "./job-error";
 export {
