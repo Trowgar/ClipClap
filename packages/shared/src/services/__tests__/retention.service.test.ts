@@ -116,7 +116,7 @@ describe("sweepRedundantSourceCopies", () => {
     mocks.clipFindMany.mockResolvedValue([]);
   });
 
-  it("only looks at terminal jobs past the grace that were never swept", async () => {
+  it("only looks at terminal jobs past the grace that were never swept, excluding jobs touched recently", async () => {
     mocks.jobFindMany.mockResolvedValue([]);
 
     await sweepRedundantSourceCopies(NOW);
@@ -127,7 +127,36 @@ describe("sweepRedundantSourceCopies", () => {
           status: { in: ["DONE", "FAILED"] },
           createdAt: { lt: new Date("2026-07-26T12:00:00Z") },
           sourceSweptAt: null,
+          // FAILED is written on EVERY BullMQ attempt, not just the last, so a
+          // job mid-retry can look terminal. processingStartedAt is refreshed
+          // at the start of every attempt, so "not touched since the cutoff"
+          // is the reliable signal that a retry is not still in flight.
+          OR: [
+            { processingStartedAt: null },
+            { processingStartedAt: { lt: new Date("2026-07-26T12:00:00Z") } },
+          ],
         },
+      })
+    );
+  });
+
+  it("excludes a job that's old enough by createdAt but was touched recently", async () => {
+    // The where-clause shape above is what Postgres actually filters on -
+    // this test exists to spell out, in plain terms, the case that shape is
+    // for: createdAt is old, but a worker is mid-retry.
+    mocks.jobFindMany.mockResolvedValue([]);
+
+    await sweepRedundantSourceCopies(NOW);
+
+    const cutoff = new Date("2026-07-26T12:00:00Z");
+    expect(mocks.jobFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          OR: [
+            { processingStartedAt: null },
+            { processingStartedAt: { lt: cutoff } },
+          ],
+        }),
       })
     );
   });
@@ -277,7 +306,7 @@ describe("sweepExpiredArtifacts", () => {
     mocks.clipFindMany.mockResolvedValue([]);
   });
 
-  it("selects terminal jobs past the 7-day window that still hold a key", async () => {
+  it("selects terminal jobs past the 7-day window that still hold a key, excluding jobs touched recently", async () => {
     mocks.jobFindMany.mockResolvedValue([]);
 
     await sweepExpiredArtifacts(NOW);
@@ -287,12 +316,46 @@ describe("sweepExpiredArtifacts", () => {
         where: {
           status: { in: ["DONE", "FAILED"] },
           createdAt: { lt: new Date("2026-07-20T12:00:00Z") },
-          OR: [
-            { sourceKey: { not: null } },
-            { sourceArtifactKey: { not: null } },
-            { normalizedArtifactKey: { not: null } },
+          // Two OR conditions can't share one object literal, so both are
+          // nested under AND: "still holds a key" and "not touched recently".
+          AND: [
+            {
+              OR: [
+                { sourceKey: { not: null } },
+                { sourceArtifactKey: { not: null } },
+                { normalizedArtifactKey: { not: null } },
+              ],
+            },
+            {
+              OR: [
+                { processingStartedAt: null },
+                { processingStartedAt: { lt: new Date("2026-07-20T12:00:00Z") } },
+              ],
+            },
           ],
         },
+      })
+    );
+  });
+
+  it("excludes a job that's old enough by createdAt but was touched recently", async () => {
+    mocks.jobFindMany.mockResolvedValue([]);
+
+    await sweepExpiredArtifacts(NOW);
+
+    const cutoff = new Date("2026-07-20T12:00:00Z");
+    expect(mocks.jobFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          AND: expect.arrayContaining([
+            {
+              OR: [
+                { processingStartedAt: null },
+                { processingStartedAt: { lt: cutoff } },
+              ],
+            },
+          ]),
+        }),
       })
     );
   });

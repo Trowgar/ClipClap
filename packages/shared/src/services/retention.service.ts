@@ -111,11 +111,21 @@ export async function sweepRedundantSourceCopies(
   options: SweepOptions = {}
 ): Promise<SweepCounts> {
   const dryRun = options.dryRun ?? false;
+  const cutoff = redundantSourceCutoff(now);
   const jobs = await prisma.job.findMany({
     where: {
       status: { in: [...TERMINAL_STATUSES] },
-      createdAt: { lt: redundantSourceCutoff(now) },
+      createdAt: { lt: cutoff },
       sourceSweptAt: null,
+      // FAILED is written on EVERY BullMQ attempt, not just the last one, so
+      // a job mid-retry can look terminal while attempt 2 is about to re-read
+      // sourceKey. processingStartedAt is refreshed at the start of every
+      // attempt, so "not touched since the cutoff" is the reliable signal
+      // that no attempt is currently in flight.
+      OR: [
+        { processingStartedAt: null },
+        { processingStartedAt: { lt: cutoff } },
+      ],
     },
     select: {
       id: true,
@@ -199,14 +209,28 @@ export async function sweepExpiredArtifacts(
   options: SweepOptions = {}
 ): Promise<SweepCounts> {
   const dryRun = options.dryRun ?? false;
+  const cutoff = sourceArtifactCutoff(now);
   const jobs = await prisma.job.findMany({
     where: {
       status: { in: [...TERMINAL_STATUSES] },
-      createdAt: { lt: sourceArtifactCutoff(now) },
-      OR: [
-        { sourceKey: { not: null } },
-        { sourceArtifactKey: { not: null } },
-        { normalizedArtifactKey: { not: null } },
+      createdAt: { lt: cutoff },
+      // Two OR conditions can't share one where object, so both live under
+      // AND: "still holds a key" and, per the same reasoning as Rule B, "not
+      // touched by a worker since the cutoff" (a FAILED job can be mid-retry).
+      AND: [
+        {
+          OR: [
+            { sourceKey: { not: null } },
+            { sourceArtifactKey: { not: null } },
+            { normalizedArtifactKey: { not: null } },
+          ],
+        },
+        {
+          OR: [
+            { processingStartedAt: null },
+            { processingStartedAt: { lt: cutoff } },
+          ],
+        },
       ],
     },
     select: {
