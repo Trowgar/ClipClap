@@ -155,7 +155,21 @@ async function linkTelegramToUser({
 
     await tx.user.update({
       where: { id: userId },
-      data: { telegramId },
+      data: {
+        telegramId,
+        // Carry the bot-side language across the merge. The orphan row is the
+        // only place it exists - a web account created through Google has no
+        // telegramLocale at all - and the row is deleted a few lines up. Without
+        // this, someone who chose a language in the bot on purpose has that
+        // choice silently reverted to whatever their Telegram client reports
+        // the moment they link an existing account.
+        //
+        // Only when the target has none: a locale already on the target was
+        // set by a previous Telegram link and is not ours to overwrite.
+        ...(orphan?.telegramLocale && !target.telegramLocale
+          ? { telegramLocale: orphan.telegramLocale }
+          : {}),
+      },
     });
 
     const existingAccount = await tx.account.findUnique({

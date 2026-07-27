@@ -234,6 +234,56 @@ describe("telegram-link.service", () => {
     });
   });
 
+  // The orphan row is the only place a bot-side language choice lives, and it
+  // is deleted by the merge. Without carrying it over, someone who picked a
+  // language in the bot on purpose has it reverted to whatever their Telegram
+  // client reports the next time they send a message.
+  it("carries the orphan's language onto a target that has none", async () => {
+    mocks.tokenFindUnique.mockResolvedValue({
+      code: "X",
+      userId: "userMain",
+      telegramId: null,
+      expiresAt: new Date(Date.now() + 60_000),
+      consumedAt: null,
+    });
+    mocks.userFindUnique
+      .mockResolvedValueOnce({ id: "userMain", telegramId: null, telegramLocale: null })
+      .mockResolvedValueOnce({ id: "orphan1", telegramId: "tg1", telegramLocale: "en" });
+    mocks.jobUpdateMany.mockResolvedValue({ count: 0 });
+    mocks.clipUpdateMany.mockResolvedValue({ count: 0 });
+    mocks.accountFindUnique.mockResolvedValue(null);
+
+    await redeemLinkFromBot({ code: "X", telegramId: "tg1" });
+
+    expect(mocks.userUpdate).toHaveBeenCalledWith({
+      where: { id: "userMain" },
+      data: { telegramId: "tg1", telegramLocale: "en" },
+    });
+  });
+
+  it("does not overwrite a language the target already has", async () => {
+    mocks.tokenFindUnique.mockResolvedValue({
+      code: "X",
+      userId: "userMain",
+      telegramId: null,
+      expiresAt: new Date(Date.now() + 60_000),
+      consumedAt: null,
+    });
+    mocks.userFindUnique
+      .mockResolvedValueOnce({ id: "userMain", telegramId: null, telegramLocale: "ru" })
+      .mockResolvedValueOnce({ id: "orphan1", telegramId: "tg1", telegramLocale: "en" });
+    mocks.jobUpdateMany.mockResolvedValue({ count: 0 });
+    mocks.clipUpdateMany.mockResolvedValue({ count: 0 });
+    mocks.accountFindUnique.mockResolvedValue(null);
+
+    await redeemLinkFromBot({ code: "X", telegramId: "tg1" });
+
+    expect(mocks.userUpdate).toHaveBeenCalledWith({
+      where: { id: "userMain" },
+      data: { telegramId: "tg1" },
+    });
+  });
+
   it("links without orphan merge when Telegram id has no existing user", async () => {
     mocks.tokenFindUnique.mockResolvedValue({
       code: "X",
