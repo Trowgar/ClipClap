@@ -1,7 +1,5 @@
 import type { TelegramClient } from "./telegram-client";
-import { t, type Locale } from "./i18n";
-
-const LOCALES: Locale[] = ["en", "ru"];
+import { LOCALES, t } from "./i18n";
 
 export async function configureBotProfile(client: TelegramClient): Promise<void> {
   for (const locale of LOCALES) {

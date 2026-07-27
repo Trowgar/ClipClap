@@ -36,7 +36,10 @@ import type { User } from "@prisma/client";
 import type { TelegramClient } from "./telegram-client";
 import { extractVideoUrl, probeVideoUrl } from "./url-probe";
 import {
+  LOCALES,
   detectLocale,
+  isLocale,
+  langOptionsList,
   parseLangCommand,
   t,
   type Dict,
@@ -44,6 +47,7 @@ import {
 } from "./i18n";
 import type {
   InlineKeyboardMarkup,
+  KeyboardButton,
   ReplyKeyboardMarkup,
   TelegramCallbackQuery,
   TelegramDocument,
@@ -64,8 +68,20 @@ const ACTIVE_STATUSES = [
 export const CALLBACK_NEW_ACCOUNT = "new_acc";
 export const CALLBACK_LINK_ACCOUNT = "link_acc";
 
-export const CALLBACK_LANG_EN = "lang_en";
-export const CALLBACK_LANG_RU = "lang_ru";
+/** Language callbacks are `lang_<code>`, built and parsed from LOCALES rather
+ *  than declared one constant per language - the old pair of constants had to
+ *  be added to a switch, a parser and a keyboard by hand, and Telegram gives
+ *  no error for a button whose callback nothing handles: it just does nothing
+ *  when tapped. Kept short: callback_data has a 64-byte ceiling. */
+const CALLBACK_LANG_PREFIX = "lang_";
+
+export function langCallbackData(locale: Locale): string {
+  return `${CALLBACK_LANG_PREFIX}${locale}`;
+}
+
+export function isLangCallback(data: string | undefined): boolean {
+  return parseLangCallback(data) !== null;
+}
 
 export const CALLBACK_SUBTITLES_TOGGLE = "subs_toggle";
 
@@ -81,17 +97,19 @@ export function isReferralAdmin(
     .includes(telegramId);
 }
 
-export function parseLangCallback(data: string | undefined): "en" | "ru" | null {
-  if (!data) return null;
-  if (data === CALLBACK_LANG_EN) return "en";
-  if (data === CALLBACK_LANG_RU) return "ru";
-  return null;
+export function parseLangCallback(data: string | undefined): Locale | null {
+  if (!data?.startsWith(CALLBACK_LANG_PREFIX)) return null;
+  // Still an explicit membership check, so a retired code - or the `lang_auto`
+  // this bot used to send, which is still sitting in old chat histories - is
+  // rejected instead of being written to User.telegramLocale.
+  const code = data.slice(CALLBACK_LANG_PREFIX.length);
+  return isLocale(code) ? code : null;
 }
 
 export type MenuAction = "account" | "help" | "settings" | "affiliate" | "plans";
 
 export function matchMenuAction(text: string): MenuAction | null {
-  for (const loc of ["en", "ru"] as const) {
+  for (const loc of LOCALES) {
     const d = t(loc);
     if (text === d.menuAccount) return "account";
     if (text === d.menuHelp) return "help";
@@ -105,7 +123,7 @@ export function matchMenuAction(text: string): MenuAction | null {
 export type SettingsAction = "lang" | "video" | "menu";
 
 export function matchSettingsAction(text: string): SettingsAction | null {
-  for (const loc of ["en", "ru"] as const) {
+  for (const loc of LOCALES) {
     const d = t(loc);
     if (text === d.settingsLangBtn) return "lang";
     if (text === d.settingsVideoBtn) return "video";
@@ -115,7 +133,7 @@ export function matchSettingsAction(text: string): SettingsAction | null {
 }
 
 export function matchReferralAction(text: string): "withdraw" | null {
-  for (const loc of ["en", "ru"] as const) {
+  for (const loc of LOCALES) {
     if (text === t(loc).referralWithdrawBtn) return "withdraw";
   }
   return null;
@@ -133,7 +151,7 @@ function referralKeyboard(dict: Dict): ReplyKeyboardMarkup {
 }
 
 export function matchHelpAction(text: string): "how" | "support" | null {
-  for (const loc of ["en", "ru"] as const) {
+  for (const loc of LOCALES) {
     const d = t(loc);
     if (text === d.helpHowBtn) return "how";
     if (text === d.helpSupportBtn) return "support";
@@ -156,7 +174,7 @@ const SUPPORT_MARKER = "🆕 #uid";
 const SUPPORT_UID_RE = new RegExp(`^${SUPPORT_MARKER}(\\d+)`);
 
 export function matchSupportAction(text: string): "close" | null {
-  for (const loc of ["en", "ru"] as const) {
+  for (const loc of LOCALES) {
     if (text === t(loc).supportCloseBtn) return "close";
   }
   return null;
@@ -345,7 +363,9 @@ function settingsKeyboard(dict: Dict): ReplyKeyboardMarkup {
 }
 
 function buildMainMenu(dict: Dict, adminWebAppUrl?: string): ReplyKeyboardMarkup {
-  const keyboard = [
+  // Annotated rather than inferred: the literal below infers as `{text}[][]`,
+  // which rejects the web_app button pushed onto it further down.
+  const keyboard: KeyboardButton[][] = [
     [{ text: dict.menuPlans }, { text: dict.menuAccount }],
     [{ text: dict.menuAffiliate }, { text: dict.menuHelp }],
     [{ text: dict.menuSettings }],
@@ -372,14 +392,21 @@ async function sendMainMenu(
   // reached from seven places (the keyboard button, /start, the settings back
   // button, ...), and a button that only appears for one of them reads as
   // "the button is missing".
+  //
+  // Private chats ONLY. A reply keyboard is attached to the CHAT, not to the
+  // sender: without `selective` every member of a group sees it, so an admin
+  // running /menu in a group would put "📊 Analytics" on everyone's keyboard.
+  // The data behind it stays safe (initData is checked per user), but the
+  // button's existence is itself something not to hand out. chatId === from.id
+  // is exactly the private-chat test - Telegram uses the user id as the chat id.
+  const isPrivate = String(chatId) === String(from.id);
   const appUrl =
     process.env.APP_URL || process.env.NEXTAUTH_URL || "https://clipclap.io";
-  const adminWebAppUrl = isReferralAdmin(
-    String(from.id),
-    process.env.REFERRAL_ADMIN_TELEGRAM_IDS
-  )
-    ? `${appUrl}/admin`
-    : undefined;
+  const adminWebAppUrl =
+    isPrivate &&
+    isReferralAdmin(String(from.id), process.env.REFERRAL_ADMIN_TELEGRAM_IDS)
+      ? `${appUrl}/admin`
+      : undefined;
 
   await client
     .sendMessage(chatId, text, { replyMarkup: buildMainMenu(dict, adminWebAppUrl) })
@@ -635,7 +662,7 @@ async function handleSettingsAction(
   switch (action) {
     case "lang": {
       await client.sendMessage(message.chat.id, dict.langMenuPrompt, {
-        replyMarkup: languageKeyboard(dict),
+        replyMarkup: languageKeyboard(),
       });
       return;
     }
@@ -668,7 +695,7 @@ async function sendAccountView(
     const text = dict.accountText({
       plan: "NONE",
       phase: "NONE",
-      billingCycle: null,
+      billingCycleLabel: null,
       periodEnd: null,
       daysUntilPeriodEnd: null,
       minutesUsed: 0,
@@ -696,13 +723,17 @@ async function sendAccountView(
         )
       )
     : null;
-  const billingCycle = usage.billingCycle
-    ? usage.billingCycle.toLowerCase()
+  // Localized here rather than inside each dictionary: the enum is the same
+  // everywhere, the word for it is not.
+  const billingCycleLabel = usage.billingCycle
+    ? usage.billingCycle === "WEEKLY"
+      ? dict.cycleWeekly
+      : dict.cycleMonthly
     : null;
 
   const text = dict.accountText({
     plan: usage.plan,
-    billingCycle,
+    billingCycleLabel,
     periodEnd,
     daysUntilPeriodEnd,
     phase: usage.subscriptionState.phase,
@@ -1125,6 +1156,17 @@ async function handleCallbackQuery(
     return;
   }
 
+  // Ahead of the switch below, because the callback data carries the language
+  // code and there is no longer a finite set of literals to enumerate as cases.
+  const langChoice = parseLangCallback(query.data);
+  if (langChoice) {
+    const ack = await applyLangChoice(query.from, langChoice);
+    await client
+      .editMessageText(query.message.chat.id, query.message.message_id, ack)
+      .catch(() => undefined);
+    return;
+  }
+
   switch (query.data) {
     case CALLBACK_NEW_ACCOUNT: {
       await resolveTelegramUser(query.from);
@@ -1166,15 +1208,6 @@ async function handleCallbackQuery(
       );
       return;
     }
-    case CALLBACK_LANG_EN:
-    case CALLBACK_LANG_RU: {
-      const choice = parseLangCallback(query.data)!;
-      const ack = await applyLangChoice(query.from, choice);
-      await client
-        .editMessageText(query.message.chat.id, query.message.message_id, ack)
-        .catch(() => undefined);
-      return;
-    }
     case CALLBACK_SUBTITLES_TOGGLE: {
       await handleSubtitlesToggle(client, query, dict);
       return;
@@ -1193,12 +1226,14 @@ function firstChoiceKeyboard(dict: Dict): InlineKeyboardMarkup {
   };
 }
 
-export function languageKeyboard(dict: Dict): InlineKeyboardMarkup {
+/** One row per supported language, each labelled in itself - so it takes no
+ *  Dict argument: the picker deliberately does not follow the locale the user
+ *  is currently stuck in. */
+export function languageKeyboard(): InlineKeyboardMarkup {
   return {
-    inline_keyboard: [
-      [{ text: dict.langBtnEn, callback_data: CALLBACK_LANG_EN }],
-      [{ text: dict.langBtnRu, callback_data: CALLBACK_LANG_RU }],
-    ],
+    inline_keyboard: LOCALES.map((loc) => [
+      { text: t(loc).langBtn, callback_data: langCallbackData(loc) },
+    ]),
   };
 }
 
@@ -1356,15 +1391,14 @@ export async function handleSubscribeCallback(
 
 async function applyLangChoice(
   from: TelegramUser,
-  choice: "en" | "ru"
+  choice: Locale
 ): Promise<string> {
   const user = await resolveTelegramUser(from);
   await prisma.user.update({
     where: { id: user.id },
     data: { telegramLocale: choice },
   });
-  const dict = t(choice);
-  return choice === "en" ? dict.langSetEn : dict.langSetRu;
+  return t(choice).langSet;
 }
 
 async function handleLang(
@@ -1375,7 +1409,10 @@ async function handleLang(
   currentDict: Dict
 ) {
   if (choice === "usage" || choice === null) {
-    await client.sendMessage(message.chat.id, currentDict.langUsage);
+    await client.sendMessage(
+      message.chat.id,
+      currentDict.langUsage(langOptionsList())
+    );
     return;
   }
 

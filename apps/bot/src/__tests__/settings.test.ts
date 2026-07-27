@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { t } from "../i18n";
+import { LOCALES, t } from "../i18n";
 
 describe("settings i18n", () => {
   it("has settings sub-menu labels in both locales", () => {
@@ -29,11 +29,12 @@ describe("language without Auto", () => {
     expect(parseLangCallback("lang_auto")).toBeNull();
   });
 
-  it("languageKeyboard has only Russian and English", () => {
-    const kb = JSON.stringify(languageKeyboard(t("en")));
+  it("languageKeyboard offers one row per supported locale, and no auto", () => {
+    const kb = JSON.stringify(languageKeyboard());
     expect(kb).toContain("lang_en");
     expect(kb).toContain("lang_ru");
     expect(kb).not.toContain("lang_auto");
+    expect(languageKeyboard().inline_keyboard).toHaveLength(LOCALES.length);
   });
 });
 

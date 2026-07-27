@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma";
 import { getPlanLimits } from "../config/plans";
+import { detectLocale, type Locale } from "../i18n";
 import type { Plan } from "@prisma/client";
 
 export type PaymentEvent =
@@ -7,13 +8,6 @@ export type PaymentEvent =
   | { kind: "subscription_renewed"; plan: Plan; periodEnd: Date }
   | { kind: "payment_failed"; manageUrl: string }
   | { kind: "subscription_canceled"; graceEndsAt: Date | null };
-
-type Locale = "en" | "ru";
-
-function detectLocale(stored: string | null | undefined): Locale {
-  if (stored?.toLowerCase().startsWith("ru")) return "ru";
-  return "en";
-}
 
 function formatDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -29,12 +23,39 @@ function planTitle(plan: Plan): string {
   return PLAN_TITLES[plan] ?? String(plan);
 }
 
-export function renderPaymentNotification(
-  locale: Locale,
+type PaymentCopy = (
   event: PaymentEvent,
   opts?: { minutes?: number }
-): string {
-  if (locale === "ru") {
+) => string;
+
+/** Keyed by the full Locale union, so adding an interface language is a
+ *  compile error here until this file has copy for it. It used to be
+ *  `if (locale === "ru") { ... }` with English falling out of the bottom,
+ *  which silently sent English to every language that was not Russian - on
+ *  billing messages, the ones a paying user is guaranteed to read.
+ *
+ *  These stay here rather than moving into the bot's Dict because they are
+ *  rendered by the web app's payment webhooks, which never load apps/bot. */
+const PAYMENT_COPY: Record<Locale, PaymentCopy> = {
+  en: (event, opts) => {
+    switch (event.kind) {
+      case "subscription_activated": {
+        const avail = opts?.minutes
+          ? `\nAvailable: ${opts.minutes} processing minutes this period.`
+          : "";
+        return `🎉 ${planTitle(event.plan)} subscription activated!\nActive until ${formatDate(event.periodEnd)}.${avail}\n\nTo start: send a video file or paste a link (YouTube, Twitch, TikTok, etc.) - I'll cut vertical clips with subtitles.`;
+      }
+      case "subscription_renewed":
+        return `🔄 Subscription renewed until ${formatDate(event.periodEnd)}.`;
+      case "payment_failed":
+        return `⚠️ Payment failed. Update your payment method or the subscription will expire.\n\n${event.manageUrl}`;
+      case "subscription_canceled":
+        return event.graceEndsAt
+          ? `⚠️ Subscription canceled. Access remains until ${formatDate(event.graceEndsAt)}.`
+          : `⚠️ Subscription canceled. Processing access is now disabled.`;
+    }
+  },
+  ru: (event, opts) => {
     switch (event.kind) {
       case "subscription_activated": {
         const avail = opts?.minutes
@@ -51,23 +72,15 @@ export function renderPaymentNotification(
           ? `⚠️ Подписка отменена. Доступ сохраняется до ${formatDate(event.graceEndsAt)}.`
           : `⚠️ Подписка отменена. Доступ к обработке прекращён.`;
     }
-  }
-  switch (event.kind) {
-    case "subscription_activated": {
-      const avail = opts?.minutes
-        ? `\nAvailable: ${opts.minutes} processing minutes this period.`
-        : "";
-      return `🎉 ${planTitle(event.plan)} subscription activated!\nActive until ${formatDate(event.periodEnd)}.${avail}\n\nTo start: send a video file or paste a link (YouTube, Twitch, TikTok, etc.) - I'll cut vertical clips with subtitles.`;
-    }
-    case "subscription_renewed":
-      return `🔄 Subscription renewed until ${formatDate(event.periodEnd)}.`;
-    case "payment_failed":
-      return `⚠️ Payment failed. Update your payment method or the subscription will expire.\n\n${event.manageUrl}`;
-    case "subscription_canceled":
-      return event.graceEndsAt
-        ? `⚠️ Subscription canceled. Access remains until ${formatDate(event.graceEndsAt)}.`
-        : `⚠️ Subscription canceled. Processing access is now disabled.`;
-  }
+  },
+};
+
+export function renderPaymentNotification(
+  locale: Locale,
+  event: PaymentEvent,
+  opts?: { minutes?: number }
+): string {
+  return PAYMENT_COPY[locale](event, opts);
 }
 
 export async function sendTelegramMessage(

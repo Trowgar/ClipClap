@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { JOB_ERROR_CODES, parseJobErrorCode } from "@clipclap/shared";
-import { detectLocale, parseLangCommand, t } from "../i18n";
+import { LOCALES, detectLocale, langOptionsList, parseLangCommand, t } from "../i18n";
 
 describe("bot i18n", () => {
   it("falls back to English for unknown language codes", () => {
@@ -143,17 +143,46 @@ describe("bot i18n", () => {
     expect(t("ru").welcomeFirstChoice).toContain("Новый аккаунт");
   });
 
-  it("exposes localized language-button labels", () => {
-    expect(t("en").langBtnEn).toContain("English");
-    expect(t("en").langBtnRu).toContain("Русский");
-    expect(t("ru").langBtnEn).toContain("English");
-    expect(t("ru").langBtnRu).toContain("Русский");
+  // Each language names itself, in itself. A picker whose entries are
+  // translated into the locale the user is currently stuck in is a picker they
+  // cannot read their way out of - which is the case that sends them to /lang.
+  it("names every language in itself", () => {
+    expect(t("en").langName).toBe("English");
+    expect(t("ru").langName).toBe("Русский");
+    for (const loc of LOCALES) {
+      expect(t(loc).langBtn).toContain(t(loc).langName);
+    }
+  });
+
+  it("gives every supported locale a dictionary and a switch confirmation", () => {
+    for (const loc of LOCALES) {
+      expect(t(loc)).toBeDefined();
+      expect(t(loc).langSet.length).toBeGreaterThan(0);
+    }
+  });
+
+  // The /lang usage line is generated from the registry, so a language added
+  // to LOCALES is offered by every locale's usage text without being
+  // hand-copied into each translation - which is how that list went stale.
+  it("lists every supported locale in the /lang usage text", () => {
+    const options = langOptionsList();
+    for (const loc of LOCALES) {
+      expect(options).toContain(`/lang ${loc}`);
+      expect(options).toContain(t(loc).langName);
+      expect(t(loc).langUsage(options)).toContain(options);
+    }
+  });
+
+  it("accepts every locale code as a /lang argument", () => {
+    for (const loc of LOCALES) {
+      expect(parseLangCommand(`/lang ${loc}`)).toBe(loc);
+    }
   });
 
   it("renders accountText NONE variant in both locales", () => {
     const en = t("en").accountText({
       plan: "NONE",
-      billingCycle: null,
+      billingCycleLabel: null,
       periodEnd: null,
       daysUntilPeriodEnd: null,
       minutesUsed: 0,
@@ -172,7 +201,7 @@ describe("bot i18n", () => {
 
     const ru = t("ru").accountText({
       plan: "NONE",
-      billingCycle: null,
+      billingCycleLabel: null,
       periodEnd: null,
       daysUntilPeriodEnd: null,
       minutesUsed: 0,
@@ -190,10 +219,43 @@ describe("bot i18n", () => {
     expect(ru).not.toContain("Хранилище:");
   });
 
+  const activeBase = {
+    plan: "STARTER",
+    billingCycleLabel: null as string | null,
+    periodEnd: "2026-06-24",
+    daysUntilPeriodEnd: 31,
+    minutesUsed: 45,
+    minutesLimit: 270,
+    topUpMinutes: 0,
+    clipsStored: 8,
+    storageClipsLimit: 20,
+    retentionDays: 7,
+    clipsTotal: 42,
+  };
+
+  // The billing cycle is localized by the caller, not by each dictionary. It
+  // used to be mapped inside accountText - and the English one interpolated
+  // the raw lowercased enum - so "(weekly)" was one copy-paste away from
+  // appearing untranslated in any language added later.
+  it("names the billing cycle in every locale, never as the raw enum", () => {
+    for (const loc of LOCALES) {
+      const d = t(loc);
+      for (const label of [d.cycleWeekly, d.cycleMonthly]) {
+        expect(label.length).toBeGreaterThan(0);
+        // Case-sensitive: English's own word for it is "weekly", which is
+        // correct copy; the raw enum "WEEKLY" is what must never appear.
+        expect(label).not.toMatch(/^(WEEKLY|MONTHLY)$/);
+        expect(d.accountText({ ...activeBase, billingCycleLabel: label })).toContain(
+          `(${label})`
+        );
+      }
+    }
+  });
+
   it("renders accountText PERIOD_ENDED as ended, not active, in both locales", () => {
     const base = {
       plan: "MAX",
-      billingCycle: "monthly",
+      billingCycleLabel: t("en").cycleMonthly,
       periodEnd: "2026-06-20",
       daysUntilPeriodEnd: 0,
       phase: "PERIOD_ENDED" as const,
@@ -222,7 +284,7 @@ describe("bot i18n", () => {
   it("renders accountText CANCELED as canceled in both locales", () => {
     const base = {
       plan: "MAX",
-      billingCycle: "monthly",
+      billingCycleLabel: t("en").cycleMonthly,
       periodEnd: "2026-06-20",
       daysUntilPeriodEnd: 0,
       phase: "CANCELED" as const,
@@ -242,7 +304,7 @@ describe("bot i18n", () => {
   it("renders accountText active plan with top-up in EN", () => {
     const text = t("en").accountText({
       plan: "STARTER",
-      billingCycle: "monthly",
+      billingCycleLabel: t("en").cycleMonthly,
       periodEnd: "2026-06-24",
       daysUntilPeriodEnd: 31,
       minutesUsed: 45,
@@ -264,7 +326,7 @@ describe("bot i18n", () => {
   it("renders accountText active plan with top-up in RU with correct plurals", () => {
     const text = t("ru").accountText({
       plan: "STARTER",
-      billingCycle: "monthly",
+      billingCycleLabel: t("ru").cycleMonthly,
       periodEnd: "2026-06-24",
       daysUntilPeriodEnd: 31,
       minutesUsed: 45,
@@ -286,7 +348,7 @@ describe("bot i18n", () => {
   it("omits top-up line when topUpMinutes is 0", () => {
     const en = t("en").accountText({
       plan: "STARTER",
-      billingCycle: "monthly",
+      billingCycleLabel: t("en").cycleMonthly,
       periodEnd: "2026-06-24",
       daysUntilPeriodEnd: 31,
       minutesUsed: 45,
@@ -301,7 +363,7 @@ describe("bot i18n", () => {
 
     const ru = t("ru").accountText({
       plan: "STARTER",
-      billingCycle: "monthly",
+      billingCycleLabel: t("ru").cycleMonthly,
       periodEnd: "2026-06-24",
       daysUntilPeriodEnd: 31,
       minutesUsed: 45,
@@ -318,7 +380,7 @@ describe("bot i18n", () => {
   it("renders correct Russian noun plurals for clips and days", () => {
     const base = {
       plan: "STARTER",
-      billingCycle: "monthly",
+      billingCycleLabel: t("en").cycleMonthly,
       periodEnd: "2026-06-24",
       minutesUsed: 0,
       minutesLimit: 270,

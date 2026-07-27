@@ -1,13 +1,29 @@
 import type { JobErrorCode, SubscriptionPhase } from "@clipclap/shared";
+import {
+  DEFAULT_LOCALE,
+  LOCALES,
+  detectLocale,
+  isLocale,
+  plural,
+  type Locale,
+} from "@clipclap/shared";
 
-export type Locale = "en" | "ru";
+// Re-exported so the rest of the bot keeps importing its locale vocabulary
+// from one module. The definitions live in @clipclap/shared because payment
+// notifications are rendered there - see the note in shared/src/i18n/locales.
+export { DEFAULT_LOCALE, LOCALES, detectLocale, isLocale, type Locale };
 
-export function detectLocale(languageCode?: string | null): Locale {
-  if (languageCode?.toLowerCase().startsWith("ru")) return "ru";
-  return "en";
-}
+export type LangChoice = Locale;
 
-export type LangChoice = "en" | "ru";
+/** What a person may type after /lang besides the bare code, in any language
+ *  they might be reading the bot in - "английский" is a Russian word for the
+ *  English entry, so the aliases belong to the locale they SELECT, not to the
+ *  locale they are written in. Keyed by Locale, so a new language cannot be
+ *  added without deciding what its speakers are likely to type. */
+const LANG_ALIASES: Record<Locale, readonly string[]> = {
+  en: ["english", "англ", "английский"],
+  ru: ["russian", "рус", "русский"],
+};
 
 export function parseLangCommand(text: string): LangChoice | "usage" | null {
   if (!/^\/lang(@\S+)?(\s|$)/.test(text)) return null;
@@ -16,9 +32,18 @@ export function parseLangCommand(text: string): LangChoice | "usage" | null {
     .trim()
     .toLowerCase();
   if (!arg) return "usage";
-  if (arg === "en" || arg === "english" || arg === "англ" || arg === "английский") return "en";
-  if (arg === "ru" || arg === "russian" || arg === "рус" || arg === "русский") return "ru";
-  return "usage";
+  if (isLocale(arg)) return arg;
+  return LOCALES.find((loc) => LANG_ALIASES[loc].includes(arg)) ?? "usage";
+}
+
+/** The choices /lang offers, rendered once from the registry instead of being
+ *  spelled out inside every locale's usage string - those go stale the moment
+ *  a language is added, and they go stale silently. Each language is named in
+ *  itself ("Русский", not "Russian"), which is both the convention for
+ *  language pickers and the only version a reader of that language is certain
+ *  to recognise. */
+export function langOptionsList(): string {
+  return LOCALES.map((loc) => `/lang ${loc} - ${t(loc).langName}`).join(", ");
 }
 
 export interface Dict {
@@ -103,9 +128,20 @@ export interface Dict {
   /** Already processing. The user has to do nothing except wait, which is
    *  the whole point of saying it in a language they read. */
   planConcurrentLimit: (active: number, limit: number) => string;
-  langUsage: string;
-  langSetEn: string;
-  langSetRu: string;
+  /** Takes the option list from langOptionsList() so the sentence around it is
+   *  translated but the languages in it are never hand-maintained. */
+  langUsage: (options: string) => string;
+  /** Confirmation of a switch TO this locale, therefore written in it. Read as
+   *  `t(choice).langSet`, never off the dictionary the user was reading a
+   *  moment ago - the whole point is that the next thing they see is already
+   *  in the language they picked. */
+  langSet: string;
+  /** This language's name in itself, for the picker and the /lang usage line. */
+  langName: string;
+  /** Flag + langName, for the inline button. Identical in every dictionary by
+   *  design: a language picker that translates its own entries is a picker the
+   *  user cannot read their way out of. */
+  langBtn: string;
   planStarterWeeklyBtn: string;
   planStarterBtn: string;
   planPlusBtn: string;
@@ -131,7 +167,12 @@ export interface Dict {
   supportMediaUnsupported: string;
   accountText: (params: {
     plan: string;
-    billingCycle: string | null;
+    /** Already localized by the caller from `cycleWeekly`/`cycleMonthly` - the
+     *  raw enum never gets this far. Each dictionary used to map the cycle
+     *  itself, and the English one simply interpolated the raw lowercased
+     *  value, so "STARTER (weekly)" was one copy-paste away from appearing
+     *  inside any new language's account screen. */
+    billingCycleLabel: string | null;
     periodEnd: string | null;
     daysUntilPeriodEnd: number | null;
     phase?: SubscriptionPhase;
@@ -156,8 +197,6 @@ export interface Dict {
   botDescription: string;
   botShortDescription: string;
   commands: Array<{ command: string; description: string }>;
-  langBtnEn: string;
-  langBtnRu: string;
   manageSubscriptionBtn: string;
   editInBrowserBtn: string;
   checkingLink: string;
@@ -239,7 +278,7 @@ const enFailureGeneric =
 
 const en: Dict = {
   welcomeNew:
-    "Welcome to ClipClap! Send me a video and I'll turn it into vertical clips with subtitles.\n\nLanguage: /lang ru - switch to Russian.",
+    "Welcome to ClipClap! Send me a video and I'll turn it into vertical clips with subtitles.\n\nLanguage: send /lang to switch.",
   welcomeFirstChoice:
     "Hi! I turn long videos into vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nYour first video is free - no card, no plan. If it comes back with no clips, it doesn't count.\n\nHow it works:\n1. Send a video (up to 30 minutes on the free run)\n2. I find the strongest moments and cut them\n3. Your clips come back here - up to 12, depending on the video\n\nFirst - how do you want to set up?\n\n• New account - use this Telegram as your ClipClap account.\n• I already have an account - link this Telegram to your existing clipclap.io account.",
   welcomeBack: "Welcome back! Send a video and I'll generate clips.",
@@ -314,9 +353,10 @@ const en: Dict = {
     `You have hit the daily limit of ${limit} videos. It resets at midnight - send this one again then.`,
   planConcurrentLimit: (active, limit) =>
     `I am still working on ${active === 1 ? "your video" : `${active} of your videos`}, and your plan processes ${limit} at a time. Send this one again once that is done - I'll message you when it is.`,
-  langUsage: "Usage: /lang en - English, /lang ru - Russian.",
-  langSetEn: "Language set to English.",
-  langSetRu: "Язык установлен: русский.",
+  langUsage: (options) => `Usage: ${options}.`,
+  langSet: "Language set to English.",
+  langName: "English",
+  langBtn: "🇬🇧 English",
   planStarterWeeklyBtn: "🌱 Starter - €3 / week",
   planStarterBtn: "💎 Starter - €9 / month",
   planPlusBtn: "🚀 Plus - €29 / month",
@@ -354,7 +394,7 @@ const en: Dict = {
     "Couldn't send that. Send a screenshot or describe it in text.",
   accountText: ({
     plan,
-    billingCycle,
+    billingCycleLabel,
     periodEnd,
     daysUntilPeriodEnd,
     phase,
@@ -369,7 +409,7 @@ const en: Dict = {
     if (plan === "NONE" || phase === "NONE") {
       return `Plan: no active plan\n\nPick a plan to start clipping.\nTotal clips created: ${clipsTotal}`;
     }
-    const planLabel = `${plan}${billingCycle ? ` (${billingCycle})` : ""}`;
+    const planLabel = `${plan}${billingCycleLabel ? ` (${billingCycleLabel})` : ""}`;
     let planLine: string;
     let renewLine: string;
     if (phase === "PERIOD_ENDED") {
@@ -425,8 +465,6 @@ const en: Dict = {
     { command: "link", description: "Connect your clipclap.io account" },
     { command: "referral", description: "Your referral link & earnings" },
   ],
-  langBtnEn: "🇬🇧 English",
-  langBtnRu: "🇷🇺 Русский",
   manageSubscriptionBtn: "🔧 Manage subscription",
   editInBrowserBtn: "✂️ Edit in browser",
   checkingLink: "Checking link…",
@@ -475,7 +513,7 @@ const ruFailureGeneric =
 
 const ru: Dict = {
   welcomeNew:
-    "Привет! Это ClipClap. Пришли видео - нарежу вертикальные клипы с субтитрами.\n\nЯзык: /lang en - переключиться на английский.",
+    "Привет! Это ClipClap. Пришли видео - нарежу вертикальные клипы с субтитрами.\n\nЯзык: отправь /lang, чтобы сменить.",
   welcomeFirstChoice:
     "Привет! Нарезаю длинные видео на вертикальные клипы с субтитрами - для TikTok, Reels и Shorts.\n\nПервое видео - бесплатно, без карты и подписки. Если клипов не получится, попытка не засчитается.\n\nКак это работает:\n1. Пришли видео (до 30 минут на бесплатном запуске)\n2. Найду самые сильные моменты и вырежу их\n3. Клипы придут сюда - до 12, зависит от видео\n\nСначала - как тебе удобнее начать?\n\n• Новый аккаунт - Telegram станет твоим аккаунтом ClipClap.\n• Уже есть аккаунт - привяжем этот Telegram к существующему аккаунту на clipclap.io.",
   welcomeBack: "С возвращением! Пришли видео - сделаю клипы.",
@@ -556,9 +594,10 @@ const ru: Dict = {
     `Достигнут дневной лимит - ${limit} ${pluralizeRu(limit, "видео", "видео", "видео")} в сутки. Лимит обнулится в полночь, тогда пришли это видео снова.`,
   planConcurrentLimit: (active, limit) =>
     `Я ещё обрабатываю ${active === 1 ? "твоё видео" : `твои видео (${active})`}, а на твоём тарифе одновременно обрабатывается ${limit}. Пришли это видео снова, когда закончу - я напишу.`,
-  langUsage: "Использование: /lang ru - русский, /lang en - английский.",
-  langSetEn: "Language set to English.",
-  langSetRu: "Язык установлен: русский.",
+  langUsage: (options) => `Использование: ${options}.`,
+  langSet: "Язык установлен: русский.",
+  langName: "Русский",
+  langBtn: "🇷🇺 Русский",
   planStarterWeeklyBtn: "🌱 Starter - €3 / неделя",
   planStarterBtn: "💎 Starter - €9 / мес",
   planPlusBtn: "🚀 Plus - €29 / мес",
@@ -595,7 +634,7 @@ const ru: Dict = {
     "Не удалось переслать это. Пришли скриншот или опиши текстом.",
   accountText: ({
     plan,
-    billingCycle,
+    billingCycleLabel,
     periodEnd,
     daysUntilPeriodEnd,
     phase,
@@ -610,13 +649,7 @@ const ru: Dict = {
     if (plan === "NONE" || phase === "NONE") {
       return `Тариф: нет активного\n\nВыбери тариф, чтобы начать.\nВсего создано: ${clipsTotal} ${pluralizeRu(clipsTotal, "клип", "клипа", "клипов")}`;
     }
-    const cycleLabel =
-      billingCycle === null
-        ? ""
-        : billingCycle === "weekly" || billingCycle === "WEEKLY"
-          ? " (недельный)"
-          : " (месячный)";
-    const planLabel = `${plan}${cycleLabel}`;
+    const planLabel = `${plan}${billingCycleLabel ? ` (${billingCycleLabel})` : ""}`;
     let planLine: string;
     let renewLine: string;
     if (phase === "PERIOD_ENDED") {
@@ -673,8 +706,6 @@ const ru: Dict = {
     { command: "link", description: "Привязать аккаунт clipclap.io" },
     { command: "referral", description: "Реферальная ссылка и доход" },
   ],
-  langBtnEn: "🇬🇧 English",
-  langBtnRu: "🇷🇺 Русский",
   manageSubscriptionBtn: "🔧 Управление подпиской",
   editInBrowserBtn: "✂️ Редактировать в браузере",
   checkingLink: "Проверяю ссылку…",
@@ -700,11 +731,11 @@ export function t(locale: Locale): Dict {
   return dictionaries[locale];
 }
 
+/** Russian-bound convenience over the shared CLDR selector: the arithmetic it
+ *  used to do by hand now comes from ICU, and every other language gets the
+ *  same treatment by calling `plural(<its code>, ...)` with its own categories.
+ *  `other` repeats `many` because Russian only selects it for fractions, which
+ *  no counter in this file produces. */
 function pluralizeRu(n: number, one: string, few: string, many: string): string {
-  const abs = Math.abs(n);
-  const mod10 = abs % 10;
-  const mod100 = abs % 100;
-  if (mod10 === 1 && mod100 !== 11) return one;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
-  return many;
+  return plural("ru", n, { one, few, many, other: many });
 }
