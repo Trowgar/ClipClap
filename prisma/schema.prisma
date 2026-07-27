@@ -516,3 +516,31 @@ model VerificationToken {
   @@unique([identifier, token])
   @@map("verification_tokens")
 }
+
+/// Anonymous guest traffic. One row per visitor per path per day; a reload
+/// increments `hits` rather than adding a row, so the table stays the size of
+/// the audience.
+///
+/// No raw IP is ever stored: `visitorHash` is sha256(ip + ua + a salt derived
+/// from the day), so the same person cannot be followed across days.
+model SiteVisit {
+  id           String   @id @default(cuid())
+  day          DateTime @db.Date
+  visitorHash  String
+  /// ISO-2 from MaxMind GeoLite2. Null when the database file is absent - a
+  /// missing GeoIP file degrades the country column, never the page load.
+  country      String?
+  path         String
+  referrerHost String?
+  /// Crawlers are flagged, not dropped, so the noise ratio stays visible and
+  /// the filter itself can be audited. The page counts isBot = false.
+  isBot        Boolean  @default(false)
+  hits         Int      @default(1)
+  firstSeenAt  DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+
+  @@unique([day, visitorHash, path])
+  @@index([day, country])
+  @@index([day, isBot])
+  @@map("site_visits")
+}
