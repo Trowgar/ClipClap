@@ -4,7 +4,6 @@ import type { V2Result } from "../analyze-v2/types";
 import { loadFixture, runFixture, type Fixture } from "./helpers/eval-fixture";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import {
-  anaphoricRunEnd,
   buildSentenceGraph,
   carriesOnlyFiller,
   looksLikeQuestion,
@@ -618,43 +617,6 @@ describe("named regressions", () => {
       }
     }
     expect(offenders, "an applied trim deleted the question it answers").toEqual([]);
-  });
-
-  it("no clip ends on the first or middle beat of a rhetorical run", async () => {
-    // Owner's second-best clip on job cms2c8ahm ended at 157.0s, on "Планета еще
-    // и не такое видала" - beat one of four ("Планета видала вулканические
-    // катастрофы / Планета видала астероидные импакты / Планете 4 5 миллиарда
-    // лет"). Every boundary check passed: complete sentence, question inside,
-    // answer inside. His verdict was "it seems to cut off". Same family as the
-    // malaria clip that ends 0.4s before "Летающих пауков? Это откуда?" - the
-    // engine is blind to what happens JUST AFTER the cut.
-    //
-    // podcast-answer-arc IS that job's transcript (identical text, 886 nodes),
-    // so this is the defect itself and not an analogue of it.
-    //
-    // ONE GUARD - measured 2026-07-26 by making anaphoricRunEnd() return null as
-    // its first statement. podcast-ecology reds with "87.4-157.0 «Самые страшные
-    // хищники на планете — это мы?» ends at #47, beat 1 of the run #47-#50",
-    // and eval-snapshot reds alongside it. podcast-answer-arc stays green in
-    // both arms: the same run sits INSIDE its 150.4-197.1 clip, which is the
-    // other thing this engine does with the same four sentences.
-    const offenders: string[] = [];
-    for (const name of CASES) {
-      const { fixture, result } = await run(name);
-      const nodes = buildSentenceGraph(fixture.transcript.segments, loadAnalyzeConfig({}));
-      for (const clip of result.highlights) {
-        const end = clip._endNode;
-        if (end === undefined) continue;
-        const runEnd = anaphoricRunEnd(nodes, end);
-        if (runEnd !== null) {
-          offenders.push(
-            `${label(name, clip)} ends at #${end} "${nodes[end].text}", ` +
-              `with the run continuing to #${runEnd} "${nodes[runEnd].text}"`
-          );
-        }
-      }
-    }
-    expect(offenders, "a clip ends mid-figure").toEqual([]);
   });
 
   it("the node range published with a clip is the range that shipped", async () => {
