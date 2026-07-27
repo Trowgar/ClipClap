@@ -114,6 +114,8 @@ export interface ClipData {
   createdAt: string;
   description?: string | null;
   lowQuality?: boolean;
+  /** The retention sweep dropped the object; the row is kept on purpose. */
+  expired?: boolean;
 }
 
 export interface SubscriptionData {

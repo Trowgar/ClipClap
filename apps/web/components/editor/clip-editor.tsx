@@ -38,13 +38,18 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
     let cancelled = false;
     (async () => {
       try {
-        const [clipData, track, download] = await Promise.all([
-          api.clips.get(clipId),
+        const clipData = await api.clips.get(clipId);
+        if (cancelled) return;
+        setClip(clipData);
+        // A swept clip has no object behind it - the editor cannot work on
+        // it, so there is nothing left to fetch (no download, no subtitles).
+        if (clipData.expired) return;
+
+        const [track, download] = await Promise.all([
           api.clips.subtitles(clipId),
           api.clips.download(clipId),
         ]);
         if (cancelled) return;
-        setClip(clipData);
         setCues(track.cues ?? []);
         setVideoUrl(download.url);
         setDuration(clipData.duration);
@@ -126,6 +131,26 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
     return <p className="text-sm text-destructive">{error}</p>;
   }
   if (!clip) return null;
+
+  if (clip.expired) {
+    // Editing an expired clip cannot work at all - there is no object left
+    // to re-render from - so say that plainly instead of showing a preview,
+    // trim bar, and subtitle list that can never save.
+    return (
+      <div className="flex flex-col gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={() => router.back()}>
+            <ArrowLeft className="mr-1.5 h-4 w-4" />
+            Back
+          </Button>
+          <h1 className="truncate text-base font-semibold">{clip.title}</h1>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          Storage period ended - this clip can no longer be edited.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-3 lg:h-[calc(100vh-3rem)]">

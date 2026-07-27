@@ -6,26 +6,54 @@ import { api } from "@/lib/api";
 
 interface ClipPlayerProps {
   clipId: string;
+  expired?: boolean;
   onTimeUpdate?: (currentTime: number) => void;
   onDurationChange?: (duration: number) => void;
 }
 
 export function ClipPlayer({
   clipId,
+  expired,
   onTimeUpdate,
   onDurationChange,
 }: ClipPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [src, setSrc] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!expired);
 
   useEffect(() => {
+    // A swept clip has no object behind it - never spend the presign round
+    // trip on it.
+    if (expired) {
+      setSrc(null);
+      setLoading(false);
+      return;
+    }
+
+    let active = true;
+    setLoading(true);
     api.clips
       .download(clipId)
-      .then(({ url }) => setSrc(url))
+      .then(({ url }) => {
+        if (active) setSrc(url);
+      })
       .catch(console.error)
-      .finally(() => setLoading(false));
-  }, [clipId]);
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [clipId, expired]);
+
+  if (expired) {
+    return (
+      <div className="flex aspect-[9/16] max-h-[500px] items-center justify-center rounded-lg bg-card">
+        <p className="text-sm text-muted-foreground">Storage period ended</p>
+      </div>
+    );
+  }
 
   if (loading) {
     return (

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   clipFindFirstOrThrow: vi.fn(),
   clipFindFirst: vi.fn(),
+  clipFindMany: vi.fn(),
   clipCreate: vi.fn(),
   userFindUniqueOrThrow: vi.fn(),
   queueAdd: vi.fn(),
@@ -15,6 +16,7 @@ vi.mock("../../lib/prisma", () => ({
     clip: {
       findFirstOrThrow: mocks.clipFindFirstOrThrow,
       findFirst: mocks.clipFindFirst,
+      findMany: mocks.clipFindMany,
       create: mocks.clipCreate,
     },
     user: {
@@ -34,7 +36,13 @@ vi.mock("../../lib/r2", () => ({
   deleteFile: mocks.deleteFile,
 }));
 
-import { ClipExpiredError, editClip, getDownloadUrl } from "../clip.service";
+import {
+  ClipExpiredError,
+  editClip,
+  getClip,
+  getDownloadUrl,
+  getUserClips,
+} from "../clip.service";
 
 describe("clip.service - editClip", () => {
   beforeEach(() => {
@@ -159,5 +167,75 @@ describe("clip.service - getDownloadUrl", () => {
     await expect(getDownloadUrl("c3", "u1")).rejects.not.toBeInstanceOf(
       ClipExpiredError
     );
+  });
+});
+
+describe("clip.service - getClip", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("marks a live clip expired: false without dropping any row field", async () => {
+    mocks.clipFindFirst.mockResolvedValue({
+      id: "c1",
+      storageKey: "clips/u1/job1/a.mp4",
+      deletedAt: null,
+    });
+
+    const clip = await getClip("c1", "u1");
+
+    expect(clip).toEqual(
+      expect.objectContaining({
+        id: "c1",
+        storageKey: "clips/u1/job1/a.mp4",
+        expired: false,
+      })
+    );
+  });
+
+  it("marks a swept clip expired: true - the row stays, it is only labeled", async () => {
+    mocks.clipFindFirst.mockResolvedValue({
+      id: "c2",
+      storageKey: "clips/u1/job1/b.mp4",
+      deletedAt: new Date("2026-07-20T00:00:00Z"),
+    });
+
+    const clip = await getClip("c2", "u1");
+
+    expect(clip).toEqual(
+      expect.objectContaining({
+        id: "c2",
+        storageKey: "clips/u1/job1/b.mp4",
+        expired: true,
+      })
+    );
+  });
+
+  it("returns null, not an expired stand-in, for a clip that isn't the caller's", async () => {
+    mocks.clipFindFirst.mockResolvedValue(null);
+
+    await expect(getClip("c3", "u1")).resolves.toBeNull();
+  });
+});
+
+describe("clip.service - getUserClips", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("derives expired per clip from its own deletedAt", async () => {
+    mocks.clipFindMany.mockResolvedValue([
+      { id: "c1", storageKey: "clips/u1/job1/a.mp4", deletedAt: null },
+      {
+        id: "c2",
+        storageKey: "clips/u1/job1/b.mp4",
+        deletedAt: new Date("2026-07-20T00:00:00Z"),
+      },
+    ]);
+
+    const clips = await getUserClips("u1");
+
+    expect(clips[0]).toEqual(expect.objectContaining({ id: "c1", expired: false }));
+    expect(clips[1]).toEqual(expect.objectContaining({ id: "c2", expired: true }));
   });
 });

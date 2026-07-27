@@ -15,21 +15,36 @@ export async function getClipsByJob(
   });
 }
 
-export async function getUserClips(userId: string): Promise<Clip[]> {
-  return prisma.clip.findMany({
+/** A Clip row plus the one thing every read path needs and Prisma doesn't
+ *  give for free: whether the retention sweep already dropped its object.
+ *  The row itself is never filtered out for this - deletedAt stays a fact
+ *  about the row, `expired` is that fact restated for callers that would
+ *  otherwise have to know the column exists. */
+export interface ClipWithExpiry extends Clip {
+  expired: boolean;
+}
+
+function withExpiry(clip: Clip): ClipWithExpiry {
+  return { ...clip, expired: Boolean(clip.deletedAt) };
+}
+
+export async function getUserClips(userId: string): Promise<ClipWithExpiry[]> {
+  const clips = await prisma.clip.findMany({
     where: { userId },
     orderBy: { createdAt: "desc" },
     take: 100,
   });
+  return clips.map(withExpiry);
 }
 
 export async function getClip(
   clipId: string,
   userId: string
-): Promise<Clip | null> {
-  return prisma.clip.findFirst({
+): Promise<ClipWithExpiry | null> {
+  const clip = await prisma.clip.findFirst({
     where: { id: clipId, userId },
   });
+  return clip ? withExpiry(clip) : null;
 }
 
 /** The clip existed and its retention period ended. Distinct from "not found"
