@@ -89,6 +89,114 @@ describe("project.service", () => {
     );
     expect(result?.clips[0]).not.toHaveProperty("storageKey");
   });
+
+  it("marks a swept clip expired instead of signing a URL to a deleted object", async () => {
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "job1",
+        userId: "u1",
+        originalFilename: "job1.mp4",
+        sourceUrl: null,
+        sourceKey: "uploads/u1/job1.mp4",
+        status: "DONE",
+        error: null,
+        sourceDurationSec: 60,
+        createdAt: new Date("2026-05-10T00:00:00.000Z"),
+        clipsGenerated: 2,
+        noClipsReason: null,
+        transcriptPartial: false,
+        clips: [
+          {
+            id: "clip-live",
+            title: "Live clip",
+            storageKey: "clips/u1/job1/live.mp4",
+            duration: 12,
+            startTime: 4,
+            endTime: 16,
+            subtitles: true,
+            parentClipId: null,
+            createdAt: new Date("2026-05-10T00:01:00.000Z"),
+            description: null,
+            lowQuality: false,
+            deletedAt: null,
+          },
+          {
+            id: "clip-swept",
+            title: "Swept clip",
+            storageKey: "clips/u1/job1/swept.mp4",
+            duration: 12,
+            startTime: 20,
+            endTime: 32,
+            subtitles: true,
+            parentClipId: null,
+            createdAt: new Date("2026-05-10T00:02:00.000Z"),
+            description: null,
+            lowQuality: false,
+            deletedAt: new Date("2026-07-20T00:00:00.000Z"),
+          },
+        ],
+      },
+    ]);
+
+    const result = await getProjectDetail("job1", "u1");
+
+    expect(result?.clips[0]).toEqual(
+      expect.objectContaining({
+        id: "clip-live",
+        expired: false,
+        previewUrl: "signed:clips/u1/job1/live.mp4",
+      })
+    );
+    expect(result?.clips[1]).toEqual(
+      expect.objectContaining({
+        id: "clip-swept",
+        expired: true,
+        previewUrl: null,
+      })
+    );
+    expect(mocks.getPresignedDownloadUrl).not.toHaveBeenCalledWith(
+      "clips/u1/job1/swept.mp4"
+    );
+  });
+
+  it("never picks a swept clip as the project card's poster frame", async () => {
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "job1",
+        userId: "u1",
+        sourceUrl: null,
+        sourceKey: "uploads/u1/job1.mp4",
+        thumbnailKey: null,
+        originalFilename: "job1.mp4",
+        status: "DONE",
+        error: null,
+        sourceDurationSec: 60,
+        createdAt: new Date("2026-05-10T00:00:00.000Z"),
+        clips: [
+          {
+            id: "clip-swept",
+            title: "Swept clip",
+            storageKey: "clips/u1/job1/swept.mp4",
+            duration: 12,
+            createdAt: new Date("2026-05-10T00:01:00.000Z"),
+            deletedAt: new Date("2026-07-20T00:00:00.000Z"),
+          },
+          {
+            id: "clip-live",
+            title: "Live clip",
+            storageKey: "clips/u1/job1/live.mp4",
+            duration: 12,
+            createdAt: new Date("2026-05-10T00:02:00.000Z"),
+            deletedAt: null,
+          },
+        ],
+      },
+    ]);
+
+    const projects = await getUserProjects("u1");
+
+    expect(projects[0].previewUrl).toBe("signed:clips/u1/job1/live.mp4");
+  });
 });
 
 describe("deleteProject - R2 keys", () => {
