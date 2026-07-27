@@ -147,8 +147,16 @@ export async function sweepRedundantSourceCopies(
     }
 
     // The guard that matters: when the two columns hold the same string, this
-    // key is the live source, not a copy of it.
-    if (job.sourceArtifactKey && job.sourceArtifactKey !== job.normalizedArtifactKey) {
+    // key is the live source, not a copy of it. A null normalizedArtifactKey
+    // means there is no normalized copy at all, so sourceArtifactKey is the
+    // ONLY source a consumer can fall back to (normalizedArtifactKey ??
+    // sourceArtifactKey) - never treat "different from null" as "safe to
+    // delete".
+    if (
+      job.sourceArtifactKey &&
+      job.normalizedArtifactKey != null &&
+      job.sourceArtifactKey !== job.normalizedArtifactKey
+    ) {
       if (await dropObject(job.sourceArtifactKey, dryRun)) {
         patch.sourceArtifactKey = null;
       } else {

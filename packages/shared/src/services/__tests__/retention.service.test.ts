@@ -185,6 +185,33 @@ describe("sweepRedundantSourceCopies", () => {
     expect(result).toEqual({ swept: 1, failed: 0 });
   });
 
+  it("NEVER deletes the source artifact when normalizedArtifactKey is null", async () => {
+    // normalizedArtifactKey null means there is no normalized copy at all -
+    // sourceArtifactKey is the ONLY source, because every consumer falls back
+    // to it via `normalizedArtifactKey ?? sourceArtifactKey`. The naive
+    // `sourceArtifactKey !== normalizedArtifactKey` guard is true here (X !==
+    // null), which would wrongly delete a job's only remaining source.
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "job6",
+        sourceKey: null,
+        sourceArtifactKey: "work/u1/job6/source.mp4",
+        normalizedArtifactKey: null,
+      },
+    ]);
+
+    const result = await sweepRedundantSourceCopies(NOW);
+
+    expect(mocks.deleteFile).not.toHaveBeenCalled();
+    // Still stamped: nothing failed, there was just nothing to do for that
+    // column.
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: "job6" },
+      data: { sourceSweptAt: NOW },
+    });
+    expect(result).toEqual({ swept: 1, failed: 0 });
+  });
+
   it("does not stamp or null anything when a delete fails", async () => {
     mocks.jobFindMany.mockResolvedValue([
       {
