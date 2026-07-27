@@ -63,6 +63,9 @@ export async function sweepExpiredClips(
   const clips = await prisma.clip.findMany({
     where: { expiresAt: { lte: now }, deletedAt: null },
     select: { id: true, storageKey: true },
+    // Deterministic paging: without an orderBy, take: SWEEP_PAGE_SIZE gets
+    // whatever arbitrary page Postgres feels like returning.
+    orderBy: { expiresAt: "asc" },
     take: SWEEP_PAGE_SIZE,
   });
 
@@ -133,6 +136,7 @@ export async function sweepRedundantSourceCopies(
       sourceArtifactKey: true,
       normalizedArtifactKey: true,
     },
+    orderBy: { createdAt: "asc" },
     take: SWEEP_PAGE_SIZE,
   });
 
@@ -239,6 +243,7 @@ export async function sweepExpiredArtifacts(
       sourceArtifactKey: true,
       normalizedArtifactKey: true,
     },
+    orderBy: { createdAt: "asc" },
     take: SWEEP_PAGE_SIZE,
   });
 
@@ -319,11 +324,19 @@ export async function runRetentionSweep(
   const expiredArtifacts = await sweepExpiredArtifacts(now, options);
 
   const prefix = dryRun ? "[retention][dry-run]" : "[retention]";
-  console.log(
+  const summary =
     `${prefix} clips ${clips.swept}/${clips.failed} failed, ` +
-      `redundant sources ${redundantSources.swept}/${redundantSources.failed} failed, ` +
-      `expired artifacts ${expiredArtifacts.swept}/${expiredArtifacts.failed} failed`
-  );
+    `redundant sources ${redundantSources.swept}/${redundantSources.failed} failed, ` +
+    `expired artifacts ${expiredArtifacts.swept}/${expiredArtifacts.failed} failed`;
+  const anyFailed =
+    clips.failed > 0 || redundantSources.failed > 0 || expiredArtifacts.failed > 0;
+  // A revoked R2 credential makes every delete fail forever - buried in
+  // console.log that reads as routine noise. Non-zero failed makes it loud.
+  if (anyFailed) {
+    console.error(summary);
+  } else {
+    console.log(summary);
+  }
 
   return { clips, redundantSources, expiredArtifacts, dryRun };
 }

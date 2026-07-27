@@ -22,6 +22,7 @@ import {
   sweepRedundantSourceCopies,
   sweepExpiredArtifacts,
   runRetentionSweep,
+  SWEEP_PAGE_SIZE,
 } from "../retention.service";
 
 const NOW = new Date("2026-07-27T12:00:00Z");
@@ -41,6 +42,8 @@ describe("sweepExpiredClips", () => {
     expect(mocks.clipFindMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { expiresAt: { lte: NOW }, deletedAt: null },
+        orderBy: { expiresAt: "asc" },
+        take: SWEEP_PAGE_SIZE,
       })
     );
   });
@@ -136,6 +139,8 @@ describe("sweepRedundantSourceCopies", () => {
             { processingStartedAt: { lt: new Date("2026-07-26T12:00:00Z") } },
           ],
         },
+        orderBy: { createdAt: "asc" },
+        take: SWEEP_PAGE_SIZE,
       })
     );
   });
@@ -334,6 +339,8 @@ describe("sweepExpiredArtifacts", () => {
             },
           ],
         },
+        orderBy: { createdAt: "asc" },
+        take: SWEEP_PAGE_SIZE,
       })
     );
   });
@@ -530,5 +537,44 @@ describe("runRetentionSweep", () => {
     const result = await runRetentionSweep(NOW);
 
     expect(result.dryRun).toBe(false);
+  });
+
+  it("logs the summary via console.error when any rule reports a failure", async () => {
+    // A revoked R2 credential makes every delete fail forever - console.log
+    // buries that behind routine noise, so an all-failing run must be loud.
+    mocks.deleteFile.mockRejectedValue(new Error("R2 503"));
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await runRetentionSweep(NOW);
+
+    // Distinct from dropObject's per-key "[retention] failed to delete ..."
+    // error, which also starts with "[retention]" - "expired artifacts" only
+    // ever appears in the run summary line.
+    const summaryLine = (call: any[]) =>
+      typeof call[0] === "string" && call[0].includes("expired artifacts");
+    expect(errorSpy.mock.calls.some(summaryLine)).toBe(true);
+    expect(logSpy.mock.calls.some(summaryLine)).toBe(false);
+
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
+  it("keeps logging the summary via console.log when nothing fails", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await runRetentionSweep(NOW);
+
+    // Distinct from dropObject's per-key "[retention] failed to delete ..."
+    // error, which also starts with "[retention]" - "expired artifacts" only
+    // ever appears in the run summary line.
+    const summaryLine = (call: any[]) =>
+      typeof call[0] === "string" && call[0].includes("expired artifacts");
+    expect(logSpy.mock.calls.some(summaryLine)).toBe(true);
+    expect(errorSpy.mock.calls.some(summaryLine)).toBe(false);
+
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 });
