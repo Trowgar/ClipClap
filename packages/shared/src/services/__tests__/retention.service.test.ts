@@ -21,6 +21,7 @@ import {
   sweepExpiredClips,
   sweepRedundantSourceCopies,
   sweepExpiredArtifacts,
+  sweepOrphanedThumbnails,
   runRetentionSweep,
   SWEEP_PAGE_SIZE,
 } from "../retention.service";
@@ -481,6 +482,70 @@ describe("sweepExpiredArtifacts", () => {
   });
 });
 
+describe("sweepOrphanedThumbnails", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.deleteFile.mockResolvedValue(undefined);
+    mocks.clipFindMany.mockResolvedValue([]);
+  });
+
+  it("selects jobs with a thumbnail, at least one clip, and no clip still alive", async () => {
+    mocks.jobFindMany.mockResolvedValue([]);
+
+    await sweepOrphanedThumbnails(NOW);
+
+    expect(mocks.jobFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          thumbnailKey: { not: null },
+          AND: [{ clips: { some: {} } }, { clips: { none: { deletedAt: null } } }],
+        },
+        orderBy: { createdAt: "asc" },
+        take: SWEEP_PAGE_SIZE,
+      })
+    );
+  });
+
+  it("deletes the thumbnail and nulls the column when every clip is swept", async () => {
+    mocks.jobFindMany.mockResolvedValue([
+      { id: "job1", thumbnailKey: "thumbs/u1/job1.jpg" },
+    ]);
+
+    const result = await sweepOrphanedThumbnails(NOW);
+
+    expect(mocks.deleteFile).toHaveBeenCalledWith("thumbs/u1/job1.jpg");
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: "job1" },
+      data: { thumbnailKey: null },
+    });
+    expect(result).toEqual({ swept: 1, failed: 0 });
+  });
+
+  it("leaves the column set when the delete fails, so the next run retries", async () => {
+    mocks.jobFindMany.mockResolvedValue([
+      { id: "job2", thumbnailKey: "thumbs/u1/job2.jpg" },
+    ]);
+    mocks.deleteFile.mockRejectedValueOnce(new Error("R2 503"));
+
+    const result = await sweepOrphanedThumbnails(NOW);
+
+    expect(mocks.jobUpdate).not.toHaveBeenCalled();
+    expect(result).toEqual({ swept: 0, failed: 1 });
+  });
+
+  it("writes nothing in dry-run mode", async () => {
+    mocks.jobFindMany.mockResolvedValue([
+      { id: "job3", thumbnailKey: "thumbs/u1/job3.jpg" },
+    ]);
+
+    const result = await sweepOrphanedThumbnails(NOW, { dryRun: true });
+
+    expect(mocks.deleteFile).not.toHaveBeenCalled();
+    expect(mocks.jobUpdate).not.toHaveBeenCalled();
+    expect(result).toEqual({ swept: 1, failed: 0 });
+  });
+});
+
 describe("non-terminal jobs", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -507,7 +572,7 @@ describe("runRetentionSweep", () => {
     mocks.jobFindMany.mockResolvedValue([]);
   });
 
-  it("runs all three rules live and reports them separately when RETENTION_SWEEP_LIVE is set", async () => {
+  it("runs all four rules live and reports them separately when RETENTION_SWEEP_LIVE is set", async () => {
     process.env.RETENTION_SWEEP_LIVE = "1";
 
     const result = await runRetentionSweep(NOW);
@@ -516,9 +581,29 @@ describe("runRetentionSweep", () => {
       clips: { swept: 1, failed: 0 },
       redundantSources: { swept: 0, failed: 0 },
       expiredArtifacts: { swept: 0, failed: 0 },
+      thumbnails: { swept: 0, failed: 0 },
       dryRun: false,
     });
     expect(mocks.clipUpdate).toHaveBeenCalled();
+  });
+
+  it("runs the thumbnail rule last, after the clip rule has run", async () => {
+    process.env.RETENTION_SWEEP_LIVE = "1";
+
+    await runRetentionSweep(NOW);
+
+    // All three job-based rules share prisma.job.findMany; the thumbnail
+    // rule's call is the only one whose where-clause filters on
+    // thumbnailKey, so we find it by shape rather than by position.
+    expect(mocks.jobFindMany).toHaveBeenCalledTimes(3);
+    const thumbnailCallIndex = mocks.jobFindMany.mock.calls.findIndex(
+      (call: any[]) => call[0].where.thumbnailKey !== undefined
+    );
+    expect(thumbnailCallIndex).toBe(2);
+    const thumbnailCallOrder =
+      mocks.jobFindMany.mock.invocationCallOrder[thumbnailCallIndex];
+    const clipCallOrder = mocks.clipFindMany.mock.invocationCallOrder[0];
+    expect(thumbnailCallOrder).toBeGreaterThan(clipCallOrder);
   });
 
   it("touches nothing when RETENTION_SWEEP_LIVE is unset", async () => {

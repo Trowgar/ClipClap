@@ -298,10 +298,68 @@ export async function sweepExpiredArtifacts(
   return { swept, failed };
 }
 
+/**
+ * Rule D: the project thumbnail once nothing playable is left.
+ *
+ * Job.thumbnailKey is the small JPEG a dashboard project card shows - it is
+ * not one of the artifacts Rule C reclaims, and reclaiming it on Rule C's
+ * 7-day schedule would be wrong: a MAX user's clips live 90 days, so a
+ * thumbnail dropped at day 7 leaves a project card with no picture while its
+ * clips still play for another 83 days. The correct moment is when the
+ * project has nothing playable left, i.e. every clip the job produced has
+ * been soft-deleted by Rule A.
+ *
+ * `clips: { some: {} }` is not redundant with `clips: { none: { deletedAt:
+ * null } }` - it is the guard against the vacuous case. A job that produced
+ * NO clips at all has, trivially, no clip with `deletedAt: null`, so on its
+ * own `none` would match it too and reclaim a thumbnail whose project card is
+ * still perfectly current. Requiring at least one clip row rules that out.
+ *
+ * This rule needs no stamp: nulling thumbnailKey removes the job from the
+ * selector for good.
+ */
+export async function sweepOrphanedThumbnails(
+  now: Date = new Date(),
+  options: SweepOptions = {}
+): Promise<SweepCounts> {
+  const dryRun = options.dryRun ?? false;
+  const jobs = await prisma.job.findMany({
+    where: {
+      thumbnailKey: { not: null },
+      AND: [{ clips: { some: {} } }, { clips: { none: { deletedAt: null } } }],
+    },
+    select: { id: true, thumbnailKey: true },
+    orderBy: { createdAt: "asc" },
+    take: SWEEP_PAGE_SIZE,
+  });
+
+  let swept = 0;
+  let failed = 0;
+
+  for (const job of jobs) {
+    // The selector guarantees thumbnailKey is not null.
+    const key = job.thumbnailKey as string;
+    if (await dropObject(key, dryRun)) {
+      if (!dryRun) {
+        await prisma.job.update({
+          where: { id: job.id },
+          data: { thumbnailKey: null },
+        });
+      }
+      swept++;
+    } else {
+      failed++;
+    }
+  }
+
+  return { swept, failed };
+}
+
 export interface RetentionSweepResult {
   clips: SweepCounts;
   redundantSources: SweepCounts;
   expiredArtifacts: SweepCounts;
+  thumbnails: SweepCounts;
   dryRun: boolean;
 }
 
@@ -329,14 +387,22 @@ export async function runRetentionSweep(
   const clips = await sweepExpiredClips(now, options);
   const redundantSources = await sweepRedundantSourceCopies(now, options);
   const expiredArtifacts = await sweepExpiredArtifacts(now, options);
+  // Last, on purpose: a thumbnail only becomes orphaned once Rule A has swept
+  // every clip, so running this after Rule A lets a single pass finish a
+  // project instead of needing two.
+  const thumbnails = await sweepOrphanedThumbnails(now, options);
 
   const prefix = dryRun ? "[retention][dry-run]" : "[retention]";
   const summary =
     `${prefix} clips ${clips.swept}/${clips.failed} failed, ` +
     `redundant sources ${redundantSources.swept}/${redundantSources.failed} failed, ` +
-    `expired artifacts ${expiredArtifacts.swept}/${expiredArtifacts.failed} failed`;
+    `expired artifacts ${expiredArtifacts.swept}/${expiredArtifacts.failed} failed, ` +
+    `thumbnails ${thumbnails.swept}/${thumbnails.failed} failed`;
   const anyFailed =
-    clips.failed > 0 || redundantSources.failed > 0 || expiredArtifacts.failed > 0;
+    clips.failed > 0 ||
+    redundantSources.failed > 0 ||
+    expiredArtifacts.failed > 0 ||
+    thumbnails.failed > 0;
   // A revoked R2 credential makes every delete fail forever - buried in
   // console.log that reads as routine noise. Non-zero failed makes it loud.
   if (anyFailed) {
@@ -345,5 +411,5 @@ export async function runRetentionSweep(
     console.log(summary);
   }
 
-  return { clips, redundantSources, expiredArtifacts, dryRun };
+  return { clips, redundantSources, expiredArtifacts, thumbnails, dryRun };
 }
