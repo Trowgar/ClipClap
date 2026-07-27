@@ -455,16 +455,24 @@ Run: `docker compose exec -w /app worker-render npx vitest run apps/worker/src/_
 
 Expected: PASS, 3 passed.
 
-- [ ] **Step 5: Run the worker suite to check nothing else assumed uuid keys**
+- [ ] **Step 5: Update the test that pinned the uuid shape**
+
+`apps/worker/src/__tests__/stage-flow.test.ts` asserts the upload key with
+`expect.stringMatching(/^work\/u1\/job1\/source-/)`. That regex pins the leak itself - a
+key shape that was different on every attempt. Replace it with an exact assertion on the
+derived key, `"work/u1/job1/source.mp4"` (and the normalized equivalent where present).
+
+- [ ] **Step 6: Run the worker suite to check nothing else assumed uuid keys**
 
 Run: `docker compose exec -w /app worker-render npx vitest run apps/worker`
 
-Expected: PASS (same count as before the change, plus the 3 new tests).
+Baseline before this task: 39 files, 475 tests. Expected after: 40 files, 478 tests, zero
+failures.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add apps/worker/src/stages/artifact-keys.ts apps/worker/src/stages/download.ts apps/worker/src/__tests__/artifact-keys.test.ts
+git add apps/worker/src/stages/artifact-keys.ts apps/worker/src/stages/download.ts apps/worker/src/__tests__/artifact-keys.test.ts apps/worker/src/__tests__/stage-flow.test.ts
 git -c user.name=Trowgar -c user.email=trowgar@yahoo.com commit -m "fix(download): derive artifact keys so retries stop orphaning 2 GB objects
 
 The stage uploads source-<uuid>.mp4 on every BullMQ attempt and overwrites the
