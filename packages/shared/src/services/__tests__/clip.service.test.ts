@@ -2,15 +2,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   clipFindFirstOrThrow: vi.fn(),
+  clipFindFirst: vi.fn(),
   clipCreate: vi.fn(),
   userFindUniqueOrThrow: vi.fn(),
   queueAdd: vi.fn(),
+  getPresignedDownloadUrl: vi.fn(),
+  deleteFile: vi.fn(),
 }));
 
 vi.mock("../../lib/prisma", () => ({
   prisma: {
     clip: {
       findFirstOrThrow: mocks.clipFindFirstOrThrow,
+      findFirst: mocks.clipFindFirst,
       create: mocks.clipCreate,
     },
     user: {
@@ -25,7 +29,12 @@ vi.mock("../../lib/queues", () => ({
   }),
 }));
 
-import { editClip } from "../clip.service";
+vi.mock("../../lib/r2", () => ({
+  getPresignedDownloadUrl: mocks.getPresignedDownloadUrl,
+  deleteFile: mocks.deleteFile,
+}));
+
+import { ClipExpiredError, editClip, getDownloadUrl } from "../clip.service";
 
 describe("clip.service - editClip", () => {
   beforeEach(() => {
@@ -109,6 +118,46 @@ describe("clip.service - editClip", () => {
         sourceStart: 42,
         sourceEnd: 50,
       })
+    );
+  });
+});
+
+describe("clip.service - getDownloadUrl", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getPresignedDownloadUrl.mockResolvedValue("https://r2.example/signed");
+  });
+
+  it("signs a URL for a live clip", async () => {
+    mocks.clipFindFirst.mockResolvedValue({
+      id: "c1",
+      storageKey: "clips/u1/job1/a.mp4",
+      deletedAt: null,
+    });
+
+    await expect(getDownloadUrl("c1", "u1")).resolves.toBe(
+      "https://r2.example/signed"
+    );
+  });
+
+  it("refuses a swept clip instead of signing a URL to a deleted object", async () => {
+    mocks.clipFindFirst.mockResolvedValue({
+      id: "c2",
+      storageKey: "clips/u1/job1/b.mp4",
+      deletedAt: new Date("2026-07-20T00:00:00Z"),
+    });
+
+    await expect(getDownloadUrl("c2", "u1")).rejects.toBeInstanceOf(
+      ClipExpiredError
+    );
+    expect(mocks.getPresignedDownloadUrl).not.toHaveBeenCalled();
+  });
+
+  it("still 404s a clip that belongs to somebody else", async () => {
+    mocks.clipFindFirst.mockResolvedValue(null);
+
+    await expect(getDownloadUrl("c3", "u1")).rejects.not.toBeInstanceOf(
+      ClipExpiredError
     );
   });
 });

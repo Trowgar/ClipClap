@@ -32,13 +32,27 @@ export async function getClip(
   });
 }
 
+/** The clip existed and its retention period ended. Distinct from "not found"
+ *  because the answers differ: one is a 404, the other is a 410 with copy that
+ *  tells the user what happened to their clip. */
+export class ClipExpiredError extends Error {
+  constructor(clipId: string) {
+    super(`Clip ${clipId} is past its retention period`);
+    this.name = "ClipExpiredError";
+  }
+}
+
 export async function getDownloadUrl(
   clipId: string,
   userId: string
 ): Promise<string> {
-  const clip = await prisma.clip.findFirstOrThrow({
+  const clip = await prisma.clip.findFirst({
     where: { id: clipId, userId },
   });
+  if (!clip) throw new Error(`Clip ${clipId} not found`);
+  // The bytes are gone; a signed URL here is a 404 from R2 inside a <video>
+  // tag, which reads to the user as a broken product rather than an expiry.
+  if (clip.deletedAt) throw new ClipExpiredError(clipId);
   return getPresignedDownloadUrl(clip.storageKey);
 }
 
