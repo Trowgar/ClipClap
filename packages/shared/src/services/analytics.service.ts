@@ -242,19 +242,32 @@ function surfaceWhere(surface?: FunnelSurface) {
       : {};
 }
 
-/** A Prisma User where-clause excluding the owner's own accounts, empty when none configured. */
-function excludeOwnAccountsWhere(own: { emails: string[]; telegramIds: string[] }) {
-  if (own.emails.length === 0 && own.telegramIds.length === 0) return {};
-  return {
-    NOT: {
-      OR: [
-        ...(own.emails.length
-          ? [{ email: { in: own.emails, mode: "insensitive" as const } }]
-          : []),
-        ...(own.telegramIds.length ? [{ telegramId: { in: own.telegramIds } }] : []),
-      ],
-    },
-  };
+/**
+ * A Prisma User where-clause excluding the owner's own accounts, empty when
+ * none are configured.
+ *
+ * Written as an AND of null-tolerant negations rather than the obvious
+ * `NOT { OR: [{email in}, {telegramId in}] }`. Both columns are nullable, and
+ * in SQL's three-valued logic a telegram-only user (email IS NULL) makes
+ * `email IN (...)` evaluate to NULL, so `NULL OR FALSE` is NULL and `NOT NULL`
+ * is NULL - the row fails the filter and every account without an email
+ * silently disappears. Measured on the real table: the naive form returned 2
+ * of 101 users instead of 98.
+ */
+export function excludeOwnAccountsWhere(own: {
+  emails: string[];
+  telegramIds: string[];
+}) {
+  const clauses = [];
+  if (own.emails.length) {
+    clauses.push({ OR: [{ email: null }, { email: { notIn: own.emails } }] });
+  }
+  if (own.telegramIds.length) {
+    clauses.push({
+      OR: [{ telegramId: null }, { telegramId: { notIn: own.telegramIds } }],
+    });
+  }
+  return clauses.length ? { AND: clauses } : {};
 }
 
 export interface Totals {

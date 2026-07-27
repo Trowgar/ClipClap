@@ -6,7 +6,7 @@ vi.mock("../../lib/prisma", () => ({
   prisma: { account: { count: mocks.count } },
 }));
 
-import { isAdminEmail, isAdminUser, parseOwnAccounts } from "../analytics.service";
+import { excludeOwnAccountsWhere, isAdminEmail, isAdminUser, parseOwnAccounts } from "../analytics.service";
 
 describe("isAdminEmail", () => {
   it("accepts an email on the list, case- and space-insensitively", () => {
@@ -72,5 +72,35 @@ describe("parseOwnAccounts", () => {
       emails: ["me@example.com"],
       telegramIds: ["12345"],
     });
+  });
+});
+
+describe("excludeOwnAccountsWhere", () => {
+  it("tolerates NULL columns instead of using NOT-OR", () => {
+    // Both columns are nullable. `NOT { OR: [{email in}, {telegramId in}] }`
+    // looks right but SQL three-valued logic drops every row whose email is
+    // NULL: measured on the real table it returned 2 of 101 users instead of
+    // 98. The clause must therefore never be a bare NOT.
+    const where = excludeOwnAccountsWhere({
+      emails: ["me@example.com"],
+      telegramIds: ["42"],
+    });
+    expect(JSON.stringify(where)).not.toContain("NOT");
+    expect(where).toEqual({
+      AND: [
+        { OR: [{ email: null }, { email: { notIn: ["me@example.com"] } }] },
+        { OR: [{ telegramId: null }, { telegramId: { notIn: ["42"] } }] },
+      ],
+    });
+  });
+
+  it("only constrains the sides that are configured", () => {
+    expect(excludeOwnAccountsWhere({ emails: ["a@b.c"], telegramIds: [] })).toEqual({
+      AND: [{ OR: [{ email: null }, { email: { notIn: ["a@b.c"] } }] }],
+    });
+  });
+
+  it("is empty when nothing is configured, so nobody is excluded", () => {
+    expect(excludeOwnAccountsWhere({ emails: [], telegramIds: [] })).toEqual({});
   });
 });
