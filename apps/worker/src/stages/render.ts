@@ -245,7 +245,12 @@ async function renderClips(
           duration: Math.round(highlight.end - highlight.start),
           startTime: highlight.start,
           endTime: highlight.end,
-          subtitles: job.subtitles,
+          // What was actually burned, not the job-level request: assFilter is
+          // only set when job.subtitles is on AND this highlight has cues in
+          // range, so a dialogue-free highlight burns nothing even when the
+          // job asked for subtitles. A later edit of this clip trusts this
+          // column to know whether re-burning would double-burn.
+          subtitles: assFilter !== null,
           subtitleTrack: { cues } as unknown as Prisma.InputJsonValue,
           cropPlan: cropPlan
             ? (cropPlan as unknown as Prisma.InputJsonValue)
@@ -450,6 +455,19 @@ async function renderTrim(
       }
     }
 
+    // Record what actually happened to the pixels, not what the edit asked
+    // for - a later edit of THIS clip reads this column (via editClip's
+    // originalHasBurnedSubtitles) to decide whether burning again would
+    // double-burn, so it must describe the file, not the request.
+    // Clean source: this render is the only thing that could have burned
+    // subtitles, so the outcome is exactly wantSubs. Fallback: the file
+    // already carried burned-in text when originalHasBurnedSubtitles is
+    // true, and that text survives untouched even when this edit asked for
+    // subtitles off - the column must still say true.
+    const subtitlesBurned = cleanSourcePath
+      ? wantSubs
+      : payload.originalHasBurnedSubtitles || wantSubs;
+
     const storageKey = `clips/${payload.userId}/${payload.jobId}/${randomUUID()}.mp4`;
     await uploadFile(storageKey, finalPath, "video/mp4");
     await prisma.clip.update({
@@ -457,6 +475,7 @@ async function renderTrim(
       data: {
         storageKey,
         duration: Math.round(payload.end - payload.start),
+        subtitles: subtitlesBurned,
         subtitleTrack: { cues: windowedCues } as unknown as Prisma.InputJsonValue,
         cropPlan: slicedPlan
           ? (slicedPlan as unknown as Prisma.InputJsonValue)

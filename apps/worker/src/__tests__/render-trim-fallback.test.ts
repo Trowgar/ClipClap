@@ -197,6 +197,43 @@ describe("renderTrim fallback avoids double-burning subtitles", () => {
       "video/mp4"
     );
   });
+
+  it("stores subtitles: true when the edit requested subtitles off but the original's burned-in text had to be kept", async () => {
+    await runRenderStage({
+      ...fallbackPayload,
+      subtitles: false, // the user asked to turn subtitles off...
+      originalHasBurnedSubtitles: true, // ...but the pixels can't un-burn.
+    });
+
+    expect(mocks.burnSubtitles).not.toHaveBeenCalled();
+    // The column must describe the pixels, not the request: the output
+    // still carries the old burned-in text, so subtitles must read true.
+    expect(mocks.clipUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ subtitles: true }),
+      })
+    );
+  });
+
+  it("chaining: editing that grandchild clip again through the fallback does not stack a second layer", async () => {
+    // This is the clip produced by the previous test: its row now correctly
+    // says subtitles: true (burned-in text kept), so a follow-up editClip
+    // call would forward originalHasBurnedSubtitles: true here - proving the
+    // compounding path (request-flag lies -> next edit trusts it -> double
+    // burn) is closed, not just deferred one edit.
+    await runRenderStage({
+      ...fallbackPayload,
+      subtitles: true, // this edit wants subtitles (e.g. editing captions again)
+      originalHasBurnedSubtitles: true,
+    });
+
+    expect(mocks.burnSubtitles).not.toHaveBeenCalled();
+    expect(mocks.clipUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ subtitles: true }),
+      })
+    );
+  });
 });
 
 describe("renderTrim clean-source branch still burns subtitles as before", () => {
@@ -245,6 +282,29 @@ describe("renderTrim clean-source branch still burns subtitles as before", () =>
       expect.stringContaining("clips/u1/job1/"),
       "/tmp/cut-clip.mp4",
       "video/mp4"
+    );
+  });
+
+  it("stores subtitles: true because this render actually burned them", async () => {
+    await runRenderStage(cleanPayload);
+
+    expect(mocks.clipUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ subtitles: true }),
+      })
+    );
+  });
+
+  it("stores subtitles: false when this render did not burn any (no cues in the trimmed window)", async () => {
+    await runRenderStage({
+      ...cleanPayload,
+      subtitleTrack: { cues: [] },
+    });
+
+    expect(mocks.clipUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ subtitles: false }),
+      })
     );
   });
 });
