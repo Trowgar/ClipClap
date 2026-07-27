@@ -88,3 +88,83 @@ export async function sweepExpiredClips(
 
   return { swept, failed };
 }
+
+/**
+ * Rule B: the copies of the source that nothing reads.
+ *
+ * A job can hold the same video three times: Job.sourceKey (what the user
+ * uploaded, read once by the download stage), Job.sourceArtifactKey (the
+ * worker's own copy of those same bytes) and Job.normalizedArtifactKey (the
+ * only one transcribe, render and the editor ever read). For an uploaded file
+ * the first two are byte-identical. Once the job is terminal and past the
+ * grace, both are dead weight - this rule drops them and keeps the normalized
+ * artifact for the edit window, which is Rule C's business.
+ *
+ * The stamp is not bookkeeping, it is the termination condition. When
+ * normalizeSource returned "none" the source artifact IS the normalized one,
+ * so this rule finds nothing to delete on that job - and without the stamp the
+ * job would match the selector again on every hourly run for ever, eventually
+ * filling the page with rows that have no work left in them.
+ */
+export async function sweepRedundantSourceCopies(
+  now: Date = new Date(),
+  options: SweepOptions = {}
+): Promise<SweepCounts> {
+  const dryRun = options.dryRun ?? false;
+  const jobs = await prisma.job.findMany({
+    where: {
+      status: { in: [...TERMINAL_STATUSES] },
+      createdAt: { lt: redundantSourceCutoff(now) },
+      sourceSweptAt: null,
+    },
+    select: {
+      id: true,
+      sourceKey: true,
+      sourceArtifactKey: true,
+      normalizedArtifactKey: true,
+    },
+    take: SWEEP_PAGE_SIZE,
+  });
+
+  let swept = 0;
+  let failed = 0;
+
+  for (const job of jobs) {
+    const patch: {
+      sourceKey?: null;
+      sourceArtifactKey?: null;
+      sourceSweptAt: Date;
+    } = { sourceSweptAt: now };
+    let ok = true;
+
+    if (job.sourceKey) {
+      if (await dropObject(job.sourceKey, dryRun)) patch.sourceKey = null;
+      else ok = false;
+    }
+
+    // The guard that matters: when the two columns hold the same string, this
+    // key is the live source, not a copy of it.
+    if (job.sourceArtifactKey && job.sourceArtifactKey !== job.normalizedArtifactKey) {
+      if (await dropObject(job.sourceArtifactKey, dryRun)) {
+        patch.sourceArtifactKey = null;
+      } else {
+        ok = false;
+      }
+    }
+
+    if (!ok) {
+      // Null nothing. A column pointing at a live object is harmless; a column
+      // pointing at a deleted one makes renderTrim take the clean-source
+      // branch and fail on download instead of degrading to the fallback.
+      failed++;
+      continue;
+    }
+
+    if (!dryRun) {
+      await prisma.job.update({ where: { id: job.id }, data: patch });
+    }
+    swept++;
+  }
+
+  return { swept, failed };
+}
