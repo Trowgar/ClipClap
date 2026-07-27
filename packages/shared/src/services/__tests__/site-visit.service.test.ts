@@ -46,6 +46,9 @@ describe("referrerHost", () => {
     expect(referrerHost(undefined)).toBeNull();
     expect(referrerHost("not a url")).toBeNull();
   });
+  it("does not treat a suffix-matching but distinct domain as our own", () => {
+    expect(referrerHost("https://notclipclap.io/x", "clipclap.io")).not.toBeNull();
+  });
 });
 
 describe("visitorHash", () => {

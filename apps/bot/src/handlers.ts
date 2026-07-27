@@ -1468,11 +1468,6 @@ async function handleVideo(
   dict: Dict,
   config: BotRuntimeConfig
 ) {
-  // The ack goes out before anything is awaited on Postgres - an upload must
-  // not wait on telemetry (or on the blocker's own reads) before the user
-  // hears anything back.
-  await client.sendMessage(message.chat.id, dict.uploading);
-
   const user = await resolveTelegramUser(from);
   await recordFunnelEvent(
     "bot",
@@ -1489,6 +1484,12 @@ async function handleVideo(
     );
     return;
   }
+
+  // The ack goes out only after the blocker check: no neutral ("received,
+  // checking...") copy exists for this path, and telling someone we are
+  // "Uploading your video..." right before refusing them is worse than the
+  // telemetry write landing a beat before the first reply.
+  await client.sendMessage(message.chat.id, dict.uploading);
 
   if (
     typeof source.fileSize === "number" &&

@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { recordSiteVisit } from "@clipclap/shared";
 
@@ -7,12 +8,20 @@ import { recordSiteVisit } from "@clipclap/shared";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/** Constant-time secret compare, matching the care taken in mini-app.service. */
+function secretsMatch(provided: string | null, expected: string): boolean {
+  if (!provided) return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
 export async function POST(req: NextRequest) {
   const secret = process.env.TRACK_SECRET;
   // Without the shared secret this is a public endpoint that writes rows:
   // anyone could inflate the numbers. Answer 204 either way so the endpoint
   // does not confirm whether a guess was right.
-  if (!secret || req.headers.get("x-track-secret") !== secret) {
+  if (!secret || !secretsMatch(req.headers.get("x-track-secret"), secret)) {
     return new NextResponse(null, { status: 204 });
   }
 
@@ -30,10 +39,15 @@ export async function POST(req: NextRequest) {
 
   if (!body.ip || !body.path) return new NextResponse(null, { status: 204 });
 
+  // Cap the path: the unique key includes it, so an attacker walking distinct
+  // URLs would otherwise create unlimited rows per day, and a pathname beyond
+  // the btree limit fails the insert silently.
+  const path = body.path.slice(0, 200);
+
   await recordSiteVisit({
     ip: body.ip,
     userAgent: body.userAgent,
-    path: body.path,
+    path,
     referrer: body.referrer,
     secret,
     selfHost: process.env.NEXT_PUBLIC_APP_HOST ?? "clipclap.io",

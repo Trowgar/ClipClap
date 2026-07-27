@@ -20,7 +20,12 @@ export async function POST(req: Request) {
     );
   }
 
-  const existing = await prisma.user.findUnique({ where: { email } });
+  // Normalize before both the lookup and the create: the unique index on
+  // email is case-sensitive in Postgres, so without this an attacker could
+  // register a case variant of an existing (or admin-listed) address.
+  const normalizedEmail = String(email).trim().toLowerCase();
+
+  const existing = await prisma.user.findUnique({ where: { email: normalizedEmail } });
   if (existing) {
     return NextResponse.json(
       { error: "An account with this email already exists" },
@@ -32,7 +37,7 @@ export async function POST(req: Request) {
 
   await prisma.user.create({
     data: {
-      email,
+      email: normalizedEmail,
       name: name || null,
       password: hashed,
     },

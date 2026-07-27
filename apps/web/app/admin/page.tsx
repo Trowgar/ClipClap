@@ -4,7 +4,8 @@ import {
   getFunnel,
   getTotals,
   getTraffic,
-  isAdminEmail,
+  isAdminTelegramId,
+  isAdminUser,
   verifyAdminCookie,
   type FunnelSurface,
 } from "@clipclap/shared";
@@ -26,11 +27,22 @@ export default async function AdminAnalyticsPage({
   // Two independent ways in: a normal admin session (desktop), or the signed
   // cookie that /api/admin/enter sets after validating Telegram initData.
   const session = await auth();
-  const cookieOk = verifyAdminCookie(
+  const cookieTelegramId = verifyAdminCookie(
     (await cookies()).get("cc_admin")?.value,
     process.env.NEXTAUTH_SECRET
   );
-  if (!isAdminEmail(session?.user?.email, process.env.ADMIN_EMAILS) && !cookieOk) {
+  // A well-signed cookie is not enough on its own: it says nothing about
+  // whether the id is STILL an admin, so a revoked id would otherwise keep
+  // access for up to an hour (the cookie TTL). Re-check against the live list.
+  const cookieOk =
+    cookieTelegramId !== null &&
+    isAdminTelegramId(cookieTelegramId, process.env.REFERRAL_ADMIN_TELEGRAM_IDS);
+  const emailOk = await isAdminUser(
+    session?.user?.id,
+    session?.user?.email,
+    process.env.ADMIN_EMAILS
+  );
+  if (!emailOk && !cookieOk) {
     // Render only the Mini App gate: inside Telegram it posts initData and
     // reloads; in a plain browser it renders nothing, which is the
     // 404-equivalent we want (no hint that this route matters).
@@ -78,7 +90,12 @@ export default async function AdminAnalyticsPage({
         <section>
           <h2 className="mb-2 font-semibold">Guest traffic (30d)</h2>
           <p className="text-sm opacity-80">
-            guests {traffic.guests} · pageviews {traffic.pageviews}
+            visitor-days {traffic.visitorDays} · pageviews {traffic.pageviews}
+          </p>
+          <p className="text-xs opacity-50">
+            Visitor-days, not unique people: the salt behind each visitor hash
+            rotates daily by design, so a daily returner is counted once per
+            day they show up.
           </p>
           <p className="mt-2 text-sm opacity-80">
             {traffic.byCountry

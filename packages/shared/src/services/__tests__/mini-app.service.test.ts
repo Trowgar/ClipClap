@@ -64,25 +64,25 @@ describe("verifyTelegramInitData", () => {
 });
 
 describe("admin cookie", () => {
-  it("round-trips a signed value", () => {
+  it("round-trips a signed value and returns the telegram id", () => {
     const value = signAdminCookie("575308044", "secret", 3600_000);
-    expect(verifyAdminCookie(value, "secret")).toBe(true);
+    expect(verifyAdminCookie(value, "secret")).toBe("575308044");
   });
 
   it("rejects a forged or edited value", () => {
     const value = signAdminCookie("575308044", "secret", 3600_000);
-    expect(verifyAdminCookie(value.replace("575308044", "1"), "secret")).toBe(false);
-    expect(verifyAdminCookie("1.9999999999999.deadbeef", "secret")).toBe(false);
+    expect(verifyAdminCookie(value.replace("575308044", "1"), "secret")).toBeNull();
+    expect(verifyAdminCookie("1.9999999999999.deadbeef", "secret")).toBeNull();
   });
 
   it("rejects an expired value and a missing one", () => {
     const expired = signAdminCookie("575308044", "secret", -1000);
-    expect(verifyAdminCookie(expired, "secret")).toBe(false);
-    expect(verifyAdminCookie(undefined, "secret")).toBe(false);
+    expect(verifyAdminCookie(expired, "secret")).toBeNull();
+    expect(verifyAdminCookie(undefined, "secret")).toBeNull();
   });
 
   it("rejects everything when the signing secret is missing", () => {
     const value = signAdminCookie("575308044", "secret", 3600_000);
-    expect(verifyAdminCookie(value, undefined)).toBe(false);
+    expect(verifyAdminCookie(value, undefined)).toBeNull();
   });
 });

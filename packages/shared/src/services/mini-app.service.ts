@@ -60,24 +60,32 @@ export function signAdminCookie(
   return `${body}.${mac}`;
 }
 
+/**
+ * Verifies the signature and expiry only. It does NOT confirm the id is
+ * still an admin - a revoked id's outstanding cookie stays well-signed until
+ * it expires, so callers MUST additionally check the returned id against the
+ * current REFERRAL_ADMIN_TELEGRAM_IDS (see isAdminTelegramId) before trusting
+ * it. Returns the telegram id on success, or null.
+ */
 export function verifyAdminCookie(
   value: string | undefined,
   secret: string | undefined
-): boolean {
+): string | null {
   try {
-    if (!value || !secret) return false;
+    if (!value || !secret) return null;
     const [telegramId, expiresAt, mac] = value.split(".");
-    if (!telegramId || !expiresAt || !mac) return false;
-    if (Number(expiresAt) < Date.now()) return false;
+    if (!telegramId || !expiresAt || !mac) return null;
+    if (Number(expiresAt) < Date.now()) return null;
 
     const expected = createHmac("sha256", secret)
       .update(`${telegramId}.${expiresAt}`)
       .digest("hex");
     const a = Buffer.from(expected, "hex");
     const b = Buffer.from(mac, "hex");
-    return a.length === b.length && timingSafeEqual(a, b);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
+    return telegramId;
   } catch {
-    return false;
+    return null;
   }
 }
 

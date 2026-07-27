@@ -27,8 +27,14 @@ function trackVisit(req: NextRequest, event: NextFetchEvent): void {
     req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
   if (!ip) return;
 
+  // NEVER derive this from req.url: the host nginx forwards the client-supplied
+  // Host header, so an attacker could set it and have us POST the secret to
+  // their server.
+  const origin = process.env.NEXT_PUBLIC_APP_URL;
+  if (!origin) return;
+
   event.waitUntil(
-    fetch(new URL("/api/_track", req.url), {
+    fetch(new URL("/api/_track", origin), {
       method: "POST",
       headers: { "content-type": "application/json", "x-track-secret": secret },
       body: JSON.stringify({

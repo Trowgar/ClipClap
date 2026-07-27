@@ -29,7 +29,7 @@ export function referrerHost(
   try {
     const host = new URL(referrer).host;
     if (!host) return null;
-    if (selfHost && host.endsWith(selfHost)) return null;
+    if (selfHost && (host === selfHost || host.endsWith("." + selfHost))) return null;
     return host;
   } catch {
     return null;

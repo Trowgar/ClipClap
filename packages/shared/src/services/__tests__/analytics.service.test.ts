@@ -1,5 +1,12 @@
-import { describe, expect, it } from "vitest";
-import { isAdminEmail } from "../analytics.service";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({ count: vi.fn() }));
+
+vi.mock("../../lib/prisma", () => ({
+  prisma: { account: { count: mocks.count } },
+}));
+
+import { isAdminEmail, isAdminUser } from "../analytics.service";
 
 describe("isAdminEmail", () => {
   it("accepts an email on the list, case- and space-insensitively", () => {
@@ -15,5 +22,34 @@ describe("isAdminEmail", () => {
   });
   it("rejects a missing email", () => {
     expect(isAdminEmail(undefined, "me@example.com")).toBe(false);
+  });
+});
+
+describe("isAdminUser", () => {
+  beforeEach(() => {
+    mocks.count.mockReset();
+  });
+
+  it("passes a listed email that has a federated account", async () => {
+    mocks.count.mockResolvedValue(1);
+    await expect(isAdminUser("u1", "me@example.com", "me@example.com")).resolves.toBe(true);
+    expect(mocks.count).toHaveBeenCalledWith({
+      where: { userId: "u1", provider: { in: ["google", "telegram"] } },
+    });
+  });
+
+  it("rejects a listed email with no federated account (self-registered credentials)", async () => {
+    mocks.count.mockResolvedValue(0);
+    await expect(isAdminUser("u1", "me@example.com", "me@example.com")).resolves.toBe(false);
+  });
+
+  it("rejects an unlisted email without even querying the database", async () => {
+    await expect(isAdminUser("u1", "stranger@x.io", "me@example.com")).resolves.toBe(false);
+    expect(mocks.count).not.toHaveBeenCalled();
+  });
+
+  it("rejects a missing userId", async () => {
+    await expect(isAdminUser(undefined, "me@example.com", "me@example.com")).resolves.toBe(false);
+    expect(mocks.count).not.toHaveBeenCalled();
   });
 });

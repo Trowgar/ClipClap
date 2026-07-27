@@ -75,7 +75,7 @@ describe("recordFunnelEvent", () => {
   it("maps every canSubmitJob code to a rejection event", () => {
     expect(uploadRejectedEvent("FREE_TRIAL_USED")).toBe("upload_rejected_trial_used");
     expect(uploadRejectedEvent("FREE_TRIAL_ATTEMPTS")).toBe("upload_rejected_trial_attempts");
-    expect(uploadRejectedEvent("FREE_SOURCE_TOO_LONG")).toBe("upload_rejected_too_long");
+    expect(uploadRejectedEvent("FREE_SOURCE_TOO_LONG")).toBe("upload_rejected_free_too_long");
     expect(uploadRejectedEvent("QUOTA")).toBe("upload_rejected_quota");
     expect(uploadRejectedEvent("LIFECYCLE")).toBe("upload_rejected_lifecycle");
     // Route-level refusals that never reach canSubmitJob

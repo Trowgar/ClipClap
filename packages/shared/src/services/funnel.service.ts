@@ -41,7 +41,7 @@ export type UploadRejectionCode =
 const REJECTION_SUFFIX: Record<UploadRejectionCode, string> = {
   FREE_TRIAL_USED: "trial_used",
   FREE_TRIAL_ATTEMPTS: "trial_attempts",
-  FREE_SOURCE_TOO_LONG: "too_long",
+  FREE_SOURCE_TOO_LONG: "free_too_long",
   QUOTA: "quota",
   LIFECYCLE: "lifecycle",
   TOO_LONG: "too_long",
