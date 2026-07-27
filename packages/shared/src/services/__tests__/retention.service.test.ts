@@ -21,6 +21,7 @@ import {
   sweepExpiredClips,
   sweepRedundantSourceCopies,
   sweepExpiredArtifacts,
+  runRetentionSweep,
 } from "../retention.service";
 
 const NOW = new Date("2026-07-27T12:00:00Z");
@@ -322,5 +323,47 @@ describe("non-terminal jobs", () => {
     for (const call of mocks.jobFindMany.mock.calls) {
       expect(call[0].where.status).toEqual({ in: ["DONE", "FAILED"] });
     }
+  });
+});
+
+describe("runRetentionSweep", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.RETENTION_SWEEP_DRY_RUN;
+    mocks.deleteFile.mockResolvedValue(undefined);
+    mocks.clipFindMany.mockResolvedValue([{ id: "c1", storageKey: "clips/a.mp4" }]);
+    mocks.jobFindMany.mockResolvedValue([]);
+  });
+
+  it("runs all three rules and reports them separately", async () => {
+    const result = await runRetentionSweep(NOW);
+
+    expect(result).toEqual({
+      clips: { swept: 1, failed: 0 },
+      redundantSources: { swept: 0, failed: 0 },
+      expiredArtifacts: { swept: 0, failed: 0 },
+      dryRun: false,
+    });
+    expect(mocks.clipUpdate).toHaveBeenCalled();
+  });
+
+  it("touches nothing when RETENTION_SWEEP_DRY_RUN is set", async () => {
+    process.env.RETENTION_SWEEP_DRY_RUN = "1";
+
+    const result = await runRetentionSweep(NOW);
+
+    expect(result.dryRun).toBe(true);
+    expect(result.clips).toEqual({ swept: 1, failed: 0 });
+    expect(mocks.deleteFile).not.toHaveBeenCalled();
+    expect(mocks.clipUpdate).not.toHaveBeenCalled();
+    expect(mocks.jobUpdate).not.toHaveBeenCalled();
+  });
+
+  it("treats an empty or absent flag as a live run", async () => {
+    process.env.RETENTION_SWEEP_DRY_RUN = "";
+
+    const result = await runRetentionSweep(NOW);
+
+    expect(result.dryRun).toBe(false);
   });
 });

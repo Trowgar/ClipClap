@@ -247,3 +247,38 @@ export async function sweepExpiredArtifacts(
 
   return { swept, failed };
 }
+
+export interface RetentionSweepResult {
+  clips: SweepCounts;
+  redundantSources: SweepCounts;
+  expiredArtifacts: SweepCounts;
+  dryRun: boolean;
+}
+
+/**
+ * One pass of every rule, in cheapest-first order.
+ *
+ * RETENTION_SWEEP_DRY_RUN exists for exactly one moment: the first run against
+ * a bucket that has never been cleaned, where every rule has a full backlog
+ * and the counts are the only warning we get before the deletes are real.
+ * It is read per run, not cached, so flipping it does not need a redeploy.
+ */
+export async function runRetentionSweep(
+  now: Date = new Date()
+): Promise<RetentionSweepResult> {
+  const dryRun = Boolean(process.env.RETENTION_SWEEP_DRY_RUN);
+  const options: SweepOptions = { dryRun };
+
+  const clips = await sweepExpiredClips(now, options);
+  const redundantSources = await sweepRedundantSourceCopies(now, options);
+  const expiredArtifacts = await sweepExpiredArtifacts(now, options);
+
+  const prefix = dryRun ? "[retention][dry-run]" : "[retention]";
+  console.log(
+    `${prefix} clips ${clips.swept}/${clips.failed} failed, ` +
+      `redundant sources ${redundantSources.swept}/${redundantSources.failed} failed, ` +
+      `expired artifacts ${expiredArtifacts.swept}/${expiredArtifacts.failed} failed`
+  );
+
+  return { clips, redundantSources, expiredArtifacts, dryRun };
+}
