@@ -3,7 +3,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import {
-  BOT_FUNNEL_EVENTS,
+  FUNNEL_EVENTS,
   buildClipCaption,
   cancelShopOrder,
   canSubmitJob,
@@ -25,10 +25,11 @@ import {
   MAX_TELEGRAM_DELIVERY_ATTEMPTS,
   parseJobErrorCode,
   prisma,
-  recordBotFunnelEvent,
+  recordFunnelEvent,
   redeemLinkFromBot,
   telegramDeliveryService,
   uploadFile,
+  uploadRejectedEvent,
 } from "@clipclap/shared";
 import type { SubscriptionPhase } from "@clipclap/shared";
 import type { User } from "@prisma/client";
@@ -619,6 +620,12 @@ async function handleSettingsAction(
       await client.sendMessage(message.chat.id, dict.welcomeBack, {
         replyMarkup: buildMainMenu(dict),
       });
+      await recordFunnelEvent(
+        "bot",
+        message.from!.id,
+        FUNNEL_EVENTS.APP_OPENED,
+        message.from!.language_code
+      );
       return;
     }
   }
@@ -1046,11 +1053,12 @@ async function handleStart(
     // This screen creates no User row - a stranger who reads it and leaves
     // used to be recorded nowhere at all, which is why the size of the
     // population behind our 95 accounts is unknown. Recorded AFTER the reply
-    // is out, and recordBotFunnelEvent never throws, so the first thing this
+    // is out, and recordFunnelEvent never throws, so the first thing this
     // person sees cannot be broken by a telemetry write.
-    await recordBotFunnelEvent(
-      BOT_FUNNEL_EVENTS.FIRST_SCREEN,
+    await recordFunnelEvent(
+      "bot",
       message.from!.id,
+      FUNNEL_EVENTS.FIRST_SCREEN,
       message.from!.language_code
     );
     return;
@@ -1119,9 +1127,16 @@ async function handleCallbackQuery(
       // The other half of the funnel: this person went PAST the first screen.
       // Counted here rather than inferred from users.createdAt so both halves
       // are one query against one table, and so the two doors stay apart.
-      await recordBotFunnelEvent(
-        BOT_FUNNEL_EVENTS.NEW_ACCOUNT,
+      await recordFunnelEvent(
+        "bot",
         query.from.id,
+        FUNNEL_EVENTS.NEW_ACCOUNT,
+        query.from.language_code
+      );
+      await recordFunnelEvent(
+        "bot",
+        query.from.id,
+        FUNNEL_EVENTS.APP_OPENED,
         query.from.language_code
       );
       return;
@@ -1137,9 +1152,10 @@ async function handleCallbackQuery(
           dict.linkAccountInstructions(code, config.appUrl)
         )
         .catch(() => undefined);
-      await recordBotFunnelEvent(
-        BOT_FUNNEL_EVENTS.LINK_ACCOUNT,
+      await recordFunnelEvent(
+        "bot",
         query.from.id,
+        FUNNEL_EVENTS.LINK_ACCOUNT,
         query.from.language_code
       );
       return;
@@ -1455,7 +1471,16 @@ async function handleVideo(
   config: BotRuntimeConfig
 ) {
   const user = await resolveTelegramUser(from);
-  const blockedReason = await getSubmissionBlocker(user.id, dict, source.duration);
+  await recordFunnelEvent(
+    "bot",
+    from.id,
+    FUNNEL_EVENTS.VIDEO_SUBMITTED,
+    from.language_code
+  );
+  const blockedReason = await getSubmissionBlocker(user.id, dict, source.duration, {
+    telegramId: from.id,
+    locale: from.language_code,
+  });
   if (blockedReason) {
     await client.sendMessage(
       message.chat.id,
@@ -1535,7 +1560,16 @@ async function handleVideoUrl(
   }
 
   const user = await resolveTelegramUser(from);
-  const blockedReason = await getSubmissionBlocker(user.id, dict, probe.durationSec);
+  await recordFunnelEvent(
+    "bot",
+    from.id,
+    FUNNEL_EVENTS.VIDEO_SUBMITTED,
+    from.language_code
+  );
+  const blockedReason = await getSubmissionBlocker(user.id, dict, probe.durationSec, {
+    telegramId: from.id,
+    locale: from.language_code,
+  });
   if (blockedReason) {
     await client.sendMessage(
       message.chat.id,
@@ -1589,7 +1623,8 @@ const STARTER_WEEKLY = getPlanLimits("STARTER", "WEEKLY");
 export async function getSubmissionBlocker(
   userId: string,
   dict: Dict,
-  durationSec?: number
+  durationSec?: number,
+  subject?: { telegramId: string | number; locale?: string }
 ) {
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
 
@@ -1603,16 +1638,33 @@ export async function getSubmissionBlocker(
     durationMinutes > 0 &&
     durationMinutes > limits.maxSourceDurationMinutes
   ) {
-    return user.plan === "NONE"
-      ? dict.freeSourceTooLong(
-          limits.maxSourceDurationMinutes,
-          STARTER_WEEKLY.maxSourceDurationMinutes
-        )
-      : dict.planSourceTooLong(limits.maxSourceDurationMinutes);
+    if (user.plan === "NONE") {
+      return dict.freeSourceTooLong(
+        limits.maxSourceDurationMinutes,
+        STARTER_WEEKLY.maxSourceDurationMinutes
+      );
+    }
+    if (subject) {
+      await recordFunnelEvent(
+        "bot",
+        subject.telegramId,
+        uploadRejectedEvent("TOO_LONG"),
+        subject.locale
+      );
+    }
+    return dict.planSourceTooLong(limits.maxSourceDurationMinutes);
   }
 
   const submission = await canSubmitJob(userId, durationMinutes);
   if (!submission.allowed) {
+    if (subject) {
+      await recordFunnelEvent(
+        "bot",
+        subject.telegramId,
+        uploadRejectedEvent(submission.code),
+        subject.locale
+      );
+    }
     switch (submission.code) {
       case "FREE_TRIAL_USED":
         return dict.freeTrialUsed(

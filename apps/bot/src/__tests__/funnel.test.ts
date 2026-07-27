@@ -36,11 +36,11 @@ vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
       create: mocks.accountCreate,
     },
     telegramLinkToken: { create: mocks.linkTokenCreate },
-    botFunnelEvent: { upsert: mocks.funnelUpsert },
+    funnelEvent: { upsert: mocks.funnelUpsert },
   },
 }));
 
-import { BOT_FUNNEL_EVENTS } from "@clipclap/shared";
+import { FUNNEL_EVENTS } from "@clipclap/shared";
 import {
   CALLBACK_LINK_ACCOUNT,
   CALLBACK_NEW_ACCOUNT,
@@ -82,7 +82,7 @@ function startUpdate() {
 
 function eventsRecorded() {
   return mocks.funnelUpsert.mock.calls.map(
-    (c) => c[0].where.telegramId_event.event
+    (c) => c[0].where.surface_subjectId_event.event
   );
 }
 
@@ -110,9 +110,10 @@ describe("first-screen telemetry", () => {
       t("ru").welcomeFirstChoice,
       expect.anything()
     );
-    expect(eventsRecorded()).toEqual([BOT_FUNNEL_EVENTS.FIRST_SCREEN]);
+    expect(eventsRecorded()).toEqual([FUNNEL_EVENTS.FIRST_SCREEN]);
     const arg = mocks.funnelUpsert.mock.calls[0][0];
-    expect(arg.where.telegramId_event.telegramId).toBe("4242");
+    expect(arg.where.surface_subjectId_event.surface).toBe("bot");
+    expect(arg.where.surface_subjectId_event.subjectId).toBe("4242");
     // The locale is worth one column: 34 of 95 users have none set and the
     // wall they hit is written in two languages only.
     expect(arg.create.locale).toBe("ru");
@@ -168,13 +169,13 @@ describe("first-screen telemetry", () => {
 
     await handleUpdate(client as never, startUpdate() as never, CONFIG);
 
-    expect(eventsRecorded()).not.toContain(BOT_FUNNEL_EVENTS.FIRST_SCREEN);
+    expect(eventsRecorded()).not.toContain(FUNNEL_EVENTS.FIRST_SCREEN);
   });
 
   it("records going past the screen, by which door", async () => {
     for (const [data, event] of [
-      [CALLBACK_NEW_ACCOUNT, BOT_FUNNEL_EVENTS.NEW_ACCOUNT],
-      [CALLBACK_LINK_ACCOUNT, BOT_FUNNEL_EVENTS.LINK_ACCOUNT],
+      [CALLBACK_NEW_ACCOUNT, FUNNEL_EVENTS.NEW_ACCOUNT],
+      [CALLBACK_LINK_ACCOUNT, FUNNEL_EVENTS.LINK_ACCOUNT],
     ] as const) {
       vi.clearAllMocks();
       mocks.userFindUnique.mockResolvedValue(null);
