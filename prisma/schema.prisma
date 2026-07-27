@@ -244,44 +244,40 @@ model TelegramLinkToken {
   @@map("telegram_link_tokens")
 }
 
-/// The top of the Telegram funnel, which was previously invisible.
+/// Funnel steps for both surfaces, which were previously invisible.
 ///
 /// A User row only exists once someone presses "New account" or "Link
 /// account", so everyone who opened the bot, read the first screen and left
-/// was recorded nowhere: we could see 95 accounts and 3 people who ever ran a
-/// job, but not the size of the population those 95 came out of.
-///
-/// One row per person per step, not one per press - the question is "how many
-/// people", so count(*) is the answer directly and the table stays the size of
-/// the audience rather than of the traffic. Repeat presses increment
-/// `occurrences`, which keeps the "opened it four times and still did not
-/// commit" signal without a row per event.
+/// was recorded nowhere. One row per person per step, not one per press - the
+/// question is "how many people", so count(*) is the answer directly and the
+/// table stays the size of the audience rather than of the traffic. Repeat
+/// presses increment `occurrences`.
 ///
 /// Deliberately NOT related to User: the whole point is the people who never
-/// became one. Join on telegramId when you want the ones who did:
-///   -- reached the first screen and never created an account
-///   SELECT count(*) FROM bot_funnel_events e
-///   WHERE e.event = 'start_first_screen'
-///     AND NOT EXISTS (SELECT 1 FROM users u WHERE u."telegramId" = e."telegramId");
-model BotFunnelEvent {
+/// became one. Join on `subjectId` when you want the ones who did - it holds a
+/// telegramId for surface='bot' and a users.id for surface='web'.
+model FunnelEvent {
+  /// "bot" | "web". Plain String for the same reason `event` is: adding a
+  /// surface must not be a migration on a table nobody's request path needs.
+  surface     String
+  /// bot: telegramId (may predate the account). web: users.id (post-signup
+  /// only - an anonymous visitor cannot be identified without cookies, which
+  /// this product deliberately does not set).
+  subjectId   String
   id          String   @id @default(cuid())
-  telegramId  String
-  /// Funnel step. Values come from BOT_FUNNEL_EVENTS in
-  /// packages/shared/src/services/bot-funnel.service.ts - a String, not an
-  /// enum, so adding a step is a code change and not a migration on a table
-  /// nobody's request path depends on.
+  /// Funnel step. Values come from FUNNEL_EVENTS in
+  /// packages/shared/src/services/funnel.service.ts - a String, not an enum.
   event       String
-  /// Telegram language_code as detected at the time. The refusal copy exists
-  /// in EN and RU only, so knowing what the drop-offs actually read is the
-  /// one dimension worth a column here.
+  /// Locale as detected at the time. Copy exists in EN and RU only, so knowing
+  /// what the drop-offs actually read is the one dimension worth a column.
   locale      String?
   occurrences Int      @default(1)
   firstSeenAt DateTime @default(now())
   lastSeenAt  DateTime @default(now())
 
-  @@unique([telegramId, event])
+  @@unique([surface, subjectId, event])
   @@index([event, firstSeenAt])
-  @@map("bot_funnel_events")
+  @@map("funnel_events")
 }
 
 enum TributeWebhookStatus {
