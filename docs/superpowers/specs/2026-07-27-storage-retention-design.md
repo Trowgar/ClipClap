@@ -129,8 +129,11 @@ the source of truth for "this artifact exists".
 
 Batching: each rule takes a bounded page (200 rows) per run, so one pass cannot
 hold the worker or the R2 client for an unbounded time. A backlog drains over
-successive hours. Deletes within a page run through `Promise.allSettled` - one
-failing key must not abandon the other 199.
+successive hours. Within a page each row's deletes are isolated - a key that
+fails costs its own row and nothing else, and the other 199 still get swept.
+Deletes run sequentially rather than fanned out: nothing here is urgent, and 200
+concurrent DeleteObject calls from the finalize worker are a burst nobody asked
+for.
 
 Idempotence: every rule's selector excludes what it already did (`deletedAt IS
 NULL`, `key IS NOT NULL`), so a re-run after a crash mid-page is a no-op on the
@@ -186,8 +189,10 @@ Unit tests in the worker package, run inside the `worker` container:
 - A second run over already-swept rows is a no-op.
 - Dry run performs no writes to either R2 or the DB.
 
-`clipsStored` after a sweep is checked against `usage.service` directly, so the
-quota-release behaviour is asserted where it is actually read.
+The quota-release behaviour needs no new test: `usage.service.test.ts` already
+asserts that `clipsStored` is counted with a `deletedAt: null` filter, which is
+the whole contract between the sweep and the quota. That test is run as part of
+the sweep work to confirm the contract still holds.
 
 ## Consequences
 
