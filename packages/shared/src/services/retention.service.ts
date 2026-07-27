@@ -168,3 +168,82 @@ export async function sweepRedundantSourceCopies(
 
   return { swept, failed };
 }
+
+/**
+ * Rule C: the edit window is over.
+ *
+ * Everything the job still holds goes. Editing a clip from a job this old
+ * still works - renderTrim branches on the PRESENCE of the column and falls
+ * back to re-trimming the finished clip file - which is exactly why the
+ * columns are nulled in the same write that deletes the objects. A column
+ * pointing at a deleted object is the one state that turns a degradation into
+ * a failure.
+ *
+ * This rule needs no stamp: it nulls every key it selects on, so a swept job
+ * cannot match the selector again.
+ */
+export async function sweepExpiredArtifacts(
+  now: Date = new Date(),
+  options: SweepOptions = {}
+): Promise<SweepCounts> {
+  const dryRun = options.dryRun ?? false;
+  const jobs = await prisma.job.findMany({
+    where: {
+      status: { in: [...TERMINAL_STATUSES] },
+      createdAt: { lt: sourceArtifactCutoff(now) },
+      OR: [
+        { sourceKey: { not: null } },
+        { sourceArtifactKey: { not: null } },
+        { normalizedArtifactKey: { not: null } },
+      ],
+    },
+    select: {
+      id: true,
+      sourceKey: true,
+      sourceArtifactKey: true,
+      normalizedArtifactKey: true,
+    },
+    take: SWEEP_PAGE_SIZE,
+  });
+
+  let swept = 0;
+  let failed = 0;
+
+  for (const job of jobs) {
+    // A Set: "none" normalization puts the same key in two columns, and a
+    // second DeleteObject for a key we just removed is a wasted round trip.
+    const keys = [
+      ...new Set(
+        [
+          job.sourceKey,
+          job.sourceArtifactKey,
+          job.normalizedArtifactKey,
+        ].filter((key): key is string => Boolean(key))
+      ),
+    ];
+
+    let ok = true;
+    for (const key of keys) {
+      if (!(await dropObject(key, dryRun))) ok = false;
+    }
+
+    if (!ok) {
+      failed++;
+      continue;
+    }
+
+    if (!dryRun) {
+      await prisma.job.update({
+        where: { id: job.id },
+        data: {
+          sourceKey: null,
+          sourceArtifactKey: null,
+          normalizedArtifactKey: null,
+        },
+      });
+    }
+    swept++;
+  }
+
+  return { swept, failed };
+}

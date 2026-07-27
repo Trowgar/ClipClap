@@ -17,7 +17,11 @@ vi.mock("../../lib/prisma", () => ({
 
 vi.mock("../../lib/r2", () => ({ deleteFile: mocks.deleteFile }));
 
-import { sweepExpiredClips, sweepRedundantSourceCopies } from "../retention.service";
+import {
+  sweepExpiredClips,
+  sweepRedundantSourceCopies,
+  sweepExpiredArtifacts,
+} from "../retention.service";
 
 const NOW = new Date("2026-07-27T12:00:00Z");
 
@@ -212,5 +216,111 @@ describe("sweepRedundantSourceCopies", () => {
     expect(mocks.deleteFile).not.toHaveBeenCalled();
     expect(mocks.jobUpdate).not.toHaveBeenCalled();
     expect(result).toEqual({ swept: 1, failed: 0 });
+  });
+});
+
+describe("sweepExpiredArtifacts", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.deleteFile.mockResolvedValue(undefined);
+    mocks.clipFindMany.mockResolvedValue([]);
+  });
+
+  it("selects terminal jobs past the 7-day window that still hold a key", async () => {
+    mocks.jobFindMany.mockResolvedValue([]);
+
+    await sweepExpiredArtifacts(NOW);
+
+    expect(mocks.jobFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          status: { in: ["DONE", "FAILED"] },
+          createdAt: { lt: new Date("2026-07-20T12:00:00Z") },
+          OR: [
+            { sourceKey: { not: null } },
+            { sourceArtifactKey: { not: null } },
+            { normalizedArtifactKey: { not: null } },
+          ],
+        },
+      })
+    );
+  });
+
+  it("deletes every remaining key once and nulls all three columns", async () => {
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "job1",
+        sourceKey: null,
+        sourceArtifactKey: "work/u1/job1/source.mp4",
+        normalizedArtifactKey: "work/u1/job1/source.mp4",
+      },
+    ]);
+
+    const result = await sweepExpiredArtifacts(NOW);
+
+    // Same string in both columns - one object, one delete call.
+    expect(mocks.deleteFile.mock.calls.map((c: any[]) => c[0])).toEqual([
+      "work/u1/job1/source.mp4",
+    ]);
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: "job1" },
+      data: {
+        sourceKey: null,
+        sourceArtifactKey: null,
+        normalizedArtifactKey: null,
+      },
+    });
+    expect(result).toEqual({ swept: 1, failed: 0 });
+  });
+
+  it("leaves every column set when a delete fails, so the next run retries", async () => {
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "job2",
+        sourceKey: null,
+        sourceArtifactKey: null,
+        normalizedArtifactKey: "work/u1/job2/normalized.mp4",
+      },
+    ]);
+    mocks.deleteFile.mockRejectedValueOnce(new Error("R2 503"));
+
+    const result = await sweepExpiredArtifacts(NOW);
+
+    expect(mocks.jobUpdate).not.toHaveBeenCalled();
+    expect(result).toEqual({ swept: 0, failed: 1 });
+  });
+
+  it("writes nothing in dry-run mode", async () => {
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "job3",
+        sourceKey: null,
+        sourceArtifactKey: null,
+        normalizedArtifactKey: "work/u1/job3/normalized.mp4",
+      },
+    ]);
+
+    const result = await sweepExpiredArtifacts(NOW, { dryRun: true });
+
+    expect(mocks.deleteFile).not.toHaveBeenCalled();
+    expect(mocks.jobUpdate).not.toHaveBeenCalled();
+    expect(result).toEqual({ swept: 1, failed: 0 });
+  });
+});
+
+describe("non-terminal jobs", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.clipFindMany.mockResolvedValue([]);
+    mocks.jobFindMany.mockResolvedValue([]);
+  });
+
+  it("are excluded by both artifact rules, however old they are", async () => {
+    await sweepRedundantSourceCopies(NOW);
+    await sweepExpiredArtifacts(NOW);
+
+    for (const call of mocks.jobFindMany.mock.calls) {
+      expect(call[0].where.status).toEqual({ in: ["DONE", "FAILED"] });
+    }
   });
 });
