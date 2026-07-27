@@ -501,13 +501,15 @@ describe("non-terminal jobs", () => {
 describe("runRetentionSweep", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    delete process.env.RETENTION_SWEEP_DRY_RUN;
+    delete process.env.RETENTION_SWEEP_LIVE;
     mocks.deleteFile.mockResolvedValue(undefined);
     mocks.clipFindMany.mockResolvedValue([{ id: "c1", storageKey: "clips/a.mp4" }]);
     mocks.jobFindMany.mockResolvedValue([]);
   });
 
-  it("runs all three rules and reports them separately", async () => {
+  it("runs all three rules live and reports them separately when RETENTION_SWEEP_LIVE is set", async () => {
+    process.env.RETENTION_SWEEP_LIVE = "1";
+
     const result = await runRetentionSweep(NOW);
 
     expect(result).toEqual({
@@ -519,9 +521,7 @@ describe("runRetentionSweep", () => {
     expect(mocks.clipUpdate).toHaveBeenCalled();
   });
 
-  it("touches nothing when RETENTION_SWEEP_DRY_RUN is set", async () => {
-    process.env.RETENTION_SWEEP_DRY_RUN = "1";
-
+  it("touches nothing when RETENTION_SWEEP_LIVE is unset", async () => {
     const result = await runRetentionSweep(NOW);
 
     expect(result.dryRun).toBe(true);
@@ -531,17 +531,20 @@ describe("runRetentionSweep", () => {
     expect(mocks.jobUpdate).not.toHaveBeenCalled();
   });
 
-  it("treats an empty or absent flag as a live run", async () => {
-    process.env.RETENTION_SWEEP_DRY_RUN = "";
+  it("treats an empty value as a dry run - a copied .env.example must never turn live", async () => {
+    process.env.RETENTION_SWEEP_LIVE = "";
 
     const result = await runRetentionSweep(NOW);
 
-    expect(result.dryRun).toBe(false);
+    expect(result.dryRun).toBe(true);
+    expect(mocks.deleteFile).not.toHaveBeenCalled();
+    expect(mocks.clipUpdate).not.toHaveBeenCalled();
   });
 
   it("logs the summary via console.error when any rule reports a failure", async () => {
     // A revoked R2 credential makes every delete fail forever - console.log
     // buries that behind routine noise, so an all-failing run must be loud.
+    process.env.RETENTION_SWEEP_LIVE = "1";
     mocks.deleteFile.mockRejectedValue(new Error("R2 503"));
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});

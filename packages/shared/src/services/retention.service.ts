@@ -308,15 +308,22 @@ export interface RetentionSweepResult {
 /**
  * One pass of every rule, in cheapest-first order.
  *
- * RETENTION_SWEEP_DRY_RUN exists for exactly one moment: the first run against
- * a bucket that has never been cleaned, where every rule has a full backlog
- * and the counts are the only warning we get before the deletes are real.
- * It is read per run, not cached, so flipping it does not need a redeploy.
+ * RETENTION_SWEEP_LIVE guards irreversible deletion of user data, so it fails
+ * CLOSED: it is an opt-IN to deleting, not an opt-out of it. Deleting happens
+ * only when the variable is set to a non-empty value - unset, empty, or
+ * absent are all a dry run that reports and writes nothing. The prior flag
+ * read the opposite way (Boolean(RETENTION_SWEEP_DRY_RUN)) and failed OPEN:
+ * `RETENTION_SWEEP_DRY_RUN=` - an empty value, exactly what a copied
+ * .env.example produces - reads as falsy and ran live against real objects.
+ * Naming the variable for the destructive branch means a typo or a
+ * half-filled .env can only ever land on "report", never on "delete". It is
+ * read per run, not cached, so flipping it does not need a redeploy.
  */
 export async function runRetentionSweep(
   now: Date = new Date()
 ): Promise<RetentionSweepResult> {
-  const dryRun = Boolean(process.env.RETENTION_SWEEP_DRY_RUN);
+  const live = Boolean(process.env.RETENTION_SWEEP_LIVE);
+  const dryRun = !live;
   const options: SweepOptions = { dryRun };
 
   const clips = await sweepExpiredClips(now, options);
