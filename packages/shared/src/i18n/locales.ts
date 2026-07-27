@@ -12,7 +12,7 @@
  *  notifications are rendered here too (telegram-notification.service). A
  *  second private copy of `"en" | "ru"` is how a new language degrades back to
  *  English on the one message a paying user is guaranteed to read. */
-export const LOCALES = ["en", "ru", "es", "pt", "id"] as const;
+export const LOCALES = ["en", "ru", "uk", "es", "pt", "id"] as const;
 
 export type Locale = (typeof LOCALES)[number];
 
@@ -27,9 +27,13 @@ export function isLocale(value: string): value is Locale {
 
 /** Language tags that are not one of our codes but should still land on a
  *  language the person can actually read. Deliberately empty: mapping, say,
- *  `uk` or `kk` onto Russian is a product call about who the audience is, not
+ *  `kk` or `be` onto Russian is a product call about who the audience is, not
  *  a technical default, and guessing it wrong is worse than falling back to
- *  English. Add entries here when that call gets made. */
+ *  English. Add entries here when that call gets made.
+ *
+ *  Ukrainian used to be the standing example here. It is not one any more -
+ *  `uk` has its own dictionary, so nothing has to decide on its speakers'
+ *  behalf what language they would rather read. */
 const LOCALE_ALIASES: Record<string, Locale> = {};
 
 /** Accepts anything Telegram puts in `language_code` (`ru`, `ru-RU`, `pt-BR`,

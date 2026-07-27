@@ -25,6 +25,18 @@ describe("bot i18n", () => {
     expect(t("en").linkSuccess(5)).toContain("5 clips from");
   });
 
+  // Ukrainian selects the same one/few/many categories as Russian but takes
+  // different endings. Asserted separately so a copy-paste from ru.ts that
+  // left Russian words behind cannot pass.
+  it("uses correct Ukrainian plural forms, including the teens exception", () => {
+    expect(t("uk").done(1)).toBe("Готово. 1 кліп готовий.");
+    expect(t("uk").done(3)).toBe("Готово. 3 кліпи готові.");
+    expect(t("uk").done(5)).toBe("Готово. 5 кліпів готові.");
+    expect(t("uk").done(11)).toBe("Готово. 11 кліпів готові.");
+    expect(t("uk").done(21)).toBe("Готово. 21 кліп готовий.");
+    expect(t("uk").done(22)).toBe("Готово. 22 кліпи готові.");
+  });
+
   it("uses correct Russian plural form for imported clips", () => {
     expect(t("ru").linkSuccess(1)).toContain("1 клип ");
     expect(t("ru").linkSuccess(2)).toContain("2 клипа ");
@@ -275,11 +287,12 @@ describe("bot i18n", () => {
     }
   });
 
-  it("names each of the five languages distinctly", () => {
+  it("names every supported language distinctly, in itself", () => {
     const names = LOCALES.map((loc) => t(loc).langName);
     expect(names).toEqual([
       "English",
       "Русский",
+      "Українська",
       "Español",
       "Português",
       "Bahasa Indonesia",

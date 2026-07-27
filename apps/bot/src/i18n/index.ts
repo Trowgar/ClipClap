@@ -8,6 +8,7 @@ import {
 import type { Dict } from "./types";
 import en from "./en";
 import ru from "./ru";
+import uk from "./uk";
 import es from "./es";
 import pt from "./pt";
 import id from "./id";
@@ -21,7 +22,7 @@ export type { Dict };
 /** One dictionary per supported language, in its own file. Keyed by the full
  *  Locale union, so adding a code to LOCALES fails to compile here until the
  *  language has words - which is the whole point of the registry. */
-const dictionaries: Record<Locale, Dict> = { en, ru, es, pt, id };
+const dictionaries: Record<Locale, Dict> = { en, ru, uk, es, pt, id };
 
 export function t(locale: Locale): Dict {
   return dictionaries[locale];
@@ -39,8 +40,25 @@ export type LangChoice = Locale;
  *  sees what the user typed, and detectLocale already resolves region tags off
  *  the wire. They are here only for the hand-typed forms. */
 const LANG_ALIASES: Record<Locale, readonly string[]> = {
-  en: ["english", "англ", "английский", "ingles", "inglés", "inggris"],
-  ru: ["russian", "рус", "русский", "ruso", "russo", "rusia"],
+  en: [
+    "english",
+    "англ",
+    "английский",
+    "англійська",
+    "ingles",
+    "inglés",
+    "inggris",
+  ],
+  ru: ["russian", "рус", "русский", "російська", "ruso", "russo", "rusia"],
+  uk: [
+    "ukrainian",
+    "ukr",
+    "укр",
+    "українська",
+    "украинский",
+    "ucraniano",
+    "ucraniana",
+  ],
   es: ["spanish", "espanol", "español", "исп", "испанский", "espanhol"],
   pt: ["portuguese", "portugues", "português", "brasil", "br", "порт", "португальский"],
   id: ["indonesian", "indonesia", "bahasa", "инд", "индонезийский"],

@@ -73,6 +73,24 @@ const PAYMENT_COPY: Record<Locale, PaymentCopy> = {
           : `⚠️ Подписка отменена. Доступ к обработке прекращён.`;
     }
   },
+  uk: (event, opts) => {
+    switch (event.kind) {
+      case "subscription_activated": {
+        const avail = opts?.minutes
+          ? `\nДоступно: ${opts.minutes} хвилин обробки в цьому періоді.`
+          : "";
+        return `🎉 Підписку ${planTitle(event.plan)} активовано!\nДіє до ${formatDate(event.periodEnd)}.${avail}\n\nЯк почати: надішли відео файлом або встав посилання (YouTube, Twitch, TikTok та інші) - наріжу вертикальні кліпи з субтитрами.`;
+      }
+      case "subscription_renewed":
+        return `🔄 Підписку продовжено до ${formatDate(event.periodEnd)}.`;
+      case "payment_failed":
+        return `⚠️ Оплата не пройшла. Онови спосіб оплати, інакше підписка завершиться.\n\n${event.manageUrl}`;
+      case "subscription_canceled":
+        return event.graceEndsAt
+          ? `⚠️ Підписку скасовано. Доступ зберігається до ${formatDate(event.graceEndsAt)}.`
+          : `⚠️ Підписку скасовано. Доступ до обробки припинено.`;
+    }
+  },
   es: (event, opts) => {
     switch (event.kind) {
       case "subscription_activated": {

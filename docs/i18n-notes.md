@@ -13,9 +13,20 @@ Refactored 2026-07-27 from a shape where "add a language" meant eight hand-edits
 `packages/shared/src/i18n/locales.ts` holds the single list:
 
 ```ts
-export const LOCALES = ["en", "ru", "es", "pt", "id"] as const;
+export const LOCALES = ["en", "ru", "uk", "es", "pt", "id"] as const;
 export type Locale = (typeof LOCALES)[number];
 ```
+
+Ukrainian shipped 2026-07-27 alongside the three below. It was the cheapest of the four: ICU gives it
+the same one/few/many categories as Russian (verified - 1=one, 2=few, 5=many, 11=many, 21=one), so its
+plural helper is a direct mirror of `pluralizeRu` rather than a new rule shape. That structural
+closeness is also its trap, and `uk.ts` says so at the top: the copy is written from the English
+source, not adapted from `ru.ts`, because adapting is faster and produces calques a Ukrainian reader
+spots immediately. `t("uk").done()` is asserted against literal expected strings for exactly that
+reason - a copy-paste that left Russian endings behind cannot pass.
+
+Adding it also retired an open question: `LOCALE_ALIASES` no longer needs to decide whether Ukrainian
+speakers should be shown Russian. They get their own dictionary.
 
 Spanish, Portuguese and Indonesian shipped 2026-07-27. The pick was a market
 bet, not a reading of the numbers: at 63 Telegram accounts with a locale, the

@@ -153,6 +153,8 @@ describe("automatic locale detection for a stranger", () => {
       ["pt-BR", "pt"],
       ["id", "id"],
       ["id-ID", "id"],
+      ["uk", "uk"],
+      ["uk-UA", "uk"],
     ] as const) {
       const client = harness();
       await handleUpdate(client as never, message("/start", tag) as never, CONFIG);
