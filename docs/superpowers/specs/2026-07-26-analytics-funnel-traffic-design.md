@@ -203,16 +203,65 @@ Raw IPs are never persisted; no cookies are set for tracking.
 
 ### 3. Admin page
 
-`apps/web/app/(dashboard)/dashboard/admin/page.tsx`, a server component that
-aggregates on the server - no client-side fetching.
+`apps/web/app/admin/page.tsx`, a server component that aggregates on the server -
+no client-side fetching.
 
-**Access:** a new `ADMIN_EMAILS` env (comma-separated) checked against the
-`auth()` session. Anything else returns 404 (not 403 - the page should not
-advertise its own existence). This mirrors the existing env-based admin pattern
-(`REFERRAL_ADMIN_TELEGRAM_IDS`) and needs no schema change. Note the existing
-bot-admin mechanism cannot be reused directly: the owner's web account
-(`ikscerato@gmail.com`) and Telegram account (`575308044`) are separate,
+**Why not under `/dashboard`:** the middleware redirects any unauthenticated
+`/dashboard/*` request to `/login`. Opened as a Telegram Mini App there is no
+session cookie yet, so the page would never run and the Mini App would show the
+login screen instead. Living at `/admin` keeps it outside that guard and lets
+the page do its own gating. It also drops the dashboard chrome, which suits the
+narrow Mini App viewport.
+
+**Access - two independent paths, either is sufficient:**
+
+1. **Desktop / normal browser:** `ADMIN_EMAILS` (comma-separated, new env)
+   checked against the `auth()` session.
+2. **Telegram Mini App:** a signed `cc_admin` cookie, set by `/api/admin/enter`
+   after it validates Telegram's `initData` (below).
+
+With neither, the page renders only the Mini App bootstrap component and no
+data: inside Telegram that component posts `initData` and reloads into the real
+page, and in a plain browser it renders nothing at all. A bare `notFound()`
+cannot be used here, because the Mini App needs one render in which to hand over
+its signature - but the outcome for anyone else is the same: an empty page that
+reveals neither data nor that this route matters. Both paths mirror the existing
+env-based admin pattern
+(`REFERRAL_ADMIN_TELEGRAM_IDS`) and need no schema change. The existing
+bot-admin mechanism cannot be reused for path 1 on its own: the owner's web
+account (`ikscerato@gmail.com`) and Telegram account (`575308044`) are separate,
 unlinked user rows.
+
+`/admin` is excluded from guest-traffic tracking so the owner's own visits do
+not pollute the numbers he is reading.
+
+#### Telegram Mini App entry
+
+The bot shows an "Analytics" button - an inline `web_app` button, rendered only
+when `isReferralAdmin(from.id, REFERRAL_ADMIN_TELEGRAM_IDS)` - pointing at
+`${appUrl}/admin`. Telegram opens the page in its own container and injects
+`window.Telegram.WebApp.initData`: the viewer's Telegram identity plus an HMAC
+signed with the bot token.
+
+`initData` is only readable client-side, while the page is a server component,
+so a small client component posts it once to `/api/admin/enter`, which:
+
+1. Validates the signature. **The Mini App algorithm differs from the Login
+   Widget one** and getting it wrong is the classic failure here:
+   `secret = HMAC_SHA256(key: "WebAppData", data: BOT_TOKEN)`, then compare
+   `HMAC_SHA256(key: secret, data: data_check_string)` against `hash`, where
+   `data_check_string` is the remaining fields as sorted `k=v` lines joined by
+   `\n`. Compare in constant time.
+2. Rejects a stale `auth_date` (older than 24h).
+3. Requires the `user.id` to be in `REFERRAL_ADMIN_TELEGRAM_IDS`.
+4. Sets `cc_admin`, an httpOnly cookie valid for one hour, signed with
+   `NEXTAUTH_SECRET` as `<telegramId>.<expiresAtMs>.<hmac>` so it cannot be
+   forged.
+
+This needs no login at all, and nothing sensitive travels in a URL. It composes
+with - and does not depend on - the Telegram web-login (OIDC) work in progress:
+that gives a normal session for the desktop path, this gives instant access from
+the phone.
 
 **Filter:** Telegram · Web · Combined.
 
@@ -253,8 +302,14 @@ disclosed as a footnote on the page rather than solved with de-duplication.
    `hits` instead of adding a row.
 6. A request with a crawler user-agent is stored with `isBot = true` and is
    excluded from the guest count.
-7. `/dashboard/admin` returns 404 for a non-admin session and renders for an
+7. `/admin` renders no data for a non-admin session and renders fully for an
    `ADMIN_EMAILS` session.
+8. The bot's Analytics button is absent for a non-admin Telegram id and opens
+   the Mini App for an admin one.
+9. `/api/admin/enter` rejects tampered `initData`, a stale `auth_date`, and a
+   valid signature belonging to a non-admin Telegram id - and in each case sets
+   no cookie.
+10. Visits to `/admin` do not appear in `site_visits`.
 
 ## Open questions
 

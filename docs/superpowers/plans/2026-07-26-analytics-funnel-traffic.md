@@ -27,7 +27,10 @@
 | `apps/web/app/(dashboard)/dashboard/page.tsx` | `app_opened` (web) | Modify |
 | `apps/web/app/api/_track/route.ts` | Node runtime, secret check, visit write | Create |
 | `apps/web/middleware.ts` | `waitUntil(fetch)` to the track route, wider matcher | Modify |
-| `apps/web/app/(dashboard)/dashboard/admin/page.tsx` | Admin page, `ADMIN_EMAILS` gate | Create |
+| `apps/web/app/admin/page.tsx` | Admin page; `ADMIN_EMAILS` session or Mini App cookie | Create |
+| `apps/web/app/admin/mini-app-gate.tsx` | Client bootstrap that hands Telegram `initData` over | Create |
+| `packages/shared/src/services/mini-app.service.ts` | `initData` HMAC validation + signed admin cookie | Create |
+| `apps/web/app/api/admin/enter/route.ts` | Validates `initData`, sets the admin cookie | Create |
 | `apps/worker/Dockerfile`, `apps/web/Dockerfile` | GeoLite2 download | Modify |
 | `.env.example` | `TRACK_SECRET`, `ADMIN_EMAILS`, `MAXMIND_LICENSE_KEY` | Modify |
 
@@ -1118,7 +1121,7 @@ Append to `.env.example`:
 # Shared secret between the Edge middleware and /api/_track. Without it the
 # tracking endpoint would be a public row-writer. Any random string.
 TRACK_SECRET=
-# Comma-separated emails allowed to open /dashboard/admin.
+# Comma-separated emails allowed to open /admin.
 ADMIN_EMAILS=
 # MaxMind licence key, used at image build time to fetch GeoLite2-Country.
 # Absent = visits are still recorded, country is null.
@@ -1170,6 +1173,9 @@ const ATTRIBUTION_WINDOW_DAYS = 30; // REFERRAL_CONFIG.attributionWindowDays
 function trackVisit(req: NextRequest, event: NextFetchEvent): void {
   const secret = process.env.TRACK_SECRET;
   if (!secret) return;
+
+  // The owner's own analytics visits must not pollute the numbers he reads.
+  if (req.nextUrl.pathname.startsWith("/admin")) return;
 
   const ip =
     req.headers.get("x-real-ip") ??
@@ -1295,8 +1301,13 @@ git -c user.name=Trowgar -c user.email=trowgar@yahoo.com commit -m "build(analyt
 **Files:**
 - Create: `packages/shared/src/services/analytics.service.ts`
 - Create: `packages/shared/src/services/__tests__/analytics.service.test.ts`
-- Create: `apps/web/app/(dashboard)/dashboard/admin/page.tsx`
+- Create: `apps/web/app/admin/page.tsx`
 - Modify: `packages/shared/src/services/index.ts`
+
+> **Not under `/dashboard`:** the middleware redirects unauthenticated
+> `/dashboard/*` to `/login`, so a Telegram Mini App (which has no session
+> cookie) would never reach the page. `/admin` sits outside that guard and does
+> its own gating.
 
 - [ ] **Step 1: Write the failing test for the admin gate helper**
 
@@ -1452,18 +1463,20 @@ Expected: PASS (4 tests).
 
 - [ ] **Step 5: Write the admin page**
 
-Create `apps/web/app/(dashboard)/dashboard/admin/page.tsx`:
+Create `apps/web/app/admin/page.tsx`:
 
 ```tsx
 import { auth } from "@/lib/auth";
-import { notFound } from "next/navigation";
+import { cookies } from "next/headers";
 import {
   getFunnel,
   getTotals,
   getTraffic,
   isAdminEmail,
+  verifyAdminCookie,
   type FunnelSurface,
 } from "@clipclap/shared";
+import { MiniAppGate } from "./mini-app-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -1478,9 +1491,19 @@ export default async function AdminAnalyticsPage({
 }: {
   searchParams: Promise<{ surface?: string }>;
 }) {
+  // Two independent ways in: a normal admin session (desktop), or the signed
+  // cookie that /api/admin/enter sets after validating Telegram initData.
   const session = await auth();
-  // 404 rather than 403: the page should not advertise that it exists.
-  if (!isAdminEmail(session?.user?.email, process.env.ADMIN_EMAILS)) notFound();
+  const cookieOk = verifyAdminCookie(
+    (await cookies()).get("cc_admin")?.value,
+    process.env.NEXTAUTH_SECRET
+  );
+  if (!isAdminEmail(session?.user?.email, process.env.ADMIN_EMAILS) && !cookieOk) {
+    // Render only the Mini App gate: inside Telegram it posts initData and
+    // reloads; in a plain browser it renders nothing and the page stays empty,
+    // which is the 404-equivalent we want (no hint that this route matters).
+    return <MiniAppGate />;
+  }
 
   const { surface: raw } = await searchParams;
   const surface: FunnelSurface | undefined =
@@ -1570,13 +1593,378 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add packages/shared/src/services/analytics.service.ts packages/shared/src/services/__tests__/analytics.service.test.ts packages/shared/src/services/index.ts "apps/web/app/(dashboard)/dashboard/admin/page.tsx"
+git add packages/shared/src/services/analytics.service.ts packages/shared/src/services/__tests__/analytics.service.test.ts packages/shared/src/services/index.ts apps/web/app/admin/page.tsx
 git -c user.name=Trowgar -c user.email=trowgar@yahoo.com commit -m "feat(analytics): aggregation service and admin page behind ADMIN_EMAILS"
 ```
 
 ---
 
-## Task 11: Deploy and verify
+## Task 11: Telegram Mini App entry
+
+**Files:**
+- Create: `packages/shared/src/services/__tests__/mini-app.service.test.ts`
+- Create: `packages/shared/src/services/mini-app.service.ts`
+- Create: `apps/web/app/api/admin/enter/route.ts`
+- Create: `apps/web/app/admin/mini-app-gate.tsx`
+- Modify: `apps/bot/src/handlers.ts` (admin button)
+- Modify: `packages/shared/src/services/index.ts`
+
+- [ ] **Step 1: Write the failing test**
+
+Create `packages/shared/src/services/__tests__/mini-app.service.test.ts`:
+
+```ts
+import { createHmac } from "crypto";
+import { describe, expect, it } from "vitest";
+import {
+  verifyTelegramInitData,
+  signAdminCookie,
+  verifyAdminCookie,
+} from "../mini-app.service";
+
+const BOT_TOKEN = "123456:test-bot-token";
+
+/** Builds a correctly signed initData string the way Telegram does. */
+function makeInitData(
+  fields: Record<string, string>,
+  token = BOT_TOKEN
+): string {
+  const checkString = Object.keys(fields)
+    .sort()
+    .map((k) => `${k}=${fields[k]}`)
+    .join("\n");
+  // Mini App algorithm: the secret is HMAC("WebAppData", token), NOT sha256(token).
+  const secret = createHmac("sha256", "WebAppData").update(token).digest();
+  const hash = createHmac("sha256", secret).update(checkString).digest("hex");
+  const params = new URLSearchParams(fields);
+  params.set("hash", hash);
+  return params.toString();
+}
+
+const nowSec = Math.floor(Date.now() / 1000);
+const userJson = JSON.stringify({ id: 575308044, first_name: "Oleg" });
+
+describe("verifyTelegramInitData", () => {
+  it("accepts data Telegram actually signed and returns the telegram id", () => {
+    const initData = makeInitData({ auth_date: String(nowSec), user: userJson });
+    expect(verifyTelegramInitData(initData, BOT_TOKEN)).toEqual({
+      ok: true,
+      telegramId: "575308044",
+    });
+  });
+
+  it("rejects a tampered payload", () => {
+    const initData = makeInitData({ auth_date: String(nowSec), user: userJson });
+    const tampered = initData.replace("575308044", "999999999");
+    expect(verifyTelegramInitData(tampered, BOT_TOKEN).ok).toBe(false);
+  });
+
+  it("rejects data signed with a different bot token", () => {
+    const initData = makeInitData(
+      { auth_date: String(nowSec), user: userJson },
+      "999999:someone-elses-token"
+    );
+    expect(verifyTelegramInitData(initData, BOT_TOKEN).ok).toBe(false);
+  });
+
+  it("rejects a stale auth_date", () => {
+    const old = String(nowSec - 60 * 60 * 25);
+    const initData = makeInitData({ auth_date: old, user: userJson });
+    expect(verifyTelegramInitData(initData, BOT_TOKEN).ok).toBe(false);
+  });
+
+  it("rejects empty input and a missing hash", () => {
+    expect(verifyTelegramInitData("", BOT_TOKEN).ok).toBe(false);
+    expect(verifyTelegramInitData("auth_date=1&user=%7B%7D", BOT_TOKEN).ok).toBe(false);
+  });
+});
+
+describe("admin cookie", () => {
+  it("round-trips a signed value", () => {
+    const value = signAdminCookie("575308044", "secret", 3600_000);
+    expect(verifyAdminCookie(value, "secret")).toBe(true);
+  });
+
+  it("rejects a forged or edited value", () => {
+    const value = signAdminCookie("575308044", "secret", 3600_000);
+    expect(verifyAdminCookie(value.replace("575308044", "1"), "secret")).toBe(false);
+    expect(verifyAdminCookie("1.9999999999999.deadbeef", "secret")).toBe(false);
+  });
+
+  it("rejects an expired value and a missing one", () => {
+    const expired = signAdminCookie("575308044", "secret", -1000);
+    expect(verifyAdminCookie(expired, "secret")).toBe(false);
+    expect(verifyAdminCookie(undefined, "secret")).toBe(false);
+  });
+
+  it("rejects everything when the signing secret is missing", () => {
+    const value = signAdminCookie("575308044", "secret", 3600_000);
+    expect(verifyAdminCookie(value, undefined)).toBe(false);
+  });
+});
+```
+
+- [ ] **Step 2: Run to verify it fails**
+
+Run: `docker compose exec -w /app/apps/web web npx vitest run --root ../.. packages/shared/src/services/__tests__/mini-app.service.test.ts`
+Expected: FAIL - cannot resolve `../mini-app.service`.
+
+- [ ] **Step 3: Write the service**
+
+Create `packages/shared/src/services/mini-app.service.ts`:
+
+```ts
+import { createHmac, timingSafeEqual } from "crypto";
+
+const MAX_AUTH_AGE_SEC = 60 * 60 * 24;
+
+export type InitDataResult =
+  | { ok: true; telegramId: string }
+  | { ok: false };
+
+/**
+ * Validates the `initData` Telegram injects into a Mini App.
+ *
+ * NOTE the secret derivation: for Mini Apps it is HMAC_SHA256("WebAppData",
+ * botToken). The Login Widget uses SHA256(botToken) instead, and mixing the two
+ * up is the classic reason "the signature never matches".
+ */
+export function verifyTelegramInitData(
+  initData: string,
+  botToken: string | undefined
+): InitDataResult {
+  try {
+    if (!initData || !botToken) return { ok: false };
+    const params = new URLSearchParams(initData);
+    const hash = params.get("hash");
+    if (!hash) return { ok: false };
+
+    params.delete("hash");
+    const checkString = [...params.entries()]
+      .map(([k, v]) => `${k}=${v}`)
+      .sort()
+      .join("\n");
+
+    const secret = createHmac("sha256", "WebAppData").update(botToken).digest();
+    const expected = createHmac("sha256", secret).update(checkString).digest("hex");
+
+    const a = Buffer.from(expected, "hex");
+    const b = Buffer.from(hash, "hex");
+    if (a.length !== b.length || !timingSafeEqual(a, b)) return { ok: false };
+
+    const authDate = Number(params.get("auth_date"));
+    if (!Number.isFinite(authDate)) return { ok: false };
+    if (Math.floor(Date.now() / 1000) - authDate > MAX_AUTH_AGE_SEC) {
+      return { ok: false };
+    }
+
+    const user = JSON.parse(params.get("user") ?? "{}") as { id?: number };
+    if (!user.id) return { ok: false };
+    return { ok: true, telegramId: String(user.id) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** `<telegramId>.<expiresAtMs>.<hmac>` - unforgeable without the secret. */
+export function signAdminCookie(
+  telegramId: string,
+  secret: string,
+  ttlMs: number
+): string {
+  const expiresAt = Date.now() + ttlMs;
+  const body = `${telegramId}.${expiresAt}`;
+  const mac = createHmac("sha256", secret).update(body).digest("hex");
+  return `${body}.${mac}`;
+}
+
+export function verifyAdminCookie(
+  value: string | undefined,
+  secret: string | undefined
+): boolean {
+  try {
+    if (!value || !secret) return false;
+    const [telegramId, expiresAt, mac] = value.split(".");
+    if (!telegramId || !expiresAt || !mac) return false;
+    if (Number(expiresAt) < Date.now()) return false;
+
+    const expected = createHmac("sha256", secret)
+      .update(`${telegramId}.${expiresAt}`)
+      .digest("hex");
+    const a = Buffer.from(expected, "hex");
+    const b = Buffer.from(mac, "hex");
+    return a.length === b.length && timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
+/** Whether a telegram id is listed in REFERRAL_ADMIN_TELEGRAM_IDS. */
+export function isAdminTelegramId(
+  telegramId: string,
+  adminIds: string | undefined
+): boolean {
+  if (!adminIds) return false;
+  return adminIds
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .includes(telegramId);
+}
+```
+
+Add to `packages/shared/src/services/index.ts`:
+```ts
+export * from "./mini-app.service";
+```
+
+- [ ] **Step 4: Run to verify it passes**
+
+Run: `docker compose exec -w /app/apps/web web npx vitest run --root ../.. packages/shared/src/services/__tests__/mini-app.service.test.ts`
+Expected: PASS (9 tests).
+
+- [ ] **Step 5: Write the entry route**
+
+Create `apps/web/app/api/admin/enter/route.ts`:
+
+```ts
+import { NextRequest, NextResponse } from "next/server";
+import {
+  isAdminTelegramId,
+  signAdminCookie,
+  verifyTelegramInitData,
+} from "@clipclap/shared";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+const TTL_MS = 60 * 60 * 1000;
+
+export async function POST(req: NextRequest) {
+  const { initData } = (await req.json().catch(() => ({}))) as {
+    initData?: string;
+  };
+
+  const result = verifyTelegramInitData(
+    initData ?? "",
+    process.env.TELEGRAM_BOT_TOKEN
+  );
+  // One shape of failure for every reason - a bad signature, a stale
+  // auth_date and a valid signature from a non-admin all look identical.
+  if (
+    !result.ok ||
+    !isAdminTelegramId(result.telegramId, process.env.REFERRAL_ADMIN_TELEGRAM_IDS)
+  ) {
+    return new NextResponse(null, { status: 204 });
+  }
+
+  const secret = process.env.NEXTAUTH_SECRET;
+  if (!secret) return new NextResponse(null, { status: 204 });
+
+  const res = NextResponse.json({ ok: true });
+  res.cookies.set("cc_admin", signAdminCookie(result.telegramId, secret, TTL_MS), {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: true,
+    path: "/admin",
+    maxAge: TTL_MS / 1000,
+  });
+  return res;
+}
+```
+
+- [ ] **Step 6: Write the Mini App gate component**
+
+Create `apps/web/app/admin/mini-app-gate.tsx`:
+
+```tsx
+"use client";
+
+import { useEffect } from "react";
+
+/**
+ * Rendered when the request carries neither an admin session nor the cookie.
+ *
+ * Inside Telegram it hands initData to /api/admin/enter and reloads into the
+ * real page. In a plain browser window.Telegram is undefined, so it renders
+ * nothing and the page stays blank.
+ */
+export function MiniAppGate() {
+  useEffect(() => {
+    const initData = (
+      window as unknown as {
+        Telegram?: { WebApp?: { initData?: string; ready?: () => void } };
+      }
+    ).Telegram?.WebApp?.initData;
+    if (!initData) return;
+
+    fetch("/api/admin/enter", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ initData }),
+    })
+      .then((r) => {
+        // Reload only on success, so a rejected signature does not spin.
+        if (r.ok) window.location.reload();
+      })
+      .catch(() => undefined);
+  }, []);
+
+  return (
+    <script
+      src="https://telegram.org/js/telegram-web-app.js"
+      async
+      // The script must be present before initData can be read; on the first
+      // paint it is not, which is why the effect runs after it loads and the
+      // page reloads once the cookie is set.
+      onLoad={() => window.location.reload()}
+    />
+  );
+}
+```
+
+- [ ] **Step 7: Add the admin button to the bot**
+
+In `apps/bot/src/handlers.ts`, in the menu that is sent to a user, append an
+inline `web_app` button only for admins. Add near `buildMainMenu` usage in
+`handleMenuAction`'s `case "menu":`, after the existing `sendMessage`:
+
+```ts
+      if (isReferralAdmin(String(message.from!.id), process.env.REFERRAL_ADMIN_TELEGRAM_IDS)) {
+        await client
+          .sendMessage(message.chat.id, "Analytics", {
+            replyMarkup: {
+              inline_keyboard: [
+                [{ text: "Open analytics", web_app: { url: `${config.appUrl}/admin` } }],
+              ],
+            },
+          })
+          .catch(() => undefined);
+      }
+```
+
+If `TelegramClient`'s inline-keyboard type does not yet allow `web_app`, extend
+the button type in `apps/bot/src/types.ts` to include
+`{ text: string; web_app: { url: string } }`.
+
+- [ ] **Step 8: Typecheck and run the suites**
+
+```bash
+docker compose exec -w /app web npx tsc -p apps/web/tsconfig.json --noEmit
+docker compose exec -w /app/apps/bot bot npx vitest run --root ../.. apps/bot/src
+```
+Expected: PASS.
+
+- [ ] **Step 9: Commit**
+
+```bash
+git add packages/shared/src/services/mini-app.service.ts packages/shared/src/services/__tests__/mini-app.service.test.ts packages/shared/src/services/index.ts apps/web/app/api/admin/enter/route.ts apps/web/app/admin/mini-app-gate.tsx apps/bot/src/handlers.ts apps/bot/src/types.ts
+git -c user.name=Trowgar -c user.email=trowgar@yahoo.com commit -m "feat(analytics): telegram mini app entry for the admin page"
+```
+
+---
+
+## Task 12: Deploy and verify
 
 No code changes. Run each step and confirm before moving on.
 
@@ -1660,10 +2048,32 @@ Expected: `start_first_screen`, `first_screen_new_account`, `app_opened`, `video
 
 - [ ] **Step 9: Verify the web funnel and the page**
 
-Load `/dashboard` while signed in, then open `/dashboard/admin`.
-Expected: an `app_opened` row with `surface='web'`; the admin page renders with the three filters. Open it in a logged-out or non-admin session and confirm a 404.
+Load `/dashboard` while signed in, then open `/admin`.
+Expected: an `app_opened` row with `surface='web'`; the admin page renders with the three filters. Open `/admin` in a logged-out browser and confirm it renders no data.
 
-- [ ] **Step 10: Final commit if anything changed**
+- [ ] **Step 10: Verify the Mini App path**
+
+In the bot, open the menu as the admin Telegram account and tap "Open analytics".
+Expected: the page opens inside Telegram and shows the stats without any login.
+
+Then confirm the endpoint cannot be talked into issuing a cookie:
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" -X POST https://clipclap.io/api/admin/enter \
+  -H 'content-type: application/json' -d '{"initData":"auth_date=1&user=%7B%22id%22%3A1%7D&hash=deadbeef"}'
+```
+Expected: `204` and no `set-cookie` header (add `-D -` to inspect headers).
+
+Also confirm the button is absent for a non-admin Telegram account.
+
+- [ ] **Step 11: Confirm /admin is not tracked**
+
+```bash
+docker compose exec -T postgres psql -U clipclap -d clipclap -c \
+  "SELECT count(*) FROM site_visits WHERE path LIKE '/admin%';"
+```
+Expected: 0 - the owner's own visits must not pollute the traffic numbers.
+
+- [ ] **Step 12: Final commit if anything changed**
 
 If verification required a fix, commit it. Otherwise the work is complete on this branch.
 
@@ -1671,6 +2081,7 @@ If verification required a fix, commit it. Otherwise the work is complete on thi
 
 ## Self-Review Notes (author)
 
+- **Mini App coverage:** `initData` HMAC with the Mini-App-specific secret derivation, stale `auth_date`, non-admin id, signed one-hour cookie, bot `web_app` button gated by `isReferralAdmin`, `/admin` excluded from traffic (T11, verified in T12 steps 10-11). The page moved out of `/dashboard` because the middleware would redirect the Mini App to `/login` before it could run.
 - **Spec coverage:** generalized table + migration (T1) · surface-aware recorder and step vocabulary incl. rejection names (T2) · bot call sites (T3) · web call sites (T4) · `site_visits` (T5) · visitor hash / daily salt / bot flagging / GeoIP degradation (T6) · `TRACK_SECRET`-guarded Node route (T7) · `waitUntil` + widened matcher excluding `/api` (T8) · GeoLite2 build (T9) · aggregation + `ADMIN_EMAILS` 404 gate + three-surface page + disclosure footnote (T10) · deploy ritual and the 7 spec verification points (T11). The spec's "not new events" rule is honoured: no task adds counters for jobs, clips or returns.
 - **Type consistency:** `recordFunnelEvent(surface, subjectId, event, locale?)`, `uploadRejectedEvent(code)`, `FUNNEL_EVENTS`, `FunnelSurface`, `recordSiteVisit({ip, userAgent, path, referrer, secret, selfHost, now})`, `isAdminEmail(email, adminEmails)`, `getFunnel/getTraffic/getTotals` are used with identical names and shapes across tasks and in the page.
 - **Known intermediate breakage:** the bot and web do not typecheck between T2 and T4 (renamed exports). Stated in the header; the full typecheck gate is T11 Step 2.
