@@ -1,4 +1,4 @@
-import NextAuth from "next-auth";
+import NextAuth, { customFetch } from "next-auth";
 import Google from "next-auth/providers/google";
 import Credentials from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@auth/prisma-adapter";
@@ -11,11 +11,29 @@ import bcrypt from "bcryptjs";
 import {
   createTelegramProvider,
   getTelegramProfileId,
+  telegramDiscoveryFetch,
   type TelegramOidcProfile,
 } from "./telegram-provider";
 
 const telegramClientId = process.env.TELEGRAM_CLIENT_ID;
 const telegramClientSecret = process.env.TELEGRAM_CLIENT_SECRET;
+
+// Telegram's OIDC discovery omits `userinfo_endpoint`; @auth/core rejects that
+// before it ever reads the id_token. Patch the discovery response via customFetch
+// (see telegramDiscoveryFetch). The symbol must be the one from next-auth so it
+// matches the instance @auth/core reads off the provider config.
+const telegramProviders =
+  telegramClientId && telegramClientSecret
+    ? [
+        Object.assign(
+          createTelegramProvider({
+            clientId: telegramClientId,
+            clientSecret: telegramClientSecret,
+          }),
+          { [customFetch]: telegramDiscoveryFetch }
+        ),
+      ]
+    : [];
 
 const nextAuth = NextAuth({
   adapter: PrismaAdapter(prisma),
@@ -24,14 +42,7 @@ const nextAuth = NextAuth({
       clientId: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
     }),
-    ...(telegramClientId && telegramClientSecret
-      ? [
-          createTelegramProvider({
-            clientId: telegramClientId,
-            clientSecret: telegramClientSecret,
-          }),
-        ]
-      : []),
+    ...telegramProviders,
     Credentials({
       name: "credentials",
       credentials: {
