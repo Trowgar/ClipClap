@@ -18,6 +18,13 @@ import {
 } from "../usage.service";
 import { FREE_TIER, getPlanLimits } from "../../config/plans";
 
+// The free trial was disabled 2026-07-25 by zeroing every field of
+// NONE_LIMITS (see the comment above NONE_LIMITS in ../../config/plans.ts).
+// TRIAL_ENABLED reads that state from the config itself so the trial-shape
+// tests below track the switch rather than a moment in time: they resume
+// automatically the instant someone un-zeroes NONE_LIMITS.
+const TRIAL_ENABLED = getPlanLimits("NONE").maxJobsPerDay > 0;
+
 describe("usage.service", () => {
   beforeEach(() => vi.clearAllMocks());
 
@@ -202,7 +209,12 @@ describe("usage.service", () => {
     expect(result).toEqual({ allowed: true });
   });
 
-  it("canSubmitJob blocks a NONE plan whose free run is already spent", async () => {
+  // GATED while the trial is disabled (see TRIAL_ENABLED above): with
+  // NONE_LIMITS zeroed, maxSourceDurationMinutes is 0, so this 10-minute
+  // submission is refused as FREE_SOURCE_TOO_LONG before the trial-used check
+  // ever runs. Not rewritten to assert that - it encodes the enabled trial's
+  // behavior and comes back automatically when NONE_LIMITS is un-zeroed.
+  it.runIf(TRIAL_ENABLED)("canSubmitJob blocks a NONE plan whose free run is already spent", async () => {
     (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
       id: "u1",
       plan: "NONE",
@@ -520,7 +532,13 @@ describe("free trial allowance", () => {
     expect(runsQuery.where.clipsGenerated).toEqual({ gt: 0 });
   });
 
-  it("lets a brand-new NONE user submit inside the allowance", async () => {
+  // GATED while the trial is disabled (see TRIAL_ENABLED above). With
+  // NONE_LIMITS zeroed, maxSourceDurationMinutes is 0 and a 12-minute
+  // submission is refused as FREE_SOURCE_TOO_LONG before the allowance is
+  // even consulted - not rewritten to assert that, since it would stop
+  // testing the allowance at all. Comes back automatically once NONE_LIMITS
+  // is un-zeroed.
+  it.runIf(TRIAL_ENABLED)("lets a brand-new NONE user submit inside the allowance", async () => {
     mockFreeUser();
     mockCounts(0, 0);
 
@@ -529,7 +547,7 @@ describe("free trial allowance", () => {
     expect(res.allowed).toBe(true);
   });
 
-  it("blocks the same user once a run has produced clips", async () => {
+  it.runIf(TRIAL_ENABLED)("blocks the same user once a run has produced clips", async () => {
     mockFreeUser();
     mockCounts(FREE_TIER.runs, FREE_TIER.runs);
 
@@ -550,7 +568,10 @@ describe("free trial allowance", () => {
    * a trial that charges for an empty result teaches the new user exactly the
    * wrong thing about the product on their only look at it.
    */
-  it("does not burn the trial on a run that produced no clips", async () => {
+  // GATED while the trial is disabled: same short-circuit as above, this
+  // submission never reaches the "did it burn a run" logic while the source
+  // cap is 0. See TRIAL_ENABLED above.
+  it.runIf(TRIAL_ENABLED)("does not burn the trial on a run that produced no clips", async () => {
     mockFreeUser();
     mockCounts(0, 1);
 
@@ -564,7 +585,9 @@ describe("free trial allowance", () => {
    * The attempt backstop is what bounds that, since the run counter alone
    * would let a user submit unclippable video forever.
    */
-  it("blocks once the lifetime attempt backstop is reached, even with no clips ever made", async () => {
+  // GATED while the trial is disabled: same short-circuit, see TRIAL_ENABLED
+  // above.
+  it.runIf(TRIAL_ENABLED)("blocks once the lifetime attempt backstop is reached, even with no clips ever made", async () => {
     mockFreeUser();
     mockCounts(0, FREE_TIER.attempts);
 
@@ -597,7 +620,13 @@ describe("free trial allowance", () => {
     expect(res.reason).toContain(String(freeCap));
   });
 
-  it("allows a source exactly at the free maximum", async () => {
+  // GATED while the trial is disabled: with NONE_LIMITS zeroed the "free
+  // maximum" is a degenerate 0 minutes, so this boundary check is testing a
+  // meaningless case. See TRIAL_ENABLED above. (It happened to still pass at
+  // 0==0 when run alone; it failed in the full suite only because the two
+  // short-circuiting tests above it left unconsumed mock queue entries behind
+  // - gating them removes that leakage too.)
+  it.runIf(TRIAL_ENABLED)("allows a source exactly at the free maximum", async () => {
     mockFreeUser();
     mockCounts(0, 0);
     const freeCap = getPlanLimits("NONE").maxSourceDurationMinutes;
@@ -678,5 +707,22 @@ describe("free trial allowance", () => {
     expect(usage.minutesLimit).toBe(free.minutesPerPeriod);
     expect(usage.storageClipsLimit).toBe(free.storageClips);
     expect(usage.retentionDays).toBe(free.retentionDays);
+  });
+
+  // ALWAYS ON. The trial is deliberately disabled right now (NONE_LIMITS in
+  // ../../config/plans.ts). This is the gate-coherence half of that: not just
+  // that the config numbers are zero (see plans.test.ts), but that the code
+  // path a brand-new NONE user actually hits is refused too. A config that
+  // reads "disabled" while canSubmitJob still lets someone through would be
+  // the dangerous half-disabled state. No-op once TRIAL_ENABLED flips true -
+  // the gated tests above take over asserting the enabled allowance.
+  it("canSubmitJob refuses a fresh NONE user while the trial is disabled", async () => {
+    if (TRIAL_ENABLED) return;
+    mockFreeUser();
+    mockCounts(0, 0);
+
+    const res = await canSubmitJob("u1", 1);
+
+    expect(res.allowed).toBe(false);
   });
 });
