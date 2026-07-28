@@ -358,6 +358,29 @@ the anchor costs money but cannot cost unbounded money.
 Rollback is `FREE_TIER_MONTHLY_BUDGET_USD=0`, which closes the trial without a
 deploy and without touching paying users.
 
+## Known gaps, accepted for now
+
+- **A password reset does not invalidate existing sessions.** Auth.js runs
+  `strategy: "jwt"`, so a token issued before the reset stays valid until it
+  expires. In the compromised-account case the attacker keeps access even after
+  the owner changes their password - which is the one scenario a reset exists
+  for. Closing it needs a version claim in the token checked on each request.
+- **No rate limiting on `/api/register`, `/api/auth/forgot` or
+  `/api/auth/reset`.** Verification raised the cost of an account from nothing
+  to owning a mailbox, but nothing bounds attempts: `/forgot` is an
+  unauthenticated mail trigger, and each rejected registration still burns a
+  bcrypt-cost-12 hash, which is a cheap way to load a single web container.
+- **`/api/register` and `/api/auth/forgot` remain account-existence oracles**
+  through their status codes, and `POST /api/auth/check-email` gives the same
+  answer directly and predates all of this.
+- **A residual timing oracle in `/forgot`.** A known address does two writes and
+  a mail round trip; an unknown one returns at once. Closing it properly means
+  moving the send to a queue.
+- **`withTimeout` and `isPlausibleEmail` are duplicated between route files.**
+  They belong in `@clipclap/shared`, but lifting them means rebuilding the
+  package the workers run from, so it is deliberately deferred rather than done
+  halfway.
+
 ## Open questions
 
 - What the infrastructure actually costs per month is still unknown, so
