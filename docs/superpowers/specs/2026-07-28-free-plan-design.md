@@ -360,6 +360,28 @@ deploy and without touching paying users.
 
 ## Known gaps, accepted for now
 
+- **`authorize()` is brittle about case.** It lowercases the typed address and
+  then does a case-sensitive `findUnique`, so any stored address that is not
+  already lowercase is unreachable by every spelling. One real account was in
+  that state - registered 2026-07-27 with a password, never able to sign in -
+  and was repaired by lowercasing the stored value on 2026-07-28. No current
+  path can recreate it: registration lowercases before storing, and OAuth rows
+  have no password so `authorize()` refuses them anyway. The durable fix is to
+  look up by `OR [email, emailCanonical]` with exact-wins, the same shape
+  `/api/auth/forgot` and `/api/register` already use, but it touches the single
+  most critical path in the app and should land as its own reviewed change
+  rather than as a footnote to something else.
+- **The floor is raised, not capped.** An anchored account now costs one
+  received email instead of one POST - but a single owned domain with a
+  catch-all MX yields unlimited distinct identities, because `canonicalizeEmail`
+  collapses only `+` tags and gmail dots. `DISPOSABLE_EMAIL_DOMAINS` is sixteen
+  entries and says so itself. Nothing rate-limits registration and nothing caps
+  accounts per domain. "Anyone can mint unlimited accounts" has become "anyone
+  with a domain can mint unlimited accounts", and the *unlimited* half is
+  bounded only by `FREE_TIER_MONTHLY_BUDGET_USD`. That is the design's own
+  claim - the ceiling is what makes the failure bounded - and it holds, but it
+  means the ceiling is not optional.
+
 - **A password reset does not invalidate existing sessions.** Auth.js runs
   `strategy: "jwt"`, so a token issued before the reset stays valid until it
   expires. In the compromised-account case the attacker keeps access even after
