@@ -1,4 +1,5 @@
 import { prisma } from "../lib/prisma";
+import { startOfLocalDay } from "../config/analytics";
 import type { FunnelSurface } from "./funnel.service";
 
 /** Closed by default: an unset or empty ADMIN_EMAILS admits nobody. */
@@ -367,8 +368,9 @@ export async function getPulse(
   const own = parseOwnAccounts(ownAccounts);
   const externalWhere = { ...surfaceWhere(surface), ...excludeOwnAccountsWhere(own) };
 
-  const todayStart = new Date();
-  todayStart.setUTCHours(0, 0, 0, 0);
+  // The same boundary the users table bolds by. Two definitions of "today" on
+  // one page is a bug, not a rounding difference.
+  const todayStart = startOfLocalDay();
   const last7Start = new Date(Date.now() - 7 * 86_400_000);
   const last30Start = new Date(Date.now() - 30 * 86_400_000);
 
