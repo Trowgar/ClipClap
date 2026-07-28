@@ -207,10 +207,24 @@ answers all three.
 
 ### Anti-farm details
 
-- **`emailCanonical`**, new unique column: for `gmail.com`/`googlemail.com`,
-  dots are stripped and everything after `+` is dropped, so `o.l.e.g+1@gmail`
-  and `oleg@gmail` collide as one account. The raw `email` stays as typed,
-  because that is the address mail is delivered to.
+- **`emailCanonical`**, new unique column: everything after `+` is dropped on
+  **every** domain, and for `gmail.com`/`googlemail.com` dots are stripped too,
+  so `o.l.e.g+1@gmail` and `oleg@gmail` collide as one account. The raw `email`
+  stays as typed, because that is the address mail is delivered to.
+
+  The two rules have different scopes on purpose. Plus-addressing is not a Gmail
+  feature - Outlook, Yahoo, Proton, Fastmail and iCloud all honour it - so
+  gating it to Gmail would leave the alias hole open on every other major
+  provider. Dots are the opposite: they are significant in the local part almost
+  everywhere except Gmail, so folding them globally would merge two different
+  people onto one account. The failure directions are not symmetric either.
+  Collapsing two distinct addresses refuses a registration with a message the
+  user can read and act on; separating one mailbox into two silently hands out a
+  second allowance that costs real money.
+
+  A trailing dot on the domain (`oleg@gmail.com.`, legal FQDN notation that
+  receiving servers treat as the same mailbox) is stripped before any of this,
+  or it mints a second canonical key for one person.
 - **Disposable-domain blocklist**, static list in shared config, checked at
   registration.
 - Telegram needs neither: a `telegramId` is phone-backed and costs a SIM.
