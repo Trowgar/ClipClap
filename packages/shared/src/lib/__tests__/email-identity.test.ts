@@ -29,6 +29,18 @@ describe("canonicalizeEmail", () => {
     expect(canonicalizeEmail("a@b@c.com")).toBeNull();
     expect(canonicalizeEmail("")).toBeNull();
   });
+
+  // A trailing dot is legal FQDN notation and receiving servers treat it as the
+  // same mailbox, so it must not mint a second canonical identity.
+  it("ignores a trailing dot on the domain", () => {
+    expect(canonicalizeEmail("oleg@gmail.com.")).toBe("oleg@gmail.com");
+    expect(canonicalizeEmail("o.leg@yahoo.com.")).toBe("o.leg@yahoo.com");
+  });
+
+  it("still rejects a domain that is only dots", () => {
+    expect(canonicalizeEmail("a@.")).toBeNull();
+    expect(canonicalizeEmail("a@com.")).toBeNull();
+  });
 });
 
 describe("isDisposableEmail", () => {
