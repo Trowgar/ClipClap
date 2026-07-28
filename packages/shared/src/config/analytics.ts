@@ -56,6 +56,13 @@ function offsetMsAt(instant: Date): number {
  * on the two days a year Riga shifts, those two instants sit on opposite sides
  * of the transition. Measuring at `at` put the boundary an hour out on exactly
  * the days this function exists to get right.
+ *
+ * One correction pass is enough only because of WHERE Riga's transition sits.
+ * The shift is an hour, so the first guess is never more than an hour from true
+ * midnight, and the transition happens at 01:00 UTC - three hours later. The
+ * guess therefore cannot land on the far side of it. A zone whose transition
+ * fell near midnight would need to iterate to a fixed point instead, so this
+ * assumption has to be rechecked if ANALYTICS_TIMEZONE ever changes.
  */
 export function startOfLocalDay(at: Date = new Date()): Date {
   const wall = wallClockMs(at);
