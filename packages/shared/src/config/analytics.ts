@@ -77,3 +77,38 @@ export function startOfLocalDay(at: Date = new Date()): Date {
 export function isLocalToday(at: Date, now: Date = new Date()): boolean {
   return startOfLocalDay(at).getTime() === startOfLocalDay(now).getTime();
 }
+
+const DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: ANALYTICS_TIMEZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+const TIME_FORMATTER = new Intl.DateTimeFormat("en-GB", {
+  timeZone: ANALYTICS_TIMEZONE,
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+/** YYYY-MM-DD as the reader's calendar has it. */
+export function formatLocalDate(at: Date): string {
+  return DATE_FORMATTER.format(at);
+}
+
+/** HH:MM as the reader's clock has it. */
+export function formatLocalTime(at: Date): string {
+  return TIME_FORMATTER.format(at);
+}
+
+/**
+ * `YYYY-MM-DD HH:MM` in the reader's zone.
+ *
+ * Printing an instant in UTC while isLocalToday buckets it in Riga produced a
+ * visible contradiction: someone registering at 00:30 Riga was shown in bold as
+ * "today" beside yesterday's printed date.
+ */
+export function formatLocalDateTime(at: Date): string {
+  return `${formatLocalDate(at)} ${formatLocalTime(at)}`;
+}

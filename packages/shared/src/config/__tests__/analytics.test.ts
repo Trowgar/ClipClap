@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { isLocalToday, startOfLocalDay } from "../analytics";
+import {
+  formatLocalDate,
+  formatLocalDateTime,
+  formatLocalTime,
+  isLocalToday,
+  startOfLocalDay,
+} from "../analytics";
 
 describe("startOfLocalDay", () => {
   it("uses the Riga day in summer, when the zone is UTC+3", () => {
@@ -72,5 +78,35 @@ describe("startOfLocalDay across a DST transition", () => {
     // 21:30Z is 00:30 local on the 25th, still on the old offset.
     const now = new Date("2026-10-25T10:00:00.000Z");
     expect(isLocalToday(new Date("2026-10-24T21:30:00.000Z"), now)).toBe(true);
+  });
+});
+
+describe("local formatting", () => {
+  it("prints the Riga calendar date, not the UTC one", () => {
+    // 21:30Z on the 27th is 00:30 on the 28th in Riga.
+    expect(formatLocalDate(new Date("2026-07-27T21:30:00.000Z"))).toBe("2026-07-28");
+  });
+
+  it("prints the Riga date in winter too", () => {
+    expect(formatLocalDate(new Date("2026-01-15T22:30:00.000Z"))).toBe("2026-01-16");
+  });
+
+  it("prints the Riga clock time", () => {
+    expect(formatLocalTime(new Date("2026-07-27T21:30:00.000Z"))).toBe("00:30");
+  });
+
+  it("combines them", () => {
+    expect(formatLocalDateTime(new Date("2026-07-27T21:30:00.000Z"))).toBe(
+      "2026-07-28 00:30"
+    );
+  });
+
+  it("never contradicts isLocalToday", () => {
+    // The regression this exists to prevent: a row flagged as today must not
+    // print a different date than today.
+    const now = new Date("2026-07-28T10:00:00.000Z");
+    const justAfterLocalMidnight = new Date("2026-07-27T21:30:00.000Z");
+    expect(isLocalToday(justAfterLocalMidnight, now)).toBe(true);
+    expect(formatLocalDate(justAfterLocalMidnight)).toBe(formatLocalDate(now));
   });
 });
