@@ -220,6 +220,11 @@ export async function getBotUserDetails(
         processingMs: true,
         estimatedTotalCostUsd: true,
         steps: {
+          // Pipeline order. Steps are upserted as each stage runs, so createdAt
+          // ascending is DOWNLOAD through FINALIZE. Without this Postgres is
+          // free to return them in any order and the accordion would read as
+          // though the pipeline ran backwards.
+          orderBy: { createdAt: "asc" },
           select: {
             step: true,
             status: true,

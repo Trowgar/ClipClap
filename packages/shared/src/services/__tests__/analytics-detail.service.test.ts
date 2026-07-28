@@ -342,7 +342,7 @@ describe("getBotUserDetails", () => {
         id: "j1",
         userId: "u1",
         createdAt: new Date("2026-07-21T09:00:00.000Z"),
-        status: "COMPLETED",
+        status: "DONE",
         sourceUrl: "https://youtu.be/x",
         originalFilename: null,
         sourceDurationSec: 600,
@@ -352,7 +352,9 @@ describe("getBotUserDetails", () => {
         processingMs: 120000,
         estimatedTotalCostUsd: 0.42,
         steps: [
-          { step: "DOWNLOAD", status: "COMPLETED", error: null, startedAt: null, finishedAt: null },
+          { step: "DOWNLOAD", status: "DONE", error: null, startedAt: new Date("2026-07-21T09:00:00.000Z"), finishedAt: new Date("2026-07-21T09:00:30.000Z") },
+          { step: "TRANSCRIBE", status: "DONE", error: null, startedAt: new Date("2026-07-21T09:00:30.000Z"), finishedAt: new Date("2026-07-21T09:02:00.000Z") },
+          { step: "RENDER", status: "FAILED", error: "ffmpeg exited 1", startedAt: new Date("2026-07-21T09:02:00.000Z"), finishedAt: null },
         ],
         telegramDelivery: { status: "DELIVERED", error: null },
       },
@@ -371,8 +373,32 @@ describe("getBotUserDetails", () => {
 
     expect(details.u1.jobs).toHaveLength(1);
     expect(details.u1.jobs[0]).toMatchObject({ id: "j1", clipsGenerated: 5 });
+    expect(details.u1.jobs[0].steps.map((s) => s.step)).toEqual([
+      "DOWNLOAD",
+      "TRANSCRIBE",
+      "RENDER",
+    ]);
+    // startedAt without finishedAt means still running or dead - no duration to
+    // report, and 0 would be a lie.
+    expect(details.u1.jobs[0].steps[2]).toMatchObject({
+      status: "FAILED",
+      error: "ffmpeg exited 1",
+      ms: null,
+    });
+    expect(details.u1.jobs[0].steps[1].ms).toBe(90_000);
     expect(details.u1.events).toHaveLength(1);
     expect(details.u1.events[0]).toMatchObject({ event: "app_opened", occurrences: 3 });
+  });
+
+  it("asks prisma for steps in pipeline order", async () => {
+    mocks.jobFindMany.mockResolvedValue([]);
+    mocks.funnelFindMany.mockResolvedValue([]);
+
+    await getBotUserDetails([{ id: "u1", telegramId: "4242" }]);
+
+    expect(mocks.jobFindMany.mock.calls[0][0].select.steps.orderBy).toEqual({
+      createdAt: "asc",
+    });
   });
 
   it("returns an empty shape for a user with no history", async () => {
