@@ -155,7 +155,20 @@ export async function claimMailboxIdentity(
   if (!userId || !email) return;
 
   const canonical = canonicalizeEmail(email);
-  if (!canonical) return;
+  if (!canonical) {
+    // Returning without claiming is right - there is nothing to write. But it
+    // is not harmless, and it used to be invisible: the row keeps a NULL
+    // emailCanonical, and isTrialAnchored refuses any account that has an email
+    // without one, before it ever reaches the google branch. So a Google
+    // Workspace address this function cannot canonicalise - a dotless internal
+    // domain like oleg@internal is the realistic one - silently costs that user
+    // their allowance for ever, with nothing in the logs to say why. The P2002
+    // warning below does not cover this path.
+    console.warn(
+      `[identity] could not canonicalise ${email} - leaving emailCanonical null for user ${userId}; this account will not be trial-anchored`
+    );
+    return;
+  }
 
   try {
     await prisma.user.update({
