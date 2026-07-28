@@ -8,6 +8,7 @@ import {
   TELEGRAM_AUTH_PROVIDER,
   telegramAuthService,
 } from "@clipclap/shared";
+import { Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import {
   createTelegramProvider,
@@ -162,7 +163,10 @@ export async function claimMailboxIdentity(
       data: { emailCanonical: canonical },
     });
   } catch (err) {
-    if (err instanceof Error && (err as { code?: string }).code === "P2002") {
+    if (
+      err instanceof Prisma.PrismaClientKnownRequestError &&
+      err.code === "P2002"
+    ) {
       // Warn, not error: this is a duplicate-mailbox event worth looking at by
       // hand, not a fault. The column stays NULL and the trial gate treats an
       // account that has an email but no canonical as unanchored.
