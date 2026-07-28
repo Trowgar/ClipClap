@@ -71,9 +71,13 @@ export async function getWebGuests(
 ): Promise<{ rows: GuestRow[]; page: Page }> {
   const where = { isBot: false };
 
-  // Grouped in full and sliced in JS because counting DISTINCT (day,
-  // visitorHash) otherwise needs raw SQL. At a few thousand visitor-days this
-  // is cheaper than the complexity; revisit when the site sees real traffic.
+  // Every call aggregates the WHOLE history: no day bound, no cache, and
+  // site_visits has no retention sweep to bound it either. Deliberate for now -
+  // paging back through everything is the point - and cheap at the current
+  // scale, where Postgres groups the rows and V8 sorts them in single-digit
+  // milliseconds. The thing to watch is the hash aggregate spilling to disk
+  // once distinct visitor-days pass roughly work_mem, which is where a
+  // `day >= ...` bound or a raw DISTINCT count has to arrive.
   const groups = await prisma.siteVisit.groupBy({
     by: ["day", "visitorHash"],
     where,
@@ -109,7 +113,7 @@ export async function getWebGuests(
       firstSeenAt: true,
       lastSeenAt: true,
     },
-    orderBy: { firstSeenAt: "asc" },
+    orderBy: [{ firstSeenAt: "asc" }, { path: "asc" }],
   });
 
   const key = (day: Date, hash: string): string => `${day.toISOString()}|${hash}`;

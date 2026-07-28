@@ -107,6 +107,52 @@ describe("getWebGuests", () => {
       durationSec: 240,
     });
     expect(result.rows[0].paths.map((p) => p.path)).toEqual(["/", "/login"]);
+    expect(result.rows[0].paths[1]).toEqual({
+      path: "/login",
+      hits: 1,
+      firstSeenAt: new Date("2026-07-27T10:04:00.000Z"),
+      lastSeenAt: new Date("2026-07-27T10:04:00.000Z"),
+    });
+  });
+
+  it("orders visitor-days newest first, by day then by last activity", async () => {
+    const older = new Date("2026-07-26T00:00:00.000Z");
+    const group = (day: Date, hash: string, lastSeen: string) => ({
+      day,
+      visitorHash: hash,
+      _sum: { hits: 2 },
+      _min: { firstSeenAt: new Date(lastSeen) },
+      _max: { lastSeenAt: new Date(lastSeen) },
+    });
+    // Deliberately out of order on the way in.
+    mocks.siteVisitGroupBy.mockResolvedValue([
+      group(older, "old", "2026-07-26T23:00:00.000Z"),
+      group(DAY, "early", "2026-07-27T08:00:00.000Z"),
+      group(DAY, "late", "2026-07-27T20:00:00.000Z"),
+    ]);
+    mocks.siteVisitFindMany.mockResolvedValue([]);
+
+    const result = await getWebGuests(1);
+
+    expect(result.rows.map((r) => r.visitorHash)).toEqual(["late", "early", "old"]);
+  });
+
+  it("slices the sorted groups by page", async () => {
+    const groups = Array.from({ length: 5 }, (_, i) => ({
+      day: new Date(`2026-07-2${i + 1}T00:00:00.000Z`),
+      visitorHash: `h${i + 1}`,
+      _sum: { hits: 1 },
+      _min: { firstSeenAt: new Date("2026-07-27T10:00:00.000Z") },
+      _max: { lastSeenAt: new Date("2026-07-27T10:00:00.000Z") },
+    }));
+    mocks.siteVisitGroupBy.mockResolvedValue(groups);
+    mocks.siteVisitFindMany.mockResolvedValue([]);
+
+    const result = await getWebGuests(2, 2);
+
+    // Newest first is h5, h4, h3, h2, h1 - page 2 of size 2 is h3, h2.
+    expect(result.rows.map((r) => r.visitorHash)).toEqual(["h3", "h2"]);
+    expect(result.page).toMatchObject({ page: 2, from: 3, to: 4, total: 5 });
   });
 
   it("reports no duration for a single-pageview guest", async () => {
