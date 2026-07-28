@@ -331,9 +331,15 @@ the anchor costs money but cannot cost unbounded money.
 2. Resend domain verification on one.com DNS: SPF, DKIM, DMARC. The domain
    currently has **no TXT records at all** and a null MX (`0 .`), so it neither
    sends nor receives today. Decide where replies go before the first send.
-3. Ship with `FREE_TIER_MONTHLY_BUDGET_USD` set low (e.g. 10) for the first
+3. Re-run the backfill once the code is live. Existing rows were filled by step
+   1 and new OAuth signups are claimed by the `createUser` hook, but a Google
+   account created *between* those two moments has a NULL `emailCanonical` with
+   no collision behind it. The gate refuses such an account its allowance - it
+   fails safe, but to a real user that looks like a bug. The script is
+   idempotent, so it costs nothing when the window is empty.
+4. Ship with `FREE_TIER_MONTHLY_BUDGET_USD` set low (e.g. 10) for the first
    week, watch `/admin`, then raise.
-4. Only after the plan is live and observed: the apology mail to the 34 stranded
+5. Only after the plan is live and observed: the apology mail to the 34 stranded
    accounts.
 
 Rollback is `FREE_TIER_MONTHLY_BUDGET_USD=0`, which closes the trial without a
