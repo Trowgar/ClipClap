@@ -237,6 +237,24 @@ A Google account counts as verified regardless of what the adapter wrote into
 canonical mailbox on their side, and minting Google accounts costs real effort -
 which is exactly the property the anchor is for.
 
+**But OAuth signups do not pass through the registration route**, and that was a
+hole in the first draft of this design. `PrismaAdapter` creates the user itself,
+with `emailCanonical` left NULL - so every new Google account leaves its mailbox
+identity unclaimed, and the same person can then register a plus-alias by
+password and collect a second allowance. Both lookups miss: the exact address is
+different, and the canonical lookup finds nothing because the Google row never
+claimed it. This is the main path, not a corner: 28 of the 36 existing email
+accounts arrived through Google.
+
+Closed in two places. The `events.createUser` hook in `apps/web/lib/auth.ts`
+writes the canonical for OAuth signups. When that write hits a unique violation,
+the mailbox is genuinely already owned by another account, and the column is
+left NULL rather than failing a sign-in the user cannot fix - so for an account
+that HAS an email, a NULL `emailCanonical` means exactly "another account owns
+this mailbox". The trial gate therefore requires `emailCanonical != null` on its
+email branch. A Telegram-only account has both columns NULL and is anchored by
+`telegramId`, so the Telegram branch is checked first and is unaffected.
+
 ### Global ceiling
 
 `FREE_TIER_MONTHLY_BUDGET_USD` in `.env` (initial value 50). `freeBudget`
