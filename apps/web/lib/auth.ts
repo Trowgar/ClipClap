@@ -4,6 +4,7 @@ import Credentials from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import {
   prisma,
+  canonicalizeEmail,
   TELEGRAM_AUTH_PROVIDER,
   telegramAuthService,
 } from "@clipclap/shared";
@@ -105,6 +106,19 @@ const nextAuth = NextAuth({
       await syncTelegramIdentity(user.id, account, profile);
     },
     async createUser({ user }) {
+      // PrismaAdapter creates OAuth users without emailCanonical, so without
+      // this every new Google signup leaves its mailbox identity unclaimed and
+      // the same person can register a plus-alias by password for a second
+      // free allowance. A P2002 here means the mailbox is ALREADY claimed by
+      // another account - leave the column NULL and let the trial gate refuse
+      // the allowance, rather than failing a sign-in the user cannot fix.
+      //
+      // Its own try/catch lives inside the helper, so the two jobs this hook
+      // does cannot cost each other: an unclaimable mailbox must not swallow a
+      // referral attribution, and a missing referral cookie must not leave a
+      // mailbox unclaimed.
+      await claimMailboxIdentity(user.id, user.email);
+
       try {
         const { cookies } = await import("next/headers");
         const { referralService, REFERRAL_COOKIE_NAME } = await import("@clipclap/shared");
@@ -123,6 +137,43 @@ export const handlers: typeof nextAuth.handlers = nextAuth.handlers;
 export const auth: typeof nextAuth.auth = nextAuth.auth;
 export const signIn: typeof nextAuth.signIn = nextAuth.signIn;
 export const signOut: typeof nextAuth.signOut = nextAuth.signOut;
+
+/**
+ * Claims the mailbox behind an OAuth signup, so `emailCanonical` means the same
+ * thing however the account was created.
+ *
+ * Exported only so it can be exercised directly against the database - a live
+ * Google sign-in is not something this repo can stage in a test. Nothing but
+ * `events.createUser` should call it in app code. Never throws: it runs inside
+ * a sign-in, and no identity bookkeeping is worth failing a login over.
+ */
+export async function claimMailboxIdentity(
+  userId: string | undefined,
+  email: string | null | undefined
+): Promise<void> {
+  if (!userId || !email) return;
+
+  const canonical = canonicalizeEmail(email);
+  if (!canonical) return;
+
+  try {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { emailCanonical: canonical },
+    });
+  } catch (err) {
+    if (err instanceof Error && (err as { code?: string }).code === "P2002") {
+      // Warn, not error: this is a duplicate-mailbox event worth looking at by
+      // hand, not a fault. The column stays NULL and the trial gate treats an
+      // account that has an email but no canonical as unanchored.
+      console.warn(
+        `[identity] mailbox ${canonical} is already claimed by another account - leaving emailCanonical null for user ${userId}`
+      );
+      return;
+    }
+    console.error("[identity] emailCanonical claim failed:", err);
+  }
+}
 
 async function syncTelegramIdentity(
   userId: string | undefined,
