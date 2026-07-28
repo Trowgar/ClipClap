@@ -1,6 +1,7 @@
 import type { Plan, SubscriptionStatus } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { isLocalToday } from "../config/analytics";
+import { parseOwnAccounts } from "./analytics.service";
 
 /** Rows per page. Chosen for a phone screen, where the Mini App lives. */
 export const PAGE_SIZE = 25;
@@ -173,18 +174,6 @@ export interface UserRow {
   isOwn: boolean;
 }
 
-/** Splits ANALYTICS_OWN_ACCOUNTS the same way analytics.service does. */
-function ownAccountSets(raw: string | undefined): {
-  emails: Set<string>;
-  telegramIds: Set<string>;
-} {
-  const parts = (raw ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-  return {
-    emails: new Set(parts.filter((p) => p.includes("@")).map((p) => p.toLowerCase())),
-    telegramIds: new Set(parts.filter((p) => !p.includes("@"))),
-  };
-}
-
 /** Telegram users, newest registration first. */
 export async function getBotUsers(
   requestedPage: number,
@@ -217,7 +206,9 @@ export async function getBotUsers(
     },
   });
 
-  const own = ownAccountSets(ownAccounts);
+  // One parser, shared with the aggregates above the table, so the two can
+  // never disagree about who counts as an own account.
+  const own = parseOwnAccounts(ownAccounts);
 
   const rows = users.map(
     (u): UserRow => ({
@@ -237,8 +228,8 @@ export async function getBotUsers(
       clips: u._count.clips,
       isToday: isLocalToday(u.createdAt, now),
       isOwn:
-        (u.telegramId !== null && own.telegramIds.has(u.telegramId)) ||
-        (u.email !== null && own.emails.has(u.email.toLowerCase())),
+        (u.telegramId !== null && own.telegramIds.includes(u.telegramId)) ||
+        (u.email !== null && own.emails.includes(u.email.toLowerCase())),
     })
   );
 
