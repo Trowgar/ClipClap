@@ -1,3 +1,4 @@
+import type { Plan, SubscriptionStatus } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { isLocalToday } from "../config/analytics";
 
@@ -145,6 +146,101 @@ export async function getWebGuests(
       })),
     };
   });
+
+  return { rows, page };
+}
+
+export interface UserRow {
+  id: string;
+  telegramId: string | null;
+  /** Display name, falling back to the telegram id when the profile has none. */
+  label: string;
+  locale: string | null;
+  plan: Plan;
+  subscriptionStatus: SubscriptionStatus;
+  currentPeriodEnd: Date | null;
+  referralCode: string | null;
+  /** Who referred them, by name or telegram id, null when nobody did. */
+  referredBy: string | null;
+  createdAt: Date;
+  jobs: number;
+  clips: number;
+  /** Registered inside the current Riga day. */
+  isToday: boolean;
+  /** Listed in ANALYTICS_OWN_ACCOUNTS. Marked, never hidden - the list has to
+   *  be complete to be useful, while the aggregates above it have to exclude
+   *  these accounts to be honest. Different jobs. */
+  isOwn: boolean;
+}
+
+/** Splits ANALYTICS_OWN_ACCOUNTS the same way analytics.service does. */
+function ownAccountSets(raw: string | undefined): {
+  emails: Set<string>;
+  telegramIds: Set<string>;
+} {
+  const parts = (raw ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+  return {
+    emails: new Set(parts.filter((p) => p.includes("@")).map((p) => p.toLowerCase())),
+    telegramIds: new Set(parts.filter((p) => !p.includes("@"))),
+  };
+}
+
+/** Telegram users, newest registration first. */
+export async function getBotUsers(
+  requestedPage: number,
+  ownAccounts: string | undefined,
+  now: Date = new Date(),
+  pageSize = PAGE_SIZE
+): Promise<{ rows: UserRow[]; page: Page }> {
+  const where = { telegramId: { not: null } };
+  const total = await prisma.user.count({ where });
+  const page = paginate(total, requestedPage, pageSize);
+
+  const users = await prisma.user.findMany({
+    where,
+    orderBy: { createdAt: "desc" },
+    skip: page.skip,
+    take: page.pageSize,
+    select: {
+      id: true,
+      telegramId: true,
+      email: true,
+      name: true,
+      telegramLocale: true,
+      plan: true,
+      subscriptionStatus: true,
+      currentPeriodEnd: true,
+      referralCode: true,
+      referredBy: { select: { name: true, telegramId: true } },
+      createdAt: true,
+      _count: { select: { jobs: true, clips: true } },
+    },
+  });
+
+  const own = ownAccountSets(ownAccounts);
+
+  const rows = users.map(
+    (u): UserRow => ({
+      id: u.id,
+      telegramId: u.telegramId,
+      label: u.name ?? u.telegramId ?? u.id,
+      locale: u.telegramLocale,
+      plan: u.plan,
+      subscriptionStatus: u.subscriptionStatus,
+      currentPeriodEnd: u.currentPeriodEnd,
+      referralCode: u.referralCode,
+      referredBy: u.referredBy
+        ? (u.referredBy.name ?? u.referredBy.telegramId ?? "unknown")
+        : null,
+      createdAt: u.createdAt,
+      jobs: u._count.jobs,
+      clips: u._count.clips,
+      isToday: isLocalToday(u.createdAt, now),
+      isOwn:
+        (u.telegramId !== null && own.telegramIds.has(u.telegramId)) ||
+        (u.email !== null && own.emails.has(u.email.toLowerCase())),
+    })
+  );
 
   return { rows, page };
 }

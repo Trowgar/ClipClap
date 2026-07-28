@@ -3,15 +3,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   siteVisitGroupBy: vi.fn(),
   siteVisitFindMany: vi.fn(),
+  userCount: vi.fn(),
+  userFindMany: vi.fn(),
 }));
 
 vi.mock("../../lib/prisma", () => ({
   prisma: {
     siteVisit: { groupBy: mocks.siteVisitGroupBy, findMany: mocks.siteVisitFindMany },
+    user: { count: mocks.userCount, findMany: mocks.userFindMany },
   },
 }));
 
-import { getWebGuests, paginate } from "../analytics-detail.service";
+import { getBotUsers, getWebGuests, paginate } from "../analytics-detail.service";
 
 describe("paginate", () => {
   it("describes the first page", () => {
@@ -203,5 +206,118 @@ describe("getWebGuests", () => {
 
     expect(result.rows).toEqual([]);
     expect(mocks.siteVisitFindMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("getBotUsers", () => {
+  const NOW = new Date("2026-07-28T10:00:00.000Z");
+
+  function user(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "u1",
+      telegramId: "4242",
+      email: null,
+      name: "Ann",
+      telegramLocale: "ru",
+      plan: "NONE",
+      subscriptionStatus: "NONE",
+      currentPeriodEnd: null,
+      referralCode: "ANN123",
+      referredBy: null,
+      createdAt: new Date("2026-07-20T09:00:00.000Z"),
+      _count: { jobs: 2, clips: 7 },
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userCount.mockResolvedValue(1);
+  });
+
+  it("returns telegram users only, newest first", async () => {
+    mocks.userFindMany.mockResolvedValue([user()]);
+
+    const result = await getBotUsers(1, undefined, NOW);
+
+    expect(mocks.userFindMany.mock.calls[0][0].where).toEqual({
+      telegramId: { not: null },
+    });
+    expect(mocks.userFindMany.mock.calls[0][0].orderBy).toEqual({ createdAt: "desc" });
+    expect(result.rows[0]).toMatchObject({
+      id: "u1",
+      label: "Ann",
+      jobs: 2,
+      clips: 7,
+      isToday: false,
+      isOwn: false,
+    });
+  });
+
+  it("flags a registration inside the Riga day as today", async () => {
+    // 2026-07-27T21:30Z is 00:30 on the 28th in Riga - today, despite the
+    // UTC date reading the 27th.
+    mocks.userFindMany.mockResolvedValue([
+      user({ createdAt: new Date("2026-07-27T21:30:00.000Z") }),
+    ]);
+
+    const result = await getBotUsers(1, undefined, NOW);
+
+    expect(result.rows[0].isToday).toBe(true);
+  });
+
+  it("marks the owner's own accounts rather than hiding them", async () => {
+    mocks.userFindMany.mockResolvedValue([user()]);
+
+    const result = await getBotUsers(1, "4242,me@example.com", NOW);
+
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].isOwn).toBe(true);
+  });
+
+  it("falls back to the telegram id when there is no name", async () => {
+    mocks.userFindMany.mockResolvedValue([user({ name: null })]);
+
+    const result = await getBotUsers(1, undefined, NOW);
+
+    expect(result.rows[0].label).toBe("4242");
+  });
+
+  it("carries the billing and referral fields the accordion prints", async () => {
+    mocks.userFindMany.mockResolvedValue([
+      user({
+        currentPeriodEnd: new Date("2026-08-04T09:00:00.000Z"),
+        referredBy: { name: "Bob", telegramId: "9001" },
+      }),
+    ]);
+
+    const result = await getBotUsers(1, undefined, NOW);
+
+    expect(result.rows[0]).toMatchObject({
+      currentPeriodEnd: new Date("2026-08-04T09:00:00.000Z"),
+      referralCode: "ANN123",
+      referredBy: "Bob",
+    });
+  });
+
+  it("names an anonymous referrer by telegram id", async () => {
+    mocks.userFindMany.mockResolvedValue([
+      user({ referredBy: { name: null, telegramId: "9001" } }),
+    ]);
+
+    const result = await getBotUsers(1, undefined, NOW);
+
+    expect(result.rows[0].referredBy).toBe("9001");
+  });
+
+  it("asks prisma for the requested page", async () => {
+    mocks.userCount.mockResolvedValue(68);
+    mocks.userFindMany.mockResolvedValue([]);
+
+    const result = await getBotUsers(2, undefined, NOW);
+
+    expect(mocks.userFindMany.mock.calls[0][0].skip).toBe(25);
+    expect(mocks.userFindMany.mock.calls[0][0].take).toBe(25);
+    expect(result.page).toMatchObject({ page: 2, from: 26, to: 50, total: 68 });
   });
 });
