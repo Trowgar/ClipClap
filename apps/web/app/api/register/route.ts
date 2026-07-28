@@ -53,12 +53,19 @@ const MAIL_TIMEOUT_MS = 5000;
  * stuck on "Creating account..." over an account that already exists. On
  * timeout the send keeps running - this is a long-lived node server, not a
  * runtime that freezes on response - the caller just stops waiting for it.
+ *
+ * The timer is cleared once the race settles. Without that it stays ref'd and
+ * holds the event loop for the full window on every registration, including the
+ * overwhelmingly common one where the send finished in a millisecond.
  */
 function withTimeout<T>(work: Promise<T>, ms: number, onTimeout: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
     work,
-    new Promise<T>((resolve) => setTimeout(() => resolve(onTimeout), ms)),
-  ]);
+    new Promise<T>((resolve) => {
+      timer = setTimeout(() => resolve(onTimeout), ms);
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 function badRequest(error: string) {
@@ -146,15 +153,23 @@ export async function POST(req: Request) {
   // One round trip for both refusals, which are different: the same address
   // twice is an ordinary duplicate, while a different address that canonicalises
   // onto an existing one is the same mailbox trying to mint a second free
-  // allowance. Which one it was is read off the row rather than paid for with a
-  // second query.
-  const clash = await prisma.user.findFirst({
+  // allowance.
+  //
+  // `take: 2`, not findFirst, because BOTH can match at once and the exact
+  // address has to win. A row can hold this exact address with a NULL canonical
+  // - that is precisely what an OAuth signup looks like when its claim lost to
+  // an existing alias - while a second row holds the canonical. findFirst
+  // returns whichever Postgres reaches first, so the user's own Google account
+  // could be answered with "sign in with the address you used first" about the
+  // address they just typed.
+  const clashes = await prisma.user.findMany({
     where: { OR: [{ email: normalizedEmail }, { emailCanonical: canonical }] },
     select: { email: true },
+    take: 2,
   });
 
-  if (clash) {
-    return clash.email === normalizedEmail
+  if (clashes.length > 0) {
+    return clashes.some((row) => row.email === normalizedEmail)
       ? duplicateAddress()
       : duplicateMailbox();
   }
