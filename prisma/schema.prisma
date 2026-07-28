@@ -109,6 +109,7 @@ enum TelegramDeliveryStatus {
 model User {
   id                    String             @id @default(cuid())
   email                 String?            @unique
+  emailCanonical        String?            @unique
   emailVerified         DateTime?
   password              String?
   telegramId            String?            @unique
@@ -149,6 +150,7 @@ model User {
   walletEntries       WalletEntry[]
   withdrawalRequests  WithdrawalRequest[]
   tributeOrders       TributeOrder[]
+  freeUsage           FreeUsage[]
 
   @@map("users")
 }
@@ -550,4 +552,33 @@ model SiteVisit {
   @@index([day, country])
   @@index([day, isBot])
   @@map("site_visits")
+}
+
+enum FreeUsageKind {
+  CHARGE
+  REFUND
+}
+
+/// Append-only ledger of the free allowance.
+///
+/// It exists as its own table for one reason: deleteProject runs
+/// prisma.job.delete, so anything counted from Job rows is reset by the user
+/// pressing Delete. jobId is therefore a bare string with NO relation and NO
+/// cascade - a foreign key here would reintroduce that hole through the back
+/// door. Rows are never updated except to true up estimatedCostUsd, and never
+/// deleted.
+model FreeUsage {
+  id               String        @id @default(cuid())
+  userId           String
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId            String?
+  kind             FreeUsageKind
+  seconds          Int
+  estimatedCostUsd Float?
+  createdAt        DateTime      @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([jobId])
+  @@map("free_usage")
 }
