@@ -30,13 +30,15 @@ export async function sendEmail(input: {
   html: string;
   text: string;
 }): Promise<boolean> {
-  const api = resend();
-  if (!api) {
-    console.warn("[email] RESEND_API_KEY unset, not sending:", input.subject);
-    return false;
-  }
-
   try {
+    // Inside the try on purpose: the never-throws guarantee must be ours, not
+    // a bet that the vendor's constructor stays non-throwing.
+    const api = resend();
+    if (!api) {
+      console.warn("[email] RESEND_API_KEY unset, not sending:", input.subject);
+      return false;
+    }
+
     const { error } = await api.emails.send({
       from: FROM,
       to: input.to,
@@ -56,19 +58,40 @@ export async function sendEmail(input: {
 }
 
 /**
- * Interpolates straight into HTML with no escaping. Every argument below is an
- * internal constant or a hex token we generated - keep it that way. If a
- * caller ever wants to put a user's own text in a mail, escape it first.
+ * HTML-escapes a value for interpolation into mail we sign with our own DKIM
+ * key. `&` has to go first or it would double-escape the entities added after
+ * it.
+ */
+export function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * Escapes every interpolated value, so callers cannot inject markup even by
+ * accident. Today's arguments are all internal constants, but this repo has a
+ * referral system: the first "your referral signed up" mail would put another
+ * user's chosen display name into a victim's inbox, inside a message our own
+ * domain vouches for. That is phishing forged under our name, not self-XSS,
+ * and a comment asking callers to be careful cannot prevent it. If some future
+ * caller genuinely needs markup, add an explicit opt-out then - not before.
  */
 function layout(
   heading: string,
   body: string,
   cta: { href: string; label: string }
 ): string {
+  // encodeURI first for URL syntax, then escapeHtml for attribute syntax: the
+  // two encodings are not the same job and the href needs both.
+  const href = escapeHtml(encodeURI(cta.href));
   return `<div style="font-family:system-ui,sans-serif;background:#000;color:#ededed;padding:32px">
-  <h1 style="font-size:20px;margin:0 0 16px">${heading}</h1>
-  <p style="margin:0 0 24px;line-height:1.5">${body}</p>
-  <a href="${cta.href}" style="display:inline-block;background:#ededed;color:#000;padding:12px 20px;border-radius:6px;text-decoration:none">${cta.label}</a>
+  <h1 style="font-size:20px;margin:0 0 16px">${escapeHtml(heading)}</h1>
+  <p style="margin:0 0 24px;line-height:1.5">${escapeHtml(body)}</p>
+  <a href="${href}" style="display:inline-block;background:#ededed;color:#000;padding:12px 20px;border-radius:6px;text-decoration:none">${escapeHtml(cta.label)}</a>
   <p style="margin:24px 0 0;font-size:12px;color:#888">If you did not ask for this, ignore this message.</p>
 </div>`;
 }
@@ -82,9 +105,11 @@ export async function sendVerificationEmail(
     to,
     subject: "Confirm your ClipClap email",
     text: `Confirm your email to unlock your free minutes: ${href}`,
+    // No number in the copy: the free allowance lives in config, and hardcoding
+    // it here would drift silently the first time it changes.
     html: layout(
       "Confirm your email",
-      "Confirm this address to unlock your 60 free minutes of video.",
+      "Confirm this address to unlock your free minutes of video.",
       { href, label: "Confirm email" }
     ),
   });

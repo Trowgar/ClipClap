@@ -22,10 +22,19 @@ export async function issueToken(
   email: string
 ): Promise<string> {
   const token = randomBytes(32).toString("hex");
+  const identifier = `${purpose}:${email}`;
+
+  // At most one live link per purpose per address. Without this, five "send me
+  // another link" clicks leave five simultaneously usable links, and an older
+  // one recovered from a mailbox keeps working after the user asked for a
+  // fresh one. It also stops expired rows accumulating for ever: nothing in
+  // retention.service sweeps this table, so issuing is the only moment we get
+  // to clean up.
+  await prisma.verificationToken.deleteMany({ where: { identifier } });
 
   await prisma.verificationToken.create({
     data: {
-      identifier: `${purpose}:${email}`,
+      identifier,
       token: hash(token),
       expires: new Date(Date.now() + TTL_MS[purpose]),
     },
@@ -38,23 +47,36 @@ export type RedeemResult =
   | { ok: true; email: string }
   | { ok: false; reason: "not-found" | "expired" };
 
-/** Single use: the row is deleted before the expiry is judged, so a stale link
- *  cannot be retried and an expired one cannot be sat on. */
+/** Single use, and single use under concurrency. The row is burned before the
+ *  expiry is judged, so a stale link cannot be retried and an expired one
+ *  cannot be sat on. */
 export async function redeemToken(
   purpose: TokenPurpose,
   token: string
 ): Promise<RedeemResult> {
+  const hashed = hash(token);
+
   const row = await prisma.verificationToken.findUnique({
-    where: { token: hash(token) },
+    where: { token: hashed },
   });
   if (!row) return { ok: false, reason: "not-found" };
 
   const prefix = `${purpose}:`;
+  // Deliberately NOT deleted: this row is a live, legitimate token for its own
+  // purpose. Burning it here would let a crafted verify URL destroy someone's
+  // pending password reset.
   if (!row.identifier.startsWith(prefix)) {
     return { ok: false, reason: "not-found" };
   }
 
-  await prisma.verificationToken.delete({ where: { token: row.token } });
+  // Compare-and-delete rather than a plain delete, so the burn itself decides
+  // the race. Corporate mail scanners prefetch links, so two redemptions
+  // milliseconds apart are routine, not hypothetical - and the loser has to
+  // get "already used" rather than an uncaught Prisma P2025.
+  const { count } = await prisma.verificationToken.deleteMany({
+    where: { token: hashed },
+  });
+  if (count === 0) return { ok: false, reason: "not-found" };
 
   if (row.expires.getTime() < Date.now()) {
     return { ok: false, reason: "expired" };
