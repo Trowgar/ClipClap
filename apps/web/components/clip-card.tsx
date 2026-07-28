@@ -19,6 +19,7 @@ export interface ClipCardClip {
   previewUrl?: string | null;
   description?: string | null;
   lowQuality?: boolean;
+  expired?: boolean;
 }
 
 interface ClipCardProps {
@@ -34,15 +35,23 @@ export function ClipCard({
 }: ClipCardProps) {
   const initialPreviewUrl = previewUrlProp ?? clip.previewUrl ?? null;
   const [previewUrl, setPreviewUrl] = useState<string | null>(() =>
-    initialPreviewUrl ?? getCachedClipUrl(clip.id)
+    clip.expired ? null : initialPreviewUrl ?? getCachedClipUrl(clip.id)
   );
   const [previewLoading, setPreviewLoading] = useState(
-    () => !initialPreviewUrl && !getCachedClipUrl(clip.id)
+    () => !clip.expired && !initialPreviewUrl && !getCachedClipUrl(clip.id)
   );
   const [downloading, setDownloading] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
+    // A swept clip has no object behind its storageKey - never spend a
+    // presign call, or the round trip, on it.
+    if (clip.expired) {
+      setPreviewUrl(null);
+      setPreviewLoading(false);
+      return;
+    }
+
     const readyUrl = initialPreviewUrl ?? getCachedClipUrl(clip.id);
     if (readyUrl) {
       rememberClipUrl(clip.id, readyUrl);
@@ -70,9 +79,10 @@ export function ClipCard({
     return () => {
       active = false;
     };
-  }, [clip.id, initialPreviewUrl]);
+  }, [clip.id, initialPreviewUrl, clip.expired]);
 
   const handleDownload = async () => {
+    if (clip.expired) return;
     setDownloading(true);
     try {
       const url = await getClipUrl(clip.id);
@@ -100,7 +110,12 @@ export function ClipCard({
   return (
     <article className="group overflow-hidden rounded-lg border border-border bg-card/70 transition-colors hover:border-white/20">
       <div className="relative aspect-[9/16] overflow-hidden bg-black">
-        {previewLoading ? (
+        {clip.expired ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-muted-foreground">
+            <FilmStrip className="h-6 w-6" />
+            <span className="px-2 text-center text-xs">Storage period ended</span>
+          </div>
+        ) : previewLoading ? (
           <div className="flex h-full items-center justify-center text-muted-foreground">
             <CircleNotch weight="bold" className="h-5 w-5 animate-spin" />
           </div>
@@ -161,8 +176,8 @@ export function ClipCard({
             size="sm"
             className="h-8 px-2"
             onClick={handleDownload}
-            disabled={downloading}
-            title="Download"
+            disabled={downloading || clip.expired}
+            title={clip.expired ? "Storage period ended" : "Download"}
             aria-label={`Download ${clip.title}`}
           >
             {downloading ? (
@@ -172,18 +187,34 @@ export function ClipCard({
             )}
             <span className="text-xs">Download</span>
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            asChild
-            className="h-8 px-2"
-            title="Edit"
-          >
-            <Link href={`/dashboard/editor?clip=${clip.id}`} aria-label={`Edit ${clip.title}`}>
+          {clip.expired ? (
+            // Not a Link: an expired clip has nothing for the editor to load,
+            // so the control must not be focusable as a link to a dead page.
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 px-2"
+              disabled
+              title="Storage period ended"
+              aria-label={`Edit ${clip.title}`}
+            >
               <PencilSimple className="h-3.5 w-3.5" />
               <span className="text-xs">Edit</span>
-            </Link>
-          </Button>
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              asChild
+              className="h-8 px-2"
+              title="Edit"
+            >
+              <Link href={`/dashboard/editor?clip=${clip.id}`} aria-label={`Edit ${clip.title}`}>
+                <PencilSimple className="h-3.5 w-3.5" />
+                <span className="text-xs">Edit</span>
+              </Link>
+            </Button>
+          )}
           <Button
             variant="outline"
             size="icon"

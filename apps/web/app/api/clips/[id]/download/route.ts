@@ -12,6 +12,13 @@ export async function GET(
   }
 
   const { id } = await params;
-  const url = await clipService.getDownloadUrl(id, session.user.id);
-  return NextResponse.json({ url });
+  try {
+    const url = await clipService.getDownloadUrl(id, session.user.id);
+    return NextResponse.json({ url });
+  } catch (error) {
+    if (error instanceof clipService.ClipExpiredError) {
+      return NextResponse.json({ error: "CLIP_EXPIRED" }, { status: 410 });
+    }
+    throw error;
+  }
 }

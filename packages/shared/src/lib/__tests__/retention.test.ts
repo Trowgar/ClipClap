@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { computeClipExpiresAt } from "../retention";
+import {
+  computeClipExpiresAt,
+  SOURCE_ARTIFACT_RETENTION_DAYS,
+  REDUNDANT_SOURCE_GRACE_HOURS,
+  sourceArtifactCutoff,
+  redundantSourceCutoff,
+} from "../retention";
 import { getPlanLimits } from "../../config/plans";
 
 describe("computeClipExpiresAt", () => {
@@ -35,14 +41,13 @@ describe("computeClipExpiresAt", () => {
     expect(days).toBe(30);
   });
 
-  // NONE clips are real output now - the free run produces them - so they get
-  // the NONE plan's retention like every other plan, not a 24h orphan sweep.
-  // A free user needs long enough to watch what we made and show someone.
+  // NONE clips are whatever the NONE plan says, no special case. The free trial
+  // is disabled (NONE_LIMITS is all zeros as of 2026-07-25), so the honest
+  // assertion is "tracks the plan", not a floor from the era when it was live.
   it("uses the NONE plan's retention for free-run clips", () => {
     const expires = computeClipExpiresAt("NONE", null, now);
     const days = (expires.getTime() - now.getTime()) / (24 * 60 * 60 * 1000);
     expect(days).toBe(getPlanLimits("NONE").retentionDays);
-    expect(days).toBeGreaterThan(1);
   });
 
   it("propagates the underlying error for invalid plan/cycle combos", () => {
@@ -50,5 +55,19 @@ describe("computeClipExpiresAt", () => {
     // computeClipExpiresAt should not silently swallow it. Caller is
     // responsible for not constructing invalid combinations.
     expect(() => computeClipExpiresAt("PLUS", "WEEKLY", now)).toThrow(/no weekly/i);
+  });
+});
+
+describe("source artifact windows", () => {
+  const now = new Date("2026-04-08T00:00:00Z");
+
+  it("keeps the edit window at 7 days for every plan", () => {
+    expect(SOURCE_ARTIFACT_RETENTION_DAYS).toBe(7);
+    expect(sourceArtifactCutoff(now)).toEqual(new Date("2026-04-01T00:00:00Z"));
+  });
+
+  it("gives a terminal job 24 hours before its redundant copies go", () => {
+    expect(REDUNDANT_SOURCE_GRACE_HOURS).toBe(24);
+    expect(redundantSourceCutoff(now)).toEqual(new Date("2026-04-07T00:00:00Z"));
   });
 });

@@ -15,30 +15,59 @@ export async function getClipsByJob(
   });
 }
 
-export async function getUserClips(userId: string): Promise<Clip[]> {
-  return prisma.clip.findMany({
+/** A Clip row plus the one thing every read path needs and Prisma doesn't
+ *  give for free: whether the retention sweep already dropped its object.
+ *  The row itself is never filtered out for this - deletedAt stays a fact
+ *  about the row, `expired` is that fact restated for callers that would
+ *  otherwise have to know the column exists. */
+export interface ClipWithExpiry extends Clip {
+  expired: boolean;
+}
+
+function withExpiry(clip: Clip): ClipWithExpiry {
+  return { ...clip, expired: Boolean(clip.deletedAt) };
+}
+
+export async function getUserClips(userId: string): Promise<ClipWithExpiry[]> {
+  const clips = await prisma.clip.findMany({
     where: { userId },
     orderBy: { createdAt: "desc" },
     take: 100,
   });
+  return clips.map(withExpiry);
 }
 
 export async function getClip(
   clipId: string,
   userId: string
-): Promise<Clip | null> {
-  return prisma.clip.findFirst({
+): Promise<ClipWithExpiry | null> {
+  const clip = await prisma.clip.findFirst({
     where: { id: clipId, userId },
   });
+  return clip ? withExpiry(clip) : null;
+}
+
+/** The clip existed and its retention period ended. Distinct from "not found"
+ *  because the answers differ: one is a 404, the other is a 410 with copy that
+ *  tells the user what happened to their clip. */
+export class ClipExpiredError extends Error {
+  constructor(clipId: string) {
+    super(`Clip ${clipId} is past its retention period`);
+    this.name = "ClipExpiredError";
+  }
 }
 
 export async function getDownloadUrl(
   clipId: string,
   userId: string
 ): Promise<string> {
-  const clip = await prisma.clip.findFirstOrThrow({
+  const clip = await prisma.clip.findFirst({
     where: { id: clipId, userId },
   });
+  if (!clip) throw new Error(`Clip ${clipId} not found`);
+  // The bytes are gone; a signed URL here is a 404 from R2 inside a <video>
+  // tag, which reads to the user as a broken product rather than an expiry.
+  if (clip.deletedAt) throw new ClipExpiredError(clipId);
   return getPresignedDownloadUrl(clip.storageKey);
 }
 
@@ -102,6 +131,10 @@ export async function editClip(input: EditClipInput): Promise<Clip> {
       undefined,
     sourceStart: input.start,
     sourceEnd: input.end,
+    // Tells the worker's fallback path (used when the clean source above is
+    // unavailable) whether original.storageKey's pixels already carry burned
+    // subtitles, so it doesn't burn a second layer on top of them.
+    originalHasBurnedSubtitles: original.subtitles,
     mode: "trim",
   });
 

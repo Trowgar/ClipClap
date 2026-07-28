@@ -80,6 +80,10 @@ function harness() {
       return {};
     }),
     answerCallbackQuery: vi.fn(async () => undefined),
+    setChatMenuButton: vi.fn(async () => {
+      order.push("setChatMenuButton");
+      return {};
+    }),
   };
   return { client, order };
 }
@@ -401,6 +405,15 @@ describe("admin analytics button visibility", () => {
     };
   }
 
+  function menuButtonCalls(client: {
+    setChatMenuButton: { mock: { calls: unknown[][] } };
+  }) {
+    return client.setChatMenuButton.mock.calls as [
+      number | string,
+      { type: string; text?: string; web_app?: { url: string } },
+    ][];
+  }
+
   function keyboardText(client: { sendMessage: { mock: { calls: unknown[][] } } }) {
     const opts = client.sendMessage.mock.calls[0][2] as {
       replyMarkup?: { keyboard: { text: string }[][] };
@@ -408,32 +421,47 @@ describe("admin analytics button visibility", () => {
     return (opts.replyMarkup?.keyboard ?? []).flat().map((b) => b.text);
   }
 
-  it("shows the analytics button to an admin in a private chat", async () => {
+  it("gives an admin in a private chat the Mini App on the menu button", async () => {
     const { client } = harness();
 
     await handleUpdate(client as never, menuIn(CHAT) as never, CONFIG);
 
-    expect(keyboardText(client)).toContain("📊 Analytics");
+    const calls = menuButtonCalls(client);
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe(CHAT.id);
+    expect(calls[0][1].type).toBe("web_app");
+    expect(calls[0][1].text).toBe("Analytics");
+    expect(calls[0][1].web_app?.url).toContain("/admin?v=");
   });
 
-  it("hides it in a group even when the sender is the admin", async () => {
-    // A reply keyboard is attached to the CHAT, not the sender: without
-    // `selective` every member of the group would get the button on their own
-    // keyboard. They cannot read the data, but the entry point is not theirs
-    // to see either.
+  it("keeps the analytics entry off the reply keyboard", async () => {
+    // A reply-keyboard web_app button receives no signed launch data from
+    // Telegram, so the Mini App behind it can never authenticate. The entry
+    // point belongs on the menu button, and nowhere else.
+    const { client } = harness();
+
+    await handleUpdate(client as never, menuIn(CHAT) as never, CONFIG);
+
+    expect(keyboardText(client)).not.toContain("Analytics");
+  });
+
+  it("sets nothing in a group even when the sender is the admin", async () => {
+    // The menu button belongs to the CHAT, not the sender: setting it in a
+    // group would hand every member the entry point. They could not read the
+    // data - the page re-checks - but it is not theirs to see either.
     const { client } = harness();
 
     await handleUpdate(client as never, menuIn(GROUP) as never, CONFIG);
 
-    expect(keyboardText(client)).not.toContain("📊 Analytics");
+    expect(menuButtonCalls(client)).toHaveLength(0);
   });
 
-  it("hides it from a non-admin in their own private chat", async () => {
+  it("sets nothing for a non-admin in their own private chat", async () => {
     process.env.REFERRAL_ADMIN_TELEGRAM_IDS = "999";
     const { client } = harness();
 
     await handleUpdate(client as never, menuIn(CHAT) as never, CONFIG);
 
-    expect(keyboardText(client)).not.toContain("📊 Analytics");
+    expect(menuButtonCalls(client)).toHaveLength(0);
   });
 });

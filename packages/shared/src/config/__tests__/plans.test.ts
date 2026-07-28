@@ -1,11 +1,25 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { getPlanLimits, PLAN_LIMITS, getPlanFromPriceId, FREE_TIER } from "../plans";
 
+// The free trial was disabled 2026-07-25 by zeroing every field of
+// NONE_LIMITS (see the comment above NONE_LIMITS in ../plans.ts for why:
+// unauthenticated registration, a client-supplied duration cap, and a hard
+// delete that erases the trial's own ledger). TRIAL_ENABLED reads that state
+// from the config instead of hardcoding it, so the tests below track the
+// switch rather than a moment in time.
+const TRIAL_ENABLED = getPlanLimits("NONE").maxJobsPerDay > 0;
+
 describe("Plan Limits", () => {
+  // GATED while the trial is disabled. These two tests encode the trial's
+  // intended shape and are not deleted or rewritten to assert zeros - they
+  // resume running automatically the moment NONE_LIMITS is un-zeroed, at
+  // which point they enforce the original design again for whoever
+  // re-enables it. See NONE_LIMITS in ../plans.ts before flipping this.
+  //
   // The free allowance exists so a new account can see one real result before
   // paying. Every field below has to be non-zero for that to be possible: a
   // zero anywhere is the wall that stopped 92 of 95 registered users.
-  it("NONE plan can actually run one video", () => {
+  it.runIf(TRIAL_ENABLED)("NONE plan can actually run one video", () => {
     const limits = getPlanLimits("NONE");
     expect(limits.minutesPerPeriod).toBeGreaterThanOrEqual(
       limits.maxSourceDurationMinutes
@@ -18,13 +32,34 @@ describe("Plan Limits", () => {
     expect(limits.priceUsd).toBe(0);
   });
 
-  it("NONE plan: 30 min source cap, 12 clips, 3d retention", () => {
+  it.runIf(TRIAL_ENABLED)("NONE plan: 30 min source cap, 12 clips, 3d retention", () => {
     const limits = getPlanLimits("NONE");
     expect(limits.maxSourceDurationMinutes).toBe(30);
     expect(limits.storageClips).toBe(12);
     expect(limits.retentionDays).toBe(3);
     expect(limits.concurrentJobsLimit).toBe(1);
     expect(limits.priorityQueue).toBe(false);
+  });
+
+  // ALWAYS ON. The trial is deliberately disabled right now (NONE_LIMITS in
+  // ../plans.ts). This does not assert "disabled" unconditionally - it
+  // asserts the disabled state is COHERENT: if TRIAL_ENABLED reads false
+  // because maxJobsPerDay is 0, every other gate must be 0 too. A half
+  // disabled trial, where one field got missed on the way down, is more
+  // dangerous than a fully live one because it looks shut but is not - so
+  // this runs unconditionally and only has teeth while TRIAL_ENABLED is
+  // false. Once the trial is genuinely re-enabled (TRIAL_ENABLED true), the
+  // gated tests above take over asserting its shape and this one is a no-op.
+  it("NONE plan trial gate is not half-disabled", () => {
+    if (TRIAL_ENABLED) return;
+    const limits = getPlanLimits("NONE");
+    expect(limits.minutesPerPeriod).toBe(0);
+    expect(limits.storageClips).toBe(0);
+    expect(limits.retentionDays).toBe(0);
+    expect(limits.concurrentJobsLimit).toBe(0);
+    expect(limits.maxSourceDurationMinutes).toBe(0);
+    expect(limits.maxFileSizeBytes).toBe(0);
+    expect(limits.maxJobsPerDay).toBe(0);
   });
 
   // The trial is a taste, not a tier: the free source cap must stay well under

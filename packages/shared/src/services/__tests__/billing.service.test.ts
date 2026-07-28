@@ -144,7 +144,12 @@ describe("billing.service - createCheckoutSession", () => {
   it("throws when required env var is missing", async () => {
     vi.unstubAllEnvs();
     vi.stubEnv("STRIPE_SECRET_KEY", "sk_test");
-    // STRIPE_STARTER_MONTHLY_PRICE_ID intentionally not set
+    // Stubbed to an explicitly empty value rather than left unset: this
+    // container's .env supplies STRIPE_STARTER_MONTHLY_PRICE_ID, so relying on
+    // its absence passed locally and failed here. requireEnv() treats "" the
+    // same as unset (`if (!v) throw`), so an explicit empty string exercises
+    // the same guard without depending on what the host's .env happens to have.
+    vi.stubEnv("STRIPE_STARTER_MONTHLY_PRICE_ID", "");
 
     (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
       id: "u1",

@@ -18,6 +18,9 @@ export interface ProjectDetailClip extends ProjectClipSummary {
   previewUrl: string | null;
   description: string | null;
   lowQuality: boolean;
+  /** The retention sweep dropped the object. The row is kept on purpose - a
+   *  clip that silently vanishes reads as data loss, an expired one does not. */
+  expired: boolean;
 }
 
 export interface ProjectSummary {
@@ -75,6 +78,7 @@ const PROJECT_INCLUDE = {
       storageKey: true,
       duration: true,
       createdAt: true,
+      deletedAt: true,
     },
   },
 };
@@ -94,6 +98,7 @@ const PROJECT_DETAIL_INCLUDE = {
       createdAt: true,
       description: true,
       lowQuality: true,
+      deletedAt: true,
     },
   },
 };
@@ -167,9 +172,11 @@ export async function getProjectDetail(
         createdAt: clip.createdAt,
         description: clip.description,
         lowQuality: clip.lowQuality,
-        previewUrl: clip.storageKey
-          ? await getPresignedDownloadUrl(clip.storageKey)
-          : null,
+        previewUrl:
+          clip.storageKey && !clip.deletedAt
+            ? await getPresignedDownloadUrl(clip.storageKey)
+            : null,
+        expired: Boolean(clip.deletedAt),
       }))
     ),
   };
@@ -193,6 +200,7 @@ async function toProjectSummaries(
       storageKey: string;
       duration: number;
       createdAt: Date;
+      deletedAt: Date | null;
     }>;
   }>
 ): Promise<ProjectSummary[]> {
@@ -216,9 +224,12 @@ async function toProjectSummary(job: {
     storageKey: string;
     duration: number;
     createdAt: Date;
+    deletedAt: Date | null;
   }>;
 }): Promise<ProjectSummary> {
-  const previewClip = job.clips.find((clip) => clip.storageKey.length > 0);
+  const previewClip = job.clips.find(
+    (clip) => clip.storageKey.length > 0 && !clip.deletedAt
+  );
   const previewUrl = previewClip
     ? await getPresignedDownloadUrl(previewClip.storageKey)
     : null;
@@ -262,18 +273,27 @@ export async function deleteProject(
       id: true,
       sourceKey: true,
       sourceArtifactKey: true,
+      normalizedArtifactKey: true,
       thumbnailKey: true,
       clips: { select: { storageKey: true } },
     },
   });
   if (!job) return { status: "not_found" };
 
+  // A Set, not an array: normalizeSource returning "none" stores the SAME key
+  // in sourceArtifactKey and normalizedArtifactKey, and deleting it twice logs
+  // a failure for an object that is already gone.
   const r2Keys = [
-    job.sourceKey,
-    job.sourceArtifactKey,
-    job.thumbnailKey,
-    ...job.clips.map((c) => c.storageKey),
-  ].filter((key): key is string => Boolean(key));
+    ...new Set(
+      [
+        job.sourceKey,
+        job.sourceArtifactKey,
+        job.normalizedArtifactKey,
+        job.thumbnailKey,
+        ...job.clips.map((c) => c.storageKey),
+      ].filter((key): key is string => Boolean(key))
+    ),
+  ];
 
   // Delete DB record first - Prisma cascades to clips, steps, deliveries.
   await prisma.job.delete({ where: { id: job.id } });

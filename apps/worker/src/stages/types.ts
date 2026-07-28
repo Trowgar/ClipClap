@@ -30,6 +30,12 @@ export type RenderStagePayload =
       sourceArtifactKey?: string;
       sourceStart?: number;
       sourceEnd?: number;
+      /** Whether originalClipStorageKey's pixels already have subtitles burned
+       *  in (Clip.subtitles on the row being trimmed). Only the FALLBACK branch
+       *  (no clean source available) needs this: it re-encodes that file
+       *  directly, so burning the edited cues on top when it is already
+       *  subtitled would stack a second layer of text. */
+      originalHasBurnedSubtitles: boolean;
     });
 
 export function requireString(value: unknown, label: string): string {

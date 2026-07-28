@@ -4,7 +4,6 @@ import {
   prisma,
   uploadFile,
 } from "@clipclap/shared";
-import { randomUUID } from "crypto";
 import { unlink } from "fs/promises";
 import { downloadVideo } from "../processors/download";
 import { normalizeSource } from "../processors/normalize";
@@ -15,6 +14,10 @@ import {
 } from "../processors/errors";
 import { safeTagJobError } from "./job-error";
 import type { DownloadStagePayload } from "./types";
+import {
+  sourceArtifactKey as buildSourceArtifactKey,
+  normalizedArtifactKey as buildNormalizedArtifactKey,
+} from "./artifact-keys";
 
 export async function runDownloadStage(
   payload: DownloadStagePayload
@@ -37,7 +40,7 @@ export async function runDownloadStage(
       job.sourceKey ?? undefined
     );
 
-    const sourceArtifactKey = `work/${payload.userId}/${payload.jobId}/source-${randomUUID()}.mp4`;
+    const sourceArtifactKey = buildSourceArtifactKey(payload.userId, payload.jobId);
     await uploadFile(sourceArtifactKey, localPath, "video/mp4");
 
     // A/V timeline normalization (idempotent: BullMQ retries skip when done)
@@ -49,7 +52,7 @@ export async function runDownloadStage(
       if (outcome.action === "none") {
         normalizedArtifactKey = sourceArtifactKey;
       } else {
-        normalizedArtifactKey = `work/${payload.userId}/${payload.jobId}/normalized-${randomUUID()}.mp4`;
+        normalizedArtifactKey = buildNormalizedArtifactKey(payload.userId, payload.jobId);
         await uploadFile(normalizedArtifactKey, outcome.path, "video/mp4");
         tempNormalizedPath = outcome.path;
       }

@@ -4,8 +4,10 @@ import {
   REFERRAL_QUEUE_NAME,
   HOLD_RELEASE_JOB,
   SUBSCRIPTION_RECONCILE_JOB,
+  RETENTION_SWEEP_JOB,
   releaseMaturedCommissions,
   reconcileSubscriptions,
+  runRetentionSweep,
 } from "@clipclap/shared";
 
 export function createReferralScheduler(): Worker {
@@ -21,6 +23,10 @@ export function createReferralScheduler(): Worker {
       if (job.name === SUBSCRIPTION_RECONCILE_JOB) {
         const { reconciled } = await reconcileSubscriptions(now);
         console.log(`[reconcile] reconciled ${reconciled} subscriptions`);
+        return;
+      }
+      if (job.name === RETENTION_SWEEP_JOB) {
+        await runRetentionSweep(now);
         return;
       }
     },

@@ -100,14 +100,14 @@ describe("stage handlers", () => {
       userId: "u1",
     });
     expect(mocks.uploadFile).toHaveBeenCalledWith(
-      expect.stringMatching(/^work\/u1\/job1\/source-/),
+      "work/u1/job1/source.mp4",
       "/tmp/source.mp4",
       "video/mp4"
     );
     expect(mocks.jobUpdate).toHaveBeenCalledWith({
       where: { id: "job1" },
       data: expect.objectContaining({
-        sourceArtifactKey: expect.stringMatching(/^work\/u1\/job1\/source-/),
+        sourceArtifactKey: "work/u1/job1/source.mp4",
         status: "DOWNLOADING",
       }),
     });
@@ -115,6 +115,14 @@ describe("stage handlers", () => {
       jobId: "job1",
       userId: "u1",
     });
+
+    // A BullMQ retry re-runs the whole stage from scratch. The key has to be
+    // derived, not random, so a retry overwrites its own object instead of
+    // orphaning it - assert that a second run uploads to the same key.
+    const firstUploadKey = mocks.uploadFile.mock.calls[0][0];
+    await runDownloadStage({ jobId: "job1", userId: "u1" });
+    const secondUploadKey = mocks.uploadFile.mock.calls[1][0];
+    expect(secondUploadKey).toBe(firstUploadKey);
   });
 
   it("transcribe stores transcript json and enqueues analyze", async () => {

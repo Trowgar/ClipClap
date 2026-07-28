@@ -245,7 +245,12 @@ async function renderClips(
           duration: Math.round(highlight.end - highlight.start),
           startTime: highlight.start,
           endTime: highlight.end,
-          subtitles: job.subtitles,
+          // What was actually burned, not the job-level request: assFilter is
+          // only set when job.subtitles is on AND this highlight has cues in
+          // range, so a dialogue-free highlight burns nothing even when the
+          // job asked for subtitles. A later edit of this clip trusts this
+          // column to know whether re-burning would double-burn.
+          subtitles: assFilter !== null,
           subtitleTrack: { cues } as unknown as Prisma.InputJsonValue,
           cropPlan: cropPlan
             ? (cropPlan as unknown as Prisma.InputJsonValue)
@@ -333,9 +338,26 @@ async function renderTrim(
 
     let finalPath: string;
     let slicedPlan: CropPlan | null = null;
+    // The queue payload snapshots sourceArtifactKey at enqueue time, so it can
+    // point at an object the retention sweep has since deleted. That is a
+    // failure to OBTAIN the source, not a render failure - degrade to the
+    // clip-file fallback below rather than throwing. An encode error further
+    // down keeps its own existing behaviour.
+    let cleanSourcePath: string | null = null;
     if (cleanSource) {
-      const sourcePath = await downloadVideo(undefined, payload.sourceArtifactKey!);
-      tempFiles.push(sourcePath);
+      try {
+        cleanSourcePath = await downloadVideo(undefined, payload.sourceArtifactKey!);
+        tempFiles.push(cleanSourcePath);
+      } catch (error) {
+        console.warn(
+          `[render] trim source artifact unavailable on job ${payload.jobId} (key=${payload.sourceArtifactKey}), falling back to clip file:`,
+          error
+        );
+        cleanSourcePath = null;
+      }
+    }
+    if (cleanSourcePath) {
+      const sourcePath = cleanSourcePath;
       let assFilter: { filter: string; assPath: string } | null = null;
       if (wantSubs) {
         assFilter = await createAssFilter(windowedCues);
@@ -415,12 +437,36 @@ async function renderTrim(
       const trimmedPath = await trimClipFile(originalPath, payload.start, payload.end);
       tempFiles.push(trimmedPath);
       finalPath = trimmedPath;
-      if (wantSubs) {
+      // originalClipStorageKey's pixels may already have subtitles burned in
+      // (see RenderStagePayload.originalHasBurnedSubtitles). Burned-in pixels
+      // cannot be un-burned, so on this degraded path a subtitle EDIT cannot
+      // be applied, and neither can turning subtitles off: skipping the burn
+      // and keeping the original text is the best available outcome, since
+      // burning the new cues on top would stack two overlapping layers of
+      // text, which is strictly worse.
+      if (wantSubs && !payload.originalHasBurnedSubtitles) {
         const subbedPath = await burnSubtitles(trimmedPath, windowedCues);
         tempFiles.push(subbedPath);
         finalPath = subbedPath;
+      } else if (wantSubs) {
+        console.warn(
+          `[render] trim fallback on job ${payload.jobId}: clip ${payload.clipId} already has subtitles burned in, skipping the requested subtitle edit to avoid double-burning`
+        );
       }
     }
+
+    // Record what actually happened to the pixels, not what the edit asked
+    // for - a later edit of THIS clip reads this column (via editClip's
+    // originalHasBurnedSubtitles) to decide whether burning again would
+    // double-burn, so it must describe the file, not the request.
+    // Clean source: this render is the only thing that could have burned
+    // subtitles, so the outcome is exactly wantSubs. Fallback: the file
+    // already carried burned-in text when originalHasBurnedSubtitles is
+    // true, and that text survives untouched even when this edit asked for
+    // subtitles off - the column must still say true.
+    const subtitlesBurned = cleanSourcePath
+      ? wantSubs
+      : payload.originalHasBurnedSubtitles || wantSubs;
 
     const storageKey = `clips/${payload.userId}/${payload.jobId}/${randomUUID()}.mp4`;
     await uploadFile(storageKey, finalPath, "video/mp4");
@@ -429,6 +475,7 @@ async function renderTrim(
       data: {
         storageKey,
         duration: Math.round(payload.end - payload.start),
+        subtitles: subtitlesBurned,
         subtitleTrack: { cues: windowedCues } as unknown as Prisma.InputJsonValue,
         cropPlan: slicedPlan
           ? (slicedPlan as unknown as Prisma.InputJsonValue)

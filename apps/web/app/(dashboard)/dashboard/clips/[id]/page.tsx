@@ -33,6 +33,7 @@ export default function ClipPage({
   }
 
   const handleDownload = async () => {
+    if (clip.expired) return;
     setDownloading(true);
     try {
       const { url } = await api.clips.download(clip.id);
@@ -82,7 +83,11 @@ export default function ClipPage({
               Edit
             </Link>
           </Button>
-          <Button onClick={handleDownload} disabled={downloading}>
+          <Button
+            onClick={handleDownload}
+            disabled={downloading || clip.expired}
+            title={clip.expired ? "Storage period ended" : undefined}
+          >
             {downloading ? (
               <CircleNotch weight="bold" className="mr-2 h-4 w-4 animate-spin" />
             ) : (
@@ -94,7 +99,7 @@ export default function ClipPage({
       </div>
 
       <div className="mx-auto max-w-md">
-        <ClipPlayer clipId={clip.id} />
+        <ClipPlayer clipId={clip.id} expired={clip.expired} />
       </div>
     </div>
   );
