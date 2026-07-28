@@ -21,9 +21,11 @@ export function GuestsTable({ rows, page }: { rows: GuestRow[]; page: Page }) {
     <section>
       <h2 className="mb-1 font-semibold">Guests</h2>
       <p className="mb-3 text-xs opacity-60">
-        One row per visitor-day, crawlers excluded. Time is the gap between the
-        first and last request - the last page&apos;s reading time is not
-        recorded, so treat it as a minimum.
+        One row per visitor-day, crawlers excluded. Days and times here are UTC,
+        not local: the visitor bucket and the salt behind its hash are both
+        derived from the UTC date, so a local day would relabel a bucket that is
+        not one. Time is the gap between the first and last request - the last
+        page&apos;s reading time is not recorded, so treat it as a minimum.
       </p>
 
       {rows.length === 0 ? (

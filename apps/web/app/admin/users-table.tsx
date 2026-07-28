@@ -1,15 +1,8 @@
+import { formatLocalDate, formatLocalDateTime } from "@clipclap/shared";
 import type { Page, UserDetail, UserRow } from "@clipclap/shared";
 import { Pager } from "./pager";
 
-function day(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
-
-function stamp(d: Date): string {
-  return d.toISOString().slice(0, 16).replace("T", " ");
-}
-
-function secs(n: number | null): string {
+function duration(n: number | null): string {
   if (n === null) return "?";
   return n < 60 ? `${n}s` : `${Math.round(n / 60)}m`;
 }
@@ -31,14 +24,16 @@ function JobBlock({ job }: { job: UserDetail["jobs"][number] }) {
   return (
     <div className="rounded border border-white/10 p-2">
       <div className="flex justify-between gap-2 text-xs">
-        <span className="tabular-nums opacity-70">{stamp(job.createdAt)}</span>
+        <span className="tabular-nums opacity-70">
+          {formatLocalDateTime(job.createdAt)}
+        </span>
         <span className={job.error ? "text-red-400" : "opacity-70"}>
           {job.status}
         </span>
       </div>
       <p className="mt-1 truncate text-xs opacity-80">{job.source}</p>
       <p className="mt-1 text-xs opacity-60">
-        {secs(job.sourceDurationSec)} source · {job.clipsGenerated} clips
+        {duration(job.sourceDurationSec)} source · {job.clipsGenerated} clips
         {job.analyzeEngine ? ` · ${job.analyzeEngine}` : ""}
         {job.processingMs !== null
           ? ` · ${Math.round(job.processingMs / 1000)}s processing`
@@ -105,7 +100,7 @@ export function UsersTable({
                         : "tabular-nums opacity-70"
                     }
                   >
-                    {day(u.createdAt)}
+                    {formatLocalDate(u.createdAt)}
                   </span>
                   <span className={u.isToday ? "ml-2 font-bold" : "ml-2"}>
                     {u.label}
@@ -122,10 +117,10 @@ export function UsersTable({
 
                 <div className="mt-2 space-y-2 border-t border-white/10 pt-2">
                   <p className="text-xs opacity-70">
-                    {stamp(u.createdAt)} · {u.locale ?? "no locale"} · {u.plan} ·{" "}
-                    {u.subscriptionStatus}
+                    {formatLocalDateTime(u.createdAt)} · {u.locale ?? "no locale"} ·{" "}
+                    {u.plan} · {u.subscriptionStatus}
                     {u.currentPeriodEnd
-                      ? ` until ${day(u.currentPeriodEnd)}`
+                      ? ` until ${formatLocalDate(u.currentPeriodEnd)}`
                       : ""}
                     {u.telegramId ? ` · tg ${u.telegramId}` : ""}
                   </p>
@@ -146,7 +141,7 @@ export function UsersTable({
                         >
                           <span>{e.event}</span>
                           <span className="shrink-0 tabular-nums">
-                            {stamp(e.firstSeenAt)}
+                            {formatLocalDateTime(e.firstSeenAt)}
                             {e.occurrences > 1 ? ` x${e.occurrences}` : ""}
                           </span>
                         </div>
