@@ -79,12 +79,27 @@ export function escapeHtml(value: string): string {
  * domain vouches for. That is phishing forged under our name, not self-XSS,
  * and a comment asking callers to be careful cannot prevent it. If some future
  * caller genuinely needs markup, add an explicit opt-out then - not before.
+ *
+ * Exported only so the escaping can be tested where it is APPLIED. Testing
+ * `escapeHtml` alone proves nothing: dropping the call from one interpolation
+ * here reopens the hole with every test still green, which is exactly what a
+ * mutation run found.
+ *
+ * `cta.href` must be a RAW, unencoded URL. It is passed through `encodeURI`,
+ * so a pre-encoded value is double-encoded - `a%40b.com` becomes `a%2540b.com`
+ * and the link silently dies.
  */
-function layout(
+export function layout(
   heading: string,
   body: string,
   cta: { href: string; label: string }
 ): string {
+  // Not escaping - a scheme check. Escaping makes `javascript:alert(1)` render
+  // harmlessly as text but leaves it live as an href, and "impossible by
+  // construction" has to cover the day a redirect target becomes a parameter.
+  if (!/^https?:\/\//i.test(cta.href)) {
+    throw new Error(`[email] refusing a non-http(s) link: ${cta.href}`);
+  }
   // encodeURI first for URL syntax, then escapeHtml for attribute syntax: the
   // two encodings are not the same job and the href needs both.
   const href = escapeHtml(encodeURI(cta.href));
