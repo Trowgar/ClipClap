@@ -26,9 +26,11 @@ function parseAddress(raw: string): { local: string; domain: string } | null {
  * ever populates `User.emailCanonical`.
  *
  * Plus-addressing is stripped for every domain, not just gmail, because it is
- * not a gmail feature - Outlook, Yahoo, Proton, Fastmail and iCloud (among
- * others) all honor it too, so gating the strip to gmail would leave the
- * alias hole open on every other major provider. Dot-stripping stays
+ * not a gmail feature - Outlook, Yahoo, Proton and Fastmail (among others) all
+ * honor it too, so gating the strip to gmail would leave the alias hole open on
+ * every other major provider. Providers that reject `+` outright, iCloud among
+ * them, cost us nothing here: mail to such an address never arrives, so the
+ * account can never verify and never reaches the allowance. Dot-stripping stays
  * gmail-only because dots are significant in the local part almost
  * everywhere else. The two mistakes are not equally bad: wrongly collapsing
  * two distinct addresses just refuses a registration with a visible error,

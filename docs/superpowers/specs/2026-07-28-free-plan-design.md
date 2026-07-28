@@ -213,9 +213,11 @@ answers all three.
   stays as typed, because that is the address mail is delivered to.
 
   The two rules have different scopes on purpose. Plus-addressing is not a Gmail
-  feature - Outlook, Yahoo, Proton, Fastmail and iCloud all honour it - so
-  gating it to Gmail would leave the alias hole open on every other major
-  provider. Dots are the opposite: they are significant in the local part almost
+  feature - Outlook, Yahoo, Proton and Fastmail all honour it - so gating it to
+  Gmail would leave the alias hole open on every other major provider.
+  Providers that reject `+` outright, iCloud among them, cost nothing here: the
+  mail never arrives, so the account never verifies and never reaches the
+  allowance. Dots are the opposite: they are significant in the local part almost
   everywhere except Gmail, so folding them globally would merge two different
   people onto one account. The failure directions are not symmetric either.
   Collapsing two distinct addresses refuses a registration with a message the
