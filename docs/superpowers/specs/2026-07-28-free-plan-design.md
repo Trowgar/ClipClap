@@ -293,6 +293,19 @@ the anchor costs money but cannot cost unbounded money.
   `pt`, `id`).
 - **Funnel**: new `upload_rejected_*` variants so `/admin` shows which wall a
   user hit - unverified, exhausted, too long, or budget closed.
+- **`/login` renders `?verified=`.** The verify route redirects with
+  `?verified=ok|invalid|not-found|expired` and nothing reads it, so a user who
+  clicks Confirm in their mail lands on the generic sign-in card with no
+  acknowledgement - the address really is verified, but the only evidence is a
+  query parameter nobody displays. The rational next move is to click the link
+  again, which returns `not-found` because the token was burned, and the feature
+  now reads as broken. Two constraints on the copy: `not-found` must say **"this
+  link has already been used"** and never "your email is not verified", because
+  a corporate mail scanner prefetching the link burns it before the human ever
+  clicks; and `ok` has to be visible to someone already signed in, because
+  registration auto-signs-in before the mail arrives. `login/page.tsx` is a
+  client component, so `useSearchParams()` needs a `<Suspense>` boundary or the
+  build fails.
 
 ## Error handling
 
