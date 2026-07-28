@@ -1,17 +1,22 @@
 import { auth } from "@/lib/auth";
 import { cookies } from "next/headers";
 import {
+  getBotUserDetails,
+  getBotUsers,
   getFunnel,
   getPulse,
   getRefusals,
   getTotals,
   getTraffic,
+  getWebGuests,
   isAdminTelegramId,
   isAdminUser,
   verifyAdminCookie,
   type FunnelSurface,
 } from "@clipclap/shared";
+import { GuestsTable } from "./guests-table";
 import { MiniAppGate } from "./mini-app-gate";
+import { UsersTable } from "./users-table";
 
 export const dynamic = "force-dynamic";
 
@@ -61,7 +66,7 @@ function PulseColumn({
 export default async function AdminAnalyticsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ surface?: string }>;
+  searchParams: Promise<{ surface?: string; page?: string }>;
 }) {
   // Two independent ways in: a normal admin session (desktop), or the signed
   // cookie that /api/admin/enter sets after validating Telegram initData.
@@ -88,18 +93,32 @@ export default async function AdminAnalyticsPage({
     return <MiniAppGate />;
   }
 
-  const { surface: raw } = await searchParams;
+  const { surface: raw, page: rawPage } = await searchParams;
   const surface: FunnelSurface | undefined =
     raw === "bot" || raw === "web" ? raw : undefined;
   const ownAccounts = process.env.ANALYTICS_OWN_ACCOUNTS;
+  // Anything unparseable is page 1; paginate() clamps the rest.
+  const requestedPage = Number(rawPage) || 1;
 
-  const [pulse, funnel, refusals, totals, traffic] = await Promise.all([
-    getPulse(surface, ownAccounts),
-    getFunnel(surface),
-    getRefusals(surface),
-    getTotals(surface, ownAccounts),
-    surface === "bot" ? Promise.resolve(null) : getTraffic(30),
-  ]);
+  const [pulse, funnel, refusals, totals, traffic, users, guests] =
+    await Promise.all([
+      getPulse(surface, ownAccounts),
+      getFunnel(surface),
+      getRefusals(surface),
+      getTotals(surface, ownAccounts),
+      surface === "bot" ? Promise.resolve(null) : getTraffic(30),
+      // The row tables belong to one surface each. Combined stays the overview.
+      surface === "bot"
+        ? getBotUsers(requestedPage, ownAccounts)
+        : Promise.resolve(null),
+      surface === "web" ? getWebGuests(requestedPage) : Promise.resolve(null),
+    ]);
+
+  const userDetails = users
+    ? await getBotUserDetails(
+        users.rows.map((u) => ({ id: u.id, telegramId: u.telegramId }))
+      )
+    : {};
 
   const noExternalPaying = totals.externalPayingActive === 0;
 
@@ -108,6 +127,8 @@ export default async function AdminAnalyticsPage({
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Analytics</h1>
         <div className="mt-3 flex gap-2">
+          {/* Deliberately drops `page`: row 30 of the users table has no
+              meaningful counterpart in the guests table. */}
           {SURFACES.map((s) => (
             <a
               key={s.key}
@@ -257,6 +278,12 @@ export default async function AdminAnalyticsPage({
         before login without cookies, which this product does not set. In
         Combined, a person with both a bot and a web account is counted twice.
       </p>
+
+      {users && (
+        <UsersTable rows={users.rows} details={userDetails} page={users.page} />
+      )}
+
+      {guests && <GuestsTable rows={guests.rows} page={guests.page} />}
     </div>
   );
 }
