@@ -87,6 +87,23 @@ export class TelegramClient {
     });
   }
 
+  /** The ☰ button next to the input field, per chat.
+   *
+   *  Omitting chatId would change it for every private chat at once, which is
+   *  never what we want here - the web_app variant is set for one admin. */
+  async setChatMenuButton(
+    chatId: string | number,
+    menuButton:
+      | { type: "web_app"; text: string; web_app: { url: string } }
+      | { type: "commands" }
+      | { type: "default" }
+  ) {
+    return this.request("setChatMenuButton", {
+      chat_id: chatId,
+      menu_button: menuButton,
+    });
+  }
+
   async sendVideo(
     chatId: string | number,
     video: string,

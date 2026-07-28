@@ -362,21 +362,42 @@ function settingsKeyboard(dict: Dict): ReplyKeyboardMarkup {
   };
 }
 
-function buildMainMenu(dict: Dict, adminWebAppUrl?: string): ReplyKeyboardMarkup {
-  // Annotated rather than inferred: the literal below infers as `{text}[][]`,
-  // which rejects the web_app button pushed onto it further down.
-  const keyboard: KeyboardButton[][] = [
-    [{ text: dict.menuPlans }, { text: dict.menuAccount }],
-    [{ text: dict.menuAffiliate }, { text: dict.menuHelp }],
-    [{ text: dict.menuSettings }],
-  ];
-  // Admins get the analytics Mini App as part of the keyboard itself rather
-  // than a second message on every menu open. A web_app keyboard button opens
-  // the app without sending its text, so matchMenuAction never sees it.
-  if (adminWebAppUrl) {
-    keyboard.push([{ text: "📊 Analytics", web_app: { url: adminWebAppUrl } }]);
-  }
-  return { keyboard, is_persistent: true, resize_keyboard: true };
+/**
+ * The admin-only analytics entry.
+ *
+ * It lives on the ☰ button beside the input field, NOT on the reply keyboard.
+ * Telegram hands no launch credential to a Mini App opened from a reply
+ * keyboard: the fragment arrives carrying tgWebAppVersion, tgWebAppPlatform and
+ * tgWebAppThemeParams and no tgWebAppData at all, because such apps are meant to
+ * answer the bot through sendData() rather than authenticate to a backend. Menu
+ * and inline button launches are signed; keyboard ones are not.
+ *
+ * It cost an afternoon of a blank admin page to learn, hence the note.
+ */
+const ADMIN_ANALYTICS_LABEL = "Analytics";
+
+function buildMainMenu(dict: Dict): ReplyKeyboardMarkup {
+  return {
+    keyboard: [
+      [{ text: dict.menuPlans }, { text: dict.menuAccount }],
+      [{ text: dict.menuAffiliate }, { text: dict.menuHelp }],
+      [{ text: dict.menuSettings }],
+    ],
+    is_persistent: true,
+    resize_keyboard: true,
+  };
+}
+
+/** Where the Mini App is opened, freshly stamped on every send.
+ *
+ *  `v` is a cache buster and NOT a credential, deliberately: a Mini App URL ends
+ *  up in our own access log and in every proxy along the way, so nothing secret
+ *  may travel in it. It only stops Telegram from restoring a webview it has
+ *  already opened at that address. */
+function adminAnalyticsUrl(): string {
+  const appUrl =
+    process.env.APP_URL || process.env.NEXTAUTH_URL || "https://clipclap.io";
+  return `${appUrl}/admin?v=${Date.now()}`;
 }
 
 /** The main menu's reply keyboard on its own, WITHOUT the app-open telemetry
@@ -387,26 +408,41 @@ function buildMainMenu(dict: Dict, adminWebAppUrl?: string): ReplyKeyboardMarkup
  *  switch does - means sending one. That send is a side effect of the switch,
  *  not a menu the user opened, and counting it as an app-open would inflate a
  *  funnel metric with events nobody caused. */
-function mainMenuKeyboard(
-  dict: Dict,
+function mainMenuKeyboard(dict: Dict): ReplyKeyboardMarkup {
+  return buildMainMenu(dict);
+}
+
+/**
+ * Puts the analytics Mini App on the ☰ button in the admin's own chat.
+ *
+ * Private chats ONLY, and set per chat rather than globally: omitting chat_id
+ * would hand the button to every private chat the bot has. chatId === from.id
+ * is exactly the private-chat test - Telegram uses the user id as the chat id.
+ *
+ * Nothing takes the button away again if an id later leaves
+ * REFERRAL_ADMIN_TELEGRAM_IDS. That leaks no data - the page re-checks the live
+ * list on every request and shows a revoked admin nothing - but the entry point
+ * would linger, so revoking someone means clearing their menu button by hand.
+ */
+async function syncAdminMenuButton(
+  client: TelegramClient,
   chatId: number | string,
   from: { id: number | string }
-): ReplyKeyboardMarkup {
-  // Private chats ONLY. A reply keyboard is attached to the CHAT, not to the
-  // sender: without `selective` every member of a group sees it, so an admin
-  // running /menu in a group would put "📊 Analytics" on everyone's keyboard.
-  // The data behind it stays safe (initData is checked per user), but the
-  // button's existence is itself something not to hand out. chatId === from.id
-  // is exactly the private-chat test - Telegram uses the user id as the chat id.
+): Promise<void> {
   const isPrivate = String(chatId) === String(from.id);
-  const appUrl =
-    process.env.APP_URL || process.env.NEXTAUTH_URL || "https://clipclap.io";
-  const adminWebAppUrl =
-    isPrivate &&
-    isReferralAdmin(String(from.id), process.env.REFERRAL_ADMIN_TELEGRAM_IDS)
-      ? `${appUrl}/admin`
-      : undefined;
-  return buildMainMenu(dict, adminWebAppUrl);
+  if (
+    !isPrivate ||
+    !isReferralAdmin(String(from.id), process.env.REFERRAL_ADMIN_TELEGRAM_IDS)
+  ) {
+    return;
+  }
+  await client
+    .setChatMenuButton(chatId, {
+      type: "web_app",
+      text: ADMIN_ANALYTICS_LABEL,
+      web_app: { url: adminAnalyticsUrl() },
+    })
+    .catch(() => undefined);
 }
 
 /** Sends the main menu and records the app-open exactly once, wherever it is shown. */
@@ -417,16 +453,14 @@ async function sendMainMenu(
   dict: Dict,
   from: { id: number | string; language_code?: string }
 ) {
-  // The analytics entry is part of the keyboard rather than a second message,
-  // and it is built here rather than at the /menu command alone: the menu is
-  // reached from seven places (the keyboard button, /start, the settings back
-  // button, ...), and a button that only appears for one of them reads as
-  // "the button is missing". The private-chat rule that governs it lives in
-  // mainMenuKeyboard.
+  // Refreshed here rather than at the /menu command alone: the menu is reached
+  // from seven places (/start, the settings back button, ...), and the ☰ button
+  // should be in place no matter which one the admin came through. Before the
+  // message, so it is already there when the menu appears.
+  await syncAdminMenuButton(client, chatId, from);
+
   await client
-    .sendMessage(chatId, text, {
-      replyMarkup: mainMenuKeyboard(dict, chatId, from),
-    })
+    .sendMessage(chatId, text, { replyMarkup: mainMenuKeyboard(dict) })
     .catch(() => undefined);
 
   // After the reply is out, never before - this is telemetry.
@@ -1456,7 +1490,7 @@ async function handleLang(
   // them - and attaching it here costs no extra message at all. Without this
   // the labels stayed in the old language until something else re-sent them.
   await client.sendMessage(message.chat.id, ack, {
-    replyMarkup: mainMenuKeyboard(t(choice), message.chat.id, from),
+    replyMarkup: mainMenuKeyboard(t(choice)),
   });
 }
 
