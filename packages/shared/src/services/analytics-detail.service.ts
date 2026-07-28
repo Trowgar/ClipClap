@@ -1,4 +1,12 @@
-import type { Plan, SubscriptionStatus } from "@prisma/client";
+import type {
+  AnalyzeEngine,
+  JobStatus,
+  JobStepName,
+  JobStepStatus,
+  Plan,
+  SubscriptionStatus,
+  TelegramDeliveryStatus,
+} from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { isLocalToday } from "../config/analytics";
 import { parseOwnAccounts } from "./analytics.service";
@@ -149,6 +157,143 @@ export async function getWebGuests(
   });
 
   return { rows, page };
+}
+
+export interface UserJob {
+  id: string;
+  createdAt: Date;
+  status: JobStatus;
+  source: string;
+  sourceDurationSec: number | null;
+  clipsGenerated: number;
+  analyzeEngine: AnalyzeEngine | null;
+  error: string | null;
+  processingMs: number | null;
+  estimatedTotalCostUsd: number | null;
+  steps: { step: JobStepName; status: JobStepStatus; error: string | null; ms: number | null }[];
+  delivery: { status: TelegramDeliveryStatus; error: string | null } | null;
+}
+
+export interface UserEvent {
+  event: string;
+  occurrences: number;
+  firstSeenAt: Date;
+  lastSeenAt: Date;
+}
+
+export interface UserDetail {
+  jobs: UserJob[];
+  events: UserEvent[];
+}
+
+/**
+ * Everything held about the users on one page, keyed by user id.
+ *
+ * Fetched for the page rather than per row so the accordion needs no client
+ * JS: the whole table, expanded content included, is one server render.
+ */
+export async function getBotUserDetails(
+  users: { id: string; telegramId: string | null }[]
+): Promise<Record<string, UserDetail>> {
+  if (users.length === 0) return {};
+
+  const userIds = users.map((u) => u.id);
+  const telegramIds = users
+    .map((u) => u.telegramId)
+    .filter((id): id is string => id !== null);
+
+  const [jobs, events] = await Promise.all([
+    prisma.job.findMany({
+      where: { userId: { in: userIds } },
+      orderBy: { createdAt: "desc" },
+      select: {
+        id: true,
+        userId: true,
+        createdAt: true,
+        status: true,
+        sourceUrl: true,
+        originalFilename: true,
+        sourceDurationSec: true,
+        clipsGenerated: true,
+        analyzeEngine: true,
+        error: true,
+        processingMs: true,
+        estimatedTotalCostUsd: true,
+        steps: {
+          select: {
+            step: true,
+            status: true,
+            error: true,
+            startedAt: true,
+            finishedAt: true,
+          },
+        },
+        telegramDelivery: { select: { status: true, error: true } },
+      },
+    }),
+    // Empty `in` lists match nothing in Prisma, which is the right answer here,
+    // but skip the round trip when there is nothing to ask about.
+    telegramIds.length === 0
+      ? Promise.resolve([])
+      : prisma.funnelEvent.findMany({
+          where: { surface: "bot", subjectId: { in: telegramIds } },
+          orderBy: { firstSeenAt: "asc" },
+          select: {
+            subjectId: true,
+            event: true,
+            occurrences: true,
+            firstSeenAt: true,
+            lastSeenAt: true,
+          },
+        }),
+  ]);
+
+  const byTelegramId = new Map(
+    users.filter((u) => u.telegramId).map((u) => [u.telegramId as string, u.id])
+  );
+
+  const details: Record<string, UserDetail> = {};
+  for (const u of users) details[u.id] = { jobs: [], events: [] };
+
+  for (const j of jobs) {
+    details[j.userId]?.jobs.push({
+      id: j.id,
+      createdAt: j.createdAt,
+      status: j.status,
+      source: j.sourceUrl ?? j.originalFilename ?? "-",
+      sourceDurationSec: j.sourceDurationSec,
+      clipsGenerated: j.clipsGenerated,
+      analyzeEngine: j.analyzeEngine,
+      error: j.error,
+      processingMs: j.processingMs,
+      estimatedTotalCostUsd: j.estimatedTotalCostUsd,
+      steps: j.steps.map((s) => ({
+        step: s.step,
+        status: s.status,
+        error: s.error,
+        ms:
+          s.startedAt && s.finishedAt
+            ? s.finishedAt.getTime() - s.startedAt.getTime()
+            : null,
+      })),
+      delivery: j.telegramDelivery
+        ? { status: j.telegramDelivery.status, error: j.telegramDelivery.error }
+        : null,
+    });
+  }
+
+  for (const e of events) {
+    const userId = byTelegramId.get(e.subjectId);
+    if (!userId) continue;
+    details[userId]?.events.push({
+      event: e.event,
+      occurrences: e.occurrences,
+      firstSeenAt: e.firstSeenAt,
+      lastSeenAt: e.lastSeenAt,
+    });
+  }
+
+  return details;
 }
 
 export interface UserRow {

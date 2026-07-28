@@ -33,6 +33,7 @@ export * from "./funnel.service";
 export * from "./site-visit.service";
 export * from "./mini-app.service";
 export * from "./analytics.service";
+export * from "./analytics-detail.service";
 export * as retentionService from "./retention.service";
 export { runRetentionSweep } from "./retention.service";
 // Named re-exports for error classes that callers need to instanceof-check

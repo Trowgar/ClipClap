@@ -5,16 +5,25 @@ const mocks = vi.hoisted(() => ({
   siteVisitFindMany: vi.fn(),
   userCount: vi.fn(),
   userFindMany: vi.fn(),
+  jobFindMany: vi.fn(),
+  funnelFindMany: vi.fn(),
 }));
 
 vi.mock("../../lib/prisma", () => ({
   prisma: {
     siteVisit: { groupBy: mocks.siteVisitGroupBy, findMany: mocks.siteVisitFindMany },
     user: { count: mocks.userCount, findMany: mocks.userFindMany },
+    job: { findMany: mocks.jobFindMany },
+    funnelEvent: { findMany: mocks.funnelFindMany },
   },
 }));
 
-import { getBotUsers, getWebGuests, paginate } from "../analytics-detail.service";
+import {
+  getBotUserDetails,
+  getBotUsers,
+  getWebGuests,
+  paginate,
+} from "../analytics-detail.service";
 
 describe("paginate", () => {
   it("describes the first page", () => {
@@ -319,5 +328,79 @@ describe("getBotUsers", () => {
     expect(mocks.userFindMany.mock.calls[0][0].skip).toBe(25);
     expect(mocks.userFindMany.mock.calls[0][0].take).toBe(25);
     expect(result.page).toMatchObject({ page: 2, from: 26, to: 50, total: 68 });
+  });
+});
+
+describe("getBotUserDetails", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("keys jobs and funnel events by user", async () => {
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "j1",
+        userId: "u1",
+        createdAt: new Date("2026-07-21T09:00:00.000Z"),
+        status: "COMPLETED",
+        sourceUrl: "https://youtu.be/x",
+        originalFilename: null,
+        sourceDurationSec: 600,
+        clipsGenerated: 5,
+        analyzeEngine: "RECALL_CRITIC",
+        error: null,
+        processingMs: 120000,
+        estimatedTotalCostUsd: 0.42,
+        steps: [
+          { step: "DOWNLOAD", status: "COMPLETED", error: null, startedAt: null, finishedAt: null },
+        ],
+        telegramDelivery: { status: "DELIVERED", error: null },
+      },
+    ]);
+    mocks.funnelFindMany.mockResolvedValue([
+      {
+        subjectId: "4242",
+        event: "app_opened",
+        occurrences: 3,
+        firstSeenAt: new Date("2026-07-20T09:00:00.000Z"),
+        lastSeenAt: new Date("2026-07-27T09:00:00.000Z"),
+      },
+    ]);
+
+    const details = await getBotUserDetails([{ id: "u1", telegramId: "4242" }]);
+
+    expect(details.u1.jobs).toHaveLength(1);
+    expect(details.u1.jobs[0]).toMatchObject({ id: "j1", clipsGenerated: 5 });
+    expect(details.u1.events).toHaveLength(1);
+    expect(details.u1.events[0]).toMatchObject({ event: "app_opened", occurrences: 3 });
+  });
+
+  it("returns an empty shape for a user with no history", async () => {
+    mocks.jobFindMany.mockResolvedValue([]);
+    mocks.funnelFindMany.mockResolvedValue([]);
+
+    const details = await getBotUserDetails([{ id: "u1", telegramId: "4242" }]);
+
+    expect(details.u1).toEqual({ jobs: [], events: [] });
+  });
+
+  it("queries nothing at all for an empty page", async () => {
+    const details = await getBotUserDetails([]);
+
+    expect(details).toEqual({});
+    expect(mocks.jobFindMany).not.toHaveBeenCalled();
+    expect(mocks.funnelFindMany).not.toHaveBeenCalled();
+  });
+
+  it("looks funnel events up by telegram id on the bot surface", async () => {
+    mocks.jobFindMany.mockResolvedValue([]);
+    mocks.funnelFindMany.mockResolvedValue([]);
+
+    await getBotUserDetails([{ id: "u1", telegramId: "4242" }]);
+
+    expect(mocks.funnelFindMany.mock.calls[0][0].where).toEqual({
+      surface: "bot",
+      subjectId: { in: ["4242"] },
+    });
   });
 });
