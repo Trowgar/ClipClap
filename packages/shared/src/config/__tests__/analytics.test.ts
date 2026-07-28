@@ -45,3 +45,32 @@ describe("isLocalToday", () => {
     expect(isLocalToday(new Date("2026-07-29T00:00:00.000Z"), now)).toBe(false);
   });
 });
+
+describe("startOfLocalDay across a DST transition", () => {
+  it("finds the true midnight on the spring-forward day", () => {
+    // Riga goes +2 to +3 at 03:00 local on 2026-03-29, so that local day began
+    // at 22:00Z - an hour later than the +3 offset in force by mid-morning
+    // would suggest.
+    const at = new Date("2026-03-29T10:00:00.000Z");
+    expect(startOfLocalDay(at).toISOString()).toBe("2026-03-28T22:00:00.000Z");
+  });
+
+  it("finds the true midnight on the fall-back day", () => {
+    // Riga goes +3 to +2 at 04:00 local on 2026-10-25. That local day began at
+    // 21:00Z, under the offset that was still in force at midnight.
+    const at = new Date("2026-10-25T10:00:00.000Z");
+    expect(startOfLocalDay(at).toISOString()).toBe("2026-10-24T21:00:00.000Z");
+  });
+
+  it("keeps the last hour of the previous day out of a spring-forward today", () => {
+    const now = new Date("2026-03-29T10:00:00.000Z");
+    expect(isLocalToday(new Date("2026-03-28T21:30:00.000Z"), now)).toBe(false);
+    expect(isLocalToday(new Date("2026-03-28T22:30:00.000Z"), now)).toBe(true);
+  });
+
+  it("keeps the first hour of a fall-back day inside today", () => {
+    // 21:30Z is 00:30 local on the 25th, still on the old offset.
+    const now = new Date("2026-10-25T10:00:00.000Z");
+    expect(isLocalToday(new Date("2026-10-24T21:30:00.000Z"), now)).toBe(true);
+  });
+});
