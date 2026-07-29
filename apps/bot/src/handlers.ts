@@ -13,6 +13,7 @@ import {
   estimatedFreeCostUsd,
   findOrCreateTelegramUser,
   FREE_TIER,
+  freeBudgetStatus,
   getPlanLimits,
   getPresignedDownloadUrl,
   getTributeCatalogEntry,
@@ -1122,6 +1123,42 @@ export async function deliverReadyTelegramJobs(
   }
 }
 
+/**
+ * The onboarding copy, with the paused note appended when free runs really are
+ * paused.
+ *
+ * Every onboarding screen promises "your first video is free". Today that
+ * promise is followed, one message later, by freeBudgetClosed - because
+ * FREE_TIER_MONTHLY_BUDGET_USD is deliberately unset and the gate refuses every
+ * free submission. Promising and then refusing inside two messages is the
+ * cheapest way to lose someone who arrived willing.
+ *
+ * Conditional rather than a rewrite, on purpose. The promise is not false - the
+ * minutes ARE on the account, freeBudgetClosed says so itself - it is only
+ * unspendable this month, and deleting it would leave the bot understating the
+ * product on the day a ceiling goes into .env. Reading freeBudgetStatus() here
+ * means the copy tracks the gate automatically in both directions: set a
+ * budget and the note disappears with no further edit.
+ *
+ * Failure is swallowed. This runs on /start, the first thing a stranger ever
+ * sees; a database hiccup in an advisory sentence must not cost them the whole
+ * welcome. The note is dropped in that case, which is the same thing the user
+ * saw yesterday.
+ */
+export async function withFreeRunsNote(
+  text: string,
+  dict: Dict
+): Promise<string> {
+  try {
+    const budget = await freeBudgetStatus();
+    if (budget.open) return text;
+  } catch (err) {
+    console.error("[start] could not read the free budget:", err);
+    return text;
+  }
+  return `${text}\n\n${dict.freeRunsPausedNote}`;
+}
+
 async function handleStart(
   client: TelegramClient,
   message: TelegramMessage,
@@ -1146,7 +1183,10 @@ async function handleStart(
       await referralService.attachReferral(user.id, payload.code);
       // The persistent menu (below) carries the 💳 Plans button; no inline
       // plan buttons needed here.
-      await client.sendMessage(message.chat.id, dict.newAccountCreated);
+      await client.sendMessage(
+        message.chat.id,
+        await withFreeRunsNote(dict.newAccountCreated, dict)
+      );
       await sendMainMenu(client, message.chat.id, dict.menuHint, dict, from);
       return; // bypass the two-button onboarding screen (deep-link)
     }
@@ -1154,9 +1194,11 @@ async function handleStart(
   }
 
   if (!existing) {
-    await client.sendMessage(message.chat.id, dict.welcomeFirstChoice, {
-      replyMarkup: firstChoiceKeyboard(dict),
-    });
+    await client.sendMessage(
+      message.chat.id,
+      await withFreeRunsNote(dict.welcomeFirstChoice, dict),
+      { replyMarkup: firstChoiceKeyboard(dict) }
+    );
     // This screen creates no User row - a stranger who reads it and leaves
     // used to be recorded nowhere at all, which is why the size of the
     // population behind our 95 accounts is unknown. Recorded AFTER the reply
@@ -1178,7 +1220,13 @@ async function handleStart(
   if (usage.plan === "NONE") {
     // The persistent menu (below) carries the 💳 Plans button; welcomeNeedsPlan
     // nudges the user to it, so no inline plan buttons here.
-    await sendMainMenu(client, message.chat.id, dict.welcomeNeedsPlan, dict, from);
+    await sendMainMenu(
+      client,
+      message.chat.id,
+      await withFreeRunsNote(dict.welcomeNeedsPlan, dict),
+      dict,
+      from
+    );
     return;
   }
 
@@ -1246,7 +1294,7 @@ async function handleCallbackQuery(
         .editMessageText(
           query.message.chat.id,
           query.message.message_id,
-          dict.newAccountCreated
+          await withFreeRunsNote(dict.newAccountCreated, dict)
         )
         .catch(() => undefined);
       // The other half of the funnel: this person went PAST the first screen.

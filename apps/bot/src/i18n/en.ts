@@ -80,6 +80,12 @@ const en: Dict = {
   welcomeBack: "Welcome back! Send a video and I'll generate clips.",
   welcomeNeedsPlan:
     "Send a video and I'll generate clips. A new account gets one free run - no card needed, up to 60 minutes of video.",
+  // Appended by the handler to the onboarding screens, and only while
+  // freeBudgetStatus() reports the month's ceiling closed. See the note on
+  // freeRunsPausedNote in types.ts for why the promise above is left intact
+  // rather than rewritten.
+  freeRunsPausedNote:
+    "⏳ One thing before you start: free runs are paused until the first of next month. That is a limit on my side, not on your account - your free minutes stay waiting for you. If you want clips today, open 💳 Plans.",
   newAccountBtn: "✨ Create new account",
   linkAccountBtn: "🔗 I already have an account",
   newAccountCreated:

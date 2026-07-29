@@ -33,6 +33,12 @@ const pt: Dict = {
   welcomeBack: "Bom te ver de novo! Manda um vídeo que eu gero os clipes.",
   welcomeNeedsPlan:
     "Manda um vídeo que eu gero os clipes. Conta nova ganha um teste grátis: sem cartão, até 60 minutos de vídeo.",
+  // Appended by the handler to the onboarding screens, and only while
+  // freeBudgetStatus() reports the month's ceiling closed. See the note on
+  // freeRunsPausedNote in types.ts for why the promise above is left intact
+  // rather than rewritten.
+  freeRunsPausedNote:
+    "⏳ Antes de começar: as execuções grátis estão pausadas até o dia primeiro do mês que vem. É um limite meu, não da sua conta: seus minutos grátis continuam esperando por você. Se quiser clipes hoje, abra 💳 Planos.",
   newAccountBtn: "✨ Criar conta nova",
   linkAccountBtn: "🔗 Já tenho conta",
   newAccountCreated:

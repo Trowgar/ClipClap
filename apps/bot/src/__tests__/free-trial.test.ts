@@ -47,7 +47,7 @@ vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
 }));
 
 import { FREE_TIER, getPlanLimits } from "@clipclap/shared";
-import { getSubmissionBlocker } from "../handlers";
+import { getSubmissionBlocker, withFreeRunsNote } from "../handlers";
 import { LOCALES, t } from "../i18n";
 
 const FREE = getPlanLimits("NONE");
@@ -165,6 +165,80 @@ describe("free trial onboarding copy", () => {
       expect(s).toContain("30");
       expect(s).toContain("180");
     }
+  });
+});
+
+/**
+ * The onboarding promised "your first video is free" while the gate answered
+ * every free submission with freeBudgetClosed - a promise and its refusal two
+ * messages apart. The promise is not deleted, because it is true of the
+ * account and false only of this month; a note is appended while the ceiling
+ * is shut, and it goes away on its own the day one is configured.
+ */
+describe("onboarding copy while free runs are paused", () => {
+  const ORIGINAL_BUDGET = process.env.FREE_TIER_MONTHLY_BUDGET_USD;
+
+  beforeEach(() => {
+    mocks.freeUsageAggregate.mockReset();
+    mocks.freeUsageAggregate.mockResolvedValue({
+      _sum: { estimatedCostUsd: 0 },
+    });
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_BUDGET === undefined) {
+      delete process.env.FREE_TIER_MONTHLY_BUDGET_USD;
+    } else {
+      process.env.FREE_TIER_MONTHLY_BUDGET_USD = ORIGINAL_BUDGET;
+    }
+  });
+
+  it("appends the note in the user's own language when the ceiling is shut", async () => {
+    delete process.env.FREE_TIER_MONTHLY_BUDGET_USD;
+
+    for (const loc of LOCALES) {
+      const dict = t(loc);
+      const msg = await withFreeRunsNote(dict.welcomeFirstChoice, dict);
+      expect(msg.startsWith(dict.welcomeFirstChoice)).toBe(true);
+      expect(msg).toContain(dict.freeRunsPausedNote);
+    }
+  });
+
+  it("leaves the welcome untouched once a budget is configured", async () => {
+    process.env.FREE_TIER_MONTHLY_BUDGET_USD = "50";
+    mocks.freeUsageAggregate.mockResolvedValue({
+      _sum: { estimatedCostUsd: 1 },
+    });
+
+    const dict = t("en");
+    expect(await withFreeRunsNote(dict.welcomeFirstChoice, dict)).toBe(
+      dict.welcomeFirstChoice
+    );
+  });
+
+  // /start is the first thing a stranger ever sees. A database hiccup in an
+  // advisory sentence must cost them the sentence, not the welcome.
+  it("still welcomes the user when the budget read throws", async () => {
+    delete process.env.FREE_TIER_MONTHLY_BUDGET_USD;
+    mocks.freeUsageAggregate.mockRejectedValue(new Error("db down"));
+
+    const dict = t("ru");
+    expect(await withFreeRunsNote(dict.welcomeNeedsPlan, dict)).toBe(
+      dict.welcomeNeedsPlan
+    );
+  });
+
+  it("says whose limit it is, in every locale, without repeating the refusal", () => {
+    for (const loc of LOCALES) {
+      const note = t(loc).freeRunsPausedNote;
+      expect(note.length).toBeGreaterThan(40);
+      // It is our ceiling, not their allowance - the same thing
+      // freeBudgetClosed has to say, said before they upload rather than after.
+      expect(note).not.toBe(t(loc).freeBudgetClosed(75, 3));
+    }
+    expect(t("en").freeRunsPausedNote).toMatch(/my side|not on your account/i);
+    expect(t("ru").freeRunsPausedNote).toMatch(/с моей стороны/i);
+    expect(t("ru").freeRunsPausedNote).toMatch(/[а-яё]/i);
   });
 });
 

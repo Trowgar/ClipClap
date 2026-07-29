@@ -39,6 +39,12 @@ const uk: Dict = {
   welcomeBack: "Радий бачити знову! Надішли відео, і я зроблю кліпи.",
   welcomeNeedsPlan:
     "Надішли відео, і я зроблю кліпи. Новий акаунт отримує один безкоштовний запуск: без картки, до 60 хвилин відео.",
+  // Appended by the handler to the onboarding screens, and only while
+  // freeBudgetStatus() reports the month's ceiling closed. See the note on
+  // freeRunsPausedNote in types.ts for why the promise above is left intact
+  // rather than rewritten.
+  freeRunsPausedNote:
+    "⏳ Одразу попереджу: безкоштовні запуски на паузі до першого числа наступного місяця. Це обмеження з мого боку, а не на твоєму акаунті - безкоштовні хвилини нікуди не подінуться. Якщо хочеш кліпи вже сьогодні, відкрий 💳 Тарифи.",
   newAccountBtn: "✨ Створити новий акаунт",
   linkAccountBtn: "🔗 Уже маю акаунт",
   newAccountCreated:

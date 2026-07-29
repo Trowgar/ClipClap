@@ -5,6 +5,25 @@ export interface Dict {
   welcomeFirstChoice: string;
   welcomeBack: string;
   welcomeNeedsPlan: string;
+  /**
+   * Appended to the onboarding screens while the month's global free budget is
+   * closed - and only then.
+   *
+   * The onboarding promises "your first video is free" to everyone who types
+   * /start. When FREE_TIER_MONTHLY_BUDGET_USD is unset or spent, the very next
+   * thing that happens to the person who believes it is freeBudgetClosed, and a
+   * bot that promises then refuses inside two messages has spent the only trust
+   * it was given. This note is the smallest thing that stops the contradiction:
+   * the promise stays true (the minutes ARE on the account), and this says when
+   * they can be spent.
+   *
+   * It must therefore agree with freeBudgetClosed and not merely echo it: same
+   * fact - the ceiling is ours, not yours - said before the user has uploaded
+   * anything rather than after. A plain string, appended by the handler, so the
+   * four onboarding messages keep their own words in every locale and only one
+   * sentence had to be translated six times.
+   */
+  freeRunsPausedNote: string;
   newAccountBtn: string;
   linkAccountBtn: string;
   newAccountCreated: string;

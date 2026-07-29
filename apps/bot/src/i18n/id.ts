@@ -30,6 +30,12 @@ const id: Dict = {
   welcomeBack: "Senang kamu kembali! Kirim video dan aku buatkan klipnya.",
   welcomeNeedsPlan:
     "Kirim video dan aku buatkan klipnya. Akun baru dapat satu percobaan gratis: tanpa kartu, sampai 60 menit video.",
+  // Appended by the handler to the onboarding screens, and only while
+  // freeBudgetStatus() reports the month's ceiling closed. See the note on
+  // freeRunsPausedNote in types.ts for why the promise above is left intact
+  // rather than rewritten.
+  freeRunsPausedNote:
+    "⏳ Sebelum mulai: percobaan gratis dijeda sampai tanggal 1 bulan depan. Itu batas dari sisiku, bukan dari akunmu - menit gratismu tetap menunggumu. Kalau mau klip hari ini, buka 💳 Paket.",
   newAccountBtn: "✨ Buat akun baru",
   linkAccountBtn: "🔗 Aku sudah punya akun",
   newAccountCreated:
