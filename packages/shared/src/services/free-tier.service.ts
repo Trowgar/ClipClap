@@ -54,6 +54,17 @@ export async function freeBalanceSeconds(userId: string): Promise<number> {
     _sum: { seconds: true },
   });
 
+  // The zero defaults are what carry the common case, not the `?? 0`. Postgres
+  // OMITS a kind entirely when the account has no rows of it - a fresh account
+  // returns [], and an account that has only ever been charged returns a
+  // one-element array - so `refunded` is usually never assigned at all. Drop
+  // either initialiser and those accounts compute against undefined, which is
+  // NaN, and NaN fails every comparison the gate makes.
+  //
+  // The `?? 0` is a type requirement, not a runtime guard: _sum.seconds is
+  // `number | null` and TypeScript will not subtract a null, but JavaScript
+  // coerces null to 0 in arithmetic, so removing it changes no behaviour. Do
+  // not read it as the thing protecting an empty sum.
   let charged = 0;
   let refunded = 0;
   for (const row of rows) {
@@ -65,10 +76,21 @@ export async function freeBalanceSeconds(userId: string): Promise<number> {
 }
 
 /**
- * Reserves minutes before the job is enqueued.
+ * Reserves seconds before the job is enqueued.
  *
  * Reservation, not post-hoc charging: ten videos submitted at once would each
  * see a full balance and all ten would run.
+ *
+ * A duplicate is a no-op, not an error. This runs on the submit path, so an
+ * unhandled P2002 reaches the user as a 500 on a button press; and the only way
+ * it fires is a retry of a submission whose reservation already landed, where
+ * the caller's post-condition - a CHARGE row exists for this job - already
+ * holds. Swallowing it makes submit idempotent.
+ *
+ * One consequence worth stating: the CHARGE row is permanent, so a refunded
+ * job's allowance cannot be re-reserved under the same jobId. That is correct -
+ * a refunded job is terminal, and every submission mints a fresh cuid - but it
+ * does mean this function is not a general "spend seconds" primitive.
  */
 export async function chargeFreeSeconds(
   userId: string,
@@ -76,9 +98,13 @@ export async function chargeFreeSeconds(
   seconds: number,
   estimatedCostUsd: number
 ): Promise<void> {
-  await prisma.freeUsage.create({
-    data: { userId, jobId, kind: "CHARGE", seconds, estimatedCostUsd },
-  });
+  try {
+    await prisma.freeUsage.create({
+      data: { userId, jobId, kind: "CHARGE", seconds, estimatedCostUsd },
+    });
+  } catch (err) {
+    if (!isDuplicateRow(err)) throw err;
+  }
 }
 
 async function findCharge(userId: string, jobId: string) {
@@ -110,14 +136,18 @@ async function alreadyRefunded(userId: string, jobId: string): Promise<boolean> 
 }
 
 /**
- * True when this error is the unique index rejecting a second refund for a job.
+ * True when this error is the unique index rejecting a duplicate ledger row.
  *
  * The only unique constraint this table carries is (userId, jobId, kind), so a
- * P2002 from a refund insert can mean nothing else: another finalize won the
- * race and the refund the caller wanted already exists. That is the same
- * conclusion alreadyRefunded reaches, so callers return the same answer.
+ * P2002 from any insert here can mean nothing else: someone else wrote the row
+ * this call wanted first. Every caller's post-condition is therefore already
+ * satisfied, which is why all three treat it as success rather than an error.
+ *
+ * Deliberately narrow. A dead connection or a constraint added later must
+ * surface, not be reported as a reservation taken or a refund granted that the
+ * user never actually got.
  */
-function isDuplicateRefund(err: unknown): boolean {
+function isDuplicateRow(err: unknown): boolean {
   return (
     err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002"
   );
@@ -146,7 +176,7 @@ export async function refundFailedJob(
       },
     });
   } catch (err) {
-    if (!isDuplicateRefund(err)) throw err;
+    if (!isDuplicateRow(err)) throw err;
     // Another finalize refunded this job between our check and our insert.
     // Nothing to do - the user has their seconds back either way.
   }
@@ -177,6 +207,19 @@ export async function refundZeroClipJob(
   if (!charge) return false;
   if (await alreadyRefunded(userId, jobId)) return false;
 
+  // READ THIS BEFORE RAISING concurrentJobsLimit FOR THE FREE TIER.
+  //
+  // This cap is NOT guarded by the database. The unique index is on
+  // (userId, jobId, kind) and correctly does not collide two different jobs, so
+  // two zero-clip jobs finalizing at the same moment can both read `used` as 0
+  // and both insert, leaving two ZERO_CLIPS rows against a cap of one.
+  //
+  // What keeps that window shut is the concurrency limit: NONE_LIMITS gives the
+  // free tier at most one job in flight, so there is no second finalize to race.
+  // Raise concurrentJobsLimit above 1 for NONE and this reopens, and the fix
+  // then is a partial unique index on (userId, reason) or a serialisable
+  // transaction - not a bigger read-check. Left alone deliberately today: real
+  // complexity for a worst case of one extra forgiveness, about $0.19.
   const used = await prisma.freeUsage.count({
     where: { userId, kind: "REFUND", reason: "ZERO_CLIPS" },
   });
@@ -194,7 +237,7 @@ export async function refundZeroClipJob(
       },
     });
   } catch (err) {
-    if (!isDuplicateRefund(err)) throw err;
+    if (!isDuplicateRow(err)) throw err;
     return false;
   }
   return true;
@@ -208,13 +251,21 @@ export async function refundZeroClipJob(
  * for a refunded job carries a deliberate 0 that must not be overwritten with
  * the real cost - doing so would cancel the charge out of the budget sum and
  * make every failed job look free.
+ *
+ * Scoped to userId as well, even though a cuid jobId is unique in practice.
+ * jobId here is a bare String with no foreign key - deliberately, since a key
+ * would reintroduce the delete-resets-the-ledger hole - so nothing in the
+ * database stops two users holding rows with the same jobId string, and an
+ * updateMany without a user would rewrite both. Taking the userId makes that
+ * unrepresentable rather than merely unlikely.
  */
 export async function trueUpFreeCost(
+  userId: string,
   jobId: string,
   actualCostUsd: number
 ): Promise<void> {
   await prisma.freeUsage.updateMany({
-    where: { jobId, kind: "CHARGE" },
+    where: { userId, jobId, kind: "CHARGE" },
     data: { estimatedCostUsd: actualCostUsd },
   });
 }

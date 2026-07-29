@@ -9,6 +9,15 @@ function p2002(): Prisma.PrismaClientKnownRequestError {
   });
 }
 
+/** A Prisma error that is NOT the duplicate we forgive. Same class, so an
+ *  `instanceof` check that forgot to compare the code cannot tell it apart. */
+function p2003(): Prisma.PrismaClientKnownRequestError {
+  return new Prisma.PrismaClientKnownRequestError("Foreign key constraint", {
+    code: "P2003",
+    clientVersion: "5.20.0",
+  });
+}
+
 vi.mock("../../lib/prisma", () => ({
   prisma: {
     freeUsage: {
@@ -58,6 +67,46 @@ describe("free-tier.service", () => {
     expect(await freeBalanceSeconds("u1")).toBe(0);
   });
 
+  // The one shape the ledger() helper cannot produce, and the shape real
+  // Postgres actually returns for almost every free account. groupBy OMITS a
+  // kind that has no rows - it does not hand back _sum.seconds: null - so an
+  // account that has been charged and never refunded yields a ONE-element
+  // array and the REFUND branch never executes. What carries that case is the
+  // `let refunded = 0` initialiser, not the `?? 0` beside it. Every other
+  // balance test feeds both kinds and so has never exercised this.
+  it("handles a ledger with charges and no refunds at all", async () => {
+    (prisma.freeUsage.groupBy as any).mockResolvedValue([
+      { kind: "CHARGE", _sum: { seconds: 1200 } },
+    ]);
+    expect(await freeBalanceSeconds("u1")).toBe(
+      FREE_TIER.lifetimeSeconds - 1200
+    );
+  });
+
+  // The mirror case, and the one that would silently grant a second allowance:
+  // a REFUND-only ledger must not read as a full balance plus the refund.
+  it("handles a ledger with refunds and no charges at all", async () => {
+    (prisma.freeUsage.groupBy as any).mockResolvedValue([
+      { kind: "REFUND", _sum: { seconds: 600 } },
+    ]);
+    expect(await freeBalanceSeconds("u1")).toBe(
+      FREE_TIER.lifetimeSeconds + 600
+    );
+  });
+
+  // groupBy returns _sum: null for an empty sum. Note this does NOT kill a
+  // mutant that drops the `?? 0`: JavaScript coerces null to 0 in arithmetic,
+  // so that operator is satisfying TypeScript, not guarding runtime. The test
+  // stays because the OUTCOME is worth pinning whatever the mechanism, but the
+  // `?? 0` is not what makes it pass - the initialisers are.
+  it("treats a null sum as zero", async () => {
+    (prisma.freeUsage.groupBy as any).mockResolvedValue([
+      { kind: "CHARGE", _sum: { seconds: null } },
+      { kind: "REFUND", _sum: { seconds: null } },
+    ]);
+    expect(await freeBalanceSeconds("u1")).toBe(FREE_TIER.lifetimeSeconds);
+  });
+
   it("writes a CHARGE row for the probed duration", async () => {
     (prisma.freeUsage.create as any).mockResolvedValue({});
     await chargeFreeSeconds("u1", "job1", 1234, 0.19);
@@ -71,6 +120,30 @@ describe("free-tier.service", () => {
         estimatedCostUsd: 0.19,
       },
     });
+  });
+
+  // chargeFreeSeconds is the only one of these that runs on the submit path, so
+  // an unhandled constraint error here is a 500 on a button press. The realistic
+  // trigger is a retried submission whose reservation already landed, where the
+  // post-condition the caller wanted - a CHARGE row for this job - already
+  // holds. Swallow it and submit becomes idempotent.
+  it("treats a duplicate reservation as a no-op", async () => {
+    (prisma.freeUsage.create as any).mockRejectedValue(p2002());
+    await expect(
+      chargeFreeSeconds("u1", "job1", 1234, 0.19)
+    ).resolves.toBeUndefined();
+  });
+
+  // The catch stays narrow here too: a real write failure must not be reported
+  // as seconds successfully reserved, or the job runs against an allowance
+  // nothing ever deducted.
+  it("lets a non-P2002 charge failure surface", async () => {
+    (prisma.freeUsage.create as any).mockRejectedValue(
+      new Error("connection reset")
+    );
+    await expect(chargeFreeSeconds("u1", "job1", 1234, 0.19)).rejects.toThrow(
+      "connection reset"
+    );
   });
 
   // Our own breakage must never consume a stranger's only look at the product,
@@ -300,12 +373,16 @@ describe("free-tier.service", () => {
   // Must target the CHARGE row and only the CHARGE row: the REFUND row for the
   // same job carries a deliberate 0, and overwriting it with the real cost would
   // cancel the charge out of the budget sum and make every failed job free.
-  it("trues up only the CHARGE row for the job", async () => {
+  //
+  // The userId matters too. jobId is a bare String with no foreign key, so
+  // nothing in the database stops two users holding the same jobId string, and
+  // an updateMany scoped to jobId alone rewrites both accounts' rows.
+  it("trues up only the CHARGE row for this user's job", async () => {
     (prisma.freeUsage.updateMany as any).mockResolvedValue({ count: 1 });
-    await trueUpFreeCost("job1", 0.31);
+    await trueUpFreeCost("u1", "job1", 0.31);
 
     expect(prisma.freeUsage.updateMany).toHaveBeenCalledWith({
-      where: { jobId: "job1", kind: "CHARGE" },
+      where: { userId: "u1", jobId: "job1", kind: "CHARGE" },
       data: { estimatedCostUsd: 0.31 },
     });
   });
@@ -314,18 +391,10 @@ describe("free-tier.service", () => {
   // what the balance was computed from; only the money is being corrected.
   it("trues up the cost without moving the allowance", async () => {
     (prisma.freeUsage.updateMany as any).mockResolvedValue({ count: 1 });
-    await trueUpFreeCost("job1", 0.31);
+    await trueUpFreeCost("u1", "job1", 0.31);
 
     const data = (prisma.freeUsage.updateMany as any).mock.calls[0][0].data;
     expect(Object.keys(data)).toEqual(["estimatedCostUsd"]);
-  });
-
-  // updateMany, not update: a paid-plan job has no ledger row at all, and
-  // prisma.update throws on a missing record. The worker calls this on every
-  // finalize, so a throw here would fail jobs that were never free.
-  it("is a no-op for a job with no ledger row", async () => {
-    (prisma.freeUsage.updateMany as any).mockResolvedValue({ count: 0 });
-    await expect(trueUpFreeCost("paid-job", 0.31)).resolves.toBeUndefined();
   });
 
   // ---------------------------------------------------------------------------
@@ -390,6 +459,31 @@ describe("free-tier.service", () => {
     // there, and a caller that told the user "forgiveness spent" twice would be
     // lying once.
     expect(await refundZeroClipJob("u1", "job1")).toBe(false);
+  });
+
+  // The narrowness has to be tested with a PRISMA error, not a plain one.
+  // A guard that checks `instanceof PrismaClientKnownRequestError` and forgets
+  // `err.code === "P2002"` still rethrows a bare Error, so the plain-Error tests
+  // above pass while every foreign-key and constraint failure is silently
+  // reported as a refund granted. Only a same-class, different-code error can
+  // catch that.
+  it("lets a non-P2002 prisma error surface on every path", async () => {
+    (prisma.freeUsage.findFirst as any).mockResolvedValue({
+      seconds: 900,
+      estimatedCostUsd: 0.14,
+    });
+    (prisma.freeUsage.count as any).mockResolvedValue(0);
+    (prisma.freeUsage.create as any).mockRejectedValue(p2003());
+
+    await expect(chargeFreeSeconds("u1", "j", 100, 0.1)).rejects.toThrow(
+      "Foreign key constraint"
+    );
+    await expect(refundFailedJob("u1", "job1")).rejects.toThrow(
+      "Foreign key constraint"
+    );
+    await expect(refundZeroClipJob("u1", "job1")).rejects.toThrow(
+      "Foreign key constraint"
+    );
   });
 
   // The P2002 catch must stay narrow. A dead connection or a constraint we have
