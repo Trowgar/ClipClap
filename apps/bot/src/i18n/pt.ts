@@ -229,7 +229,6 @@ const pt: Dict = {
     { command: "referral", description: "Seu link de indicação e ganhos" },
   ],
   manageSubscriptionBtn: "🔧 Gerenciar assinatura",
-  editInBrowserBtn: "✂️ Editar no navegador",
   checkingLink: "Verificando o link…",
   urlAccessFailed:
     "Não consegui acessar o vídeo desse link. Tente outro link ou envie o arquivo direto.",

@@ -240,7 +240,6 @@ const uk: Dict = {
     { command: "referral", description: "Реферальне посилання та дохід" },
   ],
   manageSubscriptionBtn: "🔧 Керувати підпискою",
-  editInBrowserBtn: "✂️ Редагувати у браузері",
   checkingLink: "Перевіряю посилання…",
   urlAccessFailed:
     "Не вдалося отримати відео за цим посиланням. Спробуй інше посилання або надішли файл напряму.",

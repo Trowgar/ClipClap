@@ -247,7 +247,6 @@ const ru: Dict = {
     { command: "referral", description: "Реферальная ссылка и доход" },
   ],
   manageSubscriptionBtn: "🔧 Управление подпиской",
-  editInBrowserBtn: "✂️ Редактировать в браузере",
   checkingLink: "Проверяю ссылку…",
   urlAccessFailed:
     "Не удалось получить видео по этой ссылке. Попробуй другую ссылку или загрузи файл напрямую.",

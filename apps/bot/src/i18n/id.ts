@@ -226,7 +226,6 @@ const id: Dict = {
     { command: "referral", description: "Tautan referal dan penghasilanmu" },
   ],
   manageSubscriptionBtn: "🔧 Kelola langganan",
-  editInBrowserBtn: "✂️ Edit di browser",
   checkingLink: "Memeriksa tautan…",
   urlAccessFailed:
     "Tidak bisa mengakses video di tautan itu. Coba tautan lain atau unggah filenya langsung.",

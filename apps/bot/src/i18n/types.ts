@@ -175,7 +175,6 @@ export interface Dict {
   botShortDescription: string;
   commands: Array<{ command: string; description: string }>;
   manageSubscriptionBtn: string;
-  editInBrowserBtn: string;
   checkingLink: string;
   urlAccessFailed: string;
   referralInfo: (web: string, tg: string, earned: string, pending: string) => string;

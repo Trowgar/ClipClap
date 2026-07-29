@@ -502,7 +502,6 @@ describe("the pickup window drains", () => {
     expect(client.sendVideo).toHaveBeenCalledWith(
       "victim-chat",
       expect.anything(),
-      expect.anything(),
       expect.anything()
     );
     // 60 polls is 10 minutes. A wall of dead rows must clear in a small

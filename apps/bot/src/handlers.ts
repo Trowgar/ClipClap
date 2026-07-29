@@ -987,16 +987,11 @@ export async function deliverReadyTelegramJobs(
             lowQuality: clip.lowQuality,
             lowQualityNote: dict.lowQualityNote,
           }),
-          editUrl: `${appUrl}/dashboard/editor?clip=${clip.id}`,
         });
       }
 
       for (const video of videos) {
-        await client.sendVideo(delivery.chatId, video.url, video.caption, {
-          inline_keyboard: [
-            [{ text: dict.editInBrowserBtn, url: video.editUrl }],
-          ],
-        });
+        await client.sendVideo(delivery.chatId, video.url, video.caption);
         clipsInChat++;
       }
 
