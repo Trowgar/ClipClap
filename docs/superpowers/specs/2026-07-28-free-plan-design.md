@@ -161,16 +161,35 @@ model FreeUsage {
   userId           String
   user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   jobId            String?  // NO relation, NO cascade - the job may be deleted
-  kind             FreeUsageKind // CHARGE | REFUND
+  kind             FreeUsageKind    // CHARGE | REFUND
+  reason           FreeUsageReason? // FAILED_JOB | ZERO_CLIPS, null on a CHARGE
   seconds          Int
   estimatedCostUsd Float?   // written from the probe, trued up at finalize
   createdAt        DateTime @default(now())
 
+  @@unique([userId, jobId, kind])
   @@index([userId])
   @@index([createdAt])
   @@map("free_usage")
 }
 ```
+
+`reason` exists because the first draft could not tell the two refunds apart,
+and that cost the user the wrong one. The forgiveness for an empty result is
+capped at one per account while the refund for our own breakage is deliberately
+uncapped - but a count over all REFUND rows matches both, so an account whose
+first job broke on our side silently spent a forgiveness it never used. Counting
+only `reason: ZERO_CLIPS` restores the distinction the design intended.
+
+`@@unique([userId, jobId, kind])` makes a double refund impossible rather than
+merely unlikely. Two workers finalizing the same job - a BullMQ retry, or a
+finalize that failed once and succeeded on the second attempt - can both pass a
+read-then-write check and both credit the account, and `freeBalanceSeconds`
+floors at zero but does not cap at the allowance, so the balance ends up above
+what the tier grants. One charge per job and one refund per job are real
+invariants, so the index states a truth rather than imposing a rule. Postgres
+does not collide NULLs in a unique index, which leaves any future `jobId`-less
+row unconstrained.
 
 `jobId` is a bare string, deliberately: a foreign key with any cascade
 reintroduces hole 3 through the back door.
