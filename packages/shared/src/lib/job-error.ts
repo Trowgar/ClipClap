@@ -51,6 +51,19 @@ export const JOB_ERROR_CODES = [
    *  therefore state the cause, state the limit as a number, and ask for a
    *  trimmed source. Permanent in the same sense as its sibling. */
   "SOURCE_TOO_LARGE",
+  /** A free-tier job whose real, ffprobe-measured duration does not fit in the
+   *  allowance the account has left. The submit gate could not catch it: an
+   *  upload is already in R2 when the route runs and is reserved at zero
+   *  seconds, so the download stage is the first place the true length is
+   *  known - and the last place before TRANSCRIBE spends money.
+   *
+   *  The one failure in this list that costs the user nothing: the reservation
+   *  is refunded before the job is marked FAILED, so the copy may state that
+   *  the free minutes are still there. Permanent, like the SOURCE_* codes -
+   *  every retry re-downloads and re-measures the same file - so the copy has
+   *  to name the two ways out (a shorter source, or a plan) rather than
+   *  suggest waiting. */
+  "FREE_ALLOWANCE_EXCEEDED",
 ] as const;
 
 export type JobErrorCode = (typeof JOB_ERROR_CODES)[number];

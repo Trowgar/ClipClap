@@ -5,6 +5,25 @@ export interface Dict {
   welcomeFirstChoice: string;
   welcomeBack: string;
   welcomeNeedsPlan: string;
+  /**
+   * Appended to the onboarding screens while the month's global free budget is
+   * closed - and only then.
+   *
+   * The onboarding promises "your first video is free" to everyone who types
+   * /start. When FREE_TIER_MONTHLY_BUDGET_USD is unset or spent, the very next
+   * thing that happens to the person who believes it is freeBudgetClosed, and a
+   * bot that promises then refuses inside two messages has spent the only trust
+   * it was given. This note is the smallest thing that stops the contradiction:
+   * the promise stays true (the minutes ARE on the account), and this says when
+   * they can be spent.
+   *
+   * It must therefore agree with freeBudgetClosed and not merely echo it: same
+   * fact - the ceiling is ours, not yours - said before the user has uploaded
+   * anything rather than after. A plain string, appended by the handler, so the
+   * four onboarding messages keep their own words in every locale and only one
+   * sentence had to be translated six times.
+   */
+  freeRunsPausedNote: string;
   newAccountBtn: string;
   linkAccountBtn: string;
   newAccountCreated: string;
@@ -36,21 +55,25 @@ export interface Dict {
   doneNoClips: (reason: string) => string;
   lowQualityNote: string;
   blocked: (reason: string) => string;
-  /** The free allowance is spent. Must state what they used AND what a plan
-   *  gives - "subscription required" tells a user nothing they can act on. */
-  freeTrialUsed: (
-    runs: number,
+  /** The free allowance is spent. Must state what is LEFT and what a plan
+   *  gives - "subscription required" tells a user nothing they can act on.
+   *  Minutes, not seconds, and `remainingMinutes` is floored, so it is
+   *  honestly 0 for anyone with less than a minute left. */
+  freeExhausted: (
+    remainingMinutes: number,
+    lifetimeMinutes: number,
     planMinutes: number,
     planPriceEur: number
   ) => string;
-  /** Every free attempt was spent without a single clip coming out. Different
-   *  message from freeTrialUsed on purpose: this person has seen nothing, so
-   *  selling to them as if they had is dishonest. */
-  freeTrialAttemptsUsed: (
-    attempts: number,
-    planMinutes: number,
-    planPriceEur: number
-  ) => string;
+  /** Nothing has vouched for this account yet, so it has no allowance at all.
+   *  Unreachable from Telegram in practice - a bot account is anchored by its
+   *  phone-backed telegramId - but the code is part of the shared union, and a
+   *  refusal nobody wrote words for is a refusal in English. */
+  freeNotAnchored: (planMinutes: number, planPriceEur: number) => string;
+  /** Nothing is wrong with THIS account: the month's global free budget is
+   *  spent, so free runs are paused until it resets. Say whose limit it is,
+   *  or the user reads it as their own allowance being gone. */
+  freeBudgetClosed: (planMinutes: number, planPriceEur: number) => string;
   /** Source is longer than the free run allows. Names both caps so the choice
    *  - trim it, or pay for length - is visible. */
   freeSourceTooLong: (freeMaxMinutes: number, planMaxMinutes: number) => string;
@@ -152,7 +175,6 @@ export interface Dict {
   botShortDescription: string;
   commands: Array<{ command: string; description: string }>;
   manageSubscriptionBtn: string;
-  editInBrowserBtn: string;
   checkingLink: string;
   urlAccessFailed: string;
   referralInfo: (web: string, tg: string, earned: string, pending: string) => string;

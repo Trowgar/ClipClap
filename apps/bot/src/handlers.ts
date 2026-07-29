@@ -3,6 +3,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import {
+  ACTIVE_JOB_STATUSES,
   FUNNEL_EVENTS,
   buildClipCaption,
   cancelShopOrder,
@@ -10,8 +11,11 @@ import {
   createBotInitiatedLink,
   createShopOrder,
   createTelegramDelivery,
-  findOrCreateTelegramUser,
+  deleteFile,
+  estimatedFreeCostUsd,
   FREE_TIER,
+  freeBudgetStatus,
+  getOrCreateTelegramUser,
   getPlanLimits,
   getPresignedDownloadUrl,
   getTributeCatalogEntry,
@@ -31,7 +35,11 @@ import {
   uploadFile,
   uploadRejectedEvent,
 } from "@clipclap/shared";
-import type { SubscriptionPhase, UploadRejectionCode } from "@clipclap/shared";
+import type {
+  FreeChargeInput,
+  SubscriptionPhase,
+  UploadRejectionCode,
+} from "@clipclap/shared";
 import type { User } from "@prisma/client";
 import type { TelegramClient } from "./telegram-client";
 import { extractVideoUrl, probeVideoUrl } from "./url-probe";
@@ -56,14 +64,6 @@ import type {
   TelegramUser,
   TelegramVideo,
 } from "./types";
-
-const ACTIVE_STATUSES = [
-  "PENDING",
-  "DOWNLOADING",
-  "TRANSCRIBING",
-  "ANALYZING",
-  "CUTTING",
-] as const;
 
 export const CALLBACK_NEW_ACCOUNT = "new_acc";
 export const CALLBACK_LINK_ACCOUNT = "link_acc";
@@ -987,16 +987,11 @@ export async function deliverReadyTelegramJobs(
             lowQuality: clip.lowQuality,
             lowQualityNote: dict.lowQualityNote,
           }),
-          editUrl: `${appUrl}/dashboard/editor?clip=${clip.id}`,
         });
       }
 
       for (const video of videos) {
-        await client.sendVideo(delivery.chatId, video.url, video.caption, {
-          inline_keyboard: [
-            [{ text: dict.editInBrowserBtn, url: video.editUrl }],
-          ],
-        });
+        await client.sendVideo(delivery.chatId, video.url, video.caption);
         clipsInChat++;
       }
 
@@ -1117,6 +1112,42 @@ export async function deliverReadyTelegramJobs(
   }
 }
 
+/**
+ * The onboarding copy, with the paused note appended when free runs really are
+ * paused.
+ *
+ * Every onboarding screen promises "your first video is free". Today that
+ * promise is followed, one message later, by freeBudgetClosed - because
+ * FREE_TIER_MONTHLY_BUDGET_USD is deliberately unset and the gate refuses every
+ * free submission. Promising and then refusing inside two messages is the
+ * cheapest way to lose someone who arrived willing.
+ *
+ * Conditional rather than a rewrite, on purpose. The promise is not false - the
+ * minutes ARE on the account, freeBudgetClosed says so itself - it is only
+ * unspendable this month, and deleting it would leave the bot understating the
+ * product on the day a ceiling goes into .env. Reading freeBudgetStatus() here
+ * means the copy tracks the gate automatically in both directions: set a
+ * budget and the note disappears with no further edit.
+ *
+ * Failure is swallowed. This runs on /start, the first thing a stranger ever
+ * sees; a database hiccup in an advisory sentence must not cost them the whole
+ * welcome. The note is dropped in that case, which is the same thing the user
+ * saw yesterday.
+ */
+export async function withFreeRunsNote(
+  text: string,
+  dict: Dict
+): Promise<string> {
+  try {
+    const budget = await freeBudgetStatus();
+    if (budget.open) return text;
+  } catch (err) {
+    console.error("[start] could not read the free budget:", err);
+    return text;
+  }
+  return `${text}\n\n${dict.freeRunsPausedNote}`;
+}
+
 async function handleStart(
   client: TelegramClient,
   message: TelegramMessage,
@@ -1141,7 +1172,10 @@ async function handleStart(
       await referralService.attachReferral(user.id, payload.code);
       // The persistent menu (below) carries the 💳 Plans button; no inline
       // plan buttons needed here.
-      await client.sendMessage(message.chat.id, dict.newAccountCreated);
+      await client.sendMessage(
+        message.chat.id,
+        await withFreeRunsNote(dict.newAccountCreated, dict)
+      );
       await sendMainMenu(client, message.chat.id, dict.menuHint, dict, from);
       return; // bypass the two-button onboarding screen (deep-link)
     }
@@ -1149,9 +1183,11 @@ async function handleStart(
   }
 
   if (!existing) {
-    await client.sendMessage(message.chat.id, dict.welcomeFirstChoice, {
-      replyMarkup: firstChoiceKeyboard(dict),
-    });
+    await client.sendMessage(
+      message.chat.id,
+      await withFreeRunsNote(dict.welcomeFirstChoice, dict),
+      { replyMarkup: firstChoiceKeyboard(dict) }
+    );
     // This screen creates no User row - a stranger who reads it and leaves
     // used to be recorded nowhere at all, which is why the size of the
     // population behind our 95 accounts is unknown. Recorded AFTER the reply
@@ -1173,7 +1209,13 @@ async function handleStart(
   if (usage.plan === "NONE") {
     // The persistent menu (below) carries the 💳 Plans button; welcomeNeedsPlan
     // nudges the user to it, so no inline plan buttons here.
-    await sendMainMenu(client, message.chat.id, dict.welcomeNeedsPlan, dict, from);
+    await sendMainMenu(
+      client,
+      message.chat.id,
+      await withFreeRunsNote(dict.welcomeNeedsPlan, dict),
+      dict,
+      from
+    );
     return;
   }
 
@@ -1241,7 +1283,7 @@ async function handleCallbackQuery(
         .editMessageText(
           query.message.chat.id,
           query.message.message_id,
-          dict.newAccountCreated
+          await withFreeRunsNote(dict.newAccountCreated, dict)
         )
         .catch(() => undefined);
       // The other half of the funnel: this person went PAST the first screen.
@@ -1579,6 +1621,28 @@ async function getUserLocale(userId: string): Promise<Locale> {
   return detectLocale(user?.telegramLocale ?? undefined);
 }
 
+/**
+ * The free-tier reservation to write with the Job row, or undefined if this
+ * account is paying.
+ *
+ * The plan/status pair mirrors canSubmitJob's routing into checkFreeTrial
+ * exactly, and the web route's freeChargeFor makes the same test. All three have
+ * to agree or an account gets gated on one basis and charged on another.
+ * `plan === "NONE"` alone would not do: a canceled ex-subscriber can hold plan
+ * NONE with a non-NONE subscriptionStatus, and putting their job in the free
+ * ledger would count a paid run against the free monthly budget.
+ */
+function freeChargeFor(
+  user: Pick<User, "plan" | "subscriptionStatus">,
+  durationSec: number | undefined
+): FreeChargeInput | undefined {
+  if (user.plan !== "NONE" || user.subscriptionStatus !== "NONE") {
+    return undefined;
+  }
+  const seconds = durationSec && durationSec > 0 ? Math.round(durationSec) : 0;
+  return { seconds, estimatedCostUsd: estimatedFreeCostUsd(seconds) };
+}
+
 async function handleVideo(
   client: TelegramClient,
   message: TelegramMessage,
@@ -1642,13 +1706,54 @@ async function handleVideo(
     const sourceKey = `uploads/${user.id}/telegram/${Date.now()}-${source.fileUniqueId}.mp4`;
     await uploadFile(sourceKey, tempPath, source.mimeType || "video/mp4");
 
-    const job = await jobService.createJob({
+    const created = await jobService.createJob({
       userId: user.id,
       sourceKey,
       originalFilename: source.fileName || "telegram-video.mp4",
       subtitles: user.subtitlesEnabled,
       sourceDurationSec: source.duration,
+      // Telegram's own video metadata, which is as good as it gets before the
+      // download stage measures the file. Reserved anyway rather than left to
+      // that stage: an unreserved free upload spends nothing from the ledger
+      // until DOWNLOAD, and until then the account looks untouched to every
+      // other submission it makes in the meantime.
+      freeCharge: freeChargeFor(user, source.duration),
     });
+
+    // The blocker above already counted in-flight jobs, but it counted them
+    // outside any lock and several seconds earlier - the Telegram download and
+    // the R2 upload sit in between. createJob's locked count is the one that
+    // decides; this branch is what the user sees when the two disagree, which is
+    // exactly the case where two videos arrive at once.
+    if (created.status === "concurrent_limit") {
+      await deleteFile(sourceKey).catch((error) => {
+        // Best effort, and never fatal: the object is a few megabytes we chose
+        // to store before we knew the answer, while failing here would tell a
+        // user their video broke when it was only refused.
+        console.error(
+          `[handleVideo] could not remove ${sourceKey} after a refused submission:`,
+          error
+        );
+      });
+      await client.sendMessage(
+        message.chat.id,
+        dict.blocked(
+          dict.planConcurrentLimit(created.inFlight, created.limit)
+        )
+      );
+      // The locked count is the one that decides, so it is the one that has to
+      // be counted. The advisory check earlier may have recorded this already;
+      // the upsert bumps `occurrences` rather than writing a second row, which
+      // is the shape the funnel wants - people, not presses.
+      await recordFunnelEvent(
+        "bot",
+        from.id,
+        uploadRejectedEvent("CONCURRENT"),
+        from.language_code
+      );
+      return;
+    }
+    const job = created.job;
 
     await createTelegramDelivery({
       jobId: job.id,
@@ -1683,6 +1788,44 @@ async function handleVideoUrl(
   const probe = await probeVideoUrl(url);
   if (!probe.ok) {
     await client.sendMessage(message.chat.id, dict.urlAccessFailed);
+
+    // THE HOLE THAT COST US A REAL USER'S STORY.
+    //
+    // On 2026-07-29 a Telegram user submitted four links in ten seconds and the
+    // funnel recorded four `video_submitted` rows and nothing else - no
+    // refusal, no account, no job. Everyone read that as "the free budget
+    // refused them" and went looking at the free-tier gate. It was this return:
+    // all four links failed the probe, and this branch sits BEFORE the account
+    // is created and before getSubmissionBlocker, which is where every other
+    // bot refusal is recorded. `PROBE_FAILED` has existed in the shared enum
+    // since the funnel was built and only the web route ever emitted it, so
+    // `upload_rejected_probe_failed` read as permanently zero on `bot`.
+    //
+    // "probe-unavailable" is excluded on purpose, exactly as the web route
+    // excludes it: yt-dlp missing from the container is our fault, and filing
+    // it as a refusal the submitter caused would hide an outage inside a
+    // perfectly ordinary-looking bad-link count. source-probe has already
+    // logged its own greppable line for that case; this one names the surface.
+    if (probe.reason === "probe-unavailable") {
+      console.error(
+        `[bot] URL probe unavailable for telegram ${from.id} - the link was ` +
+          `refused without ever being measured`
+      );
+      return;
+    }
+
+    // Greppable, and it carries the reason. Four silent failures in ten seconds
+    // left nothing in the logs either, so there was no way to tell a dead link
+    // from a site that blocks us from a timeout.
+    console.warn(
+      `[bot] url probe failed (${probe.reason}) for telegram ${from.id}`
+    );
+    await recordFunnelEvent(
+      "bot",
+      from.id,
+      uploadRejectedEvent("PROBE_FAILED"),
+      from.language_code
+    );
     return;
   }
 
@@ -1697,13 +1840,35 @@ async function handleVideoUrl(
     return;
   }
 
-  const job = await jobService.createJob({
+  // Int column, float probe. YouTube happens to answer whole seconds, which is
+  // why this never bit in prod, but archive.org and friends answer 596.46 and
+  // prisma.job.create rejects a Float for an Int - the link would die with an
+  // unhandled error after the user had already been told we were checking it.
+  const probedSec = Math.round(probe.durationSec);
+
+  const created = await jobService.createJob({
     userId: user.id,
     sourceUrl: url,
     originalFilename: probe.title,
     subtitles: user.subtitlesEnabled,
-    sourceDurationSec: probe.durationSec,
+    sourceDurationSec: probedSec,
+    freeCharge: freeChargeFor(user, probedSec),
   });
+
+  if (created.status === "concurrent_limit") {
+    await client.sendMessage(
+      message.chat.id,
+      dict.blocked(dict.planConcurrentLimit(created.inFlight, created.limit))
+    );
+    await recordFunnelEvent(
+      "bot",
+      from.id,
+      uploadRejectedEvent("CONCURRENT"),
+      from.language_code
+    );
+    return;
+  }
+  const job = created.job;
 
   await createTelegramDelivery({
     jobId: job.id,
@@ -1714,14 +1879,36 @@ async function handleVideoUrl(
   await client.sendMessage(message.chat.id, dict.queued);
 }
 
+/**
+ * The bot's single door to a User row - and the single place `signed_up` is
+ * recorded.
+ *
+ * Every handler that needs an account goes through here, so putting the event
+ * beside the insert catches all three ways one gets minted: the "New account"
+ * button, a `ref_` deep link that bypasses the onboarding screen, and a first
+ * message that is neither. `first_screen_new_account` counts one of those doors
+ * and cannot stand in for the others.
+ *
+ * Recorded after the row exists and never before: recordFunnelEvent does not
+ * throw, so this cannot cost anyone their account.
+ */
 async function resolveTelegramUser(from: TelegramUser): Promise<User> {
-  return findOrCreateTelegramUser({
+  const { user, created } = await getOrCreateTelegramUser({
     id: from.id,
     firstName: from.first_name,
     lastName: from.last_name,
     username: from.username,
     languageCode: from.language_code,
   });
+  if (created) {
+    await recordFunnelEvent(
+      "bot",
+      from.id,
+      FUNNEL_EVENTS.SIGNED_UP,
+      from.language_code
+    );
+  }
+  return user;
 }
 
 /** Paid-plan Starter numbers quoted in the free-tier block copy, so the
@@ -1782,15 +1969,32 @@ export async function getSubmissionBlocker(
   if (!submission.allowed) {
     await recordRejection(submission.code);
     switch (submission.code) {
-      case "FREE_TRIAL_USED":
-        return dict.freeTrialUsed(
-          submission.trial?.runsUsed ?? FREE_TIER.runs,
+      // Unreachable in practice: every account that reaches this function came
+      // in through Telegram, so it carries a phone-backed telegramId and
+      // isTrialAnchored returns true on that alone. Rendered anyway, because
+      // the code is part of the shared union and the alternative is an English
+      // log sentence in a Russian chat.
+      case "FREE_NOT_ANCHORED":
+        return dict.freeNotAnchored(
           STARTER_WEEKLY.minutesPerPeriod,
           STARTER_WEEKLY.priceUsd
         );
-      case "FREE_TRIAL_ATTEMPTS":
-        return dict.freeTrialAttemptsUsed(
-          submission.trial?.attemptsUsed ?? FREE_TIER.attempts,
+      case "FREE_EXHAUSTED":
+        // Floored to whole minutes, and floored rather than rounded: telling
+        // someone they have 1 minute left when they have 30 seconds would be
+        // a promise the next submission breaks. The fallbacks only fire if a
+        // future code path forgets to attach `trial` - 0 remaining is the safe
+        // thing to claim, never a balance the user might not have.
+        return dict.freeExhausted(
+          Math.floor((submission.trial?.remainingSeconds ?? 0) / 60),
+          Math.floor(
+            (submission.trial?.lifetimeSeconds ?? FREE_TIER.lifetimeSeconds) / 60
+          ),
+          STARTER_WEEKLY.minutesPerPeriod,
+          STARTER_WEEKLY.priceUsd
+        );
+      case "FREE_BUDGET_CLOSED":
+        return dict.freeBudgetClosed(
           STARTER_WEEKLY.minutesPerPeriod,
           STARTER_WEEKLY.priceUsd
         );
@@ -1825,13 +2029,19 @@ export async function getSubmissionBlocker(
     where: { userId, createdAt: { gte: dayStart } },
   });
   if (jobsToday >= limits.maxJobsPerDay) {
+    await recordRejection("DAILY_LIMIT");
     return dict.planDailyLimit(limits.maxJobsPerDay);
   }
 
+  // Advisory only. The count that actually enforces the limit is the one
+  // createJob takes under a per-user lock; this one is here so a second video
+  // gets the localised refusal before we spend a Telegram download and an R2
+  // upload on it.
   const inFlight = await prisma.job.count({
-    where: { userId, status: { in: [...ACTIVE_STATUSES] } },
+    where: { userId, status: { in: [...ACTIVE_JOB_STATUSES] } },
   });
   if (inFlight >= limits.concurrentJobsLimit) {
+    await recordRejection("CONCURRENT");
     return dict.planConcurrentLimit(inFlight, limits.concurrentJobsLimit);
   }
 

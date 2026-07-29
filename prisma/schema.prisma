@@ -109,7 +109,17 @@ enum TelegramDeliveryStatus {
 model User {
   id                    String             @id @default(cuid())
   email                 String?            @unique
+  emailCanonical        String?            @unique
   emailVerified         DateTime?
+  /// When a verification mail was last handed to the provider WITHOUT error.
+  ///
+  /// NULL means "we have no record of a link reaching this mailbox" - either
+  /// the send failed, or the row predates this column. It is deliberately not a
+  /// boolean and deliberately not set when the token is merely issued: the
+  /// dashboard used to state "We sent you a link when you signed up"
+  /// unconditionally, which is a lie every time Resend is down, over quota or
+  /// bouncing, and it left the user waiting for mail that was never sent.
+  verificationSentAt    DateTime?
   password              String?
   telegramId            String?            @unique
   telegramLocale        String?
@@ -149,6 +159,7 @@ model User {
   walletEntries       WalletEntry[]
   withdrawalRequests  WithdrawalRequest[]
   tributeOrders       TributeOrder[]
+  freeUsage           FreeUsage[]
 
   @@map("users")
 }
@@ -550,4 +561,55 @@ model SiteVisit {
   @@index([day, country])
   @@index([day, isBot])
   @@map("site_visits")
+}
+
+enum FreeUsageKind {
+  CHARGE
+  REFUND
+}
+
+/// Why a REFUND row exists. NULL on CHARGE rows.
+///
+/// The balance arithmetic never reads this - it stays a single group-by on
+/// `kind`. It exists so the zero-clip forgiveness cap can count only the
+/// forgiveness it grants. Without it the cap matches every refund row on the
+/// account, including the uncapped ones we write when a job fails on our side,
+/// so an account whose first job broke spends a forgiveness it never used.
+enum FreeUsageReason {
+  FAILED_JOB
+  ZERO_CLIPS
+}
+
+/// Append-only ledger of the free allowance.
+///
+/// It exists as its own table for one reason: deleteProject runs
+/// prisma.job.delete, so anything counted from Job rows is reset by the user
+/// pressing Delete. jobId is therefore a bare string with NO relation and NO
+/// cascade - a foreign key here would reintroduce that hole through the back
+/// door. Rows are never updated except to true up estimatedCostUsd, and never
+/// deleted.
+model FreeUsage {
+  id               String           @id @default(cuid())
+  userId           String
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobId            String?
+  kind             FreeUsageKind
+  reason           FreeUsageReason?
+  seconds          Int
+  estimatedCostUsd Float?
+  createdAt        DateTime         @default(now())
+
+  /// One charge per job and one refund per job are both genuine invariants, so
+  /// this states a truth rather than imposing a rule. It is also the only thing
+  /// that actually stops a double refund: two finalizes of the same job can both
+  /// pass a read-check and both insert, leaving the account holding more free
+  /// seconds than the tier grants. Postgres does not collide NULLs in a unique
+  /// index, so rows with a NULL jobId stay unconstrained - correct, since
+  /// nothing writes those today and a future manual adjustment should not be
+  /// limited to one per account.
+  @@unique([userId, jobId, kind])
+  @@index([userId])
+  @@index([createdAt])
+  @@index([jobId])
+  @@map("free_usage")
 }

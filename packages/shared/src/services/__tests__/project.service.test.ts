@@ -6,6 +6,10 @@ const mocks = vi.hoisted(() => ({
   jobFindFirst: vi.fn(),
   jobDelete: vi.fn(),
   deleteFile: vi.fn(),
+  settleFreeLedgerOnDelete: vi.fn(),
+  /** What ran, in order. The settlement has to be before the delete: after it,
+   *  the job row that says whether the run failed no longer exists. */
+  order: [] as string[],
 }));
 
 vi.mock("../../lib/prisma", () => ({
@@ -21,6 +25,10 @@ vi.mock("../../lib/prisma", () => ({
 vi.mock("../../lib/r2", () => ({
   getPresignedDownloadUrl: mocks.getPresignedDownloadUrl,
   deleteFile: mocks.deleteFile,
+}));
+
+vi.mock("../free-tier.service", () => ({
+  settleFreeLedgerOnDelete: mocks.settleFreeLedgerOnDelete,
 }));
 
 import {
@@ -204,11 +212,14 @@ describe("deleteProject - R2 keys", () => {
     vi.clearAllMocks();
     mocks.deleteFile.mockResolvedValue(undefined);
     mocks.jobDelete.mockResolvedValue({});
+    mocks.settleFreeLedgerOnDelete.mockResolvedValue(undefined);
   });
 
   it("deletes the normalized artifact, which is the largest object in the job", async () => {
     mocks.jobFindFirst.mockResolvedValue({
       id: "job1",
+      status: "DONE",
+      clipsGenerated: 1,
       sourceKey: "uploads/u1/original.mp4",
       sourceArtifactKey: "work/u1/job1/source.mp4",
       normalizedArtifactKey: "work/u1/job1/normalized.mp4",
@@ -229,6 +240,8 @@ describe("deleteProject - R2 keys", () => {
     // already gone.
     mocks.jobFindFirst.mockResolvedValue({
       id: "job2",
+      status: "DONE",
+      clipsGenerated: 0,
       sourceKey: null,
       sourceArtifactKey: "work/u1/job2/source.mp4",
       normalizedArtifactKey: "work/u1/job2/source.mp4",
@@ -240,6 +253,84 @@ describe("deleteProject - R2 keys", () => {
 
     const deleted = mocks.deleteFile.mock.calls.map((c: any[]) => c[0]);
     expect(deleted).toEqual(["work/u1/job2/source.mp4"]);
+  });
+});
+
+/**
+ * The ledger settlement deleteProject owes before it destroys the job row.
+ *
+ * The rules themselves are pinned in free-tier.service.test. What matters here
+ * is that the settlement happens AT ALL, that it is handed the outcome, and
+ * that it happens while the outcome is still knowable.
+ */
+describe("deleteProject - free ledger", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.order.length = 0;
+    mocks.deleteFile.mockResolvedValue(undefined);
+    mocks.settleFreeLedgerOnDelete.mockImplementation(async () => {
+      mocks.order.push("settle");
+    });
+    mocks.jobDelete.mockImplementation(async () => {
+      mocks.order.push("delete");
+      return {};
+    });
+  });
+
+  function failedJob() {
+    mocks.jobFindFirst.mockResolvedValue({
+      id: "job1",
+      status: "FAILED",
+      clipsGenerated: 0,
+      sourceKey: null,
+      sourceArtifactKey: null,
+      normalizedArtifactKey: null,
+      thumbnailKey: null,
+      clips: [],
+    });
+  }
+
+  it("settles the ledger BEFORE the job row is deleted", async () => {
+    failedJob();
+
+    await deleteProject("job1", "u1");
+
+    // Not a stylistic ordering. The refund sweep answers "does this charge
+    // deserve its allowance back?" by joining free_usage to jobs, so once the
+    // delete lands the question has no answer for ever - the charge is
+    // stranded and the user's trial is gone over a run we broke.
+    expect(mocks.order).toEqual(["settle", "delete"]);
+  });
+
+  it("hands the settlement the outcome, not just the id", async () => {
+    failedJob();
+
+    await deleteProject("job1", "u1");
+
+    expect(mocks.settleFreeLedgerOnDelete).toHaveBeenCalledWith("u1", "job1", {
+      status: "FAILED",
+      clipsGenerated: 0,
+    });
+  });
+
+  it("does not delete the job when the settlement fails", async () => {
+    failedJob();
+    mocks.settleFreeLedgerOnDelete.mockRejectedValue(new Error("db down"));
+
+    await expect(deleteProject("job1", "u1")).rejects.toThrow("db down");
+
+    // Failing the delete is the recoverable error: the row survives, the sweep
+    // can still reach it, and the user can press Delete again. Deleting anyway
+    // would strand exactly the charge this call exists to release.
+    expect(mocks.jobDelete).not.toHaveBeenCalled();
+    expect(mocks.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it("settles nothing for a project that is not this user's", async () => {
+    mocks.jobFindFirst.mockResolvedValue(null);
+
+    expect(await deleteProject("job1", "u1")).toEqual({ status: "not_found" });
+    expect(mocks.settleFreeLedgerOnDelete).not.toHaveBeenCalled();
   });
 });
 

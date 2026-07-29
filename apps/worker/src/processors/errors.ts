@@ -39,3 +39,20 @@ export class SourceUnavailableError extends Error {}
  *  file directly; here that is the one action guaranteed to fail, because the
  *  upload path enforces the very same cap. */
 export class SourceTooLargeError extends Error {}
+
+/** A free-tier job whose measured duration does not fit in the allowance the
+ *  account has left. Raised by the download stage's re-check, never by a
+ *  processor: it is a verdict about the ledger, not about the file.
+ *
+ *  A SIBLING of the two source errors, not a subclass, for the same reason they
+ *  are siblings of each other - the stage maps with an instanceof chain - and
+ *  because the remedies contradict. Nothing is wrong with this video: it is
+ *  simply longer than what is left, and the copy has to offer a shorter source
+ *  or a plan rather than a different file.
+ *
+ *  Permanent, and that is what makes the refund safe. All three BullMQ attempts
+ *  re-download the identical source, re-probe the identical duration and reach
+ *  the identical verdict, so unlike every other stage failure there is no
+ *  attempt on which this job could still succeed after its allowance has been
+ *  handed back. */
+export class FreeAllowanceExceededError extends Error {}

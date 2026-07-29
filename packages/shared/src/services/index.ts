@@ -34,9 +34,19 @@ export * from "./site-visit.service";
 export * from "./mini-app.service";
 export * from "./analytics.service";
 export * from "./analytics-detail.service";
+export * from "./email.service";
+export * from "./email-token.service";
+export * from "./free-tier.service";
+export * from "./free-refund-sweep.service";
+export * from "./free-budget.service";
 export * as retentionService from "./retention.service";
 export { runRetentionSweep } from "./retention.service";
 export { reconcilePendingTributeOrders } from "./tribute-reconcile.service";
+// job.service stays a namespace so createJob/getJob do not land in the top-level
+// surface, but these two are needed by name: the bot counts in-flight jobs for
+// its advisory pre-check, and both surfaces branch on the submission result.
+export { ACTIVE_JOB_STATUSES } from "./job.service";
+export type { CreateJobResult } from "./job.service";
 // Named re-exports for error classes that callers need to instanceof-check
 export { UnsupportedPlanCycleError } from "./billing.service";
 export type { InvoiceRow, InvoicePage } from "./billing.service";

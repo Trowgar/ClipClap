@@ -25,7 +25,7 @@ vi.mock("../../lib/prisma", () => ({
 import {
   TELEGRAM_AUTH_PROVIDER,
   ensureTelegramAuthAccount,
-  findOrCreateTelegramUser,
+  getOrCreateTelegramUser,
   syncUserTelegramId,
 } from "../telegram-auth.service";
 
@@ -82,14 +82,15 @@ describe("telegram-auth.service", () => {
     mocks.userFindUnique.mockResolvedValue(user);
     mocks.accountFindUnique.mockResolvedValue(null);
 
-    const result = await findOrCreateTelegramUser({
+    const result = await getOrCreateTelegramUser({
       id: 12345,
       firstName: "Ada",
       lastName: "Lovelace",
       username: "ada",
     });
 
-    expect(result).toBe(user);
+    expect(result.user).toBe(user);
+    expect(result.created).toBe(false);
     expect(mocks.accountCreate).toHaveBeenCalledWith({
       data: {
         userId: "user1",
@@ -107,7 +108,7 @@ describe("telegram-auth.service", () => {
     mocks.userCreate.mockResolvedValue(user);
     mocks.accountFindUnique.mockResolvedValue({ userId: "user1" });
 
-    const result = await findOrCreateTelegramUser({
+    const result = await getOrCreateTelegramUser({
       id: 12345,
       firstName: "Ada",
       lastName: "Lovelace",
@@ -115,7 +116,9 @@ describe("telegram-auth.service", () => {
       photoUrl: "https://cdn.example/avatar.jpg",
     });
 
-    expect(result).toBe(user);
+    expect(result.user).toBe(user);
+    // The flag `signed_up` is recorded on: true only when this call inserted.
+    expect(result.created).toBe(true);
     expect(mocks.userCreate).toHaveBeenCalledWith({
       data: {
         telegramId: "12345",

@@ -18,9 +18,23 @@ export interface TelegramUserProfile {
   languageCode?: string | null;
 }
 
-export async function findOrCreateTelegramUser(
+/**
+ * Looks a Telegram account up, creating it if this is the first time we have
+ * seen the id, and says which of the two happened.
+ *
+ * The flag is not decoration. `signed_up` has to be recorded where an account
+ * is actually minted, and the bot mints them from three different doors - the
+ * "New account" button, a `ref_` deep link that skips the onboarding screen
+ * entirely, and any handler that resolves a user it has never seen. Deriving
+ * "is this new" at each of those doors would give three answers that can drift;
+ * asking the function that does the insert gives one.
+ *
+ * This replaced `findOrCreateTelegramUser`, which returned the row alone and
+ * therefore could not answer the question.
+ */
+export async function getOrCreateTelegramUser(
   profile: TelegramUserProfile
-): Promise<User> {
+): Promise<{ user: User; created: boolean }> {
   const telegramId = String(profile.id);
   const existingUser = await prisma.user.findUnique({
     where: { telegramId },
@@ -28,7 +42,7 @@ export async function findOrCreateTelegramUser(
 
   if (existingUser) {
     await ensureTelegramAuthAccount(telegramId);
-    return existingUser;
+    return { user: existingUser, created: false };
   }
 
   const user = await prisma.user.create({
@@ -48,7 +62,7 @@ export async function findOrCreateTelegramUser(
       providerAccountId: telegramId,
     },
   });
-  return user;
+  return { user, created: true };
 }
 
 export async function ensureTelegramAuthAccount(

@@ -5,10 +5,12 @@ import {
   HOLD_RELEASE_JOB,
   SUBSCRIPTION_RECONCILE_JOB,
   RETENTION_SWEEP_JOB,
-  TRIBUTE_RECONCILE_JOB,
+  FREE_REFUND_SWEEP_JOB,
   releaseMaturedCommissions,
   reconcileSubscriptions,
   runRetentionSweep,
+  runFreeRefundSweep,
+  TRIBUTE_RECONCILE_JOB,
   reconcilePendingTributeOrders,
 } from "@clipclap/shared";
 
@@ -29,6 +31,13 @@ export function createReferralScheduler(): Worker {
       }
       if (job.name === RETENTION_SWEEP_JOB) {
         await runRetentionSweep(now);
+        return;
+      }
+      if (job.name === FREE_REFUND_SWEEP_JOB) {
+        // Returns the allowance for free jobs that failed in a stage finalize
+        // never sees. It logs its own refunds, one line each, so nothing is
+        // summarised here.
+        await runFreeRefundSweep(now);
         return;
       }
       if (job.name === TRIBUTE_RECONCILE_JOB) {

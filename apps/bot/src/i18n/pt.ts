@@ -18,6 +18,8 @@ const ptFailure: Record<JobErrorCode, string> = {
     "Não consegui baixar o vídeo desse link: ele pode estar privado, bloqueado por região, removido ou indisponível no momento. Confere se o link abre no navegador, ou me manda o arquivo direto. Seus minutos não foram usados.",
   SOURCE_TOO_LARGE:
     "Esse vídeo passa do meu limite de 2 GB, então não consegui baixar. Seus minutos não foram usados. Me mandar o arquivo não resolve porque vale o mesmo limite de 2 GB: corta o vídeo até a parte que você quer e manda esse trecho.",
+  FREE_ALLOWANCE_EXCEEDED:
+    "Este vídeo é mais longo que os minutos grátis que sobraram, então parei antes de processar. Seus minutos grátis continuam aí: use em um vídeo mais curto, ou escolha um plano pra processar este inteiro.",
 };
 
 const ptFailureGeneric =
@@ -27,14 +29,20 @@ const pt: Dict = {
   welcomeNew:
     "Bem-vindo ao ClipClap! Me manda um vídeo e eu transformo em clipes verticais com legendas.\n\nIdioma: envie /lang para trocar.",
   welcomeFirstChoice:
-    "Oi! Eu transformo vídeos longos em clipes verticais com legendas, prontos pra TikTok, Reels e Shorts.\n\nSeu primeiro vídeo é grátis: sem cartão e sem plano. Se voltar sem clipes, não conta.\n\nComo funciona:\n1. Manda um vídeo (até 30 minutos no teste grátis)\n2. Eu acho os melhores momentos e corto\n3. Seus clipes voltam aqui: até 12, dependendo do vídeo\n\nPrimeiro, como você prefere começar?\n\n• Conta nova: use este Telegram como sua conta ClipClap.\n• Já tenho conta: conecte este Telegram à sua conta do clipclap.io.",
+    "Oi! Eu transformo vídeos longos em clipes verticais com legendas, prontos pra TikTok, Reels e Shorts.\n\nSeu primeiro vídeo é grátis: sem cartão e sem plano. Se voltar sem clipes, não conta.\n\nComo funciona:\n1. Manda um vídeo (até 60 minutos no teste grátis)\n2. Eu acho os melhores momentos e corto\n3. Seus clipes voltam aqui: até 10, dependendo do vídeo\n\nPrimeiro, como você prefere começar?\n\n• Conta nova: use este Telegram como sua conta ClipClap.\n• Já tenho conta: conecte este Telegram à sua conta do clipclap.io.",
   welcomeBack: "Bom te ver de novo! Manda um vídeo que eu gero os clipes.",
   welcomeNeedsPlan:
-    "Manda um vídeo que eu gero os clipes. Conta nova ganha um teste grátis: sem cartão, até 30 minutos de vídeo.",
+    "Manda um vídeo que eu gero os clipes. Conta nova ganha um teste grátis: sem cartão, até 60 minutos de vídeo.",
+  // Appended by the handler to the onboarding screens, and only while
+  // freeBudgetStatus() reports the month's ceiling closed. See the note on
+  // freeRunsPausedNote in types.ts for why the promise above is left intact
+  // rather than rewritten.
+  freeRunsPausedNote:
+    "⏳ Antes de começar: as execuções grátis estão pausadas até o dia primeiro do mês que vem. É um limite meu, não da sua conta: seus minutos grátis continuam esperando por você. Se quiser clipes hoje, abra 💳 Planos.",
   newAccountBtn: "✨ Criar conta nova",
   linkAccountBtn: "🔗 Já tenho conta",
   newAccountCreated:
-    "Conta criada. Manda um vídeo agora: o primeiro é grátis e sem cartão.\n\nAté 30 minutos. Se voltar sem clipes, não conta no seu teste grátis.",
+    "Conta criada. Manda um vídeo agora: o primeiro é grátis e sem cartão.\n\nAté 60 minutos. Se voltar sem clipes, não conta no seu teste grátis.",
   linkAccountInstructions: (code, url) =>
     `Seu código de conexão: ${code}\n\n1. Abra ${url}/dashboard/settings no aparelho onde você está logado.\n2. Cole este código em até 10 minutos.\n\nEste Telegram vai ficar conectado a essa conta.`,
   callbackAck: "Beleza",
@@ -77,10 +85,12 @@ const pt: Dict = {
         : "Terminei. Assisti ao vídeo inteiro, mas não achei momentos fortes o bastante para virar clipe. Tenta um vídeo com mais conversa, emoção ou história.",
   lowQualityNote: "Aviso: não achei momentos fortes, este é o melhor disponível.",
   blocked: (reason) => `${reason}\n\n💳 Planos: escolha ou gerencie sua assinatura.`,
-  freeTrialUsed: (runs, planMinutes, planPriceEur) =>
-    `Esse era seu teste grátis: ${runs} ${pluralPt(runs, "vídeo", "vídeos")}, de graça e sem cartão. Os clipes que saíram são seus.\n\nPara continuar: o Starter custa €${planPriceEur} por semana e inclui ${planMinutes} minutos de vídeo, fontes de até 3 horas e 20 clipes guardados por 7 dias.`,
-  freeTrialAttemptsUsed: (attempts, planMinutes, planPriceEur) =>
-    `Processei ${attempts} ${pluralPt(attempts, "vídeo", "vídeos")} no seu teste grátis e nenhum gerou clipes, então você ainda não viu de verdade o que isso faz. Costuma acontecer quando a fonte tem pouca fala clara.\n\nAs tentativas grátis acabaram. Se quiser continuar testando, o Starter custa €${planPriceEur} por semana e inclui ${planMinutes} minutos de vídeo.`,
+  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
+    `Seus minutos grátis não dão para isso: restam ${remainingMinutes} de ${lifetimeMinutes}. O que eu já cortei continua seu.\n\nPara continuar: o Starter custa €${planPriceEur} por semana e inclui ${planMinutes} minutos de vídeo, fontes de até 3 horas e 20 clipes guardados por 7 dias.`,
+  freeNotAnchored: (planMinutes, planPriceEur) =>
+    `Os minutos grátis ainda não estão liberados nesta conta. Fale com o suporte pelo menu de ajuda que eu resolvo, ou comece agora com o Starter: €${planPriceEur} por semana e ${planMinutes} minutos de vídeo.`,
+  freeBudgetClosed: (planMinutes, planPriceEur) =>
+    `As execuções grátis estão pausadas até o dia primeiro do mês que vem. É um limite meu, não da sua conta: seus minutos grátis continuam lá.\n\nSe quiser cortar agora, o Starter custa €${planPriceEur} por semana e inclui ${planMinutes} minutos de vídeo.`,
   freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
     `Seu teste grátis aceita vídeos de até ${freeMaxMinutes} minutos, e este é mais longo. Manda um vídeo mais curto, ou um trecho de ${freeMaxMinutes} minutos deste, para testar de graça. Com um plano eu aceito fontes de até ${planMaxMinutes} minutos.`,
   planSourceTooLong: (maxMinutes) =>
@@ -219,7 +229,6 @@ const pt: Dict = {
     { command: "referral", description: "Seu link de indicação e ganhos" },
   ],
   manageSubscriptionBtn: "🔧 Gerenciar assinatura",
-  editInBrowserBtn: "✂️ Editar no navegador",
   checkingLink: "Verificando o link…",
   urlAccessFailed:
     "Não consegui acessar o vídeo desse link. Tente outro link ou envie o arquivo direto.",

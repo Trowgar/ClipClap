@@ -12,10 +12,13 @@ import type { Readable } from "stream";
 
 const execFileAsync = promisify(execFile);
 
-// TODO(plan-3): after download, ffprobe the file to get authoritative
-// sourceDurationSec, persist on Job, and re-evaluate maxSourceDurationMinutes.
-// Without this, browser-undecodable codecs (HEVC/AV1/MKV) bypass the submit-time
-// 180-min cap because the client probe in upload-zone.tsx returns null.
+// The authoritative ffprobe of the downloaded file now happens one level up, in
+// stages/source-recheck.ts, which persists sourceDurationSec and settles the
+// free reservation against it. It belongs to the stage, not here: this function
+// only has to produce a file, and the stage is what owns the job row and the
+// ledger. Still open from the original TODO: the per-plan
+// maxSourceDurationMinutes cap (180 for paid) is not re-evaluated there, so a
+// browser-undecodable codec still bypasses the submit-time cap on a PAID plan.
 export async function downloadVideo(
   sourceUrl?: string,
   sourceKey?: string

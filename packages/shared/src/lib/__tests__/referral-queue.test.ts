@@ -16,7 +16,11 @@ vi.mock("bullmq", () => ({
 
 vi.mock("../redis", () => ({ getRedis: () => ({}) }));
 
-import { registerReferralSchedules, RETENTION_SWEEP_JOB } from "../referral-queue";
+import {
+  registerReferralSchedules,
+  RETENTION_SWEEP_JOB,
+  FREE_REFUND_SWEEP_JOB,
+} from "../referral-queue";
 
 describe("registerReferralSchedules", () => {
   beforeEach(() => {
@@ -31,6 +35,16 @@ describe("registerReferralSchedules", () => {
       RETENTION_SWEEP_JOB,
       {},
       { repeat: { pattern: "0 * * * *" }, jobId: RETENTION_SWEEP_JOB }
+    );
+  });
+
+  it("registers the free refund sweep hourly, keyed the same way", async () => {
+    await registerReferralSchedules();
+
+    expect(mocks.add).toHaveBeenCalledWith(
+      FREE_REFUND_SWEEP_JOB,
+      {},
+      { repeat: { pattern: "0 * * * *" }, jobId: FREE_REFUND_SWEEP_JOB }
     );
   });
 });

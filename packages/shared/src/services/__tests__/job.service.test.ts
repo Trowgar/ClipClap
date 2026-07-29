@@ -1,0 +1,288 @@
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { Prisma } from "@prisma/client";
+
+/** The unique index on (userId, jobId, kind). */
+function p2002(): Prisma.PrismaClientKnownRequestError {
+  return new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+    code: "P2002",
+    clientVersion: "5.20.0",
+  });
+}
+
+/** Records the order in which the transaction body and the enqueue ran, so a
+ *  test can assert the enqueue is not merely present but LATER. */
+const calls: string[] = [];
+
+/** Statement order INSIDE the transaction. Kept apart from `calls` so the
+ *  transaction-versus-enqueue tests keep reading as one list. */
+const inner: string[] = [];
+
+const tx = {
+  job: {
+    create: vi.fn(),
+    count: vi.fn(async () => {
+      inner.push("count");
+      return 0;
+    }),
+  },
+  freeUsage: { create: vi.fn() },
+  user: { findUniqueOrThrow: vi.fn() },
+  // The advisory lock. When it is taken is the whole point: a lock acquired
+  // after the count would serialise nothing.
+  $queryRaw: vi.fn(async (_strings: TemplateStringsArray, ..._v: unknown[]) => {
+    inner.push("lock");
+    return [{ ok: 1 }];
+  }),
+};
+
+vi.mock("../../lib/prisma", () => ({
+  prisma: {
+    // A faithful-enough interactive transaction: it runs the callback and, if
+    // the callback throws, propagates without committing. What matters for
+    // these tests is that everything inside it happens before $transaction
+    // resolves, which is exactly what awaiting the callback gives us.
+    $transaction: vi.fn(async (fn: any) => {
+      calls.push("tx:start");
+      const result = await fn(tx);
+      calls.push("tx:commit");
+      return result;
+    }),
+  },
+}));
+
+const queueAdd = vi.fn(async (..._args: unknown[]) => {
+  calls.push("enqueue");
+});
+
+vi.mock("../../lib/queues", () => ({
+  getStageQueue: vi.fn(() => ({ add: queueAdd })),
+}));
+
+import { prisma } from "../../lib/prisma";
+import { getStageQueue } from "../../lib/queues";
+import { createJob } from "../job.service";
+
+const JOB = { id: "job_1", userId: "u1" };
+
+describe("job.service createJob", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    calls.length = 0;
+    inner.length = 0;
+    tx.job.create.mockResolvedValue(JOB);
+    tx.freeUsage.create.mockResolvedValue({});
+    // Restored by hand: clearAllMocks forgets the CALLS, not the resolved
+    // value a previous test set, so a test that stubbed one job in flight
+    // would otherwise refuse every submission after it.
+    tx.job.count.mockImplementation(async () => {
+      inner.push("count");
+      return 0;
+    });
+    // A free account with nothing in flight, unless a test says otherwise.
+    tx.user.findUniqueOrThrow.mockResolvedValue({
+      plan: "NONE",
+      billingCycle: null,
+    });
+  });
+
+  it("enqueues the download stage after the transaction commits, never before", async () => {
+    await createJob({
+      userId: "u1",
+      sourceUrl: "https://example.com/v",
+      freeCharge: { seconds: 600, estimatedCostUsd: 0.095 },
+    });
+
+    // The whole reason the charge moved inside createJob. A worker can pick the
+    // download job up the instant this add lands, so an enqueue that happened
+    // before the commit could reach TRANSCRIBE - where the money leaves - with
+    // no ledger row written at all.
+    expect(calls).toEqual(["tx:start", "tx:commit", "enqueue"]);
+  });
+
+  it("writes the Job row and the reservation in the SAME transaction", async () => {
+    await createJob({
+      userId: "u1",
+      sourceUrl: "https://example.com/v",
+      sourceDurationSec: 612,
+      freeCharge: { seconds: 612, estimatedCostUsd: 0.0969 },
+    });
+
+    // Same `tx` handle for both, which is what "same transaction" means here:
+    // neither row can exist without the other.
+    expect(tx.job.create).toHaveBeenCalledTimes(1);
+    expect(tx.freeUsage.create).toHaveBeenCalledTimes(1);
+    expect(tx.freeUsage.create.mock.calls[0][0]).toEqual({
+      data: {
+        userId: "u1",
+        jobId: "job_1",
+        kind: "CHARGE",
+        seconds: 612,
+        estimatedCostUsd: 0.0969,
+      },
+    });
+  });
+
+  it("writes no ledger row at all when there is no freeCharge", async () => {
+    await createJob({ userId: "u1", sourceUrl: "https://example.com/v" });
+
+    // A paying account. A CHARGE row here would be counted by the monthly free
+    // budget as free spend, and trueUpFreeCost would later rewrite it.
+    expect(tx.freeUsage.create).not.toHaveBeenCalled();
+    expect(calls).toEqual(["tx:start", "tx:commit", "enqueue"]);
+  });
+
+  it("gives a free job a priority and a paid job none", async () => {
+    await createJob({
+      userId: "u1",
+      sourceUrl: "https://example.com/v",
+      freeCharge: { seconds: 60, estimatedCostUsd: 0.0095 },
+    });
+    const freeOpts = queueAdd.mock.calls[0][2] as any;
+    expect(freeOpts.priority).toBeGreaterThan(0);
+
+    queueAdd.mockClear();
+
+    await createJob({ userId: "u2", sourceUrl: "https://example.com/v" });
+    // Undefined, NOT 0 or 1. Verified against the installed bullmq 5:
+    // moveToActive pops the `wait` list first and only falls back to the
+    // prioritized set, and addJob only routes into the prioritized set when
+    // opts.priority is truthy. Giving paid jobs an explicit priority would
+    // move them off the fast list and make paying users worse off.
+    expect(queueAdd.mock.calls[0][2]).toBeUndefined();
+  });
+
+  it("does not enqueue when the reservation cannot be written", async () => {
+    tx.freeUsage.create.mockRejectedValue(p2002());
+
+    await expect(
+      createJob({
+        userId: "u1",
+        sourceUrl: "https://example.com/v",
+        freeCharge: { seconds: 600, estimatedCostUsd: 0.095 },
+      })
+    ).rejects.toThrow();
+
+    // Deliberately NOT swallowed the way chargeFreeSeconds swallows P2002. That
+    // function is handed a jobId that already exists, so a duplicate means an
+    // idempotent retry; here the jobId was minted one line earlier inside this
+    // same transaction, so a duplicate cannot mean that. And Postgres has
+    // already aborted the transaction, so carrying on would produce a confusing
+    // failure at commit rather than a clear one here.
+    expect(queueAdd).not.toHaveBeenCalled();
+    expect(calls).toEqual(["tx:start"]);
+  });
+
+  it("enqueues onto the download stage", async () => {
+    await createJob({ userId: "u1", sourceKey: "uploads/u1/x.mp4" });
+    expect(getStageQueue).toHaveBeenCalledWith("download");
+    expect(queueAdd.mock.calls[0][1]).toEqual({ jobId: "job_1", userId: "u1" });
+  });
+
+  it("still uses one transaction even with no reservation", async () => {
+    await createJob({ userId: "u1", sourceKey: "uploads/u1/x.mp4" });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The concurrency limit, which used to be a read in one file and a write in
+ * another.
+ *
+ * Six simultaneous uploads on one free account all counted zero in flight, all
+ * passed the route's check and all created: six jobs and six CHARGE rows
+ * against a limit of one. These tests pin the three things that stop that -
+ * the limit is checked here, it is checked under the lock, and a refusal
+ * reaches neither the database nor the queue.
+ */
+describe("job.service createJob - concurrency", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    calls.length = 0;
+    inner.length = 0;
+    tx.job.create.mockResolvedValue(JOB);
+    tx.freeUsage.create.mockResolvedValue({});
+    // Restored by hand: clearAllMocks forgets the CALLS, not the resolved
+    // value a previous test set, so a test that stubbed one job in flight
+    // would otherwise refuse every submission after it.
+    tx.job.count.mockImplementation(async () => {
+      inner.push("count");
+      return 0;
+    });
+    tx.user.findUniqueOrThrow.mockResolvedValue({
+      plan: "NONE",
+      billingCycle: null,
+    });
+  });
+
+  it("takes the per-user advisory lock BEFORE counting anything", async () => {
+    await createJob({ userId: "u1", sourceKey: "uploads/u1/x.mp4" });
+
+    // A lock taken after the read is not a lock at all - it would let both
+    // callers read the same zero and only then queue up to write.
+    expect(inner).toEqual(["lock", "count"]);
+    expect(tx.$queryRaw).toHaveBeenCalledOnce();
+    const [strings, userId] = tx.$queryRaw.mock.calls[0] as [
+      TemplateStringsArray,
+      string,
+    ];
+    // Transaction-scoped, so the commit or the rollback releases it - Prisma
+    // pools connections, and a session lock would be taken on one connection
+    // and never released by the other.
+    expect(strings.join("?")).toContain("pg_advisory_xact_lock");
+    // Keyed on the user, so two people submitting at once do not queue behind
+    // each other.
+    expect(strings.join("?")).toContain("hashtext");
+    expect(userId).toBe("u1");
+  });
+
+  it("refuses when the account is already at its limit", async () => {
+    tx.job.count.mockResolvedValue(1);
+
+    const result = await createJob({
+      userId: "u1",
+      sourceKey: "uploads/u1/x.mp4",
+      freeCharge: { seconds: 600, estimatedCostUsd: 0.095 },
+    });
+
+    expect(result).toEqual({ status: "concurrent_limit", inFlight: 1, limit: 1 });
+    // No job, no reservation, no queue entry. The reservation matters most: a
+    // CHARGE row written for a refused submission would spend the allowance on
+    // a job that never ran.
+    expect(tx.job.create).not.toHaveBeenCalled();
+    expect(tx.freeUsage.create).not.toHaveBeenCalled();
+    expect(queueAdd).not.toHaveBeenCalled();
+  });
+
+  it("reads the limit from the plan on the user row, not from the caller", async () => {
+    // PLUS allows two in flight. A caller that passed its own idea of the limit
+    // could be working from a plan that changed since it read the user.
+    tx.user.findUniqueOrThrow.mockResolvedValue({
+      plan: "PLUS",
+      billingCycle: "MONTHLY",
+    });
+    tx.job.count.mockResolvedValue(1);
+
+    const result = await createJob({ userId: "u1", sourceKey: "uploads/u1/x.mp4" });
+
+    expect(result.status).toBe("created");
+    expect(tx.job.create).toHaveBeenCalledOnce();
+  });
+
+  it("counts only jobs that have not reached a terminal state", async () => {
+    await createJob({ userId: "u1", sourceKey: "uploads/u1/x.mp4" });
+
+    const where = (tx.job.count.mock.calls as any[])[0][0].where;
+    expect(where.userId).toBe("u1");
+    // DONE and FAILED are finished; counting them would refuse every submission
+    // an account ever made after its first five.
+    expect(where.status.in).not.toContain("DONE");
+    expect(where.status.in).not.toContain("FAILED");
+    expect(where.status.in).toContain("PENDING");
+    expect(where.status.in).toContain("CUTTING");
+  });
+
+  it("returns the created job under a status, so a refusal cannot be mistaken for one", async () => {
+    const result = await createJob({ userId: "u1", sourceKey: "uploads/u1/x.mp4" });
+    expect(result).toEqual({ status: "created", job: JOB });
+  });
+});

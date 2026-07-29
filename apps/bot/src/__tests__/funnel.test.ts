@@ -23,6 +23,8 @@ const mocks = vi.hoisted(() => ({
   linkTokenCreate: vi.fn(),
   funnelUpsert: vi.fn(),
   jobCount: vi.fn(),
+  freeUsageGroupBy: vi.fn(),
+  freeUsageAggregate: vi.fn(),
   probeVideoUrl: vi.fn(),
 }));
 
@@ -40,6 +42,10 @@ vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
     telegramLinkToken: { create: mocks.linkTokenCreate },
     funnelEvent: { upsert: mocks.funnelUpsert },
     job: { count: mocks.jobCount },
+    freeUsage: {
+      groupBy: mocks.freeUsageGroupBy,
+      aggregate: mocks.freeUsageAggregate,
+    },
   },
 }));
 
@@ -51,7 +57,11 @@ vi.mock("../url-probe", async (importOriginal) => {
   };
 });
 
-import { FUNNEL_EVENTS, uploadRejectedEvent } from "@clipclap/shared";
+import {
+  FUNNEL_EVENTS,
+  getPlanLimits,
+  uploadRejectedEvent,
+} from "@clipclap/shared";
 import {
   CALLBACK_LINK_ACCOUNT,
   CALLBACK_NEW_ACCOUNT,
@@ -114,6 +124,10 @@ describe("first-screen telemetry", () => {
     mocks.linkTokenCreate.mockResolvedValue({});
     mocks.userFindUniqueOrThrow.mockResolvedValue({ id: "u1", plan: "NONE" });
     mocks.jobCount.mockResolvedValue(0);
+    // freeUsage is deliberately NOT stubbed in this block. These tests assert
+    // the exact welcome copy, and a working freeBudgetStatus would append the
+    // "free runs are paused" note to it - which is the truth in prod today and
+    // a different test's subject.
     mocks.probeVideoUrl.mockReset();
   });
 
@@ -272,6 +286,10 @@ describe("app-open and video-submitted telemetry", () => {
       billingCycle: null,
     });
     mocks.jobCount.mockResolvedValue(0);
+    mocks.freeUsageGroupBy.mockResolvedValue([]);
+    mocks.freeUsageAggregate.mockResolvedValue({
+      _sum: { estimatedCostUsd: 0 },
+    });
     mocks.probeVideoUrl.mockReset();
   });
 
@@ -349,10 +367,16 @@ describe("app-open and video-submitted telemetry", () => {
   });
 
   it("records upload_rejected_too_long for a free-tier user whose source is too long", async () => {
+    // Derived from the config, never a literal. This used to send 600 seconds,
+    // which was "too long" only because every NONE limit was 0; the moment the
+    // free numbers came back on 2026-07-29 a ten-minute video was perfectly
+    // legal and the test was asserting a rejection that no longer happened.
+    const overCap =
+      (getPlanLimits("NONE").maxSourceDurationMinutes + 1) * 60;
     mocks.probeVideoUrl.mockResolvedValue({
       ok: true,
-      durationSec: 600,
-      title: "A ten-minute video",
+      durationSec: overCap,
+      title: "A video over the free cap",
     });
     const { client } = harness();
 
@@ -365,6 +389,149 @@ describe("app-open and video-submitted telemetry", () => {
     expect(eventsRecorded()).toContain(
       uploadRejectedEvent("FREE_SOURCE_TOO_LONG")
     );
+  });
+});
+
+/**
+ * The refusals the bot used to swallow.
+ *
+ * On 2026-07-29 an organic user submitted four links in ten seconds and the
+ * funnel recorded four `video_submitted` rows and NOTHING else. The reason was
+ * not the free-tier gate at all: every one of those links failed the yt-dlp
+ * probe, and handleVideoUrl returned at `!probe.ok` - before the account was
+ * even created and long before getSubmissionBlocker could record anything. The
+ * `PROBE_FAILED` code existed in the shared enum and only the web route ever
+ * emitted it.
+ *
+ * The two limit branches below were the second half of the same hole: they
+ * return a dictionary string with no recordRejection beside them, so a bot user
+ * who hits the daily or concurrent cap is invisible where a web user is not.
+ */
+describe("refusals the bot used to swallow", () => {
+  const EXISTING_USER = {
+    id: "u1",
+    telegramId: "4242",
+    telegramLocale: "ru",
+    supportOpen: false,
+    plan: "NONE",
+    billingCycle: null,
+    subtitlesEnabled: false,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.SUPPORT_CHAT_ID;
+    delete process.env.REFERRAL_ADMIN_TELEGRAM_IDS;
+    // The owner's switch, opened on this test process only. Without it every
+    // free submission is refused with FREE_BUDGET_CLOSED and the two limit
+    // branches under test are unreachable.
+    process.env.FREE_TIER_MONTHLY_BUDGET_USD = "50";
+    mocks.userFindUnique.mockResolvedValue(EXISTING_USER);
+    mocks.funnelUpsert.mockResolvedValue({});
+    mocks.userCreate.mockResolvedValue(EXISTING_USER);
+    mocks.accountFindUnique.mockResolvedValue(null);
+    mocks.accountCreate.mockResolvedValue({});
+    // subscriptionStatus NONE as well as plan NONE: canSubmitJob routes into
+    // checkFreeTrial only when BOTH say the account never had a plan.
+    mocks.userFindUniqueOrThrow.mockResolvedValue({
+      id: "u1",
+      telegramId: "4242",
+      plan: "NONE",
+      subscriptionStatus: "NONE",
+      billingCycle: null,
+    });
+    mocks.freeUsageGroupBy.mockResolvedValue([]);
+    mocks.freeUsageAggregate.mockResolvedValue({
+      _sum: { estimatedCostUsd: 0 },
+    });
+    mocks.jobCount.mockResolvedValue(0);
+    mocks.probeVideoUrl.mockReset();
+  });
+
+  afterEach(() => {
+    delete process.env.FREE_TIER_MONTHLY_BUDGET_USD;
+  });
+
+  function videoUrlUpdate(url: string) {
+    return {
+      update_id: 21,
+      message: { message_id: 21, chat: CHAT, from: FROM, text: url },
+    };
+  }
+
+  it("records upload_rejected_probe_failed for a link it cannot read", async () => {
+    mocks.probeVideoUrl.mockResolvedValue({ ok: false, reason: "yt-dlp-error" });
+    const { client } = harness();
+
+    await handleUpdate(
+      client as never,
+      videoUrlUpdate("https://example.com/watch?v=dead-link") as never,
+      CONFIG
+    );
+
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      CHAT.id,
+      t("ru").urlAccessFailed
+    );
+    expect(eventsRecorded()).toContain(uploadRejectedEvent("PROBE_FAILED"));
+  });
+
+  it("does not blame the user when yt-dlp is missing from the container", async () => {
+    mocks.probeVideoUrl.mockResolvedValue({
+      ok: false,
+      reason: "probe-unavailable",
+    });
+    const { client } = harness();
+
+    await handleUpdate(
+      client as never,
+      videoUrlUpdate("https://example.com/watch?v=fine-link") as never,
+      CONFIG
+    );
+
+    // Our fault, not theirs: it must not land in the funnel as a refusal the
+    // submitter could have avoided.
+    expect(eventsRecorded()).not.toContain(uploadRejectedEvent("PROBE_FAILED"));
+  });
+
+  it("records upload_rejected_daily_limit", async () => {
+    mocks.probeVideoUrl.mockResolvedValue({
+      ok: true,
+      durationSec: 120,
+      title: "A short video",
+    });
+    // jobsToday, read first inside getSubmissionBlocker.
+    mocks.jobCount.mockResolvedValue(getPlanLimits("NONE").maxJobsPerDay);
+    const { client } = harness();
+
+    await handleUpdate(
+      client as never,
+      videoUrlUpdate("https://example.com/watch?v=one-too-many") as never,
+      CONFIG
+    );
+
+    expect(eventsRecorded()).toContain(uploadRejectedEvent("DAILY_LIMIT"));
+  });
+
+  it("records upload_rejected_concurrent", async () => {
+    mocks.probeVideoUrl.mockResolvedValue({
+      ok: true,
+      durationSec: 120,
+      title: "A short video",
+    });
+    // Same mock serves both counts: today's jobs first, then in-flight ones.
+    mocks.jobCount
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(getPlanLimits("NONE").concurrentJobsLimit);
+    const { client } = harness();
+
+    await handleUpdate(
+      client as never,
+      videoUrlUpdate("https://example.com/watch?v=second-at-once") as never,
+      CONFIG
+    );
+
+    expect(eventsRecorded()).toContain(uploadRejectedEvent("CONCURRENT"));
   });
 });
 

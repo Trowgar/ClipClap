@@ -1,11 +1,18 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { SUBSCRIPTION_GRACE_BUFFER_DAYS } from "../../config/billing";
 
 vi.mock("../../lib/prisma", () => ({
   prisma: {
-    user: { findUniqueOrThrow: vi.fn() },
+    // findUnique as well as findUniqueOrThrow: the free gate now asks
+    // isTrialAnchored, which reads the account through findUnique.
+    user: { findUniqueOrThrow: vi.fn(), findUnique: vi.fn() },
     job: { aggregate: vi.fn(), count: vi.fn() },
     clip: { count: vi.fn() },
+    // The free allowance is the ledger: groupBy is the per-account balance,
+    // aggregate is the month's global spend against the budget ceiling.
+    freeUsage: { groupBy: vi.fn(), aggregate: vi.fn() },
+    // The federated half of the anchor check.
+    account: { count: vi.fn() },
   },
 }));
 
@@ -18,12 +25,11 @@ import {
 } from "../usage.service";
 import { FREE_TIER, getPlanLimits } from "../../config/plans";
 
-// The free trial was disabled 2026-07-25 by zeroing every field of
-// NONE_LIMITS (see the comment above NONE_LIMITS in ../../config/plans.ts).
-// TRIAL_ENABLED reads that state from the config itself so the trial-shape
-// tests below track the switch rather than a moment in time: they resume
-// automatically the instant someone un-zeroes NONE_LIMITS.
-const TRIAL_ENABLED = getPlanLimits("NONE").maxJobsPerDay > 0;
+// NONE_LIMITS carries real numbers again as of 2026-07-29, so every case below
+// runs for real. One switch still holds the free plan shut in production:
+// FREE_TIER_MONTHLY_BUDGET_USD is unset, an unset ceiling reads as closed, and
+// the suite asserts that unconditionally further down. The plan numbers being
+// live and the faucet being open are two different things.
 
 describe("usage.service", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -209,27 +215,6 @@ describe("usage.service", () => {
     expect(result).toEqual({ allowed: true });
   });
 
-  // GATED while the trial is disabled (see TRIAL_ENABLED above): with
-  // NONE_LIMITS zeroed, maxSourceDurationMinutes is 0, so this 10-minute
-  // submission is refused as FREE_SOURCE_TOO_LONG before the trial-used check
-  // ever runs. Not rewritten to assert that - it encodes the enabled trial's
-  // behavior and comes back automatically when NONE_LIMITS is un-zeroed.
-  it.runIf(TRIAL_ENABLED)("canSubmitJob blocks a NONE plan whose free run is already spent", async () => {
-    (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
-      id: "u1",
-      plan: "NONE",
-      subscriptionStatus: "NONE",
-      topUpMinutesRemaining: 0,
-      currentPeriodEnd: null,
-    });
-    (prisma.job.count as any).mockResolvedValue(FREE_TIER.runs);
-
-    const result = await canSubmitJob("u1", 10);
-    expect(result).toEqual(
-      expect.objectContaining({ allowed: false, code: "FREE_TRIAL_USED" })
-    );
-  });
-
   it("getUsageForUser reports subscriptionState PERIOD_ENDED for a lapsed ACTIVE plan", async () => {
     (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
       id: "u1",
@@ -366,11 +351,19 @@ describe("canSubmitJob grace + period logic", () => {
     (prisma.job.aggregate as any).mockResolvedValue({ _sum: { sourceDurationSec: 0 } });
   }
 
-  // NONE is no longer a flat refusal - it routes to the free-trial gate, which
-  // decides on lifetime run/attempt counts rather than on the plan alone.
-  it("blocks NONE plan once the free run is spent", async () => {
+  // NONE is no longer a flat refusal - it routes to the free-tier gate, which
+  // decides on the anchor, the ledger and the monthly budget rather than on the
+  // plan alone. With no anchor on the account that gate refuses, which is the
+  // property this case cares about: NONE does not walk through.
+  it("blocks a NONE plan the free gate will not admit", async () => {
     mockUser({ plan: "NONE", subscriptionStatus: "NONE" });
-    (prisma.job.count as any).mockResolvedValue(FREE_TIER.runs);
+    (prisma.user.findUnique as any).mockResolvedValue({
+      telegramId: null,
+      emailVerified: null,
+      email: "a@b.com",
+      emailCanonical: "a@b.com",
+    });
+    (prisma.account.count as any).mockResolvedValue(0);
     const res = await canSubmitJob("u1", 1);
     expect(res.allowed).toBe(false);
   });
@@ -474,22 +467,49 @@ describe("getPeriodStart via getUsageForUser", () => {
 
 /**
  * The free allowance is what lets a brand-new account see one real result
- * before paying. It is deliberately LIFETIME, not per-period: a monthly free
- * tier renews forever and can be farmed, and the goal here is "prove the
- * product once", not "run a free service".
+ * before paying. It is LIFETIME, not per-period: a monthly free tier renews
+ * forever and is farmable by anyone patient enough to wait for the reset, and
+ * the goal here is "prove the product once", not "run a free service".
  *
- * "Lifetime" is why these counts cannot go through getMinutesUsedInPeriod -
- * that function only ever answers "how much inside this window". The trial
- * gate therefore uses unwindowed job counts, and these tests pin that: a query
- * that grows a createdAt filter would silently turn the trial into a
- * renewable one, so the absence of that filter is asserted, not assumed.
+ * The gate reads three things and nothing else: the anchor, the free_usage
+ * ledger, and the month's global budget. It used to count Job rows instead,
+ * which was both resettable - deleteProject hard-deletes jobs, so an account
+ * could clear its own trial with the Delete button - and raceable, because a
+ * "run" only counted once it had produced clips, so ten simultaneous
+ * submissions each saw an unspent allowance.
+ *
+ * These tests pin the new sources AND the order the three are consulted in.
+ * The order is not cosmetic: a refusal that names the wrong reason sends the
+ * user off to buy a plan for something a plan would not fix.
  */
-describe("free trial allowance", () => {
-  beforeEach(() => vi.clearAllMocks());
-
+describe("the free-tier gate", () => {
   const DAY = 24 * 60 * 60 * 1000;
+  const FREE_CAP = getPlanLimits("NONE").maxSourceDurationMinutes;
 
-  function mockFreeUser(overrides: Record<string, unknown> = {}) {
+  const ORIGINAL_BUDGET = process.env.FREE_TIER_MONTHLY_BUDGET_USD;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // An OPEN budget is the background for every case except the two that are
+    // about the budget itself. Without it every refusal below would come back
+    // as FREE_BUDGET_CLOSED and would prove nothing about the check it means
+    // to be testing.
+    process.env.FREE_TIER_MONTHLY_BUDGET_USD = "50";
+    (prisma.freeUsage.aggregate as any).mockResolvedValue({
+      _sum: { estimatedCostUsd: 1 },
+    });
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_BUDGET === undefined) {
+      delete process.env.FREE_TIER_MONTHLY_BUDGET_USD;
+    } else {
+      process.env.FREE_TIER_MONTHLY_BUDGET_USD = ORIGINAL_BUDGET;
+    }
+  });
+
+  /** A never-subscribed account, anchored by a verified email. */
+  function freeUser(overrides: Record<string, unknown> = {}) {
     (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
       id: "u1",
       plan: "NONE",
@@ -500,158 +520,187 @@ describe("free trial allowance", () => {
       currentPeriodEnd: null,
       ...overrides,
     });
+    (prisma.user.findUnique as any).mockResolvedValue({
+      telegramId: null,
+      emailVerified: new Date(),
+      email: "a@b.com",
+      emailCanonical: "a@b.com",
+    });
     (prisma.job.aggregate as any).mockResolvedValue({
       _sum: { sourceDurationSec: 0 },
     });
   }
 
-  /** getFreeTrialStatus issues [runs, attempts] in that order. */
-  function mockCounts(runs: number, attempts: number) {
-    (prisma.job.count as any)
-      .mockResolvedValueOnce(runs)
-      .mockResolvedValueOnce(attempts);
+  /** Ledger rows shaped the way Postgres actually returns them: a kind with no
+   *  rows is OMITTED from the group-by, never returned as a zero. */
+  function ledgerCharged(seconds: number) {
+    (prisma.freeUsage.groupBy as any).mockResolvedValue(
+      seconds > 0 ? [{ kind: "CHARGE", _sum: { seconds } }] : []
+    );
   }
 
-  it("counts runs and attempts over the whole lifetime, with no date window", async () => {
-    mockCounts(0, 2);
+  it("reads the allowance off the ledger, never off job rows", async () => {
+    ledgerCharged(0);
 
     const status = await getFreeTrialStatus("u1");
 
-    expect(status.runsUsed).toBe(0);
-    expect(status.attemptsUsed).toBe(2);
-    expect(status.runsLimit).toBe(FREE_TIER.runs);
-    expect(status.attemptsLimit).toBe(FREE_TIER.attempts);
-
-    const [runsQuery, attemptsQuery] = (prisma.job.count as any).mock.calls.map(
-      (c: any[]) => c[0]
-    );
-    // A createdAt filter here would make the allowance renewable.
-    expect(runsQuery.where.createdAt).toBeUndefined();
-    expect(attemptsQuery.where.createdAt).toBeUndefined();
-    // A run is a job that actually produced clips.
-    expect(runsQuery.where.clipsGenerated).toEqual({ gt: 0 });
+    expect(status).toEqual({
+      remainingSeconds: FREE_TIER.lifetimeSeconds,
+      lifetimeSeconds: FREE_TIER.lifetimeSeconds,
+      exhausted: false,
+    });
+    // Job rows are hard-deleted by deleteProject. Counting them here is what
+    // let an account reset its own trial by pressing Delete.
+    expect((prisma.job.count as any).mock.calls).toHaveLength(0);
+    // Lifetime, not windowed: a createdAt filter would silently turn the
+    // allowance into a renewable free tier.
+    const groupByArgs = (prisma.freeUsage.groupBy as any).mock.calls[0][0];
+    expect(groupByArgs.where.createdAt).toBeUndefined();
   });
 
-  // GATED while the trial is disabled (see TRIAL_ENABLED above). With
-  // NONE_LIMITS zeroed, maxSourceDurationMinutes is 0 and a 12-minute
-  // submission is refused as FREE_SOURCE_TOO_LONG before the allowance is
-  // even consulted - not rewritten to assert that, since it would stop
-  // testing the allowance at all. Comes back automatically once NONE_LIMITS
-  // is un-zeroed.
-  it.runIf(TRIAL_ENABLED)("lets a brand-new NONE user submit inside the allowance", async () => {
-    mockFreeUser();
-    mockCounts(0, 0);
+  it("reports exhausted once the whole allowance has been charged", async () => {
+    ledgerCharged(FREE_TIER.lifetimeSeconds);
 
-    const res = await canSubmitJob("u1", 12);
+    const status = await getFreeTrialStatus("u1");
 
-    expect(res.allowed).toBe(true);
+    expect(status.remainingSeconds).toBe(0);
+    expect(status.exhausted).toBe(true);
   });
 
-  it.runIf(TRIAL_ENABLED)("blocks the same user once a run has produced clips", async () => {
-    mockFreeUser();
-    mockCounts(FREE_TIER.runs, FREE_TIER.runs);
+  it("lets an anchored account with a full balance and an open budget through", async () => {
+    freeUser();
+    ledgerCharged(0);
 
-    const res = await canSubmitJob("u1", 12);
+    expect(await canSubmitJob("u1", FREE_CAP)).toEqual({ allowed: true });
+  });
 
-    expect(res.allowed).toBe(false);
+  it("refuses an unanchored account first, before it mentions minutes", async () => {
+    freeUser();
+    (prisma.user.findUnique as any).mockResolvedValue({
+      telegramId: null,
+      emailVerified: null,
+      email: "a@b.com",
+      emailCanonical: "a@b.com",
+    });
+    (prisma.account.count as any).mockResolvedValue(0);
+    ledgerCharged(0);
+
+    // Deliberately over the length cap as well: an account that has no
+    // allowance at all must not be told about minutes it does not have, and
+    // the anchor is the only refusal that is true here.
+    const res = await canSubmitJob("u1", FREE_CAP + 1);
+
+    expect(res).toMatchObject({ allowed: false, code: "FREE_NOT_ANCHORED" });
+    expect((prisma.freeUsage.groupBy as any).mock.calls).toHaveLength(0);
+  });
+
+  it("refuses a source over the free ceiling before consulting the balance", async () => {
+    freeUser();
+    ledgerCharged(0);
+
+    const res = await canSubmitJob("u1", FREE_CAP + 1);
+
+    expect(res).toMatchObject({ allowed: false, code: "FREE_SOURCE_TOO_LONG" });
     if (res.allowed) throw new Error("unreachable");
-    expect(res.code).toBe("FREE_TRIAL_USED");
-    // The copy has to state what was used and what a plan gives, not just
-    // "subscription required".
-    expect(res.reason).toMatch(/free/i);
+    expect(res.reason).toContain(String(FREE_CAP));
+    // Telling someone their minutes are spent when the real problem is a
+    // three-hour VOD pushes them to buy for a reason that is not true - and
+    // length is the one refusal they can act on immediately.
+    expect((prisma.freeUsage.groupBy as any).mock.calls).toHaveLength(0);
+  });
+
+  it("refuses when the remaining balance is smaller than the video", async () => {
+    freeUser();
+    ledgerCharged(FREE_TIER.lifetimeSeconds - 60);
+
+    const res = await canSubmitJob("u1", FREE_CAP);
+
+    expect(res).toMatchObject({ allowed: false, code: "FREE_EXHAUSTED" });
+    if (res.allowed) throw new Error("unreachable");
+    // The numbers travel structurally, so a surface can say them in its own
+    // language instead of reprinting the English `reason`.
+    expect(res.trial).toMatchObject({
+      remainingSeconds: 60,
+      lifetimeSeconds: FREE_TIER.lifetimeSeconds,
+    });
+    // Their own allowance is the personal reason, and it wins: the global
+    // budget is not even read once this has fired.
+    expect((prisma.freeUsage.aggregate as any).mock.calls).toHaveLength(0);
   });
 
   /**
-   * A run that produced nothing must not burn the trial. The product's own
-   * failure copy already promises minutes are not spent when nothing comes
-   * back, and the market leader auto-refunds a "No Clips Rendered" project -
-   * a trial that charges for an empty result teaches the new user exactly the
-   * wrong thing about the product on their only look at it.
+   * ALWAYS ON, and it is the case the first draft of this gate got wrong.
+   *
+   * jobDurationMinutes is 0 for every submission whose source has not been
+   * probed - which is every URL on the web path today - so neededSeconds is 0,
+   * and an empty balance is not LESS than 0. A gate that only compared the two
+   * let a spent account through, and the closed budget was the sole thing
+   * refusing it, so the day a ceiling goes into .env that account would be
+   * allowed.
+   *
+   * The budget is deliberately OPEN here. With it closed this test would pass
+   * against the broken gate too, which is exactly how the bug survived: the
+   * global refusal masks the personal one.
    */
-  // GATED while the trial is disabled: same short-circuit as above, this
-  // submission never reaches the "did it burn a run" logic while the source
-  // cap is 0. See TRIAL_ENABLED above.
-  it.runIf(TRIAL_ENABLED)("does not burn the trial on a run that produced no clips", async () => {
-    mockFreeUser();
-    mockCounts(0, 1);
+  it("refuses a spent account on a duration-0 submission, with the budget open", async () => {
+    freeUser();
+    ledgerCharged(FREE_TIER.lifetimeSeconds);
 
-    const res = await canSubmitJob("u1", 12);
+    const res = await canSubmitJob("u1", 0);
 
-    expect(res.allowed).toBe(true);
+    expect(res).toMatchObject({ allowed: false, code: "FREE_EXHAUSTED" });
+    if (res.allowed) throw new Error("unreachable");
+    expect(res.trial).toMatchObject({ remainingSeconds: 0, exhausted: true });
+    // The copy may not talk about the length of a video it never measured.
+    expect(res.reason).not.toMatch(/needs 0/i);
+  });
+
+  it("prefers the personal reason over the global one when both apply", async () => {
+    freeUser();
+    ledgerCharged(FREE_TIER.lifetimeSeconds);
+    delete process.env.FREE_TIER_MONTHLY_BUDGET_USD;
+
+    const res = await canSubmitJob("u1", FREE_CAP);
+
+    expect(res).toMatchObject({ allowed: false, code: "FREE_EXHAUSTED" });
+  });
+
+  it("refuses when the month's global budget is spent", async () => {
+    freeUser();
+    ledgerCharged(0);
+    (prisma.freeUsage.aggregate as any).mockResolvedValue({
+      _sum: { estimatedCostUsd: 50 },
+    });
+
+    const res = await canSubmitJob("u1", FREE_CAP);
+
+    expect(res).toMatchObject({ allowed: false, code: "FREE_BUDGET_CLOSED" });
+    if (res.allowed) throw new Error("unreachable");
+    // The user's own balance is untouched - the pause is ours, not theirs, and
+    // the copy must be able to say so.
+    expect(res.trial).toMatchObject({ exhausted: false });
   });
 
   /**
-   * ...but empty runs are not free to US - each one pays for a transcript.
-   * The attempt backstop is what bounds that, since the run counter alone
-   * would let a user submit unclippable video forever.
+   * ALWAYS ON, and the reason this rewrite is safe to land on a live host.
+   *
+   * FREE_TIER_MONTHLY_BUDGET_USD is not set in production, and an unset
+   * ceiling reads as zero - closed - because the failure direction has to be
+   * "no free tier", never "unlimited free tier". So a brand-new account with a
+   * perfect anchor and an untouched allowance is still refused, and the free
+   * plan cannot go live by accident: someone has to put a number in .env.
    */
-  // GATED while the trial is disabled: same short-circuit, see TRIAL_ENABLED
-  // above.
-  it.runIf(TRIAL_ENABLED)("blocks once the lifetime attempt backstop is reached, even with no clips ever made", async () => {
-    mockFreeUser();
-    mockCounts(0, FREE_TIER.attempts);
+  it("refuses everything while FREE_TIER_MONTHLY_BUDGET_USD is unset", async () => {
+    delete process.env.FREE_TIER_MONTHLY_BUDGET_USD;
+    freeUser();
+    ledgerCharged(0);
 
-    const res = await canSubmitJob("u1", 12);
+    const res = await canSubmitJob("u1", FREE_CAP);
 
-    expect(res.allowed).toBe(false);
-    if (res.allowed) throw new Error("unreachable");
-    expect(res.code).toBe("FREE_TRIAL_ATTEMPTS");
+    expect(res).toMatchObject({ allowed: false, code: "FREE_BUDGET_CLOSED" });
   });
 
-  it("does not count FAILED jobs as attempts", async () => {
-    mockCounts(0, 0);
-    await getFreeTrialStatus("u1");
-    const attemptsQuery = (prisma.job.count as any).mock.calls[1][0];
-    // A user whose link died three times has seen nothing; locking them out
-    // for our own failures is the opposite of a trial.
-    expect(attemptsQuery.where.status).toEqual({ not: "FAILED" });
-  });
-
-  it("refuses a source longer than the free maximum with a reason that names the cap", async () => {
-    mockFreeUser();
-    mockCounts(0, 0);
-    const freeCap = getPlanLimits("NONE").maxSourceDurationMinutes;
-
-    const res = await canSubmitJob("u1", freeCap + 1);
-
-    expect(res.allowed).toBe(false);
-    if (res.allowed) throw new Error("unreachable");
-    expect(res.code).toBe("FREE_SOURCE_TOO_LONG");
-    expect(res.reason).toContain(String(freeCap));
-  });
-
-  // GATED while the trial is disabled: with NONE_LIMITS zeroed the "free
-  // maximum" is a degenerate 0 minutes, so this boundary check is testing a
-  // meaningless case. See TRIAL_ENABLED above. (It happened to still pass at
-  // 0==0 when run alone; it failed in the full suite only because the two
-  // short-circuiting tests above it left unconsumed mock queue entries behind
-  // - gating them removes that leakage too.)
-  it.runIf(TRIAL_ENABLED)("allows a source exactly at the free maximum", async () => {
-    mockFreeUser();
-    mockCounts(0, 0);
-    const freeCap = getPlanLimits("NONE").maxSourceDurationMinutes;
-
-    const res = await canSubmitJob("u1", freeCap);
-
-    expect(res.allowed).toBe(true);
-  });
-
-  // The too-long refusal must win over the exhausted one: telling someone the
-  // trial is spent when the real problem is a 3-hour file sends them to buy a
-  // plan for the wrong reason.
-  it("reports the duration problem, not the trial state, when both apply", async () => {
-    mockFreeUser();
-    mockCounts(FREE_TIER.runs, FREE_TIER.attempts);
-    const freeCap = getPlanLimits("NONE").maxSourceDurationMinutes;
-
-    const res = await canSubmitJob("u1", freeCap + 60);
-
-    expect(res.allowed).toBe(false);
-    if (res.allowed) throw new Error("unreachable");
-    expect(res.code).toBe("FREE_SOURCE_TOO_LONG");
-  });
-
-  it("leaves a paying subscriber untouched by the trial gate", async () => {
+  it("leaves a paying subscriber out of the free gate entirely", async () => {
     (prisma.user.findUniqueOrThrow as any).mockResolvedValue({
       id: "u1",
       plan: "STARTER",
@@ -668,37 +717,34 @@ describe("free trial allowance", () => {
     // 120 min is over the free cap and fine on STARTER.
     const res = await canSubmitJob("u1", 120);
 
-    expect(res.allowed).toBe(true);
-    // The trial counters must not even be consulted for a paying user.
-    expect((prisma.job.count as any).mock.calls).toHaveLength(0);
+    expect(res).toEqual({ allowed: true });
+    expect((prisma.user.findUnique as any).mock.calls).toHaveLength(0);
+    expect((prisma.freeUsage.groupBy as any).mock.calls).toHaveLength(0);
+    expect((prisma.freeUsage.aggregate as any).mock.calls).toHaveLength(0);
   });
 
   /**
-   * A trial is for people who have never paid. Someone who subscribed and
-   * canceled must get the lifecycle message and the resubscribe path, not a
-   * fresh free run - otherwise cancel/resubscribe is a renewable free tier.
+   * A free allowance is for people who have never paid. Someone who subscribed
+   * and canceled must get the lifecycle message and the resubscribe path, not
+   * a fresh allowance - otherwise cancel-and-resubscribe is a renewing free
+   * tier.
    */
-  it("does not hand a free run to a canceled ex-subscriber", async () => {
-    mockFreeUser({ plan: "NONE", subscriptionStatus: "CANCELED" });
-    mockCounts(0, 0);
+  it("does not hand a free allowance to a canceled ex-subscriber", async () => {
+    freeUser({ subscriptionStatus: "CANCELED" });
+    ledgerCharged(0);
 
     const res = await canSubmitJob("u1", 5);
 
-    expect(res.allowed).toBe(false);
-    if (res.allowed) throw new Error("unreachable");
-    // The lifecycle path, not the trial path. (Which lifecycle sentence they
-    // get is decided by getSubscriptionState, which collapses to phase NONE
-    // once plan is NONE - pre-existing behaviour, not this gate's business.)
-    expect(res.code).toBe("LIFECYCLE");
-    // The decisive part: the trial counters were never even consulted, so no
-    // free run was handed out.
-    expect((prisma.job.count as any).mock.calls).toHaveLength(0);
+    expect(res).toMatchObject({ allowed: false, code: "LIFECYCLE" });
+    // The decisive part: neither the anchor nor the ledger was consulted, so
+    // no allowance was handed out.
+    expect((prisma.user.findUnique as any).mock.calls).toHaveLength(0);
+    expect((prisma.freeUsage.groupBy as any).mock.calls).toHaveLength(0);
   });
 
   it("getUsageForUser reports the real free limits, not zeros", async () => {
-    mockFreeUser();
+    freeUser();
     (prisma.clip.count as any).mockResolvedValue(0);
-    mockCounts(0, 0);
 
     const usage = await getUsageForUser("u1");
     const free = getPlanLimits("NONE");
@@ -707,22 +753,5 @@ describe("free trial allowance", () => {
     expect(usage.minutesLimit).toBe(free.minutesPerPeriod);
     expect(usage.storageClipsLimit).toBe(free.storageClips);
     expect(usage.retentionDays).toBe(free.retentionDays);
-  });
-
-  // ALWAYS ON. The trial is deliberately disabled right now (NONE_LIMITS in
-  // ../../config/plans.ts). This is the gate-coherence half of that: not just
-  // that the config numbers are zero (see plans.test.ts), but that the code
-  // path a brand-new NONE user actually hits is refused too. A config that
-  // reads "disabled" while canSubmitJob still lets someone through would be
-  // the dangerous half-disabled state. No-op once TRIAL_ENABLED flips true -
-  // the gated tests above take over asserting the enabled allowance.
-  it("canSubmitJob refuses a fresh NONE user while the trial is disabled", async () => {
-    if (TRIAL_ENABLED) return;
-    mockFreeUser();
-    mockCounts(0, 0);
-
-    const res = await canSubmitJob("u1", 1);
-
-    expect(res.allowed).toBe(false);
   });
 });

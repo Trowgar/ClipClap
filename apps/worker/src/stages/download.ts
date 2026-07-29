@@ -8,10 +8,12 @@ import { unlink } from "fs/promises";
 import { downloadVideo } from "../processors/download";
 import { normalizeSource } from "../processors/normalize";
 import {
+  FreeAllowanceExceededError,
   SourceTooLargeError,
   SourceUnavailableError,
   UnsupportedInputError,
 } from "../processors/errors";
+import { recheckSourceDuration } from "./source-recheck";
 import { safeTagJobError } from "./job-error";
 import type { DownloadStagePayload } from "./types";
 import {
@@ -39,6 +41,17 @@ export async function runDownloadStage(
       job.sourceUrl ?? undefined,
       job.sourceKey ?? undefined
     );
+
+    // Measure the file and settle the free reservation against it, before the
+    // R2 upload and long before TRANSCRIBE. Deliberately the first thing that
+    // happens to a downloaded file: a job that is about to be refused should
+    // not first be copied into object storage, normalized by ffmpeg and left
+    // for the retention sweep to collect.
+    await recheckSourceDuration({
+      jobId: payload.jobId,
+      userId: payload.userId,
+      localPath,
+    });
 
     const sourceArtifactKey = buildSourceArtifactKey(payload.userId, payload.jobId);
     await uploadFile(sourceArtifactKey, localPath, "video/mp4");
@@ -92,6 +105,10 @@ async function markJobFailed(jobId: string, error: unknown) {
   // so this chain cannot silently mis-file it - but keep it first anyway, so
   // that turning it into a subclass later fails loudly in the stage test rather
   // than quietly downgrading an over-the-cap VOD to the hedged copy.
+  //
+  // FreeAllowanceExceededError is the fourth sibling and the only one whose
+  // copy may claim the minutes are intact - the re-check refunds before it
+  // throws, so that claim is a fact by the time this line runs.
   const tagged =
     error instanceof UnsupportedInputError
       ? safeTagJobError("UNSUPPORTED_INPUT", message)
@@ -99,7 +116,9 @@ async function markJobFailed(jobId: string, error: unknown) {
         ? safeTagJobError("SOURCE_TOO_LARGE", message)
         : error instanceof SourceUnavailableError
           ? safeTagJobError("SOURCE_UNAVAILABLE", message)
-          : message;
+          : error instanceof FreeAllowanceExceededError
+            ? safeTagJobError("FREE_ALLOWANCE_EXCEEDED", message)
+            : message;
   await prisma.job.update({
     where: { id: jobId },
     data: { status: "FAILED", error: tagged },

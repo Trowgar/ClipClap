@@ -6,12 +6,30 @@ import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
+/** The free allowance, when this account is running on one.
+ *
+ *  It has to be passed in rather than derived, because there is nothing in the
+ *  plan numbers to derive it FROM: a free account's minutesPerPeriod is 0 by
+ *  design (the allowance is lifetime, and a period window cannot express
+ *  "ever"), so `minutesLimit + topUp - used` is 0 for someone with a full hour
+ *  in the ledger. That arithmetic is what disabled the Cut button with "Job
+ *  needs 4 min, only 0 available" the moment the browser finished probing a
+ *  file - a wall built entirely out of the wrong denominator.
+ *
+ *  Minutes, floored, to match what the gate says when it refuses. */
+export interface FreeAllowance {
+  remainingMinutes: number;
+  lifetimeMinutes: number;
+}
+
 interface UploadZoneProps {
   minutesUsed: number;
   minutesLimit: number;
   topUpMinutesRemaining: number;
   maxSourceDurationMinutes: number;
   maxFileSizeBytes: number;
+  /** Set only for an account on the free allowance. */
+  freeAllowance?: FreeAllowance | null;
 }
 
 // Best-effort client-side duration probe. The browser only decodes codecs it
@@ -58,6 +76,7 @@ export function UploadZone({
   topUpMinutesRemaining,
   maxSourceDurationMinutes,
   maxFileSizeBytes,
+  freeAllowance = null,
 }: UploadZoneProps) {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -70,10 +89,12 @@ export function UploadZone({
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const minutesAvailable = Math.max(
-    0,
-    minutesLimit + topUpMinutesRemaining - minutesUsed
-  );
+  // A free account's balance comes from the ledger and nowhere else. Top-up
+  // minutes are deliberately NOT added to it: checkFreeTrial does not look at
+  // them either, so counting them here would enable a button the gate refuses.
+  const minutesAvailable = freeAllowance
+    ? Math.max(0, freeAllowance.remainingMinutes)
+    : Math.max(0, minutesLimit + topUpMinutesRemaining - minutesUsed);
   const durationMinutes = sourceDurationSec
     ? Math.ceil(sourceDurationSec / 60)
     : 0;
@@ -102,7 +123,9 @@ export function UploadZone({
     const maxGb = (maxFileSizeBytes / 1024 ** 3).toFixed(1);
     blockedReason = `File is ${formatBytes(file!.size)} - max ${maxGb} GB.`;
   } else if (overQuota) {
-    blockedReason = `Job needs ${durationMinutes} min, only ${minutesAvailable} available. Upgrade or top up.`;
+    blockedReason = freeAllowance
+      ? `This video needs ${durationMinutes} min and ${minutesAvailable} of your ${freeAllowance.lifetimeMinutes} free minutes are left. Send a shorter one, or pick a plan.`
+      : `Job needs ${durationMinutes} min, only ${minutesAvailable} available. Upgrade or top up.`;
   }
 
   const setFileAndProbe = useCallback(async (next: File | null) => {
@@ -319,6 +342,16 @@ export function UploadZone({
               ~{durationMinutes} min uses ·{" "}
               <span className="text-neutral-300">{minutesAvailable} min</span>{" "}
               left
+            </>
+          ) : freeAllowance ? (
+            // "0 / 0 min used" is what this line said to a free account, which
+            // reads as an account with nothing on it. It has an hour.
+            <>
+              {maxSourceDurationMinutes} min/upload cap ·{" "}
+              <span className="text-neutral-300">
+                {minutesAvailable} of {freeAllowance.lifetimeMinutes}
+              </span>{" "}
+              free min left
             </>
           ) : (
             <>

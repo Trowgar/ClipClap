@@ -15,6 +15,8 @@ const idFailure: Record<JobErrorCode, string> = {
     "Aku tidak bisa mengunduh video dari tautan itu: mungkin privat, dibatasi wilayah, sudah dihapus, atau sedang tidak tersedia. Pastikan tautannya terbuka di browser, atau kirim filenya langsung ke sini. Menitmu tidak terpakai.",
   SOURCE_TOO_LARGE:
     "Video itu melebihi batas 2 GB, jadi aku tidak bisa mengunduhnya. Menitmu tidak terpakai. Mengirim filenya juga tidak membantu karena batas 2 GB-nya sama: potong dulu videonya ke bagian yang kamu mau, lalu kirim bagian itu.",
+  FREE_ALLOWANCE_EXCEEDED:
+    "Video ini lebih panjang dari sisa menit gratismu, jadi aku berhenti sebelum memprosesnya. Menit gratismu masih utuh: pakai untuk video yang lebih pendek, atau pilih paket untuk memproses yang ini sepenuhnya.",
 };
 
 const idFailureGeneric =
@@ -24,14 +26,20 @@ const id: Dict = {
   welcomeNew:
     "Selamat datang di ClipClap! Kirim video dan aku ubah jadi klip vertikal bersubtitle.\n\nBahasa: kirim /lang untuk mengganti.",
   welcomeFirstChoice:
-    "Halo! Aku mengubah video panjang jadi klip vertikal bersubtitle, siap untuk TikTok, Reels, dan Shorts.\n\nVideo pertamamu gratis: tanpa kartu, tanpa paket. Kalau hasilnya tidak ada klip, itu tidak dihitung.\n\nCara kerjanya:\n1. Kirim video (maksimal 30 menit di percobaan gratis)\n2. Aku cari momen terkuat dan memotongnya\n3. Klipmu dikirim balik ke sini: sampai 12, tergantung videonya\n\nPertama, kamu mau mulai dengan cara yang mana?\n\n• Akun baru: pakai Telegram ini sebagai akun ClipClap-mu.\n• Sudah punya akun: hubungkan Telegram ini ke akun clipclap.io-mu.",
+    "Halo! Aku mengubah video panjang jadi klip vertikal bersubtitle, siap untuk TikTok, Reels, dan Shorts.\n\nVideo pertamamu gratis: tanpa kartu, tanpa paket. Kalau hasilnya tidak ada klip, itu tidak dihitung.\n\nCara kerjanya:\n1. Kirim video (maksimal 60 menit di percobaan gratis)\n2. Aku cari momen terkuat dan memotongnya\n3. Klipmu dikirim balik ke sini: sampai 10, tergantung videonya\n\nPertama, kamu mau mulai dengan cara yang mana?\n\n• Akun baru: pakai Telegram ini sebagai akun ClipClap-mu.\n• Sudah punya akun: hubungkan Telegram ini ke akun clipclap.io-mu.",
   welcomeBack: "Senang kamu kembali! Kirim video dan aku buatkan klipnya.",
   welcomeNeedsPlan:
-    "Kirim video dan aku buatkan klipnya. Akun baru dapat satu percobaan gratis: tanpa kartu, sampai 30 menit video.",
+    "Kirim video dan aku buatkan klipnya. Akun baru dapat satu percobaan gratis: tanpa kartu, sampai 60 menit video.",
+  // Appended by the handler to the onboarding screens, and only while
+  // freeBudgetStatus() reports the month's ceiling closed. See the note on
+  // freeRunsPausedNote in types.ts for why the promise above is left intact
+  // rather than rewritten.
+  freeRunsPausedNote:
+    "⏳ Sebelum mulai: percobaan gratis dijeda sampai tanggal 1 bulan depan. Itu batas dari sisiku, bukan dari akunmu - menit gratismu tetap menunggumu. Kalau mau klip hari ini, buka 💳 Paket.",
   newAccountBtn: "✨ Buat akun baru",
   linkAccountBtn: "🔗 Aku sudah punya akun",
   newAccountCreated:
-    "Akun dibuat. Kirim video sekarang: yang pertama gratis dan tanpa kartu.\n\nMaksimal 30 menit. Kalau hasilnya tidak ada klip, itu tidak mengurangi percobaan gratismu.",
+    "Akun dibuat. Kirim video sekarang: yang pertama gratis dan tanpa kartu.\n\nMaksimal 60 menit. Kalau hasilnya tidak ada klip, itu tidak mengurangi percobaan gratismu.",
   linkAccountInstructions: (code, url) =>
     `Kode penghubungmu: ${code}\n\n1. Buka ${url}/dashboard/settings di perangkat tempat kamu sudah login.\n2. Tempel kode ini dalam 10 menit.\n\nTelegram ini akan terhubung ke akun tersebut.`,
   callbackAck: "Oke",
@@ -74,10 +82,12 @@ const id: Dict = {
   lowQualityNote:
     "Catatan: tidak ada momen yang kuat, ini yang terbaik dari yang ada.",
   blocked: (reason) => `${reason}\n\n💳 Paket: pilih atau kelola langgananmu.`,
-  freeTrialUsed: (runs, planMinutes, planPriceEur) =>
-    `Itu tadi percobaan gratismu: ${runs} video, gratis dan tanpa kartu. Klip yang sudah jadi tetap milikmu.\n\nUntuk lanjut: Starter €${planPriceEur} per minggu, isinya ${planMinutes} menit video, sumber sampai 3 jam, dan 20 klip yang disimpan 7 hari.`,
-  freeTrialAttemptsUsed: (attempts, planMinutes, planPriceEur) =>
-    `Aku sudah memproses ${attempts} video di percobaan gratismu dan tidak ada satu pun yang menghasilkan klip, jadi kamu belum benar-benar melihat kemampuannya. Biasanya itu terjadi kalau sumbernya sedikit ucapan yang jelas.\n\nPercobaan gratismu habis. Kalau mau terus mencoba, Starter €${planPriceEur} per minggu untuk ${planMinutes} menit video.`,
+  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
+    `Menit gratismu tidak cukup untuk ini: sisa ${remainingMinutes} dari ${lifetimeMinutes}. Klip yang sudah jadi tetap milikmu.\n\nUntuk lanjut: Starter €${planPriceEur} per minggu, isinya ${planMinutes} menit video, sumber sampai 3 jam, dan 20 klip yang disimpan 7 hari.`,
+  freeNotAnchored: (planMinutes, planPriceEur) =>
+    `Menit gratis belum aktif di akun ini. Hubungi dukungan lewat menu bantuan dan aku bantu beresin, atau mulai sekarang dengan Starter: €${planPriceEur} per minggu untuk ${planMinutes} menit video.`,
+  freeBudgetClosed: (planMinutes, planPriceEur) =>
+    `Percobaan gratis dijeda sampai tanggal 1 bulan depan. Itu batas dari sisiku, bukan dari akunmu - menit gratismu tetap utuh.\n\nKalau mau memotong sekarang, Starter €${planPriceEur} per minggu untuk ${planMinutes} menit video.`,
   freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
     `Percobaan gratis menerima video sampai ${freeMaxMinutes} menit, dan yang ini lebih panjang. Kirim video yang lebih pendek, atau potongan ${freeMaxMinutes} menit dari video ini, untuk mencobanya gratis. Dengan paket, aku menerima sumber sampai ${planMaxMinutes} menit.`,
   planSourceTooLong: (maxMinutes) =>
@@ -216,7 +226,6 @@ const id: Dict = {
     { command: "referral", description: "Tautan referal dan penghasilanmu" },
   ],
   manageSubscriptionBtn: "🔧 Kelola langganan",
-  editInBrowserBtn: "✂️ Edit di browser",
   checkingLink: "Memeriksa tautan…",
   urlAccessFailed:
     "Tidak bisa mengakses video di tautan itu. Coba tautan lain atau unggah filenya langsung.",

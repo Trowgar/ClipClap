@@ -36,6 +36,13 @@ const enFailure: Record<JobErrorCode, string> = {
   // send the user off to fail a second time.
   SOURCE_TOO_LARGE:
     "That video is over my 2 GB limit, so I could not download it. Your minutes were not used. Sending me the file will not help - the same 2 GB limit applies - so trim the video to the part you want clipped and send that instead.",
+  // The one line here that can say the allowance is intact and mean it: the
+  // download stage refunds the reservation before marking the job failed. No
+  // number - /account shows the real balance - and both exits named, because a
+  // clipper whose VOD overruns the remaining free minutes can act on either but
+  // will guess neither.
+  FREE_ALLOWANCE_EXCEEDED:
+    "This video is longer than the free minutes you have left, so I stopped before processing it. Your free minutes are still there - clip a shorter video with them, or pick a plan to run this one in full.",
 };
 
 // The "unknown failure" line, so it may assert neither transience nor
@@ -69,14 +76,20 @@ const en: Dict = {
   welcomeNew:
     "Welcome to ClipClap! Send me a video and I'll turn it into vertical clips with subtitles.\n\nLanguage: send /lang to switch.",
   welcomeFirstChoice:
-    "Hi! I turn long videos into vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nYour first video is free - no card, no plan. If it comes back with no clips, it doesn't count.\n\nHow it works:\n1. Send a video (up to 30 minutes on the free run)\n2. I find the strongest moments and cut them\n3. Your clips come back here - up to 12, depending on the video\n\nFirst - how do you want to set up?\n\n• New account - use this Telegram as your ClipClap account.\n• I already have an account - link this Telegram to your existing clipclap.io account.",
+    "Hi! I turn long videos into vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nYour first video is free - no card, no plan. If it comes back with no clips, it doesn't count.\n\nHow it works:\n1. Send a video (up to 60 minutes on the free run)\n2. I find the strongest moments and cut them\n3. Your clips come back here - up to 10, depending on the video\n\nFirst - how do you want to set up?\n\n• New account - use this Telegram as your ClipClap account.\n• I already have an account - link this Telegram to your existing clipclap.io account.",
   welcomeBack: "Welcome back! Send a video and I'll generate clips.",
   welcomeNeedsPlan:
-    "Send a video and I'll generate clips. A new account gets one free run - no card needed, up to 30 minutes of video.",
+    "Send a video and I'll generate clips. A new account gets one free run - no card needed, up to 60 minutes of video.",
+  // Appended by the handler to the onboarding screens, and only while
+  // freeBudgetStatus() reports the month's ceiling closed. See the note on
+  // freeRunsPausedNote in types.ts for why the promise above is left intact
+  // rather than rewritten.
+  freeRunsPausedNote:
+    "⏳ One thing before you start: free runs are paused until the first of next month. That is a limit on my side, not on your account - your free minutes stay waiting for you. If you want clips today, open 💳 Plans.",
   newAccountBtn: "✨ Create new account",
   linkAccountBtn: "🔗 I already have an account",
   newAccountCreated:
-    "Account created. Send a video now - the first one is free, no card needed.\n\nUp to 30 minutes. If it comes back with no clips, it doesn't count against your free run.",
+    "Account created. Send a video now - the first one is free, no card needed.\n\nUp to 60 minutes. If it comes back with no clips, it doesn't count against your free run.",
   linkAccountInstructions: (code, url) =>
     `Your linking code: ${code}\n\n1. Open ${url}/dashboard/settings on the device where you're logged in.\n2. Paste this code within 10 minutes.\n\nThis Telegram will be connected to that account.`,
   callbackAck: "Got it",
@@ -118,10 +131,12 @@ const en: Dict = {
         : "Done. I watched the whole video but did not find moments strong enough for clips - no clips this time. Try a video with more talk, emotion, or story.",
   lowQualityNote: "Heads up: no strong moments found - this is the best available.",
   blocked: (reason) => `${reason}\n\n💳 Plans - choose or manage your subscription.`,
-  freeTrialUsed: (runs, planMinutes, planPriceEur) =>
-    `That was your free run - ${runs} video, free and without a card. The clips from it are yours to keep.\n\nTo carry on: Starter is €${planPriceEur} a week for ${planMinutes} minutes of video, sources up to 3 hours, and 20 clips kept for 7 days.`,
-  freeTrialAttemptsUsed: (attempts, planMinutes, planPriceEur) =>
-    `I've processed ${attempts} videos on your free trial and none of them produced clips - so you haven't really seen what this does yet. That usually means the source had little clear speech.\n\nFree attempts are used up. If you want to keep trying, Starter is €${planPriceEur} a week for ${planMinutes} minutes of video.`,
+  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
+    `Your free minutes will not cover this - ${remainingMinutes} of ${lifetimeMinutes} left. Anything I already made for you is yours to keep.\n\nTo carry on: Starter is €${planPriceEur} a week for ${planMinutes} minutes of video, sources up to 3 hours, and 20 clips kept for 7 days.`,
+  freeNotAnchored: (planMinutes, planPriceEur) =>
+    `Your free minutes are not unlocked on this account yet. Write to support from the Help menu and I'll sort it out - or start straight away with Starter: €${planPriceEur} a week for ${planMinutes} minutes of video.`,
+  freeBudgetClosed: (planMinutes, planPriceEur) =>
+    `Free runs are paused until the first of next month. That is a limit on my side, not on your account - your free minutes are still waiting for you.\n\nIf you want to clip now: Starter is €${planPriceEur} a week for ${planMinutes} minutes of video.`,
   freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
     `Your free run covers videos up to ${freeMaxMinutes} minutes, and this one is longer. Send a shorter video - or a ${freeMaxMinutes}-minute section of this one - to try it free. A plan takes sources up to ${planMaxMinutes} minutes.`,
   planSourceTooLong: (maxMinutes) =>
@@ -255,7 +270,6 @@ const en: Dict = {
     { command: "referral", description: "Your referral link & earnings" },
   ],
   manageSubscriptionBtn: "🔧 Manage subscription",
-  editInBrowserBtn: "✂️ Edit in browser",
   checkingLink: "Checking link…",
   urlAccessFailed:
     "Couldn't access the video at that link. Try a different URL or upload the file directly.",

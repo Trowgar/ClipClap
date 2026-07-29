@@ -65,15 +65,30 @@ const FUNNEL_ORDER = [
   "start_first_screen",
   "first_screen_new_account",
   "first_screen_link_account",
+  "signed_up",
   "app_opened",
+  "email_verified",
   "video_submitted",
 ] as const;
 
+/** An event that is recorded but missing from FUNNEL_ORDER is invisible here -
+ *  getFunnel walks this list, not the table - so adding a step to
+ *  FUNNEL_EVENTS without adding it here writes data nobody will ever read. A
+ *  test in analytics.service.test.ts turns that into a red test.
+ *
+ *  `email_verified` sits between opening the app and submitting because that is
+ *  where the wall is: an unverified web account is shown the "Confirm your
+ *  email" panel in place of the upload form, so it can open the dashboard and
+ *  can never reach a submission. It has no rows at all on `bot` - a Telegram
+ *  account is anchored by its phone-backed id - and getFunnel skips empty steps
+ *  rather than drawing a hard zero. */
 const FUNNEL_LABELS: Record<(typeof FUNNEL_ORDER)[number], string> = {
   start_first_screen: "Saw the first screen",
-  first_screen_new_account: "Created an account",
+  first_screen_new_account: "Pressed New account",
   first_screen_link_account: "Linked an account",
+  signed_up: "Created an account",
   app_opened: "Opened the app",
+  email_verified: "Confirmed their email",
   video_submitted: "Submitted a video",
 };
 

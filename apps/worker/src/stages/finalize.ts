@@ -1,5 +1,6 @@
 import { jobStepService, prisma } from "@clipclap/shared";
 import { buildJobCostTelemetry } from "../cost-telemetry";
+import { settleFreeLedger } from "./free-settlement";
 import type { FinalizeStagePayload } from "./types";
 
 export async function runFinalizeStage(
@@ -35,6 +36,15 @@ export async function runFinalizeStage(
         }),
       },
     });
+
+    // Settle the free ledger against the outcome that was just written: true up
+    // the reservation's cost from the telemetry above, and give the allowance
+    // back if the run produced nothing. It runs AFTER the status write, not
+    // before, because the refunds are only safe on a state the job has actually
+    // reached - a refund written against an outcome that then fails to persist
+    // would be released for a job BullMQ retries and may still finish.
+    await settleFreeLedger(payload.jobId, "DONE");
+
     await jobStepService.completeJobStep(payload.jobId, "FINALIZE", {
       status: "DONE",
     });
@@ -47,6 +57,10 @@ export async function runFinalizeStage(
         error: error instanceof Error ? error.message : String(error),
       },
     });
+    // Same rule on this side: the FAILED write comes first, and only a job that
+    // is recorded as failed gets its allowance back. settleFreeLedger swallows
+    // its own errors so the original failure is what propagates.
+    await settleFreeLedger(payload.jobId, "FAILED");
     throw error;
   }
 }

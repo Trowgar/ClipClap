@@ -5,6 +5,11 @@ import {
   type SubscriptionState,
   type SubscriptionPhase,
 } from "./subscription-state";
+// Both anchor and balance come from free-tier.service, and the budget from
+// free-budget.service. NEVER reach for user.service for any of this: that file
+// already imports this one, so an import back would close a cycle.
+import { freeBalanceSeconds, isTrialAnchored } from "./free-tier.service";
+import { freeBudgetStatus } from "./free-budget.service";
 import type { Plan, BillingCycle } from "@prisma/client";
 
 export async function getMinutesUsedInPeriod(
@@ -59,46 +64,36 @@ function getPeriodStart(
 }
 
 export interface FreeTrialStatus {
-  /** Lifetime jobs that produced at least one clip. */
-  runsUsed: number;
-  runsLimit: number;
-  /** Lifetime jobs that were not our own failures. */
-  attemptsUsed: number;
-  attemptsLimit: number;
+  /** Seconds of source left on the account, for ever. */
+  remainingSeconds: number;
+  /** The lifetime allowance, so a surface can render "x of y". */
+  lifetimeSeconds: number;
   exhausted: boolean;
 }
 
 /**
  * The free allowance, answered over the account's whole life.
  *
- * Neither count carries a `createdAt` filter, and that is the entire point:
- * getMinutesUsedInPeriod can only ever say "how much inside this window", so a
- * period-shaped question cannot express "one free run, ever". Adding a date
- * filter to either query below silently converts the trial into a renewable
- * free tier - the shared tests assert its absence for that reason.
+ * It reads the free_usage ledger and nothing else. It used to count Job rows -
+ * one run that produced clips, three attempts - and that shape had two holes
+ * this one does not. DELETE: deleteProject hard-deletes jobs, so a jobs-based
+ * count was reset by the user pressing Delete. RACE: "a run that produced
+ * clips" is only knowable after the run, so ten simultaneous submissions each
+ * saw an unspent allowance. The ledger charges seconds BEFORE the job starts,
+ * lives in its own table, and survives a project delete.
  *
- * A run is a job that produced clips, so a job that came back empty leaves the
- * allowance intact: the user has not yet seen the product work, which is the
- * thing the allowance is for. Attempts then bound what those empty runs may
- * cost us. FAILED jobs count as neither - a user whose link died three times
- * has seen nothing, and locking them out for our breakage is the opposite of a
- * trial. This mirrors the billing rule, where FAILED is likewise not charged.
+ * Still lifetime, still with no date window. freeBalanceSeconds carries that
+ * property (and its own test asserts the absence of a createdAt filter): a
+ * period-shaped question can never express "one free allowance, ever".
  */
 export async function getFreeTrialStatus(
   userId: string
 ): Promise<FreeTrialStatus> {
-  const [runsUsed, attemptsUsed] = await Promise.all([
-    prisma.job.count({ where: { userId, clipsGenerated: { gt: 0 } } }),
-    prisma.job.count({ where: { userId, status: { not: "FAILED" } } }),
-  ]);
-
+  const remainingSeconds = await freeBalanceSeconds(userId);
   return {
-    runsUsed,
-    runsLimit: FREE_TIER.runs,
-    attemptsUsed,
-    attemptsLimit: FREE_TIER.attempts,
-    exhausted:
-      runsUsed >= FREE_TIER.runs || attemptsUsed >= FREE_TIER.attempts,
+    remainingSeconds,
+    lifetimeSeconds: FREE_TIER.lifetimeSeconds,
+    exhausted: remainingSeconds <= 0,
   };
 }
 
@@ -195,9 +190,10 @@ export async function getUsageForUser(userId: string): Promise<UsageSummary> {
 export type SubmissionBlockCode =
   | "LIFECYCLE"
   | "QUOTA"
-  | "FREE_TRIAL_USED"
-  | "FREE_TRIAL_ATTEMPTS"
-  | "FREE_SOURCE_TOO_LONG";
+  | "FREE_NOT_ANCHORED"
+  | "FREE_EXHAUSTED"
+  | "FREE_SOURCE_TOO_LONG"
+  | "FREE_BUDGET_CLOSED";
 
 /** The numbers behind a QUOTA refusal, so a presentation layer can say them
  *  in its own language instead of reprinting `reason`. */
@@ -304,12 +300,15 @@ export async function canSubmitJob(
 /**
  * The free-tier gate.
  *
- * Order matters. The duration refusal comes first, because telling someone
- * their trial is spent when the real problem is that they sent a three-hour
- * VOD would push them to buy a plan for a reason that is not true - and they
- * would still be blocked afterwards if the trial really were spent. Length is
- * also the one refusal the user can act on immediately, by sending a shorter
- * cut.
+ * Order matters, and it is not arbitrary:
+ *   1. Anchor first. An unverified account has no allowance at all, so telling
+ *      it about minutes it does not have would be a lie.
+ *   2. Length next. Telling someone their trial is spent when the real problem
+ *      is a three-hour VOD pushes them to buy for a reason that is not true,
+ *      and length is the one refusal they can act on immediately.
+ *   3. Balance, then the global budget. Balance is about this user; the budget
+ *      is about everyone, and a user whose own allowance is gone should hear
+ *      the personal reason rather than a global one.
  */
 async function checkFreeTrial(
   userId: string,
@@ -317,31 +316,60 @@ async function checkFreeTrial(
 ): Promise<JobSubmissionCheck> {
   const limits = getPlanLimits("NONE");
 
+  if (!(await isTrialAnchored(userId))) {
+    return {
+      allowed: false,
+      code: "FREE_NOT_ANCHORED",
+      reason:
+        "Confirm your email to unlock your free minutes. We sent you a link when you signed up - ask for another one if it is gone.",
+    };
+  }
+
   if (jobDurationMinutes > limits.maxSourceDurationMinutes) {
     return {
       allowed: false,
       code: "FREE_SOURCE_TOO_LONG",
-      reason: `Your free run covers videos up to ${limits.maxSourceDurationMinutes} minutes. Send a shorter video to try it free, or pick a plan for sources up to ${getPlanLimits("STARTER", "WEEKLY").maxSourceDurationMinutes} minutes.`,
+      reason: `Your free minutes cover videos up to ${limits.maxSourceDurationMinutes} minutes. Send a shorter video, or pick a plan for sources up to ${getPlanLimits("STARTER", "WEEKLY").maxSourceDurationMinutes} minutes.`,
     };
   }
 
   const trial = await getFreeTrialStatus(userId);
+  const neededSeconds = jobDurationMinutes * 60;
 
-  if (trial.runsUsed >= trial.runsLimit) {
+  // `trial.exhausted` is not redundant with the comparison beside it, and this
+  // is the one line in the gate that must not be simplified.
+  //
+  // jobDurationMinutes is 0 whenever the source has not been probed - which is
+  // every URL submission on the web path today. That makes neededSeconds 0, and
+  // an empty balance is not LESS than 0, so a spent account walks straight past
+  // the comparison. Until this clause was added, the only thing refusing that
+  // account was the closed budget one check further down, which means the day a
+  // ceiling goes into .env an exhausted account is allowed through. Verified
+  // against the live gate, not reasoned about.
+  //
+  // Task 12 will make submissions carry a real duration, and this clause still
+  // stays: an upload reserves provisionally and a probe can fail, so the gate
+  // must not depend on its caller having measured anything.
+  if (trial.exhausted || trial.remainingSeconds < neededSeconds) {
     return {
       allowed: false,
-      code: "FREE_TRIAL_USED",
+      code: "FREE_EXHAUSTED",
+      // The copy states what they HAD and what is left, and deliberately says
+      // nothing about the length of this particular video: on the duration-0
+      // path we do not know it, and "this video needs 0 minutes" is nonsense.
       trial,
-      reason: `You have used your free run - that was ${trial.runsUsed} video, free and without a card. Pick a plan to keep clipping: Starter is 75 minutes of video a week, sources up to 180 minutes, 20 clips kept for 7 days.`,
+      reason: `Your free minutes will not cover this - ${Math.floor(trial.remainingSeconds / 60)} of ${trial.lifetimeSeconds / 60} left. Starter is 75 minutes of video a week for 3 USD.`,
     };
   }
 
-  if (trial.attemptsUsed >= trial.attemptsLimit) {
+  const budget = await freeBudgetStatus();
+  if (!budget.open) {
     return {
       allowed: false,
-      code: "FREE_TRIAL_ATTEMPTS",
+      code: "FREE_BUDGET_CLOSED",
       trial,
-      reason: `Your free trial is used up: ${trial.attemptsUsed} videos processed and no clips came out of them. Pick a plan to keep trying - Starter is 75 minutes of video a week for 3 EUR.`,
+      reason:
+        "Free runs are paused until the first of next month. Pick a plan to clip now - Starter is 75 minutes of video a week for 3 USD.",
     };
   }
 

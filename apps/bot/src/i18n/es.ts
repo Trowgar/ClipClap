@@ -17,6 +17,8 @@ const esFailure: Record<JobErrorCode, string> = {
     "No pude descargar el video de ese enlace: puede ser privado, estar bloqueado por región, eliminado o no disponible temporalmente. Comprueba que el enlace se abre en un navegador, o envíame el archivo directamente. No se usaron tus minutos.",
   SOURCE_TOO_LARGE:
     "Ese video supera mi límite de 2 GB, así que no pude descargarlo. No se usaron tus minutos. Enviarme el archivo no ayudará porque se aplica el mismo límite de 2 GB: recorta el video a la parte que quieres cortar y envía eso.",
+  FREE_ALLOWANCE_EXCEEDED:
+    "Este video es más largo que los minutos gratis que te quedan, así que me detuve antes de procesarlo. Tus minutos gratis siguen ahí: úsalos con un video más corto, o elige un plan para procesar este entero.",
 };
 
 const esFailureGeneric =
@@ -26,14 +28,20 @@ const es: Dict = {
   welcomeNew:
     "¡Bienvenido a ClipClap! Envíame un video y lo convierto en clips verticales con subtítulos.\n\nIdioma: envía /lang para cambiarlo.",
   welcomeFirstChoice:
-    "¡Hola! Convierto videos largos en clips verticales con subtítulos, listos para TikTok, Reels y Shorts.\n\nTu primer video es gratis: sin tarjeta y sin plan. Si vuelve sin clips, no cuenta.\n\nCómo funciona:\n1. Envía un video (hasta 30 minutos en la prueba gratis)\n2. Busco los mejores momentos y los corto\n3. Tus clips vuelven aquí: hasta 12, según el video\n\nPrimero, ¿cómo prefieres empezar?\n\n• Cuenta nueva: usa este Telegram como tu cuenta de ClipClap.\n• Ya tengo cuenta: conecta este Telegram a tu cuenta de clipclap.io.",
+    "¡Hola! Convierto videos largos en clips verticales con subtítulos, listos para TikTok, Reels y Shorts.\n\nTu primer video es gratis: sin tarjeta y sin plan. Si vuelve sin clips, no cuenta.\n\nCómo funciona:\n1. Envía un video (hasta 60 minutos en la prueba gratis)\n2. Busco los mejores momentos y los corto\n3. Tus clips vuelven aquí: hasta 10, según el video\n\nPrimero, ¿cómo prefieres empezar?\n\n• Cuenta nueva: usa este Telegram como tu cuenta de ClipClap.\n• Ya tengo cuenta: conecta este Telegram a tu cuenta de clipclap.io.",
   welcomeBack: "¡Hola de nuevo! Envía un video y te genero los clips.",
   welcomeNeedsPlan:
-    "Envía un video y te genero los clips. Una cuenta nueva tiene una prueba gratis: sin tarjeta, hasta 30 minutos de video.",
+    "Envía un video y te genero los clips. Una cuenta nueva tiene una prueba gratis: sin tarjeta, hasta 60 minutos de video.",
+  // Appended by the handler to the onboarding screens, and only while
+  // freeBudgetStatus() reports the month's ceiling closed. See the note on
+  // freeRunsPausedNote in types.ts for why the promise above is left intact
+  // rather than rewritten.
+  freeRunsPausedNote:
+    "⏳ Antes de empezar: las pruebas gratis están en pausa hasta el día uno del mes que viene. Es un límite mío, no de tu cuenta: tus minutos gratis siguen esperándote. Si quieres clips hoy, abre 💳 Planes.",
   newAccountBtn: "✨ Crear cuenta nueva",
   linkAccountBtn: "🔗 Ya tengo cuenta",
   newAccountCreated:
-    "Cuenta creada. Envía un video ya: el primero es gratis y sin tarjeta.\n\nHasta 30 minutos. Si vuelve sin clips, no cuenta contra tu prueba gratis.",
+    "Cuenta creada. Envía un video ya: el primero es gratis y sin tarjeta.\n\nHasta 60 minutos. Si vuelve sin clips, no cuenta contra tu prueba gratis.",
   linkAccountInstructions: (code, url) =>
     `Tu código de conexión: ${code}\n\n1. Abre ${url}/dashboard/settings en el dispositivo donde tienes la sesión iniciada.\n2. Pega este código antes de 10 minutos.\n\nEste Telegram quedará conectado a esa cuenta.`,
   callbackAck: "Listo",
@@ -78,10 +86,12 @@ const es: Dict = {
   lowQualityNote:
     "Aviso: no encontré momentos fuertes, esto es lo mejor disponible.",
   blocked: (reason) => `${reason}\n\n💳 Planes: elige o gestiona tu suscripción.`,
-  freeTrialUsed: (runs, planMinutes, planPriceEur) =>
-    `Esa era tu prueba gratis: ${runs} ${pluralEs(runs, "video", "videos")}, gratis y sin tarjeta. Los clips que salieron son tuyos.\n\nPara seguir: Starter cuesta €${planPriceEur} por semana e incluye ${planMinutes} minutos de video, fuentes de hasta 3 horas y 20 clips guardados 7 días.`,
-  freeTrialAttemptsUsed: (attempts, planMinutes, planPriceEur) =>
-    `Procesé ${attempts} ${pluralEs(attempts, "video", "videos")} en tu prueba gratis y ninguno dio clips, así que todavía no has visto de verdad lo que esto hace. Suele pasar cuando la fuente tiene poca habla clara.\n\nSe acabaron los intentos gratis. Si quieres seguir probando, Starter cuesta €${planPriceEur} por semana e incluye ${planMinutes} minutos de video.`,
+  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
+    `Tus minutos gratis no alcanzan para esto: quedan ${remainingMinutes} de ${lifetimeMinutes}. Lo que ya te corté es tuyo.\n\nPara seguir: Starter cuesta €${planPriceEur} por semana e incluye ${planMinutes} minutos de video, fuentes de hasta 3 horas y 20 clips guardados 7 días.`,
+  freeNotAnchored: (planMinutes, planPriceEur) =>
+    `Los minutos gratis todavía no están activos en esta cuenta. Escribe a soporte desde el menú de ayuda y lo resuelvo, o empieza ya con Starter: €${planPriceEur} por semana e incluye ${planMinutes} minutos de video.`,
+  freeBudgetClosed: (planMinutes, planPriceEur) =>
+    `Las pruebas gratis están en pausa hasta el día uno del mes que viene. Es un límite mío, no de tu cuenta: tus minutos gratis siguen ahí.\n\nSi quieres cortar ahora, Starter cuesta €${planPriceEur} por semana e incluye ${planMinutes} minutos de video.`,
   freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
     `Tu prueba gratis admite videos de hasta ${freeMaxMinutes} minutos, y este es más largo. Envía un video más corto, o un fragmento de ${freeMaxMinutes} minutos de este, para probarlo gratis. Con un plan acepto fuentes de hasta ${planMaxMinutes} minutos.`,
   planSourceTooLong: (maxMinutes) =>
@@ -220,7 +230,6 @@ const es: Dict = {
     { command: "referral", description: "Tu enlace de referidos y ganancias" },
   ],
   manageSubscriptionBtn: "🔧 Gestionar suscripción",
-  editInBrowserBtn: "✂️ Editar en el navegador",
   checkingLink: "Comprobando el enlace…",
   urlAccessFailed:
     "No pude acceder al video de ese enlace. Prueba con otro enlace o sube el archivo directamente.",

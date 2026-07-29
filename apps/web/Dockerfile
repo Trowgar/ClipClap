@@ -1,7 +1,20 @@
 # --- Base ---
 FROM node:20-alpine AS base
 WORKDIR /app
-RUN apk add --no-cache openssl
+# yt-dlp is needed on the SUBMIT path, not just in the worker: /api/jobs probes a
+# pasted URL with `yt-dlp --simulate` to learn its real duration before a Job row
+# exists. Without it the gate has nothing but the client's own claim, and a
+# three-hour VOD is fully downloaded before anything refuses it.
+#
+# ffprobe is deliberately NOT here. An upload has already been PUT to R2 by the
+# time this route runs, so measuring it would mean pulling the bytes back out of
+# R2 into the web container to learn something the download stage - which has the
+# file on disk and already has ffprobe - learns for free.
+#
+# Installed the same way the bot does it (pip, not apk) so both surfaces run the
+# same yt-dlp and a site that breaks one breaks neither more nor less.
+RUN apk add --no-cache openssl python3 py3-pip
+RUN pip3 install --break-system-packages yt-dlp
 
 # --- Dependencies ---
 FROM base AS deps

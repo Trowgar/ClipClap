@@ -17,6 +17,7 @@
     "bullmq": "^5.30.0",
     "ioredis": "^5.4.0",
     "openai": "^4.80.0",
+    "resend": "^4.0.0",
     "stripe": "^17.5.0"
   },
   "devDependencies": {

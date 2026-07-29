@@ -41,9 +41,9 @@ describe("computeClipExpiresAt", () => {
     expect(days).toBe(30);
   });
 
-  // NONE clips are whatever the NONE plan says, no special case. The free trial
-  // is disabled (NONE_LIMITS is all zeros as of 2026-07-25), so the honest
-  // assertion is "tracks the plan", not a floor from the era when it was live.
+  // NONE clips are whatever the NONE plan says, no special case. Asserted
+  // against the config rather than against a literal, so re-tuning the free
+  // retention window is a one-place change - it is 3 days as of 2026-07-29.
   it("uses the NONE plan's retention for free-run clips", () => {
     const expires = computeClipExpiresAt("NONE", null, now);
     const days = (expires.getTime() - now.getTime()) / (24 * 60 * 60 * 1000);
