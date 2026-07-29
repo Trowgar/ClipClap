@@ -168,7 +168,9 @@ export function layout(input: MailLayout): string {
 <table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" style="width:560px;max-width:560px">
 
   <tr><td style="padding:0 0 20px">
-    <span class="cc-ink" style="font-family:${MONO};font-size:15px;font-weight:700;letter-spacing:-0.02em;color:#0a0a0a">clipclap</span>
+    <!-- Uppercase wants tracking added, not removed: the negative letter-spacing
+         that suits the lowercase logotype reads cramped on caps. -->
+    <span class="cc-ink" style="font-family:${MONO};font-size:14px;font-weight:700;letter-spacing:0.14em;color:#0a0a0a">CLIPCLAP</span>
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:8px"><tr>${filmStrip("#0a0a0a", "#d4d4d8")}</tr></table>
   </td></tr>
 
