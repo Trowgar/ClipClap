@@ -109,9 +109,31 @@ export const PLAN_LIMITS: Record<
  *  time. Attempts cap the total jobs a free account may ever start. FAILED
  *  jobs are excluded from that count - our own breakages must not consume a
  *  stranger's only look at the product. */
+/** `lifetimeSeconds` and `zeroClipRefunds` are the Milestone 2 replacements for
+ *  `runs`/`attempts`, and for now all four coexist: usage.service and the bot
+ *  still read the old pair, and they stop only once Task 11 rewrites those
+ *  consumers. Do not delete `runs`/`attempts` before then - the tree must
+ *  compile at every commit.
+ *
+ *  `lifetimeSeconds` (3600) is SOURCE seconds, spent against the free_usage
+ *  ledger rather than counted from Job rows, because deleteProject hard-deletes
+ *  jobs and a jobs-based count is reset by the user pressing Delete. Nine real
+ *  prod jobs measured 0.0095 USD per source minute, so the whole allowance is
+ *  about 0.57 USD per anchored account.
+ *
+ *  Seconds replace `runs` because seconds are what the ledger can charge BEFORE
+ *  the job runs. `runs` counted delivered clips, which is only knowable
+ *  afterwards, so ten simultaneous submissions each saw an unspent allowance.
+ *
+ *  `zeroClipRefunds` (1) is one forgiveness per account for a run that
+ *  transcribed fine and simply found nothing worth cutting. Without it a first
+ *  attempt on unclippable video ends the trial and the user leaves having seen
+ *  nothing work; with more than one, an account can feed us silence forever. */
 export const FREE_TIER = {
   runs: 1,
   attempts: 3,
+  lifetimeSeconds: 3600,
+  zeroClipRefunds: 1,
 } as const;
 
 /** Not a plan - a sample. Every field is the smallest value that still lets one
