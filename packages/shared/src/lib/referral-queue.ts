@@ -8,6 +8,9 @@ export const SUBSCRIPTION_RECONCILE_JOB = "subscription-reconcile";
  *  of work - hourly, idempotent, nobody is waiting for it - and a second queue
  *  would mean a second Worker and a second shutdown path for no gain. */
 export const RETENTION_SWEEP_JOB = "retention-sweep";
+/** Free-allowance refund sweep. Same queue and the same reasoning as the
+ *  retention sweep: hourly, idempotent, nobody is waiting for it. */
+export const FREE_REFUND_SWEEP_JOB = "free-refund-sweep";
 
 let referralQueue: Queue | null = null;
 
@@ -34,6 +37,7 @@ export async function registerReferralSchedules(): Promise<void> {
   await queue.add(HOLD_RELEASE_JOB, {}, { repeat: { pattern: "0 * * * *" }, jobId: HOLD_RELEASE_JOB });
   await queue.add(SUBSCRIPTION_RECONCILE_JOB, {}, { repeat: { pattern: "0 * * * *" }, jobId: SUBSCRIPTION_RECONCILE_JOB });
   await queue.add(RETENTION_SWEEP_JOB, {}, { repeat: { pattern: "0 * * * *" }, jobId: RETENTION_SWEEP_JOB });
+  await queue.add(FREE_REFUND_SWEEP_JOB, {}, { repeat: { pattern: "0 * * * *" }, jobId: FREE_REFUND_SWEEP_JOB });
   // Retire the old 1st/15th payout batch if still scheduled in Redis.
   for (const job of await queue.getRepeatableJobs()) {
     if (job.name === "payout-batch") await queue.removeRepeatableByKey(job.key);

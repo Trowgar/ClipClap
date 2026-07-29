@@ -37,6 +37,7 @@ export * from "./analytics-detail.service";
 export * from "./email.service";
 export * from "./email-token.service";
 export * from "./free-tier.service";
+export * from "./free-refund-sweep.service";
 export * from "./free-budget.service";
 export * as retentionService from "./retention.service";
 export { runRetentionSweep } from "./retention.service";

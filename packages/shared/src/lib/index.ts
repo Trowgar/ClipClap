@@ -25,6 +25,7 @@ export {
   HOLD_RELEASE_JOB,
   SUBSCRIPTION_RECONCILE_JOB,
   RETENTION_SWEEP_JOB,
+  FREE_REFUND_SWEEP_JOB,
 } from "./referral-queue";
 export * from "./email-identity";
 export * from "./source-probe";
