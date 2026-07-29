@@ -173,8 +173,10 @@ function ClipCard({
         duration: 0.8,
         ease: [0.22, 1, 0.36, 1],
       }}
-      className="relative flex-shrink-0"
-      style={{ marginTop: clip.offset }}
+      /* On phones the gap is fluid so the four cards plus the bleed from their
+         rotation always fit the viewport; from md up it is the container's gap. */
+      className={`relative flex-shrink-0 ${index > 0 ? "ml-[min(2.2vw,16px)] md:ml-0" : ""}`}
+      style={{ marginTop: clip.offset, zIndex: index === 1 || index === 2 ? 20 : 10 }}
     >
       <motion.div
         animate={{ y: [0, -8, 0] }}
@@ -185,7 +187,7 @@ function ClipCard({
           delay: index * 0.5,
         }}
       >
-        <div className="w-[120px] sm:w-[150px] h-[213px] sm:h-[267px] rounded-[20px] border border-white/[0.08] overflow-hidden relative shadow-2xl shadow-black/60 group">
+        <div className="w-[min(20vw,150px)] md:w-[150px] aspect-[9/16] rounded-[20px] border border-white/[0.08] overflow-hidden relative shadow-2xl shadow-black/60 group">
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
             src={clip.img}
@@ -202,8 +204,8 @@ function ClipCard({
           </div>
 
           {/* Subtitle */}
-          <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/80 via-black/30 to-transparent pt-14">
-            <p className="text-white text-[10px] sm:text-[11px] font-extrabold text-center leading-tight whitespace-pre-line drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
+          <div className="absolute bottom-0 left-0 right-0 p-2 sm:p-3 bg-gradient-to-t from-black/80 via-black/30 to-transparent pt-10 sm:pt-14">
+            <p className="text-white text-[9px] sm:text-[11px] font-extrabold text-center leading-tight whitespace-pre-line drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">
               {clip.subtitle}
             </p>
           </div>
@@ -550,7 +552,9 @@ export default function LandingPage() {
                   Your clips with subtitles
                 </span>
               </div>
-              <div className="flex items-center justify-center gap-3 sm:gap-4">
+              {/* -mx-3 lets the fan borrow the section's phone padding, which
+                  buys the room for the gaps between the cards. */}
+              <div className="flex items-center justify-center gap-0 md:gap-4 -mx-3 md:mx-0">
                 {outputClips.map((clip, i) => (
                   <ClipCard key={i} clip={clip} index={i} />
                 ))}
