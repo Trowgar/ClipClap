@@ -1,5 +1,11 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { getPlanLimits, PLAN_LIMITS, getPlanFromPriceId, FREE_TIER } from "../plans";
+import {
+  getPlanLimits,
+  PLAN_LIMITS,
+  getPlanFromPriceId,
+  FREE_TIER,
+  estimatedFreeCostUsd,
+} from "../plans";
 
 // The free trial was zeroed on 2026-07-25 and turned back on 2026-07-29, once
 // the three holes that forced the zeroing were closed (see the comment above
@@ -110,11 +116,45 @@ describe("Plan Limits", () => {
       expect(Object.keys(FREE_TIER)).toEqual([
         "lifetimeSeconds",
         "zeroClipRefunds",
+        "estimatedUsdPerSourceMinute",
       ]);
     });
 
     it("forgives exactly one empty run", () => {
       expect(FREE_TIER.zeroClipRefunds).toBe(1);
+    });
+
+    // The reservation written at submit time is an estimate against the monthly
+    // ceiling, so it has to be denominated the same way the ceiling is - USD -
+    // and it has to be per source minute, which is the only unit the probe can
+    // give us before a byte is downloaded.
+    it("prices a source minute so a reservation can be made before the run", () => {
+      expect(FREE_TIER.estimatedUsdPerSourceMinute).toBe(0.0095);
+    });
+
+    // The whole lifetime allowance is 60 minutes, so one account can cost at
+    // most this much. If that ever stops being small relative to a plausible
+    // ceiling, the ceiling is no longer the thing bounding the free tier.
+    it("puts a whole free allowance well under a dollar", () => {
+      const worstCaseUsd = estimatedFreeCostUsd(FREE_TIER.lifetimeSeconds);
+      expect(worstCaseUsd).toBeCloseTo(0.57, 5);
+    });
+
+    it("bills exact seconds, not rounded-up minutes", () => {
+      // 61 seconds is one minute and one second. A ceil to 2 minutes would
+      // overstate this by 64%, and the budget would close early for no reason.
+      expect(estimatedFreeCostUsd(61)).toBeCloseTo(
+        (61 / 60) * 0.0095,
+        10
+      );
+    });
+
+    // Every upload arrives here with the duration unknown (the web route does
+    // not probe uploads), so 0 is a routine input, not an error case.
+    it("costs nothing for a duration we do not know yet", () => {
+      expect(estimatedFreeCostUsd(0)).toBe(0);
+      expect(estimatedFreeCostUsd(Number.NaN)).toBe(0);
+      expect(estimatedFreeCostUsd(-30)).toBe(0);
     });
 
     it("stays clearly under one week of the entry tier", () => {

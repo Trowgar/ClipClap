@@ -10,6 +10,7 @@ import {
   createBotInitiatedLink,
   createShopOrder,
   createTelegramDelivery,
+  estimatedFreeCostUsd,
   findOrCreateTelegramUser,
   FREE_TIER,
   getPlanLimits,
@@ -31,7 +32,11 @@ import {
   uploadFile,
   uploadRejectedEvent,
 } from "@clipclap/shared";
-import type { SubscriptionPhase, UploadRejectionCode } from "@clipclap/shared";
+import type {
+  FreeChargeInput,
+  SubscriptionPhase,
+  UploadRejectionCode,
+} from "@clipclap/shared";
 import type { User } from "@prisma/client";
 import type { TelegramClient } from "./telegram-client";
 import { extractVideoUrl, probeVideoUrl } from "./url-probe";
@@ -1579,6 +1584,28 @@ async function getUserLocale(userId: string): Promise<Locale> {
   return detectLocale(user?.telegramLocale ?? undefined);
 }
 
+/**
+ * The free-tier reservation to write with the Job row, or undefined if this
+ * account is paying.
+ *
+ * The plan/status pair mirrors canSubmitJob's routing into checkFreeTrial
+ * exactly, and the web route's freeChargeFor makes the same test. All three have
+ * to agree or an account gets gated on one basis and charged on another.
+ * `plan === "NONE"` alone would not do: a canceled ex-subscriber can hold plan
+ * NONE with a non-NONE subscriptionStatus, and putting their job in the free
+ * ledger would count a paid run against the free monthly budget.
+ */
+function freeChargeFor(
+  user: Pick<User, "plan" | "subscriptionStatus">,
+  durationSec: number | undefined
+): FreeChargeInput | undefined {
+  if (user.plan !== "NONE" || user.subscriptionStatus !== "NONE") {
+    return undefined;
+  }
+  const seconds = durationSec && durationSec > 0 ? Math.round(durationSec) : 0;
+  return { seconds, estimatedCostUsd: estimatedFreeCostUsd(seconds) };
+}
+
 async function handleVideo(
   client: TelegramClient,
   message: TelegramMessage,
@@ -1648,6 +1675,12 @@ async function handleVideo(
       originalFilename: source.fileName || "telegram-video.mp4",
       subtitles: user.subtitlesEnabled,
       sourceDurationSec: source.duration,
+      // Telegram's own video metadata, which is as good as it gets before the
+      // download stage measures the file. Reserved anyway rather than left to
+      // that stage: an unreserved free upload spends nothing from the ledger
+      // until DOWNLOAD, and until then the account looks untouched to every
+      // other submission it makes in the meantime.
+      freeCharge: freeChargeFor(user, source.duration),
     });
 
     await createTelegramDelivery({
@@ -1697,12 +1730,19 @@ async function handleVideoUrl(
     return;
   }
 
+  // Int column, float probe. YouTube happens to answer whole seconds, which is
+  // why this never bit in prod, but archive.org and friends answer 596.46 and
+  // prisma.job.create rejects a Float for an Int - the link would die with an
+  // unhandled error after the user had already been told we were checking it.
+  const probedSec = Math.round(probe.durationSec);
+
   const job = await jobService.createJob({
     userId: user.id,
     sourceUrl: url,
     originalFilename: probe.title,
     subtitles: user.subtitlesEnabled,
-    sourceDurationSec: probe.durationSec,
+    sourceDurationSec: probedSec,
+    freeCharge: freeChargeFor(user, probedSec),
   });
 
   await createTelegramDelivery({

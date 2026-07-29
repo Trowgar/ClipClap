@@ -36,6 +36,21 @@ export interface Highlight {
   kind?: string;
 }
 
+/** The free-tier reservation to write alongside the Job row.
+ *
+ *  Present ONLY for an account on the free allowance - plan NONE and
+ *  subscriptionStatus NONE, the same pair canSubmitJob uses to route into
+ *  checkFreeTrial. A paying account must never carry this: a ledger row on a
+ *  paid job would be counted by the monthly budget as free spend and would make
+ *  trueUpFreeCost overwrite a charge that was never the free tier's. */
+export interface FreeChargeInput {
+  /** Seconds of source being reserved. The probe's figure where there is one;
+   *  the client's provisional number for an upload, which the download stage
+   *  re-checks before any money is spent. */
+  seconds: number;
+  estimatedCostUsd: number;
+}
+
 export interface CreateJobInput {
   userId: string;
   sourceUrl?: string;
@@ -43,6 +58,7 @@ export interface CreateJobInput {
   originalFilename?: string;
   subtitles?: boolean;
   sourceDurationSec?: number;
+  freeCharge?: FreeChargeInput;
 }
 
 export interface EditClipInput {

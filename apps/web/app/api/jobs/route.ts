@@ -7,8 +7,12 @@ import {
   canSubmitJob,
   recordFunnelEvent,
   uploadRejectedEvent,
+  estimatedFreeCostUsd,
+  probeVideoUrl,
   FUNNEL_EVENTS,
+  type FreeChargeInput,
 } from "@clipclap/shared";
+import type { User } from "@prisma/client";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +23,18 @@ const ACTIVE_STATUSES = [
   "ANALYZING",
   "CUTTING",
 ] as const;
+
+/** How long the submit response is willing to wait on yt-dlp.
+ *
+ *  A real probe of a real video measured ~1.7s, so this is roughly a five times
+ *  margin over the observed case rather than a guess. It is not wrapped in a
+ *  withTimeout helper: probeVideoUrl already bounds ITSELF - it kills the child
+ *  process on its own timer and passes execFile a hard timeout underneath that -
+ *  so the promise it returns cannot hang. Racing a bounded promise against a
+ *  second timer would only add a way for the two to disagree. This is the
+ *  deliberate difference from the mail send in the register route, which had no
+ *  timeout of its own and genuinely needed one bolted on. */
+const PROBE_TIMEOUT_MS = 8000;
 
 export async function POST(req: NextRequest) {
   const session = await auth();
@@ -39,9 +55,80 @@ export async function POST(req: NextRequest) {
 
   await recordFunnelEvent("web", userId, FUNNEL_EVENTS.VIDEO_SUBMITTED);
 
-  const durationMinutes =
+  // How long is this video, really?
+  //
+  // The body used to answer that, which meant the submitter answered it. On a
+  // URL submission the field is not even sent, so every pasted link was gated
+  // as zero minutes.
+  //
+  // A URL is measured HERE, before a Job row exists, because `yt-dlp
+  // --simulate` reads the metadata without fetching a byte. Without that a
+  // three-hour VOD is downloaded in full and only then refused - our bandwidth,
+  // our egress, and a cheap way for one person to make us fetch unlimited
+  // video on demand.
+  //
+  // An upload is NOT measured here, and that is not an oversight. The client
+  // has already PUT the file to R2 through a presigned URL by the time this
+  // route runs, so the bytes are spent either way and there is nothing left to
+  // save; measuring it would mean pulling the file back OUT of R2 into the web
+  // container to learn something the download stage - which has it on disk and
+  // has ffprobe - learns for free. That re-check is what actually protects the
+  // OpenAI spend, because money leaves the account at TRANSCRIBE, one stage
+  // after DOWNLOAD. Until then the client's number is carried as provisional
+  // and nothing but this account's own allowance rests on it.
+  let durationSec: number | undefined =
     typeof sourceDurationSec === "number" && sourceDurationSec > 0
-      ? Math.ceil(sourceDurationSec / 60)
+      ? sourceDurationSec
+      : undefined;
+
+  if (url) {
+    const probe = await probeVideoUrl(String(url), PROBE_TIMEOUT_MS);
+
+    if (!probe.ok && probe.reason === "probe-unavailable") {
+      // yt-dlp is missing from this container. That is an operational fault,
+      // and it must NOT be dressed up as a bad link: telling the user to check
+      // a URL that is perfectly fine sends them away doing work that cannot
+      // help, and files the incident under "user error" where nobody looks.
+      // source-probe has already logged the greppable line.
+      console.error(
+        `[jobs] URL probe unavailable for user ${userId} - refusing the ` +
+          `submission rather than gating on an unmeasured source`
+      );
+      return NextResponse.json(
+        {
+          error:
+            "We could not check that video just now. This one is on us - please try again in a minute.",
+        },
+        { status: 500 }
+      );
+    }
+
+    if (!probe.ok) {
+      await recordFunnelEvent("web", userId, uploadRejectedEvent("PROBE_FAILED"));
+      return NextResponse.json(
+        {
+          error:
+            "We could not read that link. Make sure it points at a single public video and try again.",
+        },
+        { status: 400 }
+      );
+    }
+
+    // The probe's number, not the body's. This is the whole point of the block.
+    //
+    // Rounded, and that is load-bearing rather than tidy: Job.sourceDurationSec
+    // is an Int column and yt-dlp returns a float for plenty of real extractors
+    // (archive.org answers 596.46 for a ten-minute item), so handing it through
+    // raw makes prisma.job.create throw "Expected Int, provided Float" and turns
+    // a perfectly good link into a 500. Rounding once here also keeps the three
+    // things that must agree - what we gate on, what we store, and what we
+    // charge - reading from a single number.
+    durationSec = Math.round(probe.durationSec);
+  }
+
+  const durationMinutes =
+    typeof durationSec === "number" && durationSec > 0
+      ? Math.ceil(durationSec / 60)
       : 0;
 
   // All limit checks are independent reads - run them in one round trip
@@ -101,10 +188,42 @@ export async function POST(req: NextRequest) {
     sourceKey: sourceKey || undefined,
     originalFilename: originalFilename || undefined,
     subtitles: subtitles !== false,
-    sourceDurationSec: typeof sourceDurationSec === "number" ? sourceDurationSec : undefined,
+    sourceDurationSec: durationSec,
+    freeCharge: freeChargeFor(user, durationSec),
   });
 
   return NextResponse.json(job, { status: 201 });
+}
+
+/**
+ * The reservation to write with the Job row, or undefined for a paying account.
+ *
+ * The plan/status pair is checked, never the derived subscription phase, and it
+ * is the SAME pair canSubmitJob uses to route into checkFreeTrial. If these two
+ * ever disagree, an account is either gated as free and charged as paid or the
+ * reverse. In particular `plan === "NONE"` alone is not enough: a canceled
+ * ex-subscriber whose plan was reset back to NONE keeps subscriptionStatus, and
+ * charging them here would put a paid customer's job into the free ledger,
+ * where the monthly budget would count it as free spend and trueUpFreeCost
+ * would later rewrite a row that was never the free tier's.
+ */
+function freeChargeFor(
+  user: Pick<User, "plan" | "subscriptionStatus">,
+  durationSec: number | undefined
+): FreeChargeInput | undefined {
+  if (user.plan !== "NONE" || user.subscriptionStatus !== "NONE") {
+    return undefined;
+  }
+
+  // Rounded, not ceiled: this is the ledger's record of what was measured, and
+  // the gate above has already decided the submission fits. An upload arrives
+  // with 0 here - unknown until the download stage measures it - and a
+  // zero-second CHARGE row is the right thing to write, because it is the row
+  // the download-stage re-check will find and correct. No row at all would
+  // leave nothing to correct.
+  const seconds = durationSec && durationSec > 0 ? Math.round(durationSec) : 0;
+
+  return { seconds, estimatedCostUsd: estimatedFreeCostUsd(seconds) };
 }
 
 export async function GET() {

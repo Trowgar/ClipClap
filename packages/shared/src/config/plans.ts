@@ -111,7 +111,25 @@ export const PLAN_LIMITS: Record<
 export const FREE_TIER = {
   lifetimeSeconds: 3600,
   zeroClipRefunds: 1,
+  /** Measured over the nine prod jobs carrying cost telemetry: 0.0060 for
+   *  whisper-1 plus 0.0035 for the gpt-5.1 critic. Compute is not in here
+   *  because the server is paid for whether a job runs or not. Used only to
+   *  pre-charge the monthly budget; finalize replaces it with the real figure. */
+  estimatedUsdPerSourceMinute: 0.0095,
 } as const;
+
+/**
+ * What a free job's reservation costs the monthly budget.
+ *
+ * Kept beside the constant it multiplies so the web route and the bot cannot
+ * each invent their own rounding. Seconds in, USD out - no minute rounding,
+ * because the ledger stores the probe's exact seconds and a ceil here would
+ * bill a 61-second video for two minutes.
+ */
+export function estimatedFreeCostUsd(seconds: number): number {
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+  return (seconds / 60) * FREE_TIER.estimatedUsdPerSourceMinute;
+}
 
 /** Not a plan - a sample. Every field is the smallest value that still lets one
  *  real video through end to end, because each zero here is a wall a new user
