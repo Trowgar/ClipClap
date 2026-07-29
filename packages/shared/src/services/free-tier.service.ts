@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
-import { FREE_TIER } from "../config/plans";
+import { FREE_TIER, estimatedFreeCostUsd } from "../config/plans";
 
 /**
  * Has this account proven an identity worth a free allowance?
@@ -107,10 +107,65 @@ export async function chargeFreeSeconds(
   }
 }
 
-async function findCharge(userId: string, jobId: string) {
+export interface FreeCharge {
+  seconds: number;
+  estimatedCostUsd: number | null;
+}
+
+/**
+ * The reservation this job holds, or null if it holds none.
+ *
+ * Exported because "is this job running on the free allowance?" has exactly one
+ * honest answer in the worker, and it is this row - not the user's plan. The
+ * plan is mutable and the worker reads it minutes to hours after submit: a user
+ * who buys Starter while a free job is queued would look paid to a plan check,
+ * and the download stage would then skip a re-check for a job whose CHARGE row
+ * is sitting on the ledger waiting to be corrected. It is also the exact
+ * condition the three settlement functions key on, so keying the re-check on
+ * anything else would let the two disagree.
+ */
+export async function findFreeCharge(
+  userId: string,
+  jobId: string
+): Promise<FreeCharge | null> {
   return prisma.freeUsage.findFirst({
     where: { userId, jobId, kind: "CHARGE" },
     select: { seconds: true, estimatedCostUsd: true },
+  });
+}
+
+/**
+ * Corrects a reservation to the duration that was actually measured.
+ *
+ * Separate from trueUpFreeCost rather than a widening of it, because the two
+ * answer different questions at different moments. This one runs at the
+ * download stage and says "the submit path guessed the LENGTH, here is what the
+ * file really is"; trueUpFreeCost runs at finalize and says "the estimate said
+ * this would COST x, the telemetry says it cost y". Merging them would give one
+ * function two callers with two meanings, and the finalize caller - which must
+ * never touch `seconds`, because seconds is what the user's balance is made of
+ * - would be one optional argument away from rewriting the allowance.
+ *
+ * The cost is derived here rather than passed in, so a corrected row can never
+ * hold seconds from the probe and a USD figure from the client's guess. It is
+ * still only an estimate; finalize replaces it with the measured one.
+ *
+ * updateMany and scoped to kind CHARGE for the same two reasons as
+ * trueUpFreeCost: a paid job has no row at all and `update` would throw on it,
+ * and the REFUND row's deliberate zero must survive.
+ */
+export async function reviseFreeChargeSeconds(
+  userId: string,
+  jobId: string,
+  seconds: number
+): Promise<void> {
+  const measured = Math.max(0, Math.round(seconds));
+  await prisma.freeUsage.updateMany({
+    where: { userId, jobId, kind: "CHARGE" },
+    data: {
+      seconds: measured,
+      estimatedCostUsd: estimatedFreeCostUsd(measured),
+    },
   });
 }
 
@@ -158,7 +213,7 @@ export async function refundFailedJob(
   userId: string,
   jobId: string
 ): Promise<void> {
-  const charge = await findCharge(userId, jobId);
+  const charge = await findFreeCharge(userId, jobId);
   if (!charge) return;
   if (await alreadyRefunded(userId, jobId)) return;
 
@@ -203,7 +258,7 @@ export async function refundZeroClipJob(
   userId: string,
   jobId: string
 ): Promise<boolean> {
-  const charge = await findCharge(userId, jobId);
+  const charge = await findFreeCharge(userId, jobId);
   if (!charge) return false;
   if (await alreadyRefunded(userId, jobId)) return false;
 

@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   getStageQueue: vi.fn(),
   queueAdd: vi.fn(),
   jobFind: vi.fn(),
+  jobFindUnique: vi.fn(),
   jobUpdate: vi.fn(),
 }));
 
@@ -45,9 +46,22 @@ vi.mock("@clipclap/shared", () => ({
   // the stale-dist worker, reproduced: the export exists on the namespace but
   // carries no function
   tagJobError: undefined,
+  // A stale dist does not lose ONE export - it predates every symbol added
+  // since it was built, and the free-tier re-check the download stage now runs
+  // is made entirely of new ones. Undefined here for the same reason
+  // tagJobError is: this is what the worker actually sees between a container
+  // restart and `npm run build -w @clipclap/shared`.
+  probeLocalFile: undefined,
+  findFreeCharge: undefined,
+  freeBalanceSeconds: undefined,
+  reviseFreeChargeSeconds: undefined,
+  refundFailedJob: undefined,
+  refundZeroClipJob: undefined,
+  trueUpFreeCost: undefined,
   prisma: {
     job: {
       findUniqueOrThrow: mocks.jobFind,
+      findUnique: mocks.jobFindUnique,
       update: mocks.jobUpdate,
     },
   },
@@ -147,6 +161,39 @@ describe("stage failure writes survive a stale shared build", () => {
       where: { id: "job1" },
       data: { status: "FAILED", error: raw },
     });
+  });
+
+  it("download still SUCCEEDS on a stale dist - the re-check skips, the job runs", async () => {
+    // The failure direction that matters for the newest guard. Before it, a
+    // stale dist cost nothing but error copy; the download stage now calls
+    // three brand-new shared exports, and calling one raw would TypeError in
+    // the middle of a healthy job and fail every download on the box - paying
+    // customers included - until someone noticed the build order. The measured
+    // duration is worth less than the pipeline.
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      userId: "u1",
+      sourceUrl: null,
+      sourceKey: "uploads/u1/vod.mp4",
+    });
+    mocks.downloadVideo.mockResolvedValue("/tmp/source.mp4");
+    mocks.normalizeSource.mockResolvedValue({
+      path: "/tmp/source.mp4",
+      action: "none",
+    });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      runDownloadStage({ jobId: "job1", userId: "u1" })
+    ).resolves.toBeUndefined();
+
+    expect(mocks.queueAdd).toHaveBeenCalledWith("transcribe", {
+      jobId: "job1",
+      userId: "u1",
+    });
+    // and it is loud, because the free ledger is silently not being corrected
+    expect(String(errors.mock.calls[0]?.[0])).toContain("stale");
+    errors.mockRestore();
   });
 
   it("analyze still marks the job FAILED, with the untagged prose", async () => {

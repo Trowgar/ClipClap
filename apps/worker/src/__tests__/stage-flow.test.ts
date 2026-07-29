@@ -12,8 +12,16 @@ const mocks = vi.hoisted(() => ({
   getStageQueue: vi.fn(),
   queueAdd: vi.fn(),
   jobFind: vi.fn(),
+  jobFindUnique: vi.fn(),
   jobUpdate: vi.fn(),
   analyzeHighlightsV2: vi.fn(),
+  probeLocalFile: vi.fn(),
+  findFreeCharge: vi.fn(),
+  freeBalanceSeconds: vi.fn(),
+  reviseFreeChargeSeconds: vi.fn(),
+  refundFailedJob: vi.fn(),
+  refundZeroClipJob: vi.fn(),
+  trueUpFreeCost: vi.fn(),
 }));
 
 vi.mock("@clipclap/shared", async () => ({
@@ -31,9 +39,17 @@ vi.mock("@clipclap/shared", async () => ({
       "@clipclap/shared/lib/job-error"
     )
   ).tagJobError,
+  probeLocalFile: mocks.probeLocalFile,
+  findFreeCharge: mocks.findFreeCharge,
+  freeBalanceSeconds: mocks.freeBalanceSeconds,
+  reviseFreeChargeSeconds: mocks.reviseFreeChargeSeconds,
+  refundFailedJob: mocks.refundFailedJob,
+  refundZeroClipJob: mocks.refundZeroClipJob,
+  trueUpFreeCost: mocks.trueUpFreeCost,
   prisma: {
     job: {
       findUniqueOrThrow: mocks.jobFind,
+      findUnique: mocks.jobFindUnique,
       update: mocks.jobUpdate,
     },
   },
@@ -74,6 +90,16 @@ describe("stage handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getStageQueue.mockReturnValue({ add: mocks.queueAdd });
+    // The download stage now re-measures every source. Default it to a readable
+    // file on a paying account (no CHARGE row), so these tests keep asserting
+    // the download path and the free re-check gets its own file.
+    mocks.probeLocalFile.mockResolvedValue({
+      ok: true,
+      durationSec: 60,
+      title: "Upload",
+    });
+    mocks.findFreeCharge.mockResolvedValue(null);
+    mocks.jobFindUnique.mockResolvedValue(null);
     // pin the engine: these tests assert the legacy analyze path and must not
     // depend on the ambient ANALYZE_ENGINE of the environment they run in
     vi.stubEnv("ANALYZE_ENGINE", "legacy");

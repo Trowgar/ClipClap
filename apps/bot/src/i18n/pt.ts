@@ -18,6 +18,8 @@ const ptFailure: Record<JobErrorCode, string> = {
     "Não consegui baixar o vídeo desse link: ele pode estar privado, bloqueado por região, removido ou indisponível no momento. Confere se o link abre no navegador, ou me manda o arquivo direto. Seus minutos não foram usados.",
   SOURCE_TOO_LARGE:
     "Esse vídeo passa do meu limite de 2 GB, então não consegui baixar. Seus minutos não foram usados. Me mandar o arquivo não resolve porque vale o mesmo limite de 2 GB: corta o vídeo até a parte que você quer e manda esse trecho.",
+  FREE_ALLOWANCE_EXCEEDED:
+    "Este vídeo é mais longo que os minutos grátis que sobraram, então parei antes de processar. Seus minutos grátis continuam aí: use em um vídeo mais curto, ou escolha um plano pra processar este inteiro.",
 };
 
 const ptFailureGeneric =

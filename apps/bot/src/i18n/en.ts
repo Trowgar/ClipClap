@@ -36,6 +36,13 @@ const enFailure: Record<JobErrorCode, string> = {
   // send the user off to fail a second time.
   SOURCE_TOO_LARGE:
     "That video is over my 2 GB limit, so I could not download it. Your minutes were not used. Sending me the file will not help - the same 2 GB limit applies - so trim the video to the part you want clipped and send that instead.",
+  // The one line here that can say the allowance is intact and mean it: the
+  // download stage refunds the reservation before marking the job failed. No
+  // number - /account shows the real balance - and both exits named, because a
+  // clipper whose VOD overruns the remaining free minutes can act on either but
+  // will guess neither.
+  FREE_ALLOWANCE_EXCEEDED:
+    "This video is longer than the free minutes you have left, so I stopped before processing it. Your free minutes are still there - clip a shorter video with them, or pick a plan to run this one in full.",
 };
 
 // The "unknown failure" line, so it may assert neither transience nor

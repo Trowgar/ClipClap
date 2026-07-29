@@ -17,6 +17,8 @@ const esFailure: Record<JobErrorCode, string> = {
     "No pude descargar el video de ese enlace: puede ser privado, estar bloqueado por región, eliminado o no disponible temporalmente. Comprueba que el enlace se abre en un navegador, o envíame el archivo directamente. No se usaron tus minutos.",
   SOURCE_TOO_LARGE:
     "Ese video supera mi límite de 2 GB, así que no pude descargarlo. No se usaron tus minutos. Enviarme el archivo no ayudará porque se aplica el mismo límite de 2 GB: recorta el video a la parte que quieres cortar y envía eso.",
+  FREE_ALLOWANCE_EXCEEDED:
+    "Este video es más largo que los minutos gratis que te quedan, así que me detuve antes de procesarlo. Tus minutos gratis siguen ahí: úsalos con un video más corto, o elige un plan para procesar este entero.",
 };
 
 const esFailureGeneric =

@@ -37,8 +37,10 @@ import {
   refundFailedJob,
   refundZeroClipJob,
   trueUpFreeCost,
+  findFreeCharge,
+  reviseFreeChargeSeconds,
 } from "../free-tier.service";
-import { FREE_TIER } from "../../config/plans";
+import { FREE_TIER, estimatedFreeCostUsd } from "../../config/plans";
 
 function ledger(charged: number, refunded: number) {
   (prisma.freeUsage.groupBy as any).mockResolvedValue([
@@ -395,6 +397,88 @@ describe("free-tier.service", () => {
 
     const data = (prisma.freeUsage.updateMany as any).mock.calls[0][0].data;
     expect(Object.keys(data)).toEqual(["estimatedCostUsd"]);
+  });
+
+  // ---------------------------------------------------------------------------
+  // reviseFreeChargeSeconds - the download stage correcting a reservation that
+  // was made before anyone had measured the file.
+  // ---------------------------------------------------------------------------
+
+  // Same scoping as trueUpFreeCost and for the same two reasons: a paid job has
+  // no row at all (updateMany matches nothing instead of `update` throwing), and
+  // the REFUND row's deliberate zero seconds must not be rewritten to the real
+  // length - that would hand the account back an allowance it never spent.
+  it("revises only the CHARGE row for this user's job", async () => {
+    (prisma.freeUsage.updateMany as any).mockResolvedValue({ count: 1 });
+    await reviseFreeChargeSeconds("u1", "job1", 612);
+
+    expect(prisma.freeUsage.updateMany).toHaveBeenCalledWith({
+      where: { userId: "u1", jobId: "job1", kind: "CHARGE" },
+      data: { seconds: 612, estimatedCostUsd: estimatedFreeCostUsd(612) },
+    });
+  });
+
+  // The cost is DERIVED here rather than passed in, so a corrected row can never
+  // hold the probe's seconds beside a USD figure computed from the client's
+  // guess. The two fields on this row are one fact.
+  it("moves the seconds and the money together", async () => {
+    (prisma.freeUsage.updateMany as any).mockResolvedValue({ count: 1 });
+    await reviseFreeChargeSeconds("u1", "job1", 3600);
+
+    const data = (prisma.freeUsage.updateMany as any).mock.calls[0][0].data;
+    expect(Object.keys(data).sort()).toEqual(["estimatedCostUsd", "seconds"]);
+    expect(data.estimatedCostUsd).toBeCloseTo(
+      FREE_TIER.estimatedUsdPerSourceMinute * 60,
+      10
+    );
+  });
+
+  // ffprobe returns a float and the column is Int?. Rounded, not ceiled, to
+  // match what the submit path writes - otherwise a corrected row and an
+  // uncorrected one differ by a second for no reason anyone can later explain.
+  it("rounds the probe's float to the column's integer", async () => {
+    (prisma.freeUsage.updateMany as any).mockResolvedValue({ count: 1 });
+    await reviseFreeChargeSeconds("u1", "job1", 612.6);
+
+    expect(
+      (prisma.freeUsage.updateMany as any).mock.calls[0][0].data.seconds
+    ).toBe(613);
+  });
+
+  // A negative duration is not representable in the column and would ADD to the
+  // balance. Nothing produces one today; clamping costs a Math.max.
+  it("never writes a negative reservation", async () => {
+    (prisma.freeUsage.updateMany as any).mockResolvedValue({ count: 1 });
+    await reviseFreeChargeSeconds("u1", "job1", -30);
+
+    const data = (prisma.freeUsage.updateMany as any).mock.calls[0][0].data;
+    expect(data.seconds).toBe(0);
+    expect(data.estimatedCostUsd).toBe(0);
+  });
+
+  // findFreeCharge is how the worker decides a job is on the free allowance at
+  // all. It must ask the ledger, not the user's plan: the plan is mutable and is
+  // read hours after submit, and it is this row that the three settlement
+  // functions key on.
+  it("reports the reservation a job holds, scoped to CHARGE and to the user", async () => {
+    (prisma.freeUsage.findFirst as any).mockResolvedValue({
+      seconds: 0,
+      estimatedCostUsd: 0,
+    });
+
+    expect(await findFreeCharge("u1", "job1")).toEqual({
+      seconds: 0,
+      estimatedCostUsd: 0,
+    });
+    expect(prisma.freeUsage.findFirst).toHaveBeenCalledWith({
+      where: { userId: "u1", jobId: "job1", kind: "CHARGE" },
+      select: { seconds: true, estimatedCostUsd: true },
+    });
+  });
+
+  it("reports null for a paying account, which has no row", async () => {
+    (prisma.freeUsage.findFirst as any).mockResolvedValue(null);
+    expect(await findFreeCharge("u1", "job1")).toBeNull();
   });
 
   // ---------------------------------------------------------------------------

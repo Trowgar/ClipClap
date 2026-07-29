@@ -69,6 +69,14 @@ const TEXT: Record<JobErrorCode, string> = {
   // needs to know what to cut it down to.
   SOURCE_TOO_LARGE:
     "That video is over our 2 GB limit, so we could not download it. Your minutes were not used. Uploading the file here will not help - the same 2 GB limit applies - so trim the video to the part you want clipped and use that instead.",
+  // The only line here that can promise the allowance is intact and mean it:
+  // the download stage refunds the reservation before it marks the job failed,
+  // so "still there" is a fact and not a hedge. It states no number - the copy
+  // is a static map with no room for one, and the account page shows the real
+  // balance - and it names both exits, because a clipper whose VOD is over the
+  // remaining free minutes can act on either but will guess neither.
+  FREE_ALLOWANCE_EXCEEDED:
+    "This video is longer than the free minutes you have left, so we stopped before processing it. Your free minutes are still there - clip a shorter video with them, or pick a plan to run this one in full.",
 };
 
 export function jobErrorText(code: JobErrorCode | null | undefined): string {

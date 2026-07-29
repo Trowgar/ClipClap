@@ -15,6 +15,8 @@ const idFailure: Record<JobErrorCode, string> = {
     "Aku tidak bisa mengunduh video dari tautan itu: mungkin privat, dibatasi wilayah, sudah dihapus, atau sedang tidak tersedia. Pastikan tautannya terbuka di browser, atau kirim filenya langsung ke sini. Menitmu tidak terpakai.",
   SOURCE_TOO_LARGE:
     "Video itu melebihi batas 2 GB, jadi aku tidak bisa mengunduhnya. Menitmu tidak terpakai. Mengirim filenya juga tidak membantu karena batas 2 GB-nya sama: potong dulu videonya ke bagian yang kamu mau, lalu kirim bagian itu.",
+  FREE_ALLOWANCE_EXCEEDED:
+    "Video ini lebih panjang dari sisa menit gratismu, jadi aku berhenti sebelum memprosesnya. Menit gratismu masih utuh: pakai untuk video yang lebih pendek, atau pilih paket untuk memproses yang ini sepenuhnya.",
 };
 
 const idFailureGeneric =
