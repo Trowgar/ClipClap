@@ -1,4 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { Prisma } from "@prisma/client";
+
+/** The unique index on (userId, jobId, kind) rejecting a second refund. */
+function p2002(): Prisma.PrismaClientKnownRequestError {
+  return new Prisma.PrismaClientKnownRequestError("Unique constraint failed", {
+    code: "P2002",
+    clientVersion: "5.20.0",
+  });
+}
 
 vi.mock("../../lib/prisma", () => ({
   prisma: {
@@ -81,6 +90,7 @@ describe("free-tier.service", () => {
         userId: "u1",
         jobId: "job1",
         kind: "REFUND",
+        reason: "FAILED_JOB",
         seconds: 1800,
         estimatedCostUsd: 0,
       },
@@ -105,14 +115,22 @@ describe("free-tier.service", () => {
 
     expect(refunded).toBe(true);
     expect(prisma.freeUsage.create).toHaveBeenCalledOnce();
+    expect((prisma.freeUsage.create as any).mock.calls[0][0].data.reason).toBe(
+      "ZERO_CLIPS"
+    );
   });
 
+  // The two count calls must be stubbed separately. Returning 1 for both makes
+  // this pass at the alreadyRefunded check instead - a different rule, already
+  // covered below - and the cap is never exercised at all.
   it("refuses the second zero-clip refund on the same account", async () => {
     (prisma.freeUsage.findFirst as any).mockResolvedValue({
       seconds: 900,
       estimatedCostUsd: 0.14,
     });
-    (prisma.freeUsage.count as any).mockResolvedValue(1);
+    (prisma.freeUsage.count as any)
+      .mockResolvedValueOnce(0) // no refund for THIS job yet
+      .mockResolvedValueOnce(1); // but the account's forgiveness is spent
 
     const refunded = await refundZeroClipJob("u1", "job2");
 
@@ -188,9 +206,12 @@ describe("free-tier.service", () => {
     expect(prisma.freeUsage.create).not.toHaveBeenCalled();
   });
 
-  // The account-wide forgiveness counter. It must NOT be scoped to this job -
-  // scoping it to the job makes the cap per-job, which is no cap at all.
-  it("counts zero-clip forgiveness across the whole account", async () => {
+  // The account-wide forgiveness counter, and the single most delicate `where`
+  // in the file. It must NOT be scoped to this job - that makes the cap per-job,
+  // which is no cap at all. It must ALSO carry reason: "ZERO_CLIPS", or it
+  // counts the uncapped refunds refundFailedJob writes and charges the user a
+  // forgiveness for our own breakage.
+  it("counts zero-clip forgiveness account-wide, by reason", async () => {
     (prisma.freeUsage.findFirst as any).mockResolvedValue({
       seconds: 900,
       estimatedCostUsd: 0.14,
@@ -201,7 +222,7 @@ describe("free-tier.service", () => {
     await refundZeroClipJob("u1", "job1");
 
     expect(prisma.freeUsage.count).toHaveBeenNthCalledWith(2, {
-      where: { userId: "u1", kind: "REFUND", jobId: { not: null } },
+      where: { userId: "u1", kind: "REFUND", reason: "ZERO_CLIPS" },
     });
   });
 
@@ -308,49 +329,99 @@ describe("free-tier.service", () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Known-wrong behaviour, pinned deliberately.
+  // The two defects the first draft of this service shipped with. Both are now
+  // fixed in the schema rather than worked around here, so these assert the
+  // corrected behaviour. They are the regression tests for that fix.
   // ---------------------------------------------------------------------------
 
-  // REPORTED BUG, pinned as-specified rather than silently fixed.
+  // Defect 1, fixed by FreeUsageReason.
   //
-  // The forgiveness counter matches `{ kind: "REFUND", jobId: { not: null } }`,
-  // which is every refund row there is - including the ones refundFailedJob
-  // writes. So an account whose first job FAILED has spent its zero-clip
-  // forgiveness without ever seeing an empty result, and the uncapped
-  // our-fault refund quietly turns into a capped one.
+  // The forgiveness counter used to match every REFUND row on the account,
+  // including the ones refundFailedJob writes. An account whose first job broke
+  // on our side had therefore spent its zero-clip forgiveness without ever
+  // seeing an empty result, which turned the deliberately uncapped our-fault
+  // refund into a capped one.
   //
-  // The ledger cannot currently tell the two reasons apart: FreeUsageKind is
-  // CHARGE|REFUND and there is no reason column. The fix is a schema change
-  // (a third kind, REFUND_ZERO_CLIP, or a `reason` column) plus counting only
-  // those rows here, and it belongs in a migration task, not this one.
-  //
-  // This test exists so the bug is visible in the suite instead of only in a
-  // report nobody re-reads. Delete it when the schema can express the
-  // distinction - do not delete it to make the suite quieter.
-  it("BUG: lets a failed-job refund consume the zero-clip forgiveness", async () => {
+  // The count is now narrowed by reason, so a FAILED_JOB row is invisible to it.
+  // Here the account has a failed-job refund on record and still gets its
+  // forgiveness: the ZERO_CLIPS count is what the second stub answers, and it is
+  // zero.
+  it("does not let a failed-job refund consume the forgiveness", async () => {
     (prisma.freeUsage.findFirst as any).mockResolvedValue({
       seconds: 900,
       estimatedCostUsd: 0.14,
     });
-    // First call: no REFUND for THIS job. Second call: one account-wide refund
-    // row exists - the full refund of an earlier job that failed on our side.
     (prisma.freeUsage.count as any)
-      .mockResolvedValueOnce(0)
-      .mockResolvedValueOnce(1);
+      .mockResolvedValueOnce(0) // no refund for THIS job
+      .mockResolvedValueOnce(0); // no ZERO_CLIPS refund, despite an earlier
+    // FAILED_JOB one existing on the account
+    (prisma.freeUsage.create as any).mockResolvedValue({});
 
-    expect(await refundZeroClipJob("u1", "job2")).toBe(false);
-    expect(prisma.freeUsage.create).not.toHaveBeenCalled();
+    expect(await refundZeroClipJob("u1", "job2")).toBe(true);
+    expect(prisma.freeUsage.create).toHaveBeenCalledOnce();
   });
 
-  // Also reported: the balance is floored at 0 but not capped at the allowance.
-  // Two concurrent finalizes of the same job both pass the idempotency check and
-  // both write a full refund, and the account ends up with MORE free seconds
-  // than the tier grants. The durable fix is a unique index on
-  // (userId, jobId, kind), not arithmetic here.
-  it("BUG: a double refund can push the balance above the allowance", async () => {
+  // Defect 2, fixed by @@unique([userId, jobId, kind]).
+  //
+  // Two finalizes of one job could both pass the read-check and both insert,
+  // leaving the account above the tier. The index now rejects the loser with
+  // P2002, and the loser must conclude what its read-check would have: already
+  // refunded. Anything else turns a benign race into a failed job.
+  it("treats a P2002 on a failed-job refund as already refunded", async () => {
+    (prisma.freeUsage.findFirst as any).mockResolvedValue({
+      seconds: 1800,
+      estimatedCostUsd: 0.28,
+    });
+    (prisma.freeUsage.count as any).mockResolvedValue(0);
+    (prisma.freeUsage.create as any).mockRejectedValue(p2002());
+
+    await expect(refundFailedJob("u1", "job1")).resolves.toBeUndefined();
+  });
+
+  it("treats a P2002 on a zero-clip refund as forgiveness not granted", async () => {
+    (prisma.freeUsage.findFirst as any).mockResolvedValue({
+      seconds: 900,
+      estimatedCostUsd: 0.14,
+    });
+    (prisma.freeUsage.count as any).mockResolvedValue(0);
+    (prisma.freeUsage.create as any).mockRejectedValue(p2002());
+
+    // False, not true: the seconds are back, but this call is not what put them
+    // there, and a caller that told the user "forgiveness spent" twice would be
+    // lying once.
+    expect(await refundZeroClipJob("u1", "job1")).toBe(false);
+  });
+
+  // The P2002 catch must stay narrow. A dead connection or a constraint we have
+  // not thought of has to surface, not be silently swallowed as a duplicate -
+  // that would report a refund the user never received.
+  it("lets a non-P2002 write failure surface", async () => {
+    (prisma.freeUsage.findFirst as any).mockResolvedValue({
+      seconds: 900,
+      estimatedCostUsd: 0.14,
+    });
+    (prisma.freeUsage.count as any).mockResolvedValue(0);
+    (prisma.freeUsage.create as any).mockRejectedValue(
+      new Error("connection reset")
+    );
+
+    await expect(refundFailedJob("u1", "job1")).rejects.toThrow(
+      "connection reset"
+    );
+    await expect(refundZeroClipJob("u1", "job1")).rejects.toThrow(
+      "connection reset"
+    );
+  });
+
+  // The balance deliberately has no upper cap. A Math.min here would mask a
+  // double write rather than prevent it, and the unique index is what prevents
+  // it. This pins the absence: if a balance ever does exceed the allowance, the
+  // ledger has rows it should not, and that must stay visible rather than being
+  // quietly clamped away.
+  it("does not clamp the balance to the allowance", async () => {
     ledger(1800, 3600);
-    expect(await freeBalanceSeconds("u1")).toBeGreaterThan(
-      FREE_TIER.lifetimeSeconds
+    expect(await freeBalanceSeconds("u1")).toBe(
+      FREE_TIER.lifetimeSeconds - 1800 + 3600
     );
   });
 });

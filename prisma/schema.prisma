@@ -559,6 +559,18 @@ enum FreeUsageKind {
   REFUND
 }
 
+/// Why a REFUND row exists. NULL on CHARGE rows.
+///
+/// The balance arithmetic never reads this - it stays a single group-by on
+/// `kind`. It exists so the zero-clip forgiveness cap can count only the
+/// forgiveness it grants. Without it the cap matches every refund row on the
+/// account, including the uncapped ones we write when a job fails on our side,
+/// so an account whose first job broke spends a forgiveness it never used.
+enum FreeUsageReason {
+  FAILED_JOB
+  ZERO_CLIPS
+}
+
 /// Append-only ledger of the free allowance.
 ///
 /// It exists as its own table for one reason: deleteProject runs
@@ -568,15 +580,25 @@ enum FreeUsageKind {
 /// door. Rows are never updated except to true up estimatedCostUsd, and never
 /// deleted.
 model FreeUsage {
-  id               String        @id @default(cuid())
+  id               String           @id @default(cuid())
   userId           String
-  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   jobId            String?
   kind             FreeUsageKind
+  reason           FreeUsageReason?
   seconds          Int
   estimatedCostUsd Float?
-  createdAt        DateTime      @default(now())
+  createdAt        DateTime         @default(now())
 
+  /// One charge per job and one refund per job are both genuine invariants, so
+  /// this states a truth rather than imposing a rule. It is also the only thing
+  /// that actually stops a double refund: two finalizes of the same job can both
+  /// pass a read-check and both insert, leaving the account holding more free
+  /// seconds than the tier grants. Postgres does not collide NULLs in a unique
+  /// index, so rows with a NULL jobId stay unconstrained - correct, since
+  /// nothing writes those today and a future manual adjustment should not be
+  /// limited to one per account.
+  @@unique([userId, jobId, kind])
   @@index([userId])
   @@index([createdAt])
   @@index([jobId])

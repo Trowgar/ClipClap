@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { FREE_TIER } from "../config/plans";
 
@@ -90,18 +91,36 @@ async function findCharge(userId: string, jobId: string) {
 /**
  * Idempotency guard, shared by both refund paths on purpose.
  *
- * A job reaches exactly one terminal state: FAILED, or COMPLETED with some clip
- * count. "Failed" and "produced zero clips" are therefore mutually exclusive
- * outcomes and no job should ever want both refunds. What this actually defends
- * against is the same outcome arriving twice - a BullMQ retry, or a finalize
- * running on two workers - which without it writes the charge back twice and
- * leaves the account holding more free seconds than the tier grants.
+ * A job reaches exactly one terminal state. analyze.ts routes an honest empty
+ * outcome to finalize as DONE and only technical failures to FAILED, so "failed"
+ * and "produced zero clips" are disjoint and no job legitimately wants both
+ * refunds. What this defends against is the same outcome arriving twice - a
+ * BullMQ retry, or a finalize running on two workers.
+ *
+ * It is a read-check, so it cannot see a write that has not committed yet. It
+ * saves a round trip in the common case; the unique index on
+ * (userId, jobId, kind) is what actually makes the double refund impossible, and
+ * both callers treat its P2002 as this function having returned true.
  */
 async function alreadyRefunded(userId: string, jobId: string): Promise<boolean> {
   const existing = await prisma.freeUsage.count({
     where: { userId, jobId, kind: "REFUND" },
   });
   return existing > 0;
+}
+
+/**
+ * True when this error is the unique index rejecting a second refund for a job.
+ *
+ * The only unique constraint this table carries is (userId, jobId, kind), so a
+ * P2002 from a refund insert can mean nothing else: another finalize won the
+ * race and the refund the caller wanted already exists. That is the same
+ * conclusion alreadyRefunded reaches, so callers return the same answer.
+ */
+function isDuplicateRefund(err: unknown): boolean {
+  return (
+    err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002"
+  );
 }
 
 /** Full release, no cap: a job we broke must not cost the user their trial. */
@@ -113,17 +132,24 @@ export async function refundFailedJob(
   if (!charge) return;
   if (await alreadyRefunded(userId, jobId)) return;
 
-  await prisma.freeUsage.create({
-    data: {
-      userId,
-      jobId,
-      kind: "REFUND",
-      seconds: charge.seconds,
-      // The money was spent even though the run failed; only the allowance is
-      // given back, so the budget ceiling still sees the true cost.
-      estimatedCostUsd: 0,
-    },
-  });
+  try {
+    await prisma.freeUsage.create({
+      data: {
+        userId,
+        jobId,
+        kind: "REFUND",
+        reason: "FAILED_JOB",
+        seconds: charge.seconds,
+        // The money was spent even though the run failed; only the allowance is
+        // given back, so the budget ceiling still sees the true cost.
+        estimatedCostUsd: 0,
+      },
+    });
+  } catch (err) {
+    if (!isDuplicateRefund(err)) throw err;
+    // Another finalize refunded this job between our check and our insert.
+    // Nothing to do - the user has their seconds back either way.
+  }
 }
 
 /**
@@ -133,13 +159,15 @@ export async function refundFailedJob(
  * leaves having seen nothing work. With more than one, an account can feed us
  * silence indefinitely.
  *
- * KNOWN BUG, kept as specified: the cap query below matches every REFUND row on
- * the account, and refundFailedJob writes rows that match it too. An account
- * whose first job failed on our side has therefore spent its zero-clip
- * forgiveness without ever seeing an empty result. The ledger cannot tell the
- * two reasons apart today - FreeUsageKind is CHARGE|REFUND with no reason
- * column - so fixing it needs a schema change, not an edit here. Pinned by the
- * "BUG:" test in free-tier.service.test.ts.
+ * The cap counts ZERO_CLIPS rows only. Counting every refund on the account
+ * would let a job that broke on OUR side spend a forgiveness the user never
+ * used, quietly turning refundFailedJob's deliberately uncapped release into a
+ * capped one - the exact opposite of what it is for. That is what `reason` was
+ * added to the ledger to express.
+ *
+ * Returns whether THIS call wrote the refund, so a caller can tell the user
+ * their one forgiveness has now been spent. A lost race returns false: the
+ * seconds are back, but this call is not what put them there.
  */
 export async function refundZeroClipJob(
   userId: string,
@@ -150,19 +178,25 @@ export async function refundZeroClipJob(
   if (await alreadyRefunded(userId, jobId)) return false;
 
   const used = await prisma.freeUsage.count({
-    where: { userId, kind: "REFUND", jobId: { not: null } },
+    where: { userId, kind: "REFUND", reason: "ZERO_CLIPS" },
   });
   if (used >= FREE_TIER.zeroClipRefunds) return false;
 
-  await prisma.freeUsage.create({
-    data: {
-      userId,
-      jobId,
-      kind: "REFUND",
-      seconds: charge.seconds,
-      estimatedCostUsd: 0,
-    },
-  });
+  try {
+    await prisma.freeUsage.create({
+      data: {
+        userId,
+        jobId,
+        kind: "REFUND",
+        reason: "ZERO_CLIPS",
+        seconds: charge.seconds,
+        estimatedCostUsd: 0,
+      },
+    });
+  } catch (err) {
+    if (!isDuplicateRefund(err)) throw err;
+    return false;
+  }
   return true;
 }
 
