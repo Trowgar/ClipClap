@@ -1782,15 +1782,32 @@ export async function getSubmissionBlocker(
   if (!submission.allowed) {
     await recordRejection(submission.code);
     switch (submission.code) {
-      case "FREE_TRIAL_USED":
-        return dict.freeTrialUsed(
-          submission.trial?.runsUsed ?? FREE_TIER.runs,
+      // Unreachable in practice: every account that reaches this function came
+      // in through Telegram, so it carries a phone-backed telegramId and
+      // isTrialAnchored returns true on that alone. Rendered anyway, because
+      // the code is part of the shared union and the alternative is an English
+      // log sentence in a Russian chat.
+      case "FREE_NOT_ANCHORED":
+        return dict.freeNotAnchored(
           STARTER_WEEKLY.minutesPerPeriod,
           STARTER_WEEKLY.priceUsd
         );
-      case "FREE_TRIAL_ATTEMPTS":
-        return dict.freeTrialAttemptsUsed(
-          submission.trial?.attemptsUsed ?? FREE_TIER.attempts,
+      case "FREE_EXHAUSTED":
+        // Floored to whole minutes, and floored rather than rounded: telling
+        // someone they have 1 minute left when they have 30 seconds would be
+        // a promise the next submission breaks. The fallbacks only fire if a
+        // future code path forgets to attach `trial` - 0 remaining is the safe
+        // thing to claim, never a balance the user might not have.
+        return dict.freeExhausted(
+          Math.floor((submission.trial?.remainingSeconds ?? 0) / 60),
+          Math.floor(
+            (submission.trial?.lifetimeSeconds ?? FREE_TIER.lifetimeSeconds) / 60
+          ),
+          STARTER_WEEKLY.minutesPerPeriod,
+          STARTER_WEEKLY.priceUsd
+        );
+      case "FREE_BUDGET_CLOSED":
+        return dict.freeBudgetClosed(
           STARTER_WEEKLY.minutesPerPeriod,
           STARTER_WEEKLY.priceUsd
         );

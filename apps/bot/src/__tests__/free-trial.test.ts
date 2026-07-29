@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * Two things are under test here, and they are the same product decision seen
@@ -19,22 +19,39 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   userFindUniqueOrThrow: vi.fn(),
+  userFindUnique: vi.fn(),
   jobCount: vi.fn(),
   jobAggregate: vi.fn(),
+  freeUsageGroupBy: vi.fn(),
+  freeUsageAggregate: vi.fn(),
+  accountCount: vi.fn(),
 }));
 
 vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
   prisma: {
-    user: { findUniqueOrThrow: mocks.userFindUniqueOrThrow },
+    user: {
+      findUniqueOrThrow: mocks.userFindUniqueOrThrow,
+      // The gate reads the anchor through findUnique.
+      findUnique: mocks.userFindUnique,
+    },
     job: { count: mocks.jobCount, aggregate: mocks.jobAggregate },
+    // The free allowance is the free_usage ledger now, not a count of jobs:
+    // groupBy is this account's balance, aggregate is the month's global spend
+    // against the budget ceiling.
+    freeUsage: {
+      groupBy: mocks.freeUsageGroupBy,
+      aggregate: mocks.freeUsageAggregate,
+    },
+    account: { count: mocks.accountCount },
   },
 }));
 
 import { FREE_TIER, getPlanLimits } from "@clipclap/shared";
 import { getSubmissionBlocker } from "../handlers";
-import { t } from "../i18n";
+import { LOCALES, t } from "../i18n";
 
 const FREE = getPlanLimits("NONE");
+const LIFETIME_MINUTES = FREE_TIER.lifetimeSeconds / 60;
 
 /** The free trial is switched off by zeroing NONE_LIMITS (see the comment above
  *  NONE_LIMITS in packages/shared/src/config/plans.ts). Tests that assert what a
@@ -86,8 +103,9 @@ describe("free trial onboarding copy", () => {
       t("ru").welcomeFirstChoice,
       t("ru").newAccountCreated,
       t("ru").welcomeNeedsPlan,
-      t("ru").freeTrialUsed(1, 75, 3),
-      t("ru").freeTrialAttemptsUsed(FREE_TIER.attempts, 75, 3),
+      t("ru").freeExhausted(0, LIFETIME_MINUTES, 75, 3),
+      t("ru").freeNotAnchored(75, 3),
+      t("ru").freeBudgetClosed(75, 3),
       t("ru").freeSourceTooLong(FREE.maxSourceDurationMinutes, 180),
     ]) {
       expect(s).toMatch(/[а-яё]/i);
@@ -96,14 +114,57 @@ describe("free trial onboarding copy", () => {
     }
   });
 
-  it("the exhausted message says what was used AND what a plan gives", () => {
+  it("the exhausted message says what is LEFT and what a plan gives", () => {
     for (const loc of ["en", "ru"] as const) {
-      const s = t(loc).freeTrialUsed(1, 75, 3);
-      // what they used
-      expect(s).toMatch(loc === "en" ? /free run/i : /бесплатн/i);
+      const s = t(loc).freeExhausted(0, LIFETIME_MINUTES, 75, 3);
+      // what they have left, out of what
+      expect(s).toMatch(loc === "en" ? /free minutes/i : /бесплатн/i);
+      expect(s).toContain(String(LIFETIME_MINUTES));
       // what a plan gives: concrete minutes and price, not "upgrade"
       expect(s).toContain("75");
       expect(s).toContain("3");
+    }
+  });
+
+  /**
+   * The gate grew two refusals that did not exist before - an account with no
+   * anchor, and the month's global budget being spent - and the bot has to be
+   * able to say both in every language it claims to speak. The Dict type makes
+   * a MISSING translation a compile error; this makes an empty or
+   * number-dropping one a test failure, in all six locales rather than the two
+   * anyone reads by hand.
+   */
+  it("words all three free refusals in every locale, with the plan numbers", () => {
+    for (const loc of LOCALES) {
+      const messages = [
+        t(loc).freeExhausted(0, LIFETIME_MINUTES, 75, 3),
+        t(loc).freeNotAnchored(75, 3),
+        t(loc).freeBudgetClosed(75, 3),
+      ];
+      for (const s of messages) {
+        expect(s.length).toBeGreaterThan(40);
+        // A refusal the user cannot act on is only a wall: every one of them
+        // names the way out and what it costs.
+        expect(s).toContain("75");
+        expect(s).toContain("3");
+      }
+    }
+  });
+
+  /**
+   * The budget refusal is the one the product is actually sitting on right
+   * now, and it is not the user's fault. Copy that reads as "your allowance is
+   * gone" would send someone to support over an account that is perfectly
+   * fine, so every locale has to place the limit on our side.
+   */
+  it("blames the paused budget on us, not on the user's account", () => {
+    expect(t("en").freeBudgetClosed(75, 3)).toMatch(/my side|not on your account/i);
+    expect(t("ru").freeBudgetClosed(75, 3)).toMatch(/с моей стороны/i);
+    for (const loc of LOCALES) {
+      // and none of them may claim the user's own minutes are spent
+      expect(t(loc).freeBudgetClosed(75, 3)).not.toBe(
+        t(loc).freeExhausted(0, LIFETIME_MINUTES, 75, 3)
+      );
     }
   });
 
@@ -117,6 +178,8 @@ describe("free trial onboarding copy", () => {
 });
 
 describe("getSubmissionBlocker on the free tier", () => {
+  const ORIGINAL_BUDGET = process.env.FREE_TIER_MONTHLY_BUDGET_USD;
+
   beforeEach(() => {
     // mockReset, not mockClear: these tests queue mockResolvedValueOnce values
     // and a blocked submission deliberately leaves some unconsumed. clearAllMocks
@@ -124,8 +187,29 @@ describe("getSubmissionBlocker on the free tier", () => {
     // question there.
     mocks.jobCount.mockReset();
     mocks.userFindUniqueOrThrow.mockReset();
+    mocks.userFindUnique.mockReset();
     mocks.jobAggregate.mockReset();
+    mocks.freeUsageGroupBy.mockReset();
+    mocks.freeUsageAggregate.mockReset();
+    mocks.accountCount.mockReset();
     mocks.jobAggregate.mockResolvedValue({ _sum: { sourceDurationSec: 0 } });
+    // An OPEN budget is the background for everything except the two cases
+    // that are about the budget itself. Without it every refusal below would
+    // arrive as FREE_BUDGET_CLOSED and would prove nothing about the check it
+    // means to be testing.
+    process.env.FREE_TIER_MONTHLY_BUDGET_USD = "50";
+    mocks.freeUsageAggregate.mockResolvedValue({
+      _sum: { estimatedCostUsd: 1 },
+    });
+    ledgerCharged(0);
+  });
+
+  afterEach(() => {
+    if (ORIGINAL_BUDGET === undefined) {
+      delete process.env.FREE_TIER_MONTHLY_BUDGET_USD;
+    } else {
+      process.env.FREE_TIER_MONTHLY_BUDGET_USD = ORIGINAL_BUDGET;
+    }
   });
 
   function freeUser(overrides: Record<string, unknown> = {}) {
@@ -139,16 +223,30 @@ describe("getSubmissionBlocker on the free tier", () => {
       currentPeriodEnd: null,
       ...overrides,
     });
+    // Anchored by the phone-backed Telegram id, which is how EVERY account
+    // that reaches this function is anchored - a bot-only account has both
+    // email columns NULL and never touches the email half of the check.
+    mocks.userFindUnique.mockResolvedValue({
+      telegramId: "4242",
+      emailVerified: null,
+      email: null,
+      emailCanonical: null,
+    });
   }
 
-  /**
-   * getFreeTrialStatus asks for [runs, attempts]; getSubmissionBlocker then
-   * asks for [jobsToday, inFlight]. Queue them in that order.
-   */
-  function counts(runs: number, attempts: number, today = 0, inFlight = 0) {
+  /** The account's ledger balance, shaped the way Postgres returns it: a kind
+   *  with no rows is OMITTED from the group-by, never returned as a zero. */
+  function ledgerCharged(seconds: number) {
+    mocks.freeUsageGroupBy.mockResolvedValue(
+      seconds > 0 ? [{ kind: "CHARGE", _sum: { seconds } }] : []
+    );
+  }
+
+  /** getSubmissionBlocker asks job.count for [jobsToday, inFlight] once the
+   *  gate has allowed the submission. The allowance itself no longer counts
+   *  jobs at all - it reads the ledger. */
+  function counts(today = 0, inFlight = 0) {
     mocks.jobCount
-      .mockResolvedValueOnce(runs)
-      .mockResolvedValueOnce(attempts)
       .mockResolvedValueOnce(today)
       .mockResolvedValueOnce(inFlight);
   }
@@ -157,46 +255,83 @@ describe("getSubmissionBlocker on the free tier", () => {
     "lets a brand-new Russian user through with no message at all",
     async () => {
       freeUser();
-      counts(0, 0);
+      counts();
       expect(await getSubmissionBlocker("u1", t("ru"), 600)).toBeNull();
     }
   );
 
   // The mirror of the test above, for the state the product is actually in.
-  // A trial that is switched off must SHUT the gate, not leave it ajar: this is
-  // the assertion that would catch a half-disabled NONE_LIMITS.
+  // A free plan that is switched off must SHUT the gate, not leave it ajar:
+  // this is the assertion that would catch a half-disabled NONE_LIMITS.
   it.runIf(!TRIAL_ENABLED)(
-    "blocks a brand-new user outright while the trial is disabled",
+    "blocks a brand-new user outright while the free plan is off",
     async () => {
       freeUser();
-      counts(0, 0);
+      counts();
       expect(await getSubmissionBlocker("u1", t("ru"), 600)).not.toBeNull();
     }
   );
 
-  it("renders the exhausted trial in Russian, not in English", async () => {
+  /**
+   * The refusal a real user hits today, and the one this rewrite exists to
+   * produce: FREE_TIER_MONTHLY_BUDGET_USD is unset in production, an unset
+   * ceiling reads as closed, and a submission with no known duration reaches
+   * that check rather than being turned away for length.
+   */
+  it("renders the paused free plan in Russian, not in English", async () => {
+    delete process.env.FREE_TIER_MONTHLY_BUDGET_USD;
     freeUser();
-    counts(FREE_TIER.runs, FREE_TIER.runs);
 
-    const msg = await getSubmissionBlocker("u1", t("ru"), 600);
+    const msg = await getSubmissionBlocker("u1", t("ru"));
 
     expect(msg).not.toBeNull();
     expect(msg).toMatch(/[а-яё]/i);
+    expect(msg).toMatch(/с моей стороны/i);
+    // The English prose canSubmitJob writes for logs must not reach a chat.
+    expect(msg).not.toMatch(/Free runs are paused/i);
     expect(msg).not.toMatch(/Active subscription required/i);
   });
 
-  it("renders the exhausted trial in English for an English user", async () => {
+  it("tells an English user the pause is ours, not their allowance", async () => {
+    delete process.env.FREE_TIER_MONTHLY_BUDGET_USD;
     freeUser();
-    counts(FREE_TIER.runs, FREE_TIER.runs);
 
-    const msg = await getSubmissionBlocker("u1", t("en"), 600);
+    const msg = await getSubmissionBlocker("u1", t("en"));
 
-    expect(msg).toMatch(/free run/i);
+    expect(msg).toMatch(/paused/i);
+    expect(msg).toMatch(/not on your account/i);
   });
+
+  it.runIf(TRIAL_ENABLED)(
+    "renders the spent allowance in Russian, not in English",
+    async () => {
+      freeUser();
+      ledgerCharged(FREE_TIER.lifetimeSeconds);
+
+      const msg = await getSubmissionBlocker("u1", t("ru"), 600);
+
+      expect(msg).not.toBeNull();
+      expect(msg).toMatch(/[а-яё]/i);
+      expect(msg).not.toMatch(/Active subscription required/i);
+    }
+  );
+
+  it.runIf(TRIAL_ENABLED)(
+    "tells an English user how much of the allowance is left",
+    async () => {
+      freeUser();
+      ledgerCharged(FREE_TIER.lifetimeSeconds);
+
+      const msg = await getSubmissionBlocker("u1", t("en"), 600);
+
+      expect(msg).toMatch(/free minutes/i);
+      // 0 of 60 - the real numbers, off the ledger, not a generic wall.
+      expect(msg).toContain(String(LIFETIME_MINUTES));
+    }
+  );
 
   it("refuses an over-long free source with the free cap, in the user's language", async () => {
     freeUser();
-    counts(0, 0);
 
     const tooLong = (FREE.maxSourceDurationMinutes + 30) * 60;
     const msg = await getSubmissionBlocker("u1", t("ru"), tooLong);
@@ -205,20 +340,6 @@ describe("getSubmissionBlocker on the free tier", () => {
     expect(msg).toMatch(/[а-яё]/i);
   });
 
-  it.runIf(TRIAL_ENABLED)(
-    "explains the spent attempt backstop when nothing ever produced clips",
-    async () => {
-      freeUser();
-      counts(0, FREE_TIER.attempts);
-
-      const msg = await getSubmissionBlocker("u1", t("en"), 600);
-
-      // This user got nothing, so the copy must not talk as if they had clips.
-      expect(msg).toMatch(/none of them produced clips/i);
-      expect(msg).not.toMatch(/clips from it are yours/i);
-    }
-  );
-
   it("does not block a paying subscriber", async () => {
     freeUser({
       plan: "STARTER",
@@ -226,10 +347,12 @@ describe("getSubmissionBlocker on the free tier", () => {
       subscriptionStatus: "ACTIVE",
       currentPeriodEnd: new Date(Date.now() + 5 * 86_400_000),
     });
-    // No trial counters are consulted; only jobsToday and inFlight.
-    mocks.jobCount.mockResolvedValueOnce(0).mockResolvedValueOnce(0);
+    // Only jobsToday and inFlight - the free gate is not entered at all.
+    counts();
 
     // 60 min is over the free cap and well inside STARTER's.
     expect(await getSubmissionBlocker("u1", t("en"), 3600)).toBeNull();
+    expect(mocks.freeUsageGroupBy.mock.calls).toHaveLength(0);
+    expect(mocks.freeUsageAggregate.mock.calls).toHaveLength(0);
   });
 });

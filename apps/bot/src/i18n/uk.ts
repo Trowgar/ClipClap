@@ -88,10 +88,12 @@ const uk: Dict = {
   lowQualityNote:
     "Увага: сильних моментів не знайшлося - це найкраще з доступного.",
   blocked: (reason) => `${reason}\n\n💳 Тарифи - обрати підписку або керувати нею.`,
-  freeTrialUsed: (runs, planMinutes, planPriceEur) =>
-    `Це був твій безкоштовний запуск - ${runs} відео, безкоштовно й без картки. Готові кліпи залишаються твоїми.\n\nЩоб продовжити: Starter коштує €${planPriceEur} на тиждень і дає ${planMinutes} хвилин відео, джерела до 3 годин та 20 кліпів, які зберігаються 7 днів.`,
-  freeTrialAttemptsUsed: (attempts, planMinutes, planPriceEur) =>
-    `Я обробив ${attempts} відео на безкоштовному запуску, і жодне не дало кліпів - тобто по-справжньому ти продукт ще не бачив. Зазвичай так буває, коли в джерелі мало розбірливої мови.\n\nБезкоштовні спроби вичерпано. Якщо хочеш спробувати ще - Starter, €${planPriceEur} на тиждень за ${planMinutes} хвилин відео.`,
+  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
+    `Безкоштовні хвилини вичерпано - лишилося ${remainingMinutes} із ${lifetimeMinutes}. Усе, що я вже встиг нарізати, залишається твоїм.\n\nЩоб продовжити: Starter коштує €${planPriceEur} на тиждень і дає ${planMinutes} хвилин відео, джерела до 3 годин та 20 кліпів, які зберігаються 7 днів.`,
+  freeNotAnchored: (planMinutes, planPriceEur) =>
+    `Безкоштовні хвилини на цьому акаунті ще не відкриті. Напиши в підтримку з меню допомоги - я розберуся. Або почни одразу з тарифу Starter: €${planPriceEur} на тиждень за ${planMinutes} хвилин відео.`,
+  freeBudgetClosed: (planMinutes, planPriceEur) =>
+    `Безкоштовні запуски на паузі до першого числа наступного місяця. Це обмеження з мого боку, а не на твоєму акаунті - безкоштовні хвилини нікуди не подінуться.\n\nЯкщо хочеш різати вже зараз: Starter - €${planPriceEur} на тиждень за ${planMinutes} хвилин відео.`,
   freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
     `Безкоштовний запуск приймає відео до ${freeMaxMinutes} хвилин, а це довше. Надішли коротше відео - або ${freeMaxMinutes}-хвилинний фрагмент цього, - щоб спробувати безкоштовно. З тарифом я беру джерела до ${planMaxMinutes} хвилин.`,
   planSourceTooLong: (maxMinutes) =>

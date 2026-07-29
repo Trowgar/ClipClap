@@ -27,26 +27,37 @@ export const FUNNEL_EVENTS = {
 export type FunnelEvent = string;
 export type FunnelSurface = "bot" | "web";
 
-/** Refusal codes: the shared canSubmitJob ones plus the route-level checks. */
+/** Refusal codes: the shared canSubmitJob ones plus the route-level checks.
+ *
+ *  `trial_used` and `trial_attempts` were retired here when the gate moved from
+ *  counting jobs to spending the free_usage ledger. Rows already written under
+ *  those names are untouched and still readable - the column is a String, so
+ *  retiring a code in this file does not rewrite the past. Anyone reading the
+ *  funnel across that boundary has to union the old suffixes with
+ *  `free_exhausted` by hand. */
 export type UploadRejectionCode =
-  | "FREE_TRIAL_USED"
-  | "FREE_TRIAL_ATTEMPTS"
+  | "FREE_NOT_ANCHORED"
+  | "FREE_EXHAUSTED"
   | "FREE_SOURCE_TOO_LONG"
+  | "FREE_BUDGET_CLOSED"
   | "QUOTA"
   | "LIFECYCLE"
   | "TOO_LONG"
   | "DAILY_LIMIT"
-  | "CONCURRENT";
+  | "CONCURRENT"
+  | "PROBE_FAILED";
 
 const REJECTION_SUFFIX: Record<UploadRejectionCode, string> = {
-  FREE_TRIAL_USED: "trial_used",
-  FREE_TRIAL_ATTEMPTS: "trial_attempts",
+  FREE_NOT_ANCHORED: "free_not_anchored",
+  FREE_EXHAUSTED: "free_exhausted",
   FREE_SOURCE_TOO_LONG: "free_too_long",
+  FREE_BUDGET_CLOSED: "free_budget_closed",
   QUOTA: "quota",
   LIFECYCLE: "lifecycle",
   TOO_LONG: "too_long",
   DAILY_LIMIT: "daily_limit",
   CONCURRENT: "concurrent",
+  PROBE_FAILED: "probe_failed",
 };
 
 /** The event name for a refusal, e.g. "upload_rejected_quota". */

@@ -77,10 +77,12 @@ const pt: Dict = {
         : "Terminei. Assisti ao vídeo inteiro, mas não achei momentos fortes o bastante para virar clipe. Tenta um vídeo com mais conversa, emoção ou história.",
   lowQualityNote: "Aviso: não achei momentos fortes, este é o melhor disponível.",
   blocked: (reason) => `${reason}\n\n💳 Planos: escolha ou gerencie sua assinatura.`,
-  freeTrialUsed: (runs, planMinutes, planPriceEur) =>
-    `Esse era seu teste grátis: ${runs} ${pluralPt(runs, "vídeo", "vídeos")}, de graça e sem cartão. Os clipes que saíram são seus.\n\nPara continuar: o Starter custa €${planPriceEur} por semana e inclui ${planMinutes} minutos de vídeo, fontes de até 3 horas e 20 clipes guardados por 7 dias.`,
-  freeTrialAttemptsUsed: (attempts, planMinutes, planPriceEur) =>
-    `Processei ${attempts} ${pluralPt(attempts, "vídeo", "vídeos")} no seu teste grátis e nenhum gerou clipes, então você ainda não viu de verdade o que isso faz. Costuma acontecer quando a fonte tem pouca fala clara.\n\nAs tentativas grátis acabaram. Se quiser continuar testando, o Starter custa €${planPriceEur} por semana e inclui ${planMinutes} minutos de vídeo.`,
+  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
+    `Seus minutos grátis acabaram: restam ${remainingMinutes} de ${lifetimeMinutes}. O que eu já cortei continua seu.\n\nPara continuar: o Starter custa €${planPriceEur} por semana e inclui ${planMinutes} minutos de vídeo, fontes de até 3 horas e 20 clipes guardados por 7 dias.`,
+  freeNotAnchored: (planMinutes, planPriceEur) =>
+    `Os minutos grátis ainda não estão liberados nesta conta. Fale com o suporte pelo menu de ajuda que eu resolvo, ou comece agora com o Starter: €${planPriceEur} por semana e ${planMinutes} minutos de vídeo.`,
+  freeBudgetClosed: (planMinutes, planPriceEur) =>
+    `As execuções grátis estão pausadas até o dia primeiro do mês que vem. É um limite meu, não da sua conta: seus minutos grátis continuam lá.\n\nSe quiser cortar agora, o Starter custa €${planPriceEur} por semana e inclui ${planMinutes} minutos de vídeo.`,
   freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
     `Seu teste grátis aceita vídeos de até ${freeMaxMinutes} minutos, e este é mais longo. Manda um vídeo mais curto, ou um trecho de ${freeMaxMinutes} minutos deste, para testar de graça. Com um plano eu aceito fontes de até ${planMaxMinutes} minutos.`,
   planSourceTooLong: (maxMinutes) =>

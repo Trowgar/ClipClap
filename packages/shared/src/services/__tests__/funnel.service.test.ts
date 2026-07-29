@@ -73,15 +73,44 @@ describe("recordFunnelEvent", () => {
   });
 
   it("maps every canSubmitJob code to a rejection event", () => {
-    expect(uploadRejectedEvent("FREE_TRIAL_USED")).toBe("upload_rejected_trial_used");
-    expect(uploadRejectedEvent("FREE_TRIAL_ATTEMPTS")).toBe("upload_rejected_trial_attempts");
+    expect(uploadRejectedEvent("FREE_NOT_ANCHORED")).toBe("upload_rejected_free_not_anchored");
+    expect(uploadRejectedEvent("FREE_EXHAUSTED")).toBe("upload_rejected_free_exhausted");
     expect(uploadRejectedEvent("FREE_SOURCE_TOO_LONG")).toBe("upload_rejected_free_too_long");
+    expect(uploadRejectedEvent("FREE_BUDGET_CLOSED")).toBe("upload_rejected_free_budget_closed");
     expect(uploadRejectedEvent("QUOTA")).toBe("upload_rejected_quota");
     expect(uploadRejectedEvent("LIFECYCLE")).toBe("upload_rejected_lifecycle");
     // Route-level refusals that never reach canSubmitJob
     expect(uploadRejectedEvent("TOO_LONG")).toBe("upload_rejected_too_long");
     expect(uploadRejectedEvent("DAILY_LIMIT")).toBe("upload_rejected_daily_limit");
     expect(uploadRejectedEvent("CONCURRENT")).toBe("upload_rejected_concurrent");
+    expect(uploadRejectedEvent("PROBE_FAILED")).toBe("upload_rejected_probe_failed");
+  });
+
+  // The gate stopped emitting FREE_TRIAL_USED / FREE_TRIAL_ATTEMPTS when it
+  // moved onto the ledger, but funnel_events already holds rows under their
+  // suffixes. Nothing in this module may start producing those strings again
+  // under a different meaning - a reader summing "trial_used" must be able to
+  // trust that every such row came from the old jobs-counting gate.
+  it("no longer emits the retired trial suffixes under any current code", () => {
+    const retired = ["upload_rejected_trial_used", "upload_rejected_trial_attempts"];
+    const current = (
+      [
+        "FREE_NOT_ANCHORED",
+        "FREE_EXHAUSTED",
+        "FREE_SOURCE_TOO_LONG",
+        "FREE_BUDGET_CLOSED",
+        "QUOTA",
+        "LIFECYCLE",
+        "TOO_LONG",
+        "DAILY_LIMIT",
+        "CONCURRENT",
+        "PROBE_FAILED",
+      ] as const
+    ).map(uploadRejectedEvent);
+
+    for (const gone of retired) expect(current).not.toContain(gone);
+    // and every live code still maps to a distinct event
+    expect(new Set(current).size).toBe(current.length);
   });
 
   it("resolves instead of throwing when the write fails", async () => {

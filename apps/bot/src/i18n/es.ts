@@ -78,10 +78,12 @@ const es: Dict = {
   lowQualityNote:
     "Aviso: no encontré momentos fuertes, esto es lo mejor disponible.",
   blocked: (reason) => `${reason}\n\n💳 Planes: elige o gestiona tu suscripción.`,
-  freeTrialUsed: (runs, planMinutes, planPriceEur) =>
-    `Esa era tu prueba gratis: ${runs} ${pluralEs(runs, "video", "videos")}, gratis y sin tarjeta. Los clips que salieron son tuyos.\n\nPara seguir: Starter cuesta €${planPriceEur} por semana e incluye ${planMinutes} minutos de video, fuentes de hasta 3 horas y 20 clips guardados 7 días.`,
-  freeTrialAttemptsUsed: (attempts, planMinutes, planPriceEur) =>
-    `Procesé ${attempts} ${pluralEs(attempts, "video", "videos")} en tu prueba gratis y ninguno dio clips, así que todavía no has visto de verdad lo que esto hace. Suele pasar cuando la fuente tiene poca habla clara.\n\nSe acabaron los intentos gratis. Si quieres seguir probando, Starter cuesta €${planPriceEur} por semana e incluye ${planMinutes} minutos de video.`,
+  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
+    `Se acabaron tus minutos gratis: quedan ${remainingMinutes} de ${lifetimeMinutes}. Lo que ya te corté es tuyo.\n\nPara seguir: Starter cuesta €${planPriceEur} por semana e incluye ${planMinutes} minutos de video, fuentes de hasta 3 horas y 20 clips guardados 7 días.`,
+  freeNotAnchored: (planMinutes, planPriceEur) =>
+    `Los minutos gratis todavía no están activos en esta cuenta. Escribe a soporte desde el menú de ayuda y lo resuelvo, o empieza ya con Starter: €${planPriceEur} por semana e incluye ${planMinutes} minutos de video.`,
+  freeBudgetClosed: (planMinutes, planPriceEur) =>
+    `Las pruebas gratis están en pausa hasta el día uno del mes que viene. Es un límite mío, no de tu cuenta: tus minutos gratis siguen ahí.\n\nSi quieres cortar ahora, Starter cuesta €${planPriceEur} por semana e incluye ${planMinutes} minutos de video.`,
   freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
     `Tu prueba gratis admite videos de hasta ${freeMaxMinutes} minutos, y este es más largo. Envía un video más corto, o un fragmento de ${freeMaxMinutes} minutos de este, para probarlo gratis. Con un plan acepto fuentes de hasta ${planMaxMinutes} minutos.`,
   planSourceTooLong: (maxMinutes) =>

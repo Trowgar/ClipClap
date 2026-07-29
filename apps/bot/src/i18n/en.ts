@@ -118,10 +118,12 @@ const en: Dict = {
         : "Done. I watched the whole video but did not find moments strong enough for clips - no clips this time. Try a video with more talk, emotion, or story.",
   lowQualityNote: "Heads up: no strong moments found - this is the best available.",
   blocked: (reason) => `${reason}\n\n💳 Plans - choose or manage your subscription.`,
-  freeTrialUsed: (runs, planMinutes, planPriceEur) =>
-    `That was your free run - ${runs} video, free and without a card. The clips from it are yours to keep.\n\nTo carry on: Starter is €${planPriceEur} a week for ${planMinutes} minutes of video, sources up to 3 hours, and 20 clips kept for 7 days.`,
-  freeTrialAttemptsUsed: (attempts, planMinutes, planPriceEur) =>
-    `I've processed ${attempts} videos on your free trial and none of them produced clips - so you haven't really seen what this does yet. That usually means the source had little clear speech.\n\nFree attempts are used up. If you want to keep trying, Starter is €${planPriceEur} a week for ${planMinutes} minutes of video.`,
+  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
+    `Your free minutes are used up - ${remainingMinutes} of ${lifetimeMinutes} left. Anything I already made for you is yours to keep.\n\nTo carry on: Starter is €${planPriceEur} a week for ${planMinutes} minutes of video, sources up to 3 hours, and 20 clips kept for 7 days.`,
+  freeNotAnchored: (planMinutes, planPriceEur) =>
+    `Your free minutes are not unlocked on this account yet. Write to support from the Help menu and I'll sort it out - or start straight away with Starter: €${planPriceEur} a week for ${planMinutes} minutes of video.`,
+  freeBudgetClosed: (planMinutes, planPriceEur) =>
+    `Free runs are paused until the first of next month. That is a limit on my side, not on your account - your free minutes are still waiting for you.\n\nIf you want to clip now: Starter is €${planPriceEur} a week for ${planMinutes} minutes of video.`,
   freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
     `Your free run covers videos up to ${freeMaxMinutes} minutes, and this one is longer. Send a shorter video - or a ${freeMaxMinutes}-minute section of this one - to try it free. A plan takes sources up to ${planMaxMinutes} minutes.`,
   planSourceTooLong: (maxMinutes) =>

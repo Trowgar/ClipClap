@@ -97,10 +97,12 @@ const ru: Dict = {
         : "Готово. Я просмотрел всё видео, но не нашёл достаточно сильных моментов - клипов в этот раз нет. Попробуй видео с большим количеством речи, эмоций или истории.",
   lowQualityNote: "Внимание: сильных моментов не нашлось - это лучшее из доступного.",
   blocked: (reason) => `${reason}\n\n💳 Тарифы - выбрать или управлять подпиской.`,
-  freeTrialUsed: (runs, planMinutes, planPriceEur) =>
-    `Это был бесплатный запуск - ${runs} ${pluralizeRu(runs, "видео", "видео", "видео")}, бесплатно и без карты. Готовые клипы остаются у тебя.\n\nЧтобы продолжить: Starter - €${planPriceEur} в неделю за ${planMinutes} минут видео, исходники до 3 часов и 20 клипов, которые хранятся 7 дней.`,
-  freeTrialAttemptsUsed: (attempts, planMinutes, planPriceEur) =>
-    `Я обработал ${attempts} ${pluralizeRu(attempts, "видео", "видео", "видео")} на бесплатном пробном запуске, и ни одно не дало клипов - то есть толком показать продукт не вышло. Обычно так бывает, когда в исходнике мало разборчивой речи.\n\nБесплатные попытки закончились. Если хочешь попробовать ещё - Starter, €${planPriceEur} в неделю за ${planMinutes} минут видео.`,
+  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
+    `Бесплатные минуты закончились - осталось ${remainingMinutes} из ${lifetimeMinutes}. Всё, что я уже успел нарезать, остаётся у тебя.\n\nЧтобы продолжить: Starter - €${planPriceEur} в неделю за ${planMinutes} минут видео, исходники до 3 часов и 20 клипов, которые хранятся 7 дней.`,
+  freeNotAnchored: (planMinutes, planPriceEur) =>
+    `Бесплатные минуты на этом аккаунте ещё не открыты. Напиши в поддержку из меню помощи - я разберусь. Или начни сразу с тарифа Starter: €${planPriceEur} в неделю за ${planMinutes} минут видео.`,
+  freeBudgetClosed: (planMinutes, planPriceEur) =>
+    `Бесплатные запуски на паузе до первого числа следующего месяца. Это ограничение с моей стороны, а не на твоём аккаунте - бесплатные минуты никуда не денутся.\n\nЕсли хочешь резать прямо сейчас: Starter - €${planPriceEur} в неделю за ${planMinutes} минут видео.`,
   freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
     `Бесплатный запуск - это видео до ${freeMaxMinutes} минут, а это длиннее. Пришли видео покороче или фрагмент этого на ${freeMaxMinutes} минут, чтобы попробовать бесплатно. На тарифе исходники до ${planMaxMinutes} минут.`,
   planSourceTooLong: (maxMinutes) =>

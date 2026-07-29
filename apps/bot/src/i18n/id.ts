@@ -74,10 +74,12 @@ const id: Dict = {
   lowQualityNote:
     "Catatan: tidak ada momen yang kuat, ini yang terbaik dari yang ada.",
   blocked: (reason) => `${reason}\n\n💳 Paket: pilih atau kelola langgananmu.`,
-  freeTrialUsed: (runs, planMinutes, planPriceEur) =>
-    `Itu tadi percobaan gratismu: ${runs} video, gratis dan tanpa kartu. Klip yang sudah jadi tetap milikmu.\n\nUntuk lanjut: Starter €${planPriceEur} per minggu, isinya ${planMinutes} menit video, sumber sampai 3 jam, dan 20 klip yang disimpan 7 hari.`,
-  freeTrialAttemptsUsed: (attempts, planMinutes, planPriceEur) =>
-    `Aku sudah memproses ${attempts} video di percobaan gratismu dan tidak ada satu pun yang menghasilkan klip, jadi kamu belum benar-benar melihat kemampuannya. Biasanya itu terjadi kalau sumbernya sedikit ucapan yang jelas.\n\nPercobaan gratismu habis. Kalau mau terus mencoba, Starter €${planPriceEur} per minggu untuk ${planMinutes} menit video.`,
+  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
+    `Menit gratismu habis: sisa ${remainingMinutes} dari ${lifetimeMinutes}. Klip yang sudah jadi tetap milikmu.\n\nUntuk lanjut: Starter €${planPriceEur} per minggu, isinya ${planMinutes} menit video, sumber sampai 3 jam, dan 20 klip yang disimpan 7 hari.`,
+  freeNotAnchored: (planMinutes, planPriceEur) =>
+    `Menit gratis belum aktif di akun ini. Hubungi dukungan lewat menu bantuan dan aku bantu beresin, atau mulai sekarang dengan Starter: €${planPriceEur} per minggu untuk ${planMinutes} menit video.`,
+  freeBudgetClosed: (planMinutes, planPriceEur) =>
+    `Percobaan gratis dijeda sampai tanggal 1 bulan depan. Itu batas dari sisiku, bukan dari akunmu - menit gratismu tetap utuh.\n\nKalau mau memotong sekarang, Starter €${planPriceEur} per minggu untuk ${planMinutes} menit video.`,
   freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
     `Percobaan gratis menerima video sampai ${freeMaxMinutes} menit, dan yang ini lebih panjang. Kirim video yang lebih pendek, atau potongan ${freeMaxMinutes} menit dari video ini, untuk mencobanya gratis. Dengan paket, aku menerima sumber sampai ${planMaxMinutes} menit.`,
   planSourceTooLong: (maxMinutes) =>
