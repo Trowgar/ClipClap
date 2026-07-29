@@ -397,6 +397,33 @@ whatever any future path forgets. It refunds free-tier jobs that are terminally
 with no matching REFUND. Its killswitch defaults to **on**, unlike the trial's:
 a refund sweep failing closed would silently keep money that is not ours.
 
+## Blocking defects found by the end-to-end run
+
+Both were reproduced live on 2026-07-29 and both must be closed before
+`FREE_TIER_MONTHLY_BUDGET_USD` is set, because each one costs a real user the
+exact thing the trial was built to give them.
+
+**Deleting a failed project forfeits the allowance for ever.** The refund sweep's
+selector joins `free_usage` to `jobs`, and `deleteProject` hard-deletes the job -
+so the orphaned charge becomes invisible to the sweep built to refund it. The
+no-foreign-key decision that closes hole 3 for the *balance* is exactly what
+blinds the *sweep*. Worse, the window is up to seven hours (six of silence plus
+the hourly cron), and during it the dashboard tells the user their minutes are
+spent over a run **we** broke - which makes deleting that failed project the
+obvious next move. Observed: sweep with the job row refunds 3600s; after the user
+deletes, the sweep reports `refunded: 0` and the orphan charge stays. The fix has
+to let the sweep find a charge whose job is gone - the ledger already holds
+`userId` and `seconds`, so the join is the only reason it cannot.
+
+**`concurrentJobsLimit: 1` does not survive concurrent submits.** Six
+simultaneous `POST /api/jobs` on the upload path all returned 201 and wrote six
+CHARGE rows. `plans.ts` states that this limit is the only thing holding the
+zero-clip forgiveness cap shut, and `source-recheck.ts` reads the balance then
+writes - so N concurrent uploads each reserve 0 seconds, each re-check reads the
+same balance and passes, and one account transcribes N times its allowance. It
+shows only on the upload path: the yt-dlp probe's latency serialises URL
+submissions, which is why two browser tabs look safe and six curl calls are not.
+
 ## Known gaps, accepted for now
 
 - **`authorize()` is brittle about case.** It lowercases the typed address and
