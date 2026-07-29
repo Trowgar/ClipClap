@@ -1,12 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ count: vi.fn() }));
+const mocks = vi.hoisted(() => ({ count: vi.fn(), funnelGroupBy: vi.fn() }));
 
 vi.mock("../../lib/prisma", () => ({
-  prisma: { account: { count: mocks.count } },
+  prisma: {
+    account: { count: mocks.count },
+    funnelEvent: { groupBy: mocks.funnelGroupBy },
+  },
 }));
 
-import { excludeOwnAccountsWhere, isAdminEmail, isAdminUser, parseOwnAccounts } from "../analytics.service";
+import {
+  excludeOwnAccountsWhere,
+  getFunnel,
+  isAdminEmail,
+  isAdminUser,
+  parseOwnAccounts,
+} from "../analytics.service";
+import { FUNNEL_EVENTS } from "../funnel.service";
 
 describe("isAdminEmail", () => {
   it("accepts an email on the list, case- and space-insensitively", () => {
@@ -112,5 +122,53 @@ describe("excludeOwnAccountsWhere", () => {
 
   it("is empty when nothing is configured, so nobody is excluded", () => {
     expect(excludeOwnAccountsWhere({ emails: [], telegramIds: [] })).toEqual({});
+  });
+});
+
+/**
+ * getFunnel walks a hardcoded FUNNEL_ORDER, not the table, so an event that is
+ * recorded but missing from that list is written to the database and never
+ * shown to anyone. That is not hypothetical: `signed_up` and `email_verified`
+ * were added to FUNNEL_EVENTS and were invisible on /admin until the order was
+ * updated too. This test is the thing that makes the next one a red test rather
+ * than a silent hole.
+ */
+describe("getFunnel renders every declared step", () => {
+  beforeEach(() => {
+    mocks.funnelGroupBy.mockReset();
+  });
+
+  it("shows every FUNNEL_EVENTS value that has rows", async () => {
+    const all = Object.values(FUNNEL_EVENTS);
+    mocks.funnelGroupBy.mockResolvedValue(
+      all.map((event, i) => ({
+        event,
+        _count: { _all: 100 - i },
+        _sum: { occurrences: 100 - i },
+      }))
+    );
+
+    const steps = await getFunnel();
+
+    expect(steps.map((s) => s.event).sort()).toEqual([...all].sort());
+    // And every one of them carries a human label, not the wire name.
+    for (const step of steps) {
+      expect(step.label).not.toBe(step.event);
+      expect(step.label.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("skips a step nobody has reached instead of drawing a zero", async () => {
+    mocks.funnelGroupBy.mockResolvedValue([
+      { event: FUNNEL_EVENTS.SIGNED_UP, _count: { _all: 10 }, _sum: { occurrences: 10 } },
+      { event: FUNNEL_EVENTS.APP_OPENED, _count: { _all: 8 }, _sum: { occurrences: 12 } },
+    ]);
+
+    const steps = await getFunnel();
+
+    expect(steps.map((s) => s.event)).toEqual([
+      FUNNEL_EVENTS.SIGNED_UP,
+      FUNNEL_EVENTS.APP_OPENED,
+    ]);
   });
 });
