@@ -98,7 +98,7 @@ const ru: Dict = {
   lowQualityNote: "Внимание: сильных моментов не нашлось - это лучшее из доступного.",
   blocked: (reason) => `${reason}\n\n💳 Тарифы - выбрать или управлять подпиской.`,
   freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
-    `Бесплатные минуты закончились - осталось ${remainingMinutes} из ${lifetimeMinutes}. Всё, что я уже успел нарезать, остаётся у тебя.\n\nЧтобы продолжить: Starter - €${planPriceEur} в неделю за ${planMinutes} минут видео, исходники до 3 часов и 20 клипов, которые хранятся 7 дней.`,
+    `Бесплатных минут на это не хватит - осталось ${remainingMinutes} из ${lifetimeMinutes}. Всё, что я уже успел нарезать, остаётся у тебя.\n\nЧтобы продолжить: Starter - €${planPriceEur} в неделю за ${planMinutes} минут видео, исходники до 3 часов и 20 клипов, которые хранятся 7 дней.`,
   freeNotAnchored: (planMinutes, planPriceEur) =>
     `Бесплатные минуты на этом аккаунте ещё не открыты. Напиши в поддержку из меню помощи - я разберусь. Или начни сразу с тарифа Starter: €${planPriceEur} в неделю за ${planMinutes} минут видео.`,
   freeBudgetClosed: (planMinutes, planPriceEur) =>

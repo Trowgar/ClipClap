@@ -75,7 +75,7 @@ const id: Dict = {
     "Catatan: tidak ada momen yang kuat, ini yang terbaik dari yang ada.",
   blocked: (reason) => `${reason}\n\n💳 Paket: pilih atau kelola langgananmu.`,
   freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
-    `Menit gratismu habis: sisa ${remainingMinutes} dari ${lifetimeMinutes}. Klip yang sudah jadi tetap milikmu.\n\nUntuk lanjut: Starter €${planPriceEur} per minggu, isinya ${planMinutes} menit video, sumber sampai 3 jam, dan 20 klip yang disimpan 7 hari.`,
+    `Menit gratismu tidak cukup untuk ini: sisa ${remainingMinutes} dari ${lifetimeMinutes}. Klip yang sudah jadi tetap milikmu.\n\nUntuk lanjut: Starter €${planPriceEur} per minggu, isinya ${planMinutes} menit video, sumber sampai 3 jam, dan 20 klip yang disimpan 7 hari.`,
   freeNotAnchored: (planMinutes, planPriceEur) =>
     `Menit gratis belum aktif di akun ini. Hubungi dukungan lewat menu bantuan dan aku bantu beresin, atau mulai sekarang dengan Starter: €${planPriceEur} per minggu untuk ${planMinutes} menit video.`,
   freeBudgetClosed: (planMinutes, planPriceEur) =>

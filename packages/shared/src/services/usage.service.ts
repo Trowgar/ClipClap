@@ -336,12 +336,29 @@ async function checkFreeTrial(
   const trial = await getFreeTrialStatus(userId);
   const neededSeconds = jobDurationMinutes * 60;
 
-  if (trial.remainingSeconds < neededSeconds) {
+  // `trial.exhausted` is not redundant with the comparison beside it, and this
+  // is the one line in the gate that must not be simplified.
+  //
+  // jobDurationMinutes is 0 whenever the source has not been probed - which is
+  // every URL submission on the web path today. That makes neededSeconds 0, and
+  // an empty balance is not LESS than 0, so a spent account walks straight past
+  // the comparison. Until this clause was added, the only thing refusing that
+  // account was the closed budget one check further down, which means the day a
+  // ceiling goes into .env an exhausted account is allowed through. Verified
+  // against the live gate, not reasoned about.
+  //
+  // Task 12 will make submissions carry a real duration, and this clause still
+  // stays: an upload reserves provisionally and a probe can fail, so the gate
+  // must not depend on its caller having measured anything.
+  if (trial.exhausted || trial.remainingSeconds < neededSeconds) {
     return {
       allowed: false,
       code: "FREE_EXHAUSTED",
+      // The copy states what they HAD and what is left, and deliberately says
+      // nothing about the length of this particular video: on the duration-0
+      // path we do not know it, and "this video needs 0 minutes" is nonsense.
       trial,
-      reason: `Your free minutes are used up - ${Math.floor(trial.remainingSeconds / 60)} of ${trial.lifetimeSeconds / 60} left, and this video needs ${jobDurationMinutes}. Starter is 75 minutes of video a week for 3 USD.`,
+      reason: `Your free minutes will not cover this - ${Math.floor(trial.remainingSeconds / 60)} of ${trial.lifetimeSeconds / 60} left. Starter is 75 minutes of video a week for 3 USD.`,
     };
   }
 

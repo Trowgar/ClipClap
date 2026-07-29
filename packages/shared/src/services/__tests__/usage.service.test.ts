@@ -641,6 +641,33 @@ describe("the free-tier gate", () => {
     }
   );
 
+  /**
+   * ALWAYS ON, and it is the case the first draft of this gate got wrong.
+   *
+   * jobDurationMinutes is 0 for every submission whose source has not been
+   * probed - which is every URL on the web path today - so neededSeconds is 0,
+   * and an empty balance is not LESS than 0. A gate that only compared the two
+   * let a spent account through, and the closed budget was the sole thing
+   * refusing it, so the day a ceiling goes into .env that account would be
+   * allowed.
+   *
+   * The budget is deliberately OPEN here. With it closed this test would pass
+   * against the broken gate too, which is exactly how the bug survived: the
+   * global refusal masks the personal one.
+   */
+  it("refuses a spent account on a duration-0 submission, with the budget open", async () => {
+    freeUser();
+    ledgerCharged(FREE_TIER.lifetimeSeconds);
+
+    const res = await canSubmitJob("u1", 0);
+
+    expect(res).toMatchObject({ allowed: false, code: "FREE_EXHAUSTED" });
+    if (res.allowed) throw new Error("unreachable");
+    expect(res.trial).toMatchObject({ remainingSeconds: 0, exhausted: true });
+    // The copy may not talk about the length of a video it never measured.
+    expect(res.reason).not.toMatch(/needs 0/i);
+  });
+
   it.runIf(BALANCE_REACHABLE)(
     "prefers the personal reason over the global one when both apply",
     async () => {

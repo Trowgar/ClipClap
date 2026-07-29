@@ -79,7 +79,7 @@ const es: Dict = {
     "Aviso: no encontré momentos fuertes, esto es lo mejor disponible.",
   blocked: (reason) => `${reason}\n\n💳 Planes: elige o gestiona tu suscripción.`,
   freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
-    `Se acabaron tus minutos gratis: quedan ${remainingMinutes} de ${lifetimeMinutes}. Lo que ya te corté es tuyo.\n\nPara seguir: Starter cuesta €${planPriceEur} por semana e incluye ${planMinutes} minutos de video, fuentes de hasta 3 horas y 20 clips guardados 7 días.`,
+    `Tus minutos gratis no alcanzan para esto: quedan ${remainingMinutes} de ${lifetimeMinutes}. Lo que ya te corté es tuyo.\n\nPara seguir: Starter cuesta €${planPriceEur} por semana e incluye ${planMinutes} minutos de video, fuentes de hasta 3 horas y 20 clips guardados 7 días.`,
   freeNotAnchored: (planMinutes, planPriceEur) =>
     `Los minutos gratis todavía no están activos en esta cuenta. Escribe a soporte desde el menú de ayuda y lo resuelvo, o empieza ya con Starter: €${planPriceEur} por semana e incluye ${planMinutes} minutos de video.`,
   freeBudgetClosed: (planMinutes, planPriceEur) =>

@@ -89,7 +89,7 @@ const uk: Dict = {
     "Увага: сильних моментів не знайшлося - це найкраще з доступного.",
   blocked: (reason) => `${reason}\n\n💳 Тарифи - обрати підписку або керувати нею.`,
   freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
-    `Безкоштовні хвилини вичерпано - лишилося ${remainingMinutes} із ${lifetimeMinutes}. Усе, що я вже встиг нарізати, залишається твоїм.\n\nЩоб продовжити: Starter коштує €${planPriceEur} на тиждень і дає ${planMinutes} хвилин відео, джерела до 3 годин та 20 кліпів, які зберігаються 7 днів.`,
+    `Безкоштовних хвилин на це не вистачить - лишилося ${remainingMinutes} із ${lifetimeMinutes}. Усе, що я вже встиг нарізати, залишається твоїм.\n\nЩоб продовжити: Starter коштує €${planPriceEur} на тиждень і дає ${planMinutes} хвилин відео, джерела до 3 годин та 20 кліпів, які зберігаються 7 днів.`,
   freeNotAnchored: (planMinutes, planPriceEur) =>
     `Безкоштовні хвилини на цьому акаунті ще не відкриті. Напиши в підтримку з меню допомоги - я розберуся. Або почни одразу з тарифу Starter: €${planPriceEur} на тиждень за ${planMinutes} хвилин відео.`,
   freeBudgetClosed: (planMinutes, planPriceEur) =>
