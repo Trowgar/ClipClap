@@ -11,6 +11,20 @@ import {
   dashboardSecondaryActionClass,
 } from "@/components/panel-styles";
 
+/** Date only, and pinned to en-GB rather than the reader's default locale.
+ *  This component is server-rendered and then hydrated, and a date formatted
+ *  with the server's locale on one pass and the browser's on the next is a
+ *  hydration mismatch. The web UI is English-only anyway.
+ *
+ *  The time of day is left off: the question this answers is "was that recently
+ *  enough that it might still arrive, or should I ask for another one". */
+function sentOn(value: Date): string {
+  return new Date(value).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+  });
+}
+
 /**
  * The account has no anchor, so it has no allowance at all - isTrialAnchored
  * wants a verified address, a linked Google row, or a Telegram id. Both ways of
@@ -21,9 +35,15 @@ import {
 export function VerifyEmailPanel({
   email,
   lifetimeMinutes,
+  verificationSentAt,
 }: {
   email: string | null;
   lifetimeMinutes: number;
+  /** When a link was last accepted by the mail provider, or null if none ever
+   *  was. Null is also what every account created before the column existed
+   *  reads as, which is why the copy says "no record of" rather than "we did
+   *  not send" - the second would be a new false claim replacing the old one. */
+  verificationSentAt: Date | null;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -40,6 +60,10 @@ export function VerifyEmailPanel({
           kind: "ok",
           text: `A new link is on its way${email ? ` to ${email}` : ""}. It works for 24 hours and can be used once.`,
         });
+        // The send stamped verificationSentAt, so the paragraph above is now
+        // out of date - it may still be showing "no record of a confirmation
+        // link". Pull the server's copy so the two agree.
+        router.refresh();
         return;
       }
       setMessage({ kind: "error", text: result.error });
@@ -65,10 +89,21 @@ export function VerifyEmailPanel({
           </h2>
           <p className="mt-1.5 text-sm leading-relaxed text-neutral-400">
             {lifetimeMinutes} minutes of video are waiting on this account - no
-            card, no plan. We only need to know the address is yours. We sent a
-            link{email ? " to " : ""}
-            {email && <span className="text-neutral-200">{email}</span>} when you
-            signed up.
+            card, no plan. We only need to know the address is yours.{" "}
+            {verificationSentAt ? (
+              <>
+                We sent a link{email ? " to " : ""}
+                {email && <span className="text-neutral-200">{email}</span>} on{" "}
+                {sentOn(verificationSentAt)}.
+              </>
+            ) : (
+              <span className="text-amber-400">
+                We have no record of a confirmation link reaching
+                {email ? " " : " you"}
+                {email && <span className="text-amber-300">{email}</span>} - the
+                send may have failed. Ask for one now.
+              </span>
+            )}
           </p>
 
           <div className="mt-4 flex flex-wrap gap-2">

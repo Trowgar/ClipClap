@@ -1,6 +1,7 @@
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
 import {
+  prisma,
   projectService,
   userService,
   canSubmitJob,
@@ -28,11 +29,19 @@ export default async function DashboardPage() {
   // stopped sharing in July. Zero is honest here - no file has been picked yet
   // - and the gate handles it: the FREE_EXHAUSTED clause deliberately does not
   // depend on its caller having measured anything.
-  const [recentProjects, usage, gate, trial] = await Promise.all([
+  const [recentProjects, usage, gate, trial, mailState] = await Promise.all([
     projectService.getRecentProjects(userId),
     userService.getUsage(userId),
     canSubmitJob(userId, 0),
     getFreeTrialStatus(userId),
+    // Read for exactly one panel, and read here rather than inside it because
+    // the panel is a client component. Null means "no record of a link going
+    // out" - a failed send, or an account older than the column - and the panel
+    // says so instead of asserting a send nobody can see.
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { verificationSentAt: true },
+    }),
   ]);
 
   // After the page's own data is resolved, never before: this is telemetry and
@@ -82,6 +91,7 @@ export default async function DashboardPage() {
         <VerifyEmailPanel
           email={session.user.email ?? null}
           lifetimeMinutes={freeAllowance.lifetimeMinutes}
+          verificationSentAt={mailState?.verificationSentAt ?? null}
         />
       ) : blockCode === "FREE_EXHAUSTED" ? (
         <FreeExhaustedPanel

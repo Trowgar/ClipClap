@@ -13,9 +13,9 @@ import {
   createTelegramDelivery,
   deleteFile,
   estimatedFreeCostUsd,
-  findOrCreateTelegramUser,
   FREE_TIER,
   freeBudgetStatus,
+  getOrCreateTelegramUser,
   getPlanLimits,
   getPresignedDownloadUrl,
   getTributeCatalogEntry,
@@ -1746,6 +1746,16 @@ async function handleVideo(
           dict.planConcurrentLimit(created.inFlight, created.limit)
         )
       );
+      // The locked count is the one that decides, so it is the one that has to
+      // be counted. The advisory check earlier may have recorded this already;
+      // the upsert bumps `occurrences` rather than writing a second row, which
+      // is the shape the funnel wants - people, not presses.
+      await recordFunnelEvent(
+        "bot",
+        from.id,
+        uploadRejectedEvent("CONCURRENT"),
+        from.language_code
+      );
       return;
     }
     const job = created.job;
@@ -1783,6 +1793,44 @@ async function handleVideoUrl(
   const probe = await probeVideoUrl(url);
   if (!probe.ok) {
     await client.sendMessage(message.chat.id, dict.urlAccessFailed);
+
+    // THE HOLE THAT COST US A REAL USER'S STORY.
+    //
+    // On 2026-07-29 a Telegram user submitted four links in ten seconds and the
+    // funnel recorded four `video_submitted` rows and nothing else - no
+    // refusal, no account, no job. Everyone read that as "the free budget
+    // refused them" and went looking at the free-tier gate. It was this return:
+    // all four links failed the probe, and this branch sits BEFORE the account
+    // is created and before getSubmissionBlocker, which is where every other
+    // bot refusal is recorded. `PROBE_FAILED` has existed in the shared enum
+    // since the funnel was built and only the web route ever emitted it, so
+    // `upload_rejected_probe_failed` read as permanently zero on `bot`.
+    //
+    // "probe-unavailable" is excluded on purpose, exactly as the web route
+    // excludes it: yt-dlp missing from the container is our fault, and filing
+    // it as a refusal the submitter caused would hide an outage inside a
+    // perfectly ordinary-looking bad-link count. source-probe has already
+    // logged its own greppable line for that case; this one names the surface.
+    if (probe.reason === "probe-unavailable") {
+      console.error(
+        `[bot] URL probe unavailable for telegram ${from.id} - the link was ` +
+          `refused without ever being measured`
+      );
+      return;
+    }
+
+    // Greppable, and it carries the reason. Four silent failures in ten seconds
+    // left nothing in the logs either, so there was no way to tell a dead link
+    // from a site that blocks us from a timeout.
+    console.warn(
+      `[bot] url probe failed (${probe.reason}) for telegram ${from.id}`
+    );
+    await recordFunnelEvent(
+      "bot",
+      from.id,
+      uploadRejectedEvent("PROBE_FAILED"),
+      from.language_code
+    );
     return;
   }
 
@@ -1817,6 +1865,12 @@ async function handleVideoUrl(
       message.chat.id,
       dict.blocked(dict.planConcurrentLimit(created.inFlight, created.limit))
     );
+    await recordFunnelEvent(
+      "bot",
+      from.id,
+      uploadRejectedEvent("CONCURRENT"),
+      from.language_code
+    );
     return;
   }
   const job = created.job;
@@ -1830,14 +1884,36 @@ async function handleVideoUrl(
   await client.sendMessage(message.chat.id, dict.queued);
 }
 
+/**
+ * The bot's single door to a User row - and the single place `signed_up` is
+ * recorded.
+ *
+ * Every handler that needs an account goes through here, so putting the event
+ * beside the insert catches all three ways one gets minted: the "New account"
+ * button, a `ref_` deep link that bypasses the onboarding screen, and a first
+ * message that is neither. `first_screen_new_account` counts one of those doors
+ * and cannot stand in for the others.
+ *
+ * Recorded after the row exists and never before: recordFunnelEvent does not
+ * throw, so this cannot cost anyone their account.
+ */
 async function resolveTelegramUser(from: TelegramUser): Promise<User> {
-  return findOrCreateTelegramUser({
+  const { user, created } = await getOrCreateTelegramUser({
     id: from.id,
     firstName: from.first_name,
     lastName: from.last_name,
     username: from.username,
     languageCode: from.language_code,
   });
+  if (created) {
+    await recordFunnelEvent(
+      "bot",
+      from.id,
+      FUNNEL_EVENTS.SIGNED_UP,
+      from.language_code
+    );
+  }
+  return user;
 }
 
 /** Paid-plan Starter numbers quoted in the free-tier block copy, so the
@@ -1958,6 +2034,7 @@ export async function getSubmissionBlocker(
     where: { userId, createdAt: { gte: dayStart } },
   });
   if (jobsToday >= limits.maxJobsPerDay) {
+    await recordRejection("DAILY_LIMIT");
     return dict.planDailyLimit(limits.maxJobsPerDay);
   }
 
@@ -1969,6 +2046,7 @@ export async function getSubmissionBlocker(
     where: { userId, status: { in: [...ACTIVE_JOB_STATUSES] } },
   });
   if (inFlight >= limits.concurrentJobsLimit) {
+    await recordRejection("CONCURRENT");
     return dict.planConcurrentLimit(inFlight, limits.concurrentJobsLimit);
   }
 

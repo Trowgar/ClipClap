@@ -95,8 +95,10 @@ export const PLAN_LIMITS: Record<
  *  need once.
  *
  *  Denominated in SECONDS OF SOURCE, because that is what the money is
- *  denominated in: 0.0095 USD per source minute, measured over the nine real
- *  jobs in prod that carry cost telemetry. 3600 seconds is 0.57 USD.
+ *  denominated in: about 0.010 USD per source minute plus 0.020 per run,
+ *  measured over the prod jobs that carry cost telemetry. A full 3600-second
+ *  allowance spent in one run is 0.62 USD, and 0.02 more for each extra run it
+ *  is split across.
  *
  *  Sixty minutes rather than thirty: the audience clips 3-8 hour VODs, and a
  *  half-hour ceiling forces them to hand-trim a segment first, which is the
@@ -111,24 +113,58 @@ export const PLAN_LIMITS: Record<
 export const FREE_TIER = {
   lifetimeSeconds: 3600,
   zeroClipRefunds: 1,
-  /** Measured over the nine prod jobs carrying cost telemetry: 0.0060 for
-   *  whisper-1 plus 0.0035 for the gpt-5.1 critic. Compute is not in here
-   *  because the server is paid for whether a job runs or not. Used only to
-   *  pre-charge the monthly budget; finalize replaces it with the real figure. */
-  estimatedUsdPerSourceMinute: 0.0095,
+  /** The part of a free run's cash cost that scales with length: 0.0060 for
+   *  whisper-1, which is billed per minute of audio, plus about 0.0040 for the
+   *  share of the critic that does grow with the transcript.
+   *
+   *  Compute is NOT in here and must never be. cost-telemetry records it on the
+   *  job because it is real capacity, but the server is rented whether a job
+   *  runs or not, so charging it to the monthly budget spends a ceiling that is
+   *  denominated in money on something that is not money. */
+  estimatedUsdPerSourceMinute: 0.01,
+  /** The part that does NOT scale with length.
+   *
+   *  The critic makes a roughly fixed number of calls with a roughly fixed
+   *  prompt whatever the source is, so a short video pays almost all of it. The
+   *  purely per-minute model was 2-3x low there and that error runs in the
+   *  dangerous direction: reservations are what bound in-flight spend, so
+   *  under-counting them lets a burst overshoot the ceiling before a single job
+   *  finalizes. Measured on a 174-second run - 0.046 cash, of which about 0.029
+   *  was the critic. */
+  estimatedUsdPerRun: 0.02,
 } as const;
 
 /**
  * What a free job's reservation costs the monthly budget.
  *
- * Kept beside the constant it multiplies so the web route and the bot cannot
+ * Two components, not one. A flat per-run charge covers the critic, whose cost
+ * barely moves with source length, and the per-minute rate covers transcription
+ * and the part of analysis that does grow. The single per-minute rate this
+ * replaced reserved 0.028 for a run that really cost 0.046 in cash - 39% under,
+ * and worst on exactly the short sources a new user tries first.
+ *
+ * Checked against every prod job that carries cost telemetry: it reserves at or
+ * slightly above the measured cash line in each case, which is the direction
+ * that has to be wrong if either does. Finalize replaces it with the measured
+ * figure, so an over-reservation costs nothing but a little headroom while the
+ * job is in flight; an under-reservation is a hole in the ceiling.
+ *
+ * Kept beside the constants it multiplies so the web route and the bot cannot
  * each invent their own rounding. Seconds in, USD out - no minute rounding,
  * because the ledger stores the probe's exact seconds and a ceil here would
  * bill a 61-second video for two minutes.
+ *
+ * Zero seconds means zero, INCLUDING the per-run part. A duration of 0 is what
+ * an unprobed submission carries, not a real run, and charging the flat fee for
+ * one would bill the budget for a job whose length we have not measured.
+ * reviseFreeChargeSeconds re-derives the whole figure once the probe lands.
  */
 export function estimatedFreeCostUsd(seconds: number): number {
   if (!Number.isFinite(seconds) || seconds <= 0) return 0;
-  return (seconds / 60) * FREE_TIER.estimatedUsdPerSourceMinute;
+  return (
+    FREE_TIER.estimatedUsdPerRun +
+    (seconds / 60) * FREE_TIER.estimatedUsdPerSourceMinute
+  );
 }
 
 /** Not a plan - a sample. Every field is the smallest value that still lets one

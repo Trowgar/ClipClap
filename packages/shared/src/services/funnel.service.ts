@@ -18,6 +18,23 @@ export const FUNNEL_EVENTS = {
   NEW_ACCOUNT: "first_screen_new_account",
   /** Bot only: pressed "Link account". */
   LINK_ACCOUNT: "first_screen_link_account",
+  /** Both: a User row was created for this person.
+   *
+   *  Not the same question as FIRST_SCREEN or NEW_ACCOUNT, which are about one
+   *  screen in one surface. This is "an account now exists", wherever it came
+   *  from: the web register form, a Google or Telegram sign-in the adapter
+   *  created a row for, a referral deep link that skips the onboarding screen.
+   *  Without it, `users` is a running total with no dates a funnel can slice. */
+  SIGNED_UP: "signed_up",
+  /** Web only: a verification link was opened and the address is now confirmed.
+   *
+   *  The pair SIGNED_UP -> EMAIL_VERIFIED is what makes the "Confirm your
+   *  email" wall countable. Before it, a person who registered, met the panel
+   *  and left emitted one `app_opened` and was indistinguishable from a
+   *  verified user idling on the dashboard. There is no bot equivalent: a
+   *  Telegram account is anchored by its phone-backed id and is never asked to
+   *  confirm anything. */
+  EMAIL_VERIFIED: "email_verified",
   /** Both: bot main menu rendered / web dashboard loaded. */
   APP_OPENED: "app_opened",
   /** Both: an attempt to create a job, recorded before the limit checks. */
@@ -59,6 +76,26 @@ const REJECTION_SUFFIX: Record<UploadRejectionCode, string> = {
   CONCURRENT: "concurrent",
   PROBE_FAILED: "probe_failed",
 };
+
+/**
+ * READ BEFORE CHASING A ZERO: `upload_rejected_free_not_anchored` is expected
+ * to stay at or near zero, and that is not a bug in the recording.
+ *
+ * The dashboard replaces the upload form with the "Confirm your email" panel
+ * for exactly the accounts that would earn this code, so the submit route is
+ * unreachable from the UI for them; the only callers left are direct API
+ * clients. On `bot` it is unreachable by construction - a Telegram account is
+ * anchored by its phone-backed id.
+ *
+ * It is deliberately NOT synthesised from the panel being rendered. The panel
+ * is drawn on every dashboard load, so counting it here would turn a refusal
+ * count into a page-view count under a name that says "rejected", and the two
+ * would then disagree with the web route's own row for the same code. The wall
+ * IS measured, by the pair that was added for it: everyone with SIGNED_UP and
+ * no EMAIL_VERIFIED is a person sitting behind it. Keep the recording in the
+ * route - it is the honest record of an API refusal and it comes back the day
+ * the dashboard stops hiding the form.
+ */
 
 /** The event name for a refusal, e.g. "upload_rejected_quota". */
 export function uploadRejectedEvent(code: UploadRejectionCode): string {

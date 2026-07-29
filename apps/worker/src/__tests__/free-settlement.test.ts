@@ -279,7 +279,9 @@ describe("finalize settlement", () => {
     mocks.jobFindUnique.mockResolvedValue({
       userId: "u1",
       clipsGenerated: 0,
-      estimatedTotalCostUsd: 0.42,
+      estimatedTranscriptionCostUsd: 0.3,
+      estimatedAnalysisCostUsd: 0.12,
+      estimatedComputeCostUsd: 0.3,
     });
     mocks.trueUpFreeCost.mockImplementation(async () => {
       order.push("trueUp");
@@ -292,14 +294,63 @@ describe("finalize settlement", () => {
     await settleFreeLedger("job1", "DONE");
 
     expect(order).toEqual(["trueUp", "refund"]);
-    expect(mocks.trueUpFreeCost).toHaveBeenCalledWith("u1", "job1", 0.42);
+    expect(mocks.trueUpFreeCost).toHaveBeenCalledWith(
+      "u1",
+      "job1",
+      expect.closeTo(0.42, 10)
+    );
+  });
+
+  it("charges the ledger the cash lines only, never compute", async () => {
+    // The numbers are a real prod job: 0.179 whisper-1, 0.054 critic, 0.179 of
+    // rented server. The server is paid for whether this job runs or not, so
+    // the monthly ceiling - which bounds MONEY - must not be spent on it.
+    // Charging the total burned the ceiling about 37% faster than the spend it
+    // exists to bound.
+    mocks.jobFindUnique.mockResolvedValue({
+      userId: "u1",
+      clipsGenerated: 4,
+      estimatedTranscriptionCostUsd: 0.179,
+      estimatedAnalysisCostUsd: 0.054,
+      estimatedComputeCostUsd: 0.179,
+    });
+
+    await settleFreeLedger("job1", "DONE");
+
+    expect(mocks.trueUpFreeCost).toHaveBeenCalledWith(
+      "u1",
+      "job1",
+      expect.closeTo(0.233, 10)
+    );
+  });
+
+  it("does not even read the compute line off the job row", async () => {
+    // Stronger than checking the arithmetic: if the select ever goes back to
+    // estimatedTotalCostUsd, that column carries compute inside it and no
+    // assertion about the sum would notice.
+    mocks.jobFindUnique.mockResolvedValue({
+      userId: "u1",
+      clipsGenerated: 1,
+      estimatedTranscriptionCostUsd: 0.1,
+      estimatedAnalysisCostUsd: 0.02,
+    });
+
+    await settleFreeLedger("job1", "DONE");
+
+    const select = mocks.jobFindUnique.mock.calls[0][0].select;
+    expect(select).not.toHaveProperty("estimatedTotalCostUsd");
+    expect(select).not.toHaveProperty("estimatedComputeCostUsd");
+    expect(select.estimatedTranscriptionCostUsd).toBe(true);
+    expect(select.estimatedAnalysisCostUsd).toBe(true);
   });
 
   it("refunds a failed job and never spends the zero-clip forgiveness on it", async () => {
     mocks.jobFindUnique.mockResolvedValue({
       userId: "u1",
       clipsGenerated: 0,
-      estimatedTotalCostUsd: 0.42,
+      estimatedTranscriptionCostUsd: 0.3,
+      estimatedAnalysisCostUsd: 0.12,
+      estimatedComputeCostUsd: 0.3,
     });
 
     await settleFreeLedger("job1", "FAILED");
@@ -314,7 +365,9 @@ describe("finalize settlement", () => {
     mocks.jobFindUnique.mockResolvedValue({
       userId: "u1",
       clipsGenerated: 3,
-      estimatedTotalCostUsd: 0.42,
+      estimatedTranscriptionCostUsd: 0.3,
+      estimatedAnalysisCostUsd: 0.12,
+      estimatedComputeCostUsd: 0.3,
     });
 
     await settleFreeLedger("job1", "DONE");
@@ -331,7 +384,8 @@ describe("finalize settlement", () => {
     mocks.jobFindUnique.mockResolvedValue({
       userId: "u1",
       clipsGenerated: 0,
-      estimatedTotalCostUsd: null,
+      estimatedTranscriptionCostUsd: null,
+      estimatedAnalysisCostUsd: null,
     });
 
     await settleFreeLedger("job1", "FAILED");
@@ -344,7 +398,9 @@ describe("finalize settlement", () => {
     mocks.jobFindUnique.mockResolvedValue({
       userId: "u1",
       clipsGenerated: 1,
-      estimatedTotalCostUsd: 0.42,
+      estimatedTranscriptionCostUsd: 0.3,
+      estimatedAnalysisCostUsd: 0.12,
+      estimatedComputeCostUsd: 0.3,
     });
     mocks.trueUpFreeCost.mockRejectedValue(new Error("connection reset"));
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -372,7 +428,12 @@ describe("finalize settlement", () => {
     });
     mocks.jobFindUnique.mockImplementation(async () => {
       order.push("settle");
-      return { userId: "u1", clipsGenerated: 0, estimatedTotalCostUsd: 0.11 };
+      return {
+        userId: "u1",
+        clipsGenerated: 0,
+        estimatedTranscriptionCostUsd: 0.06,
+        estimatedAnalysisCostUsd: 0.05,
+      };
     });
 
     await runFinalizeStage({ jobId: "job1", userId: "u1" });
@@ -395,7 +456,8 @@ describe("finalize settlement", () => {
     mocks.jobFindUnique.mockResolvedValue({
       userId: "u1",
       clipsGenerated: 2,
-      estimatedTotalCostUsd: 0.11,
+      estimatedTranscriptionCostUsd: 0.06,
+      estimatedAnalysisCostUsd: 0.05,
     });
 
     await expect(

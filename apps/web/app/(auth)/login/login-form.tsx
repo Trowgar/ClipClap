@@ -17,6 +17,12 @@ export function LoginForm() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  /** The account exists and is signed in, but /api/register reported that the
+   *  confirmation mail never went out. Held on screen instead of redirected
+   *  past: the redirect is what turned a failed send into a silent one, and the
+   *  dashboard is a poor place to learn it because the free minutes are already
+   *  locked by then. */
+  const [mailFailed, setMailFailed] = useState(false);
 
   const handleEmailSubmit = useCallback(async () => {
     if (!email) return;
@@ -87,9 +93,12 @@ export function LoginForm() {
       body: JSON.stringify({ email, name, password }),
     });
 
+    const data = await res.json().catch(() => ({}) as Record<string, unknown>);
+
     if (!res.ok) {
-      const data = await res.json();
-      setError(data.error || "Something went wrong");
+      setError(
+        (typeof data.error === "string" && data.error) || "Something went wrong"
+      );
       setLoading(false);
       return;
     }
@@ -104,9 +113,20 @@ export function LoginForm() {
     if (signInRes?.error) {
       setError("Account created but could not sign in. Try logging in.");
       setLoading(false);
-    } else {
-      window.location.href = "/dashboard";
+      return;
     }
+
+    // The route has always returned this and the form has always thrown it
+    // away. `=== false` rather than a falsy test: a response that somehow omits
+    // the field must not be read as a failed send and scare a user whose mail
+    // is on its way.
+    if (data.verificationSent === false) {
+      setMailFailed(true);
+      setLoading(false);
+      return;
+    }
+
+    window.location.href = "/dashboard";
   }, [email, name, password, confirmPassword]);
 
   const handleGoogleSignIn = () => {
@@ -123,6 +143,7 @@ export function LoginForm() {
     setConfirmPassword("");
     setName("");
     setError("");
+    setMailFailed(false);
   };
 
   return (
@@ -299,8 +320,46 @@ export function LoginForm() {
         </motion.div>
       )}
 
+      {/* ── Registered, but the confirmation mail did not go out ──
+          The account is real and already signed in, so this is not an error -
+          it is the one thing the user needs to know before they go looking for
+          a mail that is not coming. */}
+      {step === "register" && mailFailed && (
+        <motion.div
+          key="mail-failed"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -10 }}
+          transition={{ duration: 0.2 }}
+        >
+          <h1 className="text-xl font-semibold text-white">
+            Your account is ready
+          </h1>
+          <p className="mt-1 text-sm text-neutral-500">{email}</p>
+
+          <p
+            role="alert"
+            className="mt-6 rounded-lg border border-amber-500/25 bg-amber-500/[0.07] px-4 py-3 text-sm leading-relaxed text-amber-300"
+          >
+            We could not send the confirmation email just now. Your free minutes
+            stay locked until the address is confirmed - open the dashboard and
+            press &ldquo;Send me another link&rdquo;, or connect Telegram
+            instead, which unlocks them with no email at all.
+          </p>
+
+          <button
+            onClick={() => {
+              window.location.href = "/dashboard";
+            }}
+            className={`mt-4 ${authPrimaryButtonClass}`}
+          >
+            Continue to dashboard
+          </button>
+        </motion.div>
+      )}
+
       {/* ── Register: name + password ── */}
-      {step === "register" && (
+      {step === "register" && !mailFailed && (
         <motion.div
           key="register"
           initial={{ opacity: 0, y: 10 }}

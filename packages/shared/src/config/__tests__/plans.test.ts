@@ -117,6 +117,7 @@ describe("Plan Limits", () => {
         "lifetimeSeconds",
         "zeroClipRefunds",
         "estimatedUsdPerSourceMinute",
+        "estimatedUsdPerRun",
       ]);
     });
 
@@ -129,28 +130,44 @@ describe("Plan Limits", () => {
     // and it has to be per source minute, which is the only unit the probe can
     // give us before a byte is downloaded.
     it("prices a source minute so a reservation can be made before the run", () => {
-      expect(FREE_TIER.estimatedUsdPerSourceMinute).toBe(0.0095);
+      expect(FREE_TIER.estimatedUsdPerSourceMinute).toBe(0.01);
     });
 
-    // The whole lifetime allowance is 60 minutes, so one account can cost at
-    // most this much. If that ever stops being small relative to a plausible
-    // ceiling, the ceiling is no longer the thing bounding the free tier.
+    // The critic costs about the same on a three-minute clip as on a
+    // thirty-minute one, so a purely per-minute estimate is worst exactly where
+    // new users start. Reserving too little is the dangerous direction: the
+    // reservation is all that bounds spend that has not finalized yet.
+    it("charges a fixed component per run, not only per minute", () => {
+      expect(FREE_TIER.estimatedUsdPerRun).toBe(0.02);
+      // Measured: a 174-second source really cost 0.046 in cash. The old
+      // per-minute-only model reserved 0.028 for it.
+      expect(estimatedFreeCostUsd(174)).toBeGreaterThan(0.046);
+      // ...and not wildly more than it, or short runs stop fitting the ceiling.
+      expect(estimatedFreeCostUsd(174)).toBeLessThan(0.06);
+    });
+
+    // The whole lifetime allowance is 60 minutes, so one account spending it in
+    // a single run can cost at most this much. If that ever stops being small
+    // relative to a plausible ceiling, the ceiling is no longer the thing
+    // bounding the free tier.
     it("puts a whole free allowance well under a dollar", () => {
       const worstCaseUsd = estimatedFreeCostUsd(FREE_TIER.lifetimeSeconds);
-      expect(worstCaseUsd).toBeCloseTo(0.57, 5);
+      expect(worstCaseUsd).toBeCloseTo(0.62, 5);
+      expect(worstCaseUsd).toBeLessThan(1);
     });
 
     it("bills exact seconds, not rounded-up minutes", () => {
       // 61 seconds is one minute and one second. A ceil to 2 minutes would
-      // overstate this by 64%, and the budget would close early for no reason.
-      expect(estimatedFreeCostUsd(61)).toBeCloseTo(
-        (61 / 60) * 0.0095,
-        10
-      );
+      // overstate the per-minute half by 64%, and the budget would close early
+      // for no reason.
+      expect(estimatedFreeCostUsd(61)).toBeCloseTo(0.02 + (61 / 60) * 0.01, 10);
     });
 
     // Every upload arrives here with the duration unknown (the web route does
     // not probe uploads), so 0 is a routine input, not an error case.
+    // Zero has to mean zero INCLUDING the per-run component: an unprobed
+    // submission is not a run, and charging the flat fee for one would bill the
+    // budget for a length nobody has measured.
     it("costs nothing for a duration we do not know yet", () => {
       expect(estimatedFreeCostUsd(0)).toBe(0);
       expect(estimatedFreeCostUsd(Number.NaN)).toBe(0);

@@ -4,7 +4,9 @@ import {
   canonicalizeEmail,
   isDisposableEmail,
   issueToken,
+  recordFunnelEvent,
   sendVerificationEmail,
+  FUNNEL_EVENTS,
 } from "@clipclap/shared";
 import { Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
@@ -176,14 +178,16 @@ export async function POST(req: Request) {
 
   const hashed = await bcrypt.hash(password, 12);
 
+  let created: { id: string };
   try {
-    await prisma.user.create({
+    created = await prisma.user.create({
       data: {
         email: normalizedEmail,
         emailCanonical: canonical,
         name: typeof name === "string" ? name.trim() || null : null,
         password: hashed,
       },
+      select: { id: true },
     });
   } catch (err) {
     // The lookup above races a concurrent registration of the same mailbox. The
@@ -219,6 +223,44 @@ export async function POST(req: Request) {
   } catch (err) {
     console.error("[register] could not issue a verification link:", err);
   }
+
+  if (verificationSent) {
+    // The one fact the dashboard cannot work out for itself. issueToken writing
+    // a row proves a link was MINTED, not that one was delivered, so the panel
+    // had nothing truthful to read and asserted the send unconditionally. A
+    // timestamp rather than a boolean because the panel wants to say when.
+    await prisma.user
+      .update({
+        where: { id: created.id },
+        data: { verificationSentAt: new Date() },
+      })
+      .catch((err) => {
+        // The mail is out; failing the registration over the bookkeeping would
+        // be strictly worse than a panel that says "no record of a link".
+        console.error(
+          "[register] could not stamp verificationSentAt:",
+          err instanceof Error ? err.message : err
+        );
+      });
+  } else {
+    // ALERT ON THIS LINE. It is the only place a signup that will never get its
+    // mail becomes visible, and it is deliberately one stable string with no
+    // interpolation before the marker so a log query can match on it:
+    //
+    //   docker compose logs web | grep verification-send-failed
+    //
+    // The address is included because "which mailboxes are affected" is the
+    // first question an outage raises; email.service has already logged the
+    // provider's own error above this line.
+    console.error(
+      `[register] verification-send-failed for ${normalizedEmail} - the ` +
+        `account exists but has no confirmation link and no free allowance`
+    );
+  }
+
+  // After the account and the mail, never before: telemetry must not be able to
+  // cost someone their signup. recordFunnelEvent does not throw.
+  await recordFunnelEvent("web", created.id, FUNNEL_EVENTS.SIGNED_UP);
 
   // Reported, not asserted: with RESEND_API_KEY unset this is false on every
   // registration, which is the truth and is what the log says too.

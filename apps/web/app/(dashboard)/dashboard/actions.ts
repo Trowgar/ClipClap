@@ -69,13 +69,33 @@ export async function resendVerificationEmail(): Promise<ResendResult> {
     const token = await issueToken("verify", user.email);
     const sent = await sendVerificationEmail(user.email, token);
     if (!sent) {
+      // Same marker as the register route, on purpose: one grep has to find
+      // every signup that is waiting on mail we never managed to send,
+      // whichever door asked for it.
+      console.error(
+        `[resend-verification] verification-send-failed for ${user.email}`
+      );
       return {
         ok: false,
         error: "The mail could not be sent just now. Try again in a minute.",
       };
     }
+    // Only on a send the provider accepted. The panel reads this to decide
+    // whether it may claim a link went out, so writing it on a failure would
+    // reinstate exactly the lie this column exists to end.
+    await prisma.user
+      .update({ where: { id: userId }, data: { verificationSentAt: new Date() } })
+      .catch((err) => {
+        console.error(
+          "[resend-verification] could not stamp verificationSentAt:",
+          err instanceof Error ? err.message : err
+        );
+      });
   } catch (err) {
-    console.error("[resend-verification] could not issue a link:", err);
+    console.error(
+      `[resend-verification] verification-send-failed for ${user.email}:`,
+      err
+    );
     return {
       ok: false,
       error: "The mail could not be sent just now. Try again in a minute.",

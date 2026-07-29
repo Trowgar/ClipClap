@@ -120,6 +120,17 @@ const nextAuth = NextAuth({
       // mailbox unclaimed.
       await claimMailboxIdentity(user.id, user.email);
 
+      // Google and Telegram signups never touch /api/register - PrismaAdapter
+      // inserts the row - so this hook is the only place they can be counted.
+      // Same reason emailCanonical has to be filled here: anything the register
+      // route does for a signup, this hook owes the federated ones too.
+      if (user.id) {
+        const { recordFunnelEvent, FUNNEL_EVENTS } = await import(
+          "@clipclap/shared"
+        );
+        await recordFunnelEvent("web", user.id, FUNNEL_EVENTS.SIGNED_UP);
+      }
+
       try {
         const { cookies } = await import("next/headers");
         const { referralService, REFERRAL_COOKIE_NAME } = await import("@clipclap/shared");

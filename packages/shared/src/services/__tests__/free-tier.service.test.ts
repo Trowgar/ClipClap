@@ -429,7 +429,7 @@ describe("free-tier.service", () => {
     const data = (prisma.freeUsage.updateMany as any).mock.calls[0][0].data;
     expect(Object.keys(data).sort()).toEqual(["estimatedCostUsd", "seconds"]);
     expect(data.estimatedCostUsd).toBeCloseTo(
-      FREE_TIER.estimatedUsdPerSourceMinute * 60,
+      FREE_TIER.estimatedUsdPerRun + FREE_TIER.estimatedUsdPerSourceMinute * 60,
       10
     );
   });

@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma, redeemToken } from "@clipclap/shared";
+import {
+  prisma,
+  recordFunnelEvent,
+  redeemToken,
+  FUNNEL_EVENTS,
+} from "@clipclap/shared";
 
 export const dynamic = "force-dynamic";
 
@@ -33,10 +38,29 @@ export async function GET(req: NextRequest) {
   // original verification timestamp if some other path (an OAuth link) got
   // there first - matching zero rows is the right outcome then, not an error,
   // because the mailbox is verified either way.
-  await prisma.user.updateMany({
+  const confirmed = await prisma.user.updateMany({
     where: { email: result.email, emailVerified: null },
     data: { emailVerified: new Date() },
   });
+
+  // Only a real transition is recorded, and only after the redirect target is
+  // decided. Zero rows means the address was already verified by some other
+  // path, which is not a person crossing the wall - it is the same person
+  // arriving twice, and counting it would inflate the one number that says how
+  // many signups get their free minutes at all.
+  //
+  // The lookup is a second round trip because updateMany cannot return ids and
+  // the funnel is keyed on users.id on this surface, never on an address. It
+  // runs only on the transition, so it costs nothing in the common repeat case.
+  if (confirmed.count > 0) {
+    const user = await prisma.user.findUnique({
+      where: { email: result.email },
+      select: { id: true },
+    });
+    if (user) {
+      await recordFunnelEvent("web", user.id, FUNNEL_EVENTS.EMAIL_VERIFIED);
+    }
+  }
 
   return NextResponse.redirect(`${APP_URL}/login?verified=ok`);
 }

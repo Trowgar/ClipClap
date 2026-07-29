@@ -53,14 +53,14 @@ describe("subtitlesKeyboard", () => {
 });
 
 const toggleMocks = vi.hoisted(() => ({
-  findOrCreateTelegramUser: vi.fn(),
+  getOrCreateTelegramUser: vi.fn(),
   userUpdate: vi.fn(),
 }));
 vi.mock("@clipclap/shared", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
-    findOrCreateTelegramUser: toggleMocks.findOrCreateTelegramUser,
+    getOrCreateTelegramUser: toggleMocks.getOrCreateTelegramUser,
     prisma: { user: { update: toggleMocks.userUpdate } },
   };
 });
@@ -69,7 +69,10 @@ import { handleSubtitlesToggle } from "../handlers";
 
 describe("handleSubtitlesToggle", () => {
   it("flips subtitlesEnabled and edits the message to the new state", async () => {
-    toggleMocks.findOrCreateTelegramUser.mockResolvedValue({ id: "u1", subtitlesEnabled: true });
+    toggleMocks.getOrCreateTelegramUser.mockResolvedValue({
+      user: { id: "u1", subtitlesEnabled: true },
+      created: false,
+    });
     toggleMocks.userUpdate.mockResolvedValue({});
     const client = { editMessageText: vi.fn().mockResolvedValue(undefined) } as never;
     const query = { id: "q", from: { id: 42 }, message: { chat: { id: 7 }, message_id: 3 } };

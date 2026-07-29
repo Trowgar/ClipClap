@@ -111,6 +111,15 @@ model User {
   email                 String?            @unique
   emailCanonical        String?            @unique
   emailVerified         DateTime?
+  /// When a verification mail was last handed to the provider WITHOUT error.
+  ///
+  /// NULL means "we have no record of a link reaching this mailbox" - either
+  /// the send failed, or the row predates this column. It is deliberately not a
+  /// boolean and deliberately not set when the token is merely issued: the
+  /// dashboard used to state "We sent you a link when you signed up"
+  /// unconditionally, which is a lie every time Resend is down, over quota or
+  /// bouncing, and it left the user waiting for mail that was never sent.
+  verificationSentAt    DateTime?
   password              String?
   telegramId            String?            @unique
   telegramLocale        String?

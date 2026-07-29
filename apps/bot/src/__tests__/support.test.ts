@@ -4,13 +4,13 @@ import { t } from "../i18n";
 const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
   update: vi.fn(),
-  findOrCreateTelegramUser: vi.fn(),
+  getOrCreateTelegramUser: vi.fn(),
 }));
 vi.mock("@clipclap/shared", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
-    findOrCreateTelegramUser: mocks.findOrCreateTelegramUser,
+    getOrCreateTelegramUser: mocks.getOrCreateTelegramUser,
     prisma: { user: { findUnique: mocks.findUnique, update: mocks.update } },
   };
 });

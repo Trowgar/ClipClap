@@ -18,6 +18,10 @@ export type JobOutcome = "DONE" | "FAILED";
  * the free_usage table untouched by construction, not by a plan check that
  * could go stale between submit and finalize.
  *
+ * WHAT THE LEDGER IS CHARGED is the cash the run cost - transcription plus
+ * analysis - and not `estimatedTotalCostUsd`, which also contains compute. See
+ * the select below; that distinction is the whole point of this stage.
+ *
  * ORDER: true up, then refund. It matters, and the reason is not the one you
  * would guess from reading trueUpFreeCost today.
  *
@@ -60,7 +64,23 @@ export async function settleFreeLedger(
       select: {
         userId: true,
         clipsGenerated: true,
-        estimatedTotalCostUsd: true,
+        // The two CASH lines, deliberately not estimatedTotalCostUsd.
+        //
+        // The total also carries estimatedComputeCostUsd, which is
+        // sourceMinutes * 0.006 of rented server that we pay for whether this
+        // job runs or not. cost-telemetry is right to record it - it is the
+        // full picture of what a run consumes, and the margin analysis reads
+        // it - but the monthly budget is a CEILING ON MONEY LEAVING THE
+        // ACCOUNT, and compute does not leave it because of this job. Charging
+        // it burned the ceiling about 37% faster than the spend it bounds: a
+        // run reserved at 0.02755 was trued up to 0.063, of which 0.017 was
+        // compute, so a 10 USD ceiling funded about 13 accounts instead of 17.
+        //
+        // Do not "simplify" this back to the total. If a third cash line is
+        // ever added to cost-telemetry it must be added here too; if a second
+        // non-cash line is added, it must not.
+        estimatedTranscriptionCostUsd: true,
+        estimatedAnalysisCostUsd: true,
       },
     });
     if (!job) return;
@@ -72,11 +92,14 @@ export async function settleFreeLedger(
     // number that keeps the free tier bounded. Leaving the estimate in place is
     // the conservative error: it over-counts a job that spent less than
     // predicted, and over-counting closes the tier early rather than late.
-    if (
-      typeof job.estimatedTotalCostUsd === "number" &&
-      job.estimatedTotalCostUsd > 0
-    ) {
-      await trueUpFreeCost(job.userId, jobId, job.estimatedTotalCostUsd);
+    //
+    // A DONE job always transcribed, so its transcription line is always
+    // positive and this never skips a run that really spent money.
+    const cashCostUsd =
+      (job.estimatedTranscriptionCostUsd ?? 0) +
+      (job.estimatedAnalysisCostUsd ?? 0);
+    if (cashCostUsd > 0) {
+      await trueUpFreeCost(job.userId, jobId, cashCostUsd);
     }
 
     if (outcome === "FAILED") {
