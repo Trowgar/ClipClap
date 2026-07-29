@@ -45,6 +45,7 @@ vi.mock("../telegram-notification.service", () => ({ notifyPaymentEvent: mocks.n
 vi.mock("../referral.service", () => ({ recordCommission: mocks.recordCommission }));
 
 import {
+  applyPaidOrder,
   canonicalTributeEventName,
   dispatchTributeEvent,
   hashTributeEvent,
@@ -183,6 +184,36 @@ describe("dispatchTributeEvent - activation", () => {
       expect.objectContaining({ data: expect.objectContaining({ subscriptionStatus: "ACTIVE", currentPeriodEnd: new Date("2026-07-28T00:00:00.000Z") }) })
     );
     expect(mocks.notify).toHaveBeenCalledWith("user-1", expect.objectContaining({ kind: "subscription_renewed" }));
+  });
+});
+
+describe("applyPaidOrder - idempotency", () => {
+  it("activates once, then treats a re-apply of the same period as a no-op", async () => {
+    const order = { ...ORDER } as unknown as Parameters<typeof applyPaidOrder>[0];
+    const expiresAt = new Date("2026-07-21T00:00:00.000Z");
+
+    mocks.userFindUnique.mockResolvedValueOnce({ id: "user-1", currentPeriodEnd: null });
+    mocks.userUpdate.mockResolvedValue({ id: "user-1" });
+
+    const first = await applyPaidOrder(order, expiresAt, false);
+    expect(first).toEqual({ status: "activated", userId: "user-1", plan: "STARTER" });
+    expect(mocks.userUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.userUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "user-1" },
+        data: expect.objectContaining({ subscriptionStatus: "ACTIVE", currentPeriodEnd: expiresAt }),
+      })
+    );
+    expect(mocks.notify).toHaveBeenCalledTimes(1);
+
+    // Same order, same period, re-applied (e.g. by a reconcile poll after the
+    // webhook already granted access): must be an idempotent skip, not a
+    // second activation/notification.
+    mocks.userFindUnique.mockResolvedValueOnce({ id: "user-1", currentPeriodEnd: expiresAt });
+    const second = await applyPaidOrder(order, expiresAt, false);
+    expect(second).toEqual({ status: "stale_order", orderUuid: "ord-1" });
+    expect(mocks.userUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.notify).toHaveBeenCalledTimes(1);
   });
 });
 
