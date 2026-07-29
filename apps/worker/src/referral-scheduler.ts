@@ -5,9 +5,11 @@ import {
   HOLD_RELEASE_JOB,
   SUBSCRIPTION_RECONCILE_JOB,
   RETENTION_SWEEP_JOB,
+  TRIBUTE_RECONCILE_JOB,
   releaseMaturedCommissions,
   reconcileSubscriptions,
   runRetentionSweep,
+  reconcilePendingTributeOrders,
 } from "@clipclap/shared";
 
 export function createReferralScheduler(): Worker {
@@ -27,6 +29,13 @@ export function createReferralScheduler(): Worker {
       }
       if (job.name === RETENTION_SWEEP_JOB) {
         await runRetentionSweep(now);
+        return;
+      }
+      if (job.name === TRIBUTE_RECONCILE_JOB) {
+        const r = await reconcilePendingTributeOrders(new Date());
+        console.log(
+          `[tribute-reconcile] checked=${r.checked} activated=${r.activated} failed=${r.failed} expired=${r.expired}`
+        );
         return;
       }
     },
