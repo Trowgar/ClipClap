@@ -377,6 +377,26 @@ the anchor costs money but cannot cost unbounded money.
 Rollback is `FREE_TIER_MONTHLY_BUDGET_USD=0`, which closes the trial without a
 deploy and without touching paying users.
 
+## The refund a failure never reaches
+
+Finalize settles the ledger, but a job that breaks at TRANSCRIBE, ANALYZE or
+RENDER never gets there - each stage marks the job `FAILED` and throws onward.
+So the charge stands for ever and our own breakage eats the user's only look at
+the product, which is the exact outcome the uncapped failure refund exists to
+prevent.
+
+The obvious fix is wrong. Refunding inside each stage's `markJobFailed` releases
+the allowance on BullMQ's **first** attempt, while the third can still succeed -
+handing out clips and an intact balance together. The download-stage refusal is
+safe only because it is deterministic across all three attempts.
+
+Closed with a sweep instead of a `failed` event handler: one query in one place
+rather than wiring into five stage workers, and self-healing, so it also catches
+whatever any future path forgets. It refunds free-tier jobs that are terminally
+`FAILED` - past the retry window by age, not by status alone - and hold a CHARGE
+with no matching REFUND. Its killswitch defaults to **on**, unlike the trial's:
+a refund sweep failing closed would silently keep money that is not ours.
+
 ## Known gaps, accepted for now
 
 - **`authorize()` is brittle about case.** It lowercases the typed address and
