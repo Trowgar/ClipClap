@@ -148,7 +148,21 @@ export async function POST(req: NextRequest) {
   // particular submission fits inside it.
   const limits = getPlanLimits(user.plan, user.billingCycle ?? "MONTHLY");
 
-  if (durationMinutes > limits.maxSourceDurationMinutes) {
+  // Skipped for the free tier, and only for the free tier.
+  //
+  // checkFreeTrial already checks length, against the same 60 minutes this line
+  // would read, and it says something better: it names the free allowance and
+  // points at Starter's 180-minute cap, which is the one sentence in a refusal
+  // that gives someone a reason to pay. This check firing first replaced that
+  // with "Trim before uploading" and filed the refusal under `too_long`, so
+  // `upload_rejected_free_too_long` read as permanently zero and the funnel
+  // could not show how often length is what stops people.
+  //
+  // Not reordered wholesale, deliberately. Running the submission check first
+  // for everyone would reclassify a paid account over its plan's source cap
+  // from TOO_LONG to QUOTA, and TOO_LONG is the truer answer there - a 200
+  // minute source is refused for its length whatever minutes are left.
+  if (!isOnFreeTier(user) && durationMinutes > limits.maxSourceDurationMinutes) {
     await recordFunnelEvent("web", userId, uploadRejectedEvent("TOO_LONG"));
     return NextResponse.json(
       {
@@ -196,24 +210,32 @@ export async function POST(req: NextRequest) {
 }
 
 /**
- * The reservation to write with the Job row, or undefined for a paying account.
+ * Is this account running on the free allowance?
  *
- * The plan/status pair is checked, never the derived subscription phase, and it
- * is the SAME pair canSubmitJob uses to route into checkFreeTrial. If these two
- * ever disagree, an account is either gated as free and charged as paid or the
- * reverse. In particular `plan === "NONE"` alone is not enough: a canceled
- * ex-subscriber whose plan was reset back to NONE keeps subscriptionStatus, and
- * charging them here would put a paid customer's job into the free ledger,
- * where the monthly budget would count it as free spend and trueUpFreeCost
- * would later rewrite a row that was never the free tier's.
+ * ONE definition, used by both the checks that care, because they have to agree:
+ * the route hands length refusals to checkFreeTrial for exactly the accounts it
+ * writes a ledger row for. Two copies of this condition would eventually drift
+ * and leave an account gated on one basis and charged on another.
+ *
+ * The plan/status PAIR is checked, never the derived subscription phase, and it
+ * is the same pair canSubmitJob uses to route into checkFreeTrial. `plan ===
+ * "NONE"` alone is not enough: a canceled ex-subscriber whose plan was reset
+ * back to NONE keeps a non-NONE subscriptionStatus, and treating them as free
+ * here would put a paid customer's job into the free ledger, where the monthly
+ * budget would count it as free spend and trueUpFreeCost would later rewrite a
+ * row that was never the free tier's.
  */
+function isOnFreeTier(user: Pick<User, "plan" | "subscriptionStatus">): boolean {
+  return user.plan === "NONE" && user.subscriptionStatus === "NONE";
+}
+
+/** The reservation to write with the Job row, or undefined for a paying
+ *  account. */
 function freeChargeFor(
   user: Pick<User, "plan" | "subscriptionStatus">,
   durationSec: number | undefined
 ): FreeChargeInput | undefined {
-  if (user.plan !== "NONE" || user.subscriptionStatus !== "NONE") {
-    return undefined;
-  }
+  if (!isOnFreeTier(user)) return undefined;
 
   // Rounded, not ceiled: this is the ledger's record of what was measured, and
   // the gate above has already decided the submission fits. An upload arrives
