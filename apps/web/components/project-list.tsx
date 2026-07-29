@@ -22,6 +22,10 @@ export type SerializedProjectSummary = Omit<
 interface RecentProjectsProps {
   projects: SerializedProjectSummary[];
   hasMore: boolean;
+  /** False when the dashboard swapped the upload zone for a panel - an unverified
+   *  or spent free account. The empty state must not point at a form that the
+   *  reader cannot see. */
+  canUpload?: boolean;
 }
 
 interface ProjectTableProps {
@@ -48,7 +52,11 @@ const STATUS_LABELS: Record<string, string> = {
   FAILED: "failed",
 };
 
-export function RecentProjects({ projects, hasMore }: RecentProjectsProps) {
+export function RecentProjects({
+  projects,
+  hasMore,
+  canUpload = true,
+}: RecentProjectsProps) {
   if (projects.length === 0) {
     return (
       <section className="space-y-4">
@@ -56,7 +64,12 @@ export function RecentProjects({ projects, hasMore }: RecentProjectsProps) {
           <h2 className="text-lg font-semibold">Recent Projects</h2>
         </div>
         <p className="rounded-lg border border-border py-8 text-center text-sm text-muted-foreground">
-          No projects yet. Upload your first video above.
+          {canUpload
+            ? "No projects yet. Upload your first video above."
+            : /* The upload zone is replaced by a panel in this state, so
+                 pointing at it would send the reader looking for a form that
+                 is not on the page. */
+              "No projects yet."}
         </p>
       </section>
     );

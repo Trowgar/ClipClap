@@ -62,6 +62,13 @@ export default async function DashboardPage() {
   // allowed submission on plan NONE can only have come through checkFreeTrial.
   const onFreePlan = usage.plan === "NONE";
 
+  // The three free refusals replace the upload zone with a panel, so the empty
+  // projects list must not tell the reader to upload "above".
+  const showsUploadZone =
+    blockCode !== "FREE_NOT_ANCHORED" &&
+    blockCode !== "FREE_EXHAUSTED" &&
+    blockCode !== "FREE_BUDGET_CLOSED";
+
   return (
     <div className="mx-auto max-w-3xl space-y-10">
       <div>
@@ -100,6 +107,7 @@ export default async function DashboardPage() {
       <RecentProjects
         projects={serializedProjects}
         hasMore={recentProjects.hasMore}
+        canUpload={showsUploadZone}
       />
     </div>
   );
