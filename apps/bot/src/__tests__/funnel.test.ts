@@ -51,7 +51,11 @@ vi.mock("../url-probe", async (importOriginal) => {
   };
 });
 
-import { FUNNEL_EVENTS, uploadRejectedEvent } from "@clipclap/shared";
+import {
+  FUNNEL_EVENTS,
+  getPlanLimits,
+  uploadRejectedEvent,
+} from "@clipclap/shared";
 import {
   CALLBACK_LINK_ACCOUNT,
   CALLBACK_NEW_ACCOUNT,
@@ -349,10 +353,16 @@ describe("app-open and video-submitted telemetry", () => {
   });
 
   it("records upload_rejected_too_long for a free-tier user whose source is too long", async () => {
+    // Derived from the config, never a literal. This used to send 600 seconds,
+    // which was "too long" only because every NONE limit was 0; the moment the
+    // free numbers came back on 2026-07-29 a ten-minute video was perfectly
+    // legal and the test was asserting a rejection that no longer happened.
+    const overCap =
+      (getPlanLimits("NONE").maxSourceDurationMinutes + 1) * 60;
     mocks.probeVideoUrl.mockResolvedValue({
       ok: true,
-      durationSec: 600,
-      title: "A ten-minute video",
+      durationSec: overCap,
+      title: "A video over the free cap",
     });
     const { client } = harness();
 

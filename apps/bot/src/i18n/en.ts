@@ -69,14 +69,14 @@ const en: Dict = {
   welcomeNew:
     "Welcome to ClipClap! Send me a video and I'll turn it into vertical clips with subtitles.\n\nLanguage: send /lang to switch.",
   welcomeFirstChoice:
-    "Hi! I turn long videos into vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nYour first video is free - no card, no plan. If it comes back with no clips, it doesn't count.\n\nHow it works:\n1. Send a video (up to 30 minutes on the free run)\n2. I find the strongest moments and cut them\n3. Your clips come back here - up to 12, depending on the video\n\nFirst - how do you want to set up?\n\n• New account - use this Telegram as your ClipClap account.\n• I already have an account - link this Telegram to your existing clipclap.io account.",
+    "Hi! I turn long videos into vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nYour first video is free - no card, no plan. If it comes back with no clips, it doesn't count.\n\nHow it works:\n1. Send a video (up to 60 minutes on the free run)\n2. I find the strongest moments and cut them\n3. Your clips come back here - up to 10, depending on the video\n\nFirst - how do you want to set up?\n\n• New account - use this Telegram as your ClipClap account.\n• I already have an account - link this Telegram to your existing clipclap.io account.",
   welcomeBack: "Welcome back! Send a video and I'll generate clips.",
   welcomeNeedsPlan:
-    "Send a video and I'll generate clips. A new account gets one free run - no card needed, up to 30 minutes of video.",
+    "Send a video and I'll generate clips. A new account gets one free run - no card needed, up to 60 minutes of video.",
   newAccountBtn: "✨ Create new account",
   linkAccountBtn: "🔗 I already have an account",
   newAccountCreated:
-    "Account created. Send a video now - the first one is free, no card needed.\n\nUp to 30 minutes. If it comes back with no clips, it doesn't count against your free run.",
+    "Account created. Send a video now - the first one is free, no card needed.\n\nUp to 60 minutes. If it comes back with no clips, it doesn't count against your free run.",
   linkAccountInstructions: (code, url) =>
     `Your linking code: ${code}\n\n1. Open ${url}/dashboard/settings on the device where you're logged in.\n2. Paste this code within 10 minutes.\n\nThis Telegram will be connected to that account.`,
   callbackAck: "Got it",

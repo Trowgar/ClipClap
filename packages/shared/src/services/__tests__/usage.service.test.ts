@@ -25,13 +25,11 @@ import {
 } from "../usage.service";
 import { FREE_TIER, getPlanLimits } from "../../config/plans";
 
-// The free plan is switched off in two independent places, and the tests below
-// read both from the config rather than hard-coding a moment in time:
-//   - NONE_LIMITS is zeroed (see the comment above it in ../../config/plans.ts),
-//     which is what BALANCE_REACHABLE in the free-tier suite tracks;
-//   - FREE_TIER_MONTHLY_BUDGET_USD is unset in production, which closes the
-//     budget and is asserted unconditionally down there.
-// Un-zeroing either one on its own does not open the free plan.
+// NONE_LIMITS carries real numbers again as of 2026-07-29, so every case below
+// runs for real. One switch still holds the free plan shut in production:
+// FREE_TIER_MONTHLY_BUDGET_USD is unset, an unset ceiling reads as closed, and
+// the suite asserts that unconditionally further down. The plan numbers being
+// live and the faucet being open are two different things.
 
 describe("usage.service", () => {
   beforeEach(() => vi.clearAllMocks());
@@ -488,14 +486,6 @@ describe("the free-tier gate", () => {
   const DAY = 24 * 60 * 60 * 1000;
   const FREE_CAP = getPlanLimits("NONE").maxSourceDurationMinutes;
 
-  // The balance refusal is only REACHABLE when a submission with a non-zero
-  // duration can get past the length check, and NONE_LIMITS is zeroed today
-  // (see the comment above NONE_LIMITS in ../../config/plans.ts), so every
-  // such submission is currently refused for length first. The two cases that
-  // need a real duration are gated on that config rather than deleted, so they
-  // come back on their own the moment the numbers are un-zeroed.
-  const BALANCE_REACHABLE = FREE_CAP > 0;
-
   const ORIGINAL_BUDGET = process.env.FREE_TIER_MONTHLY_BUDGET_USD;
 
   beforeEach(() => {
@@ -619,27 +609,24 @@ describe("the free-tier gate", () => {
     expect((prisma.freeUsage.groupBy as any).mock.calls).toHaveLength(0);
   });
 
-  it.runIf(BALANCE_REACHABLE)(
-    "refuses when the remaining balance is smaller than the video",
-    async () => {
-      freeUser();
-      ledgerCharged(FREE_TIER.lifetimeSeconds - 60);
+  it("refuses when the remaining balance is smaller than the video", async () => {
+    freeUser();
+    ledgerCharged(FREE_TIER.lifetimeSeconds - 60);
 
-      const res = await canSubmitJob("u1", FREE_CAP);
+    const res = await canSubmitJob("u1", FREE_CAP);
 
-      expect(res).toMatchObject({ allowed: false, code: "FREE_EXHAUSTED" });
-      if (res.allowed) throw new Error("unreachable");
-      // The numbers travel structurally, so a surface can say them in its own
-      // language instead of reprinting the English `reason`.
-      expect(res.trial).toMatchObject({
-        remainingSeconds: 60,
-        lifetimeSeconds: FREE_TIER.lifetimeSeconds,
-      });
-      // Their own allowance is the personal reason, and it wins: the global
-      // budget is not even read once this has fired.
-      expect((prisma.freeUsage.aggregate as any).mock.calls).toHaveLength(0);
-    }
-  );
+    expect(res).toMatchObject({ allowed: false, code: "FREE_EXHAUSTED" });
+    if (res.allowed) throw new Error("unreachable");
+    // The numbers travel structurally, so a surface can say them in its own
+    // language instead of reprinting the English `reason`.
+    expect(res.trial).toMatchObject({
+      remainingSeconds: 60,
+      lifetimeSeconds: FREE_TIER.lifetimeSeconds,
+    });
+    // Their own allowance is the personal reason, and it wins: the global
+    // budget is not even read once this has fired.
+    expect((prisma.freeUsage.aggregate as any).mock.calls).toHaveLength(0);
+  });
 
   /**
    * ALWAYS ON, and it is the case the first draft of this gate got wrong.
@@ -668,18 +655,15 @@ describe("the free-tier gate", () => {
     expect(res.reason).not.toMatch(/needs 0/i);
   });
 
-  it.runIf(BALANCE_REACHABLE)(
-    "prefers the personal reason over the global one when both apply",
-    async () => {
-      freeUser();
-      ledgerCharged(FREE_TIER.lifetimeSeconds);
-      delete process.env.FREE_TIER_MONTHLY_BUDGET_USD;
+  it("prefers the personal reason over the global one when both apply", async () => {
+    freeUser();
+    ledgerCharged(FREE_TIER.lifetimeSeconds);
+    delete process.env.FREE_TIER_MONTHLY_BUDGET_USD;
 
-      const res = await canSubmitJob("u1", FREE_CAP);
+    const res = await canSubmitJob("u1", FREE_CAP);
 
-      expect(res).toMatchObject({ allowed: false, code: "FREE_EXHAUSTED" });
-    }
-  );
+    expect(res).toMatchObject({ allowed: false, code: "FREE_EXHAUSTED" });
+  });
 
   it("refuses when the month's global budget is spent", async () => {
     freeUser();

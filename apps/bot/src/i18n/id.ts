@@ -24,14 +24,14 @@ const id: Dict = {
   welcomeNew:
     "Selamat datang di ClipClap! Kirim video dan aku ubah jadi klip vertikal bersubtitle.\n\nBahasa: kirim /lang untuk mengganti.",
   welcomeFirstChoice:
-    "Halo! Aku mengubah video panjang jadi klip vertikal bersubtitle, siap untuk TikTok, Reels, dan Shorts.\n\nVideo pertamamu gratis: tanpa kartu, tanpa paket. Kalau hasilnya tidak ada klip, itu tidak dihitung.\n\nCara kerjanya:\n1. Kirim video (maksimal 30 menit di percobaan gratis)\n2. Aku cari momen terkuat dan memotongnya\n3. Klipmu dikirim balik ke sini: sampai 12, tergantung videonya\n\nPertama, kamu mau mulai dengan cara yang mana?\n\n• Akun baru: pakai Telegram ini sebagai akun ClipClap-mu.\n• Sudah punya akun: hubungkan Telegram ini ke akun clipclap.io-mu.",
+    "Halo! Aku mengubah video panjang jadi klip vertikal bersubtitle, siap untuk TikTok, Reels, dan Shorts.\n\nVideo pertamamu gratis: tanpa kartu, tanpa paket. Kalau hasilnya tidak ada klip, itu tidak dihitung.\n\nCara kerjanya:\n1. Kirim video (maksimal 60 menit di percobaan gratis)\n2. Aku cari momen terkuat dan memotongnya\n3. Klipmu dikirim balik ke sini: sampai 10, tergantung videonya\n\nPertama, kamu mau mulai dengan cara yang mana?\n\n• Akun baru: pakai Telegram ini sebagai akun ClipClap-mu.\n• Sudah punya akun: hubungkan Telegram ini ke akun clipclap.io-mu.",
   welcomeBack: "Senang kamu kembali! Kirim video dan aku buatkan klipnya.",
   welcomeNeedsPlan:
-    "Kirim video dan aku buatkan klipnya. Akun baru dapat satu percobaan gratis: tanpa kartu, sampai 30 menit video.",
+    "Kirim video dan aku buatkan klipnya. Akun baru dapat satu percobaan gratis: tanpa kartu, sampai 60 menit video.",
   newAccountBtn: "✨ Buat akun baru",
   linkAccountBtn: "🔗 Aku sudah punya akun",
   newAccountCreated:
-    "Akun dibuat. Kirim video sekarang: yang pertama gratis dan tanpa kartu.\n\nMaksimal 30 menit. Kalau hasilnya tidak ada klip, itu tidak mengurangi percobaan gratismu.",
+    "Akun dibuat. Kirim video sekarang: yang pertama gratis dan tanpa kartu.\n\nMaksimal 60 menit. Kalau hasilnya tidak ada klip, itu tidak mengurangi percobaan gratismu.",
   linkAccountInstructions: (code, url) =>
     `Kode penghubungmu: ${code}\n\n1. Buka ${url}/dashboard/settings di perangkat tempat kamu sudah login.\n2. Tempel kode ini dalam 10 menit.\n\nTelegram ini akan terhubung ke akun tersebut.`,
   callbackAck: "Oke",

@@ -26,14 +26,14 @@ const es: Dict = {
   welcomeNew:
     "¡Bienvenido a ClipClap! Envíame un video y lo convierto en clips verticales con subtítulos.\n\nIdioma: envía /lang para cambiarlo.",
   welcomeFirstChoice:
-    "¡Hola! Convierto videos largos en clips verticales con subtítulos, listos para TikTok, Reels y Shorts.\n\nTu primer video es gratis: sin tarjeta y sin plan. Si vuelve sin clips, no cuenta.\n\nCómo funciona:\n1. Envía un video (hasta 30 minutos en la prueba gratis)\n2. Busco los mejores momentos y los corto\n3. Tus clips vuelven aquí: hasta 12, según el video\n\nPrimero, ¿cómo prefieres empezar?\n\n• Cuenta nueva: usa este Telegram como tu cuenta de ClipClap.\n• Ya tengo cuenta: conecta este Telegram a tu cuenta de clipclap.io.",
+    "¡Hola! Convierto videos largos en clips verticales con subtítulos, listos para TikTok, Reels y Shorts.\n\nTu primer video es gratis: sin tarjeta y sin plan. Si vuelve sin clips, no cuenta.\n\nCómo funciona:\n1. Envía un video (hasta 60 minutos en la prueba gratis)\n2. Busco los mejores momentos y los corto\n3. Tus clips vuelven aquí: hasta 10, según el video\n\nPrimero, ¿cómo prefieres empezar?\n\n• Cuenta nueva: usa este Telegram como tu cuenta de ClipClap.\n• Ya tengo cuenta: conecta este Telegram a tu cuenta de clipclap.io.",
   welcomeBack: "¡Hola de nuevo! Envía un video y te genero los clips.",
   welcomeNeedsPlan:
-    "Envía un video y te genero los clips. Una cuenta nueva tiene una prueba gratis: sin tarjeta, hasta 30 minutos de video.",
+    "Envía un video y te genero los clips. Una cuenta nueva tiene una prueba gratis: sin tarjeta, hasta 60 minutos de video.",
   newAccountBtn: "✨ Crear cuenta nueva",
   linkAccountBtn: "🔗 Ya tengo cuenta",
   newAccountCreated:
-    "Cuenta creada. Envía un video ya: el primero es gratis y sin tarjeta.\n\nHasta 30 minutos. Si vuelve sin clips, no cuenta contra tu prueba gratis.",
+    "Cuenta creada. Envía un video ya: el primero es gratis y sin tarjeta.\n\nHasta 60 minutos. Si vuelve sin clips, no cuenta contra tu prueba gratis.",
   linkAccountInstructions: (code, url) =>
     `Tu código de conexión: ${code}\n\n1. Abre ${url}/dashboard/settings en el dispositivo donde tienes la sesión iniciada.\n2. Pega este código antes de 10 minutos.\n\nEste Telegram quedará conectado a esa cuenta.`,
   callbackAck: "Listo",

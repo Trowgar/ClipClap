@@ -53,15 +53,6 @@ import { LOCALES, t } from "../i18n";
 const FREE = getPlanLimits("NONE");
 const LIFETIME_MINUTES = FREE_TIER.lifetimeSeconds / 60;
 
-/** The free trial is switched off by zeroing NONE_LIMITS (see the comment above
- *  NONE_LIMITS in packages/shared/src/config/plans.ts). Tests that assert what a
- *  user sees while the trial is RUNNING cannot pass while it is off - every cap
- *  is 0, so the source-too-long refusal fires before any trial logic is reached.
- *  Gating them on the config rather than deleting them means they come back on
- *  their own the moment NONE_LIMITS is un-zeroed, which is exactly when their
- *  protection is wanted. The disabled state has its own always-on test below. */
-const TRIAL_ENABLED = FREE.maxJobsPerDay > 0;
-
 describe("free trial onboarding copy", () => {
   // The wall being removed was literally step 1. What matters is what the
   // numbered instructions tell a new user to DO first: send a video, not pay.
@@ -251,26 +242,11 @@ describe("getSubmissionBlocker on the free tier", () => {
       .mockResolvedValueOnce(inFlight);
   }
 
-  it.runIf(TRIAL_ENABLED)(
-    "lets a brand-new Russian user through with no message at all",
-    async () => {
-      freeUser();
-      counts();
-      expect(await getSubmissionBlocker("u1", t("ru"), 600)).toBeNull();
-    }
-  );
-
-  // The mirror of the test above, for the state the product is actually in.
-  // A free plan that is switched off must SHUT the gate, not leave it ajar:
-  // this is the assertion that would catch a half-disabled NONE_LIMITS.
-  it.runIf(!TRIAL_ENABLED)(
-    "blocks a brand-new user outright while the free plan is off",
-    async () => {
-      freeUser();
-      counts();
-      expect(await getSubmissionBlocker("u1", t("ru"), 600)).not.toBeNull();
-    }
-  );
+  it("lets a brand-new Russian user through with no message at all", async () => {
+    freeUser();
+    counts();
+    expect(await getSubmissionBlocker("u1", t("ru"), 600)).toBeNull();
+  });
 
   /**
    * The refusal a real user hits today, and the one this rewrite exists to
@@ -302,33 +278,27 @@ describe("getSubmissionBlocker on the free tier", () => {
     expect(msg).toMatch(/not on your account/i);
   });
 
-  it.runIf(TRIAL_ENABLED)(
-    "renders the spent allowance in Russian, not in English",
-    async () => {
-      freeUser();
-      ledgerCharged(FREE_TIER.lifetimeSeconds);
+  it("renders the spent allowance in Russian, not in English", async () => {
+    freeUser();
+    ledgerCharged(FREE_TIER.lifetimeSeconds);
 
-      const msg = await getSubmissionBlocker("u1", t("ru"), 600);
+    const msg = await getSubmissionBlocker("u1", t("ru"), 600);
 
-      expect(msg).not.toBeNull();
-      expect(msg).toMatch(/[а-яё]/i);
-      expect(msg).not.toMatch(/Active subscription required/i);
-    }
-  );
+    expect(msg).not.toBeNull();
+    expect(msg).toMatch(/[а-яё]/i);
+    expect(msg).not.toMatch(/Active subscription required/i);
+  });
 
-  it.runIf(TRIAL_ENABLED)(
-    "tells an English user how much of the allowance is left",
-    async () => {
-      freeUser();
-      ledgerCharged(FREE_TIER.lifetimeSeconds);
+  it("tells an English user how much of the allowance is left", async () => {
+    freeUser();
+    ledgerCharged(FREE_TIER.lifetimeSeconds);
 
-      const msg = await getSubmissionBlocker("u1", t("en"), 600);
+    const msg = await getSubmissionBlocker("u1", t("en"), 600);
 
-      expect(msg).toMatch(/free minutes/i);
-      // 0 of 60 - the real numbers, off the ledger, not a generic wall.
-      expect(msg).toContain(String(LIFETIME_MINUTES));
-    }
-  );
+    expect(msg).toMatch(/free minutes/i);
+    // 0 of 60 - the real numbers, off the ledger, not a generic wall.
+    expect(msg).toContain(String(LIFETIME_MINUTES));
+  });
 
   it("refuses an over-long free source with the free cap, in the user's language", async () => {
     freeUser();

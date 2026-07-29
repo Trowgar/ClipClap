@@ -92,46 +92,23 @@ export const PLAN_LIMITS: Record<
  *  It is LIFETIME, not per-period. A recurring free tier renews forever and is
  *  farmable by anyone patient enough to wait for the reset; the point of this
  *  allowance is only "see one real result before paying", which is a thing you
- *  need once. Lifetime is also the only shape the data can express honestly:
- *  usage.service's minute accounting is windowed by billing period and can
- *  never answer "ever", so the gate counts jobs with no date filter instead.
+ *  need once.
  *
- *  `runs` is denominated in jobs that ACTUALLY PRODUCED CLIPS, not in minutes.
- *  Minutes are the wrong unit for a free tier: the per-job cost is dominated by
- *  fixed work (a transcript, then several analysis passes over it), so thirty
- *  one-minute videos cost far more than one thirty-minute video while spending
- *  the same "minutes". Counting delivered runs bounds the thing that actually
- *  costs money.
+ *  Denominated in SECONDS OF SOURCE, because that is what the money is
+ *  denominated in: 0.0095 USD per source minute, measured over the nine real
+ *  jobs in prod that carry cost telemetry. 3600 seconds is 0.57 USD.
  *
- *  `attempts` is the backstop that makes the above safe. Because a run only
- *  counts once it produced clips, a user submitting unclippable video would
- *  otherwise never exhaust the trial while still costing a transcript every
- *  time. Attempts cap the total jobs a free account may ever start. FAILED
- *  jobs are excluded from that count - our own breakages must not consume a
- *  stranger's only look at the product. */
-/** `lifetimeSeconds` and `zeroClipRefunds` are the Milestone 2 replacements for
- *  `runs`/`attempts`, and for now all four coexist: usage.service and the bot
- *  still read the old pair, and they stop only once Task 11 rewrites those
- *  consumers. Do not delete `runs`/`attempts` before then - the tree must
- *  compile at every commit.
+ *  Sixty minutes rather than thirty: the audience clips 3-8 hour VODs, and a
+ *  half-hour ceiling forces them to hand-trim a segment first, which is the
+ *  exact work they came here to avoid. Sixty rather than a hundred and twenty:
+ *  Starter gives 75 minutes PER WEEK for 3 USD, and a lifetime free allowance
+ *  has to stay clearly under one week of the entry tier or it competes with the
+ *  cheapest paid plan. That constraint, not cost, is what caps generosity.
  *
- *  `lifetimeSeconds` (3600) is SOURCE seconds, spent against the free_usage
- *  ledger rather than counted from Job rows, because deleteProject hard-deletes
- *  jobs and a jobs-based count is reset by the user pressing Delete. Nine real
- *  prod jobs measured 0.0095 USD per source minute, so the whole allowance is
- *  about 0.57 USD per anchored account.
- *
- *  Seconds replace `runs` because seconds are what the ledger can charge BEFORE
- *  the job runs. `runs` counted delivered clips, which is only knowable
- *  afterwards, so ten simultaneous submissions each saw an unspent allowance.
- *
- *  `zeroClipRefunds` (1) is one forgiveness per account for a run that
- *  transcribed fine and simply found nothing worth cutting. Without it a first
- *  attempt on unclippable video ends the trial and the user leaves having seen
- *  nothing work; with more than one, an account can feed us silence forever. */
+ *  `zeroClipRefunds` is the backstop that keeps the minute accounting honest.
+ *  A run that transcribes but finds nothing has cost us money while showing the
+ *  user nothing, so the first one is forgiven and later ones are not. */
 export const FREE_TIER = {
-  runs: 1,
-  attempts: 3,
   lifetimeSeconds: 3600,
   zeroClipRefunds: 1,
 } as const;
@@ -140,32 +117,37 @@ export const FREE_TIER = {
  *  real video through end to end, because each zero here is a wall a new user
  *  hits before seeing anything.
  *
- *  maxSourceDurationMinutes (30) is the cost lever. Whisper plus the analysis
- *  passes run about $0.36 per source hour, so a 30-minute ceiling caps one free
- *  run near $0.18 and the whole lifetime allowance near $0.54 in the worst case
- *  where all three attempts transcribe and none produce clips. A 3-hour VOD
- *  trial would be six times that and slow enough that the user leaves before it
- *  finishes. 30 minutes is still a real podcast segment or stream chunk rather
- *  than a toy, which matters: the trial has to run on the content the user
- *  actually wants clipped or it proves nothing. It also stays far under the
- *  180-minute paid cap, so length remains a reason to subscribe. */
+ *  Re-enabled 2026-07-29. The three holes that forced the July zeroing are
+ *  closed elsewhere, and none of them is closed by these numbers:
+ *    1. Unverified open registration -> the trial now requires a verified email
+ *       or a linked telegramId (isTrialAnchored in free-tier.service).
+ *    2. Client-supplied source duration -> the real duration comes from
+ *       source-probe; the request body is no longer trusted for gating.
+ *    3. Deleting a project reset the ledger -> the ledger is free_usage, which
+ *       has no cascade from Job.
+ *  Plus a monthly USD ceiling (FREE_TIER_MONTHLY_BUDGET_USD) that closes the
+ *  trial on its own and is unset by default. Do not raise these numbers without
+ *  checking all four are still in place. */
 const NONE_LIMITS: PlanLimits = {
-  // DISABLED 2026-07-25. The free trial shipped in 767a54b was live in prod for
-  // a short window and is an unbounded compute faucet: POST /api/register is
-  // unauthenticated and unrate-limited, the 30-minute cap is enforced on a
-  // client-supplied sourceDurationSec that is absent (and therefore 0) on every
-  // URL submission, and DELETE /api/projects/:id hard-deletes the Job rows that
-  // ARE the trial's ledger, so a single account can reset itself forever.
-  // Zeroed until those three holes are closed AND the owner has approved the
-  // commercial terms. Do not re-enable by editing these numbers alone.
+  // Lifetime seconds live in FREE_TIER and are answered by the ledger, not by
+  // usage.service's period window - which can only ever say "inside this
+  // window" and cannot express "ever".
   minutesPerPeriod: 0,
-  storageClips: 0,
-  retentionDays: 0,
+  storageClips: 10,
+  retentionDays: 3,
   priorityQueue: false,
-  concurrentJobsLimit: 0,
-  maxSourceDurationMinutes: 0,
-  maxFileSizeBytes: 0,
-  maxJobsPerDay: 0,
+  // DO NOT raise above 1. The zero-clip forgiveness cap is a read-then-write
+  // over the whole account, and the unique index on (userId, jobId, kind)
+  // deliberately does not collide two DIFFERENT jobs - so two zero-clip jobs
+  // finalizing at once both pass the check and both refund, giving two
+  // forgivenesses on a cap of one. Reproduced against real Postgres. This
+  // number being 1 is the only thing holding that shut; raising it needs a
+  // partial unique index on (userId, reason) or a serialisable transaction
+  // first.
+  concurrentJobsLimit: 1,
+  maxSourceDurationMinutes: 60,
+  maxFileSizeBytes: ABUSE_CAPS.maxFileSizeBytes,
+  maxJobsPerDay: 5,
   priceUsd: 0,
 };
 
