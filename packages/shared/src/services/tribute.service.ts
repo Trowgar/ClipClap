@@ -67,7 +67,7 @@ export function hashTributeEvent(envelope: TributeShopWebhookEnvelope): string {
   // per-occurrence discriminator so two genuine events never collide.
   let discriminator: string;
   if (canon === "shoporderrefunded") {
-    discriminator = `tx:${p.transactionId ?? ""}`;
+    discriminator = `tx:${p.transactionId ?? ""}:at:${envelope.created_at ?? ""}`;
   } else if (canon === "shoporderchargefailed" || canon === "shoporderpaymentfailed") {
     discriminator = `at:${envelope.created_at ?? ""}`;
   } else {

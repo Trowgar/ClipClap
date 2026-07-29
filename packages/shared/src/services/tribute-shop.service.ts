@@ -66,3 +66,25 @@ export async function cancelShopOrder(uuid: string): Promise<void> {
   });
   if (!res.ok) throw new Error(`Tribute cancel order failed: ${res.status}`);
 }
+
+export interface ShopOrderView {
+  status: "pending" | "prepaid" | "paid" | "failed";
+  memberExpiresAt?: string;
+  amount?: number;
+  currency?: string;
+  period?: string;
+  memberInTrial?: boolean;
+  memberTrialEndsAt?: string;
+}
+
+export async function getShopOrder(uuid: string): Promise<ShopOrderView> {
+  const { apiKey, base } = requireConfig();
+  const res = await fetch(`${base}/shop/orders/${uuid}`, {
+    headers: { "Api-Key": apiKey },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Tribute get order failed: ${res.status} ${text.slice(0, 200)}`);
+  }
+  return (await res.json()) as ShopOrderView;
+}

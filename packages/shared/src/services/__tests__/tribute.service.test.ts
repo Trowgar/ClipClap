@@ -123,6 +123,14 @@ describe("hashTributeEvent", () => {
     expect(hashTributeEvent({ ...envelope("shopOrderChargeFailed"), created_at: "2026-07-14T10:00:00Z" }))
       .not.toBe(hashTributeEvent({ ...envelope("shopOrderChargeFailed"), created_at: "2026-07-15T10:00:00Z" }));
   });
+
+  it("dedups refunds by created_at so distinct refunds do not collide without transactionId", () => {
+    const a = hashTributeEvent({ ...envelope("shopOrderRefunded"), created_at: "2026-07-01T00:00:00Z" });
+    const b = hashTributeEvent({ ...envelope("shopOrderRefunded"), created_at: "2026-07-02T00:00:00Z" });
+    const aRetry = hashTributeEvent({ ...envelope("shopOrderRefunded"), created_at: "2026-07-01T00:00:00Z" });
+    expect(a).not.toBe(b);
+    expect(a).toBe(aRetry);
+  });
 });
 
 describe("dispatchTributeEvent - activation", () => {
