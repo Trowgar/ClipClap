@@ -8,10 +8,17 @@ vi.mock("child_process", () => ({
 import { extractVideoUrl, probeLocalFile, probeVideoUrl } from "../source-probe";
 
 type ExecCb = (
-  err: Error | null,
+  err: (Error & { code?: string }) | null,
   stdout: string,
   stderr: string
 ) => void;
+
+/** What execFile hands back when the binary is not on PATH. */
+function enoent(binary: string): Error & { code: string } {
+  return Object.assign(new Error(`spawn ${binary} ENOENT`), {
+    code: "ENOENT",
+  });
+}
 
 describe("extractVideoUrl", () => {
   it("finds a URL embedded in surrounding text", () => {
@@ -77,6 +84,24 @@ describe("probeVideoUrl", () => {
     await expect(
       probeVideoUrl("https://invalid.example/x")
     ).resolves.toEqual({ ok: false, reason: "yt-dlp-error" });
+  });
+
+  // A container without yt-dlp must not tell the user their link is dead. The
+  // gate silently never running is our fault and has to say so.
+  it("reports probe-unavailable, not yt-dlp-error, when yt-dlp is missing", async () => {
+    const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    execFileMock.mockImplementation(
+      (_cmd: string, _args: string[], _opts: unknown, cb: ExecCb) => {
+        cb(enoent("yt-dlp"), "", "");
+        return { kill: vi.fn() };
+      }
+    );
+
+    await expect(
+      probeVideoUrl("https://youtube.com/abc")
+    ).resolves.toEqual({ ok: false, reason: "probe-unavailable" });
+    expect(logSpy.mock.calls[0]?.[0]).toContain("yt-dlp");
+    logSpy.mockRestore();
   });
 
   it("reports no-duration for a live stream with no duration", async () => {
@@ -150,11 +175,17 @@ describe("probeLocalFile", () => {
     expect(args[args.length - 1]).toBe("/tmp/clip.mp4");
   });
 
-  // ffprobe is not yt-dlp, so its failures must not claim to be.
+  // ffprobe is not yt-dlp, so its failures must not claim to be. ffprobe
+  // itself exits non-zero on an unreadable file - the process ran, so this is
+  // "probe-error", distinct from ffprobe not existing at all.
   it("reports probe-error on an unreadable file", async () => {
     execFileMock.mockImplementation(
       (_cmd: string, _args: string[], _opts: unknown, cb: ExecCb) => {
-        cb(new Error("ENOENT"), "", "No such file or directory\n");
+        cb(
+          Object.assign(new Error("Command failed"), { code: 1 as never }),
+          "",
+          "No such file or directory\n"
+        );
         return { kill: vi.fn() };
       }
     );
@@ -163,6 +194,23 @@ describe("probeLocalFile", () => {
       ok: false,
       reason: "probe-error",
     });
+  });
+
+  it("reports probe-unavailable when ffprobe itself is missing", async () => {
+    const logSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    execFileMock.mockImplementation(
+      (_cmd: string, _args: string[], _opts: unknown, cb: ExecCb) => {
+        cb(enoent("ffprobe"), "", "");
+        return { kill: vi.fn() };
+      }
+    );
+
+    await expect(probeLocalFile("/tmp/clip.mp4")).resolves.toEqual({
+      ok: false,
+      reason: "probe-unavailable",
+    });
+    expect(logSpy.mock.calls[0]?.[0]).toContain("ffprobe");
+    logSpy.mockRestore();
   });
 
   it("reports no-duration when ffprobe prints N/A", async () => {

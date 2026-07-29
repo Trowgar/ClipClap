@@ -11,10 +11,27 @@ export type ProbeResult =
   // "yt-dlp-error" stays specific to the URL probe; "probe-error" is the local
   // ffprobe failure. Callers that only branch on `ok` are unaffected, and
   // nothing gets to blame yt-dlp for a file it never saw.
+  //
+  // "probe-unavailable" is the binary missing from PATH. It must not share a
+  // reason with a dead link: a container without yt-dlp would otherwise tell
+  // every user "check the link is public" while the gate silently never runs -
+  // wrong message to them, no signal to us. This one is our fault, not theirs.
   | {
       ok: false;
-      reason: "timeout" | "yt-dlp-error" | "no-duration" | "probe-error";
+      reason:
+        | "timeout"
+        | "yt-dlp-error"
+        | "no-duration"
+        | "probe-error"
+        | "probe-unavailable";
     };
+
+/** execFile reports a binary that is not on PATH as ENOENT on the callback
+ *  error, which is an operational fault rather than anything the submitter
+ *  did. Logged with the binary name so it is greppable. */
+function isMissingBinary(err: unknown): boolean {
+  return (err as NodeJS.ErrnoException | null)?.code === "ENOENT";
+}
 
 export function probeVideoUrl(
   url: string,
@@ -45,6 +62,14 @@ export function probeVideoUrl(
       { timeout: timeoutMs + 1000 },
       (err, stdout) => {
         if (err) {
+          if (isMissingBinary(err)) {
+            console.error(
+              "[source-probe] yt-dlp is not on PATH in this container; " +
+                "URL probing is unavailable and no duration can be enforced"
+            );
+            finish({ ok: false, reason: "probe-unavailable" });
+            return;
+          }
           finish({ ok: false, reason: "yt-dlp-error" });
           return;
         }
@@ -91,6 +116,14 @@ export function probeLocalFile(path: string): Promise<ProbeResult> {
       { timeout: 15_000 },
       (err, stdout) => {
         if (err) {
+          if (isMissingBinary(err)) {
+            console.error(
+              "[source-probe] ffprobe is not on PATH in this container; " +
+                "local file probing is unavailable"
+            );
+            resolve({ ok: false, reason: "probe-unavailable" });
+            return;
+          }
           resolve({ ok: false, reason: "probe-error" });
           return;
         }
