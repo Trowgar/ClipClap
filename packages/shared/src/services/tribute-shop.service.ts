@@ -79,12 +79,21 @@ export interface ShopOrderView {
 
 export async function getShopOrder(uuid: string): Promise<ShopOrderView> {
   const { apiKey, base } = requireConfig();
-  const res = await fetch(`${base}/shop/orders/${uuid}`, {
-    headers: { "Api-Key": apiKey },
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Tribute get order failed: ${res.status} ${text.slice(0, 200)}`);
+  // Bound the request so a hung Tribute call cannot stall the reconcile job (it
+  // shares a concurrency-1 queue with the other scheduled sweeps).
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+  try {
+    const res = await fetch(`${base}/shop/orders/${uuid}`, {
+      headers: { "Api-Key": apiKey },
+      signal: controller.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Tribute get order failed: ${res.status} ${text.slice(0, 200)}`);
+    }
+    return (await res.json()) as ShopOrderView;
+  } finally {
+    clearTimeout(timeout);
   }
-  return (await res.json()) as ShopOrderView;
 }
