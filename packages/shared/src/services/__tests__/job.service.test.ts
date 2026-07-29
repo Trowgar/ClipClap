@@ -13,9 +13,26 @@ function p2002(): Prisma.PrismaClientKnownRequestError {
  *  test can assert the enqueue is not merely present but LATER. */
 const calls: string[] = [];
 
+/** Statement order INSIDE the transaction. Kept apart from `calls` so the
+ *  transaction-versus-enqueue tests keep reading as one list. */
+const inner: string[] = [];
+
 const tx = {
-  job: { create: vi.fn() },
+  job: {
+    create: vi.fn(),
+    count: vi.fn(async () => {
+      inner.push("count");
+      return 0;
+    }),
+  },
   freeUsage: { create: vi.fn() },
+  user: { findUniqueOrThrow: vi.fn() },
+  // The advisory lock. When it is taken is the whole point: a lock acquired
+  // after the count would serialise nothing.
+  $queryRaw: vi.fn(async (_strings: TemplateStringsArray, ..._v: unknown[]) => {
+    inner.push("lock");
+    return [{ ok: 1 }];
+  }),
 };
 
 vi.mock("../../lib/prisma", () => ({
@@ -51,8 +68,21 @@ describe("job.service createJob", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     calls.length = 0;
+    inner.length = 0;
     tx.job.create.mockResolvedValue(JOB);
     tx.freeUsage.create.mockResolvedValue({});
+    // Restored by hand: clearAllMocks forgets the CALLS, not the resolved
+    // value a previous test set, so a test that stubbed one job in flight
+    // would otherwise refuse every submission after it.
+    tx.job.count.mockImplementation(async () => {
+      inner.push("count");
+      return 0;
+    });
+    // A free account with nothing in flight, unless a test says otherwise.
+    tx.user.findUniqueOrThrow.mockResolvedValue({
+      plan: "NONE",
+      billingCycle: null,
+    });
   });
 
   it("enqueues the download stage after the transaction commits, never before", async () => {
@@ -151,5 +181,108 @@ describe("job.service createJob", () => {
   it("still uses one transaction even with no reservation", async () => {
     await createJob({ userId: "u1", sourceKey: "uploads/u1/x.mp4" });
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The concurrency limit, which used to be a read in one file and a write in
+ * another.
+ *
+ * Six simultaneous uploads on one free account all counted zero in flight, all
+ * passed the route's check and all created: six jobs and six CHARGE rows
+ * against a limit of one. These tests pin the three things that stop that -
+ * the limit is checked here, it is checked under the lock, and a refusal
+ * reaches neither the database nor the queue.
+ */
+describe("job.service createJob - concurrency", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    calls.length = 0;
+    inner.length = 0;
+    tx.job.create.mockResolvedValue(JOB);
+    tx.freeUsage.create.mockResolvedValue({});
+    // Restored by hand: clearAllMocks forgets the CALLS, not the resolved
+    // value a previous test set, so a test that stubbed one job in flight
+    // would otherwise refuse every submission after it.
+    tx.job.count.mockImplementation(async () => {
+      inner.push("count");
+      return 0;
+    });
+    tx.user.findUniqueOrThrow.mockResolvedValue({
+      plan: "NONE",
+      billingCycle: null,
+    });
+  });
+
+  it("takes the per-user advisory lock BEFORE counting anything", async () => {
+    await createJob({ userId: "u1", sourceKey: "uploads/u1/x.mp4" });
+
+    // A lock taken after the read is not a lock at all - it would let both
+    // callers read the same zero and only then queue up to write.
+    expect(inner).toEqual(["lock", "count"]);
+    expect(tx.$queryRaw).toHaveBeenCalledOnce();
+    const [strings, userId] = tx.$queryRaw.mock.calls[0] as [
+      TemplateStringsArray,
+      string,
+    ];
+    // Transaction-scoped, so the commit or the rollback releases it - Prisma
+    // pools connections, and a session lock would be taken on one connection
+    // and never released by the other.
+    expect(strings.join("?")).toContain("pg_advisory_xact_lock");
+    // Keyed on the user, so two people submitting at once do not queue behind
+    // each other.
+    expect(strings.join("?")).toContain("hashtext");
+    expect(userId).toBe("u1");
+  });
+
+  it("refuses when the account is already at its limit", async () => {
+    tx.job.count.mockResolvedValue(1);
+
+    const result = await createJob({
+      userId: "u1",
+      sourceKey: "uploads/u1/x.mp4",
+      freeCharge: { seconds: 600, estimatedCostUsd: 0.095 },
+    });
+
+    expect(result).toEqual({ status: "concurrent_limit", inFlight: 1, limit: 1 });
+    // No job, no reservation, no queue entry. The reservation matters most: a
+    // CHARGE row written for a refused submission would spend the allowance on
+    // a job that never ran.
+    expect(tx.job.create).not.toHaveBeenCalled();
+    expect(tx.freeUsage.create).not.toHaveBeenCalled();
+    expect(queueAdd).not.toHaveBeenCalled();
+  });
+
+  it("reads the limit from the plan on the user row, not from the caller", async () => {
+    // PLUS allows two in flight. A caller that passed its own idea of the limit
+    // could be working from a plan that changed since it read the user.
+    tx.user.findUniqueOrThrow.mockResolvedValue({
+      plan: "PLUS",
+      billingCycle: "MONTHLY",
+    });
+    tx.job.count.mockResolvedValue(1);
+
+    const result = await createJob({ userId: "u1", sourceKey: "uploads/u1/x.mp4" });
+
+    expect(result.status).toBe("created");
+    expect(tx.job.create).toHaveBeenCalledOnce();
+  });
+
+  it("counts only jobs that have not reached a terminal state", async () => {
+    await createJob({ userId: "u1", sourceKey: "uploads/u1/x.mp4" });
+
+    const where = (tx.job.count.mock.calls as any[])[0][0].where;
+    expect(where.userId).toBe("u1");
+    // DONE and FAILED are finished; counting them would refuse every submission
+    // an account ever made after its first five.
+    expect(where.status.in).not.toContain("DONE");
+    expect(where.status.in).not.toContain("FAILED");
+    expect(where.status.in).toContain("PENDING");
+    expect(where.status.in).toContain("CUTTING");
+  });
+
+  it("returns the created job under a status, so a refusal cannot be mistaken for one", async () => {
+    const result = await createJob({ userId: "u1", sourceKey: "uploads/u1/x.mp4" });
+    expect(result).toEqual({ status: "created", job: JOB });
   });
 });

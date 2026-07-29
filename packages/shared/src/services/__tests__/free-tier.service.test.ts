@@ -39,6 +39,7 @@ import {
   trueUpFreeCost,
   findFreeCharge,
   reviseFreeChargeSeconds,
+  settleFreeLedgerOnDelete,
 } from "../free-tier.service";
 import { FREE_TIER, estimatedFreeCostUsd } from "../../config/plans";
 
@@ -601,5 +602,156 @@ describe("free-tier.service", () => {
     expect(await freeBalanceSeconds("u1")).toBe(
       FREE_TIER.lifetimeSeconds - 1800 + 3600
     );
+  });
+});
+
+/**
+ * The settlement deleteProject owes the ledger before it destroys the evidence.
+ *
+ * These assert the rules against the ROW WRITES, not against a helper being
+ * called, because the point of the function is which free_usage row exists
+ * afterwards.
+ */
+describe("settleFreeLedgerOnDelete", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (prisma.freeUsage.create as any).mockResolvedValue({});
+  });
+
+  /** A free job holding a reservation, with no refund written yet. */
+  function charged(seconds = 3600) {
+    (prisma.freeUsage.findFirst as any).mockResolvedValue({
+      seconds,
+      estimatedCostUsd: 0.57,
+    });
+    (prisma.freeUsage.count as any).mockResolvedValue(0);
+  }
+
+  it("refunds a FAILED job in full - the case the sweep can no longer reach", async () => {
+    charged(3600);
+
+    await settleFreeLedgerOnDelete("u1", "job1", {
+      status: "FAILED",
+      clipsGenerated: 0,
+    });
+
+    expect((prisma.freeUsage.create as any).mock.calls[0][0]).toEqual({
+      data: {
+        userId: "u1",
+        jobId: "job1",
+        kind: "REFUND",
+        reason: "FAILED_JOB",
+        seconds: 3600,
+        estimatedCostUsd: 0,
+      },
+    });
+  });
+
+  it("leaves the charge alone when the DONE job produced clips", async () => {
+    charged(1200);
+
+    await settleFreeLedgerOnDelete("u1", "job1", {
+      status: "DONE",
+      clipsGenerated: 3,
+    });
+
+    // The user got what they paid seconds for and then tidied up. Refunding
+    // here would hand back minutes that were spent successfully - which is
+    // exactly why the sweep must not be taught to refund orphaned charges.
+    expect(prisma.freeUsage.create).not.toHaveBeenCalled();
+  });
+
+  it("spends the once-per-account forgiveness on a DONE job with no clips", async () => {
+    charged(900);
+
+    await settleFreeLedgerOnDelete("u1", "job1", {
+      status: "DONE",
+      clipsGenerated: 0,
+    });
+
+    expect((prisma.freeUsage.create as any).mock.calls[0][0]).toEqual({
+      data: {
+        userId: "u1",
+        jobId: "job1",
+        kind: "REFUND",
+        reason: "ZERO_CLIPS",
+        seconds: 900,
+        estimatedCostUsd: 0,
+      },
+    });
+  });
+
+  it("gives no second forgiveness once one has been spent", async () => {
+    (prisma.freeUsage.findFirst as any).mockResolvedValue({
+      seconds: 900,
+      estimatedCostUsd: 0.14,
+    });
+    // No REFUND for THIS job, but the account has already used its ZERO_CLIPS
+    // allowance. alreadyRefunded is asked first, the cap second.
+    (prisma.freeUsage.count as any)
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(FREE_TIER.zeroClipRefunds);
+
+    await settleFreeLedgerOnDelete("u1", "job2", {
+      status: "DONE",
+      clipsGenerated: 0,
+    });
+
+    expect(prisma.freeUsage.create).not.toHaveBeenCalled();
+  });
+
+  it("keeps the charge of a job deleted while it is still running", async () => {
+    charged(3600);
+
+    for (const status of [
+      "PENDING",
+      "DOWNLOADING",
+      "TRANSCRIBING",
+      "ANALYZING",
+      "CUTTING",
+    ] as const) {
+      await settleFreeLedgerOnDelete("u1", "job1", {
+        status,
+        clipsGenerated: 0,
+      });
+    }
+
+    // Money leaves the account at TRANSCRIBE, so an in-flight job may already
+    // have been paid for, and the outcome nobody can predict yet is not
+    // evidence of our breakage. Refunding here would let one account submit an
+    // hour, let it transcribe, delete it and repeat - the lifetime allowance is
+    // the only bound on free spend and this would make it resettable on demand.
+    expect(prisma.freeUsage.create).not.toHaveBeenCalled();
+  });
+
+  it("writes nothing at all for a paying account", async () => {
+    // No CHARGE row is what "paid" looks like to the ledger - not the plan
+    // column, which is mutable and can have changed since submit.
+    (prisma.freeUsage.findFirst as any).mockResolvedValue(null);
+
+    await settleFreeLedgerOnDelete("u9", "job9", {
+      status: "FAILED",
+      clipsGenerated: 0,
+    });
+
+    expect(prisma.freeUsage.create).not.toHaveBeenCalled();
+  });
+
+  it("does not refund twice when the job was already settled by finalize", async () => {
+    (prisma.freeUsage.findFirst as any).mockResolvedValue({
+      seconds: 3600,
+      estimatedCostUsd: 0.57,
+    });
+    (prisma.freeUsage.count as any).mockResolvedValue(1);
+
+    await settleFreeLedgerOnDelete("u1", "job1", {
+      status: "FAILED",
+      clipsGenerated: 0,
+    });
+
+    // Deleting a project the sweep already refunded is the ordinary case, not
+    // an edge one: six hours of silence pass, the sweep runs, and the user
+    // clears the wreckage afterwards.
+    expect(prisma.freeUsage.create).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import type { JobStatus } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { FREE_TIER, estimatedFreeCostUsd } from "../config/plans";
 
@@ -271,6 +272,9 @@ export async function refundZeroClipJob(
   //
   // What keeps that window shut is the concurrency limit: NONE_LIMITS gives the
   // free tier at most one job in flight, so there is no second finalize to race.
+  // That limit only became real on 2026-07-29 - it used to be a count in the
+  // route with nothing serialising it, and six simultaneous uploads sailed past
+  // it - and it is now taken under a per-user advisory lock inside createJob.
   // Raise concurrentJobsLimit above 1 for NONE and this reopens, and the fix
   // then is a partial unique index on (userId, reason) or a serialisable
   // transaction - not a bigger read-check. Left alone deliberately today: real
@@ -296,6 +300,101 @@ export async function refundZeroClipJob(
     return false;
   }
   return true;
+}
+
+/**
+ * Settles the ledger for a job that is about to be hard-deleted.
+ *
+ * WHY THIS HAS TO HAPPEN HERE, of all places.
+ *
+ * The refund sweep is the safety net for a free job that died somewhere
+ * finalize never sees, and its selector joins free_usage to jobs - it has to,
+ * because "was this job FAILED?" is a question only the job row can answer.
+ * deleteProject hard-deletes that row. So a charge whose job is gone is
+ * invisible to the one mechanism that exists to release it, and the loss is
+ * permanent. The timing is what makes it cruel: the sweep waits six hours for
+ * silence, so for most of a working day the dashboard says the minutes are
+ * spent, the failed project sits there with a Delete button, and pressing it -
+ * the obvious next move - is what makes the forfeiture final.
+ *
+ * The fix cannot be "let the sweep refund orphans". Once the job row is gone
+ * the ledger cannot tell a FAILED job's charge from the charge of a DONE job
+ * whose clips the user downloaded and then tidied away, and refunding the
+ * second would hand back minutes that were spent successfully. The outcome is
+ * only knowable while the row still exists, which is here.
+ *
+ * THE RULES ARE FINALIZE'S RULES, deliberately - see settleFreeLedger in the
+ * worker. A FAILED job refunds in full, a DONE job that produced nothing takes
+ * the once-per-account forgiveness, a DONE job with clips keeps its charge.
+ * Deleting a project is not a settlement event of its own; it is the last
+ * moment at which the settlement that was already owed can still be made.
+ *
+ * A JOB DELETED WHILE IT IS STILL RUNNING KEEPS ITS CHARGE. That is the one
+ * case finalize has no rule for, and it is the one case where refunding would
+ * be a hole rather than a kindness: money leaves the account at TRANSCRIBE, so
+ * an in-flight job may already have been paid for, and a delete that refunded
+ * it would let one account submit an hour of video, let it transcribe, delete
+ * it, and repeat - the lifetime allowance is the only bound on free spend, and
+ * a user-triggered reset of it is unbounded. The outcome is also genuinely
+ * unknown at that instant: nobody, including the user, can say whether this run
+ * would have produced clips. Keeping the charge is the conservative error, and
+ * it is the user's own choice that reaches it - unlike the FAILED case, where
+ * the run was broken by us and the user is only clearing away the wreckage.
+ *
+ * Refunding a FAILED job here does NOT need the sweep's six-hour silence
+ * threshold, and that difference is real rather than an oversight. The
+ * threshold exists because status FAILED is written on every BullMQ attempt, so
+ * a job can look terminal with a retry still to come. Deletion removes the row
+ * those attempts update: the next attempt cannot find the job and no attempt
+ * can now succeed, which makes the delete itself the terminal event.
+ *
+ * Returns nothing and is a no-op for a paying account - both refunds begin with
+ * findFreeCharge and return on null, so a paid job leaves free_usage untouched
+ * by construction rather than by a plan check that could go stale.
+ */
+export async function settleFreeLedgerOnDelete(
+  userId: string,
+  jobId: string,
+  job: { status: JobStatus; clipsGenerated: number }
+): Promise<void> {
+  const charge = await findFreeCharge(userId, jobId);
+  if (!charge) return;
+
+  if (job.status === "FAILED") {
+    await refundFailedJob(userId, jobId);
+    // Says "released", not "wrote a row": refundFailedJob is idempotent and
+    // returns nothing, so this line cannot claim to be the write. The balance
+    // is back either way, which is what the line is here to record.
+    console.log(
+      `[free-tier] delete of failed job ${jobId} for user ${userId}: ` +
+        `${charge.seconds}s released (a no-op if finalize or the sweep got ` +
+        `there first)`
+    );
+    return;
+  }
+
+  if (job.status === "DONE") {
+    if (job.clipsGenerated === 0) {
+      const forgiven = await refundZeroClipJob(userId, jobId);
+      console.log(
+        `[free-tier] delete of zero-clip job ${jobId} for user ${userId}: ` +
+          (forgiven
+            ? `forgave ${charge.seconds}s`
+            : `forgiveness already spent, charge stands`)
+      );
+    }
+    return;
+  }
+
+  // Still in flight. Greppable, because this is the one branch that costs the
+  // user seconds without any refund path left afterwards - the row the sweep
+  // would have needed is about to be deleted - and "why did my minutes not come
+  // back" needs an answer in the logs.
+  console.log(
+    `[free-tier] job ${jobId} deleted by user ${userId} while ${job.status}; ` +
+      `charge of ${charge.seconds}s stands (outcome unknown, spend possibly ` +
+      `already incurred)`
+  );
 }
 
 /**

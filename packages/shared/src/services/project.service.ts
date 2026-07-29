@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma";
 import { deleteFile, getPresignedDownloadUrl } from "../lib/r2";
 import { parseJobErrorCode, type JobErrorCode } from "../lib/job-error";
+import { settleFreeLedgerOnDelete } from "./free-tier.service";
 import type { JobStatus, NoClipsReason } from "@prisma/client";
 
 export interface ProjectClipSummary {
@@ -271,6 +272,8 @@ export async function deleteProject(
     where: { id: projectId, userId },
     select: {
       id: true,
+      status: true,
+      clipsGenerated: true,
       sourceKey: true,
       sourceArtifactKey: true,
       normalizedArtifactKey: true,
@@ -279,6 +282,25 @@ export async function deleteProject(
     },
   });
   if (!job) return { status: "not_found" };
+
+  // BEFORE the delete, and it cannot move after it.
+  //
+  // The refund sweep answers "does this charge deserve its allowance back?" by
+  // joining free_usage to jobs, so the line below - which hard-deletes the job -
+  // is the moment that question stops having an answer. Settling first is what
+  // stops a user clearing away a project we broke and losing their trial for it.
+  // See settleFreeLedgerOnDelete for the rules and for what an in-flight job
+  // gets.
+  //
+  // Deliberately NOT wrapped in a try/catch. A settlement that throws leaves the
+  // job row in place, so the delete fails, the user retries, and the sweep can
+  // still reach the row in the meantime - every path stays recoverable. Deleting
+  // anyway on a ledger error would strand exactly the charge this call exists to
+  // release, which is the one outcome nothing downstream can undo.
+  await settleFreeLedgerOnDelete(userId, job.id, {
+    status: job.status,
+    clipsGenerated: job.clipsGenerated,
+  });
 
   // A Set, not an array: normalizeSource returning "none" stores the SAME key
   // in sourceArtifactKey and normalizedArtifactKey, and deleting it twice logs

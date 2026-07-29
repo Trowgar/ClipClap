@@ -3,6 +3,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import {
+  ACTIVE_JOB_STATUSES,
   FUNNEL_EVENTS,
   buildClipCaption,
   cancelShopOrder,
@@ -10,6 +11,7 @@ import {
   createBotInitiatedLink,
   createShopOrder,
   createTelegramDelivery,
+  deleteFile,
   estimatedFreeCostUsd,
   findOrCreateTelegramUser,
   FREE_TIER,
@@ -62,14 +64,6 @@ import type {
   TelegramUser,
   TelegramVideo,
 } from "./types";
-
-const ACTIVE_STATUSES = [
-  "PENDING",
-  "DOWNLOADING",
-  "TRANSCRIBING",
-  "ANALYZING",
-  "CUTTING",
-] as const;
 
 export const CALLBACK_NEW_ACCOUNT = "new_acc";
 export const CALLBACK_LINK_ACCOUNT = "link_acc";
@@ -1717,7 +1711,7 @@ async function handleVideo(
     const sourceKey = `uploads/${user.id}/telegram/${Date.now()}-${source.fileUniqueId}.mp4`;
     await uploadFile(sourceKey, tempPath, source.mimeType || "video/mp4");
 
-    const job = await jobService.createJob({
+    const created = await jobService.createJob({
       userId: user.id,
       sourceKey,
       originalFilename: source.fileName || "telegram-video.mp4",
@@ -1730,6 +1724,31 @@ async function handleVideo(
       // other submission it makes in the meantime.
       freeCharge: freeChargeFor(user, source.duration),
     });
+
+    // The blocker above already counted in-flight jobs, but it counted them
+    // outside any lock and several seconds earlier - the Telegram download and
+    // the R2 upload sit in between. createJob's locked count is the one that
+    // decides; this branch is what the user sees when the two disagree, which is
+    // exactly the case where two videos arrive at once.
+    if (created.status === "concurrent_limit") {
+      await deleteFile(sourceKey).catch((error) => {
+        // Best effort, and never fatal: the object is a few megabytes we chose
+        // to store before we knew the answer, while failing here would tell a
+        // user their video broke when it was only refused.
+        console.error(
+          `[handleVideo] could not remove ${sourceKey} after a refused submission:`,
+          error
+        );
+      });
+      await client.sendMessage(
+        message.chat.id,
+        dict.blocked(
+          dict.planConcurrentLimit(created.inFlight, created.limit)
+        )
+      );
+      return;
+    }
+    const job = created.job;
 
     await createTelegramDelivery({
       jobId: job.id,
@@ -1784,7 +1803,7 @@ async function handleVideoUrl(
   // unhandled error after the user had already been told we were checking it.
   const probedSec = Math.round(probe.durationSec);
 
-  const job = await jobService.createJob({
+  const created = await jobService.createJob({
     userId: user.id,
     sourceUrl: url,
     originalFilename: probe.title,
@@ -1792,6 +1811,15 @@ async function handleVideoUrl(
     sourceDurationSec: probedSec,
     freeCharge: freeChargeFor(user, probedSec),
   });
+
+  if (created.status === "concurrent_limit") {
+    await client.sendMessage(
+      message.chat.id,
+      dict.blocked(dict.planConcurrentLimit(created.inFlight, created.limit))
+    );
+    return;
+  }
+  const job = created.job;
 
   await createTelegramDelivery({
     jobId: job.id,
@@ -1933,8 +1961,12 @@ export async function getSubmissionBlocker(
     return dict.planDailyLimit(limits.maxJobsPerDay);
   }
 
+  // Advisory only. The count that actually enforces the limit is the one
+  // createJob takes under a per-user lock; this one is here so a second video
+  // gets the localised refusal before we spend a Telegram download and an R2
+  // upload on it.
   const inFlight = await prisma.job.count({
-    where: { userId, status: { in: [...ACTIVE_STATUSES] } },
+    where: { userId, status: { in: [...ACTIVE_JOB_STATUSES] } },
   });
   if (inFlight >= limits.concurrentJobsLimit) {
     return dict.planConcurrentLimit(inFlight, limits.concurrentJobsLimit);

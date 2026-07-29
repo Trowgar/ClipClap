@@ -397,32 +397,60 @@ whatever any future path forgets. It refunds free-tier jobs that are terminally
 with no matching REFUND. Its killswitch defaults to **on**, unlike the trial's:
 a refund sweep failing closed would silently keep money that is not ours.
 
-## Blocking defects found by the end-to-end run
+## Blocking defects found by the end-to-end run - both closed 2026-07-29
 
-Both were reproduced live on 2026-07-29 and both must be closed before
-`FREE_TIER_MONTHLY_BUDGET_USD` is set, because each one costs a real user the
-exact thing the trial was built to give them.
+Both were reproduced live on 2026-07-29 and both cost a real user the exact
+thing the trial was built to give them, so both gated setting
+`FREE_TIER_MONTHLY_BUDGET_USD`. Both are fixed; the reproductions and the
+verifications are in the commit that closed them.
 
-**Deleting a failed project forfeits the allowance for ever.** The refund sweep's
-selector joins `free_usage` to `jobs`, and `deleteProject` hard-deletes the job -
-so the orphaned charge becomes invisible to the sweep built to refund it. The
-no-foreign-key decision that closes hole 3 for the *balance* is exactly what
-blinds the *sweep*. Worse, the window is up to seven hours (six of silence plus
-the hourly cron), and during it the dashboard tells the user their minutes are
-spent over a run **we** broke - which makes deleting that failed project the
+**Deleting a failed project forfeited the allowance for ever.** The refund
+sweep's selector joins `free_usage` to `jobs`, and `deleteProject` hard-deletes
+the job - so the orphaned charge became invisible to the sweep built to refund
+it. The no-foreign-key decision that closes hole 3 for the *balance* is exactly
+what blinds the *sweep*. Worse, the window is up to seven hours (six of silence
+plus the hourly cron), and during it the dashboard tells the user their minutes
+are spent over a run **we** broke - which makes deleting that failed project the
 obvious next move. Observed: sweep with the job row refunds 3600s; after the user
-deletes, the sweep reports `refunded: 0` and the orphan charge stays. The fix has
-to let the sweep find a charge whose job is gone - the ledger already holds
-`userId` and `seconds`, so the join is the only reason it cannot.
+deletes, the sweep reports `refunded: 0` and the orphan charge stays.
 
-**`concurrentJobsLimit: 1` does not survive concurrent submits.** Six
-simultaneous `POST /api/jobs` on the upload path all returned 201 and wrote six
-CHARGE rows. `plans.ts` states that this limit is the only thing holding the
-zero-clip forgiveness cap shut, and `source-recheck.ts` reads the balance then
-writes - so N concurrent uploads each reserve 0 seconds, each re-check reads the
-same balance and passes, and one account transcribes N times its allowance. It
-shows only on the upload path: the yt-dlp probe's latency serialises URL
-submissions, which is why two browser tabs look safe and six curl calls are not.
+The first instinct - teach the sweep to refund a charge whose job is gone - is
+WRONG, and this is the part worth keeping. Once the job row is deleted the ledger
+cannot tell a FAILED job's charge from the charge of a DONE job whose clips the
+user downloaded and then tidied away; refunding the second hands back minutes
+that were spent successfully, on a lifetime allowance, on demand. The outcome is
+only knowable while the row still exists. So the settlement moved INTO
+`deleteProject`, immediately before the delete, keyed on the job's own status and
+`clipsGenerated`, using finalize's rules: FAILED refunds in full, DONE with zero
+clips takes the once-per-account forgiveness, DONE with clips keeps its charge
+(`settleFreeLedgerOnDelete` in `free-tier.service`). A job deleted while it is
+still RUNNING keeps its charge, deliberately: money leaves at TRANSCRIBE, so the
+run may already have been paid for, and a refund there would let one account
+submit an hour, let it transcribe, delete it and repeat - the lifetime allowance
+is the only bound on free spend and that would make it resettable on demand. A
+settlement failure aborts the delete rather than proceeding without it, because
+the job row surviving is recoverable and a stranded charge is not.
+
+**`concurrentJobsLimit: 1` did not survive concurrent submits.** Six simultaneous
+`POST /api/jobs` on the upload path all returned 201 and wrote six CHARGE rows.
+`plans.ts` states that this limit is the only thing holding the zero-clip
+forgiveness cap shut, and `source-recheck.ts` reads the balance then writes - so
+N concurrent uploads each reserve 0 seconds, each re-check reads the same balance
+and passes, and one account transcribes N times its allowance. It shows only on
+the upload path: the yt-dlp probe's latency serialises URL submissions, which is
+why two browser tabs look safe and six curl calls are not.
+
+The check moved out of the route and the bot and into `createJob`'s transaction,
+behind a per-user `pg_advisory_xact_lock(hashtext(userId), 1)` - the pattern
+`withdrawal.service` already uses against double-spend, taken first and alone so
+it has no ordering to deadlock on, and transaction-scoped so a thrown request
+cannot leak it. The limit is read from the user row inside the same transaction
+rather than passed in, so no caller can forget it, and `createJob` now returns
+`{ status: "created" | "concurrent_limit" }` instead of a bare Job. The route
+keeps no second copy of the check: two definitions of a limit can disagree, and
+only one of them decides. The bot keeps its pre-check as an ADVISORY one, so a
+refusal arrives before a Telegram download and an R2 upload are spent, and it
+deletes the uploaded object if the locked check refuses after all.
 
 ## Known gaps, accepted for now
 

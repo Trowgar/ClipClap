@@ -162,6 +162,12 @@ const NONE_LIMITS: PlanLimits = {
   // number being 1 is the only thing holding that shut; raising it needs a
   // partial unique index on (userId, reason) or a serialisable transaction
   // first.
+  //
+  // The number now MEANS something, which it did not until 2026-07-29: the
+  // limit was read in the route and written three statements later, so six
+  // simultaneous uploads all passed a check that said zero. createJob enforces
+  // it inside its transaction under a per-user advisory lock. Everything above
+  // rests on that, so do not move the check back out to a caller.
   concurrentJobsLimit: 1,
   maxSourceDurationMinutes: 60,
   maxFileSizeBytes: ABUSE_CAPS.maxFileSizeBytes,

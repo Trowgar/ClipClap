@@ -16,14 +16,6 @@ import type { User } from "@prisma/client";
 
 export const dynamic = "force-dynamic";
 
-const ACTIVE_STATUSES = [
-  "PENDING",
-  "DOWNLOADING",
-  "TRANSCRIBING",
-  "ANALYZING",
-  "CUTTING",
-] as const;
-
 /** How long the submit response is willing to wait on yt-dlp.
  *
  *  A real probe of a real video measured ~1.7s, so this is roughly a five times
@@ -134,13 +126,10 @@ export async function POST(req: NextRequest) {
   // All limit checks are independent reads - run them in one round trip
   const dayStart = new Date();
   dayStart.setHours(0, 0, 0, 0);
-  const [user, submission, jobsToday, inFlight] = await Promise.all([
+  const [user, submission, jobsToday] = await Promise.all([
     prisma.user.findUniqueOrThrow({ where: { id: userId } }),
     canSubmitJob(userId, durationMinutes),
     prisma.job.count({ where: { userId, createdAt: { gte: dayStart } } }),
-    prisma.job.count({
-      where: { userId, status: { in: [...ACTIVE_STATUSES] } },
-    }),
   ]);
 
   // No flat refusal for NONE any more: a never-subscribed account has a free
@@ -186,17 +175,18 @@ export async function POST(req: NextRequest) {
       { status: 429 }
     );
   }
-  if (inFlight >= limits.concurrentJobsLimit) {
-    await recordFunnelEvent("web", userId, uploadRejectedEvent("CONCURRENT"));
-    return NextResponse.json(
-      {
-        error: `You have ${inFlight} active jobs (limit: ${limits.concurrentJobsLimit}). Wait for one to finish.`,
-      },
-      { status: 429 }
-    );
-  }
-
-  const job = await jobService.createJob({
+  // The concurrency limit is NOT checked here any more, and the count that used
+  // to sit beside jobsToday above is gone with it.
+  //
+  // Counting in flight jobs in this route and creating the job three statements
+  // later is a read-then-write with no serialisation: six simultaneous uploads
+  // on one free account all read zero, all passed this check, and all created -
+  // six jobs and six reservations against a limit of one, reproduced against
+  // prod. Moving the check inside createJob's transaction, under a per-user
+  // advisory lock, is what makes it hold. Doing it in BOTH places would not be
+  // belt and braces; it would be a second definition of the limit that can
+  // disagree with the one that decides.
+  const created = await jobService.createJob({
     userId,
     sourceUrl: url || undefined,
     sourceKey: sourceKey || undefined,
@@ -206,7 +196,17 @@ export async function POST(req: NextRequest) {
     freeCharge: freeChargeFor(user, durationSec),
   });
 
-  return NextResponse.json(job, { status: 201 });
+  if (created.status === "concurrent_limit") {
+    await recordFunnelEvent("web", userId, uploadRejectedEvent("CONCURRENT"));
+    return NextResponse.json(
+      {
+        error: `You have ${created.inFlight} active jobs (limit: ${created.limit}). Wait for one to finish.`,
+      },
+      { status: 429 }
+    );
+  }
+
+  return NextResponse.json(created.job, { status: 201 });
 }
 
 /**

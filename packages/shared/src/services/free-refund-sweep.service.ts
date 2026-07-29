@@ -79,6 +79,15 @@ interface RefundCandidate {
  * reaching anything - the same trap Job.sourceSweptAt exists to avoid in the
  * retention sweep, which cannot be solved here without a migration.
  *
+ * THE JOIN ALSO MEANS THIS SWEEP CANNOT SEE A CHARGE WHOSE JOB WAS DELETED, and
+ * that is not a gap to be closed here. Once the job row is gone the ledger
+ * cannot tell a FAILED job's charge from that of a DONE job whose clips the user
+ * downloaded and then tidied away, and refunding the second would hand back
+ * minutes that were spent successfully. The outcome is only knowable while the
+ * row exists, so deleteProject settles the ledger before it deletes - see
+ * settleFreeLedgerOnDelete. Teaching this selector to refund orphans would undo
+ * that reasoning and make a lifetime allowance resettable with a Delete button.
+ *
  * "Owned by an account on the free tier" is expressed as the CHARGE row
  * itself, not as user.plan. The ledger row is what makes a job the free
  * tier's - it is what the download re-check keys on and what refundFailedJob
