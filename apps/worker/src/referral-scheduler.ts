@@ -11,9 +11,6 @@ import {
   runRetentionSweep,
   runFreeRefundSweep,
   TRIBUTE_RECONCILE_JOB,
-  releaseMaturedCommissions,
-  reconcileSubscriptions,
-  runRetentionSweep,
   reconcilePendingTributeOrders,
 } from "@clipclap/shared";
 
@@ -41,6 +38,8 @@ export function createReferralScheduler(): Worker {
         // never sees. It logs its own refunds, one line each, so nothing is
         // summarised here.
         await runFreeRefundSweep(now);
+        return;
+      }
       if (job.name === TRIBUTE_RECONCILE_JOB) {
         const r = await reconcilePendingTributeOrders(new Date());
         console.log(
