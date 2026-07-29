@@ -27,3 +27,4 @@ export {
   RETENTION_SWEEP_JOB,
 } from "./referral-queue";
 export * from "./email-identity";
+export * from "./source-probe";
