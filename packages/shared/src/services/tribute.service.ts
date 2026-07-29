@@ -67,7 +67,7 @@ export function hashTributeEvent(envelope: TributeShopWebhookEnvelope): string {
   // per-occurrence discriminator so two genuine events never collide.
   let discriminator: string;
   if (canon === "shoporderrefunded") {
-    discriminator = `tx:${p.transactionId ?? ""}`;
+    discriminator = `tx:${p.transactionId ?? ""}:at:${envelope.created_at ?? ""}`;
   } else if (canon === "shoporderchargefailed" || canon === "shoporderpaymentfailed") {
     discriminator = `at:${envelope.created_at ?? ""}`;
   } else {
@@ -195,27 +195,19 @@ async function accrueReferral(order: TributeOrder, expiresAt: Date): Promise<voi
   }
 }
 
-async function applyOrderPayment(
-  envelope: TributeShopWebhookEnvelope,
+export async function applyPaidOrder(
+  order: TributeOrder,
+  expiresAt: Date,
   isRenewal: boolean
 ): Promise<TributeProcessOutcome> {
-  const p = envelope.payload;
-  const orderUuid = String(p.uuid ?? "");
-  const order = await prisma.tributeOrder.findUnique({ where: { orderUuid } });
-  if (!order) return { status: "unknown_order", orderUuid };
-  if (!p.memberExpiresAt) {
-    throw new Error(`payment event for ${orderUuid} missing memberExpiresAt`);
-  }
-  const expiresAt = new Date(p.memberExpiresAt);
-
   const user = await prisma.user.findUnique({
     where: { id: order.userId },
     select: { id: true, currentPeriodEnd: true },
   });
-  if (!user) return { status: "unknown_order", orderUuid };
-  // Assign (never increment); reject an out-of-order older event.
-  if (user.currentPeriodEnd && expiresAt < user.currentPeriodEnd) {
-    return { status: "stale_order", orderUuid };
+  if (!user) return { status: "unknown_order", orderUuid: order.orderUuid };
+  // Assign (never increment); an equal-or-older period means already applied.
+  if (user.currentPeriodEnd && expiresAt <= user.currentPeriodEnd) {
+    return { status: "stale_order", orderUuid: order.orderUuid };
   }
 
   await prisma.user.update({
@@ -225,13 +217,16 @@ async function applyOrderPayment(
       billingCycle: order.billingCycle,
       currentPeriodEnd: expiresAt,
       subscriptionStatus: "ACTIVE",
-      tributeSubscriptionId: orderUuid,
+      tributeSubscriptionId: order.orderUuid,
       dunningSince: null,
       graceEndsAt: null,
     },
   });
   if (order.status !== "PAID") {
-    await prisma.tributeOrder.update({ where: { orderUuid }, data: { status: "PAID" } });
+    await prisma.tributeOrder.update({
+      where: { orderUuid: order.orderUuid },
+      data: { status: "PAID" },
+    });
   }
 
   await accrueReferral(order, expiresAt);
@@ -243,10 +238,31 @@ async function applyOrderPayment(
       periodEnd: expiresAt,
     });
   } catch (err) {
-    console.warn("[tribute] notification failed (activation stands):", err instanceof Error ? err.message : err);
+    console.warn(
+      "[tribute] notification failed (activation stands):",
+      err instanceof Error ? err.message : err
+    );
   }
 
-  return { status: isRenewal ? "renewed" : "activated", userId: order.userId, plan: order.plan };
+  return {
+    status: isRenewal ? "renewed" : "activated",
+    userId: order.userId,
+    plan: order.plan,
+  };
+}
+
+async function applyOrderPayment(
+  envelope: TributeShopWebhookEnvelope,
+  isRenewal: boolean
+): Promise<TributeProcessOutcome> {
+  const p = envelope.payload;
+  const orderUuid = String(p.uuid ?? "");
+  const order = await prisma.tributeOrder.findUnique({ where: { orderUuid } });
+  if (!order) return { status: "unknown_order", orderUuid };
+  if (!p.memberExpiresAt) {
+    throw new Error(`payment event for ${orderUuid} missing memberExpiresAt`);
+  }
+  return applyPaidOrder(order, new Date(p.memberExpiresAt), isRenewal);
 }
 
 async function applyChargeFailed(

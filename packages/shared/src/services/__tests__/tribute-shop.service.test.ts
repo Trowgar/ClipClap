@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createShopOrder, cancelShopOrder } from "../tribute-shop.service";
+import { createShopOrder, cancelShopOrder, getShopOrder } from "../tribute-shop.service";
 
 const OLD_ENV = { ...process.env };
 
@@ -62,5 +62,27 @@ describe("cancelShopOrder", () => {
     vi.stubGlobal("fetch", fetchMock);
     await cancelShopOrder("ord-9");
     expect(fetchMock.mock.calls[0][0]).toBe("https://tribute.tg/api/v1/shop/orders/ord-9/cancel");
+  });
+});
+
+describe("getShopOrder", () => {
+  it("GETs /shop/orders/{uuid} with the Api-Key header and returns the parsed order", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ status: "paid", memberExpiresAt: "2026-08-01T00:00:00Z" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const order = await getShopOrder("uuid-1");
+
+    expect(order.status).toBe("paid");
+    expect(order.memberExpiresAt).toBe("2026-08-01T00:00:00Z");
+    expect(fetchMock.mock.calls[0][0]).toBe("https://tribute.tg/api/v1/shop/orders/uuid-1");
+    expect(fetchMock.mock.calls[0][1].headers["Api-Key"]).toBe("test-key");
+  });
+
+  it("throws when the API returns a non-ok status", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 404, text: async () => "nope" }));
+    await expect(getShopOrder("x")).rejects.toThrow(/404/);
   });
 });

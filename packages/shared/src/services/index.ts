@@ -41,6 +41,7 @@ export * from "./free-refund-sweep.service";
 export * from "./free-budget.service";
 export * as retentionService from "./retention.service";
 export { runRetentionSweep } from "./retention.service";
+export { reconcilePendingTributeOrders } from "./tribute-reconcile.service";
 // Named re-exports for error classes that callers need to instanceof-check
 export { UnsupportedPlanCycleError } from "./billing.service";
 export type { InvoiceRow, InvoicePage } from "./billing.service";

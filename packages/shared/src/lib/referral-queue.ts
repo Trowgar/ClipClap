@@ -11,6 +11,7 @@ export const RETENTION_SWEEP_JOB = "retention-sweep";
 /** Free-allowance refund sweep. Same queue and the same reasoning as the
  *  retention sweep: hourly, idempotent, nobody is waiting for it. */
 export const FREE_REFUND_SWEEP_JOB = "free-refund-sweep";
+export const TRIBUTE_RECONCILE_JOB = "tribute-order-reconcile";
 
 let referralQueue: Queue | null = null;
 
@@ -38,6 +39,7 @@ export async function registerReferralSchedules(): Promise<void> {
   await queue.add(SUBSCRIPTION_RECONCILE_JOB, {}, { repeat: { pattern: "0 * * * *" }, jobId: SUBSCRIPTION_RECONCILE_JOB });
   await queue.add(RETENTION_SWEEP_JOB, {}, { repeat: { pattern: "0 * * * *" }, jobId: RETENTION_SWEEP_JOB });
   await queue.add(FREE_REFUND_SWEEP_JOB, {}, { repeat: { pattern: "0 * * * *" }, jobId: FREE_REFUND_SWEEP_JOB });
+  await queue.add(TRIBUTE_RECONCILE_JOB, {}, { repeat: { pattern: "*/10 * * * *" }, jobId: TRIBUTE_RECONCILE_JOB });
   // Retire the old 1st/15th payout batch if still scheduled in Redis.
   for (const job of await queue.getRepeatableJobs()) {
     if (job.name === "payout-batch") await queue.removeRepeatableByKey(job.key);

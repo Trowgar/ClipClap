@@ -10,6 +10,11 @@ import {
   reconcileSubscriptions,
   runRetentionSweep,
   runFreeRefundSweep,
+  TRIBUTE_RECONCILE_JOB,
+  releaseMaturedCommissions,
+  reconcileSubscriptions,
+  runRetentionSweep,
+  reconcilePendingTributeOrders,
 } from "@clipclap/shared";
 
 export function createReferralScheduler(): Worker {
@@ -36,6 +41,11 @@ export function createReferralScheduler(): Worker {
         // never sees. It logs its own refunds, one line each, so nothing is
         // summarised here.
         await runFreeRefundSweep(now);
+      if (job.name === TRIBUTE_RECONCILE_JOB) {
+        const r = await reconcilePendingTributeOrders(new Date());
+        console.log(
+          `[tribute-reconcile] checked=${r.checked} activated=${r.activated} failed=${r.failed} expired=${r.expired}`
+        );
         return;
       }
     },
