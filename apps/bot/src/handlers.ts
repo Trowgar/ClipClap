@@ -1030,17 +1030,19 @@ const PROGRESS_STEPS: ReadonlyArray<{
  * six chances to disagree, and the disagreement would be invisible until someone
  * read the bot in Indonesian.
  *
- * A terminal status draws every line done. That state is only ever written by
- * the delivery pass, AFTER the clips are in the chat: an "all finished" board
- * standing above an empty chat is the same promise-we-cannot-keep bug the
- * delivery loop already guards against with its summary line.
+ * There is no finished state, and the type says so. The board's whole value is
+ * temporal: it answers "is this thing alive?" while the answer is not yet in the
+ * chat. Once the clips are there it is scaffolding nobody took down, and ten runs
+ * leave ten dead boards in the history - so a terminal job DELETES its board
+ * rather than ticking it (see removeProgressBoard).
  */
-export function renderProgressBoard(dict: Dict, status: JobStatus): string {
-  const terminal = status === "DONE" || status === "FAILED";
+export function renderProgressBoard(
+  dict: Dict,
+  status: Exclude<JobStatus, "DONE" | "FAILED">
+): string {
   const activeIndex = PROGRESS_STEPS.findIndex((s) => s.running === status);
 
   const lines = PROGRESS_STEPS.map((step, i) => {
-    if (terminal) return `✅ ${step.label(dict)}`;
     // activeIndex === -1 is PENDING: queued, nothing started.
     if (activeIndex === -1) return `◽ ${step.label(dict)}`;
     if (i < activeIndex) return `✅ ${step.label(dict)}`;
@@ -1048,9 +1050,8 @@ export function renderProgressBoard(dict: Dict, status: JobStatus): string {
     return `◽ ${step.label(dict)}`;
   });
 
-  const title = terminal ? dict.progressDoneTitle : dict.progressTitle;
-  const note = activeIndex === -1 && !terminal ? `\n\n${dict.progressQueuedNote}` : "";
-  return `${title}\n\n${lines.join("\n")}${note}`;
+  const note = activeIndex === -1 ? `\n\n${dict.progressQueuedNote}` : "";
+  return `${dict.progressTitle}\n\n${lines.join("\n")}${note}`;
 }
 
 /** Telegram answers an edit whose text is byte-identical with this instead of
@@ -1090,7 +1091,13 @@ export async function updateTelegramProgressBoards(client: TelegramClient) {
   for (const row of rows) {
     // The comparison the SQL cannot do - see getInFlightTelegramDeliveries.
     if (row.progressStatus === row.job.status) continue;
-    if (row.progressMessageId === null) continue;
+    if (typeof row.progressMessageId !== "number") continue;
+    // getInFlightTelegramDeliveries already excludes these in SQL, so this is
+    // unreachable - and it stays because renderProgressBoard's signature refuses
+    // them, which makes the exclusion a fact the compiler checks rather than a
+    // where clause someone can widen without noticing. Terminal boards are the
+    // delivery pass's business: it deletes them, once the clips are in the chat.
+    if (row.job.status === "DONE" || row.job.status === "FAILED") continue;
 
     try {
       const dict = t(await getUserLocale(row.userId));
@@ -1121,32 +1128,36 @@ export async function updateTelegramProgressBoards(client: TelegramClient) {
 }
 
 /**
- * Draws the board's last frame - every line ticked - once the outcome is in the
- * chat, so it stops showing whichever stage it was frozen on.
+ * Takes the board down once this job has said its final word in the chat.
  *
- * Deliberately not called on the failure or no-clips paths: those already say in
- * words what happened, and a board reading "Finished - sending your clips" above
- * "no clips this time" would contradict them. There the last stage shown is left
- * standing, which is at worst uninformative rather than wrong.
+ * Deleted rather than ticked, and that is the point. The board exists to answer
+ * "is this alive?" during a wait that measures 2.5 to 13 minutes; the moment the
+ * answer is in the chat it is scaffolding nobody removed, and it accumulates -
+ * ten runs, ten dead boards in the history. An earlier version drew a final
+ * all-ticked frame instead, which is exactly the clutter it now avoids.
+ *
+ * MUST be called after the outcome is in the chat, never before - on the happy
+ * path that means after the clips. Deleting first would leave a user whose R2
+ * signing then failed with nothing at all: no clips and no board either.
+ *
+ * Best effort by construction. A board that will not delete is cosmetic litter;
+ * a throw here would escape into the shared ten-second poll and stall the
+ * deliveries queued behind it.
  */
-async function closeProgressBoard(
+async function removeProgressBoard(
   client: TelegramClient,
-  delivery: { id: string; chatId: string; progressMessageId: number | null },
-  dict: Dict
+  delivery: { id: string; chatId: string; progressMessageId: number | null }
 ) {
-  if (delivery.progressMessageId === null) return;
+  // typeof, not `=== null`: rows written before this column existed read back as
+  // null, and any caller reaching us with the field simply absent would
+  // otherwise have `deleteMessage(chatId, undefined)` sent to Telegram.
+  if (typeof delivery.progressMessageId !== "number") return;
   try {
-    await client.editMessageText(
-      delivery.chatId,
-      delivery.progressMessageId,
-      renderProgressBoard(dict, "DONE")
-    );
+    await client.deleteMessage(delivery.chatId, delivery.progressMessageId);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (isUnmodifiedEdit(message)) return;
     console.error(
-      `[progress] could not close the board for delivery ${delivery.id}:`,
-      message
+      `[progress] could not remove the board for delivery ${delivery.id}:`,
+      error instanceof Error ? error.message : error
     );
   }
 }
@@ -1205,6 +1216,12 @@ export async function deliverReadyTelegramJobs(
           delivery.chatId,
           dict.processingFailed(parseJobErrorCode(delivery.job.error))
         );
+        // The failure copy explains everything the board could, and a board
+        // frozen on "Listening to the speech" beside it only raises the question
+        // of whether it is still running. Note the job may yet heal to DONE and
+        // be re-picked - it will simply have no board by then, which the clips
+        // path treats as "nothing to remove".
+        await removeProgressBoard(client, delivery);
         await settleDelivery(delivery.id, {
           kind: "FAILURE_NOTIFIED",
           error: delivery.job.error || "Job failed",
@@ -1217,6 +1234,7 @@ export async function deliverReadyTelegramJobs(
           delivery.chatId,
           dict.doneNoClips(delivery.job.noClipsReason ?? "NO_VIABLE_MOMENTS")
         );
+        await removeProgressBoard(client, delivery);
         await settleDelivery(delivery.id, { kind: "DELIVERED" });
         continue;
       }
@@ -1252,11 +1270,9 @@ export async function deliverReadyTelegramJobs(
         dict.done(delivery.job.clips.length)
       );
 
-      // Retire the board, for the same reason and in the same order: every line
-      // ticked is a claim that the clips exist, so it is only true once they are
-      // in the chat above it. Best effort - a stale board is cosmetic, and this
-      // must not be the thing that stops the row being settled below.
-      await closeProgressBoard(client, delivery, dict);
+      // Now, and not a line earlier: the board is the user's only sign of life
+      // until the clips land, so it comes down only once they have.
+      await removeProgressBoard(client, delivery);
 
       await settleDelivery(delivery.id, { kind: "DELIVERED" });
     } catch (error) {
@@ -1286,6 +1302,9 @@ export async function deliverReadyTelegramJobs(
             reportError instanceof Error ? reportError.message : reportError
           );
         }
+        // Videos are in the chat and the row is terminal either way, so the board
+        // has nothing left to narrate here either.
+        await removeProgressBoard(client, delivery);
         await settleDelivery(delivery.id, { kind: "FAILED", error: message });
         continue;
       }

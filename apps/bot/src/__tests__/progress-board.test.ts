@@ -122,13 +122,14 @@ describe("renderProgressBoard", () => {
     expect(board).toContain(en.progressQueuedNote);
   });
 
-  it("ticks every stage once the job is terminal", () => {
-    for (const status of ["DONE", "FAILED"] as const) {
-      const board = renderProgressBoard(en, status);
-      expect(board).not.toContain("◽");
-      expect(board).not.toContain("⏳");
-      expect(board).toContain(en.progressDoneTitle);
-    }
+  // There is no finished frame, by design: a terminal job DELETES its board
+  // rather than ticking it, because once the clips are in the chat the board is
+  // scaffolding nobody took down, and it accumulates one per run. The signature
+  // is what enforces this - DONE and FAILED do not typecheck as arguments - so
+  // the assertion is a compile-time one and there is nothing to test at runtime.
+  it("has no terminal state to render", () => {
+    // @ts-expect-error DONE is excluded from the parameter type on purpose.
+    expect(() => renderProgressBoard(en, "DONE")).not.toThrow();
   });
 
   // The stage order is the order of the pipeline. A board that lists rendering

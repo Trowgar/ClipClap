@@ -136,6 +136,7 @@ interface SeedRow {
   chatId?: string;
   userId?: string;
   createdAt?: Date;
+  progressMessageId?: number | null;
 }
 
 const EPOCH = new Date("2026-07-24T10:00:00Z").getTime();
@@ -160,6 +161,16 @@ function createStore(...seeds: (FakeJob | SeedRow)[]) {
         attempts: 0,
         error: null,
         deliveredAt: null,
+        // Every seeded row has a live progress board, because that is the normal
+        // case: the submit path sends one before it creates the delivery. Pass
+        // null explicitly to cover a row whose acknowledgement send failed, or
+        // one written before the column existed.
+        //
+        // `in`, not `??`: null IS the case under test, and `??` would helpfully
+        // replace it with the default and quietly test nothing.
+        progressMessageId:
+          "progressMessageId" in spec ? spec.progressMessageId! : 900 + index,
+        progressStatus: null,
         createdAt: spec.createdAt ?? new Date(EPOCH + index * 1000),
       },
     };
@@ -238,6 +249,7 @@ function makeClient() {
   return {
     sendMessage: vi.fn().mockResolvedValue(undefined),
     sendVideo: vi.fn().mockResolvedValue(undefined),
+    deleteMessage: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -834,5 +846,108 @@ describe("a failing status write cannot abort the batch", () => {
       "chat-a",
       t("en").donePartial(1, 2)
     );
+  });
+});
+
+/**
+ * The progress board is scaffolding, and every terminal path has to take it down.
+ *
+ * It exists to answer "is this alive?" during a wait that measures 2.5 to 13
+ * minutes in production. The moment this job has said its final word, the board
+ * is clutter that accumulates one message per run - so it is deleted rather than
+ * ticked, which is what an earlier version of this feature got wrong.
+ */
+describe("the progress board is retired with the job", () => {
+  it("deletes the board only AFTER the clips are in the chat", async () => {
+    store = createStore({
+      job: doneJob("job1", [clip("c1"), clip("c2")]),
+      progressMessageId: 900,
+    });
+    const client = makeClient();
+    const order: string[] = [];
+    client.sendVideo.mockImplementation(async () => {
+      order.push("video");
+    });
+    client.deleteMessage.mockImplementation(async () => {
+      order.push("delete");
+    });
+
+    await poll(client);
+
+    expect(client.deleteMessage).toHaveBeenCalledWith("500", 900);
+    // Order is the invariant, not a detail: deleting first would leave a user
+    // whose R2 signing then failed with no clips AND no sign of life.
+    expect(order).toEqual(["video", "video", "delete"]);
+  });
+
+  it("deletes the board when the job failed", async () => {
+    store = createStore({
+      job: {
+        id: "job1",
+        status: "FAILED",
+        error: "boom",
+        noClipsReason: null,
+        clips: [],
+      },
+      progressMessageId: 901,
+    });
+    const client = makeClient();
+
+    await poll(client);
+
+    expect(client.deleteMessage).toHaveBeenCalledWith("500", 901);
+  });
+
+  it("deletes the board when there were no clips to send", async () => {
+    store = createStore({
+      job: {
+        id: "job1",
+        status: "DONE",
+        error: null,
+        noClipsReason: "NO_USABLE_SPEECH",
+        clips: [],
+      },
+      progressMessageId: 902,
+    });
+    const client = makeClient();
+
+    await poll(client);
+
+    expect(client.deleteMessage).toHaveBeenCalledWith("500", 902);
+  });
+
+  // Rows written before the column existed, and rows whose acknowledgement send
+  // failed, both read back with no board. Nothing may be deleted on their behalf
+  // - least of all message id `undefined`.
+  it("deletes nothing when the row has no board", async () => {
+    store = createStore({
+      job: doneJob("job1", [clip("c1")]),
+      progressMessageId: null,
+    });
+    const client = makeClient();
+
+    await poll(client);
+
+    expect(client.deleteMessage).not.toHaveBeenCalled();
+    expect(client.sendVideo).toHaveBeenCalledTimes(1);
+  });
+
+  // A board that will not delete is litter; a clip that never arrives is the
+  // product failing. The row must still settle.
+  it("still delivers and settles when the delete fails", async () => {
+    store = createStore({
+      job: doneJob("job1", [clip("c1")]),
+      progressMessageId: 903,
+    });
+    const client = makeClient();
+    client.deleteMessage.mockRejectedValue(new Error("message to delete not found"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await expect(poll(client)).resolves.toBeUndefined();
+
+    expect(client.sendVideo).toHaveBeenCalledTimes(1);
+    expect(store.row.status).toBe("DELIVERED");
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
   });
 });

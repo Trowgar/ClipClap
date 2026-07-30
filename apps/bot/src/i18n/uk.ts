@@ -65,7 +65,6 @@ const uk: Dict = {
   uploading: "Завантажую твоє відео...",
   queued: "У черзі. Надішлю кліпи сюди, щойно рендер завершиться.",
   progressTitle: "🎬 Працюю над твоїм відео",
-  progressDoneTitle: "🎬 Готово - надсилаю кліпи",
   progressQueuedNote: "У черзі - почну ось-ось.",
   progressStepDownload: "Забираю відео",
   progressStepTranscribe: "Слухаю мовлення",

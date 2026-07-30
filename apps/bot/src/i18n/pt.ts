@@ -59,7 +59,6 @@ const pt: Dict = {
   uploading: "Enviando seu vídeo...",
   queued: "Na fila. Mando os clipes aqui quando a renderização terminar.",
   progressTitle: "🎬 Trabalhando no seu vídeo",
-  progressDoneTitle: "🎬 Pronto - enviando seus clipes",
   progressQueuedNote: "Na fila: começo a qualquer momento.",
   progressStepDownload: "Baixando o vídeo",
   progressStepTranscribe: "Ouvindo a fala",

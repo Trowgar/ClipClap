@@ -77,7 +77,6 @@ const ru: Dict = {
   uploading: "Загружаю видео...",
   queued: "В очереди. Пришлю клипы сюда, когда рендер закончится.",
   progressTitle: "🎬 Работаю над твоим видео",
-  progressDoneTitle: "🎬 Готово - отправляю клипы",
   progressQueuedNote: "В очереди - начну с минуты на минуту.",
   progressStepDownload: "Забираю видео",
   progressStepTranscribe: "Слушаю речь",

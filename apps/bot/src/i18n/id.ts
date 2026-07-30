@@ -56,7 +56,6 @@ const id: Dict = {
   uploading: "Mengunggah videomu...",
   queued: "Masuk antrean. Klipnya aku kirim ke sini begitu render selesai.",
   progressTitle: "🎬 Sedang mengerjakan videomu",
-  progressDoneTitle: "🎬 Selesai - mengirim klipmu",
   progressQueuedNote: "Dalam antrean - segera mulai.",
   progressStepDownload: "Mengambil videonya",
   progressStepTranscribe: "Mendengarkan suaranya",

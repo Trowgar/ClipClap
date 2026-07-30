@@ -70,6 +70,16 @@ export class TelegramClient {
     });
   }
 
+  /** Removes one of the bot's own messages. Telegram allows this for 48 hours,
+   *  and the longest run measured in production is 13 minutes, so the progress
+   *  board is always well inside the window. */
+  async deleteMessage(chatId: string | number, messageId: number) {
+    return this.request("deleteMessage", {
+      chat_id: chatId,
+      message_id: messageId,
+    });
+  }
+
   async answerCallbackQuery(callbackQueryId: string, text?: string) {
     return this.request("answerCallbackQuery", {
       callback_query_id: callbackQueryId,

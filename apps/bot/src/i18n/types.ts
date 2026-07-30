@@ -66,7 +66,6 @@ export interface Dict {
    * spread - so time remaining is not derivable from anything we know at submit,
    * and a wrong "about 5 minutes" is worse than no estimate at all. */
   progressTitle: string;
-  progressDoneTitle: string;
   progressQueuedNote: string;
   progressStepDownload: string;
   progressStepTranscribe: string;
