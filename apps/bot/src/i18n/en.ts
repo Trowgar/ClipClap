@@ -157,6 +157,8 @@ const en: Dict = {
     `You have hit the daily limit of ${limit} videos. It resets at midnight - send this one again then.`,
   planConcurrentLimit: (active, limit) =>
     `I am still working on ${active === 1 ? "your video" : `${active} of your videos`}, and your plan processes ${limit} at a time. Send this one again once that is done - I'll message you when it is.`,
+  submitBusy:
+    "Something else from your account is still going through. Give it a moment and send this again.",
   langUsage: (options) => `Usage: ${options}.`,
   langSet: "Language set to English.",
   langName: "English",

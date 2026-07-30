@@ -27,6 +27,12 @@ const tx = {
   },
   freeUsage: { create: vi.fn() },
   user: { findUniqueOrThrow: vi.fn() },
+  // SET LOCAL lock_timeout. Recorded in `inner` because WHERE it sits matters:
+  // set after the lock statement it bounds nothing at all.
+  $executeRawUnsafe: vi.fn(async (sql: string) => {
+    inner.push(`set:${sql}`);
+    return 0;
+  }),
   // The advisory lock. When it is taken is the whole point: a lock acquired
   // after the count would serialise nothing.
   $queryRaw: vi.fn(async (_strings: TemplateStringsArray, ..._v: unknown[]) => {
@@ -219,7 +225,11 @@ describe("job.service createJob - concurrency", () => {
 
     // A lock taken after the read is not a lock at all - it would let both
     // callers read the same zero and only then queue up to write.
-    expect(inner).toEqual(["lock", "count"]);
+    expect(inner).toEqual([
+      "set:SET LOCAL lock_timeout = 5000",
+      "lock",
+      "count",
+    ]);
     expect(tx.$queryRaw).toHaveBeenCalledOnce();
     const [strings, userId] = tx.$queryRaw.mock.calls[0] as [
       TemplateStringsArray,
@@ -284,5 +294,112 @@ describe("job.service createJob - concurrency", () => {
   it("returns the created job under a status, so a refusal cannot be mistaken for one", async () => {
     const result = await createJob({ userId: "u1", sourceKey: "uploads/u1/x.mp4" });
     expect(result).toEqual({ status: "created", job: JOB });
+  });
+});
+
+/**
+ * CONTENTION IS A REFUSAL, NOT A 500.
+ *
+ * Reproduced against prod: holding pg_advisory_xact_lock(hashtext(user), 1) in
+ * psql and submitting made this function throw PrismaClientKnownRequestError
+ * P2028 after 22.7 SECONDS - the `timeout: 15_000` on the transaction did not
+ * bound the wait, because Prisma only checks it when the next statement is
+ * issued and the blocked statement never returned. The web route had no catch,
+ * so the user got a bare 500 and the funnel got nothing.
+ */
+describe("job.service createJob - lock contention", () => {
+  /** What Postgres sends when lock_timeout cancels a blocked statement. */
+  function lockTimeout(): Prisma.PrismaClientKnownRequestError {
+    return new Prisma.PrismaClientKnownRequestError("Raw query failed", {
+      code: "P2010",
+      clientVersion: "5.20.0",
+      meta: { code: "55P03", message: "ERROR: canceling statement due to lock timeout" },
+    });
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    calls.length = 0;
+    inner.length = 0;
+    tx.job.create.mockResolvedValue(JOB);
+    tx.freeUsage.create.mockResolvedValue({});
+    tx.job.count.mockImplementation(async () => {
+      inner.push("count");
+      return 0;
+    });
+    tx.user.findUniqueOrThrow.mockResolvedValue({
+      plan: "NONE",
+      billingCycle: null,
+    });
+    tx.$executeRawUnsafe.mockImplementation(async (sql: string) => {
+      inner.push(`set:${sql}`);
+      return 0;
+    });
+    tx.$queryRaw.mockImplementation(async () => {
+      inner.push("lock");
+      return [{ ok: 1 }];
+    });
+  });
+
+  it("bounds the wait with lock_timeout, which the transaction timeout does not", async () => {
+    await createJob({ userId: "u1", sourceKey: "uploads/u1/x.mp4" });
+
+    const sql = tx.$executeRawUnsafe.mock.calls[0][0] as string;
+    expect(sql).toMatch(/^SET LOCAL lock_timeout = \d+$/);
+    // LOCAL, so it dies with the transaction. A plain SET would ride the pooled
+    // connection into the next unrelated request.
+    expect(sql).toContain("SET LOCAL");
+  });
+
+  it("turns a lock timeout into a refusal the caller can render", async () => {
+    tx.$queryRaw.mockRejectedValue(lockTimeout());
+
+    const result = await createJob({ userId: "u1", sourceKey: "uploads/u1/x.mp4" });
+
+    expect(result).toEqual({ status: "busy" });
+    // Nothing was created and nothing was queued, so a retry is genuinely safe.
+    expect(queueAdd).not.toHaveBeenCalled();
+  });
+
+  it("also refuses on P2028, the shape the bug actually produced", async () => {
+    (prisma.$transaction as any).mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError("Transaction already closed", {
+        code: "P2028",
+        clientVersion: "5.20.0",
+      })
+    );
+
+    await expect(
+      createJob({ userId: "u1", sourceKey: "uploads/u1/x.mp4" })
+    ).resolves.toEqual({ status: "busy" });
+  });
+
+  it("still throws anything that is not contention", async () => {
+    // A dead connection told to "try again in a moment" sends the user round a
+    // loop that cannot end. Only the two contention codes are swallowed.
+    tx.$queryRaw.mockRejectedValue(
+      new Prisma.PrismaClientKnownRequestError("Server has closed the connection", {
+        code: "P1017",
+        clientVersion: "5.20.0",
+      })
+    );
+
+    await expect(
+      createJob({ userId: "u1", sourceKey: "uploads/u1/x.mp4" })
+    ).rejects.toThrow();
+  });
+
+  it("does not swallow a P2002 from the reservation insert", async () => {
+    // The unique index firing here means a cuid collided or something else is
+    // writing rows - never a reason to tell the user to retry.
+    tx.freeUsage.create.mockRejectedValue(p2002());
+
+    await expect(
+      createJob({
+        userId: "u1",
+        sourceKey: "uploads/u1/x.mp4",
+        freeCharge: { seconds: 60, estimatedCostUsd: 0.042 },
+      })
+    ).rejects.toThrow();
   });
 });

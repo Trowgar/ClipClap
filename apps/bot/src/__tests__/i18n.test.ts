@@ -734,4 +734,25 @@ describe("bot i18n", () => {
     }
   });
 
+  /**
+   * A submission refused because the account's own submit lock was contended.
+   * It replaces an uncaught error that reached the user as silence, so every
+   * locale needs it - and it must not be the concurrency copy, which states a
+   * plan limit that is not what refused them.
+   */
+  it("has busy copy in every locale, distinct from the plan concurrency copy", () => {
+    for (const loc of LOCALES) {
+      const dict = t(loc);
+      expect(dict.submitBusy.length).toBeGreaterThan(0);
+      expect(dict.submitBusy).not.toBe(dict.planConcurrentLimit(1, 1));
+      // It tells the user to do the one thing that can work.
+      expect(dict.submitBusy).not.toContain("undefined");
+    }
+  });
+
+  it("does not reuse one language's busy copy for another", () => {
+    const seen = new Set(LOCALES.map((loc) => t(loc).submitBusy));
+    expect(seen.size).toBe(LOCALES.length);
+  });
+
 });

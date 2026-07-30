@@ -196,7 +196,13 @@ export default async function AdminAnalyticsPage({
               <div
                 key={step.event}
                 className={`rounded-md border-l-4 py-2 pl-3 ${
-                  step.biggestDrop ? "border-red-400 bg-red-400/10" : "border-white/10"
+                  step.biggestDrop
+                    ? "border-red-400 bg-red-400/10"
+                    : step.scope
+                      ? // Dashed, because this step is not on the line the ones
+                        // above and below it form - it applies to a subset.
+                        "border-dashed border-white/20"
+                      : "border-white/10"
                 }`}
               >
                 <div className="flex items-baseline justify-between gap-2">
@@ -205,7 +211,14 @@ export default async function AdminAnalyticsPage({
                 </div>
                 <div className="flex items-baseline justify-between gap-2 text-xs opacity-60">
                   <span>
-                    {step.pctOfPrev !== null ? `→ ${step.pctOfPrev}% of previous` : "first step"}
+                    {/* A scoped step is measured against the population it can
+                        apply to, never against the step above it - see
+                        SCOPED_STEPS in analytics.service. */}
+                    {step.scope
+                      ? `→ ${step.scope.pctOfApplicable ?? 0}% of ${step.scope.applicableTo} applicable`
+                      : step.pctOfPrev !== null
+                        ? `→ ${step.pctOfPrev}% of previous`
+                        : "first step"}
                     {step.biggestDrop && (
                       <span className="ml-2 rounded bg-red-400/20 px-1.5 py-0.5 text-red-300">
                         biggest drop
@@ -214,6 +227,9 @@ export default async function AdminAnalyticsPage({
                   </span>
                   {step.repeats > 0 && <span>+{step.repeats} repeats</span>}
                 </div>
+                {step.scope && (
+                  <div className="mt-1 text-xs opacity-50">{step.scope.note}</div>
+                )}
               </div>
             ))}
           </div>

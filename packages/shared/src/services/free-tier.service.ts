@@ -239,6 +239,50 @@ export async function refundFailedJob(
 }
 
 /**
+ * Full release for a job the user deleted before a cent of it was spent.
+ *
+ * Uncapped, like refundFailedJob and unlike the zero-clip forgiveness, and the
+ * reason it can be is arithmetic rather than generosity: the farming attack the
+ * cap exists to stop needs a TRANSCRIPTION to have happened, and the only
+ * statuses that reach this function are the ones before the transcribe call.
+ * Submitting an hour of video and deleting it at PENDING costs us a Job row and
+ * a queue entry. Repeating that a thousand times still costs us a Job row and a
+ * queue entry - there is nothing to farm.
+ *
+ * The states this is legal for are decided by settleFreeLedgerOnDelete, which
+ * is the only caller, and are named there. Do not widen it here.
+ */
+export async function refundUnstartedJob(
+  userId: string,
+  jobId: string
+): Promise<void> {
+  const charge = await findFreeCharge(userId, jobId);
+  if (!charge) return;
+  if (await alreadyRefunded(userId, jobId)) return;
+
+  try {
+    await prisma.freeUsage.create({
+      data: {
+        userId,
+        jobId,
+        kind: "REFUND",
+        reason: "DELETED_BEFORE_SPEND",
+        seconds: charge.seconds,
+        // Zero, like every other refund row, and here it is not even a
+        // convention: no money was spent, so there is nothing for the monthly
+        // budget to keep counting. The CHARGE row's own estimate stays on the
+        // ledger and keeps overstating the month by one reservation until the
+        // next true-up - erring towards closing the trial early, which is the
+        // safe direction.
+        estimatedCostUsd: 0,
+      },
+    });
+  } catch (err) {
+    if (!isDuplicateRow(err)) throw err;
+  }
+}
+
+/**
  * One forgiveness per account for a run that transcribed but found nothing.
  *
  * Without it a first attempt on unclippable video ends the trial and the user
@@ -329,17 +373,35 @@ export async function refundZeroClipJob(
  * Deleting a project is not a settlement event of its own; it is the last
  * moment at which the settlement that was already owed can still be made.
  *
- * A JOB DELETED WHILE IT IS STILL RUNNING KEEPS ITS CHARGE. That is the one
- * case finalize has no rule for, and it is the one case where refunding would
- * be a hole rather than a kindness: money leaves the account at TRANSCRIBE, so
- * an in-flight job may already have been paid for, and a delete that refunded
- * it would let one account submit an hour of video, let it transcribe, delete
- * it, and repeat - the lifetime allowance is the only bound on free spend, and
- * a user-triggered reset of it is unbounded. The outcome is also genuinely
- * unknown at that instant: nobody, including the user, can say whether this run
- * would have produced clips. Keeping the charge is the conservative error, and
- * it is the user's own choice that reaches it - unlike the FAILED case, where
- * the run was broken by us and the user is only clearing away the wreckage.
+ * A JOB DELETED WHILE IT IS RUNNING IS TWO DIFFERENT CASES, and they split on
+ * exactly one line: the TRANSCRIBE call, which is where money leaves the
+ * account.
+ *
+ *   PENDING, DOWNLOADING      -> REFUNDED, in full and uncapped.
+ *   TRANSCRIBING, ANALYZING,
+ *   CUTTING                   -> the charge stands.
+ *
+ * Before TRANSCRIBE nothing has been spent. No OpenAI request has been made; we
+ * are out a Job row, a queue entry and, at DOWNLOADING, some bandwidth. And
+ * those two states are precisely the ones a person deletes from - paste the
+ * wrong link, notice, press Delete, in the seconds before a worker gets to it.
+ * Keeping the charge there took sixty minutes off a new account for a typo,
+ * silently, with no sweep able to reach it afterwards because the job row was
+ * about to be deleted. That is not a conservative error; it is the trial ending
+ * before the user has seen anything at all.
+ *
+ * The docstring this replaces justified keeping the charge with a farming
+ * attack: submit an hour, let it transcribe, delete, repeat. Read the attack
+ * again - it needs the transcription. It is real from TRANSCRIBING onward and
+ * that is why those states are unchanged, and it is not available at all before
+ * the transcribe call, so refunding there opens nothing. The other argument,
+ * that the outcome is unknown at the instant of deletion, is true of every
+ * state including PENDING; what makes it decisive from TRANSCRIBING on is that
+ * the spend is already real, not that the outcome is uncertain.
+ *
+ * The two live in one function rather than two so the boundary is stated once.
+ * If a stage is ever added between DOWNLOAD and TRANSCRIBE, it belongs in
+ * PRE_SPEND_STATUSES below only if it makes no paid API call.
  *
  * Refunding a FAILED job here does NOT need the sweep's six-hour silence
  * threshold, and that difference is real rather than an oversight. The
@@ -352,6 +414,41 @@ export async function refundZeroClipJob(
  * findFreeCharge and return on null, so a paid job leaves free_usage untouched
  * by construction rather than by a plan check that could go stale.
  */
+/**
+ * The job states in which no money has been spent yet.
+ *
+ * Derived from where the OpenAI calls are, not from where the pipeline feels
+ * early: DOWNLOAD fetches bytes and TRANSCRIBE is the first stage that bills.
+ * Exported so a test can assert the boundary rather than restate it, and so the
+ * next person adding a stage has one list to look at.
+ */
+export const PRE_SPEND_JOB_STATUSES = [
+  "PENDING",
+  "DOWNLOADING",
+] as const satisfies readonly JobStatus[];
+
+/**
+ * Would deleting a job in this state cost the user seconds they would otherwise
+ * keep?
+ *
+ * True for exactly the in-flight states past the transcribe call. Not for
+ * PENDING or DOWNLOADING, which now refund. Not for DONE either: those seconds
+ * were spent on a run that finished, and they are gone whether the project is
+ * tidied away or left sitting there - a warning would be describing the past,
+ * not the button. Not for FAILED, which refunds in full.
+ *
+ * It exists so the confirm dialog and settleFreeLedgerOnDelete cannot disagree
+ * about which press costs something. A dialog that warns where the ledger
+ * refunds trains people to ignore it.
+ */
+export function deleteForfeitsFreeSeconds(status: JobStatus): boolean {
+  return (
+    status !== "DONE" &&
+    status !== "FAILED" &&
+    !(PRE_SPEND_JOB_STATUSES as readonly JobStatus[]).includes(status)
+  );
+}
+
 export async function settleFreeLedgerOnDelete(
   userId: string,
   jobId: string,
@@ -386,14 +483,24 @@ export async function settleFreeLedgerOnDelete(
     return;
   }
 
-  // Still in flight. Greppable, because this is the one branch that costs the
-  // user seconds without any refund path left afterwards - the row the sweep
-  // would have needed is about to be deleted - and "why did my minutes not come
-  // back" needs an answer in the logs.
+  if ((PRE_SPEND_JOB_STATUSES as readonly JobStatus[]).includes(job.status)) {
+    await refundUnstartedJob(userId, jobId);
+    console.log(
+      `[free-tier] delete of ${job.status} job ${jobId} for user ${userId}: ` +
+        `${charge.seconds}s released (nothing had been spent - the transcribe ` +
+        `call had not happened)`
+    );
+    return;
+  }
+
+  // In flight and past the transcribe call. Greppable, because this is the one
+  // branch that costs the user seconds without any refund path left afterwards -
+  // the row the sweep would have needed is about to be deleted - and "why did my
+  // minutes not come back" needs an answer in the logs.
   console.log(
     `[free-tier] job ${jobId} deleted by user ${userId} while ${job.status}; ` +
-      `charge of ${charge.seconds}s stands (outcome unknown, spend possibly ` +
-      `already incurred)`
+      `charge of ${charge.seconds}s stands (outcome unknown, spend already ` +
+      `incurred at TRANSCRIBE)`
   );
 }
 

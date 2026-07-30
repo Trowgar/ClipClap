@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ count: vi.fn(), funnelGroupBy: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  count: vi.fn(),
+  funnelGroupBy: vi.fn(),
+  userCount: vi.fn(),
+}));
 
 vi.mock("../../lib/prisma", () => ({
   prisma: {
     account: { count: mocks.count },
     funnelEvent: { groupBy: mocks.funnelGroupBy },
+    user: { count: mocks.userCount },
   },
 }));
 
@@ -138,6 +143,8 @@ describe("excludeOwnAccountsWhere", () => {
 describe("getFunnel renders every declared step", () => {
   beforeEach(() => {
     mocks.funnelGroupBy.mockReset();
+    mocks.userCount.mockReset();
+    mocks.userCount.mockResolvedValue(8);
   });
 
   it("shows every FUNNEL_EVENTS value that has rows", async () => {
@@ -181,5 +188,156 @@ describe("getFunnel renders every declared step", () => {
       FUNNEL_EVENTS.SIGNED_UP,
       FUNNEL_EVENTS.APP_OPENED,
     ]);
+  });
+});
+
+/**
+ * The shape prod actually has, and the one that broke the label.
+ *
+ * `signed_up` and `email_verified` only exist for accounts created after the
+ * instrumentation landed; `app_opened` fires for every account there has ever
+ * been. So the counts RISE across those steps, which is not a funnel failing -
+ * it is two different populations - and the old Math.abs comparison handed the
+ * "biggest drop" badge to the biggest RISE and drew it in red.
+ */
+describe("getFunnel labels drops", () => {
+  beforeEach(() => {
+    mocks.funnelGroupBy.mockReset();
+    mocks.userCount.mockReset();
+    mocks.userCount.mockResolvedValue(8);
+  });
+
+  const rows = (counts: Record<string, number>) =>
+    Object.entries(counts).map(([event, n]) => ({
+      event,
+      _count: { _all: n },
+      _sum: { occurrences: n },
+    }));
+
+  it("never calls an increase a drop", async () => {
+    mocks.funnelGroupBy.mockResolvedValue(
+      rows({
+        [FUNNEL_EVENTS.SIGNED_UP]: 1,
+        [FUNNEL_EVENTS.APP_OPENED]: 3,
+        [FUNNEL_EVENTS.VIDEO_SUBMITTED]: 2,
+      })
+    );
+
+    const steps = await getFunnel();
+    const risen = steps.find((s) => s.event === FUNNEL_EVENTS.APP_OPENED);
+
+    expect(risen?.people).toBe(3);
+    expect(risen?.biggestDrop).toBe(false);
+    // 3 -> 2 is the only real loss on the path, so it is the one that is marked.
+    expect(steps.filter((s) => s.biggestDrop).map((s) => s.event)).toEqual([
+      FUNNEL_EVENTS.VIDEO_SUBMITTED,
+    ]);
+  });
+
+  it("marks nothing when every step gains", async () => {
+    mocks.funnelGroupBy.mockResolvedValue(
+      rows({
+        [FUNNEL_EVENTS.SIGNED_UP]: 1,
+        [FUNNEL_EVENTS.APP_OPENED]: 3,
+        [FUNNEL_EVENTS.VIDEO_SUBMITTED]: 5,
+      })
+    );
+
+    const steps = await getFunnel();
+
+    expect(steps.some((s) => s.biggestDrop)).toBe(false);
+  });
+
+  it("picks the largest loss, not the largest change", async () => {
+    mocks.funnelGroupBy.mockResolvedValue(
+      rows({
+        [FUNNEL_EVENTS.SIGNED_UP]: 10,
+        [FUNNEL_EVENTS.APP_OPENED]: 100,
+        [FUNNEL_EVENTS.VIDEO_SUBMITTED]: 60,
+      })
+    );
+
+    const steps = await getFunnel();
+
+    // The 10 -> 100 change is bigger in absolute terms than 100 -> 60.
+    expect(steps.filter((s) => s.biggestDrop).map((s) => s.event)).toEqual([
+      FUNNEL_EVENTS.VIDEO_SUBMITTED,
+    ]);
+  });
+});
+
+/**
+ * `email_verified` is structurally unreachable for most accounts: a telegramId
+ * or a Google row anchors the trial without it, and prod had 8 accounts out of
+ * 105 anchors for which the wall exists at all. Read against `app_opened` it
+ * looks like a 92% loss that no amount of product work could recover.
+ */
+describe("getFunnel scopes the email wall to the accounts it applies to", () => {
+  beforeEach(() => {
+    mocks.funnelGroupBy.mockReset();
+    mocks.userCount.mockReset();
+  });
+
+  const prodShape = () => {
+    mocks.funnelGroupBy.mockResolvedValue([
+      { event: FUNNEL_EVENTS.SIGNED_UP, _count: { _all: 10 }, _sum: { occurrences: 10 } },
+      { event: FUNNEL_EVENTS.APP_OPENED, _count: { _all: 100 }, _sum: { occurrences: 100 } },
+      { event: FUNNEL_EVENTS.EMAIL_VERIFIED, _count: { _all: 4 }, _sum: { occurrences: 4 } },
+      { event: FUNNEL_EVENTS.VIDEO_SUBMITTED, _count: { _all: 90 }, _sum: { occurrences: 90 } },
+    ]);
+    mocks.userCount.mockResolvedValue(8);
+  };
+
+  it("carries its own denominator and no percentage of the step above", async () => {
+    prodShape();
+
+    const steps = await getFunnel();
+    const wall = steps.find((s) => s.event === FUNNEL_EVENTS.EMAIL_VERIFIED);
+
+    expect(wall?.pctOfPrev).toBeNull();
+    expect(wall?.scope).toEqual({
+      applicableTo: 8,
+      pctOfApplicable: 50,
+      note: expect.stringContaining("confirm an email"),
+    });
+  });
+
+  it("counts only accounts with neither a telegramId nor a google row", async () => {
+    prodShape();
+
+    await getFunnel();
+
+    expect(mocks.userCount).toHaveBeenCalledWith({
+      where: { telegramId: null, accounts: { none: { provider: "google" } } },
+    });
+  });
+
+  it("does not break the chain for the step after it", async () => {
+    prodShape();
+
+    const steps = await getFunnel();
+    const submitted = steps.find((s) => s.event === FUNNEL_EVENTS.VIDEO_SUBMITTED);
+
+    // 90 of the 100 who opened the app, NOT 2250% of the 4 who confirmed.
+    expect(submitted?.pctOfPrev).toBe(90);
+  });
+
+  it("is never the biggest drop, however small it is", async () => {
+    prodShape();
+
+    const steps = await getFunnel();
+    const wall = steps.find((s) => s.event === FUNNEL_EVENTS.EMAIL_VERIFIED);
+
+    expect(wall?.biggestDrop).toBe(false);
+  });
+
+  it("reports no percentage rather than dividing by zero", async () => {
+    prodShape();
+    mocks.userCount.mockResolvedValue(0);
+
+    const steps = await getFunnel();
+    const wall = steps.find((s) => s.event === FUNNEL_EVENTS.EMAIL_VERIFIED);
+
+    expect(wall?.scope?.pctOfApplicable).toBeNull();
   });
 });

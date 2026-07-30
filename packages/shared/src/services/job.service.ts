@@ -1,8 +1,13 @@
+import { Prisma as PrismaNamespace } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { getStageQueue } from "../lib/queues";
 import { getPlanLimits } from "../config/plans";
 import type { Job, JobStatus, Prisma } from "@prisma/client";
 import type { CreateJobInput } from "../types";
+
+// Destructured rather than imported by name: `Prisma` is already taken above as
+// a type-only import for the namespace's types, and the error class is a value.
+const { PrismaClientKnownRequestError } = PrismaNamespace;
 
 /**
  * A job that has not reached a terminal state yet - what "in flight" counts.
@@ -28,10 +33,65 @@ export const ACTIVE_JOB_STATUSES = [
  * funnel event to record. It also carries the numbers the copy states, so the
  * message a user reads cannot disagree with the count that actually refused
  * them.
+ *
+ * `busy` is the same idea applied to the one case that used to escape as an
+ * exception: the per-user lock was held by somebody else for longer than we are
+ * willing to wait. That reached the web route as an uncaught P2028, which the
+ * user saw as a bare 500 after twenty-three seconds and which /admin could not
+ * see at all, because nothing records a funnel event for a thrown request. It
+ * carries no numbers - there is nothing true to say about a queue we gave up
+ * on - and the honest copy is "try again in a moment".
  */
 export type CreateJobResult =
   | { status: "created"; job: Job }
-  | { status: "concurrent_limit"; inFlight: number; limit: number };
+  | { status: "concurrent_limit"; inFlight: number; limit: number }
+  | { status: "busy" };
+
+/**
+ * How long a submission is willing to wait for this account's lock.
+ *
+ * The work under the lock is three statements and finishes in single-digit
+ * milliseconds, so five seconds is not a budget - it is a ceiling on somebody
+ * else's pathology. Two things can hold the lock that long: a submission that
+ * is itself stuck, or an operator holding it by hand from psql. Both should end
+ * in "try again in a moment", not in a request that hangs for twenty-three
+ * seconds and then 500s.
+ *
+ * It is NOT the same knob as the transaction timeout, and that confusion is the
+ * bug this closes. `timeout: 15_000` bounds how long the interactive
+ * transaction may live, and Prisma only notices it has been exceeded when the
+ * NEXT statement is issued - so a query blocked inside the lock is not
+ * interrupted at 15s at all. Measured: the lock was released at 22.6s and only
+ * then did Prisma raise P2028, at 22.7s. lock_timeout is enforced by Postgres
+ * on the blocked statement itself, which is the only place that can see it.
+ */
+const LOCK_WAIT_MS = 5_000;
+
+/** Postgres SQLSTATE for a statement cancelled by lock_timeout. */
+const PG_LOCK_NOT_AVAILABLE = "55P03";
+
+/**
+ * True when this error is the lock wait above running out, or the transaction
+ * dying because it did.
+ *
+ * Two codes, because two mechanisms can report the same event. P2010 with
+ * SQLSTATE 55P03 is the ordinary path - Postgres cancelled the blocked
+ * `pg_advisory_xact_lock` and Prisma passed the raw failure through. P2028 is
+ * the belt: if a transaction ever manages to outlive its own timeout for any
+ * reason, the request is still one that waited too long on a queue, and the
+ * user is owed the same "try again" rather than a stack trace. Deliberately
+ * narrow beyond that - a connection failure or a constraint violation must
+ * still surface as an error, because reporting one of those as "busy" would
+ * tell a user to retry something that will never work.
+ */
+function isLockContention(err: unknown): boolean {
+  if (!(err instanceof PrismaClientKnownRequestError)) return false;
+  if (err.code === "P2028") return true;
+  return (
+    err.code === "P2010" &&
+    (err.meta as { code?: string } | undefined)?.code === PG_LOCK_NOT_AVAILABLE
+  );
+}
 
 /**
  * BullMQ priority for a job running on the free allowance.
@@ -107,71 +167,100 @@ const FREE_JOB_PRIORITY = 10;
 export async function createJob(
   input: CreateJobInput
 ): Promise<CreateJobResult> {
-  const result = await prisma.$transaction(
-    async (tx): Promise<CreateJobResult> => {
-      // The subquery-and-constant shape is not decoration: pg_advisory_xact_lock
-      // returns void and $queryRaw cannot deserialize that. The classid is a
-      // literal in the SQL rather than a bound parameter, because Prisma binds a
-      // JS number as int8 and there is no pg_advisory_xact_lock(int4, int8).
-      // Classid 1 keeps job submission in its own namespace, away from
-      // withdrawal.service's 0.
-      await tx.$queryRaw`SELECT 1 AS ok FROM (SELECT pg_advisory_xact_lock(hashtext(${input.userId}), 1)) AS _lock`;
+  let result: CreateJobResult;
+  try {
+    result = await prisma.$transaction(
+      async (tx): Promise<CreateJobResult> => {
+        // SET LOCAL, so it dies with the transaction and cannot leak onto the
+        // next request to borrow this pooled connection. It has to be issued
+        // INSIDE the transaction and before the lock; a lock_timeout set anywhere
+        // else applies to nothing that matters here.
+        //
+        // $executeRawUnsafe and an interpolated number because SET does not take
+        // bind parameters - "SET LOCAL lock_timeout = $1" is a syntax error. The
+        // value is a module constant, never anything a caller supplies, so there
+        // is nothing here for an injection to reach.
+        await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = ${LOCK_WAIT_MS}`);
 
-      const user = await tx.user.findUniqueOrThrow({
-        where: { id: input.userId },
-        select: { plan: true, billingCycle: true },
-      });
-      const limit = getPlanLimits(
-        user.plan,
-        user.billingCycle ?? "MONTHLY"
-      ).concurrentJobsLimit;
+        // The subquery-and-constant shape is not decoration: pg_advisory_xact_lock
+        // returns void and $queryRaw cannot deserialize that. The classid is a
+        // literal in the SQL rather than a bound parameter, because Prisma binds a
+        // JS number as int8 and there is no pg_advisory_xact_lock(int4, int8).
+        // Classid 1 keeps job submission in its own namespace, away from
+        // withdrawal.service's 0.
+        await tx.$queryRaw`SELECT 1 AS ok FROM (SELECT pg_advisory_xact_lock(hashtext(${input.userId}), 1)) AS _lock`;
 
-      // Committed rows only, which is exactly right: the caller that got here
-      // first has already committed its Job row by the time it releases the
-      // lock, so this count sees it. Read Committed is enough for the same
-      // reason it is enough in withdrawal.service.
-      const inFlight = await tx.job.count({
-        where: {
-          userId: input.userId,
-          status: { in: [...ACTIVE_JOB_STATUSES] },
-        },
-      });
-      if (inFlight >= limit) {
-        return { status: "concurrent_limit", inFlight, limit };
-      }
+        const user = await tx.user.findUniqueOrThrow({
+          where: { id: input.userId },
+          select: { plan: true, billingCycle: true },
+        });
+        const limit = getPlanLimits(
+          user.plan,
+          user.billingCycle ?? "MONTHLY"
+        ).concurrentJobsLimit;
 
-      const created = await tx.job.create({
-        data: {
-          userId: input.userId,
-          sourceUrl: input.sourceUrl,
-          sourceKey: input.sourceKey,
-          originalFilename: input.originalFilename,
-          subtitles: input.subtitles ?? true,
-          sourceDurationSec: input.sourceDurationSec,
-          status: "PENDING",
-        },
-      });
-
-      if (input.freeCharge) {
-        await tx.freeUsage.create({
-          data: {
+        // Committed rows only, which is exactly right: the caller that got here
+        // first has already committed its Job row by the time it releases the
+        // lock, so this count sees it. Read Committed is enough for the same
+        // reason it is enough in withdrawal.service.
+        const inFlight = await tx.job.count({
+          where: {
             userId: input.userId,
-            jobId: created.id,
-            kind: "CHARGE",
-            seconds: input.freeCharge.seconds,
-            estimatedCostUsd: input.freeCharge.estimatedCostUsd,
+            status: { in: [...ACTIVE_JOB_STATUSES] },
           },
         });
-      }
+        if (inFlight >= limit) {
+          return { status: "concurrent_limit", inFlight, limit };
+        }
 
-      return { status: "created", job: created };
-    },
-    // Wider than the 5s default, because the body now waits on a lock: several
-    // submissions from one account queue up, and the last one in a burst must
-    // not be failed by a timeout for having waited its turn. The work under the
-    // lock is three statements, so this is headroom, not an expectation.
-    { timeout: 15_000, maxWait: 10_000 }
-  );
+        const created = await tx.job.create({
+          data: {
+            userId: input.userId,
+            sourceUrl: input.sourceUrl,
+            sourceKey: input.sourceKey,
+            originalFilename: input.originalFilename,
+            subtitles: input.subtitles ?? true,
+            sourceDurationSec: input.sourceDurationSec,
+            status: "PENDING",
+          },
+        });
+
+        if (input.freeCharge) {
+          await tx.freeUsage.create({
+            data: {
+              userId: input.userId,
+              jobId: created.id,
+              kind: "CHARGE",
+              seconds: input.freeCharge.seconds,
+              estimatedCostUsd: input.freeCharge.estimatedCostUsd,
+            },
+          });
+        }
+
+        return { status: "created", job: created };
+      },
+      // Wider than the 5s default, because the body now waits on a lock: several
+      // submissions from one account queue up, and the last one in a burst must
+      // not be failed by a timeout for having waited its turn. The work under the
+      // lock is three statements, so this is headroom, not an expectation.
+      //
+      // It must stay comfortably ABOVE LOCK_WAIT_MS. This number does not bound
+      // the wait - lock_timeout does - it only decides which of the two reports a
+      // stuck submission, and lock_timeout is the one that can say why.
+      { timeout: 15_000, maxWait: 10_000 }
+    );
+  } catch (err) {
+    if (!isLockContention(err)) throw err;
+    // Greppable and rate-limited by its own rarity: on a per-user lock held for
+    // milliseconds, waiting out five whole seconds means something is wrong -
+    // a wedged transaction, or a hand-held lock in psql - and the line is what
+    // connects "users are being told to try again" to that cause.
+    console.warn(
+      `[jobs] submission for user ${input.userId} gave up waiting ${LOCK_WAIT_MS}ms ` +
+        `for the per-user lock; refusing as busy`
+    );
+    return { status: "busy" };
+  }
 
   // A refusal never reaches the queue. The enqueue also stays outside the
   // transaction: a worker can pick the download up the instant the add lands,

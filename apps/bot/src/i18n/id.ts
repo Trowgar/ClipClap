@@ -108,6 +108,8 @@ const id: Dict = {
     `Kamu sudah mencapai batas harian ${limit} video. Batasnya direset tengah malam: kirim video ini lagi setelah itu.`,
   planConcurrentLimit: (active, limit) =>
     `Aku masih mengerjakan ${active === 1 ? "videomu" : `${active} videomu`}, dan paketmu memproses ${limit} sekaligus. Kirim yang ini lagi setelah selesai: nanti aku kabari.`,
+  submitBusy:
+    "Kiriman lain dari akunmu masih diproses. Tunggu sebentar lalu kirim ini lagi.",
   langUsage: (options) => `Cara pakai: ${options}.`,
   langSet: "Bahasa diatur ke Bahasa Indonesia.",
   langName: "Bahasa Indonesia",

@@ -590,6 +590,12 @@ enum FreeUsageKind {
 enum FreeUsageReason {
   FAILED_JOB
   ZERO_CLIPS
+  /// The user deleted the job before any money had left the account - PENDING
+  /// or DOWNLOADING, which are the states before the TRANSCRIBE call. Its own
+  /// reason rather than FAILED_JOB because nothing failed, and rather than
+  /// ZERO_CLIPS because this one is uncapped: there is no farming attack to
+  /// cap, since the attack needs a transcription to have happened.
+  DELETED_BEFORE_SPEND
 }
 
 /// Append-only ledger of the free allowance.

@@ -103,7 +103,13 @@ export const SIDE_ACTION_EVENTS = ["earn_advertisers_tapped"] as const;
  *  email" panel in place of the upload form, so it can open the dashboard and
  *  can never reach a submission. It has no rows at all on `bot` - a Telegram
  *  account is anchored by its phone-backed id - and getFunnel skips empty steps
- *  rather than drawing a hard zero. */
+ *  rather than drawing a hard zero.
+ *
+ *  It is also the one step in this list that most accounts CANNOT pass, which
+ *  is not the same as failing to: 97 of prod's 105 anchors are a telegramId or
+ *  a Google row and neither is ever shown the wall. It is therefore listed in
+ *  SCOPED_STEPS and drawn against its own denominator instead of against the
+ *  step above it. */
 const FUNNEL_LABELS: Record<(typeof FUNNEL_ORDER)[number], string> = {
   start_first_screen: "Saw the welcome screen",
   first_screen_link_account: "Linked an account",
@@ -113,21 +119,94 @@ const FUNNEL_LABELS: Record<(typeof FUNNEL_ORDER)[number], string> = {
   video_submitted: "Submitted a video",
 };
 
+/**
+ * A step that only part of the population can ever reach, and the size of that
+ * part.
+ *
+ * `people` on such a step must NOT be read against the step above it, because
+ * the step above counts everybody. `email_verified` is the case this exists
+ * for: on 2026-07-30 prod held 69 accounts anchored by a telegramId, 28 by
+ * Google and 8 by nothing but an email, and only that last 8 are ever shown the
+ * confirmation wall. Divided by `app_opened` the step reads as a 92%
+ * catastrophe that is really a definition.
+ */
+export interface FunnelStepScope {
+  /** How many accounts the step can apply to at all. */
+  applicableTo: number;
+  /** `people` as a percentage of `applicableTo`, null when that is 0. */
+  pctOfApplicable: number | null;
+  /** Rendered next to the number. Says what the denominator IS. */
+  note: string;
+}
+
 export interface FunnelStep {
   event: string;
   label: string;
   people: number;
   repeats: number;
-  /** % of the previous non-zero step, null for the first one. */
+  /** % of the previous non-zero step ON THE MAIN PATH, null for the first one
+   *  and null for every scoped step - see `scope`. */
   pctOfPrev: number | null;
-  /** True for the step with the largest absolute drop from its predecessor. */
+  /** True for the step that LOST the most people relative to its predecessor.
+   *  Never true for a step that gained people, and never true for a scoped one. */
   biggestDrop: boolean;
+  /** Non-null when this step applies to only part of the population. */
+  scope: FunnelStepScope | null;
 }
+
+/**
+ * How many accounts the email wall can apply to.
+ *
+ * Anyone with a telegramId is anchored by a phone-backed id and is never asked
+ * to confirm anything; anyone with a google row had the mailbox verified by
+ * Google before the identity was issued. What is left is the population that
+ * must open a confirmation link before it can submit - the exact set
+ * isTrialAnchored sends to the emailVerified branch. Keep the two in step: this
+ * is the denominator that makes `email_verified` mean something, and if it
+ * stops matching the gate the number becomes decorative.
+ *
+ * Counted from `users`, while `people` on the step is counted from
+ * `funnel_events`. Two sources, on purpose - there is no event for "this
+ * account is walled", and synthesising one from a rendered panel would turn a
+ * refusal count into a page-view count (see the note above uploadRejectedEvent).
+ * The consequence is that the figure is a live headcount and the numerator is
+ * historical, so a step can read over 100% if the population shrinks. Better
+ * that than a denominator that is wrong by 92%.
+ */
+async function emailWalledAccounts(surface?: FunnelSurface): Promise<number> {
+  return prisma.user.count({
+    where: {
+      ...surfaceWhere(surface),
+      telegramId: null,
+      accounts: { none: { provider: "google" } },
+    },
+  });
+}
+
+/** Steps whose denominator is a population rather than the step above them. */
+const SCOPED_STEPS: Partial<
+  Record<
+    (typeof FUNNEL_ORDER)[number],
+    { note: string; applicableTo: (surface?: FunnelSurface) => Promise<number> }
+  >
+> = {
+  email_verified: {
+    note: "of the accounts that have to confirm an email - Telegram and Google accounts never see this wall",
+    applicableTo: emailWalledAccounts,
+  },
+};
 
 /**
  * Funnel steps for one surface (or both), in true funnel order with the
  * drop-off from each step's predecessor. Steps with no rows are skipped
  * entirely rather than shown as a hard zero.
+ *
+ * A SCOPED STEP IS DRAWN BUT DOES NOT LINK THE CHAIN. It carries its own
+ * denominator, it is not eligible for "biggest drop", and the step after it
+ * takes its percentage from the last unscoped step instead - so `video_submitted`
+ * is compared to `app_opened`, which is a comparison of two numbers that count
+ * the same people. Deleting the step instead would be worse: it is the only
+ * measure of the email wall there is.
  */
 export async function getFunnel(surface?: FunnelSurface): Promise<FunnelStep[]> {
   const grouped = await prisma.funnelEvent.groupBy({
@@ -148,6 +227,31 @@ export async function getFunnel(surface?: FunnelSurface): Promise<FunnelStep[]> 
   for (const event of FUNNEL_ORDER) {
     const row = byEvent.get(event);
     if (!row || row.people === 0) continue;
+
+    const scoping = SCOPED_STEPS[event];
+    if (scoping) {
+      const applicableTo = await scoping.applicableTo(surface);
+      steps.push({
+        event,
+        label: FUNNEL_LABELS[event],
+        people: row.people,
+        repeats: row.repeats,
+        pctOfPrev: null,
+        biggestDrop: false,
+        scope: {
+          applicableTo,
+          pctOfApplicable:
+            applicableTo > 0
+              ? Math.round((row.people / applicableTo) * 100)
+              : null,
+          note: scoping.note,
+        },
+      });
+      // prevPeople is deliberately NOT advanced: the next step on the main path
+      // compares against the last step that counted everybody.
+      continue;
+    }
+
     const pctOfPrev =
       prevPeople === null || prevPeople === 0
         ? null
@@ -159,21 +263,34 @@ export async function getFunnel(surface?: FunnelSurface): Promise<FunnelStep[]> 
       repeats: row.repeats,
       pctOfPrev,
       biggestDrop: false,
+      scope: null,
     });
     prevPeople = row.people;
   }
 
-  // Largest absolute drop between two consecutive surviving steps.
-  let biggestDropIdx = -1;
+  // The largest LOSS between two consecutive main-path steps.
+  //
+  // This was Math.abs, which made a step that GAINED people eligible - and it
+  // won: `signed_up` and `email_verified` only exist for accounts created after
+  // 2026-07-29 while `app_opened` fires for every account there has ever been,
+  // so app_opened genuinely rises, and /admin drew the rise in red under the
+  // words "biggest drop". A drop is a decrease; a step that grew is reported as
+  // exactly nothing.
+  //
+  // Scoped steps are skipped on both sides of the comparison, which is what
+  // `mainPath` is for: comparing a conditional step to the one before it is the
+  // same category error in a smaller font.
+  const mainPath = steps.filter((step) => step.scope === null);
+  let biggestDrop: FunnelStep | null = null;
   let biggestDropAmount = 0;
-  for (let i = 1; i < steps.length; i++) {
-    const drop = Math.abs(steps[i - 1].people - steps[i].people);
+  for (let i = 1; i < mainPath.length; i++) {
+    const drop = mainPath[i - 1].people - mainPath[i].people;
     if (drop > biggestDropAmount) {
       biggestDropAmount = drop;
-      biggestDropIdx = i;
+      biggestDrop = mainPath[i];
     }
   }
-  if (biggestDropIdx >= 0) steps[biggestDropIdx].biggestDrop = true;
+  if (biggestDrop) biggestDrop.biggestDrop = true;
 
   return steps;
 }

@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   jobDelete: vi.fn(),
   deleteFile: vi.fn(),
   settleFreeLedgerOnDelete: vi.fn(),
+  deleteForfeitsFreeSeconds: vi.fn(),
+  freeUsageFindMany: vi.fn(),
   /** What ran, in order. The settlement has to be before the delete: after it,
    *  the job row that says whether the run failed no longer exists. */
   order: [] as string[],
@@ -19,6 +21,7 @@ vi.mock("../../lib/prisma", () => ({
       findFirst: mocks.jobFindFirst,
       delete: mocks.jobDelete,
     },
+    freeUsage: { findMany: mocks.freeUsageFindMany },
   },
 }));
 
@@ -29,6 +32,7 @@ vi.mock("../../lib/r2", () => ({
 
 vi.mock("../free-tier.service", () => ({
   settleFreeLedgerOnDelete: mocks.settleFreeLedgerOnDelete,
+  deleteForfeitsFreeSeconds: mocks.deleteForfeitsFreeSeconds,
 }));
 
 import {
@@ -44,6 +48,10 @@ describe("project.service", () => {
     mocks.getPresignedDownloadUrl.mockImplementation(
       async (key: string) => `signed:${key}`
     );
+    // Default: nothing is exposed, so the ledger is never asked. Tests that care
+    // about the delete warning override both.
+    mocks.deleteForfeitsFreeSeconds.mockReturnValue(false);
+    mocks.freeUsageFindMany.mockResolvedValue([]);
   });
 
   it("returns three recent projects and reports when more exist", async () => {
@@ -331,6 +339,71 @@ describe("deleteProject - free ledger", () => {
 
     expect(await deleteProject("job1", "u1")).toEqual({ status: "not_found" });
     expect(mocks.settleFreeLedgerOnDelete).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * What the confirm dialog reads. The number has to come from the ledger rather
+ * than from the plan, because settleFreeLedgerOnDelete keys on the ledger too -
+ * a dialog that warned on a plan check would warn a paying account, and would
+ * miss an account that changed plan while a job was in flight.
+ */
+describe("project.service - minutes a delete would forfeit", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.getPresignedDownloadUrl.mockImplementation(
+      async (key: string) => `signed:${key}`
+    );
+  });
+
+  it("reports the reserved seconds for a project whose delete would cost them", async () => {
+    mocks.deleteForfeitsFreeSeconds.mockReturnValue(true);
+    mocks.freeUsageFindMany.mockResolvedValue([{ jobId: "job1", seconds: 1800 }]);
+    mocks.jobFindMany.mockResolvedValue([project("job1")]);
+
+    const projects = await getUserProjects("u1");
+
+    expect(projects[0].freeSecondsAtRisk).toBe(1800);
+    expect(mocks.freeUsageFindMany).toHaveBeenCalledWith({
+      // CHARGE only and scoped to the user: a REFUND row would be counted as
+      // something still at stake, and jobId carries no foreign key.
+      where: { userId: "u1", kind: "CHARGE", jobId: { in: ["job1"] } },
+      select: { jobId: true, seconds: true },
+    });
+  });
+
+  it("reports null for a paying account, which has no ledger row", async () => {
+    mocks.deleteForfeitsFreeSeconds.mockReturnValue(true);
+    mocks.freeUsageFindMany.mockResolvedValue([]);
+    mocks.jobFindMany.mockResolvedValue([project("job1")]);
+
+    const projects = await getUserProjects("u1");
+
+    expect(projects[0].freeSecondsAtRisk).toBeNull();
+  });
+
+  it("does not ask the ledger at all when no project could lose anything", async () => {
+    // A page of fifty finished projects is the common case; it must not cost a
+    // query per row, or a query at all.
+    mocks.deleteForfeitsFreeSeconds.mockReturnValue(false);
+    mocks.jobFindMany.mockResolvedValue([project("job1"), project("job2")]);
+
+    const projects = await getUserProjects("u1");
+
+    expect(mocks.freeUsageFindMany).not.toHaveBeenCalled();
+    expect(projects.every((p) => p.freeSecondsAtRisk === null)).toBe(true);
+  });
+
+  it("carries the same number on the detail page as on the list", async () => {
+    mocks.deleteForfeitsFreeSeconds.mockReturnValue(true);
+    mocks.freeUsageFindMany.mockResolvedValue([{ jobId: "job1", seconds: 900 }]);
+    mocks.jobFindMany.mockResolvedValue([
+      { ...project("job1"), noClipsReason: null, transcriptPartial: false },
+    ]);
+
+    const detail = await getProjectDetail("job1", "u1");
+
+    expect(detail?.freeSecondsAtRisk).toBe(900);
   });
 });
 

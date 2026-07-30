@@ -17,6 +17,7 @@ import { JobProgress } from "@/components/job-progress";
 import { Button } from "@/components/ui/button";
 import { formatDuration } from "@/lib/utils";
 import { jobErrorText } from "@/lib/job-error-text";
+import { deleteProjectConfirmMessage } from "@/lib/delete-project-confirm";
 import { LocalDate } from "@/components/local-date";
 
 export type SerializedProjectDetail = Omit<
@@ -72,11 +73,11 @@ export function ProjectDetail({
   );
 
   const handleDeleteProject = useCallback(async () => {
-    const clipCount = clips.length;
-    const message =
-      clipCount > 0
-        ? `Delete "${project.title}" and its ${clipCount} clip${clipCount === 1 ? "" : "s"}?\n\nThis cannot be undone.`
-        : `Delete "${project.title}"?\n\nThis cannot be undone.`;
+    const message = deleteProjectConfirmMessage(
+      project.title,
+      clips.length,
+      project.freeSecondsAtRisk
+    );
 
     if (!window.confirm(message)) return;
 
@@ -97,7 +98,13 @@ export function ProjectDetail({
       window.alert("Could not reach the server. Try again.");
       setDeleting(false);
     }
-  }, [clips.length, project.id, project.title, router]);
+  }, [
+    clips.length,
+    project.freeSecondsAtRisk,
+    project.id,
+    project.title,
+    router,
+  ]);
 
   const isProcessing = !["DONE", "FAILED"].includes(project.status);
   const totalClipDuration = clips.reduce((sum, clip) => sum + clip.duration, 0);

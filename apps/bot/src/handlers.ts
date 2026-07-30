@@ -1965,6 +1965,10 @@ function freeChargeFor(
   if (user.plan !== "NONE" || user.subscriptionStatus !== "NONE") {
     return undefined;
   }
+  // Seconds may be 0 when Telegram sends no duration metadata. The USD figure
+  // never is: estimatedFreeCostUsd floors an unmeasured submission at the flat
+  // per-run charge, so the monthly ceiling sees the run while it is in flight
+  // rather than only once the download stage measures it.
   const seconds = durationSec && durationSec > 0 ? Math.round(durationSec) : 0;
   return { seconds, estimatedCostUsd: estimatedFreeCostUsd(seconds) };
 }
@@ -2018,6 +2022,21 @@ async function handleVideo(
   await mkdir(tempDir, { recursive: true });
   const tempPath = join(tempDir, `${source.fileUniqueId}.mp4`);
 
+  // THE OBJECT WE UPLOADED, until a Job row takes ownership of it.
+  //
+  // R2 cleanup used to hang off one specific return value - the
+  // `concurrent_limit` branch below - so every other way out of this function
+  // leaked the file. That was not theoretical: a held advisory lock made
+  // createJob THROW, and a thrown submission left several megabytes in the
+  // bucket that nothing would ever collect, because the retention sweep works
+  // from job rows and there was no job row. Any new refusal status would have
+  // leaked the same way by default, which is the deeper problem: the cleanup
+  // was attached to one outcome instead of to the absence of an owner.
+  //
+  // Cleared only once createJob has returned a job. After that the object
+  // belongs to that job and deleting it here would break a run that is starting.
+  let unownedKey: string | undefined;
+
   try {
     try {
       await client.downloadFile(source.fileId, tempPath);
@@ -2037,6 +2056,9 @@ async function handleVideo(
 
     const sourceKey = `uploads/${user.id}/telegram/${Date.now()}-${source.fileUniqueId}.mp4`;
     await uploadFile(sourceKey, tempPath, source.mimeType || "video/mp4");
+    // Marked BEFORE createJob, not after: the throw this protects against comes
+    // out of createJob itself.
+    unownedKey = sourceKey;
 
     const created = await jobService.createJob({
       userId: user.id,
@@ -2058,15 +2080,6 @@ async function handleVideo(
     // decides; this branch is what the user sees when the two disagree, which is
     // exactly the case where two videos arrive at once.
     if (created.status === "concurrent_limit") {
-      await deleteFile(sourceKey).catch((error) => {
-        // Best effort, and never fatal: the object is a few megabytes we chose
-        // to store before we knew the answer, while failing here would tell a
-        // user their video broke when it was only refused.
-        console.error(
-          `[handleVideo] could not remove ${sourceKey} after a refused submission:`,
-          error
-        );
-      });
       await client.sendMessage(
         message.chat.id,
         dict.blocked(
@@ -2085,7 +2098,22 @@ async function handleVideo(
       );
       return;
     }
+
+    if (created.status === "busy") {
+      await client.sendMessage(message.chat.id, dict.blocked(dict.submitBusy));
+      await recordFunnelEvent(
+        "bot",
+        from.id,
+        uploadRejectedEvent("BUSY"),
+        from.language_code
+      );
+      return;
+    }
     const job = created.job;
+    // The job owns the object from here. Everything after this line may fail
+    // without the file being collectable - it is the source the download stage
+    // is about to fetch.
+    unownedKey = undefined;
 
     await createTelegramDelivery({
       jobId: job.id,
@@ -2097,6 +2125,18 @@ async function handleVideo(
     await showQueuedBoard(client, message.chat.id, ack, dict);
   } finally {
     await rm(tempPath, { force: true });
+    if (unownedKey) {
+      // Best effort, and never fatal: the object is a few megabytes we chose to
+      // store before we knew the answer, while throwing here would replace
+      // whatever actually went wrong with an R2 error, or turn a plain refusal
+      // into "your video broke".
+      await deleteFile(unownedKey).catch((error) => {
+        console.error(
+          `[handleVideo] could not remove ${unownedKey} after a submission that never became a job:`,
+          error
+        );
+      });
+    }
   }
 }
 
@@ -2257,6 +2297,20 @@ async function handleVideoUrl(
       "bot",
       from.id,
       uploadRejectedEvent("CONCURRENT"),
+      from.language_code
+    );
+    return;
+  }
+
+  // No R2 object to clean up on this path - a link is not uploaded anywhere -
+  // but the refusal still has to be said and counted, or the funnel shows a
+  // `video_submitted` with nothing after it.
+  if (created.status === "busy") {
+    await client.sendMessage(message.chat.id, dict.blocked(dict.submitBusy));
+    await recordFunnelEvent(
+      "bot",
+      from.id,
+      uploadRejectedEvent("BUSY"),
       from.language_code
     );
     return;

@@ -40,6 +40,8 @@ import {
   findFreeCharge,
   reviseFreeChargeSeconds,
   settleFreeLedgerOnDelete,
+  deleteForfeitsFreeSeconds,
+  PRE_SPEND_JOB_STATUSES,
 } from "../free-tier.service";
 import { FREE_TIER, estimatedFreeCostUsd } from "../../config/plans";
 
@@ -454,7 +456,10 @@ describe("free-tier.service", () => {
 
     const data = (prisma.freeUsage.updateMany as any).mock.calls[0][0].data;
     expect(data.seconds).toBe(0);
-    expect(data.estimatedCostUsd).toBe(0);
+    // The SECONDS floor at zero; the money does not. An unmeasured run still
+    // costs the flat per-run charge, and a reservation of 0.00 is no
+    // reservation at all - see estimatedFreeCostUsd.
+    expect(data.estimatedCostUsd).toBe(FREE_TIER.estimatedUsdPerRun);
   });
 
   // findFreeCharge is how the worker decides a job is on the free allowance at
@@ -700,28 +705,91 @@ describe("settleFreeLedgerOnDelete", () => {
     expect(prisma.freeUsage.create).not.toHaveBeenCalled();
   });
 
-  it("keeps the charge of a job deleted while it is still running", async () => {
+  it("keeps the charge of a job deleted after the transcribe call", async () => {
     charged(3600);
 
-    for (const status of [
-      "PENDING",
-      "DOWNLOADING",
-      "TRANSCRIBING",
-      "ANALYZING",
-      "CUTTING",
-    ] as const) {
+    for (const status of ["TRANSCRIBING", "ANALYZING", "CUTTING"] as const) {
       await settleFreeLedgerOnDelete("u1", "job1", {
         status,
         clipsGenerated: 0,
       });
     }
 
-    // Money leaves the account at TRANSCRIBE, so an in-flight job may already
-    // have been paid for, and the outcome nobody can predict yet is not
-    // evidence of our breakage. Refunding here would let one account submit an
+    // Money leaves the account at TRANSCRIBE, so a job that has reached it has
+    // already been paid for. Refunding here would let one account submit an
     // hour, let it transcribe, delete it and repeat - the lifetime allowance is
     // the only bound on free spend and this would make it resettable on demand.
     expect(prisma.freeUsage.create).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The states BEFORE the transcribe call, which are the states a person
+   * actually deletes from: paste the wrong link, notice, press Delete.
+   *
+   * Keeping the charge there cost a new account its whole sixty minutes for a
+   * typo, silently, with no sweep able to reach it afterwards - the row the
+   * sweep would have joined against is deleted a line later. The farming attack
+   * the old rule cited needs a transcription to have happened, so refunding
+   * here opens nothing.
+   */
+  it("refunds a job deleted before anything was spent", async () => {
+    for (const status of PRE_SPEND_JOB_STATUSES) {
+      (prisma.freeUsage.create as any).mockClear();
+      charged(3600);
+
+      await settleFreeLedgerOnDelete("u1", "job1", {
+        status,
+        clipsGenerated: 0,
+      });
+
+      expect(prisma.freeUsage.create, `${status} must refund`).toHaveBeenCalledWith({
+        data: {
+          userId: "u1",
+          jobId: "job1",
+          kind: "REFUND",
+          reason: "DELETED_BEFORE_SPEND",
+          seconds: 3600,
+          // Nothing was spent, so there is nothing for the monthly budget to
+          // keep counting.
+          estimatedCostUsd: 0,
+        },
+      });
+    }
+  });
+
+  it("names PENDING and DOWNLOADING as the pre-spend states, and nothing else", async () => {
+    // The boundary is where the OpenAI calls are, not where the pipeline feels
+    // early. DOWNLOAD fetches bytes; TRANSCRIBE is the first stage that bills.
+    expect([...PRE_SPEND_JOB_STATUSES]).toEqual(["PENDING", "DOWNLOADING"]);
+  });
+
+  it("does not spend the zero-clip forgiveness on a pre-spend delete", async () => {
+    charged(600);
+
+    await settleFreeLedgerOnDelete("u1", "job1", {
+      status: "PENDING",
+      clipsGenerated: 0,
+    });
+
+    // ZERO_CLIPS is capped at one per account and is the user's only second
+    // chance at an unclippable video. A delete that never cost us anything must
+    // not consume it.
+    const row = (prisma.freeUsage.create as any).mock.calls[0][0].data;
+    expect(row.reason).not.toBe("ZERO_CLIPS");
+  });
+
+  it("tells the dialog which presses cost minutes, and agrees with itself", async () => {
+    // The confirm dialog reads this. A warning that fires where the ledger
+    // refunds trains people to ignore it.
+    expect(deleteForfeitsFreeSeconds("PENDING")).toBe(false);
+    expect(deleteForfeitsFreeSeconds("DOWNLOADING")).toBe(false);
+    expect(deleteForfeitsFreeSeconds("TRANSCRIBING")).toBe(true);
+    expect(deleteForfeitsFreeSeconds("ANALYZING")).toBe(true);
+    expect(deleteForfeitsFreeSeconds("CUTTING")).toBe(true);
+    // Already settled: FAILED refunds, DONE spent its minutes on a run that
+    // finished, and neither is changed by pressing Delete.
+    expect(deleteForfeitsFreeSeconds("DONE")).toBe(false);
+    expect(deleteForfeitsFreeSeconds("FAILED")).toBe(false);
   });
 
   it("writes nothing at all for a paying account", async () => {

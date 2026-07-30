@@ -111,6 +111,8 @@ const pt: Dict = {
     `Você bateu o limite diário de ${limit} ${pluralPt(limit, "vídeo", "vídeos")}. Ele zera à meia-noite: manda este de novo depois disso.`,
   planConcurrentLimit: (active, limit) =>
     `Ainda estou trabalhando em ${active === 1 ? "seu vídeo" : `${active} dos seus vídeos`}, e seu plano processa ${limit} por vez. Manda este de novo quando terminar: eu te aviso quando acontecer.`,
+  submitBusy:
+    "Outro envio da sua conta ainda está passando. Espere um momento e mande este de novo.",
   langUsage: (options) => `Uso: ${options}.`,
   langSet: "Idioma definido: português.",
   langName: "Português",

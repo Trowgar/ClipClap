@@ -78,7 +78,16 @@ export type UploadRejectionCode =
   | "TOO_LONG"
   | "DAILY_LIMIT"
   | "CONCURRENT"
-  | "PROBE_FAILED";
+  | "PROBE_FAILED"
+  /** The per-user submit lock was held by somebody else for longer than we wait
+   *  for it. Not a limit and not the user's fault - the honest answer is "try
+   *  again in a moment" - but it IS a refusal, and it used to be an uncaught
+   *  P2028 that reached the browser as a 500 and left no row here at all. */
+  | "BUSY"
+  /** Anything else the submit path threw. A catch-all exists so that a bare 500
+   *  is never again invisible in the funnel; if this stops being near zero, the
+   *  logs beside it name the actual error. */
+  | "SUBMIT_FAILED";
 
 const REJECTION_SUFFIX: Record<UploadRejectionCode, string> = {
   FREE_NOT_ANCHORED: "free_not_anchored",
@@ -91,6 +100,8 @@ const REJECTION_SUFFIX: Record<UploadRejectionCode, string> = {
   DAILY_LIMIT: "daily_limit",
   CONCURRENT: "concurrent",
   PROBE_FAILED: "probe_failed",
+  BUSY: "busy",
+  SUBMIT_FAILED: "submit_failed",
 };
 
 /**

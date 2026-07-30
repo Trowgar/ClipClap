@@ -95,10 +95,10 @@ export const PLAN_LIMITS: Record<
  *  need once.
  *
  *  Denominated in SECONDS OF SOURCE, because that is what the money is
- *  denominated in: about 0.010 USD per source minute plus 0.020 per run,
- *  measured over the prod jobs that carry cost telemetry. A full 3600-second
- *  allowance spent in one run is 0.62 USD, and 0.02 more for each extra run it
- *  is split across.
+ *  denominated in: 0.012 USD per source minute plus 0.030 per run, fitted over
+ *  every prod job that carries cost telemetry (see estimatedUsdPerRun for the
+ *  query and its output). A full 3600-second allowance spent in one run
+ *  reserves 0.75 USD, and 0.03 more for each extra run it is split across.
  *
  *  Sixty minutes rather than thirty: the audience clips 3-8 hour VODs, and a
  *  half-hour ceiling forces them to hand-trim a segment first, which is the
@@ -114,14 +114,20 @@ export const FREE_TIER = {
   lifetimeSeconds: 3600,
   zeroClipRefunds: 1,
   /** The part of a free run's cash cost that scales with length: 0.0060 for
-   *  whisper-1, which is billed per minute of audio, plus about 0.0040 for the
-   *  share of the critic that does grow with the transcript.
+   *  whisper-1, which is billed per minute of audio and is exact (every prod
+   *  job's transcription figure is secs/60 * 0.006 to the cent), plus 0.0060
+   *  for the share of the critic that grows with the transcript.
+   *
+   *  The critic half was 0.0040 and was too low. The largest analysis figure in
+   *  the table below is 0.273 on a 3138-second source, which is 0.0052 per
+   *  minute AFTER subtracting the flat part - and that is a measurement, not a
+   *  worst case, so it is rounded up rather than fitted to.
    *
    *  Compute is NOT in here and must never be. cost-telemetry records it on the
    *  job because it is real capacity, but the server is rented whether a job
    *  runs or not, so charging it to the monthly budget spends a ceiling that is
    *  denominated in money on something that is not money. */
-  estimatedUsdPerSourceMinute: 0.01,
+  estimatedUsdPerSourceMinute: 0.012,
   /** The part that does NOT scale with length.
    *
    *  The critic makes a roughly fixed number of calls with a roughly fixed
@@ -129,9 +135,48 @@ export const FREE_TIER = {
    *  purely per-minute model was 2-3x low there and that error runs in the
    *  dangerous direction: reservations are what bound in-flight spend, so
    *  under-counting them lets a burst overshoot the ceiling before a single job
-   *  finalizes. Measured on a 174-second run - 0.046 cash, of which about 0.029
-   *  was the critic. */
-  estimatedUsdPerRun: 0.02,
+   *  finalizes.
+   *
+   *  RECALIBRATED 2026-07-30, from 0.020, because 0.020 was fitted to ONE run
+   *  whose critic happened to cost 0.029 and the next near-identical 188-second
+   *  run cost 0.042. gpt-5.1's OUTPUT tokens at 10 USD/1M are what move, and
+   *  neither constant modelled them. Re-run this against prod before touching
+   *  either number - `cash` is the real money (transcription + analysis);
+   *  compute is excluded on purpose, see above:
+   *
+   *    SELECT "sourceDurationSec" AS secs,
+   *           round(("estimatedTranscriptionCostUsd"
+   *                  + "estimatedAnalysisCostUsd")::numeric, 4) AS cash,
+   *           round((0.030 + "sourceDurationSec" / 60.0 * 0.012)::numeric, 4)
+   *             AS reserved,
+   *           id
+   *      FROM jobs
+   *     WHERE "estimatedTotalCostUsd" IS NOT NULL
+   *     ORDER BY "sourceDurationSec";
+   *
+   *     secs |  cash  | reserved |            id
+   *    ------+--------+----------+---------------------------
+   *      501 | 0.0500 |   0.1302 | cmpkb1o4v00015zbx4rfjy0zj
+   *     1789 | 0.2330 |   0.3878 | cmrkvyzln000113tcps7f5hv0
+   *     1790 | 0.1800 |   0.3880 | cmpg0xg2a0001nsy610003yxf
+   *     1790 | 0.2710 |   0.3880 | cmrv9t0x5000y9pvweq9c8j78
+   *     1790 | 0.1800 |   0.3880 | cmpfzi7jz00016olp9gr9p4ng
+   *     2385 | 0.2410 |   0.5070 | cmrj4sopj0001jqlzmsfl120l
+   *     3138 | 0.5370 |   0.6576 | cmrvawjxs00129pvw0oe1c1kv
+   *     3138 | 0.5020 |   0.6576 | cms7jhcbz0003nb7fkfdki0lp
+   *     3138 | 0.5870 |   0.6576 | cmrzcqhl6000138lkg41n8bs0
+   *     3138 | 0.4710 |   0.6576 | cms2c8ahm000droa7tcqh30ho
+   *
+   *  Two SHORT runs pin the flat term and are not in that table, because the
+   *  free-plan walks that produced them ended by deleting the project and the
+   *  job row went with it. Both are recorded here so the fit can be checked:
+   *  174s cost 0.046 cash (walk 1) and 188s cost 0.0610 cash (walk 2, which is
+   *  the run that exposed this). 0.030 + 188/60*0.012 = 0.0676, so the shorter
+   *  end clears by 11% and the 3138-second worst case by 12%. The line through
+   *  those two extremes is 0.0275 + 0.0107/min; both constants are rounded UP
+   *  from it, because an over-reservation costs a little headroom while a job
+   *  is in flight and an under-reservation is a hole in the ceiling. */
+  estimatedUsdPerRun: 0.03,
 } as const;
 
 /**
@@ -143,24 +188,35 @@ export const FREE_TIER = {
  * replaced reserved 0.028 for a run that really cost 0.046 in cash - 39% under,
  * and worst on exactly the short sources a new user tries first.
  *
- * Checked against every prod job that carries cost telemetry: it reserves at or
- * slightly above the measured cash line in each case, which is the direction
- * that has to be wrong if either does. Finalize replaces it with the measured
- * figure, so an over-reservation costs nothing but a little headroom while the
- * job is in flight; an under-reservation is a hole in the ceiling.
+ * Checked against every prod job that carries cost telemetry - the query and
+ * its output are in estimatedUsdPerRun above, and it is the thing to re-run
+ * rather than to trust this sentence about. It reserves above the measured cash
+ * line in every one of them, by 11% at the thinnest. That claim was FALSE when
+ * it was first written: the constants it described reserved 0.543 for a
+ * 3138-second job that cost 0.587, and 0.0513 for a 188-second job that cost
+ * 0.0610. Finalize replaces the reservation with the measured figure, so an
+ * over-reservation costs nothing but a little headroom while the job is in
+ * flight; an under-reservation is a hole in the ceiling.
  *
  * Kept beside the constants it multiplies so the web route and the bot cannot
  * each invent their own rounding. Seconds in, USD out - no minute rounding,
  * because the ledger stores the probe's exact seconds and a ceil here would
  * bill a 61-second video for two minutes.
  *
- * Zero seconds means zero, INCLUDING the per-run part. A duration of 0 is what
- * an unprobed submission carries, not a real run, and charging the flat fee for
- * one would bill the budget for a job whose length we have not measured.
- * reviseFreeChargeSeconds re-derives the whole figure once the probe lands.
+ * ZERO SECONDS STILL RESERVES THE PER-RUN PART, and that is the point of the
+ * floor rather than an edge case nobody thought about. Zero is what an UPLOAD
+ * carries: nothing measures a file's length before this route runs, so the old
+ * "zero seconds means zero dollars" rule made an upload reserve 0.00 and left
+ * the in-flight bound absent on exactly the path where six concurrent
+ * submissions were once seen sailing through. A submission whose length we have
+ * not measured is still a run, and a run costs the flat fee whatever it turns
+ * out to contain. reviseFreeChargeSeconds re-derives the whole figure once the
+ * probe lands, so the floor is only ever what is held in the meantime.
  */
 export function estimatedFreeCostUsd(seconds: number): number {
-  if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return FREE_TIER.estimatedUsdPerRun;
+  }
   return (
     FREE_TIER.estimatedUsdPerRun +
     (seconds / 60) * FREE_TIER.estimatedUsdPerSourceMinute

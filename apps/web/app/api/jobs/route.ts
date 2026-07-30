@@ -186,21 +186,58 @@ export async function POST(req: NextRequest) {
   // advisory lock, is what makes it hold. Doing it in BOTH places would not be
   // belt and braces; it would be a second definition of the limit that can
   // disagree with the one that decides.
-  const created = await jobService.createJob({
-    userId,
-    sourceUrl: url || undefined,
-    sourceKey: sourceKey || undefined,
-    originalFilename: originalFilename || undefined,
-    subtitles: subtitles !== false,
-    sourceDurationSec: durationSec,
-    freeCharge: freeChargeFor(user, durationSec),
-  });
+  // WRAPPED, because this call can fail for reasons that are not refusals and
+  // an uncaught one here is worse than it looks. It reaches the browser as a
+  // bare 500 with no copy, and - the part that hid it for a day - it writes NO
+  // `upload_rejected_*` row, because every one of those is written by a branch
+  // that returns rather than throws. A submission that dies in here is
+  // therefore invisible on /admin: the funnel shows `video_submitted` and then
+  // nothing, which reads exactly like a user who changed their mind.
+  //
+  // Reproduced: holding the account's advisory lock in psql made this throw
+  // PrismaClientKnownRequestError P2028 after 22.7 seconds.
+  let created: Awaited<ReturnType<typeof jobService.createJob>>;
+  try {
+    created = await jobService.createJob({
+      userId,
+      sourceUrl: url || undefined,
+      sourceKey: sourceKey || undefined,
+      originalFilename: originalFilename || undefined,
+      subtitles: subtitles !== false,
+      sourceDurationSec: durationSec,
+      freeCharge: freeChargeFor(user, durationSec),
+    });
+  } catch (error) {
+    console.error(`[jobs] createJob threw for user ${userId}:`, error);
+    await recordFunnelEvent("web", userId, uploadRejectedEvent("SUBMIT_FAILED"));
+    return NextResponse.json(
+      {
+        error:
+          "We could not start that job. This one is on us - please try again in a minute.",
+      },
+      { status: 500 }
+    );
+  }
 
   if (created.status === "concurrent_limit") {
     await recordFunnelEvent("web", userId, uploadRejectedEvent("CONCURRENT"));
     return NextResponse.json(
       {
         error: `You have ${created.inFlight} active jobs (limit: ${created.limit}). Wait for one to finish.`,
+      },
+      { status: 429 }
+    );
+  }
+
+  // Contention on this account's own submit lock. 429 rather than 500 because
+  // nothing is broken and retrying is the correct next action - which is also
+  // what the copy says, without inventing a count we do not have.
+  if (created.status === "busy") {
+    await recordFunnelEvent("web", userId, uploadRejectedEvent("BUSY"));
+    return NextResponse.json(
+      {
+        error:
+          "Another submission from your account is still going through. Give it a moment and try again.",
       },
       { status: 429 }
     );
@@ -243,6 +280,11 @@ function freeChargeFor(
   // zero-second CHARGE row is the right thing to write, because it is the row
   // the download-stage re-check will find and correct. No row at all would
   // leave nothing to correct.
+  //
+  // The SECONDS are zero; the USD are not. estimatedFreeCostUsd floors an
+  // unknown length at the flat per-run charge, so an upload holds a real
+  // reservation against the monthly ceiling from the moment it is submitted.
+  // It used to hold 0.00, which is the same as holding nothing.
   const seconds = durationSec && durationSec > 0 ? Math.round(durationSec) : 0;
 
   return { seconds, estimatedCostUsd: estimatedFreeCostUsd(seconds) };

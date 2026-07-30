@@ -112,6 +112,8 @@ const es: Dict = {
     `Llegaste al límite diario de ${limit} ${pluralEs(limit, "video", "videos")}. Se reinicia a medianoche: envía este otra vez entonces.`,
   planConcurrentLimit: (active, limit) =>
     `Todavía estoy trabajando en ${active === 1 ? "tu video" : `${active} de tus videos`}, y tu plan procesa ${limit} a la vez. Envía este otra vez cuando termine: te aviso cuando pase.`,
+  submitBusy:
+    "Otro envío de tu cuenta todavía se está procesando. Espera un momento y manda este otra vez.",
   langUsage: (options) => `Uso: ${options}.`,
   langSet: "Idioma configurado: español.",
   langName: "Español",

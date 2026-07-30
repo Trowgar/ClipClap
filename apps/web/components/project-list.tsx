@@ -6,6 +6,7 @@ import Link from "next/link";
 import { ArrowRight, FilmStrip, FolderOpen, Trash } from "@phosphor-icons/react";
 import { Badge } from "@/components/ui/badge";
 import { cn, formatDuration } from "@/lib/utils";
+import { deleteProjectConfirmMessage } from "@/lib/delete-project-confirm";
 import { LocalDate } from "@/components/local-date";
 import type { ProjectSummary } from "@clipclap/shared";
 
@@ -106,11 +107,11 @@ export function ProjectTable({ projects: initialProjects }: ProjectTableProps) {
 
   const handleDelete = useCallback(
     async (project: SerializedProjectSummary) => {
-      const clipCount = project.clipCount;
-      const message =
-        clipCount > 0
-          ? `Delete "${project.title}" and its ${clipCount} clip${clipCount === 1 ? "" : "s"}?\n\nThis cannot be undone.`
-          : `Delete "${project.title}"?\n\nThis cannot be undone.`;
+      const message = deleteProjectConfirmMessage(
+        project.title,
+        project.clipCount,
+        project.freeSecondsAtRisk
+      );
       if (!window.confirm(message)) return;
 
       setDeletingId(project.id);

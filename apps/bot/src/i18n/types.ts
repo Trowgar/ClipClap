@@ -137,6 +137,14 @@ export interface Dict {
   /** Already processing. The user has to do nothing except wait, which is
    *  the whole point of saying it in a language they read. */
   planConcurrentLimit: (active: number, limit: number) => string;
+  /** The per-user submit lock was held too long and we gave up waiting.
+   *
+   *  Deliberately NOT planConcurrentLimit: that one states a plan limit and
+   *  quotes numbers, and this is neither a limit nor the user's fault - it is
+   *  contention, and the only true instruction is to try again. Reusing the
+   *  concurrency copy would tell someone their plan refused them when it did
+   *  not. It replaces an uncaught error that reached the user as silence. */
+  submitBusy: string;
   /** Takes the option list from langOptionsList() so the sentence around it is
    *  translated but the languages in it are never hand-maintained. */
   langUsage: (options: string) => string;

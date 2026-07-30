@@ -130,7 +130,7 @@ describe("Plan Limits", () => {
     // and it has to be per source minute, which is the only unit the probe can
     // give us before a byte is downloaded.
     it("prices a source minute so a reservation can be made before the run", () => {
-      expect(FREE_TIER.estimatedUsdPerSourceMinute).toBe(0.01);
+      expect(FREE_TIER.estimatedUsdPerSourceMinute).toBe(0.012);
     });
 
     // The critic costs about the same on a three-minute clip as on a
@@ -138,12 +138,43 @@ describe("Plan Limits", () => {
     // new users start. Reserving too little is the dangerous direction: the
     // reservation is all that bounds spend that has not finalized yet.
     it("charges a fixed component per run, not only per minute", () => {
-      expect(FREE_TIER.estimatedUsdPerRun).toBe(0.02);
+      expect(FREE_TIER.estimatedUsdPerRun).toBe(0.03);
       // Measured: a 174-second source really cost 0.046 in cash. The old
       // per-minute-only model reserved 0.028 for it.
       expect(estimatedFreeCostUsd(174)).toBeGreaterThan(0.046);
       // ...and not wildly more than it, or short runs stop fitting the ceiling.
-      expect(estimatedFreeCostUsd(174)).toBeLessThan(0.06);
+      expect(estimatedFreeCostUsd(174)).toBeLessThan(0.08);
+    });
+
+    // THE TABLE. Every prod job that carried cost telemetry on 2026-07-30, plus
+    // the two short walk runs whose job rows were deleted with their projects.
+    // `cash` is transcription + analysis; compute is deliberately not money.
+    //
+    // This is the assertion the docstring in plans.ts used to make in prose and
+    // get wrong: with the old 0.020/0.010 the 3138-second/0.5870 row reserved
+    // 0.5430 and the 188-second/0.0610 row reserved 0.0513. Add rows to it as
+    // prod produces them; the direction of the inequality is the invariant.
+    it("reserves at or above the real cash for every measured prod run", () => {
+      const measured: Array<{ secs: number; cash: number; note: string }> = [
+        { secs: 174, cash: 0.046, note: "walk 1, row deleted with its project" },
+        { secs: 188, cash: 0.061, note: "walk 2, row deleted with its project" },
+        { secs: 501, cash: 0.05, note: "cmpkb1o4v00015zbx4rfjy0zj" },
+        { secs: 1789, cash: 0.233, note: "cmrkvyzln000113tcps7f5hv0" },
+        { secs: 1790, cash: 0.18, note: "cmpg0xg2a0001nsy610003yxf" },
+        { secs: 1790, cash: 0.271, note: "cmrv9t0x5000y9pvweq9c8j78" },
+        { secs: 1790, cash: 0.18, note: "cmpfzi7jz00016olp9gr9p4ng" },
+        { secs: 2385, cash: 0.241, note: "cmrj4sopj0001jqlzmsfl120l" },
+        { secs: 3138, cash: 0.537, note: "cmrvawjxs00129pvw0oe1c1kv" },
+        { secs: 3138, cash: 0.502, note: "cms7jhcbz0003nb7fkfdki0lp" },
+        { secs: 3138, cash: 0.587, note: "cmrzcqhl6000138lkg41n8bs0" },
+        { secs: 3138, cash: 0.471, note: "cms2c8ahm000droa7tcqh30ho" },
+      ];
+      for (const run of measured) {
+        expect(
+          estimatedFreeCostUsd(run.secs),
+          `${run.secs}s (${run.note}) must reserve at least ${run.cash}`
+        ).toBeGreaterThanOrEqual(run.cash);
+      }
     });
 
     // The whole lifetime allowance is 60 minutes, so one account spending it in
@@ -152,7 +183,7 @@ describe("Plan Limits", () => {
     // bounding the free tier.
     it("puts a whole free allowance well under a dollar", () => {
       const worstCaseUsd = estimatedFreeCostUsd(FREE_TIER.lifetimeSeconds);
-      expect(worstCaseUsd).toBeCloseTo(0.62, 5);
+      expect(worstCaseUsd).toBeCloseTo(0.75, 5);
       expect(worstCaseUsd).toBeLessThan(1);
     });
 
@@ -160,18 +191,19 @@ describe("Plan Limits", () => {
       // 61 seconds is one minute and one second. A ceil to 2 minutes would
       // overstate the per-minute half by 64%, and the budget would close early
       // for no reason.
-      expect(estimatedFreeCostUsd(61)).toBeCloseTo(0.02 + (61 / 60) * 0.01, 10);
+      expect(estimatedFreeCostUsd(61)).toBeCloseTo(0.03 + (61 / 60) * 0.012, 10);
     });
 
     // Every upload arrives here with the duration unknown (the web route does
-    // not probe uploads), so 0 is a routine input, not an error case.
-    // Zero has to mean zero INCLUDING the per-run component: an unprobed
-    // submission is not a run, and charging the flat fee for one would bill the
-    // budget for a length nobody has measured.
-    it("costs nothing for a duration we do not know yet", () => {
-      expect(estimatedFreeCostUsd(0)).toBe(0);
-      expect(estimatedFreeCostUsd(Number.NaN)).toBe(0);
-      expect(estimatedFreeCostUsd(-30)).toBe(0);
+    // not probe uploads), so 0 is a routine input, not an error case - and it
+    // used to reserve 0.00 USD, which meant the in-flight bound was absent on
+    // the one path that had already been seen letting six concurrent
+    // submissions through. An unmeasured submission is still a run.
+    it("reserves the flat per-run amount when the duration is unknown", () => {
+      expect(estimatedFreeCostUsd(0)).toBe(FREE_TIER.estimatedUsdPerRun);
+      expect(estimatedFreeCostUsd(Number.NaN)).toBe(FREE_TIER.estimatedUsdPerRun);
+      expect(estimatedFreeCostUsd(-30)).toBe(FREE_TIER.estimatedUsdPerRun);
+      expect(estimatedFreeCostUsd(0)).toBeGreaterThan(0);
     });
 
     it("stays clearly under one week of the entry tier", () => {

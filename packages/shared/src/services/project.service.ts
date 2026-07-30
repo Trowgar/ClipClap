@@ -1,7 +1,10 @@
 import { prisma } from "../lib/prisma";
 import { deleteFile, getPresignedDownloadUrl } from "../lib/r2";
 import { parseJobErrorCode, type JobErrorCode } from "../lib/job-error";
-import { settleFreeLedgerOnDelete } from "./free-tier.service";
+import {
+  deleteForfeitsFreeSeconds,
+  settleFreeLedgerOnDelete,
+} from "./free-tier.service";
 import type { JobStatus, NoClipsReason } from "@prisma/client";
 
 export interface ProjectClipSummary {
@@ -39,6 +42,9 @@ export interface ProjectSummary {
   previewUrl: string | null;
   thumbnailUrl: string | null;
   clips: ProjectClipSummary[];
+  /** Free-allowance seconds this project would forfeit if it were deleted right
+   *  now, or null when a delete costs nothing. See freeSecondsAtRiskByJob. */
+  freeSecondsAtRisk: number | null;
 }
 
 export interface ProjectDetail {
@@ -63,6 +69,9 @@ export interface ProjectDetail {
   noClipsReason: NoClipsReason | null;
   transcriptPartial: boolean;
   clips: ProjectDetailClip[];
+  /** Free-allowance seconds this project would forfeit if it were deleted right
+   *  now, or null when a delete costs nothing. See freeSecondsAtRiskByJob. */
+  freeSecondsAtRisk: number | null;
 }
 
 export interface RecentProjectsResult {
@@ -104,6 +113,43 @@ const PROJECT_DETAIL_INCLUDE = {
   },
 };
 
+/**
+ * The reservation each of these jobs would forfeit if it were deleted now.
+ *
+ * ONE query for the whole page, not one per row, and only for the rows that
+ * could possibly lose something - a list of fifty finished projects asks the
+ * ledger nothing at all.
+ *
+ * A paying account has no CHARGE rows, so its map comes back empty and every
+ * project reports null. That is why the answer is derived from the ledger
+ * rather than from the plan: the plan is mutable and the ledger row is the
+ * thing settleFreeLedgerOnDelete will actually look at.
+ */
+async function freeSecondsAtRiskByJob(
+  userId: string,
+  jobs: Array<{ id: string; status: JobStatus }>
+): Promise<Map<string, number>> {
+  const exposed = jobs.filter((job) => deleteForfeitsFreeSeconds(job.status));
+  if (exposed.length === 0) return new Map();
+
+  const charges = await prisma.freeUsage.findMany({
+    where: {
+      userId,
+      kind: "CHARGE",
+      jobId: { in: exposed.map((job) => job.id) },
+    },
+    select: { jobId: true, seconds: true },
+  });
+
+  return new Map(
+    charges
+      .filter((row): row is { jobId: string; seconds: number } =>
+        Boolean(row.jobId)
+      )
+      .map((row) => [row.jobId, row.seconds])
+  );
+}
+
 export async function getRecentProjects(
   userId: string,
   limit = 3
@@ -116,7 +162,7 @@ export async function getRecentProjects(
   });
 
   return {
-    projects: await toProjectSummaries(jobs.slice(0, limit)),
+    projects: await toProjectSummaries(userId, jobs.slice(0, limit)),
     hasMore: jobs.length > limit,
   };
 }
@@ -132,7 +178,7 @@ export async function getUserProjects(
     take,
   });
 
-  return toProjectSummaries(jobs);
+  return toProjectSummaries(userId, jobs);
 }
 
 export async function getProjectDetail(
@@ -148,6 +194,8 @@ export async function getProjectDetail(
   const job = jobs[0];
   if (!job) return null;
 
+  const atRisk = await freeSecondsAtRiskByJob(userId, [job]);
+
   return {
     id: job.id,
     userId: job.userId,
@@ -161,6 +209,7 @@ export async function getProjectDetail(
     clipsGenerated: job.clipsGenerated,
     noClipsReason: job.noClipsReason,
     transcriptPartial: job.transcriptPartial,
+    freeSecondsAtRisk: atRisk.get(job.id) ?? null,
     clips: await Promise.all(
       job.clips.map(async (clip) => ({
         id: clip.id,
@@ -184,6 +233,7 @@ export async function getProjectDetail(
 }
 
 async function toProjectSummaries(
+  userId: string,
   jobs: Array<{
     id: string;
     userId: string;
@@ -205,10 +255,14 @@ async function toProjectSummaries(
     }>;
   }>
 ): Promise<ProjectSummary[]> {
-  return Promise.all(jobs.map(toProjectSummary));
+  const atRisk = await freeSecondsAtRiskByJob(userId, jobs);
+  return Promise.all(
+    jobs.map((job) => toProjectSummary(job, atRisk.get(job.id) ?? null))
+  );
 }
 
-async function toProjectSummary(job: {
+async function toProjectSummary(
+  job: {
   id: string;
   userId: string;
   sourceUrl: string | null;
@@ -227,7 +281,9 @@ async function toProjectSummary(job: {
     createdAt: Date;
     deletedAt: Date | null;
   }>;
-}): Promise<ProjectSummary> {
+  },
+  freeSecondsAtRisk: number | null
+): Promise<ProjectSummary> {
   const previewClip = job.clips.find(
     (clip) => clip.storageKey.length > 0 && !clip.deletedAt
   );
@@ -257,6 +313,7 @@ async function toProjectSummary(job: {
       duration: clip.duration,
       createdAt: clip.createdAt,
     })),
+    freeSecondsAtRisk,
   };
 }
 
