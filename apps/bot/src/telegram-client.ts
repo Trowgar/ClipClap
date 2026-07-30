@@ -87,6 +87,37 @@ export class TelegramClient {
     });
   }
 
+  /* The three readers below exist so configureBotProfile can skip writes whose
+   * value is already in place.
+   *
+   * Telegram rate-limits the setMy* family hard - measured here as
+   * "Too Many Requests: retry after 156" on all three methods at once, after a
+   * run of container restarts. The bot re-synced 21 values (7 slots x 3 fields)
+   * on EVERY boot, and with tsx watch a boot happens on every source edit, so a
+   * copy-editing session is guaranteed to trip the limit and leave the profile
+   * half-written. The getMy* family took dozens of calls across that same
+   * session without a single 429, which is why reading first is cheap enough to
+   * be the default. */
+  async getMyDescription(languageCode?: string) {
+    return this.request<{ description: string }>("getMyDescription", {
+      language_code: languageCode,
+    });
+  }
+
+  async getMyShortDescription(languageCode?: string) {
+    return this.request<{ short_description: string }>(
+      "getMyShortDescription",
+      { language_code: languageCode }
+    );
+  }
+
+  async getMyCommands(languageCode?: string) {
+    return this.request<Array<{ command: string; description: string }>>(
+      "getMyCommands",
+      { language_code: languageCode }
+    );
+  }
+
   /** The ☰ button next to the input field, per chat.
    *
    *  Omitting chatId would change it for every private chat at once, which is

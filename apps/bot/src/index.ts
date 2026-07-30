@@ -17,8 +17,14 @@ let running = true;
 console.log("ClipClap Telegram bot starting");
 
 void (async () => {
-  await configureBotProfile(client);
-  console.log("Bot profile sync complete (en, ru) - check warnings above for any locale failures");
+  // Real counts, not a fixed string. The old line read "sync complete (en, ru)"
+  // - a locale list hardcoded back when there were two of them, printed
+  // unconditionally - so it announced success under seven consecutive rate-limit
+  // failures and told nobody that the profile had been left half-written.
+  const { updated, current, failed } = await configureBotProfile(client);
+  console.log(
+    `Bot profile sync: ${updated} updated, ${current} already current, ${failed} failed`
+  );
 })();
 
 void pollUpdates();
