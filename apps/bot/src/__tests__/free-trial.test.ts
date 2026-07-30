@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   freeUsageGroupBy: vi.fn(),
   freeUsageAggregate: vi.fn(),
   accountCount: vi.fn(),
+  clipCount: vi.fn(),
 }));
 
 vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
@@ -43,11 +44,17 @@ vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
       aggregate: mocks.freeUsageAggregate,
     },
     account: { count: mocks.accountCount },
+    // getUsageForUser counts stored and lifetime clips alongside the plan.
+    clip: { count: mocks.clipCount },
   },
 }));
 
 import { FREE_TIER, getPlanLimits } from "@clipclap/shared";
-import { getSubmissionBlocker, withFreeRunsNote } from "../handlers";
+import {
+  freeRunCapMinutes,
+  getSubmissionBlocker,
+  withFreeRunsNote,
+} from "../handlers";
 import { LOCALES, t } from "../i18n";
 
 const FREE = getPlanLimits("NONE");
@@ -438,5 +445,104 @@ describe("getSubmissionBlocker on the free tier", () => {
     expect(await getSubmissionBlocker("u1", t("en"), 3600)).toBeNull();
     expect(mocks.freeUsageGroupBy.mock.calls).toHaveLength(0);
     expect(mocks.freeUsageAggregate.mock.calls).toHaveLength(0);
+  });
+});
+
+/**
+ * What the 🎬 screen may promise about the free run.
+ *
+ * TWO NUMBERS hide behind "60 minutes" and the screen used to quote the wrong
+ * one. `maxSourceDurationMinutes` caps a single source; FREE_TIER.lifetimeSeconds
+ * is the whole allowance, ever. Someone who has spent 35 of their 60 minutes
+ * cannot send an hour-long video, and telling them they can sends them off to be
+ * refused on submit - by getSubmissionBlocker, in this very file.
+ *
+ * The real freeBalanceSeconds runs here against the faked ledger, so the
+ * arithmetic under test is the one production uses, including its refunds.
+ */
+describe("what the create screen may promise about the free run", () => {
+  const SOURCE_CAP = getPlanLimits("NONE").maxSourceDurationMinutes;
+
+  /** charged/refunded in SECONDS, exactly as the ledger stores them. */
+  function ledger(charged: number, refunded = 0) {
+    mocks.freeUsageGroupBy.mockResolvedValue([
+      { kind: "CHARGE", _sum: { seconds: charged } },
+      { kind: "REFUND", _sum: { seconds: refunded } },
+    ]);
+  }
+
+  beforeEach(() => {
+    process.env.FREE_TIER_MONTHLY_BUDGET_USD = "50";
+    // Month-to-date global spend, well under the ceiling above.
+    mocks.freeUsageAggregate.mockResolvedValue({ _sum: { costUsd: 1 } });
+    mocks.clipCount.mockResolvedValue(0);
+    mocks.userFindUniqueOrThrow.mockResolvedValue({
+      id: "u1",
+      plan: "NONE",
+      subscriptionStatus: "NONE",
+      currentPeriodEnd: null,
+      billingCycle: null,
+      topUpMinutes: 0,
+    });
+    ledger(0);
+  });
+
+  it("offers the whole allowance to somebody with no account yet", async () => {
+    await expect(freeRunCapMinutes(null)).resolves.toBe(SOURCE_CAP);
+  });
+
+  it("offers what is LEFT, not the per-source cap", async () => {
+    ledger(35 * 60);
+
+    await expect(freeRunCapMinutes({ id: "u1" })).resolves.toBe(25);
+  });
+
+  // The per-source cap still applies on top: a fresh account has 60 minutes of
+  // allowance AND a 60-minute ceiling on one video, and neither may be exceeded.
+  it("never offers more than one source may be", async () => {
+    ledger(0);
+
+    await expect(freeRunCapMinutes({ id: "u1" })).resolves.toBe(SOURCE_CAP);
+  });
+
+  it("counts a refund back into what is left", async () => {
+    ledger(40 * 60, 15 * 60);
+
+    await expect(freeRunCapMinutes({ id: "u1" })).resolves.toBe(35);
+  });
+
+  // Null, not 0: "on the free run: up to 0 minutes" is worse than no line.
+  it("says nothing once the allowance is spent", async () => {
+    ledger(FREE_TIER.lifetimeSeconds);
+
+    await expect(freeRunCapMinutes({ id: "u1" })).resolves.toBeNull();
+  });
+
+  // Floored, matching freeExhausted - a rounded-up promise is a refusal.
+  it("says nothing to somebody with less than a minute left", async () => {
+    ledger(FREE_TIER.lifetimeSeconds - 30);
+
+    await expect(freeRunCapMinutes({ id: "u1" })).resolves.toBeNull();
+  });
+
+  it("says nothing to a live subscriber", async () => {
+    mocks.userFindUniqueOrThrow.mockResolvedValue({
+      id: "u1",
+      plan: "STARTER",
+      subscriptionStatus: "ACTIVE",
+      currentPeriodEnd: new Date(Date.now() + 7 * 24 * 3600 * 1000),
+      billingCycle: "WEEKLY",
+      topUpMinutes: 0,
+    });
+
+    await expect(freeRunCapMinutes({ id: "u1" })).resolves.toBeNull();
+  });
+
+  // The allowance is intact but unusable this month, so promising it would be
+  // taken back by freeBudgetClosed on the next submit.
+  it("says nothing while the month's global budget is closed", async () => {
+    delete process.env.FREE_TIER_MONTHLY_BUDGET_USD;
+
+    await expect(freeRunCapMinutes({ id: "u1" })).resolves.toBeNull();
   });
 });

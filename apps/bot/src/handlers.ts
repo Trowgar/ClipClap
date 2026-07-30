@@ -14,6 +14,7 @@ import {
   deleteFile,
   estimatedFreeCostUsd,
   FREE_TIER,
+  freeBalanceSeconds,
   freeBudgetStatus,
   getOrCreateTelegramUser,
   getPlanLimits,
@@ -756,32 +757,15 @@ async function handleMenuAction(
       // allowance that is not theirs, on the one screen whose whole job is to
       // answer "what may I send?".
       //
-      // Absent account counts as free: there is nothing to look up, and a
-      // stranger who has not sent anything yet is exactly who the free run is
-      // for. A live subscription is the same test sendPlansView uses, so the two
-      // screens cannot disagree about who is on a plan.
-      let onPaidPlan = false;
-      if (existing) {
-        try {
-          const usage = await getUsageForUser(existing.id);
-          onPaidPlan = usage.plan !== "NONE" && usage.subscriptionState.live;
-        } catch (error) {
-          // Fall back to showing the free line. Over-explaining costs a
-          // subscriber one irrelevant sentence; swallowing the screen costs
-          // everyone the only place the limits are written down.
-          console.error(
-            "[create] could not read the plan; quoting the free cap anyway:",
-            error instanceof Error ? error.message : error
-          );
-        }
-      }
+      // Absent account counts as free with the whole allowance: there is nothing
+      // to look up, and a stranger who has sent nothing is exactly who the free
+      // run is for.
+      let freeMaxMinutes: number | null = await freeRunCapMinutes(existing);
 
       await client.sendMessage(
         message.chat.id,
         dict.createPrompt({
-          freeMaxMinutes: onPaidPlan
-            ? null
-            : getPlanLimits("NONE").maxSourceDurationMinutes,
+          freeMaxMinutes,
           planMaxMinutes: STARTER_WEEKLY.maxSourceDurationMinutes,
           maxFileGb: Math.round(
             STARTER_WEEKLY.maxFileSizeBytes / (1024 * 1024 * 1024)
@@ -800,6 +784,62 @@ async function handleMenuAction(
       await sendPlansView(client, message, dict, config, existing);
       return;
     }
+  }
+}
+
+/**
+ * The longest video this person can actually send on the free run right now, or
+ * null when the free run is not a thing they can use.
+ *
+ * TWO DIFFERENT NUMBERS live behind "60 minutes" and the 🎬 screen used to quote
+ * the wrong one. `maxSourceDurationMinutes` caps a single source;
+ * `FREE_TIER.lifetimeSeconds` is the whole allowance, ever. Someone who has
+ * already spent 35 of their 60 minutes cannot send an hour-long video - they can
+ * send 25 minutes - and a screen that answers "what may I send?" with the static
+ * cap is telling them to try something that will be refused on submit.
+ *
+ * So: the smaller of what is left and what one source may be. Floored, matching
+ * freeExhausted, so anyone with under a minute reads 0 rather than a rounded-up
+ * promise - and 0 returns null, because a line saying "up to 0 minutes" is worse
+ * than no line.
+ *
+ * Null for three cases, all of them "the free run is not available to you":
+ *   - a live paid subscription (the free allowance is not theirs)
+ *   - the allowance is spent
+ *   - the month's global free budget is closed (freeBudgetStatus)
+ *
+ * Any read that throws falls back to the full cap. Over-quoting costs one
+ * sentence; a screen that fails costs everyone the only place the limits are
+ * written down.
+ */
+export async function freeRunCapMinutes(
+  existing: { id: string } | null
+): Promise<number | null> {
+  const sourceCap = getPlanLimits("NONE").maxSourceDurationMinutes;
+  if (!existing) return sourceCap;
+
+  try {
+    // Same live-subscription test sendPlansView uses, so the two screens cannot
+    // disagree about who is on a plan.
+    const usage = await getUsageForUser(existing.id);
+    if (usage.plan !== "NONE" && usage.subscriptionState.live) return null;
+
+    const budget = await freeBudgetStatus();
+    if (!budget.open) return null;
+
+    // From the ledger, never from Job rows: deleting a project hard-deletes
+    // those, so a jobs-based balance is reset by pressing Delete.
+    const leftMinutes = Math.floor(
+      (await freeBalanceSeconds(existing.id)) / 60
+    );
+    const usable = Math.min(leftMinutes, sourceCap);
+    return usable > 0 ? usable : null;
+  } catch (error) {
+    console.error(
+      "[create] could not read the free balance; quoting the full cap:",
+      error instanceof Error ? error.message : error
+    );
+    return sourceCap;
   }
 }
 
