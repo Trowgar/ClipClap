@@ -132,7 +132,11 @@ const uk: Dict = {
   planMaxBtn: "👑 Max - €89 / місяць",
   menuCreate: "🎬 Створити кліпи",
   createPrompt: ({ freeMaxMinutes, planMaxMinutes, maxFileGb }) =>
-    `Надішли мені відео - файлом або посиланням.\n\nДо ${planMaxMinutes / 60} годин відео, до ${maxFileGb} ГБ на файл.\nНа безкоштовному запуску: до ${freeMaxMinutes} хвилин.`,
+    `Надішли мені відео - файлом або посиланням.\n\nДо ${planMaxMinutes / 60} годин відео, до ${maxFileGb} ГБ на файл.${
+      freeMaxMinutes === null
+        ? ""
+        : `\nНа безкоштовному запуску: до ${freeMaxMinutes} хвилин.`
+    }`,
   menuAccount: "📊 Акаунт",
   menuHelp: "❓ Довідка",
   menuSettings: "⚙️ Налаштування",

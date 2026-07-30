@@ -122,7 +122,11 @@ const es: Dict = {
   planMaxBtn: "👑 Max - €89 / mes",
   menuCreate: "🎬 Crear clips",
   createPrompt: ({ freeMaxMinutes, planMaxMinutes, maxFileGb }) =>
-    `Mándame el video: sube el archivo o pega un enlace.\n\nHasta ${planMaxMinutes / 60} horas de video, hasta ${maxFileGb} GB por archivo.\nEn la prueba gratis: hasta ${freeMaxMinutes} minutos.`,
+    `Mándame el video: sube el archivo o pega un enlace.\n\nHasta ${planMaxMinutes / 60} horas de video, hasta ${maxFileGb} GB por archivo.${
+      freeMaxMinutes === null
+        ? ""
+        : `\nEn la prueba gratis: hasta ${freeMaxMinutes} minutos.`
+    }`,
   menuAccount: "📊 Cuenta",
   menuHelp: "❓ Ayuda",
   menuSettings: "⚙️ Ajustes",

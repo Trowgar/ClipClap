@@ -87,6 +87,31 @@ describe("free trial onboarding copy", () => {
     expect(t("ru").welcomeFirstScreen).toMatch(/бесплатн/i);
   });
 
+  // A subscriber is told about an allowance that is not theirs and a cap that
+  // does not apply to them, on the one screen that exists to answer "what may I
+  // send?". Every locale has to drop the line, not just the two we read.
+  it("says nothing about the free run to somebody on a plan", () => {
+    const paid = { freeMaxMinutes: null, planMaxMinutes: 180, maxFileGb: 2 };
+    const free = { ...paid, freeMaxMinutes: FREE.maxSourceDurationMinutes };
+
+    for (const loc of LOCALES) {
+      const onPlan = t(loc).createPrompt(paid);
+      // The free cap number is the tell - the sentence around it differs per
+      // language, the 60 does not.
+      expect(onPlan).not.toContain(String(FREE.maxSourceDurationMinutes));
+      // ...while the rest of the answer survives: the plan cap and the file cap
+      // are what a subscriber came to this screen for.
+      expect(onPlan).toContain("3");
+      expect(onPlan).toContain("2");
+      // And the free reader still gets the line, so this is a branch and not a
+      // deletion.
+      expect(t(loc).createPrompt(free)).toContain(
+        String(FREE.maxSourceDurationMinutes)
+      );
+      expect(t(loc).createPrompt(free).length).toBeGreaterThan(onPlan.length);
+    }
+  });
+
   it("no longer opens by asking for a plan", () => {
     expect(t("en").welcomeFirstScreen).not.toMatch(/1\.\s*Pick a plan/i);
     expect(t("ru").welcomeFirstScreen).not.toMatch(/1\.\s*Выбери тариф/i);

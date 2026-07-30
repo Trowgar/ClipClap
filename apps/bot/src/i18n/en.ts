@@ -167,7 +167,11 @@ const en: Dict = {
   planMaxBtn: "👑 Max - €89 / month",
   menuCreate: "🎬 Create clips",
   createPrompt: ({ freeMaxMinutes, planMaxMinutes, maxFileGb }) =>
-    `Send me the video - upload the file or paste a link.\n\nUp to ${planMaxMinutes / 60} hours of video, up to ${maxFileGb} GB per file.\nOn the free run: up to ${freeMaxMinutes} minutes.`,
+    `Send me the video - upload the file or paste a link.\n\nUp to ${planMaxMinutes / 60} hours of video, up to ${maxFileGb} GB per file.${
+      freeMaxMinutes === null
+        ? ""
+        : `\nOn the free run: up to ${freeMaxMinutes} minutes.`
+    }`,
   menuAccount: "📊 Account",
   menuHelp: "❓ Help",
   menuSettings: "⚙️ Settings",

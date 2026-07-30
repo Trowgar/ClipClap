@@ -168,7 +168,14 @@ export interface Dict {
    *  them off the plan config: a hardcoded "3 hours" in six locales is six
    *  places to drift from ABUSE_CAPS. */
   createPrompt: (limits: {
-    freeMaxMinutes: number;
+    /** The free cap, or null for somebody who is not on the free tier.
+     *
+     *  Null omits the line entirely rather than printing a zero: a subscriber
+     *  reading "on the free run: up to 60 minutes" is being told about an
+     *  allowance that is not theirs and a limit that does not apply to them,
+     *  which is noise on the one screen that exists to answer "what may I
+     *  send?". */
+    freeMaxMinutes: number | null;
     planMaxMinutes: number;
     maxFileGb: number;
   }) => string;

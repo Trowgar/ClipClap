@@ -144,7 +144,11 @@ const ru: Dict = {
   planMaxBtn: "👑 Max - €89 / мес",
   menuCreate: "🎬 Создать клипы",
   createPrompt: ({ freeMaxMinutes, planMaxMinutes, maxFileGb }) =>
-    `Пришли мне видео - файлом или ссылкой.\n\nДо ${planMaxMinutes / 60} часов видео, до ${maxFileGb} ГБ на файл.\nНа бесплатном прогоне: до ${freeMaxMinutes} минут.`,
+    `Пришли мне видео - файлом или ссылкой.\n\nДо ${planMaxMinutes / 60} часов видео, до ${maxFileGb} ГБ на файл.${
+      freeMaxMinutes === null
+        ? ""
+        : `\nНа бесплатном прогоне: до ${freeMaxMinutes} минут.`
+    }`,
   menuAccount: "📊 Аккаунт",
   menuHelp: "❓ Помощь",
   menuSettings: "⚙️ Настройки",

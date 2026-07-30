@@ -118,7 +118,11 @@ const id: Dict = {
   planMaxBtn: "👑 Max - €89 / bulan",
   menuCreate: "🎬 Buat klip",
   createPrompt: ({ freeMaxMinutes, planMaxMinutes, maxFileGb }) =>
-    `Kirim videonya - unggah file atau tempel tautan.\n\nSampai ${planMaxMinutes / 60} jam video, sampai ${maxFileGb} GB per file.\nDi percobaan gratis: sampai ${freeMaxMinutes} menit.`,
+    `Kirim videonya - unggah file atau tempel tautan.\n\nSampai ${planMaxMinutes / 60} jam video, sampai ${maxFileGb} GB per file.${
+      freeMaxMinutes === null
+        ? ""
+        : `\nDi percobaan gratis: sampai ${freeMaxMinutes} menit.`
+    }`,
   menuAccount: "📊 Akun",
   menuHelp: "❓ Bantuan",
   menuSettings: "⚙️ Pengaturan",

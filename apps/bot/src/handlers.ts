@@ -751,10 +751,37 @@ async function handleMenuAction(
     // this is the moment a user is choosing a file. Read off the plan config so
     // six locales cannot drift from ABUSE_CAPS between them.
     case "create": {
+      // The free cap is quoted only to somebody it applies to. A subscriber
+      // reading "on the free run: up to 60 minutes" is being told about an
+      // allowance that is not theirs, on the one screen whose whole job is to
+      // answer "what may I send?".
+      //
+      // Absent account counts as free: there is nothing to look up, and a
+      // stranger who has not sent anything yet is exactly who the free run is
+      // for. A live subscription is the same test sendPlansView uses, so the two
+      // screens cannot disagree about who is on a plan.
+      let onPaidPlan = false;
+      if (existing) {
+        try {
+          const usage = await getUsageForUser(existing.id);
+          onPaidPlan = usage.plan !== "NONE" && usage.subscriptionState.live;
+        } catch (error) {
+          // Fall back to showing the free line. Over-explaining costs a
+          // subscriber one irrelevant sentence; swallowing the screen costs
+          // everyone the only place the limits are written down.
+          console.error(
+            "[create] could not read the plan; quoting the free cap anyway:",
+            error instanceof Error ? error.message : error
+          );
+        }
+      }
+
       await client.sendMessage(
         message.chat.id,
         dict.createPrompt({
-          freeMaxMinutes: getPlanLimits("NONE").maxSourceDurationMinutes,
+          freeMaxMinutes: onPaidPlan
+            ? null
+            : getPlanLimits("NONE").maxSourceDurationMinutes,
           planMaxMinutes: STARTER_WEEKLY.maxSourceDurationMinutes,
           maxFileGb: Math.round(
             STARTER_WEEKLY.maxFileSizeBytes / (1024 * 1024 * 1024)
