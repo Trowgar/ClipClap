@@ -18,7 +18,20 @@ export interface Dict {
    * row behind, and `signed_up` keeps meaning "someone who did something".
    */
   welcomeFirstScreen: string;
+  /** A greeting, and therefore only for /start - somebody who has arrived.
+   *
+   *  It used to double as the text for "you are back at the main menu", which
+   *  greeted people who had never left: tapping Settings and then ⬅️ Menu
+   *  answered "Welcome back!". Navigation gets `menuTitle` instead. */
   welcomeBack: string;
+  /** The main menu reached by navigation - /menu, or ⬅️ Menu out of a submenu.
+   *
+   *  A bare label on purpose. A reply keyboard has to be attached to some
+   *  message, so something must be said, but the keyboard IS the content and its
+   *  first full-width button is the primary action. Telling the reader to press
+   *  the button they are looking at is the same wasted line as the "Tap START to
+   *  begin" that came off botDescription. */
+  menuTitle: string;
   welcomeNeedsPlan: string;
   /**
    * Appended to the onboarding screens while the month's global free budget is

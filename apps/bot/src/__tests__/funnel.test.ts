@@ -298,15 +298,50 @@ describe("app-open and video-submitted telemetry", () => {
 
     await handleUpdate(client as never, menuUpdate() as never, CONFIG);
 
+    // menuTitle, not welcomeBack: /menu is navigation. Greeting somebody who
+    // never left reads as the bot having lost the thread of the conversation.
     expect(client.sendMessage).toHaveBeenCalledWith(
       CHAT.id,
-      t("ru").welcomeBack,
+      t("ru").menuTitle,
       expect.anything()
     );
     const appOpened = eventsRecorded().filter(
       (e) => e === FUNNEL_EVENTS.APP_OPENED
     );
     expect(appOpened).toHaveLength(1);
+  });
+
+  // The path a real user tripped over: Settings, then ⬅️ Menu, and the bot said
+  // "Welcome back! Send a video and I'll generate clips." to somebody who had
+  // never left - and told them to send a video while the keyboard's own first
+  // full-width button says exactly that.
+  it("returns to the menu from settings without greeting the user again", async () => {
+    const { client } = harness();
+
+    await handleUpdate(
+      client as never,
+      {
+        update_id: 14,
+        message: {
+          message_id: 14,
+          chat: CHAT,
+          from: FROM,
+          text: t("ru").settingsBackBtn,
+        },
+      } as never,
+      CONFIG
+    );
+
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      CHAT.id,
+      t("ru").menuTitle,
+      expect.anything()
+    );
+    expect(client.sendMessage).not.toHaveBeenCalledWith(
+      CHAT.id,
+      t("ru").welcomeBack,
+      expect.anything()
+    );
   });
 
   // A stranger's /start now carries the main-menu keyboard, which used to be the

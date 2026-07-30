@@ -756,3 +756,30 @@ describe("bot i18n", () => {
   });
 
 });
+
+/**
+ * Navigation is not a greeting.
+ *
+ * Settings -> ⬅️ Menu used to answer "Welcome back! Send a video and I'll
+ * generate clips." to somebody who had never left, and instructed them to send a
+ * video while the keyboard's own first full-width button says exactly that.
+ */
+describe("the main menu reached by navigation", () => {
+  it("has a title in every locale and it is not the greeting", () => {
+    for (const loc of LOCALES) {
+      expect(t(loc).menuTitle.length).toBeGreaterThan(0);
+      expect(t(loc).menuTitle).not.toBe(t(loc).welcomeBack);
+    }
+  });
+
+  // Short on purpose: the keyboard is the content, and a line telling the reader
+  // to press the button in front of them is the "Tap START to begin" that came
+  // off botDescription for the same reason.
+  it("says nothing about sending a video - the button already does", () => {
+    expect(t("en").menuTitle).not.toMatch(/send/i);
+    expect(t("ru").menuTitle).not.toMatch(/пришл|отправ/i);
+    for (const loc of LOCALES) {
+      expect(t(loc).menuTitle.length).toBeLessThan(30);
+    }
+  });
+});

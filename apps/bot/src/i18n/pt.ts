@@ -29,6 +29,7 @@ const pt: Dict = {
   welcomeFirstScreen:
     "Oi! Me manda um vídeo longo - ou um link - e eu corto em clipes verticais com legendas, prontos pra TikTok, Reels e Shorts.\n\nFunciona com podcasts, lives da Twitch, entrevistas, webinars e reviews.\n\nSeu primeiro vídeo é grátis: sem cartão e sem plano. Se voltar sem clipes, não conta.",
   welcomeBack: "Bom te ver de novo! Manda um vídeo que eu gero os clipes.",
+  menuTitle: "Menu principal",
   welcomeNeedsPlan:
     "Manda um vídeo que eu gero os clipes. Conta nova ganha um teste grátis: sem cartão, até 60 minutos de vídeo.",
   // Appended by the handler to the onboarding screens, and only while

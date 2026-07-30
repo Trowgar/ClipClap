@@ -26,6 +26,7 @@ const id: Dict = {
   welcomeFirstScreen:
     "Halo! Kirim aku video panjang - atau tautannya - dan aku potong jadi klip vertikal bersubtitle, siap untuk TikTok, Reels, dan Shorts.\n\nCocok untuk podcast, siaran Twitch, wawancara, webinar, dan review.\n\nVideo pertamamu gratis: tanpa kartu, tanpa paket. Kalau hasilnya tidak ada klip, itu tidak dihitung.",
   welcomeBack: "Senang kamu kembali! Kirim video dan aku buatkan klipnya.",
+  menuTitle: "Menu utama",
   welcomeNeedsPlan:
     "Kirim video dan aku buatkan klipnya. Akun baru dapat satu percobaan gratis: tanpa kartu, sampai 60 menit video.",
   // Appended by the handler to the onboarding screens, and only while

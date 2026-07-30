@@ -605,7 +605,9 @@ export async function handleUpdate(
 
   if (text === "/menu" || text.startsWith("/menu ") || text.startsWith("/menu@")) {
     // sendMainMenu carries the admin analytics button for every entry point.
-    await sendMainMenu(client, message.chat.id, dict.welcomeBack, dict, from);
+    // menuTitle, not welcomeBack: this is navigation, and greeting somebody who
+    // never left reads as the bot having lost track of the conversation.
+    await sendMainMenu(client, message.chat.id, dict.menuTitle, dict, from);
     return;
   }
 
@@ -900,7 +902,10 @@ async function handleSettingsAction(
       return;
     }
     case "menu": {
-      await sendMainMenu(client, message.chat.id, dict.welcomeBack, dict, message.from!);
+      // Back out of Settings. See the note on /menu above: a greeting here told
+      // somebody who had tapped ⬅️ Menu that they were welcome back, and told
+      // them to send a video while the keyboard's own first button says so.
+      await sendMainMenu(client, message.chat.id, dict.menuTitle, dict, message.from!);
       return;
     }
   }
