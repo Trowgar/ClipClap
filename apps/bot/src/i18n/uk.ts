@@ -64,6 +64,13 @@ const uk: Dict = {
     "Надішли мені відео, і я зроблю з нього вертикальні кліпи. Почни з /start.",
   uploading: "Завантажую твоє відео...",
   queued: "У черзі. Надішлю кліпи сюди, щойно рендер завершиться.",
+  progressTitle: "🎬 Працюю над твоїм відео",
+  progressDoneTitle: "🎬 Готово - надсилаю кліпи",
+  progressQueuedNote: "У черзі - почну ось-ось.",
+  progressStepDownload: "Забираю відео",
+  progressStepTranscribe: "Слухаю мовлення",
+  progressStepAnalyze: "Шукаю найкращі моменти",
+  progressStepRender: "Нарізаю та додаю субтитри",
   fileTooLarge: (url) =>
     `Це відео більше за 20 МБ - це ліміт Bot API Telegram. Поки що завантажуй довгі відео на сайті: ${url}/dashboard. Ми працюємо над тим, щоб зняти це обмеження.`,
   processingFailed: (code) => (code && ukFailure[code]) || ukFailureGeneric,

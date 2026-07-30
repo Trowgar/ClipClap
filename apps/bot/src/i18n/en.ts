@@ -104,6 +104,13 @@ const en: Dict = {
     "Send me a video and I'll turn it into vertical clips. Use /start to get going.",
   uploading: "Uploading your video...",
   queued: "Queued. I'll send the clips back here when rendering finishes.",
+  progressTitle: "🎬 Working on your video",
+  progressDoneTitle: "🎬 Finished - sending your clips",
+  progressQueuedNote: "In the queue - starting any moment.",
+  progressStepDownload: "Getting the video",
+  progressStepTranscribe: "Listening to the speech",
+  progressStepAnalyze: "Finding the best moments",
+  progressStepRender: "Cutting and adding subtitles",
   fileTooLarge: (url) =>
     `This video is over 20 MB - Telegram's Bot API limit. For now, upload longer videos on the website: ${url}/dashboard. We're working on lifting this limit soon.`,
   processingFailed: (code) => (code && enFailure[code]) || enFailureGeneric,

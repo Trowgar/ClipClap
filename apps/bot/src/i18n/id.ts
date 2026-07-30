@@ -55,6 +55,13 @@ const id: Dict = {
     "Kirim video dan aku ubah jadi klip vertikal. Pakai /start untuk mulai.",
   uploading: "Mengunggah videomu...",
   queued: "Masuk antrean. Klipnya aku kirim ke sini begitu render selesai.",
+  progressTitle: "🎬 Sedang mengerjakan videomu",
+  progressDoneTitle: "🎬 Selesai - mengirim klipmu",
+  progressQueuedNote: "Dalam antrean - segera mulai.",
+  progressStepDownload: "Mengambil videonya",
+  progressStepTranscribe: "Mendengarkan suaranya",
+  progressStepAnalyze: "Mencari momen terbaik",
+  progressStepRender: "Memotong dan menambahkan subtitle",
   fileTooLarge: (url) =>
     `Video ini lebih dari 20 MB, batas Bot API Telegram. Untuk sekarang, unggah video panjang lewat situs: ${url}/dashboard. Kami sedang berusaha menghapus batas ini.`,
   processingFailed: (code) => (code && idFailure[code]) || idFailureGeneric,

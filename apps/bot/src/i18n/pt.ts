@@ -58,6 +58,13 @@ const pt: Dict = {
     "Me manda um vídeo e eu transformo em clipes verticais. Use /start para começar.",
   uploading: "Enviando seu vídeo...",
   queued: "Na fila. Mando os clipes aqui quando a renderização terminar.",
+  progressTitle: "🎬 Trabalhando no seu vídeo",
+  progressDoneTitle: "🎬 Pronto - enviando seus clipes",
+  progressQueuedNote: "Na fila: começo a qualquer momento.",
+  progressStepDownload: "Baixando o vídeo",
+  progressStepTranscribe: "Ouvindo a fala",
+  progressStepAnalyze: "Procurando os melhores momentos",
+  progressStepRender: "Cortando e colocando legendas",
   fileTooLarge: (url) =>
     `Este vídeo passa de 20 MB, o limite da Bot API do Telegram. Por enquanto, envie vídeos longos pelo site: ${url}/dashboard. Estamos trabalhando para remover esse limite em breve.`,
   processingFailed: (code) => (code && ptFailure[code]) || ptFailureGeneric,

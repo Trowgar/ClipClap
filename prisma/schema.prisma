@@ -451,6 +451,18 @@ model TelegramDelivery {
   attempts    Int                    @default(0)
   error       String?
   deliveredAt DateTime?
+  /// The live progress board's message_id in this chat, or null when the chat
+  /// has no board (the submit-time send failed, or the row predates this
+  /// column). Everything that touches the board treats null as "nothing to
+  /// update" rather than as an error: a missing board costs the user a nicer
+  /// wait, never a clip.
+  progressMessageId Int?
+  /// The Job.status already rendered into that message. The poller edits only
+  /// when this differs from the job's current status, which is what keeps a
+  /// 10-second loop from re-sending identical text for six minutes. Nullable
+  /// because the board starts life as the upload acknowledgement, before any
+  /// stage has run.
+  progressStatus    JobStatus?
   createdAt   DateTime               @default(now())
   updatedAt   DateTime               @updatedAt
 

@@ -1,5 +1,9 @@
 import { TelegramClient } from "./telegram-client";
-import { deliverReadyTelegramJobs, handleUpdate } from "./handlers";
+import {
+  deliverReadyTelegramJobs,
+  handleUpdate,
+  updateTelegramProgressBoards,
+} from "./handlers";
 import { configureBotProfile } from "./setup";
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -50,10 +54,19 @@ async function pollUpdates() {
 
 async function pollDeliveries() {
   while (running) {
+    // Deliveries first: a finished job getting its clips outranks a running one
+    // getting a nicer wait, and the delivery pass draws the board's last frame
+    // itself. Separate try blocks so a failure in either cannot stop the other -
+    // the progress board is a courtesy and must never cost anyone a clip.
     try {
       await deliverReadyTelegramJobs(client, appUrl);
     } catch (error) {
       console.error("Telegram delivery polling failed:", error);
+    }
+    try {
+      await updateTelegramProgressBoards(client);
+    } catch (error) {
+      console.error("Telegram progress polling failed:", error);
     }
     await sleep(10_000);
   }

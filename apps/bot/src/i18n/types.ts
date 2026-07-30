@@ -51,6 +51,27 @@ export interface Dict {
   sendVideoHint: string;
   uploading: string;
   queued: string;
+  /* The live progress board.
+   *
+   * Words only - the ✅/⏳/◽ markers and the line order are layout and live in
+   * renderProgressBoard, so the six dictionaries cannot disagree about the shape
+   * of the thing or drift a step out of sequence.
+   *
+   * Stage names are the user's mental model, not ours: "Listening to the speech"
+   * rather than TRANSCRIBE, "Finding the best moments" rather than ANALYZE. The
+   * pipeline's own names are engineer vocabulary and mean nothing to a clipper.
+   *
+   * No ETA anywhere, deliberately. Measured over production jobs, the same
+   * 30-minute source finished in 153 s once and 780 s another time - a fivefold
+   * spread - so time remaining is not derivable from anything we know at submit,
+   * and a wrong "about 5 minutes" is worse than no estimate at all. */
+  progressTitle: string;
+  progressDoneTitle: string;
+  progressQueuedNote: string;
+  progressStepDownload: string;
+  progressStepTranscribe: string;
+  progressStepAnalyze: string;
+  progressStepRender: string;
   fileTooLarge: (url: string) => string;
   /** Takes the code parsed out of Job.error, NEVER the raw message: the stored
    *  text is engineer prose in English and must not reach a user. Unknown or

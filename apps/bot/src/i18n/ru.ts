@@ -76,6 +76,13 @@ const ru: Dict = {
     "Пришли видео - нарежу вертикальные клипы. /start, если ещё не подключал аккаунт.",
   uploading: "Загружаю видео...",
   queued: "В очереди. Пришлю клипы сюда, когда рендер закончится.",
+  progressTitle: "🎬 Работаю над твоим видео",
+  progressDoneTitle: "🎬 Готово - отправляю клипы",
+  progressQueuedNote: "В очереди - начну с минуты на минуту.",
+  progressStepDownload: "Забираю видео",
+  progressStepTranscribe: "Слушаю речь",
+  progressStepAnalyze: "Ищу лучшие моменты",
+  progressStepRender: "Нарезаю и накладываю субтитры",
   fileTooLarge: (url) =>
     `Видео больше 20 МБ - это лимит Telegram Bot API. Пока что для длинных видео используй сайт: ${url}/dashboard. Скоро снимем это ограничение.`,
   processingFailed: (code) => (code && ruFailure[code]) || ruFailureGeneric,

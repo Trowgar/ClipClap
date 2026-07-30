@@ -27,17 +27,31 @@ export class TelegramClient {
     });
   }
 
+  /** Returns the sent message, so a caller that means to edit it later - the
+   *  progress board - can keep its message_id. Existing callers ignore it. */
   async sendMessage(
     chatId: string | number,
     text: string,
-    options?: { replyMarkup?: ReplyMarkup; parseMode?: "HTML" | "MarkdownV2" }
+    options?: {
+      replyMarkup?: ReplyMarkup;
+      parseMode?: "HTML" | "MarkdownV2";
+      /** Anchors the reply in the thread of the user's own message. This is what
+       *  gives a job its identity: with two videos in flight, an unanchored
+       *  "Done, 3 clips" does not say which one it belongs to. */
+      replyToMessageId?: number;
+    }
   ) {
-    return this.request("sendMessage", {
+    return this.request<{ message_id: number }>("sendMessage", {
       chat_id: chatId,
       text,
       disable_web_page_preview: true,
       reply_markup: options?.replyMarkup,
       parse_mode: options?.parseMode,
+      reply_to_message_id: options?.replyToMessageId,
+      // The anchor message can be deleted between submit and the send. Without
+      // this Telegram refuses the whole send with "message to reply not found",
+      // which would cost the user their acknowledgement over a cosmetic detail.
+      allow_sending_without_reply: options?.replyToMessageId ? true : undefined,
     });
   }
 

@@ -46,6 +46,10 @@ describe("telegram-delivery.service", () => {
         jobId: "job1",
         userId: "user1",
         chatId: "12345",
+        // Explicit null rather than omitted: a caller whose acknowledgement send
+        // failed has no board, and the readers all treat null as "nothing to
+        // update". Written so a future default cannot quietly become a number.
+        progressMessageId: null,
       },
     });
   });

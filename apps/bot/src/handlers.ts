@@ -40,7 +40,7 @@ import type {
   SubscriptionPhase,
   UploadRejectionCode,
 } from "@clipclap/shared";
-import type { User } from "@prisma/client";
+import type { JobStatus, User } from "@prisma/client";
 import type { TelegramClient } from "./telegram-client";
 import { extractVideoUrl, probeVideoUrl } from "./url-probe";
 import {
@@ -1010,6 +1010,147 @@ async function settleDelivery(deliveryId: string, owed: OwedWrite) {
   }
 }
 
+/** The pipeline in the order the user experiences it, which is the order the
+ *  board draws. Each entry names the status that is RUNNING that line. */
+const PROGRESS_STEPS: ReadonlyArray<{
+  running: JobStatus;
+  label: (dict: Dict) => string;
+}> = [
+  { running: "DOWNLOADING", label: (d) => d.progressStepDownload },
+  { running: "TRANSCRIBING", label: (d) => d.progressStepTranscribe },
+  { running: "ANALYZING", label: (d) => d.progressStepAnalyze },
+  { running: "CUTTING", label: (d) => d.progressStepRender },
+];
+
+/**
+ * The live progress board, as one message the poller edits in place.
+ *
+ * The layout lives here rather than in the dictionaries so the six locales carry
+ * words and nothing else - a marker set or a step order duplicated six times is
+ * six chances to disagree, and the disagreement would be invisible until someone
+ * read the bot in Indonesian.
+ *
+ * A terminal status draws every line done. That state is only ever written by
+ * the delivery pass, AFTER the clips are in the chat: an "all finished" board
+ * standing above an empty chat is the same promise-we-cannot-keep bug the
+ * delivery loop already guards against with its summary line.
+ */
+export function renderProgressBoard(dict: Dict, status: JobStatus): string {
+  const terminal = status === "DONE" || status === "FAILED";
+  const activeIndex = PROGRESS_STEPS.findIndex((s) => s.running === status);
+
+  const lines = PROGRESS_STEPS.map((step, i) => {
+    if (terminal) return `✅ ${step.label(dict)}`;
+    // activeIndex === -1 is PENDING: queued, nothing started.
+    if (activeIndex === -1) return `◽ ${step.label(dict)}`;
+    if (i < activeIndex) return `✅ ${step.label(dict)}`;
+    if (i === activeIndex) return `⏳ ${step.label(dict)}`;
+    return `◽ ${step.label(dict)}`;
+  });
+
+  const title = terminal ? dict.progressDoneTitle : dict.progressTitle;
+  const note = activeIndex === -1 && !terminal ? `\n\n${dict.progressQueuedNote}` : "";
+  return `${title}\n\n${lines.join("\n")}${note}`;
+}
+
+/** Telegram answers an edit whose text is byte-identical with this instead of
+ *  succeeding. It means the board already says the right thing, so it is a
+ *  success for our purposes - the only reason it can happen is a progressStatus
+ *  write that failed after its edit landed. */
+function isUnmodifiedEdit(message: string): boolean {
+  return message.toLowerCase().includes("message is not modified");
+}
+
+/**
+ * Moves every in-flight board to the stage its job is actually on.
+ *
+ * Runs on the same ten-second tick as the delivery poll, because the wait it
+ * covers is long: measured across production jobs, 2.5 to 13 minutes pass
+ * between "queued" and the first word of output, median 6.5 - and until now the
+ * chat said nothing for the whole of it while Job.status walked four stages.
+ *
+ * Nothing here is allowed to break a delivery. Every failure is swallowed and
+ * logged: a board is a courtesy, and a user who loses it still gets their clips,
+ * whereas a throw escaping into pollDeliveries would stall the queue behind it.
+ */
+export async function updateTelegramProgressBoards(client: TelegramClient) {
+  let rows: Awaited<
+    ReturnType<typeof telegramDeliveryService.getInFlightTelegramDeliveries>
+  >;
+  try {
+    rows = await telegramDeliveryService.getInFlightTelegramDeliveries();
+  } catch (error) {
+    console.error(
+      "[progress] could not read in-flight deliveries:",
+      error instanceof Error ? error.message : error
+    );
+    return;
+  }
+
+  for (const row of rows) {
+    // The comparison the SQL cannot do - see getInFlightTelegramDeliveries.
+    if (row.progressStatus === row.job.status) continue;
+    if (row.progressMessageId === null) continue;
+
+    try {
+      const dict = t(await getUserLocale(row.userId));
+      await client.editMessageText(
+        row.chatId,
+        row.progressMessageId,
+        renderProgressBoard(dict, row.job.status)
+      );
+      await telegramDeliveryService.markTelegramProgressShown(
+        row.id,
+        row.job.status
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isUnmodifiedEdit(message)) {
+        // The edit already landed; only its bookkeeping is outstanding.
+        await telegramDeliveryService
+          .markTelegramProgressShown(row.id, row.job.status)
+          .catch(() => undefined);
+        continue;
+      }
+      console.error(
+        `[progress] could not update the board for delivery ${row.id}:`,
+        message
+      );
+    }
+  }
+}
+
+/**
+ * Draws the board's last frame - every line ticked - once the outcome is in the
+ * chat, so it stops showing whichever stage it was frozen on.
+ *
+ * Deliberately not called on the failure or no-clips paths: those already say in
+ * words what happened, and a board reading "Finished - sending your clips" above
+ * "no clips this time" would contradict them. There the last stage shown is left
+ * standing, which is at worst uninformative rather than wrong.
+ */
+async function closeProgressBoard(
+  client: TelegramClient,
+  delivery: { id: string; chatId: string; progressMessageId: number | null },
+  dict: Dict
+) {
+  if (delivery.progressMessageId === null) return;
+  try {
+    await client.editMessageText(
+      delivery.chatId,
+      delivery.progressMessageId,
+      renderProgressBoard(dict, "DONE")
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (isUnmodifiedEdit(message)) return;
+    console.error(
+      `[progress] could not close the board for delivery ${delivery.id}:`,
+      message
+    );
+  }
+}
+
 export async function deliverReadyTelegramJobs(
   client: TelegramClient,
   appUrl: string
@@ -1110,6 +1251,12 @@ export async function deliverReadyTelegramJobs(
         delivery.chatId,
         dict.done(delivery.job.clips.length)
       );
+
+      // Retire the board, for the same reason and in the same order: every line
+      // ticked is a claim that the clips exist, so it is only true once they are
+      // in the chat above it. Best effort - a stale board is cosmetic, and this
+      // must not be the thing that stops the row being settled below.
+      await closeProgressBoard(client, delivery, dict);
 
       await settleDelivery(delivery.id, { kind: "DELIVERED" });
     } catch (error) {
@@ -1765,7 +1912,13 @@ async function handleVideo(
   // checking...") copy exists for this path, and telling someone we are
   // "Uploading your video..." right before refusing them is worse than the
   // telemetry write landing a beat before the first reply.
-  await client.sendMessage(message.chat.id, dict.uploading);
+  //
+  // Its message_id is kept because this same message becomes the live progress
+  // board once the job exists - one message that mutates, rather than
+  // "Uploading..." followed by "Queued" and then six minutes of silence. Sent as
+  // a reply to the user's own video so the whole exchange is one thread, which
+  // is what gives a job its identity on a plan that allows two at once.
+  const ack = await sendProgressAnchor(client, message, dict);
 
   if (
     typeof source.fileSize === "number" &&
@@ -1852,12 +2005,73 @@ async function handleVideo(
       jobId: job.id,
       userId: user.id,
       chatId: String(message.chat.id),
+      progressMessageId: ack,
     });
 
-    await client.sendMessage(message.chat.id, dict.queued);
+    await showQueuedBoard(client, message.chat.id, ack, dict);
   } finally {
     await rm(tempPath, { force: true });
   }
+}
+
+/**
+ * The one message this job will keep editing, sent as a reply to the video.
+ *
+ * Returns its message_id, or undefined if the send failed - in which case the
+ * job still runs and still delivers, it just narrates nothing. A board is a
+ * courtesy and may never be a precondition.
+ */
+async function sendProgressAnchor(
+  client: TelegramClient,
+  message: TelegramMessage,
+  dict: Dict
+): Promise<number | undefined> {
+  try {
+    const sent = await client.sendMessage(message.chat.id, dict.uploading, {
+      replyToMessageId: message.message_id,
+    });
+    return sent?.message_id;
+  } catch (error) {
+    console.error(
+      "[progress] could not send the progress anchor:",
+      error instanceof Error ? error.message : error
+    );
+    return undefined;
+  }
+}
+
+/**
+ * Turns the upload acknowledgement into the board, in its queued state.
+ *
+ * Replaces the second message the chat used to get ("Queued. I'll send the clips
+ * back here when rendering finishes."), so a submission now costs one message
+ * instead of two and that message stays useful for the whole run.
+ *
+ * Falls back to sending `queued` as its own message when there is no board to
+ * edit, so a failed anchor still leaves the user told what is happening.
+ */
+async function showQueuedBoard(
+  client: TelegramClient,
+  chatId: number | string,
+  progressMessageId: number | undefined,
+  dict: Dict
+) {
+  if (progressMessageId === undefined) {
+    await client.sendMessage(chatId, dict.queued).catch(() => undefined);
+    return;
+  }
+  await client
+    .editMessageText(
+      chatId,
+      progressMessageId,
+      renderProgressBoard(dict, "PENDING")
+    )
+    .catch((error) => {
+      console.error(
+        "[progress] could not draw the queued board:",
+        error instanceof Error ? error.message : error
+      );
+    });
 }
 
 async function handleVideoUrl(
@@ -1963,13 +2177,16 @@ async function handleVideoUrl(
   }
   const job = created.job;
 
+  const ack = await sendProgressAnchor(client, message, dict);
+
   await createTelegramDelivery({
     jobId: job.id,
     userId: user.id,
     chatId: String(message.chat.id),
+    progressMessageId: ack,
   });
 
-  await client.sendMessage(message.chat.id, dict.queued);
+  await showQueuedBoard(client, message.chat.id, ack, dict);
 }
 
 /**

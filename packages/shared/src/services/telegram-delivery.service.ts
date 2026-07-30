@@ -4,6 +4,10 @@ export interface CreateTelegramDeliveryInput {
   jobId: string;
   userId: string;
   chatId: string;
+  /** The message the chat is already showing for this job, which becomes the
+   *  live progress board. Optional: if the submit-time send failed there is no
+   *  board, and every reader below treats that as "nothing to update". */
+  progressMessageId?: number;
 }
 
 export async function createTelegramDelivery(
@@ -14,7 +18,63 @@ export async function createTelegramDelivery(
       jobId: input.jobId,
       userId: input.userId,
       chatId: input.chatId,
+      progressMessageId: input.progressMessageId ?? null,
     },
+  });
+}
+
+/**
+ * Deliveries whose job is still running and whose board is out of date.
+ *
+ * This is the other half of the ten-second poll that already exists for
+ * finished jobs. Measured against production, a job spends between 2.5 and 13
+ * minutes between "queued" and its first word of output - median 6.5 - and the
+ * chat said nothing at all for the whole of it, even though Job.status walks
+ * DOWNLOADING -> TRANSCRIBING -> ANALYZING -> CUTTING the entire time.
+ *
+ * PENDING only: a row that has already reported an outcome has nothing left to
+ * narrate. Terminal job states are excluded here too - the board's last edit is
+ * made by the delivery pass itself, so that "all done" cannot appear above a
+ * chat with no clips in it.
+ *
+ * The "out of date" half is deliberately NOT in the SQL. Prisma cannot compare
+ * two columns of the same row in a where clause, and the alternatives - a raw
+ * query, or a generated column - buy nothing here: the window is 20 rows wide,
+ * so the caller filters in memory. See the note on progressStatus in the schema
+ * for why the comparison exists at all.
+ */
+export async function getInFlightTelegramDeliveries(take = 20) {
+  return prisma.telegramDelivery.findMany({
+    where: {
+      status: "PENDING",
+      progressMessageId: { not: null },
+      job: { status: { notIn: ["DONE", "FAILED"] } },
+    },
+    select: {
+      id: true,
+      chatId: true,
+      userId: true,
+      progressMessageId: true,
+      progressStatus: true,
+      job: { select: { status: true } },
+    },
+    orderBy: { createdAt: "asc" },
+    take,
+  });
+}
+
+/** Records which stage the board is now showing, so the next poll can tell
+ *  whether an edit is owed. Separate from the edit itself because the edit is
+ *  the irreversible half. */
+export async function markTelegramProgressShown(
+  deliveryId: string,
+  status: NonNullable<
+    Awaited<ReturnType<typeof getInFlightTelegramDeliveries>>[number]["progressStatus"]
+  >
+) {
+  return prisma.telegramDelivery.update({
+    where: { id: deliveryId },
+    data: { progressStatus: status },
   });
 }
 
