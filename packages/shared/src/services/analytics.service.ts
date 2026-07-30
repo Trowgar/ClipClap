@@ -63,13 +63,35 @@ export interface FunnelRow {
  *  by getRefusals. */
 const FUNNEL_ORDER = [
   "start_first_screen",
-  "first_screen_new_account",
   "first_screen_link_account",
   "signed_up",
   "app_opened",
   "email_verified",
   "video_submitted",
 ] as const;
+
+/** Retired steps, kept out of FUNNEL_ORDER on purpose.
+ *
+ *  `first_screen_new_account` counted a tap on the "New account" button of the
+ *  bot's two-button onboarding prompt. That prompt was removed - it asked about
+ *  our account topology before delivering anything - so the event can never be
+ *  written again. Left in FUNNEL_ORDER it would draw a permanent zero at the top
+ *  of the chart, which reads as a broken funnel rather than a deleted screen.
+ *  The historical rows stay in the table; nothing deletes them. */
+export const RETIRED_FUNNEL_EVENTS = ["first_screen_new_account"] as const;
+
+/** Recorded, but not steps on the way to anything - so not part of the funnel,
+ *  for the same reason refusals are not.
+ *
+ *  `earn_advertisers_tapped` measures interest in an offer that does not exist
+ *  yet; it is a poll, not a stage. Putting it in FUNNEL_ORDER would draw it as a
+ *  cliff between two unrelated stages and make the drop-offs on either side
+ *  meaningless. Read it directly when deciding whether to build the brokerage.
+ *
+ *  Anything listed here is deliberately invisible on /admin's funnel chart, which
+ *  is exactly the hole the test in analytics.service.test.ts exists to catch - so
+ *  a name only belongs here after someone has decided it is not a stage. */
+export const SIDE_ACTION_EVENTS = ["earn_advertisers_tapped"] as const;
 
 /** An event that is recorded but missing from FUNNEL_ORDER is invisible here -
  *  getFunnel walks this list, not the table - so adding a step to
@@ -83,8 +105,7 @@ const FUNNEL_ORDER = [
  *  account is anchored by its phone-backed id - and getFunnel skips empty steps
  *  rather than drawing a hard zero. */
 const FUNNEL_LABELS: Record<(typeof FUNNEL_ORDER)[number], string> = {
-  start_first_screen: "Saw the first screen",
-  first_screen_new_account: "Pressed New account",
+  start_first_screen: "Saw the welcome screen",
   first_screen_link_account: "Linked an account",
   signed_up: "Created an account",
   app_opened: "Opened the app",

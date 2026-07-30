@@ -66,8 +66,11 @@ describe("recordFunnelEvent", () => {
 
   it("keeps the existing step names stable and adds the shared ones", () => {
     expect(FUNNEL_EVENTS.FIRST_SCREEN).toBe("start_first_screen");
-    expect(FUNNEL_EVENTS.NEW_ACCOUNT).toBe("first_screen_new_account");
+    // Deliberately still the old literal. The button that used to emit it lived
+    // on the removed two-button first screen; /link and the Settings entry emit
+    // it now. Renaming it would split one question's history across two names.
     expect(FUNNEL_EVENTS.LINK_ACCOUNT).toBe("first_screen_link_account");
+    expect(FUNNEL_EVENTS.EARN_ADVERTISERS).toBe("earn_advertisers_tapped");
     expect(FUNNEL_EVENTS.APP_OPENED).toBe("app_opened");
     expect(FUNNEL_EVENTS.VIDEO_SUBMITTED).toBe("video_submitted");
   });

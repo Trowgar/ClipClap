@@ -56,32 +56,47 @@ const LIFETIME_MINUTES = FREE_TIER.lifetimeSeconds / 60;
 describe("free trial onboarding copy", () => {
   // The wall being removed was literally step 1. What matters is what the
   // numbered instructions tell a new user to DO first: send a video, not pay.
+  // The numbered list this used to inspect lives on botDescription now, so the
+  // property is asserted where it moved to: whatever the reader is told to do
+  // first, it must be about the video and not about paying.
   it("makes sending a video the first instruction", () => {
-    const step1 = { en: /^1\..*/m, ru: /^1\..*/m };
     for (const loc of ["en", "ru"] as const) {
-      const first = t(loc).welcomeFirstChoice.match(step1[loc])?.[0] ?? "";
+      const first = t(loc).botDescription.match(/^1\..*/m)?.[0] ?? "";
       expect(first).toMatch(loc === "en" ? /send a video/i : /пришли видео/i);
       expect(first).not.toMatch(loc === "en" ? /plan/i : /тариф/i);
     }
   });
 
-  it("states the trial plainly on the first screen, with the real cap", () => {
-    expect(t("en").welcomeFirstChoice).toMatch(/free/i);
-    expect(t("en").welcomeFirstChoice).toContain(String(FREE.maxSourceDurationMinutes));
-    expect(t("ru").welcomeFirstChoice).toMatch(/бесплатн/i);
-    expect(t("ru").welcomeFirstChoice).toContain(String(FREE.maxSourceDurationMinutes));
+  // The cap moved with the rest of the limits onto createPrompt, which answers
+  // the 🎬 button - the moment the user is choosing a file, rather than a number
+  // thrown at a stranger. The guarantee this test exists for is unchanged: the
+  // real free cap is stated somewhere the user reads BEFORE submitting, and it
+  // is read off the plan config so it cannot drift.
+  it("states the real free cap where the user is asked for a file", () => {
+    const limits = {
+      freeMaxMinutes: FREE.maxSourceDurationMinutes,
+      planMaxMinutes: 180,
+      maxFileGb: 2,
+    };
+    for (const loc of ["en", "ru"] as const) {
+      expect(t(loc).createPrompt(limits)).toContain(
+        String(FREE.maxSourceDurationMinutes)
+      );
+    }
+    expect(t("en").welcomeFirstScreen).toMatch(/free/i);
+    expect(t("ru").welcomeFirstScreen).toMatch(/бесплатн/i);
   });
 
   it("no longer opens by asking for a plan", () => {
-    expect(t("en").welcomeFirstChoice).not.toMatch(/1\.\s*Pick a plan/i);
-    expect(t("ru").welcomeFirstChoice).not.toMatch(/1\.\s*Выбери тариф/i);
+    expect(t("en").welcomeFirstScreen).not.toMatch(/1\.\s*Pick a plan/i);
+    expect(t("ru").welcomeFirstScreen).not.toMatch(/1\.\s*Выбери тариф/i);
   });
 
-  it("newAccountCreated points at the free run, not at the Plans button", () => {
-    expect(t("en").newAccountCreated).toMatch(/free/i);
-    expect(t("en").newAccountCreated).not.toMatch(/to enable processing/i);
-    expect(t("ru").newAccountCreated).toMatch(/бесплатн/i);
-    expect(t("ru").newAccountCreated).not.toMatch(/чтобы запустить обработку/i);
+  it("welcomeFirstScreen points at the free run, not at the Plans button", () => {
+    expect(t("en").welcomeFirstScreen).toMatch(/free/i);
+    expect(t("en").welcomeFirstScreen).not.toMatch(/to enable processing/i);
+    expect(t("ru").welcomeFirstScreen).toMatch(/бесплатн/i);
+    expect(t("ru").welcomeFirstScreen).not.toMatch(/чтобы запустить обработку/i);
   });
 
   it("welcomeNeedsPlan offers the free run instead of demanding a plan first", () => {
@@ -91,8 +106,8 @@ describe("free trial onboarding copy", () => {
 
   it("keeps the Russian copy in Russian", () => {
     for (const s of [
-      t("ru").welcomeFirstChoice,
-      t("ru").newAccountCreated,
+      t("ru").welcomeFirstScreen,
+      t("ru").welcomeFirstScreen,
       t("ru").welcomeNeedsPlan,
       t("ru").freeExhausted(0, LIFETIME_MINUTES, 75, 3),
       t("ru").freeNotAnchored(75, 3),
@@ -198,8 +213,8 @@ describe("onboarding copy while free runs are paused", () => {
 
     for (const loc of LOCALES) {
       const dict = t(loc);
-      const msg = await withFreeRunsNote(dict.welcomeFirstChoice, dict);
-      expect(msg.startsWith(dict.welcomeFirstChoice)).toBe(true);
+      const msg = await withFreeRunsNote(dict.welcomeFirstScreen, dict);
+      expect(msg.startsWith(dict.welcomeFirstScreen)).toBe(true);
       expect(msg).toContain(dict.freeRunsPausedNote);
     }
   });
@@ -211,8 +226,8 @@ describe("onboarding copy while free runs are paused", () => {
     });
 
     const dict = t("en");
-    expect(await withFreeRunsNote(dict.welcomeFirstChoice, dict)).toBe(
-      dict.welcomeFirstChoice
+    expect(await withFreeRunsNote(dict.welcomeFirstScreen, dict)).toBe(
+      dict.welcomeFirstScreen
     );
   });
 

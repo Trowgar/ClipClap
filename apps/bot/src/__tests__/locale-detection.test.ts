@@ -44,11 +44,7 @@ vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
   },
 }));
 
-import {
-  CALLBACK_NEW_ACCOUNT,
-  handleUpdate,
-  langCallbackData,
-} from "../handlers";
+import { handleUpdate, langCallbackData } from "../handlers";
 import { LOCALES, t } from "../i18n";
 
 const CONFIG = { appUrl: "https://clipclap.io" };
@@ -118,7 +114,7 @@ describe("automatic locale detection for a stranger", () => {
 
     expect(client.sendMessage).toHaveBeenCalledWith(
       CHAT.id,
-      t("ru").welcomeFirstChoice,
+      t("ru").welcomeFirstScreen,
       expect.anything()
     );
   });
@@ -136,7 +132,7 @@ describe("automatic locale detection for a stranger", () => {
 
     expect(client.sendMessage).toHaveBeenCalledWith(
       CHAT.id,
-      t("ru").welcomeFirstChoice,
+      t("ru").welcomeFirstScreen,
       expect.anything()
     );
   });
@@ -160,7 +156,7 @@ describe("automatic locale detection for a stranger", () => {
       await handleUpdate(client as never, message("/start", tag) as never, CONFIG);
       expect(client.sendMessage).toHaveBeenCalledWith(
         CHAT.id,
-        t(locale).welcomeFirstChoice,
+        t(locale).welcomeFirstScreen,
         expect.anything()
       );
     }
@@ -173,7 +169,7 @@ describe("automatic locale detection for a stranger", () => {
 
     expect(client.sendMessage).toHaveBeenCalledWith(
       CHAT.id,
-      t("en").welcomeFirstChoice,
+      t("en").welcomeFirstScreen,
       expect.anything()
     );
   });
@@ -186,19 +182,27 @@ describe("automatic locale detection for a stranger", () => {
 
     expect(client.sendMessage).toHaveBeenCalledWith(
       CHAT.id,
-      t("en").welcomeFirstChoice,
+      t("en").welcomeFirstScreen,
       expect.anything()
     );
   });
 });
 
+// These used to press "New account" on the two-button first screen, which was
+// the only eager door to a User row. That screen is gone and /start creates
+// nothing, so the row is now made lazily - and Settings -> Video settings is the
+// cheapest path that still goes through resolveTelegramUser. What is under test
+// is unchanged: which locale string reaches the column.
 describe("what gets stored on the account", () => {
+  const openVideoSettings = (languageCode?: string) =>
+    message(t("en").settingsVideoBtn, languageCode);
+
   it("stores the raw tag Telegram sent, not the resolved locale", async () => {
     const client = harness();
 
     await handleUpdate(
       client as never,
-      callback(CALLBACK_NEW_ACCOUNT, "ru-RU") as never,
+      openVideoSettings("ru-RU") as never,
       CONFIG
     );
 
@@ -215,11 +219,7 @@ describe("what gets stored on the account", () => {
   it("keeps an unsupported tag verbatim and still reads as English", async () => {
     const client = harness();
 
-    await handleUpdate(
-      client as never,
-      callback(CALLBACK_NEW_ACCOUNT, "de") as never,
-      CONFIG
-    );
+    await handleUpdate(client as never, openVideoSettings("de") as never, CONFIG);
     expect(mocks.userCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ telegramLocale: "de" }),
@@ -313,6 +313,7 @@ describe("changing the language from the settings menu", () => {
         replyMarkup: expect.objectContaining({
           keyboard: [
             [{ text: t("en").settingsLangBtn }, { text: t("en").settingsVideoBtn }],
+            [{ text: t("en").settingsLinkBtn }],
             [{ text: t("en").settingsBackBtn }],
           ],
         }),

@@ -26,10 +26,8 @@ const ptFailureGeneric =
   "Algo deu errado ao processar este vídeo e seus minutos não foram usados. Ainda não dá pra saber se este vai terminar: espera alguns minutos pra ver se os clipes chegam antes de mandar de novo, assim o mesmo vídeo não gasta seus minutos duas vezes. Se não chegar nada, manda de novo ou tenta outro arquivo.";
 
 const pt: Dict = {
-  welcomeNew:
-    "Bem-vindo ao ClipClap! Me manda um vídeo e eu transformo em clipes verticais com legendas.\n\nIdioma: envie /lang para trocar.",
-  welcomeFirstChoice:
-    "Oi! Eu transformo vídeos longos em clipes verticais com legendas, prontos pra TikTok, Reels e Shorts.\n\nSeu primeiro vídeo é grátis: sem cartão e sem plano. Se voltar sem clipes, não conta.\n\nComo funciona:\n1. Manda um vídeo (até 60 minutos no teste grátis)\n2. Eu acho os melhores momentos e corto\n3. Seus clipes voltam aqui: até 10, dependendo do vídeo\n\nPrimeiro, como você prefere começar?\n\n• Conta nova: use este Telegram como sua conta ClipClap.\n• Já tenho conta: conecte este Telegram à sua conta do clipclap.io.",
+  welcomeFirstScreen:
+    "Oi! Me manda um vídeo longo - ou um link - e eu corto em clipes verticais com legendas, prontos pra TikTok, Reels e Shorts.\n\nFunciona com podcasts, lives da Twitch, entrevistas, webinars e reviews.\n\nSeu primeiro vídeo é grátis: sem cartão e sem plano. Se voltar sem clipes, não conta.",
   welcomeBack: "Bom te ver de novo! Manda um vídeo que eu gero os clipes.",
   welcomeNeedsPlan:
     "Manda um vídeo que eu gero os clipes. Conta nova ganha um teste grátis: sem cartão, até 60 minutos de vídeo.",
@@ -39,10 +37,6 @@ const pt: Dict = {
   // rather than rewritten.
   freeRunsPausedNote:
     "⏳ Antes de começar: as execuções grátis estão pausadas até o dia primeiro do mês que vem. É um limite meu, não da sua conta: seus minutos grátis continuam esperando por você. Se quiser clipes hoje, abra 💳 Planos.",
-  newAccountBtn: "✨ Criar conta nova",
-  linkAccountBtn: "🔗 Já tenho conta",
-  newAccountCreated:
-    "Conta criada. Manda um vídeo agora: o primeiro é grátis e sem cartão.\n\nAté 60 minutos. Se voltar sem clipes, não conta no seu teste grátis.",
   linkAccountInstructions: (code, url) =>
     `Seu código de conexão: ${code}\n\n1. Abra ${url}/dashboard/settings no aparelho onde você está logado.\n2. Cole este código em até 10 minutos.\n\nEste Telegram vai ficar conectado a essa conta.`,
   callbackAck: "Beleza",
@@ -119,11 +113,19 @@ const pt: Dict = {
   planStarterBtn: "💎 Starter - €9 / mês",
   planPlusBtn: "🚀 Plus - €29 / mês",
   planMaxBtn: "👑 Max - €89 / mês",
+  menuCreate: "🎬 Criar clipes",
+  createPrompt: ({ freeMaxMinutes, planMaxMinutes, maxFileGb }) =>
+    `Me manda o vídeo: envie o arquivo ou cole um link.\n\nAté ${planMaxMinutes / 60} horas de vídeo, até ${maxFileGb} GB por arquivo.\nNo teste grátis: até ${freeMaxMinutes} minutos.`,
   menuAccount: "📊 Conta",
   menuHelp: "❓ Ajuda",
   menuSettings: "⚙️ Configurações",
-  menuAffiliate: "🤝 Afiliados",
+  menuEarn: "💰 Ganhar dinheiro",
   menuPlans: "💳 Planos",
+  earnMenuPrompt: "💰 Ganhar dinheiro - escolha:",
+  earnReferralBtn: "🔗 Programa de indicações",
+  earnAdvertisersBtn: "🎯 Encontrar anunciantes",
+  earnAdvertisersSoon:
+    "🎯 Encontrar anunciantes\n\nSe você tem audiência mas não tem anunciantes, eu procuro por você. Só fico com uma porcentagem dos acordos que eu fechar.\n\nAinda não está aberto: estou montando. E eu conto quantas pessoas tocam aqui, então tocar é um voto.",
   plansText:
     "💳 <b>Planos do ClipClap</b>\nPague uma vez e comece a usar. Cancele quando quiser no Tribute.\n\n" +
     "🌱 <b>Starter</b> - €3/sem · €9/mês\n   • 75 min/sem (270 min/mês)\n   • 20 clipes guardados\n   • 7 dias de retenção\n\n" +
@@ -205,6 +207,7 @@ const pt: Dict = {
   settingsMenuPrompt: "⚙️ Configurações",
   settingsLangBtn: "🌐 Idioma",
   settingsVideoBtn: "🎬 Configurações de vídeo",
+  settingsLinkBtn: "🔗 Vincular conta",
   settingsBackBtn: "⬅️ Menu principal",
   langMenuPrompt: "Escolha seu idioma:",
   videoSettingsPrompt: "🎬 Configurações de vídeo",
@@ -214,11 +217,13 @@ const pt: Dict = {
     enabled
       ? "Legendas ligadas."
       : "Legendas desligadas. Os vídeos novos vão sair sem legenda embutida.",
-  menuHint: "Use os botões do menu abaixo para ações rápidas.",
+  // See the note on en.botDescription for why there is no plan, no price, no
+  // limits and no "press START" line here.
   botDescription:
-    "O ClipClap transforma vídeos longos em clipes verticais curtos com legendas, prontos pra TikTok, Reels e Shorts.\n\nManda um vídeo (até 3 horas) e eu acho os melhores momentos, corto e embuto as legendas automaticamente.\n\nComo funciona:\n1. Escolha um plano\n2. Mande um vídeo\n3. Receba seus clipes\n\nToque em START para começar.",
+    "Transforme qualquer vídeo longo em clipes virais curtos com legendas - prontos pra TikTok, Reels e Shorts!\n\nFunciona com podcasts, lives da Twitch, entrevistas, webinars e reviews.\n\n1. Manda um vídeo ou cola um link\n2. A IA encontra os melhores momentos e cria os clipes\n3. Receba vídeos prontos pra postar aqui mesmo, no Telegram\n\nSeu primeiro vídeo é grátis, sem cartão.",
+  // See the note on en.botShortDescription. 120-char ceiling.
   botShortDescription:
-    "Vídeo longo → clipes verticais com legendas. Manda um vídeo para começar.",
+    "Horas de podcast, live ou entrevista → clipes curtos e virais com legendas para TikTok e Reels.",
   commands: [
     { command: "start", description: "Menu principal" },
     { command: "account", description: "Seu plano e estatísticas" },

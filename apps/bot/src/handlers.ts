@@ -65,9 +65,6 @@ import type {
   TelegramVideo,
 } from "./types";
 
-export const CALLBACK_NEW_ACCOUNT = "new_acc";
-export const CALLBACK_LINK_ACCOUNT = "link_acc";
-
 /** Language callbacks are `lang_<code>`, built and parsed from LOCALES rather
  *  than declared one constant per language - the old pair of constants had to
  *  be added to a switch, a parser and a keyboard by hand, and Telegram gives
@@ -106,30 +103,67 @@ export function parseLangCallback(data: string | undefined): Locale | null {
   return isLocale(code) ? code : null;
 }
 
-export type MenuAction = "account" | "help" | "settings" | "affiliate" | "plans";
+export type MenuAction =
+  | "create"
+  | "account"
+  | "help"
+  | "settings"
+  | "earn"
+  | "plans";
 
 export function matchMenuAction(text: string): MenuAction | null {
   for (const loc of LOCALES) {
     const d = t(loc);
+    if (text === d.menuCreate) return "create";
     if (text === d.menuAccount) return "account";
     if (text === d.menuHelp) return "help";
     if (text === d.menuSettings) return "settings";
-    if (text === d.menuAffiliate) return "affiliate";
+    if (text === d.menuEarn) return "earn";
     if (text === d.menuPlans) return "plans";
   }
   return null;
 }
 
-export type SettingsAction = "lang" | "video" | "menu";
+export type SettingsAction = "lang" | "video" | "link" | "menu";
 
 export function matchSettingsAction(text: string): SettingsAction | null {
   for (const loc of LOCALES) {
     const d = t(loc);
     if (text === d.settingsLangBtn) return "lang";
     if (text === d.settingsVideoBtn) return "video";
+    if (text === d.settingsLinkBtn) return "link";
     if (text === d.settingsBackBtn) return "menu";
   }
   return null;
+}
+
+export type EarnAction = "referral" | "advertisers";
+
+export function matchEarnAction(text: string): EarnAction | null {
+  for (const loc of LOCALES) {
+    const d = t(loc);
+    if (text === d.earnReferralBtn) return "referral";
+    if (text === d.earnAdvertisersBtn) return "advertisers";
+  }
+  return null;
+}
+
+/** 💰 Earn, which now covers two unrelated offers: the referral programme that
+ *  pays for invites, and the advertiser brokerage that is not built yet.
+ *
+ *  Shown to everyone, unconditionally. A version gated on `clipsTotal >= 1` was
+ *  considered and dropped: the brokerage is a revenue line rather than growth
+ *  mechanics, and progressive disclosure buys less than it costs in complexity. */
+function earnKeyboard(dict: Dict): ReplyKeyboardMarkup {
+  return {
+    keyboard: [
+      [{ text: dict.earnReferralBtn }],
+      [{ text: dict.earnAdvertisersBtn }],
+      [{ text: dict.settingsBackBtn }],
+    ],
+    is_persistent: true,
+    resize_keyboard: true,
+  };
 }
 
 export function matchReferralAction(text: string): "withdraw" | null {
@@ -355,6 +389,10 @@ function settingsKeyboard(dict: Dict): ReplyKeyboardMarkup {
   return {
     keyboard: [
       [{ text: dict.settingsLangBtn }, { text: dict.settingsVideoBtn }],
+      // Where account linking lives now that the first screen no longer asks
+      // about it. Someone who paid on the website and then opened the bot looks
+      // here; /link and the website's deep link both still work.
+      [{ text: dict.settingsLinkBtn }],
       [{ text: dict.settingsBackBtn }],
     ],
     is_persistent: true,
@@ -376,11 +414,20 @@ function settingsKeyboard(dict: Dict): ReplyKeyboardMarkup {
  */
 const ADMIN_ANALYTICS_LABEL = "Analytics";
 
+/** The main menu, with the product's own action on it at last.
+ *
+ *  It used to be five buttons - Plans, Account, Affiliate, Help, Settings - and
+ *  not one of them was "make a clip": a new arrival was shown the till, the
+ *  referral scheme and the help desk, and nothing about what the bot does.
+ *  🎬 now sits alone on the first row, full width, which is the only position
+ *  that reads as primary. The rest keeps its old shape so returning users are
+ *  not made to relearn anything. */
 function buildMainMenu(dict: Dict): ReplyKeyboardMarkup {
   return {
     keyboard: [
+      [{ text: dict.menuCreate }],
       [{ text: dict.menuPlans }, { text: dict.menuAccount }],
-      [{ text: dict.menuAffiliate }, { text: dict.menuHelp }],
+      [{ text: dict.menuEarn }, { text: dict.menuHelp }],
       [{ text: dict.menuSettings }],
     ],
     is_persistent: true,
@@ -527,6 +574,7 @@ export async function handleUpdate(
       text.startsWith("/") ||
       (parseMenuCommand(text) ?? matchMenuAction(text)) !== null ||
       matchSettingsAction(text) !== null ||
+      matchEarnAction(text) !== null ||
       matchReferralAction(text) !== null ||
       matchHelpAction(text) !== null;
     if (navMatched) {
@@ -594,7 +642,13 @@ export async function handleUpdate(
 
   const settingsAction = matchSettingsAction(text);
   if (settingsAction) {
-    await handleSettingsAction(client, message, settingsAction, dict);
+    await handleSettingsAction(client, message, settingsAction, dict, config);
+    return;
+  }
+
+  const earnAction = matchEarnAction(text);
+  if (earnAction) {
+    await handleEarnAction(client, message, from, earnAction, dict, config);
     return;
   }
 
@@ -693,8 +747,26 @@ async function handleMenuAction(
       });
       return;
     }
-    case "affiliate": {
-      await handleReferral(client, message, message.from!, dict, config);
+    // The limits live here rather than on the pre-START description, because
+    // this is the moment a user is choosing a file. Read off the plan config so
+    // six locales cannot drift from ABUSE_CAPS between them.
+    case "create": {
+      await client.sendMessage(
+        message.chat.id,
+        dict.createPrompt({
+          freeMaxMinutes: getPlanLimits("NONE").maxSourceDurationMinutes,
+          planMaxMinutes: STARTER_WEEKLY.maxSourceDurationMinutes,
+          maxFileGb: Math.round(
+            STARTER_WEEKLY.maxFileSizeBytes / (1024 * 1024 * 1024)
+          ),
+        })
+      );
+      return;
+    }
+    case "earn": {
+      await client.sendMessage(message.chat.id, dict.earnMenuPrompt, {
+        replyMarkup: earnKeyboard(dict),
+      });
       return;
     }
     case "plans": {
@@ -704,11 +776,43 @@ async function handleMenuAction(
   }
 }
 
+async function handleEarnAction(
+  client: TelegramClient,
+  message: TelegramMessage,
+  from: TelegramUser,
+  action: EarnAction,
+  dict: Dict,
+  config: BotRuntimeConfig
+) {
+  switch (action) {
+    case "referral": {
+      await handleReferral(client, message, from, dict, config);
+      return;
+    }
+    // Not built, and deliberately so. The tap is recorded before the reply so
+    // the decision to build it rests on how many people press the button rather
+    // than on a guess - the same reason FIRST_SCREEN exists.
+    case "advertisers": {
+      await client.sendMessage(message.chat.id, dict.earnAdvertisersSoon, {
+        replyMarkup: earnKeyboard(dict),
+      });
+      await recordFunnelEvent(
+        "bot",
+        from.id,
+        FUNNEL_EVENTS.EARN_ADVERTISERS,
+        from.language_code
+      );
+      return;
+    }
+  }
+}
+
 async function handleSettingsAction(
   client: TelegramClient,
   message: TelegramMessage,
   action: SettingsAction,
-  dict: Dict
+  dict: Dict,
+  config: BotRuntimeConfig
 ) {
   switch (action) {
     case "lang": {
@@ -722,6 +826,10 @@ async function handleSettingsAction(
       await client.sendMessage(message.chat.id, dict.videoSettingsPrompt, {
         replyMarkup: subtitlesKeyboard(dict, user.subtitlesEnabled),
       });
+      return;
+    }
+    case "link": {
+      await handleLink(client, message, dict, config);
       return;
     }
     case "menu": {
@@ -1166,33 +1274,56 @@ async function handleStart(
   if (payload?.kind === "ref") {
     const isNew = !existing;
     const from = message.from!;
+    // Still eager here, unlike the plain /start below: attachReferral needs a
+    // row to attach to, and a referral link is a commitment the referrer has
+    // already been credited for.
     const user = await resolveTelegramUser(from);
     if (isNew) {
       const { referralService } = await import("@clipclap/shared");
       await referralService.attachReferral(user.id, payload.code);
-      // The persistent menu (below) carries the 💳 Plans button; no inline
-      // plan buttons needed here.
-      await client.sendMessage(
+      await sendMainMenu(
+        client,
         message.chat.id,
-        await withFreeRunsNote(dict.newAccountCreated, dict)
+        await withFreeRunsNote(dict.welcomeFirstScreen, dict),
+        dict,
+        from
       );
-      await sendMainMenu(client, message.chat.id, dict.menuHint, dict, from);
-      return; // bypass the two-button onboarding screen (deep-link)
+      return;
     }
     // existing user: fall through to the normal welcome flow below
   }
 
   if (!existing) {
-    await client.sendMessage(
-      message.chat.id,
-      await withFreeRunsNote(dict.welcomeFirstChoice, dict),
-      { replyMarkup: firstChoiceKeyboard(dict) }
-    );
-    // This screen creates no User row - a stranger who reads it and leaves
-    // used to be recorded nowhere at all, which is why the size of the
-    // population behind our 95 accounts is unknown. Recorded AFTER the reply
-    // is out, and recordFunnelEvent never throws, so the first thing this
-    // person sees cannot be broken by a telemetry write.
+    // One screen, and it invites rather than interrogates. It replaced a
+    // two-button "New account / I already have one" prompt - a question about
+    // our account topology, put to everybody to serve the few who own a
+    // clipclap.io account AND found the bot themselves, when the website's deep
+    // link already carries that case straight past here.
+    //
+    // NO User row is created, which is the same property the old screen had and
+    // is worth keeping: resolveTelegramUser stays the only door to a row and is
+    // still reached lazily - on the first video, or on a settings change - so a
+    // stranger who reads this and leaves leaves nothing behind, and `signed_up`
+    // keeps meaning "somebody who did something" rather than "somebody who
+    // pressed START".
+    // Sent with mainMenuKeyboard rather than through sendMainMenu, and that is
+    // about telemetry, not about the buttons - they are identical.
+    //
+    // sendMainMenu records APP_OPENED, and this person has not opened anything:
+    // they typed /start and are looking at a pitch. Counting it here would make
+    // app_opened ~= first_screen for the bot and quietly turn "people using the
+    // product" into "people who saw the door". The same distinction is already
+    // drawn for the language switch, which re-sends this keyboard without
+    // claiming an app-open - see the note on mainMenuKeyboard.
+    await client
+      .sendMessage(
+        message.chat.id,
+        await withFreeRunsNote(dict.welcomeFirstScreen, dict),
+        { replyMarkup: mainMenuKeyboard(dict) }
+      )
+      .catch(() => undefined);
+    // Recorded AFTER the reply is out, and recordFunnelEvent never throws, so
+    // the first thing this person sees cannot be broken by a telemetry write.
     await recordFunnelEvent(
       "bot",
       message.from!.id,
@@ -1277,46 +1408,6 @@ async function handleCallbackQuery(
   }
 
   switch (query.data) {
-    case CALLBACK_NEW_ACCOUNT: {
-      await resolveTelegramUser(query.from);
-      await client
-        .editMessageText(
-          query.message.chat.id,
-          query.message.message_id,
-          await withFreeRunsNote(dict.newAccountCreated, dict)
-        )
-        .catch(() => undefined);
-      // The other half of the funnel: this person went PAST the first screen.
-      // Counted here rather than inferred from users.createdAt so both halves
-      // are one query against one table, and so the two doors stay apart.
-      await recordFunnelEvent(
-        "bot",
-        query.from.id,
-        FUNNEL_EVENTS.NEW_ACCOUNT,
-        query.from.language_code
-      );
-      await sendMainMenu(client, query.message.chat.id, dict.menuHint, dict, query.from);
-      return;
-    }
-    case CALLBACK_LINK_ACCOUNT: {
-      const { code } = await createBotInitiatedLink({
-        telegramId: String(query.from.id),
-      });
-      await client
-        .editMessageText(
-          query.message.chat.id,
-          query.message.message_id,
-          dict.linkAccountInstructions(code, config.appUrl)
-        )
-        .catch(() => undefined);
-      await recordFunnelEvent(
-        "bot",
-        query.from.id,
-        FUNNEL_EVENTS.LINK_ACCOUNT,
-        query.from.language_code
-      );
-      return;
-    }
     case CALLBACK_SUBTITLES_TOGGLE: {
       await handleSubtitlesToggle(client, query, dict);
       return;
@@ -1324,15 +1415,6 @@ async function handleCallbackQuery(
     default:
       return;
   }
-}
-
-function firstChoiceKeyboard(dict: Dict): InlineKeyboardMarkup {
-  return {
-    inline_keyboard: [
-      [{ text: dict.newAccountBtn, callback_data: CALLBACK_NEW_ACCOUNT }],
-      [{ text: dict.linkAccountBtn, callback_data: CALLBACK_LINK_ACCOUNT }],
-    ],
-  };
 }
 
 /** One row per supported language, each labelled in itself - so it takes no
@@ -1568,6 +1650,17 @@ async function handleLink(
   await client.sendMessage(
     message.chat.id,
     dict.linkCodePrompt(code, config.appUrl)
+  );
+  // Moved here from the first screen's "I already have an account" button when
+  // that screen was removed. Same event name, same question - how many people
+  // join a web account to a Telegram one - so the series is not split in two.
+  // This function is the single place a link is started from inside the bot:
+  // both /link and the Settings button land on it.
+  await recordFunnelEvent(
+    "bot",
+    from.id,
+    FUNNEL_EVENTS.LINK_ACCOUNT,
+    from.language_code
   );
 }
 

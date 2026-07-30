@@ -80,11 +80,25 @@ describe("bot i18n", () => {
     expect(parseLangCommand("/lang@clipclapbot en")).toBe("en");
   });
 
-  it("renders the welcome choice in both locales", () => {
-    expect(t("en").welcomeFirstChoice).toContain("New account");
-    expect(t("en").welcomeFirstChoice).toContain("I already have");
-    expect(t("ru").welcomeFirstChoice).toContain("Новый аккаунт");
-    expect(t("ru").welcomeFirstChoice).toContain("Уже есть аккаунт");
+  // Was "renders the welcome choice in both locales", asserting the two account
+  // buttons. There is no choice on this screen any more - it invites instead of
+  // interrogating - so what is worth pinning is that the invitation names both
+  // ways in of a video: a file or a link. Someone who only ever pastes URLs must
+  // not read "send me a video" as "upload a file".
+  it("offers both a file and a link on the welcome screen", () => {
+    expect(t("en").welcomeFirstScreen).toContain("link");
+    expect(t("en").welcomeFirstScreen).toContain("video");
+    expect(t("ru").welcomeFirstScreen).toContain("ссылку");
+    expect(t("ru").welcomeFirstScreen).toContain("видео");
+  });
+
+  // Buttons, not prose: the account-linking path survived the first screen's
+  // removal and has to stay reachable, or someone who paid on the website is
+  // stuck with a bot that will not recognise them.
+  it("keeps account linking reachable from settings in every locale", () => {
+    for (const loc of LOCALES) {
+      expect(t(loc).settingsLinkBtn.length).toBeGreaterThan(0);
+    }
   });
 
   it("has unique menu button labels per locale", () => {
@@ -142,17 +156,22 @@ describe("bot i18n", () => {
     }
   });
 
-  it("renders a value-pitch welcome with numbered steps for new users", () => {
-    expect(t("en").welcomeFirstChoice).toContain("vertical clips");
-    expect(t("en").welcomeFirstChoice).toContain("1.");
-    expect(t("en").welcomeFirstChoice).toContain("2.");
-    expect(t("en").welcomeFirstChoice).toContain("3.");
-    expect(t("en").welcomeFirstChoice).toContain("New account");
-    expect(t("ru").welcomeFirstChoice).toContain("вертикальные клипы");
-    expect(t("ru").welcomeFirstChoice).toContain("1.");
-    expect(t("ru").welcomeFirstChoice).toContain("2.");
-    expect(t("ru").welcomeFirstChoice).toContain("3.");
-    expect(t("ru").welcomeFirstChoice).toContain("Новый аккаунт");
+  // The numbered how-it-works list moved to botDescription, which is the screen
+  // people read BEFORE pressing START and where explaining the mechanism earns
+  // its space. This screen is post-START: the reader has already decided to try
+  // it, so it states the value and the free run and gets out of the way.
+  it("pitches the value and the free run on the welcome screen", () => {
+    expect(t("en").welcomeFirstScreen).toContain("vertical clips");
+    expect(t("en").welcomeFirstScreen).toContain("free");
+    expect(t("ru").welcomeFirstScreen).toContain("вертикальные клипы");
+    expect(t("ru").welcomeFirstScreen).toContain("бесплатно");
+  });
+
+  it("keeps the numbered how-it-works list on the pre-START description", () => {
+    for (const step of ["1.", "2.", "3."]) {
+      expect(t("en").botDescription).toContain(step);
+      expect(t("ru").botDescription).toContain(step);
+    }
   });
 
   // Each language names itself, in itself. A picker whose entries are
@@ -244,7 +263,7 @@ describe("bot i18n", () => {
       "menuAccount",
       "menuHelp",
       "menuSettings",
-      "menuAffiliate",
+      "menuEarn",
       "menuPlans",
       "settingsLangBtn",
       "settingsVideoBtn",

@@ -30,7 +30,7 @@ describe("plans i18n", () => {
     for (const loc of ["en", "ru"] as const) {
       const d = t(loc);
       expect(d.welcomeNeedsPlan).not.toMatch(/dashboard|clipclap\.io/);
-      expect(d.newAccountCreated).not.toMatch(/dashboard|clipclap\.io/);
+      expect(d.welcomeFirstScreen).not.toMatch(/dashboard|clipclap\.io/);
       expect(d.blocked("limit reached")).not.toMatch(/dashboard|clipclap\.io/);
     }
   });

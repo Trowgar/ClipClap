@@ -12,15 +12,31 @@ import { prisma } from "../lib/prisma";
  * hand in SQL, so they must not be renamed casually.
  */
 export const FUNNEL_EVENTS = {
-  /** Bot only: the two-button screen was shown to somebody with no account. */
+  /** Bot only: the welcome screen was shown to somebody with no account.
+   *
+   *  The string is unchanged so the history stays continuous, but what it counts
+   *  has narrowed: it used to mean "was shown the two-button New account / I
+   *  already have one prompt", and that prompt is gone. It is now simply the top
+   *  of the bot funnel - a stranger typed /start. No User row exists at this
+   *  point, which is the whole reason the step is worth recording: `signed_up`
+   *  cannot see these people. */
   FIRST_SCREEN: "start_first_screen",
-  /** Bot only: pressed "New account". */
-  NEW_ACCOUNT: "first_screen_new_account",
-  /** Bot only: pressed "Link account". */
+  /** Bot only: an account was linked from inside the bot.
+   *
+   *  Emitted by /link and by the Settings button that replaced the first
+   *  screen's "I already have an account". The literal is unchanged because the
+   *  question it answers - how many people join a web account to a Telegram one
+   *  - is unchanged, and rewriting it would split the series in two. */
   LINK_ACCOUNT: "first_screen_link_account",
+  /** Bot only: tapped "Find advertisers" under 💰 Earn.
+   *
+   *  The offer behind it is not built. The button exists to price the decision:
+   *  a count of taps is evidence about whether to build the brokerage at all,
+   *  which is cheaper to collect than the brokerage is to write. */
+  EARN_ADVERTISERS: "earn_advertisers_tapped",
   /** Both: a User row was created for this person.
    *
-   *  Not the same question as FIRST_SCREEN or NEW_ACCOUNT, which are about one
+   *  Not the same question as FIRST_SCREEN, which is about one
    *  screen in one surface. This is "an account now exists", wherever it came
    *  from: the web register form, a Google or Telegram sign-in the adapter
    *  created a row for, a referral deep link that skips the onboarding screen.

@@ -23,10 +23,8 @@ const idFailureGeneric =
   "Ada yang salah saat memproses video ini dan menitmu tidak terpakai. Belum bisa dipastikan apakah yang ini akan selesai: tunggu beberapa menit untuk melihat apakah klipnya datang sebelum mengirim ulang, supaya video yang sama tidak menghabiskan menitmu dua kali. Kalau tidak ada yang datang, kirim lagi atau coba file lain.";
 
 const id: Dict = {
-  welcomeNew:
-    "Selamat datang di ClipClap! Kirim video dan aku ubah jadi klip vertikal bersubtitle.\n\nBahasa: kirim /lang untuk mengganti.",
-  welcomeFirstChoice:
-    "Halo! Aku mengubah video panjang jadi klip vertikal bersubtitle, siap untuk TikTok, Reels, dan Shorts.\n\nVideo pertamamu gratis: tanpa kartu, tanpa paket. Kalau hasilnya tidak ada klip, itu tidak dihitung.\n\nCara kerjanya:\n1. Kirim video (maksimal 60 menit di percobaan gratis)\n2. Aku cari momen terkuat dan memotongnya\n3. Klipmu dikirim balik ke sini: sampai 10, tergantung videonya\n\nPertama, kamu mau mulai dengan cara yang mana?\n\n• Akun baru: pakai Telegram ini sebagai akun ClipClap-mu.\n• Sudah punya akun: hubungkan Telegram ini ke akun clipclap.io-mu.",
+  welcomeFirstScreen:
+    "Halo! Kirim aku video panjang - atau tautannya - dan aku potong jadi klip vertikal bersubtitle, siap untuk TikTok, Reels, dan Shorts.\n\nCocok untuk podcast, siaran Twitch, wawancara, webinar, dan review.\n\nVideo pertamamu gratis: tanpa kartu, tanpa paket. Kalau hasilnya tidak ada klip, itu tidak dihitung.",
   welcomeBack: "Senang kamu kembali! Kirim video dan aku buatkan klipnya.",
   welcomeNeedsPlan:
     "Kirim video dan aku buatkan klipnya. Akun baru dapat satu percobaan gratis: tanpa kartu, sampai 60 menit video.",
@@ -36,10 +34,6 @@ const id: Dict = {
   // rather than rewritten.
   freeRunsPausedNote:
     "⏳ Sebelum mulai: percobaan gratis dijeda sampai tanggal 1 bulan depan. Itu batas dari sisiku, bukan dari akunmu - menit gratismu tetap menunggumu. Kalau mau klip hari ini, buka 💳 Paket.",
-  newAccountBtn: "✨ Buat akun baru",
-  linkAccountBtn: "🔗 Aku sudah punya akun",
-  newAccountCreated:
-    "Akun dibuat. Kirim video sekarang: yang pertama gratis dan tanpa kartu.\n\nMaksimal 60 menit. Kalau hasilnya tidak ada klip, itu tidak mengurangi percobaan gratismu.",
   linkAccountInstructions: (code, url) =>
     `Kode penghubungmu: ${code}\n\n1. Buka ${url}/dashboard/settings di perangkat tempat kamu sudah login.\n2. Tempel kode ini dalam 10 menit.\n\nTelegram ini akan terhubung ke akun tersebut.`,
   callbackAck: "Oke",
@@ -116,11 +110,19 @@ const id: Dict = {
   planStarterBtn: "💎 Starter - €9 / bulan",
   planPlusBtn: "🚀 Plus - €29 / bulan",
   planMaxBtn: "👑 Max - €89 / bulan",
+  menuCreate: "🎬 Buat klip",
+  createPrompt: ({ freeMaxMinutes, planMaxMinutes, maxFileGb }) =>
+    `Kirim videonya - unggah file atau tempel tautan.\n\nSampai ${planMaxMinutes / 60} jam video, sampai ${maxFileGb} GB per file.\nDi percobaan gratis: sampai ${freeMaxMinutes} menit.`,
   menuAccount: "📊 Akun",
   menuHelp: "❓ Bantuan",
   menuSettings: "⚙️ Pengaturan",
-  menuAffiliate: "🤝 Afiliasi",
+  menuEarn: "💰 Cari uang",
   menuPlans: "💳 Paket",
+  earnMenuPrompt: "💰 Cari uang - pilih:",
+  earnReferralBtn: "🔗 Program referral",
+  earnAdvertisersBtn: "🎯 Cari pengiklan",
+  earnAdvertisersSoon:
+    "🎯 Cari pengiklan\n\nKalau kamu punya audiens tapi belum ada pengiklan, aku bisa mencarikannya. Aku hanya ambil persentase dari kesepakatan yang aku temukan.\n\nBelum dibuka: masih aku siapkan. Aku juga menghitung berapa orang yang menekan ini, jadi menekannya adalah suara.",
   plansText:
     "💳 <b>Paket ClipClap</b>\nBayar sekali, langsung pakai. Batalkan kapan saja di Tribute.\n\n" +
     "🌱 <b>Starter</b> - €3/mgg · €9/bln\n   • 75 mnt/mgg (270 mnt/bln)\n   • 20 klip tersimpan\n   • disimpan 7 hari\n\n" +
@@ -202,6 +204,7 @@ const id: Dict = {
   settingsMenuPrompt: "⚙️ Pengaturan",
   settingsLangBtn: "🌐 Bahasa",
   settingsVideoBtn: "🎬 Pengaturan video",
+  settingsLinkBtn: "🔗 Hubungkan akun",
   settingsBackBtn: "⬅️ Menu utama",
   langMenuPrompt: "Pilih bahasamu:",
   videoSettingsPrompt: "🎬 Pengaturan video",
@@ -211,11 +214,13 @@ const id: Dict = {
     enabled
       ? "Subtitle diaktifkan."
       : "Subtitle dinonaktifkan. Video baru tidak akan punya subtitle yang menempel.",
-  menuHint: "Pakai tombol menu di bawah untuk aksi cepat.",
+  // See the note on en.botDescription for why there is no plan, no price, no
+  // limits and no "press START" line here.
   botDescription:
-    "ClipClap mengubah video panjang jadi klip vertikal pendek bersubtitle, siap untuk TikTok, Reels, dan Shorts.\n\nKirim video (sampai 3 jam) dan aku cari momen terbaiknya, memotongnya, lalu menempelkan subtitle otomatis.\n\nCara kerjanya:\n1. Pilih paket\n2. Kirim video\n3. Terima klipmu\n\nKetuk START untuk mulai.",
+    "Ubah video panjang apa pun jadi klip viral pendek bersubtitle - siap untuk TikTok, Reels, dan Shorts!\n\nCocok untuk podcast, siaran Twitch, wawancara, webinar, dan review.\n\n1. Kirim video atau tempel tautan\n2. AI menemukan momen terbaik dan membuat klip\n3. Terima video siap posting langsung di sini, di Telegram\n\nVideo pertamamu gratis, tanpa kartu.",
+  // See the note on en.botShortDescription. 120-char ceiling.
   botShortDescription:
-    "Video panjang → klip vertikal bersubtitle. Kirim video untuk mulai.",
+    "Podcast, siaran, dan wawancara panjang → klip pendek viral bersubtitle untuk TikTok, Reels, dan Shorts.",
   commands: [
     { command: "start", description: "Menu utama" },
     { command: "account", description: "Paket dan statistikmu" },

@@ -62,11 +62,7 @@ import {
   getPlanLimits,
   uploadRejectedEvent,
 } from "@clipclap/shared";
-import {
-  CALLBACK_LINK_ACCOUNT,
-  CALLBACK_NEW_ACCOUNT,
-  handleUpdate,
-} from "../handlers";
+import { handleUpdate } from "../handlers";
 import { t } from "../i18n";
 
 const CONFIG = { appUrl: "https://clipclap.io" };
@@ -138,7 +134,7 @@ describe("first-screen telemetry", () => {
 
     expect(client.sendMessage).toHaveBeenCalledWith(
       CHAT.id,
-      t("ru").welcomeFirstChoice,
+      t("ru").welcomeFirstScreen,
       expect.anything()
     );
     expect(eventsRecorded()).toEqual([FUNNEL_EVENTS.FIRST_SCREEN]);
@@ -169,7 +165,7 @@ describe("first-screen telemetry", () => {
 
     expect(client.sendMessage).toHaveBeenCalledWith(
       CHAT.id,
-      t("ru").welcomeFirstChoice,
+      t("ru").welcomeFirstScreen,
       expect.anything()
     );
     expect(err).toHaveBeenCalled();
@@ -203,35 +199,30 @@ describe("first-screen telemetry", () => {
     expect(eventsRecorded()).not.toContain(FUNNEL_EVENTS.FIRST_SCREEN);
   });
 
-  it("records going past the screen, by which door", async () => {
-    for (const [data, event] of [
-      [CALLBACK_NEW_ACCOUNT, FUNNEL_EVENTS.NEW_ACCOUNT],
-      [CALLBACK_LINK_ACCOUNT, FUNNEL_EVENTS.LINK_ACCOUNT],
-    ] as const) {
-      vi.clearAllMocks();
-      mocks.userFindUnique.mockResolvedValue(null);
-      mocks.funnelUpsert.mockResolvedValue({});
-      mocks.userCreate.mockResolvedValue({ id: "u1", telegramId: "4242" });
-      mocks.accountFindUnique.mockResolvedValue(null);
-      mocks.accountCreate.mockResolvedValue({});
-      const { client } = harness();
+  // Replaces "records going past the screen, by which door". There are no doors
+  // any more: the two-button first screen is gone, so `first_screen_new_account`
+  // can never be written again and `first_screen_link_account` moved to the one
+  // place a link is now started from - handleLink, behind /link and the Settings
+  // button. Asserted through /link because that is the path a real user takes.
+  it("records a link attempt started from inside the bot", async () => {
+    mocks.userFindUnique.mockResolvedValue({
+      id: "u1",
+      telegramLocale: "ru",
+      supportOpen: false,
+      plan: "NONE",
+    });
+    const { client } = harness();
 
-      await handleUpdate(
-        client as never,
-        {
-          update_id: 2,
-          callback_query: {
-            id: "cb",
-            from: FROM,
-            data,
-            message: { message_id: 7, chat: CHAT },
-          },
-        } as never,
-        CONFIG
-      );
+    await handleUpdate(
+      client as never,
+      {
+        update_id: 2,
+        message: { message_id: 7, chat: CHAT, from: FROM, text: "/link" },
+      } as never,
+      CONFIG
+    );
 
-      expect(eventsRecorded()).toContain(event);
-    }
+    expect(eventsRecorded()).toContain(FUNNEL_EVENTS.LINK_ACCOUNT);
   });
 
   it("does not let a telemetry failure break a button press", async () => {
@@ -244,18 +235,13 @@ describe("first-screen telemetry", () => {
         client as never,
         {
           update_id: 3,
-          callback_query: {
-            id: "cb",
-            from: FROM,
-            data: CALLBACK_NEW_ACCOUNT,
-            message: { message_id: 7, chat: CHAT },
-          },
+          message: { message_id: 7, chat: CHAT, from: FROM, text: "/link" },
         } as never,
         CONFIG
       )
     ).resolves.toBeUndefined();
 
-    expect(client.editMessageText).toHaveBeenCalled();
+    expect(client.sendMessage).toHaveBeenCalled();
   });
 });
 
@@ -323,26 +309,49 @@ describe("app-open and video-submitted telemetry", () => {
     expect(appOpened).toHaveLength(1);
   });
 
-  it("records app_opened exactly once (not twice) for a brand-new account", async () => {
+  // A stranger's /start now carries the main-menu keyboard, which used to be the
+  // one thing that meant "the app was opened". It must NOT count as one: they
+  // typed /start and are reading a pitch. Counting it would make app_opened
+  // ~= first_screen on the bot and quietly redefine "people using the product"
+  // as "people who saw the door". Same distinction the language switch draws.
+  it("does not claim an app-open for a stranger who only saw the welcome screen", async () => {
     mocks.userFindUnique.mockResolvedValue(null);
-    mocks.userCreate.mockResolvedValue({ id: "u1", telegramId: "4242" });
     const { client } = harness();
 
     await handleUpdate(
       client as never,
       {
         update_id: 12,
-        callback_query: {
-          id: "cb",
-          from: FROM,
-          data: CALLBACK_NEW_ACCOUNT,
-          message: { message_id: 7, chat: CHAT },
-        },
+        message: { message_id: 7, chat: CHAT, from: FROM, text: "/start" },
       } as never,
       CONFIG
     );
 
-    expect(eventsRecorded()).toContain(FUNNEL_EVENTS.NEW_ACCOUNT);
+    expect(eventsRecorded()).toEqual([FUNNEL_EVENTS.FIRST_SCREEN]);
+    // And no row is created either - lazy creation is what keeps `signed_up`
+    // meaning "did something" rather than "pressed START".
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+  });
+
+  it("records app_opened exactly once (not twice) for a returning user's /start", async () => {
+    mocks.userFindUnique.mockResolvedValue({
+      id: "u1",
+      telegramId: "4242",
+      telegramLocale: "ru",
+      supportOpen: false,
+      plan: "NONE",
+    });
+    const { client } = harness();
+
+    await handleUpdate(
+      client as never,
+      {
+        update_id: 13,
+        message: { message_id: 8, chat: CHAT, from: FROM, text: "/start" },
+      } as never,
+      CONFIG
+    );
+
     const appOpened = eventsRecorded().filter(
       (e) => e === FUNNEL_EVENTS.APP_OPENED
     );

@@ -73,10 +73,8 @@ const enFailureGeneric =
   "Something went wrong while processing this video and your minutes were not used. I cannot tell yet whether this one will finish - wait a few minutes to see if the clips arrive before sending it again, so the same video does not use your minutes twice. If nothing arrives by then, send it again or send a different file.";
 
 const en: Dict = {
-  welcomeNew:
-    "Welcome to ClipClap! Send me a video and I'll turn it into vertical clips with subtitles.\n\nLanguage: send /lang to switch.",
-  welcomeFirstChoice:
-    "Hi! I turn long videos into vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nYour first video is free - no card, no plan. If it comes back with no clips, it doesn't count.\n\nHow it works:\n1. Send a video (up to 60 minutes on the free run)\n2. I find the strongest moments and cut them\n3. Your clips come back here - up to 10, depending on the video\n\nFirst - how do you want to set up?\n\n• New account - use this Telegram as your ClipClap account.\n• I already have an account - link this Telegram to your existing clipclap.io account.",
+  welcomeFirstScreen:
+    "Hi! Send me a long video - or a link to one - and I'll cut it into vertical clips with subtitles, ready for TikTok, Reels and Shorts.\n\nWorks with podcasts, Twitch streams, interviews, webinars and reviews.\n\nYour first video is free - no card, no plan. If it comes back with no clips, it doesn't count.",
   welcomeBack: "Welcome back! Send a video and I'll generate clips.",
   welcomeNeedsPlan:
     "Send a video and I'll generate clips. A new account gets one free run - no card needed, up to 60 minutes of video.",
@@ -86,10 +84,6 @@ const en: Dict = {
   // rather than rewritten.
   freeRunsPausedNote:
     "⏳ One thing before you start: free runs are paused until the first of next month. That is a limit on my side, not on your account - your free minutes stay waiting for you. If you want clips today, open 💳 Plans.",
-  newAccountBtn: "✨ Create new account",
-  linkAccountBtn: "🔗 I already have an account",
-  newAccountCreated:
-    "Account created. Send a video now - the first one is free, no card needed.\n\nUp to 60 minutes. If it comes back with no clips, it doesn't count against your free run.",
   linkAccountInstructions: (code, url) =>
     `Your linking code: ${code}\n\n1. Open ${url}/dashboard/settings on the device where you're logged in.\n2. Paste this code within 10 minutes.\n\nThis Telegram will be connected to that account.`,
   callbackAck: "Got it",
@@ -165,11 +159,19 @@ const en: Dict = {
   planStarterBtn: "💎 Starter - €9 / month",
   planPlusBtn: "🚀 Plus - €29 / month",
   planMaxBtn: "👑 Max - €89 / month",
+  menuCreate: "🎬 Create clips",
+  createPrompt: ({ freeMaxMinutes, planMaxMinutes, maxFileGb }) =>
+    `Send me the video - upload the file or paste a link.\n\nUp to ${planMaxMinutes / 60} hours of video, up to ${maxFileGb} GB per file.\nOn the free run: up to ${freeMaxMinutes} minutes.`,
   menuAccount: "📊 Account",
   menuHelp: "❓ Help",
   menuSettings: "⚙️ Settings",
-  menuAffiliate: "🤝 Affiliate",
+  menuEarn: "💰 Earn",
   menuPlans: "💳 Plans",
+  earnMenuPrompt: "💰 Earn - choose:",
+  earnReferralBtn: "🔗 Referral program",
+  earnAdvertisersBtn: "🎯 Find advertisers",
+  earnAdvertisersSoon:
+    "🎯 Find advertisers\n\nIf you have an audience but no advertisers, I can look for them for you - I only take a cut of deals I find.\n\nThis is not open yet. I'm still setting it up, and I'm counting how many people tap this - so tapping it is a vote.",
   plansText:
     "💳 <b>ClipClap Plans</b>\nPay once - start using. Cancel anytime in Tribute.\n\n" +
     "🌱 <b>Starter</b> - €3/wk · €9/mo\n   • 75 min/wk (270 min/mo)\n   • 20 clips stored\n   • 7-day retention\n\n" +
@@ -246,6 +248,7 @@ const en: Dict = {
   settingsMenuPrompt: "⚙️ Settings",
   settingsLangBtn: "🌐 Language",
   settingsVideoBtn: "🎬 Video settings",
+  settingsLinkBtn: "🔗 Link account",
   settingsBackBtn: "⬅️ Menu",
   langMenuPrompt: "Choose your language:",
   videoSettingsPrompt: "🎬 Video settings",
@@ -255,11 +258,68 @@ const en: Dict = {
     enabled
       ? "Subtitles turned on."
       : "Subtitles turned off. New videos won't have burned-in subtitles.",
-  menuHint: "Tap the menu buttons below for quick actions.",
+  // The one screen every single visitor reads, and the only one they read
+  // BEFORE deciding whether to press START - so it may not open by asking for
+  // money. It used to: step 1 of 3 was "Pick a plan", which also contradicted
+  // welcomeFirstScreen one tap later.
+  //
+  // No plan, no price and no limits here on purpose. "Up to 3 hours" was the
+  // PAID ceiling quoted to someone whose free run caps at 60 minutes, and a
+  // third number - the 2 GB file cap - lived only in helpText. Those belong in
+  // the submit flow, where they are an answer to "what may I send", not a wall
+  // in front of a stranger.
+  //
+  // "Tap START to begin" is gone: Telegram already renders START across the
+  // full width, so the line spent the screen's most valuable real estate
+  // telling someone to press the only button on it.
+  //
+  // Telegram supports NO markup in this field - no HTML, no Markdown - so all
+  // structure has to come from line breaks. Hard cap 512 chars, asserted per
+  // locale in i18n.test.ts.
+  //
+  // THE LAST LINE IS COUPLED TO FREE_TIER_MONTHLY_BUDGET_USD.
+  //
+  // This text is static - written once at boot, and it cannot be conditional -
+  // while the free run is gated at request time by freeBudgetStatus(), which
+  // reads that ceiling and reports the trial CLOSED whenever it is unset or
+  // unparseable. So "Your first video is free" is only true while a usable
+  // ceiling is configured; without one, this screen promises something that
+  // freeRunsPausedNote takes back on the very next tap. It was held out of this
+  // copy until the ceiling was set for exactly that reason. If the free tier is
+  // ever rolled back, this line comes out in the same commit.
+  //
+  // "First video" rather than "60 free minutes" is a deliberate simplification:
+  // the ledger grants FREE_TIER.lifetimeSeconds = 3600 in total, not per video,
+  // so someone who sends a 15-minute source still has 45 minutes left. The
+  // phrasing therefore under-promises, which is the safe direction, and it
+  // matches welcomeFirstScreen one screen later.
   botDescription:
-    "ClipClap turns long videos into short vertical clips with subtitles - ready for TikTok, Reels and Shorts.\n\nSend a video (up to 3 hours) - I'll find the highlights, cut them and burn in subtitles automatically.\n\nHow it works:\n1. Pick a plan\n2. Send a video\n3. Receive your clips\n\nTap START to begin.",
+    "Turn any long video into short viral clips with subtitles - ready for TikTok, Reels and Shorts!\n\nWorks with podcasts, Twitch streams, interviews, webinars and reviews.\n\n1. Send a video or paste a link\n2. AI finds the best moments and creates clips\n3. Get ready-to-post videos right here in Telegram\n\nYour first video is free - no card needed.",
+  // Shown on the bot's profile card, in search results, and in the link preview
+  // whenever someone forwards t.me/<bot>. It has to stand alone: a person
+  // reading it in a search list has no other context and has not opened
+  // anything yet.
+  //
+  // Source types lead on purpose - "podcasts, streams, interviews" is what a
+  // clipper scans a search list for, while "long video" is what every rival
+  // says. The arrow survives from the old copy because it buys compression
+  // inside a 120-char ceiling that a verb would spend.
+  //
+  // "Send a video to start" is gone for the same reason "Tap START" left
+  // botDescription: the profile card already carries a Message button and a
+  // search row already opens the bot when tapped, so the instruction spent a
+  // fifth of the budget telling someone to do the obvious.
+  //
+  // "Long ... -> short ..." is load-bearing and may not be dropped for space.
+  // A draft that led with the source types alone tested badly on exactly the
+  // question that matters here: it left the long-to-short transformation to be
+  // INFERRED from the arrow plus the reader's knowledge that a stream runs for
+  // hours. That inference is safe for a clipper and unsafe for everyone else,
+  // and this string is the one piece of copy with nothing beside it to lean on.
+  //
+  // Hard cap 120 chars, asserted for every locale in i18n.test.ts.
   botShortDescription:
-    "Long video → vertical clips with subtitles. Send a video to start.",
+    "Long podcasts, streams and interviews → short viral clips with subtitles for TikTok, Reels and Shorts.",
   commands: [
     { command: "start", description: "Show main menu" },
     { command: "account", description: "Your plan and stats" },

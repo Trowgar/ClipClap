@@ -15,6 +15,8 @@ import {
   isAdminEmail,
   isAdminUser,
   parseOwnAccounts,
+  RETIRED_FUNNEL_EVENTS,
+  SIDE_ACTION_EVENTS,
 } from "../analytics.service";
 import { FUNNEL_EVENTS } from "../funnel.service";
 
@@ -139,7 +141,16 @@ describe("getFunnel renders every declared step", () => {
   });
 
   it("shows every FUNNEL_EVENTS value that has rows", async () => {
-    const all = Object.values(FUNNEL_EVENTS);
+    // Two kinds of name are excluded, and both exclusions have to be declared
+    // in the service rather than assumed here - otherwise this test stops being
+    // the guard it exists to be and starts rubber-stamping whatever the code
+    // happens to render. RETIRED are events nothing writes any more;
+    // SIDE_ACTION are recorded but are not stages on the way to anything.
+    const excluded = new Set<string>([
+      ...RETIRED_FUNNEL_EVENTS,
+      ...SIDE_ACTION_EVENTS,
+    ]);
+    const all = Object.values(FUNNEL_EVENTS).filter((e) => !excluded.has(e));
     mocks.funnelGroupBy.mockResolvedValue(
       all.map((event, i) => ({
         event,

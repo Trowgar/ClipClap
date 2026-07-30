@@ -1,8 +1,23 @@
 import type { JobErrorCode, SubscriptionPhase } from "@clipclap/shared";
 
 export interface Dict {
-  welcomeNew: string;
-  welcomeFirstChoice: string;
+  /**
+   * What a stranger sees on their very first /start - and the only thing they
+   * see. It replaced a screen that asked "New account or do you already have
+   * one?" before delivering anything at all.
+   *
+   * That question was about our account topology, not about the user's goal, it
+   * was put to 100% of arrivals to serve the sliver who own a clipclap.io
+   * account AND found the bot on their own AND want the two joined - and the
+   * main path for that sliver is the website's deep link, which skips this
+   * screen entirely. Linking now lives on `settingsLinkBtn` and /link.
+   *
+   * No account is created by this screen. resolveTelegramUser is still the only
+   * door to a User row and it is still reached lazily - on the first video, or
+   * on a settings change - so a stranger who reads this and leaves leaves no
+   * row behind, and `signed_up` keeps meaning "someone who did something".
+   */
+  welcomeFirstScreen: string;
   welcomeBack: string;
   welcomeNeedsPlan: string;
   /**
@@ -24,9 +39,6 @@ export interface Dict {
    * sentence had to be translated six times.
    */
   freeRunsPausedNote: string;
-  newAccountBtn: string;
-  linkAccountBtn: string;
-  newAccountCreated: string;
   linkAccountInstructions: (code: string, url: string) => string;
   callbackAck: string;
   linkCodePrompt: (code: string, url: string) => string;
@@ -123,11 +135,40 @@ export interface Dict {
   planStarterBtn: string;
   planPlusBtn: string;
   planMaxBtn: string;
+  /** The primary action, and the reason it exists: the main keyboard used to
+   *  carry five buttons - Plans, Account, Affiliate, Help, Settings - and not
+   *  one of them was "make a clip". A new arrival was shown the till and the
+   *  help desk and nothing about the product. */
+  menuCreate: string;
+  /** Answer to menuCreate, and the home of every technical limit.
+   *
+   *  The numbers live here rather than on the pre-START description because
+   *  this is the moment they are useful - the user is choosing a file - instead
+   *  of a wall in front of a stranger. Taken as arguments so the caller reads
+   *  them off the plan config: a hardcoded "3 hours" in six locales is six
+   *  places to drift from ABUSE_CAPS. */
+  createPrompt: (limits: {
+    freeMaxMinutes: number;
+    planMaxMinutes: number;
+    maxFileGb: number;
+  }) => string;
   menuAccount: string;
   menuHelp: string;
   menuSettings: string;
-  menuAffiliate: string;
+  /** Was `menuAffiliate`. Renamed because it now opens a submenu with two
+   *  different offers under it - the referral programme and the advertiser
+   *  brokerage - and "Affiliate" had stopped describing either. "Earn" is what
+   *  the user is there for; the mechanism is the submenu's business. */
+  menuEarn: string;
   menuPlans: string;
+  earnMenuPrompt: string;
+  earnReferralBtn: string;
+  earnAdvertisersBtn: string;
+  /** Placeholder for the advertiser brokerage, which is deliberately not built
+   *  yet. It describes the offer and says it is coming, and the tap is recorded
+   *  in the funnel - so whether it gets built is answered by how many people
+   *  press a button, not by a guess. Promises no date, because there is none. */
+  earnAdvertisersSoon: string;
   plansText: string;
   plansSubscribed: (plan: string, periodEnd: string | null) => string;
   noPlanNudge: string;
@@ -165,12 +206,16 @@ export interface Dict {
   settingsMenuPrompt: string;
   settingsLangBtn: string;
   settingsVideoBtn: string;
+  /** Where account linking went when the two-button first screen was removed.
+   *  This is the hint, and Settings is where someone who paid on the website
+   *  and then opened the bot will actually look. /link still works, and the
+   *  website's deep link remains the main path. */
+  settingsLinkBtn: string;
   settingsBackBtn: string;
   langMenuPrompt: string;
   videoSettingsPrompt: string;
   subtitlesToggleBtn: (enabled: boolean) => string;
   subtitlesAck: (enabled: boolean) => string;
-  menuHint: string;
   botDescription: string;
   botShortDescription: string;
   commands: Array<{ command: string; description: string }>;
