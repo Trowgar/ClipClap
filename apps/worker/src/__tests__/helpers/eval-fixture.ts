@@ -74,8 +74,8 @@ export function loadVariantDefs(dir: string = FIXTURES_DIR): Record<string, Vari
 }
 
 /** Base first, then declared variants in a stable order. */
-export function variantNames(): string[] {
-  return [BASE_VARIANT, ...Object.keys(loadVariantDefs()).sort()];
+export function variantNames(dir: string = FIXTURES_DIR): string[] {
+  return [BASE_VARIANT, ...Object.keys(loadVariantDefs(dir)).sort()];
 }
 
 export function snapshotFileName(variant: string): string {
@@ -209,8 +209,14 @@ export interface Fixture {
   fingerprints: Record<string, Partial<EngineFingerprint> | null>;
 }
 
-export function loadFixture(name: string): Fixture {
-  const dir = join(FIXTURES_DIR, name);
+/**
+ * `fixturesDir` exists for the same reason loadVariantDefs takes one: the
+ * absent-recording branch cannot be exercised against the shared tree once every
+ * declared variant IS recorded, and a test that can only assert the present
+ * branch quietly stops guarding the absent one.
+ */
+export function loadFixture(name: string, fixturesDir: string = FIXTURES_DIR): Fixture {
+  const dir = join(fixturesDir, name);
   const read = (file: string) => JSON.parse(readFileSync(join(dir, file), "utf-8"));
   const readIfPresent = (file: string) =>
     existsSync(join(dir, file)) ? read(file) : null;
@@ -224,7 +230,7 @@ export function loadFixture(name: string): Fixture {
 
   const snapshots: Record<string, EvalShape | null> = {};
   const fingerprints: Record<string, Partial<EngineFingerprint> | null> = {};
-  for (const variant of variantNames()) {
+  for (const variant of variantNames(fixturesDir)) {
     snapshots[variant] = readIfPresent(snapshotFileName(variant));
     fingerprints[variant] =
       variant === BASE_VARIANT

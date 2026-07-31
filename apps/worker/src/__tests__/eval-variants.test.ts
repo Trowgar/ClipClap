@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -22,6 +22,39 @@ function variantsDir(contents: unknown): string {
   tempDirs.push(dir);
   writeFileSync(join(dir, "variants.json"), JSON.stringify(contents));
   return dir;
+}
+
+const SYNTHETIC_FIXTURE = "synthetic";
+
+/**
+ * A throwaway fixtures tree: one fixture with a base recording, plus whatever
+ * variants the caller declares and does NOT record.
+ *
+ * The real tree cannot express "declared but unrecorded" any more - luna is
+ * recorded in both fixtures - and it must not be edited to make it: those files
+ * are paid recordings. The transcript and responses here are never replayed,
+ * only parsed, so they can be empty.
+ */
+function syntheticFixture(opts: { declare: Record<string, unknown> }): string {
+  const dir = variantsDir(opts.declare);
+  const fixture = join(dir, SYNTHETIC_FIXTURE);
+  mkdirSync(fixture);
+  writeFileSync(join(fixture, "transcript.json"), JSON.stringify({ text: "", segments: [] }));
+  writeFileSync(join(fixture, "responses.json"), JSON.stringify({}));
+  writeFileSync(
+    join(fixture, "snapshot.json"),
+    JSON.stringify({ count: 0, tier: null, clips: [], dropReasons: {} })
+  );
+  writeFileSync(join(fixture, "meta.json"), JSON.stringify({ engine: { scanModel: "x" } }));
+  return dir;
+}
+
+/** A variant that variants.json actually declares, whatever it is called. Tests
+ *  that hardcode a name go stale the moment the plan moves to another model. */
+function declaredVariant(): string {
+  const declared = variantNames().filter((v) => v !== BASE_VARIANT);
+  expect(declared.length).toBeGreaterThan(0);
+  return declared[0];
 }
 afterAll(() => {
   for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
@@ -102,20 +135,35 @@ describe("fixture variant surface", () => {
     expect(fixture.fingerprints[BASE_VARIANT]).toEqual(fixture.fingerprint);
   });
 
-  it("reports a variant that has not been recorded yet as absent, not as empty", () => {
-    const fixture = loadFixture("podcast-ecology");
-    // luna is declared but not yet recorded at this point in the plan
-    expect(fixture.snapshots.luna ?? null).toBeNull();
-    expect(fixture.fingerprints.luna ?? null).toBeNull();
+  it("reports a declared but unrecorded variant as absent, not as empty", () => {
+    // Deliberately NOT the shared fixtures tree: every variant declared there is
+    // recorded now, so the absent branch is unreachable through it and an
+    // assertion against a real name would only re-prove the recorded branch.
+    const dir = syntheticFixture({ declare: { ghost: { criticModel: "m" } } });
+    const fixture = loadFixture(SYNTHETIC_FIXTURE, dir);
+    expect(fixture.snapshots.ghost).toBeNull();
+    expect(fixture.fingerprints.ghost).toBeNull();
+    // and the loader really did read this directory, so the nulls above are
+    // absence rather than a failure to find anything at all
+    expect(fixture.snapshots[BASE_VARIANT]).not.toBeNull();
+    expect(fixture.fingerprints[BASE_VARIANT]).not.toBeNull();
   });
 
   it("refuses to replay a variant that carries no fingerprint", async () => {
     // The base path only WARNS here, a concession for fixtures older than the
     // fingerprint mechanism. A variant cannot be older than it, and an
     // un-fingerprinted variant is not comparable to anything, so it must throw.
+    //
+    // The fingerprint is forced onto the loaded object rather than read from
+    // disk: luna is recorded now, and this guard must keep being tested after
+    // every declared variant has a recording.
+    const variant = declaredVariant();
     const fixture = loadFixture("podcast-ecology");
-    expect(fixture.fingerprints.luna ?? null).toBeNull();
-    await expect(runFixtureVariant(fixture, "luna")).rejects.toThrow(
+    const unfingerprinted = {
+      ...fixture,
+      fingerprints: { ...fixture.fingerprints, [variant]: null },
+    };
+    await expect(runFixtureVariant(unfingerprinted, variant)).rejects.toThrow(
       /no recorded fingerprint in meta\.json/
     );
   });
@@ -142,13 +190,17 @@ describe("fixture variant surface", () => {
 
 describe("unrecorded variant announcement", () => {
   it("names every declared variant that has no recording, without failing", () => {
+    // Fixture names that exist nowhere on disk, so no declared variant can have
+    // a recording for them. Driving it with the REAL fixture names would make
+    // this test say "luna is unrecorded", which was true when it was written and
+    // is false the moment anybody records luna.
+    const variant = declaredVariant();
     const warnings: string[] = [];
-    warnUnrecordedVariants(["podcast-ecology", "podcast-answer-arc"], (m) => warnings.push(m));
-    // luna is declared in variants.json and recorded nowhere yet
+    warnUnrecordedVariants(["ghost-fixture-a", "ghost-fixture-b"], (m) => warnings.push(m));
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatch(/variant "luna" is declared/);
-    expect(warnings[0]).toContain("podcast-ecology");
-    expect(warnings[0]).toContain("podcast-answer-arc");
+    expect(warnings[0]).toContain(`variant "${variant}" is declared`);
+    expect(warnings[0]).toContain("ghost-fixture-a");
+    expect(warnings[0]).toContain("ghost-fixture-b");
     expect(warnings[0]).toMatch(/NOT being tested/);
   });
 
@@ -157,6 +209,14 @@ describe("unrecorded variant announcement", () => {
     // no fixtures means no missing pairs - the announcement is per pair, not
     // per declaration, so it must not fire on an empty set
     warnUnrecordedVariants([], (m) => warnings.push(m));
+    expect(warnings).toEqual([]);
+  });
+
+  it("stays silent for the fixtures that ARE fully recorded", () => {
+    // the other half of the contract, and the half that only became testable
+    // once luna was recorded: no announcement for a pair that exists
+    const warnings: string[] = [];
+    warnUnrecordedVariants(["podcast-ecology", "podcast-answer-arc"], (m) => warnings.push(m));
     expect(warnings).toEqual([]);
   });
 });
