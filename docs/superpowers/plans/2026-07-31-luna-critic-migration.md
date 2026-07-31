@@ -1858,8 +1858,12 @@ with:
   const argv = process.argv.slice(2);
   const variantFlag = argv.indexOf("--variant");
   const variant = variantFlag === -1 ? BASE_VARIANT : argv[variantFlag + 1];
+  // `flagAt === -1` must be handled explicitly: without it, variantFlag + 1 is 0
+  // and the filter silently drops the FIRST case name, so `eval-topup.ts
+  // podcast-ecology` prints the usage line instead of running. Found by the
+  // Task 10 implementer against this exact snippet.
   const cases = argv.filter(
-    (a, i) => !a.startsWith("-") && i !== variantFlag + 1
+    (a, i) => !a.startsWith("-") && (variantFlag === -1 || i !== variantFlag + 1)
   );
   if (cases.length === 0 || !variant) {
     console.error("usage: eval-topup.ts [--variant NAME] <case-name> [case-name ...]");
@@ -1987,7 +1991,11 @@ with:
   const argv = process.argv.slice(2);
   const variantFlag = argv.indexOf("--variant");
   const variant = variantFlag === -1 ? BASE_VARIANT : argv[variantFlag + 1];
-  const names = argv.filter((a, i) => !a.startsWith("-") && i !== variantFlag + 1);
+  // See the note in Task 10: the `=== -1` arm is required or the first case name
+  // is dropped when no flag is given.
+  const names = argv.filter(
+    (a, i) => !a.startsWith("-") && (variantFlag === -1 || i !== variantFlag + 1)
+  );
   if (!variant) {
     console.error("usage: eval-bless.ts [--variant NAME] [case-name ...]");
     process.exit(1);
