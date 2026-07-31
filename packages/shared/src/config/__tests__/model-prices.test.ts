@@ -3,6 +3,7 @@ import {
   audioPricePerMinute,
   EMPTY_MODEL_PRICES,
   loadModelPrices,
+  readRate,
   tokenPrice,
 } from "../model-prices";
 
@@ -107,5 +108,51 @@ describe("lookups", () => {
     const prices = loadModelPrices({ MODEL_PRICES_JSON: VALID }, () => {});
     expect(tokenPrice(prices, "toString")).toBeUndefined();
     expect(tokenPrice(prices, "constructor")).toBeUndefined();
+  });
+});
+
+describe("readRate", () => {
+  it("parses a valid rate", () => {
+    const warn = vi.fn();
+    expect(readRate("0.006", "COMPUTE_COST_PER_MINUTE_USD", warn)).toBe(0.006);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("accepts zero, which is a legitimate rate", () => {
+    const warn = vi.fn();
+    expect(readRate("0", "COMPUTE_COST_PER_MINUTE_USD", warn)).toBe(0);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("returns null with NO warning when unset - not configured is not an error", () => {
+    const warn = vi.fn();
+    expect(readRate(undefined, "COMPUTE_COST_PER_MINUTE_USD", warn)).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("returns null with no warning when blank or whitespace", () => {
+    const warn = vi.fn();
+    expect(readRate("", "COMPUTE_COST_PER_MINUTE_USD", warn)).toBeNull();
+    expect(readRate("   ", "COMPUTE_COST_PER_MINUTE_USD", warn)).toBeNull();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("returns null and warns once, naming the variable, on a non-numeric value", () => {
+    const warn = vi.fn();
+    expect(readRate("cheap", "COMPUTE_COST_PER_MINUTE_USD", warn)).toBeNull();
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0][0]).toContain("COMPUTE_COST_PER_MINUTE_USD");
+  });
+
+  it("returns null and warns on a negative rate", () => {
+    const warn = vi.fn();
+    expect(readRate("-0.01", "COMPUTE_COST_PER_MINUTE_USD", warn)).toBeNull();
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("returns null and warns on a non-finite rate", () => {
+    const warn = vi.fn();
+    expect(readRate("1e999", "COMPUTE_COST_PER_MINUTE_USD", warn)).toBeNull();
+    expect(warn).toHaveBeenCalledOnce();
   });
 });

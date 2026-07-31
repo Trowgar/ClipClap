@@ -1,4 +1,9 @@
-import { jobStepService, loadModelPrices, prisma } from "@clipclap/shared";
+import {
+  jobStepService,
+  loadModelPrices,
+  prisma,
+  readRate,
+} from "@clipclap/shared";
 import { buildJobCostTelemetry } from "../cost-telemetry";
 import { criticModel, transcriptionModel } from "../model-selection";
 import { settleFreeLedger } from "./free-settlement";
@@ -9,22 +14,10 @@ import type { FinalizeStagePayload } from "./types";
 const MODEL_PRICES = loadModelPrices();
 
 /** Optional. Unset means compute is not reported - see cost-telemetry.ts. */
-const COMPUTE_COST_PER_MINUTE_USD = readOptionalRate(
-  process.env.COMPUTE_COST_PER_MINUTE_USD
+const COMPUTE_COST_PER_MINUTE_USD = readRate(
+  process.env.COMPUTE_COST_PER_MINUTE_USD,
+  "COMPUTE_COST_PER_MINUTE_USD"
 );
-
-function readOptionalRate(raw: string | undefined): number | null {
-  if (raw === undefined || raw.trim() === "") return null;
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    console.warn(
-      `[cost] COMPUTE_COST_PER_MINUTE_USD=${JSON.stringify(raw)} is not a ` +
-        `non-negative number - compute cost will not be reported.`
-    );
-    return null;
-  }
-  return parsed;
-}
 
 export async function runFinalizeStage(
   payload: FinalizeStagePayload
@@ -61,6 +54,13 @@ export async function runFinalizeStage(
     // FAILED (and refund it). TypeScript does not catch this: a spread of a
     // non-literal object skips excess-property checking, and the unit tests
     // mock prisma, so both guards are blind to it.
+    //
+    // Removing by name rather than picking the columns by name is deliberate:
+    // everything the builder returns is a column by default, so a cost field
+    // added later reaches the row without anyone remembering to list it here.
+    // An explicit pick would silently drop that new field - a quietly missing
+    // cost figure, which is the exact failure this phase exists to remove -
+    // whereas this shape fails loudly the moment a name has no column.
     //
     // Delete these two lines when the columns land, and spread `telemetry`
     // whole - that is what makes the model names start being recorded.

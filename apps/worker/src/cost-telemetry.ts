@@ -14,12 +14,14 @@ import {
  * environment (see @clipclap/shared model-prices) and an unknown model yields
  * null.
  *
- * Two fabricated constants were removed with it:
- *   - COMPUTE_COST_PER_MINUTE = 0.006, a hand-entered guess that happened to
- *     equal whisper's rate, which is why the compute column mirrored the
- *     transcription column in every row ever written. It is now an env rate,
- *     unset by default.
- *   - ANALYSIS_COST_PER_MINUTE = 0.00005, the no-token-usage fallback.
+ * Rows written before 2026-07-31 carry two fabricated figures, and their
+ * values explain what you are looking at: estimatedComputeCostUsd was
+ * sourceMinutes * 0.006, a hand-entered guess that happened to equal
+ * whisper's rate, which is why the compute column mirrors the transcription
+ * column in every historical row; and estimatedAnalysisCostUsd fell back to
+ * sourceMinutes * 0.00005 whenever token usage was missing. Neither is a
+ * measurement. Do not re-add either. Compute is now an env rate, unset by
+ * default.
  *
  * estimatedTotalCostUsd is CASH ONLY (transcription + analysis) and is null
  * unless both parts are known. It deliberately excludes compute: the server is

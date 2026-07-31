@@ -38,6 +38,30 @@ function isPrice(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
+/**
+ * A USD rate parsed from an env string. Unset or blank yields null silently -
+ * "not configured" is not an error. Anything else unusable yields null loudly.
+ *
+ * `label` names the variable in the warning: without it a bad value is reported
+ * with no way to tell which knob to fix.
+ */
+export function readRate(
+  raw: string | undefined,
+  label: string,
+  warn: Warn = console.warn
+): number | null {
+  if (raw === undefined || raw.trim() === "") return null;
+  const parsed = Number(raw);
+  if (!isPrice(parsed)) {
+    warn(
+      `[model-prices] ${label}=${JSON.stringify(raw)} is not a finite ` +
+        `non-negative number - ignoring it.`
+    );
+    return null;
+  }
+  return parsed;
+}
+
 function readTokenPrices(raw: unknown, warn: Warn): Record<string, TokenPrice> {
   if (raw === undefined) return {};
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {

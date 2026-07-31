@@ -12,6 +12,7 @@ export {
   loadModelPrices,
   tokenPrice,
   audioPricePerMinute,
+  readRate,
   EMPTY_MODEL_PRICES,
 } from "./model-prices";
 export type { ModelPrices, TokenPrice } from "./model-prices";

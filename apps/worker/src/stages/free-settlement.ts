@@ -93,8 +93,14 @@ export async function settleFreeLedger(
     // the conservative error: it over-counts a job that spent less than
     // predicted, and over-counting closes the tier early rather than late.
     //
-    // A DONE job always transcribed, so its transcription line is always
-    // positive and this never skips a run that really spent money.
+    // A DONE job always transcribed, but its transcription line is only positive
+    // if MODEL_PRICES_JSON prices the model it used - an unpriced model yields
+    // null by design (see cost-telemetry.ts). So a missing or incomplete price
+    // table skips the true-up for every job and leaves the reservation estimate
+    // standing. That is the safe direction - over-counting closes the tier early,
+    // never late - but it means an unpriced model silently stops the ledger from
+    // tracking real spend. The boot warning in index.ts (Task 5) is what makes
+    // that visible; without it this failure is completely silent.
     const cashCostUsd =
       (job.estimatedTranscriptionCostUsd ?? 0) +
       (job.estimatedAnalysisCostUsd ?? 0);
