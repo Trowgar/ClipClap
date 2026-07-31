@@ -19,6 +19,7 @@ import {
   type SilenceInterval,
 } from "./audio-chunks";
 import { whisperLanguageToIso } from "../analyze-v2/language";
+import { transcriptionModel } from "../models";
 
 const execFileAsync = promisify(execFile);
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -150,7 +151,7 @@ async function whisperCall(
 ): Promise<RawWhisperResponse> {
   const response = await openai.audio.transcriptions.create({
     file: createReadStream(audioPath),
-    model: process.env.OPENAI_TRANSCRIPTION_MODEL || "whisper-1",
+    model: transcriptionModel(),
     response_format: "verbose_json",
     timestamp_granularities: ["segment", "word"],
     ...(languageIso ? { language: languageIso } : {}),

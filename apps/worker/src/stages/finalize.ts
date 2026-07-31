@@ -1,5 +1,6 @@
 import { jobStepService, prisma } from "@clipclap/shared";
 import { buildJobCostTelemetry } from "../cost-telemetry";
+import { criticModel, transcriptionModel } from "../models";
 import { settleFreeLedger } from "./free-settlement";
 import type { FinalizeStagePayload } from "./types";
 
@@ -28,11 +29,10 @@ export async function runFinalizeStage(
           analyzeMs: job.analyzeMs ?? 0,
           renderMs: job.renderMs ?? 0,
           clipsGenerated: job.clipsGenerated,
-          transcriptionModel:
-            process.env.OPENAI_TRANSCRIPTION_MODEL || "whisper-1",
+          transcriptionModel: transcriptionModel(),
           analysisInputTokens: job.analysisInputTokens,
           analysisOutputTokens: job.analysisOutputTokens,
-          criticModel: process.env.OPENAI_CRITIC_MODEL || "gpt-5.1",
+          criticModel: criticModel(),
         }),
       },
     });
