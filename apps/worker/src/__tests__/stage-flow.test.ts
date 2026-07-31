@@ -408,10 +408,30 @@ describe("stage handlers", () => {
         error: null,
       }),
     });
+  });
 
-    // Pins the seam Task 2 created: the model finalize PRICES must be the model
-    // the engine RAN. Reverting either call site to its own env-var literal used
-    // to leave the whole suite green - see the Task 2 review.
+  // Pins the seam Task 2 created: the model finalize PRICES must be the model
+  // the engine RAN. Reverting either call site to its own env-var literal used
+  // to leave the whole suite green - see the Task 2 review. It gets its own test
+  // and its own fixture so that a break here reports as a pricing-seam failure
+  // rather than as an error-clearing one, and so an edit to that test's fixture
+  // cannot quietly change what this runs against.
+  it("prices the job with the same models the engine actually ran", async () => {
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      sourceDurationSec: 600,
+      processingStartedAt: new Date("2026-05-09T22:00:00.000Z"),
+      transcribeMs: 12000,
+      analyzeMs: 8000,
+      renderMs: 20000,
+      clipsGenerated: 3,
+      analysisInputTokens: 40000,
+      analysisOutputTokens: 5000,
+      error: null,
+    });
+
+    await runFinalizeStage({ jobId: "job1", userId: "u1" });
+
     expect(mocks.jobUpdate).toHaveBeenCalledWith({
       where: { id: "job1" },
       data: expect.objectContaining({

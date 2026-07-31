@@ -17,13 +17,33 @@ import type { FinalizeStagePayload } from "./types";
  * unknown arguments rather than ignoring them - the throw is caught by
  * runFinalizeStage, which marks the job FAILED and refunds it. Spreading a
  * non-literal skips TypeScript's excess-property check and the tests mock
- * Prisma, so neither guard saw it the first time. This one does: adding a field
- * to buildJobCostTelemetry that is not a Job column now fails the typecheck.
+ * Prisma, so neither guard saw it the first time.
+ *
+ * This checks BOTH halves of "fits the row", because each misses what the other
+ * catches. The outer arm rejects a field that is not a Job column at all. The
+ * inner arm rejects a field whose VALUE the column cannot accept - the columns
+ * this guard was written for are String?, so criticModel() one day returning a
+ * non-string is the plausible slip, and a key-only check waves it through.
+ * Prisma's FieldUpdateOperationsInput wrappers do not get in the way: they are
+ * supertypes, so a plain `string` is assignable to
+ * `string | StringFieldUpdateOperationsInput | null`.
+ *
+ * Nested rather than intersected on purpose - it keeps the two diagnostics
+ * distinct, so the failure says which kind of mistake was made.
  */
+type Telemetry = ReturnType<typeof buildJobCostTelemetry>;
 type TelemetryFitsJobRow =
-  keyof ReturnType<typeof buildJobCostTelemetry> extends keyof Prisma.JobUncheckedUpdateInput
-    ? true
+  keyof Telemetry extends keyof Prisma.JobUncheckedUpdateInput
+    ? Telemetry extends Pick<
+        Prisma.JobUncheckedUpdateInput,
+        keyof Telemetry & keyof Prisma.JobUncheckedUpdateInput
+      >
+      ? true
+      : {
+          error: "buildJobCostTelemetry returns a field whose type the Job column cannot accept";
+        }
     : { error: "buildJobCostTelemetry returns a field that is not a Job column" };
+// Do not delete: this const IS the check.
 const _telemetryFitsJobRow: TelemetryFitsJobRow = true;
 
 /** Parsed once at module load: the price table does not change under a running
@@ -67,14 +87,17 @@ export async function runFinalizeStage(
       computeCostPerMinuteUsd: COMPUTE_COST_PER_MINUTE_USD,
     });
 
-    await prisma.job.update({
-      where: { id: payload.jobId },
-      data: {
-        status: "DONE",
-        error: null,
-        ...telemetry,
-      },
-    });
+    // Annotated rather than inlined so that deleting the guard above changes
+    // real code rather than a lone unused const. This does NOT replace it: a
+    // spread of a non-literal skips excess-property checking here too, which is
+    // exactly how the unknown-argument throw reached production.
+    const data: Prisma.JobUncheckedUpdateInput = {
+      status: "DONE",
+      error: null,
+      ...telemetry,
+    };
+
+    await prisma.job.update({ where: { id: payload.jobId }, data });
 
     // Settle the free ledger against the outcome that was just written: true up
     // the reservation's cost from the telemetry above, and give the allowance
