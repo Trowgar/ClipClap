@@ -1105,8 +1105,15 @@ In `apps/worker/src/index.ts`, add to the imports:
 ```ts
 import { audioPricePerMinute, loadModelPrices, tokenPrice } from "@clipclap/shared";
 import { loadAnalyzeConfig } from "./analyze-v2/config";
-import { transcriptionModel } from "./model-selection";
+import { highlightsModel, transcriptionModel } from "./model-selection";
 ```
+
+**Why this checks more than the Task 4 guard does.** The guard asserts the shipped
+DEFAULTS are priced; it reads `loadAnalyzeConfig({})` with an empty env because no test
+process can read `.env` (see Task 4 for the three-different-md5 finding). This warning is
+the other half: it reads the REAL environment, so it is the only thing that catches an
+operator who points `OPENAI_CRITIC_MODEL` at a model nobody priced. Keep both - they cover
+different failures, and neither subsumes the other.
 
 Add this function and its call immediately after the existing
 `console.log(\`ClipClap worker starting with role=${role ?? "(empty)"}\`);` line:
@@ -1122,7 +1129,13 @@ function warnAboutMissingPrices(): void {
   const prices = loadModelPrices();
   const cfg = loadAnalyzeConfig();
   const missing: string[] = [];
-  for (const model of [cfg.scanModel, cfg.criticModel, cfg.criticModelFallback, cfg.finalizerModel]) {
+  for (const model of [
+    cfg.scanModel,
+    cfg.criticModel,
+    cfg.criticModelFallback,
+    cfg.finalizerModel,
+    highlightsModel(),
+  ]) {
     if (tokenPrice(prices, model) === undefined) missing.push(model);
   }
   const asr = transcriptionModel();
