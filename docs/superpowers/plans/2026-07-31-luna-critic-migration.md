@@ -503,10 +503,13 @@ with:
 - [ ] **Step 7: Verify no literal survives**
 
 ```bash
-grep -rn '"gpt-5.1"\|"whisper-1"' apps/worker/src --include=*.ts | grep -v __tests__ | grep -v analyze-v2/config.ts | grep -v models.ts
+grep -rn '"gpt-5.1"\|"whisper-1"' apps/worker/src --include=*.ts \
+  | grep -v __tests__ | grep -v analyze-v2/config.ts | grep -v models.ts | grep -v cost-telemetry.ts
 ```
 
-Expected: no output. The only remaining defaults are in `analyze-v2/config.ts` and `models.ts`.
+Expected: no output.
+
+`cost-telemetry.ts` is excluded on purpose and is NOT a leftover: it still holds the old `TRANSCRIPTION_COST_PER_MINUTE` and `MODEL_TOKEN_PRICES` tables, whose keys are model names. Those tables are deleted in Task 3, and the grep line above drops the exclusion at that point. The only remaining *defaults* after this task are in `analyze-v2/config.ts` and `models.ts`.
 
 - [ ] **Step 8: Run the worker suite to check nothing regressed**
 
