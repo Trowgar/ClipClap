@@ -111,7 +111,11 @@ describe("runCritic", () => {
         completions: {
           create: vi.fn(async (body: any) => {
             caps.push(body.max_completion_tokens);
-            return ok([verdictRow("a")]);
+            // Answers about ALL THREE deliberately: an incomplete answer now
+            // buys a second, smaller call (the silent-omission retry), and this
+            // test is about the budget a full batch is given. Asserting the
+            // whole array therefore also pins "one batch, one call".
+            return ok([verdictRow("a"), verdictRow("b", { id: "b" }), verdictRow("c", { id: "c" })]);
           }),
         },
       },
@@ -261,10 +265,108 @@ describe("runCritic", () => {
   });
 
   it("counts candidates silently omitted from a successful batch", async () => {
+    // The retry below cannot help here: this stub answers about "a" whatever it
+    // is asked, so the re-ask comes back with a row for an id that is not in the
+    // retried batch and dies on the per-batch id guard.
     const client = seqClient([() => ok([verdictRow("a")])]);
     const r = await runCritic(client, newUsage(), nodes(10), [cand("a", 0), cand("b", 4)], "ru", cfg);
     expect(r.verdicts).toHaveLength(1);
     expect(r.telemetry.omittedDrops).toBe(1);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Silent-omission retry. Measured once on gpt-5.6-luna (podcast-ecology: 24
+  // verdicts for 25 candidates, c8 unanswered, no marker of any kind).
+  // ---------------------------------------------------------------------------
+
+  it("re-asks exactly the omitted ids in one follow-up call", async () => {
+    const asked: string[][] = [];
+    const client = {
+      chat: {
+        completions: {
+          create: vi.fn(async (body: any) => {
+            const user: string = body.messages.find((m: any) => m.role === "user").content;
+            const ids = [...user.matchAll(/CANDIDATE (\w+)/g)].map((m) => m[1]);
+            asked.push(ids);
+            // first ask: answer about "a" only, say nothing about "b" or "c"
+            if (asked.length === 1) return ok([verdictRow("a")]);
+            return ok(ids.map((id) => verdictRow(id, { id })));
+          }),
+        },
+      },
+    } as any;
+    const batch = [cand("a", 0), cand("b", 4), cand("c", 8)];
+    const r = await runCritic(client, newUsage(), nodes(20), batch, "ru", {
+      ...cfg,
+      criticBatchSize: 3,
+    });
+
+    expect(client.chat.completions.create).toHaveBeenCalledTimes(2);
+    // exactly the missing ids, in candidate order - not the whole batch again
+    expect(asked[1]).toEqual(["b", "c"]);
+    expect(r.verdicts.map((v) => v.id).sort()).toEqual(["a", "b", "c"]);
+    expect(r.telemetry.omittedFirstPass).toBe(2);
+    expect(r.telemetry.omittedRecovered).toBe(2);
+    expect(r.telemetry.omittedRetryFailed).toBe(0);
+    expect(r.telemetry.omittedDrops).toBe(0);
+  });
+
+  it("makes no follow-up call when the batch answered about every candidate", async () => {
+    const client = seqClient([
+      () => ok([verdictRow("a"), verdictRow("b", { id: "b" }), verdictRow("c", { id: "c" })]),
+    ]);
+    const batch = [cand("a", 0), cand("b", 4), cand("c", 8)];
+    const r = await runCritic(client, newUsage(), nodes(20), batch, "ru", {
+      ...cfg,
+      criticBatchSize: 3,
+    });
+
+    expect(client.chat.completions.create).toHaveBeenCalledTimes(1);
+    expect(r.verdicts).toHaveLength(3);
+    expect(r.telemetry.omittedFirstPass).toBe(0);
+    expect(r.telemetry.omittedRecovered).toBe(0);
+    expect(r.telemetry.omittedRetryFailed).toBe(0);
+  });
+
+  it("drops a candidate the retry omits too - one pass, never a loop", async () => {
+    // "b" is never mentioned, no matter how often it is asked about. Without the
+    // one-pass bound this recurses until the stack or the bill runs out.
+    const client = {
+      chat: {
+        completions: {
+          create: vi.fn(async () => ok([verdictRow("a")])),
+        },
+      },
+    } as any;
+    const batch = [cand("a", 0), cand("b", 4)];
+    const r = await runCritic(client, newUsage(), nodes(10), batch, "ru", {
+      ...cfg,
+      criticBatchSize: 2,
+    });
+
+    expect(client.chat.completions.create).toHaveBeenCalledTimes(2);
+    expect(r.verdicts.map((v) => v.id)).toEqual(["a"]);
+    expect(r.telemetry.omittedFirstPass).toBe(1);
+    expect(r.telemetry.omittedRecovered).toBe(0);
+    expect(r.telemetry.omittedRetryFailed).toBe(1);
+    // the candidate is still an unattributed loss, which is what index.ts reads
+    expect(r.telemetry.omittedDrops).toBe(1);
+  });
+
+  it("counts a rescued row that fails a business invariant as NOT recovered", async () => {
+    // Recovery is measured against verdicts that survived every check, not
+    // against rows the retry returned - otherwise a run could report a rescue
+    // and still ship the thinner set.
+    const client = seqClient([
+      () => ok([verdictRow("a")]),
+      () => ok([verdictRow("b", { id: "b", start_node: -1 })]),
+    ]);
+    const r = await runCritic(client, newUsage(), nodes(10), [cand("a", 0), cand("b", 4)], "ru", cfg);
+    expect(r.verdicts.map((v) => v.id)).toEqual(["a"]);
+    expect(r.telemetry.omittedFirstPass).toBe(1);
+    expect(r.telemetry.omittedRecovered).toBe(0);
+    expect(r.telemetry.omittedRetryFailed).toBe(1);
+    expect(r.telemetry.invariantDrops).toBe(1);
   });
 
   it("degrades gracefully when the fallback model result is truncated", async () => {

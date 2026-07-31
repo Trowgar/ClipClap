@@ -147,6 +147,14 @@ export interface CriticRunResult {
     refusalDrops: number;
     truncatedDrops: number;
     omittedDrops: number;
+    /** Candidates whose batch's FIRST critic call returned no row about them.
+     *  The population the one retry pass below is asked to rescue. */
+    omittedFirstPass: number;
+    /** ...of which the retry brought back a verdict that survived every check. */
+    omittedRecovered: number;
+    /** ...and of which it did not. omittedFirstPass = recovered + retryFailed,
+     *  always: both are measured against the same set at the end of the run. */
+    omittedRetryFailed: number;
     invariantDrops: number;
     fallbackModelUsed: boolean;
   };
@@ -172,6 +180,9 @@ export async function runCritic(
     refusalDrops: 0,
     truncatedDrops: 0,
     omittedDrops: 0,
+    omittedFirstPass: 0,
+    omittedRecovered: 0,
+    omittedRetryFailed: 0,
     invariantDrops: 0,
     fallbackModelUsed: false,
   };
@@ -184,6 +195,10 @@ export async function runCritic(
   const kindById = new Map(candidates.map((c) => [c.id, c.type]));
   /** ids whose loss is already attributed to refusal/truncation telemetry. */
   const accountedDropIds = new Set<string>();
+  /** ids the first critic call for their batch said nothing at all about, i.e.
+   *  the ones the retry pass was spent on. Resolved into recovered/failed at the
+   *  end, against the verdicts that actually survived. */
+  const firstPassOmittedIds = new Set<string>();
 
   const callBatch = async (
     batch: MergedCandidate[],
@@ -200,7 +215,20 @@ export async function runCritic(
       retryDelayMs: options.retryDelayMs,
     });
 
-  const processBatch = async (batch: MergedCandidate[]): Promise<TaggedRow[]> => {
+  /**
+   * `mayRetryOmissions` is the ONE-PASS BOUND on the silent-omission retry
+   * below, and it is a parameter rather than a counter so the bound is
+   * structural: the retry is the only call site that passes false, and every
+   * path reachable from it inherits that false. There is no arithmetic to get
+   * wrong and no way to spell a second pass.
+   *
+   * The split path passes it through unchanged: a split child IS the first pass
+   * for the candidates it carries, so it keeps its own single retry.
+   */
+  const processBatch = async (
+    batch: MergedCandidate[],
+    mayRetryOmissions = true
+  ): Promise<TaggedRow[]> => {
     const ids = () => batch.map((c) => c.id).join(",");
 
     const split = async (): Promise<TaggedRow[]> => {
@@ -210,8 +238,8 @@ export async function runCritic(
       // not the systematic starvation the old flat 400/candidate produced.
       telemetry.batchSplits += 1;
       const mid = Math.ceil(batch.length / 2);
-      const first = await processBatch(batch.slice(0, mid));
-      const second = await processBatch(batch.slice(mid));
+      const first = await processBatch(batch.slice(0, mid), mayRetryOmissions);
+      const second = await processBatch(batch.slice(mid), mayRetryOmissions);
       return [...first, ...second];
     };
     const dropTruncated = (): TaggedRow[] => {
@@ -287,10 +315,52 @@ export async function runCritic(
       }
       own.push({ row, degraded });
     }
-    return own;
+
+    // SILENT OMISSION - the call succeeded, the schema was honoured, and the
+    // model simply did not mention some candidate it was handed. Measured once
+    // in 25 candidates on gpt-5.6-luna (podcast-ecology, c8), never in 52 on
+    // gpt-5.1. It has no marker of any kind: no truncation, no refusal, nothing
+    // on disk to see it by, which is what makes it invisible recall loss - the
+    // orchestrator only raises when NOTHING survives, so with survivors a
+    // thinner set ships quietly.
+    //
+    // So ask again, once, about exactly the candidates that got no row. Asking
+    // is the whole mechanism: no assertion about why, no classification of the
+    // failure, nothing that could turn a content answer into a failed job -
+    // engine-notes §4, "when torn between asserting something about a failure
+    // and staying quiet and retrying, stay quiet".
+    //
+    // Through processBatch, not a hand-rolled call, so the follow-up is a REAL
+    // critic prompt over that subset (criticUserPrompt via callBatch, the same
+    // path batch splitting re-asks through) and inherits the same truncation,
+    // refusal and fallback handling. The only thing it does not inherit is the
+    // right to do this again.
+    //
+    // Omission is measured on ROWS, after the per-batch id guard and before the
+    // business invariants: a row that came back and then failed a field check
+    // was an answer, and it is already counted by invariantDrops. The retry is
+    // for silence only, which keeps this strictly additive - a batch the model
+    // answered completely makes no second call and ships byte-identically.
+    const answered = new Set(own.map((r) => r.row.id));
+    const missing = batch.filter((c) => !answered.has(c.id));
+    if (missing.length === 0 || !mayRetryOmissions) return own;
+
+    for (const c of missing) firstPassOmittedIds.add(c.id);
+    console.warn(
+      `[analyze-v2] critic omitted ${missing.map((c) => c.id).join(",")} from batch ` +
+        `[${ids()}] - re-asking once`
+    );
+    const retried = await processBatch(missing, false);
+    return [...own, ...retried];
   };
 
-  const tagged = (await mapWithConcurrency(batches, CRITIC_CONCURRENCY, processBatch)).flat();
+  // Wrapped, NOT passed by reference: mapWithConcurrency calls fn(item, index),
+  // so handing it processBatch directly would bind the batch INDEX to
+  // mayRetryOmissions - and index 0 is falsy, so batch 0 would silently be the
+  // one batch that never retries an omission.
+  const tagged = (
+    await mapWithConcurrency(batches, CRITIC_CONCURRENCY, (batch) => processBatch(batch))
+  ).flat();
 
   // business invariants: every id at most once, sane fields, node indices in range
   const verdicts: CriticVerdict[] = [];
@@ -364,6 +434,28 @@ export async function runCritic(
     telemetry.omittedDrops += omitted.length;
     console.warn(`[analyze-v2] critic returned no verdict for candidate ${omitted.join(",")}`);
   }
+
+  // What the retry pass was worth, resolved against the verdicts that actually
+  // shipped rather than against the rows the retry returned - a rescued row that
+  // then failed a business invariant rescued nothing.
+  //
+  // omittedDrops is deliberately NOT redefined: it still counts every candidate
+  // that ended with no verdict and no attributed drop, which is exactly what
+  // index.ts's unjudged sum needs and what it meant before this retry existed.
+  // It simply gets smaller when the retry works. The three counters below are
+  // the new information, and they are separate names because a reader who
+  // cannot tell "the model never omitted anything" from "it omitted three and
+  // we got all three back" has been told less than before, not more.
+  //
+  // omittedFirstPass and omittedDrops answer different questions and will not
+  // generally be equal even when the retry recovers nothing: a candidate whose
+  // only row died in the invariant filter is an omittedDrop that was never a
+  // first-pass omission (it got an answer, just not a usable one).
+  telemetry.omittedFirstPass = firstPassOmittedIds.size;
+  telemetry.omittedRecovered = [...firstPassOmittedIds].filter((id) =>
+    verdictIds.has(id)
+  ).length;
+  telemetry.omittedRetryFailed = telemetry.omittedFirstPass - telemetry.omittedRecovered;
 
   return { verdicts, telemetry };
 }
