@@ -59,7 +59,11 @@ import {
 import type { SentenceNode } from "../analyze-v2/types";
 import { readdirSync } from "fs";
 
-const CASES = readdirSync(FIXTURES_DIR).sort();
+// Directories only: FIXTURES_DIR also holds variants.json, which is not a fixture.
+const CASES = readdirSync(FIXTURES_DIR, { withFileTypes: true })
+  .filter((e) => e.isDirectory())
+  .map((e) => e.name)
+  .sort();
 
 /** The owner-reported defect: podcast-ecology 36.68-39.30s, six words that
  *  occur exactly once in the episode. The region must reach it. */
