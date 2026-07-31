@@ -186,36 +186,14 @@ export function loadFixture(name: string): Fixture {
  */
 export async function runFixture(
   fixture: Fixture,
-  overrides: Partial<AnalyzeConfig> = {},
   extraResponses: Record<string, string> = {}
 ): Promise<V2Result> {
-  const cfg: AnalyzeConfig = {
-    ...loadAnalyzeConfig({}),
-    engine: "recall-critic",
-    ...overrides,
-  };
-  // Compared against the EFFECTIVE config: an override of a fingerprinted knob
-  // invalidates the recording exactly as an edit to the default would.
-  assertFingerprintMatches(fixture.name, fixture.fingerprint, computeFingerprint(cfg));
-  const client = createReplayClient({ ...fixture.responses, ...extraResponses });
-  const result = await analyzeHighlightsV2(fixture.transcript, {
-    client,
-    cfg,
-    retryDelayMs: 1,
-  });
-  if (client.missing.length > 0) {
-    // keys repeat because callJsonSchema retries once before giving up
-    const unique = [...new Set(client.missing)];
-    throw new Error(
-      `fixture "${fixture.name}" is stale: ${unique.length} unrecorded request(s) [${unique.join(", ")}]. ` +
-        `Re-record with eval-record.ts, or check whether a prompt changed.`
-    );
-  }
-  return result;
+  return runFixtureVariant(fixture, BASE_VARIANT, extraResponses);
 }
 
 /**
- * Replays a fixture under a named variant.
+ * Replays a fixture under a named variant. The base variant IS the plain replay,
+ * so runFixture is this function with the base name - there is no second path.
  *
  * The scanner's request keys are identical across variants, so its recorded
  * answers are reused byte for byte and the candidate set entering the critic is
@@ -229,11 +207,24 @@ export async function runFixtureVariant(
   extraResponses: Record<string, string> = {}
 ): Promise<V2Result> {
   const cfg = variantConfig(variant);
-  assertFingerprintMatches(
-    `${fixture.name}[${variant}]`,
-    fixture.fingerprints[variant] ?? null,
-    computeFingerprint(cfg)
-  );
+  const isBase = variant === BASE_VARIANT;
+  // Base keeps the bare fixture name in its messages; only a variant run is
+  // worth the "[name]" qualifier, and only a variant run is topped up.
+  const label = isBase ? fixture.name : `${fixture.name}[${variant}]`;
+  const recorded = fixture.fingerprints[variant] ?? null;
+  // assertFingerprintMatches WARNS on an absent fingerprint, a concession for
+  // fixtures recorded before fingerprinting existed. A variant cannot be one of
+  // those - it postdates the mechanism - and comparability is the only property
+  // it has, so an unfingerprinted variant replay is not merely unverified, it is
+  // worthless. Refuse it here and leave the base concession intact.
+  if (!isBase && recorded === null) {
+    throw new Error(
+      `fixture "${fixture.name}" variant "${variant}" has no recorded fingerprint in meta.json. ` +
+        `A variant exists only to be compared against another, so an unfingerprinted one cannot be ` +
+        `known to be comparable. Re-record it with eval-topup.ts --variant ${variant}.`
+    );
+  }
+  assertFingerprintMatches(label, recorded, computeFingerprint(cfg));
   const client = createReplayClient({ ...fixture.responses, ...extraResponses });
   const result = await analyzeHighlightsV2(fixture.transcript, {
     client,
@@ -241,13 +232,48 @@ export async function runFixtureVariant(
     retryDelayMs: 1,
   });
   if (client.missing.length > 0) {
+    // keys repeat because callJsonSchema retries once before giving up
     const unique = [...new Set(client.missing)];
+    // The remediation differs by path: base is produced by eval-record.ts, a
+    // variant is topped up onto an existing recording.
     throw new Error(
-      `fixture "${fixture.name}" variant "${variant}" is stale: ${unique.length} ` +
-        `unrecorded request(s) [${unique.join(", ")}]. Record them with:\n` +
-        `  docker compose exec worker-analyze sh -c "cd /app/apps/worker && ` +
-        `npx tsx src/scripts/eval-topup.ts --variant ${variant} ${fixture.name}"`
+      isBase
+        ? `fixture "${fixture.name}" is stale: ${unique.length} unrecorded request(s) ` +
+          `[${unique.join(", ")}]. Re-record with eval-record.ts, or check whether a prompt changed.`
+        : `fixture "${fixture.name}" variant "${variant}" is stale: ${unique.length} ` +
+          `unrecorded request(s) [${unique.join(", ")}]. Record them with:\n` +
+          `  docker compose exec worker-analyze sh -c "cd /app/apps/worker && ` +
+          `npx tsx src/scripts/eval-topup.ts --variant ${variant} ${fixture.name}"`
     );
   }
   return result;
+}
+
+/**
+ * Announces (fixture, variant) pairs that are declared but never recorded.
+ *
+ * Declaring a variant is how a recording gets STARTED, so reddening the suite
+ * for one would make adding a candidate model a broken-build event. But silence
+ * is worse than it looks: the pair is simply absent from the case list, so the
+ * suite goes green while proving nothing about the declared model. Same shape as
+ * assertFingerprintMatches' "cannot verify" path - announce, do not fail - and
+ * the same injectable sink, so the announcement itself is testable.
+ */
+export function warnUnrecordedVariants(
+  fixtures: string[],
+  warn: (message: string) => void = console.warn
+): void {
+  for (const variant of variantNames()) {
+    if (variant === BASE_VARIANT) continue;
+    const missing = fixtures.filter(
+      (name) => !existsSync(join(FIXTURES_DIR, name, snapshotFileName(variant)))
+    );
+    if (missing.length > 0) {
+      warn(
+        `[eval] variant "${variant}" is declared in variants.json but has no recording for: ` +
+          `${missing.join(", ")}. Those pairs are NOT being tested. ` +
+          `Record with eval-topup.ts --variant ${variant}.`
+      );
+    }
+  }
 }

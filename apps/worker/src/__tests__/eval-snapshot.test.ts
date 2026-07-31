@@ -10,6 +10,7 @@ import {
   toShape,
   variantConfig,
   variantNames,
+  warnUnrecordedVariants,
 } from "./helpers/eval-fixture";
 import { computeFingerprint } from "./helpers/eval-fingerprint";
 
@@ -33,12 +34,15 @@ const FIXTURES = readdirSync(FIXTURES_DIR, { withFileTypes: true })
 /** Every (fixture, variant) pair that has actually been recorded. A declared
  *  but unrecorded variant is skipped rather than failed: declaring it is how a
  *  recording gets started, and reddening the suite for that would make adding a
- *  candidate model a broken-build event. */
+ *  candidate model a broken-build event. Skipped is not the same as unnoticed
+ *  though - the warning below names every pair this list silently drops. */
 const CASES: Array<[string, string]> = FIXTURES.flatMap((name) =>
   variantNames()
     .filter((variant) => existsSync(join(FIXTURES_DIR, name, snapshotFileName(variant))))
     .map((variant) => [name, variant] as [string, string])
 );
+
+warnUnrecordedVariants(FIXTURES);
 
 describe("eval fixtures", () => {
   it("finds the recorded fixtures on disk", () => {

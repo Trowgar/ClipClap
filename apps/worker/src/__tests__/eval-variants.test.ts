@@ -1,14 +1,16 @@
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   BASE_VARIANT,
   loadFixture,
   loadVariantDefs,
+  runFixtureVariant,
   snapshotFileName,
   variantConfig,
   variantNames,
+  warnUnrecordedVariants,
 } from "./helpers/eval-fixture";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 
@@ -105,5 +107,56 @@ describe("fixture variant surface", () => {
     // luna is declared but not yet recorded at this point in the plan
     expect(fixture.snapshots.luna ?? null).toBeNull();
     expect(fixture.fingerprints.luna ?? null).toBeNull();
+  });
+
+  it("refuses to replay a variant that carries no fingerprint", async () => {
+    // The base path only WARNS here, a concession for fixtures older than the
+    // fingerprint mechanism. A variant cannot be older than it, and an
+    // un-fingerprinted variant is not comparable to anything, so it must throw.
+    const fixture = loadFixture("podcast-ecology");
+    expect(fixture.fingerprints.luna ?? null).toBeNull();
+    await expect(runFixtureVariant(fixture, "luna")).rejects.toThrow(
+      /no recorded fingerprint in meta\.json/
+    );
+  });
+
+  it("still only warns when the BASE fingerprint is missing", async () => {
+    // guards the guard above: the throw must not have swallowed the legacy
+    // concession, or every pre-fingerprint fixture would red at once
+    const fixture = loadFixture("podcast-ecology");
+    const warnings: string[] = [];
+    const sink = vi.spyOn(console, "warn").mockImplementation((m: string) => {
+      warnings.push(m);
+    });
+    try {
+      await runFixtureVariant(
+        { ...fixture, fingerprints: { ...fixture.fingerprints, [BASE_VARIANT]: null } },
+        BASE_VARIANT
+      );
+    } finally {
+      sink.mockRestore();
+    }
+    expect(warnings.join("\n")).toMatch(/has no meta\.json engine fingerprint/);
+  });
+});
+
+describe("unrecorded variant announcement", () => {
+  it("names every declared variant that has no recording, without failing", () => {
+    const warnings: string[] = [];
+    warnUnrecordedVariants(["podcast-ecology", "podcast-answer-arc"], (m) => warnings.push(m));
+    // luna is declared in variants.json and recorded nowhere yet
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/variant "luna" is declared/);
+    expect(warnings[0]).toContain("podcast-ecology");
+    expect(warnings[0]).toContain("podcast-answer-arc");
+    expect(warnings[0]).toMatch(/NOT being tested/);
+  });
+
+  it("says nothing when a declared variant is recorded everywhere", () => {
+    const warnings: string[] = [];
+    // no fixtures means no missing pairs - the announcement is per pair, not
+    // per declaration, so it must not fire on an empty set
+    warnUnrecordedVariants([], (m) => warnings.push(m));
+    expect(warnings).toEqual([]);
   });
 });
