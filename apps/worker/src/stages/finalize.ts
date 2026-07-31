@@ -38,26 +38,41 @@ export async function runFinalizeStage(
     const processingEndedAt = new Date();
     const processingStartedAt = job.processingStartedAt ?? processingEndedAt;
 
+    const telemetry = buildJobCostTelemetry({
+      sourceDurationSec: job.sourceDurationSec,
+      processingStartedAt,
+      processingEndedAt,
+      transcribeMs: job.transcribeMs ?? 0,
+      analyzeMs: job.analyzeMs ?? 0,
+      renderMs: job.renderMs ?? 0,
+      clipsGenerated: job.clipsGenerated,
+      transcriptionModel: transcriptionModel(),
+      analysisInputTokens: job.analysisInputTokens,
+      analysisOutputTokens: job.analysisOutputTokens,
+      criticModel: criticModel(),
+      prices: MODEL_PRICES,
+      computeCostPerMinuteUsd: COMPUTE_COST_PER_MINUTE_USD,
+    });
+
+    // The builder reports which models produced the figures, but the Job table
+    // has no column for either yet, and Prisma REJECTS an unknown argument
+    // rather than ignoring it - `Unknown argument \`criticModel\`` - which would
+    // throw here, be caught below, and mark every successfully rendered job
+    // FAILED (and refund it). TypeScript does not catch this: a spread of a
+    // non-literal object skips excess-property checking, and the unit tests
+    // mock prisma, so both guards are blind to it.
+    //
+    // Delete these two lines when the columns land, and spread `telemetry`
+    // whole - that is what makes the model names start being recorded.
+    const { criticModel: _critic, transcriptionModel: _asr, ...costColumns } =
+      telemetry;
+
     await prisma.job.update({
       where: { id: payload.jobId },
       data: {
         status: "DONE",
         error: null,
-        ...buildJobCostTelemetry({
-          sourceDurationSec: job.sourceDurationSec,
-          processingStartedAt,
-          processingEndedAt,
-          transcribeMs: job.transcribeMs ?? 0,
-          analyzeMs: job.analyzeMs ?? 0,
-          renderMs: job.renderMs ?? 0,
-          clipsGenerated: job.clipsGenerated,
-          transcriptionModel: transcriptionModel(),
-          analysisInputTokens: job.analysisInputTokens,
-          analysisOutputTokens: job.analysisOutputTokens,
-          criticModel: criticModel(),
-          prices: MODEL_PRICES,
-          computeCostPerMinuteUsd: COMPUTE_COST_PER_MINUTE_USD,
-        }),
+        ...costColumns,
       },
     });
 
