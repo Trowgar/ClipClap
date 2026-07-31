@@ -241,16 +241,19 @@ async function main() {
         );
         continue;
       }
-    } else {
-      // The remediation differs by path, and pointing a variant at eval-record.ts
-      // would be worse than saying nothing: eval-record re-records the BASE, so
-      // following it would spend money and still leave the variant unrecorded.
+    } else if (variant === BASE_VARIANT) {
+      // Base only, and load-bearing there: a fixture recorded before
+      // fingerprinting existed legitimately replays without one, and this line
+      // is the only thing that says the run is unverified.
+      //
+      // A variant is deliberately silent here. runFixtureVariant throws on a
+      // missing variant fingerprint a few lines below, naming the fixture, the
+      // variant, the reason and the remedy - so warning first would put a vaguer
+      // version of that error one line ahead of it. This script's output IS the
+      // review artefact; two lines saying one thing is how it stops being read.
       console.log(
-        `${name}: WARNING - no meta.json fingerprint for variant "${variant}", cannot verify ` +
-          `the recording matches the current config. ` +
-          (variant === BASE_VARIANT
-            ? `Re-record with eval-record.ts.`
-            : `Record it with eval-topup.ts --variant ${variant} ${name}.`)
+        `${name}: WARNING - no meta.json fingerprint, cannot verify the recording matches ` +
+          `the current config. Re-record with eval-record.ts.`
       );
     }
 
