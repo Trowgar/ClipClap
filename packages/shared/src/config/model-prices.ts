@@ -20,14 +20,14 @@ export interface TokenPrice {
 
 export interface ModelPrices {
   /** Chat/completion models, by exact model id. */
-  tokensPerMillionUsd: Record<string, TokenPrice>;
+  readonly tokensPerMillionUsd: Readonly<Record<string, TokenPrice>>;
   /** Transcription models, USD per minute of audio, by exact model id. */
-  audioPerMinuteUsd: Record<string, number>;
+  readonly audioPerMinuteUsd: Readonly<Record<string, number>>;
 }
 
 export const EMPTY_MODEL_PRICES: ModelPrices = Object.freeze({
-  tokensPerMillionUsd: {},
-  audioPerMinuteUsd: {},
+  tokensPerMillionUsd: Object.freeze({}),
+  audioPerMinuteUsd: Object.freeze({}),
 });
 
 type Env = Record<string, string | undefined>;
@@ -118,11 +118,11 @@ export function loadModelPrices(
 }
 
 export function tokenPrice(prices: ModelPrices, model: string): TokenPrice | undefined {
-  if (!model) return undefined;
+  if (!Object.hasOwn(prices.tokensPerMillionUsd, model)) return undefined;
   return prices.tokensPerMillionUsd[model];
 }
 
 export function audioPricePerMinute(prices: ModelPrices, model: string): number | undefined {
-  if (!model) return undefined;
+  if (!Object.hasOwn(prices.audioPerMinuteUsd, model)) return undefined;
   return prices.audioPerMinuteUsd[model];
 }

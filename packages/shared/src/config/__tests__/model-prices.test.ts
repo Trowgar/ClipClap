@@ -68,6 +68,27 @@ describe("loadModelPrices", () => {
     );
     expect(tokenPrice(prices, "free")).toEqual({ input: 0, output: 0 });
   });
+
+  it("rejects a price that overflows to Infinity", () => {
+    const warn = vi.fn();
+    const prices = loadModelPrices(
+      { MODEL_PRICES_JSON: '{"tokensPerMillionUsd":{"huge":{"input":1e999,"output":1}},"audioPerMinuteUsd":{"huge":1e999}}' },
+      warn
+    );
+    expect(prices.tokensPerMillionUsd).toEqual({});
+    expect(prices.audioPerMinuteUsd).toEqual({});
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a price section that is not an object, and says so", () => {
+    const warn = vi.fn();
+    const prices = loadModelPrices(
+      { MODEL_PRICES_JSON: '{"tokensPerMillionUsd":"gpt-5.1","audioPerMinuteUsd":[1,2]}' },
+      warn
+    );
+    expect(prices).toEqual(EMPTY_MODEL_PRICES);
+    expect(warn).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("lookups", () => {
@@ -80,5 +101,11 @@ describe("lookups", () => {
   it("treats an empty model name as unknown", () => {
     const prices = loadModelPrices({ MODEL_PRICES_JSON: VALID }, () => {});
     expect(tokenPrice(prices, "")).toBeUndefined();
+  });
+
+  it("treats prototype property names as unknown, not as inherited values", () => {
+    const prices = loadModelPrices({ MODEL_PRICES_JSON: VALID }, () => {});
+    expect(tokenPrice(prices, "toString")).toBeUndefined();
+    expect(tokenPrice(prices, "constructor")).toBeUndefined();
   });
 });
