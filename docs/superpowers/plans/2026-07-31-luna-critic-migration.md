@@ -40,13 +40,14 @@
 | `apps/worker/src/__tests__/model-selection.test.ts` (new) | Ties `criticModel()` to `loadAnalyzeConfig()` so the two cannot drift. |
 | `apps/worker/src/cost-telemetry.ts` (modify) | Compute costs from injected prices; return `null` when a price is unknown. No fabricated constants. |
 | `apps/worker/src/__tests__/cost-telemetry.test.ts` (modify) | Updated for the new signature and the null-on-unknown rule. |
-| `apps/worker/src/__tests__/env-prices-binding.test.ts` (new) | Reads `.env.example` and asserts the shipped price table covers the default models. This is the "changed model, forgot price" catcher. |
+| `packages/shared/src/config/model-prices.example.json` (new) | The canonical shipped price table. Lives under `packages/` because that is bind-mounted into the containers - see Task 4 for why `.env.example` cannot hold it. |
+| `apps/worker/src/__tests__/env-prices-binding.test.ts` (new) | Asserts the shipped table prices every model the default config can reach. This is the "changed model, forgot price" catcher. |
 | `apps/worker/src/stages/finalize.ts` (modify) | Use `model-selection.ts` and pass prices in; write the two new model columns. |
 | `apps/worker/src/processors/transcribe.ts` (modify) | Use `model-selection.ts` for the transcription model. |
 | `apps/worker/src/index.ts` (modify) | Warn at boot when a configured model has no price. |
 | `prisma/schema.prisma` (modify) | Two nullable columns on `Job`. |
 | `apps/worker/src/scripts/backfill-job-models.ts` (new) | One-off backfill of the two columns for existing rows. |
-| `.env.example` (modify) | Document `MODEL_PRICES_JSON` and `COMPUTE_COST_PER_MINUTE_USD`. |
+| `.env.example` (modify) | Document `MODEL_PRICES_JSON` and `COMPUTE_COST_PER_MINUTE_USD`, and point at the canonical table rather than duplicating it. |
 
 **Phase B - fixture variants**
 
@@ -891,25 +892,61 @@ and is null unless both cash lines are known."
 
 ---
 
-## Task 4: `.env.example` and the binding test
+## Task 4: A canonical price table the tests can actually read
 
-The failure this catches: someone changes the default critic model and forgets the price. It ties two files that have no other reason to agree, so it is not tautological.
+The failure this guards: someone changes the default critic model and forgets its price. Cost then goes silently blank, because Task 3 removed the fallback on purpose.
+
+**Where the table lives, and why not `.env.example`.** The obvious home is `.env.example`, and the first attempt put it there. It does not work: the containers bind-mount only `apps/worker`, `packages` and `prisma`, so a test running inside `worker-analyze` reads the `.env.example` baked into the image by `COPY . .`, not the one in the repo. Editing the table on the host and re-running the test silently checks a stale copy - a green run proving nothing, which is exactly what this test exists to prevent.
+
+Bind-mounting the single file was tried and rejected: it works until any tool that writes by atomic replace touches it (`sed -i`, most editors), at which point the mount still points at the orphaned inode and the container silently sees a frozen version. A guard whose own integrity depends on nobody using `sed -i` is not a guard.
+
+So the canonical table lives under `packages/`, which IS mounted, and `.env.example` points at it. One source, always live.
 
 **Files:**
+- Create: `packages/shared/src/config/model-prices.example.json`
 - Modify: `.env.example`
 - Create: `apps/worker/src/__tests__/env-prices-binding.test.ts`
 
-- [ ] **Step 1: Add the variables to `.env.example`**
+- [ ] **Step 1: Create the canonical table**
 
-In `.env.example`, immediately after line 25 (`CRITIC_MODEL_FALLBACK=gpt-5-mini`), add:
+`packages/shared/src/config/model-prices.example.json`:
+
+```json
+{
+  "tokensPerMillionUsd": {
+    "gpt-5.1": { "input": 1.25, "output": 10.0 },
+    "gpt-5-mini": { "input": 0.25, "output": 2.0 },
+    "gpt-5.6-luna": { "input": 0.20, "output": 1.20 },
+    "gpt-4o-mini": { "input": 0.15, "output": 0.6 }
+  },
+  "audioPerMinuteUsd": {
+    "whisper-1": 0.006,
+    "gpt-4o-mini-transcribe": 0.003
+  }
+}
+```
+
+Pretty-printed on purpose: this file is read by a test and by humans, never by the env parser, so it does not need to be one line.
+
+- [ ] **Step 2: Point `.env.example` at it**
+
+After the line `CRITIC_MODEL_FALLBACK=gpt-5-mini`, add:
 
 ```
 # Model prices, USD. There is deliberately no price table in the source tree -
 # a compiled-in price goes stale silently (GPT-5.6 Luna was cut 80% in one day
-# on 2026-07-31). Every model the engine can be pointed at needs an entry here,
-# or its cost simply is not recorded. Keep it on ONE line: it is JSON in an env
-# file. Token prices are USD per 1M tokens; audio prices are USD per minute.
-MODEL_PRICES_JSON={"tokensPerMillionUsd":{"gpt-5.1":{"input":1.25,"output":10.0},"gpt-5-mini":{"input":0.25,"output":2.0},"gpt-5.6-luna":{"input":0.20,"output":1.20},"gpt-4o-mini":{"input":0.15,"output":0.6}},"audioPerMinuteUsd":{"whisper-1":0.006,"gpt-4o-mini-transcribe":0.003}}
+# on 2026-07-31). Every model the engine can be pointed at needs an entry, or
+# its cost is simply not recorded; the boot warning names any that are missing.
+#
+# The canonical table is packages/shared/src/config/model-prices.example.json,
+# which is where the test reads it from. Paste its contents here as ONE line -
+# this is JSON inside an env file, so a wrapped value will not parse:
+#
+#   node -e "console.log(JSON.stringify(require('./packages/shared/src/config/model-prices.example.json')))"
+#
+# The value is left empty here rather than duplicated, because a copy in a file
+# no test can read is a copy that silently goes stale.
+MODEL_PRICES_JSON=
 
 # USD per source minute of rented capacity, for reporting only. Unset means
 # compute is not reported at all, which is the honest default: the server is
@@ -919,9 +956,9 @@ MODEL_PRICES_JSON={"tokensPerMillionUsd":{"gpt-5.1":{"input":1.25,"output":10.0}
 COMPUTE_COST_PER_MINUTE_USD=
 ```
 
-- [ ] **Step 2: Write the failing test**
+- [ ] **Step 3: Write the test**
 
-Create `apps/worker/src/__tests__/env-prices-binding.test.ts`:
+`apps/worker/src/__tests__/env-prices-binding.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -932,38 +969,35 @@ import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { transcriptionModel } from "../model-selection";
 
 /**
- * Binds two files that otherwise have no reason to agree: the engine's default
- * models (analyze-v2/config.ts, model-selection.ts) and the price table shipped in
- * .env.example.
+ * Binds two things that otherwise have no reason to agree: the engine's default
+ * models (analyze-v2/config.ts, model-selection.ts) and the shipped price table.
  *
- * The failure it exists to catch is a model change that forgets the price. That
- * used to be invisible, because cost-telemetry fell back to gpt-5.1's price for
- * anything unknown; now it produces a null cost, which is honest but silent.
- * This test is where it becomes loud.
+ * The failure it catches is a model change that forgets the price. That used to
+ * be invisible because cost-telemetry fell back to gpt-5.1's price for anything
+ * unknown; now it produces a null cost, which is honest but silent. This is
+ * where it becomes loud.
  *
- * To verify this test is real, delete one model's entry from MODEL_PRICES_JSON
- * in .env.example by hand and watch it go red.
+ * It reads packages/shared/... rather than .env.example ON PURPOSE - see the
+ * note in the plan. `packages` is bind-mounted into the container, `.env.example`
+ * is not, so a test reading the latter would check whatever was baked into the
+ * image and pass while the real table was wrong.
+ *
+ * To verify this test is real, delete one model's entry from the JSON by hand
+ * and watch it go red.
  */
-const ENV_EXAMPLE = join(__dirname, "..", "..", "..", "..", ".env.example");
+const PRICES_FILE = join(
+  __dirname,
+  "..", "..", "..", "..",
+  "packages", "shared", "src", "config", "model-prices.example.json"
+);
 
-function readExampleEnv(): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const line of readFileSync(ENV_EXAMPLE, "utf-8").split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed === "" || trimmed.startsWith("#")) continue;
-    const eq = trimmed.indexOf("=");
-    if (eq === -1) continue;
-    out[trimmed.slice(0, eq)] = trimmed.slice(eq + 1);
-  }
-  return out;
-}
+describe("shipped price table", () => {
+  const prices = loadModelPrices(
+    { MODEL_PRICES_JSON: readFileSync(PRICES_FILE, "utf-8") },
+    () => {}
+  );
 
-describe(".env.example price table", () => {
-  const example = readExampleEnv();
-  const prices = loadModelPrices(example, () => {});
-
-  it("is present and parses", () => {
-    expect(example.MODEL_PRICES_JSON).toBeDefined();
+  it("parses, and is not empty", () => {
     expect(Object.keys(prices.tokensPerMillionUsd).length).toBeGreaterThan(0);
     expect(Object.keys(prices.audioPerMinuteUsd).length).toBeGreaterThan(0);
   });
@@ -978,7 +1012,7 @@ describe(".env.example price table", () => {
     ]) {
       expect(
         tokenPrice(prices, model),
-        `MODEL_PRICES_JSON in .env.example has no price for "${model}"`
+        `model-prices.example.json has no price for "${model}"`
       ).toBeDefined();
     }
   });
@@ -987,13 +1021,13 @@ describe(".env.example price table", () => {
     const model = transcriptionModel({});
     expect(
       audioPricePerMinute(prices, model),
-      `MODEL_PRICES_JSON in .env.example has no audio price for "${model}"`
+      `model-prices.example.json has no audio price for "${model}"`
     ).toBeDefined();
   });
 });
 ```
 
-- [ ] **Step 3: Run the test to verify it passes**
+- [ ] **Step 4: Run it**
 
 ```bash
 docker compose exec worker-analyze sh -c "cd /app/apps/worker && npx vitest run --root /app apps/worker/src/__tests__/env-prices-binding.test.ts"
@@ -1001,51 +1035,54 @@ docker compose exec worker-analyze sh -c "cd /app/apps/worker && npx vitest run 
 
 Expected: PASS, 3 tests.
 
-- [ ] **Step 4: Prove the test is not fake**
+- [ ] **Step 5: Prove the test is not fake, and that it reads the LIVE file**
 
-Per the discipline in `docs/engine-notes.md` section 4: a test that cannot go red is not a test. Disable the thing it guards by hand, never with git.
+This step is doing double duty: it proves the assertion has teeth AND that the mount actually reaches the test. Both failed silently on the first attempt at this task.
 
 ```bash
-cp .env.example /tmp/env.example.bak
-md5sum .env.example
+cp packages/shared/src/config/model-prices.example.json /tmp/prices.bak
+md5sum packages/shared/src/config/model-prices.example.json
 ```
 
-Now edit `.env.example` by hand and delete the `"gpt-4o-mini":{"input":0.15,"output":0.6}` entry (and the comma before it) from `MODEL_PRICES_JSON`. Re-run:
+Now edit the JSON **by hand** and delete the `"gpt-4o-mini"` entry from `tokensPerMillionUsd`. Confirm the container sees your edit before running anything:
+
+```bash
+docker compose exec -T worker-analyze sh -c "grep -c 'gpt-4o-mini\"' /app/packages/shared/src/config/model-prices.example.json"
+```
+
+Expected: `1` - only the transcribe model remains. If it still reports 2, the container is not seeing your edit and every result below is meaningless. Stop and report that.
+
+Then:
 
 ```bash
 docker compose exec worker-analyze sh -c "cd /app/apps/worker && npx vitest run --root /app apps/worker/src/__tests__/env-prices-binding.test.ts"
 ```
 
-Expected: FAIL with `MODEL_PRICES_JSON in .env.example has no price for "gpt-4o-mini"`.
+Expected: FAIL with `model-prices.example.json has no price for "gpt-4o-mini"`.
 
 Restore and verify byte-identical:
 
 ```bash
-cp /tmp/env.example.bak .env.example
-md5sum .env.example
+cp /tmp/prices.bak packages/shared/src/config/model-prices.example.json
+md5sum packages/shared/src/config/model-prices.example.json
 ```
 
-The two `md5sum` outputs must match. Re-run the test; expected PASS.
+The two md5 values must match. Re-run; expected PASS.
 
-- [ ] **Step 5: Update the real `.env` on this host**
+- [ ] **Step 6: The real `.env` - COORDINATOR ONLY**
 
-`.env` is not in git and is what actually runs. Add the same `MODEL_PRICES_JSON` line to it, then:
+`.env` holds production secrets and is not edited by task implementers. The coordinator pastes the one-line table into it and restarts the workers.
 
-```bash
-docker compose restart worker-finalize worker-analyze
-docker compose logs --tail 30 worker-finalize | grep -i "model-prices" || echo "no price warnings - good"
-```
-
-Expected: no `[model-prices]` warnings.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add .env.example apps/worker/src/__tests__/env-prices-binding.test.ts
+git add packages/shared/src/config/model-prices.example.json .env.example \
+        apps/worker/src/__tests__/env-prices-binding.test.ts
 git -c user.name=Trowgar -c user.email=trowgar@yahoo.com commit -m "test(worker): bind the default models to the shipped price table
 
-Catches the real failure here - model changed, price forgotten - by tying
-analyze-v2/config.ts to .env.example. Verified red by deleting an entry."
+The table lives under packages/ because that is bind-mounted into the
+containers and .env.example is not - a test reading .env.example checks the
+copy baked into the image and passes while the real table is wrong."
 ```
 
 ---
