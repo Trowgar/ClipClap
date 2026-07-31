@@ -29,10 +29,48 @@ export type VariantOverrides = Partial<
   Pick<AnalyzeConfig, "criticModel" | "finalizerModel" | "criticModelFallback">
 >;
 
-export function loadVariantDefs(): Record<string, VariantOverrides> {
-  const path = join(FIXTURES_DIR, "variants.json");
+/** The only knobs a variant may move. See VariantOverrides for why this is narrow. */
+export const VARIANT_OVERRIDE_KEYS = [
+  "criticModel",
+  "finalizerModel",
+  "criticModelFallback",
+] as const satisfies ReadonlyArray<keyof VariantOverrides>;
+
+/**
+ * Reads variants.json and REJECTS any knob outside the whitelist.
+ *
+ * The type above is erased at runtime, so without this check the narrowness is
+ * only ever as good as whichever knobs a test happened to name - and the knobs
+ * most worth blocking (scanWindowSec, criticMaxCandidates, criticBatchSize) are
+ * exactly the ones nobody thinks to assert on. Refusing to load is the
+ * conservative move: the alternative failure is a variant that quietly changes
+ * what the model is asked and still presents as a working model comparison.
+ *
+ * `dir` exists so a test can validate a throwaway variants.json without writing
+ * to the shared fixtures tree that every other test file reads concurrently.
+ */
+export function loadVariantDefs(dir: string = FIXTURES_DIR): Record<string, VariantOverrides> {
+  const path = join(dir, "variants.json");
   if (!existsSync(path)) return {};
-  return JSON.parse(readFileSync(path, "utf-8")) as Record<string, VariantOverrides>;
+  const parsed = JSON.parse(readFileSync(path, "utf-8")) as Record<
+    string,
+    Record<string, unknown>
+  >;
+  const allowed: readonly string[] = VARIANT_OVERRIDE_KEYS;
+  for (const [name, overrides] of Object.entries(parsed)) {
+    for (const key of Object.keys(overrides)) {
+      if (!allowed.includes(key)) {
+        throw new Error(
+          `variant "${name}" in ${path} overrides "${key}", which is not allowed. A variant may ` +
+            `only change WHO answers (${VARIANT_OVERRIDE_KEYS.join(", ")}), never what is asked - ` +
+            `anything else moves the prompts, moves every request key, and makes the diff between ` +
+            `variants mix the model change with a second changed knob, while still looking like a ` +
+            `clean model comparison.`
+        );
+      }
+    }
+  }
+  return parsed as Record<string, VariantOverrides>;
 }
 
 /** Base first, then declared variants in a stable order. */

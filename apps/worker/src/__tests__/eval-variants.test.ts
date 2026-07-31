@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   BASE_VARIANT,
   loadFixture,
@@ -8,6 +11,19 @@ import {
   variantNames,
 } from "./helpers/eval-fixture";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
+
+/** Writes a throwaway variants.json so the whitelist can be exercised without
+ *  touching the shared fixtures tree other test files read concurrently. */
+const tempDirs: string[] = [];
+function variantsDir(contents: unknown): string {
+  const dir = mkdtempSync(join(tmpdir(), "eval-variants-"));
+  tempDirs.push(dir);
+  writeFileSync(join(dir, "variants.json"), JSON.stringify(contents));
+  return dir;
+}
+afterAll(() => {
+  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+});
 
 describe("variant definitions", () => {
   it("always offers the base variant first", () => {
@@ -49,6 +65,31 @@ describe("variant definitions", () => {
 
   it("throws on an unknown variant rather than silently running the base", () => {
     expect(() => variantConfig("no-such-variant")).toThrow(/unknown variant/i);
+  });
+
+  it("refuses a knob outside the whitelist, not merely the ones a test names", () => {
+    // scanWindowSec deliberately: it is NOT one of the knobs the assertions
+    // above name, so only a whitelist rejects it. It changes the scan prompts,
+    // which moves every request key and turns the diff into a mixed signal.
+    const dir = variantsDir({
+      wide: { criticModel: "gpt-5.6-luna", scanWindowSec: 300 },
+    });
+    expect(() => loadVariantDefs(dir)).toThrow(/scanWindowSec.*not allowed/s);
+  });
+
+  it("accepts every whitelisted knob, so the check is a whitelist and not a ban", () => {
+    const dir = variantsDir({
+      whole: {
+        criticModel: "a",
+        finalizerModel: "b",
+        criticModelFallback: "c",
+      },
+    });
+    expect(loadVariantDefs(dir).whole).toEqual({
+      criticModel: "a",
+      finalizerModel: "b",
+      criticModelFallback: "c",
+    });
   });
 });
 
