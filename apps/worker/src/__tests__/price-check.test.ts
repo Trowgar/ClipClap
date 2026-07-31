@@ -134,7 +134,7 @@ describe("warnAboutMissingPrices", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("emits one message naming all missing models when several are unpriced", () => {
+  it("emits one message naming all missing models when the table is present but empty", () => {
     const warn = vi.fn();
     const env = {
       ...DISTINCT_ENV,
@@ -152,5 +152,15 @@ describe("warnAboutMissingPrices", () => {
     expect(message).toContain("finalizer-model-x");
     expect(message).toContain("highlights-model-x");
     expect(message).toContain("transcription-model-x");
+  });
+
+  it("emits both the loader's warning and its own when MODEL_PRICES_JSON is unset", () => {
+    const warn = vi.fn();
+    warnAboutMissingPrices({ OPENAI_CRITIC_MODEL: "unpriced-model" }, warn);
+
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn.mock.calls[0][0]).toContain("MODEL_PRICES_JSON is unset");
+    expect(warn.mock.calls[1][0]).toContain("[cost] no price");
+    expect(warn.mock.calls[1][0]).toContain("unpriced-model");
   });
 });
