@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { readdirSync, existsSync } from "fs";
 import { join } from "path";
-import { FIXTURES_DIR, loadFixture, runFixture, toShape } from "./helpers/eval-fixture";
+import {
+  BASE_VARIANT,
+  FIXTURES_DIR,
+  loadFixture,
+  runFixtureVariant,
+  snapshotFileName,
+  toShape,
+  variantConfig,
+  variantNames,
+} from "./helpers/eval-fixture";
 import { computeFingerprint } from "./helpers/eval-fingerprint";
-import { loadAnalyzeConfig } from "../analyze-v2/config";
 
 /**
  * The eval fixtures are the only end-to-end proof this engine has: real
@@ -22,30 +30,42 @@ const FIXTURES = readdirSync(FIXTURES_DIR, { withFileTypes: true })
   .map((e) => e.name)
   .sort();
 
+/** Every (fixture, variant) pair that has actually been recorded. A declared
+ *  but unrecorded variant is skipped rather than failed: declaring it is how a
+ *  recording gets started, and reddening the suite for that would make adding a
+ *  candidate model a broken-build event. */
+const CASES: Array<[string, string]> = FIXTURES.flatMap((name) =>
+  variantNames()
+    .filter((variant) => existsSync(join(FIXTURES_DIR, name, snapshotFileName(variant))))
+    .map((variant) => [name, variant] as [string, string])
+);
+
 describe("eval fixtures", () => {
   it("finds the recorded fixtures on disk", () => {
-    // guards the guard: a glob that silently matched nothing would make every
-    // it.each below vanish and the suite would still report green
     expect(FIXTURES.length).toBeGreaterThanOrEqual(2);
     expect(FIXTURES).toContain("podcast-answer-arc");
     expect(FIXTURES).toContain("podcast-ecology");
   });
 
-  it.each(FIXTURES)("%s was recorded on the current engine config", (name) => {
-    const fixture = loadFixture(name);
-    // Not just "no mismatch": an absent fingerprint only warns inside
-    // assertFingerprintMatches, so a fixture that lost its meta.json would
-    // replay green forever. Require the recording to actually carry one.
-    expect(fixture.fingerprint).not.toBeNull();
-    expect(fixture.fingerprint).toEqual(
-      computeFingerprint({ ...loadAnalyzeConfig({}), engine: "recall-critic" })
-    );
+  it("finds at least the base variant of every fixture", () => {
+    // guards the guard: an empty CASES list would make every it.each below
+    // vanish while the suite still reported green
+    expect(CASES.length).toBeGreaterThanOrEqual(FIXTURES.length);
+    for (const name of FIXTURES) {
+      expect(CASES).toContainEqual([name, BASE_VARIANT]);
+    }
   });
 
-  it.each(FIXTURES)("%s replays to its recorded snapshot", async (name) => {
+  it.each(CASES)("%s[%s] was recorded on the config that variant describes", (name, variant) => {
     const fixture = loadFixture(name);
-    expect(fixture.snapshot).not.toBeNull();
-    const shape = toShape(await runFixture(fixture));
-    expect(shape).toEqual(fixture.snapshot);
+    expect(fixture.fingerprints[variant]).not.toBeNull();
+    expect(fixture.fingerprints[variant]).toEqual(computeFingerprint(variantConfig(variant)));
+  });
+
+  it.each(CASES)("%s[%s] replays to its recorded snapshot", async (name, variant) => {
+    const fixture = loadFixture(name);
+    expect(fixture.snapshots[variant]).not.toBeNull();
+    const shape = toShape(await runFixtureVariant(fixture, variant));
+    expect(shape).toEqual(fixture.snapshots[variant]);
   });
 });
