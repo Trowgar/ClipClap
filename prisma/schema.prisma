@@ -399,6 +399,13 @@ model Job {
   transcriptPartial     Boolean        @default(false)
   analysisInputTokens   Int?
   analysisOutputTokens  Int?
+  /// Which models produced the token counts and the cost figures above. Stored
+  /// because dollars are DERIVED and prices move: without the multiplier, a row
+  /// can never be re-priced. The ten rows that predate this column had to be
+  /// backfilled from analyzeEngine and date, which only worked because the
+  /// engine changed at the same time the model did - not a repeatable trick.
+  criticModel           String?
+  transcriptionModel    String?
   createdAt                     DateTime  @default(now())
 
   clips            Clip[]

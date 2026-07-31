@@ -83,7 +83,9 @@ vi.mock("../processors/analyze", () => ({
   analyzeHighlightsV1: mocks.analyzeHighlightsV1,
 }));
 
+import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { AnalyzeTechnicalError } from "../analyze-v2/critic";
+import { transcriptionModel } from "../model-selection";
 import {
   SourceTooLargeError,
   SourceUnavailableError,
@@ -404,6 +406,17 @@ describe("stage handlers", () => {
       data: expect.objectContaining({
         status: "DONE",
         error: null,
+      }),
+    });
+
+    // Pins the seam Task 2 created: the model finalize PRICES must be the model
+    // the engine RAN. Reverting either call site to its own env-var literal used
+    // to leave the whole suite green - see the Task 2 review.
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: "job1" },
+      data: expect.objectContaining({
+        criticModel: loadAnalyzeConfig({}).criticModel,
+        transcriptionModel: transcriptionModel({}),
       }),
     });
   });

@@ -50,32 +50,12 @@ export async function runFinalizeStage(
       computeCostPerMinuteUsd: COMPUTE_COST_PER_MINUTE_USD,
     });
 
-    // The builder reports which models produced the figures, but the Job table
-    // has no column for either yet, and Prisma REJECTS an unknown argument
-    // rather than ignoring it - `Unknown argument \`criticModel\`` - which would
-    // throw here, be caught below, and mark every successfully rendered job
-    // FAILED (and refund it). TypeScript does not catch this: a spread of a
-    // non-literal object skips excess-property checking, and the unit tests
-    // mock prisma, so both guards are blind to it.
-    //
-    // Removing by name rather than picking the columns by name is deliberate:
-    // everything the builder returns is a column by default, so a cost field
-    // added later reaches the row without anyone remembering to list it here.
-    // An explicit pick would silently drop that new field - a quietly missing
-    // cost figure, which is the exact failure this phase exists to remove -
-    // whereas this shape fails loudly the moment a name has no column.
-    //
-    // Delete these two lines when the columns land, and spread `telemetry`
-    // whole - that is what makes the model names start being recorded.
-    const { criticModel: _critic, transcriptionModel: _asr, ...costColumns } =
-      telemetry;
-
     await prisma.job.update({
       where: { id: payload.jobId },
       data: {
         status: "DONE",
         error: null,
-        ...costColumns,
+        ...telemetry,
       },
     });
 
