@@ -19,6 +19,12 @@
   `docker compose exec worker-analyze sh -c "cd /app/apps/worker && npx vitest run --root /app apps/worker/src/__tests__/NAME.test.ts"`
 - **Shared test command shape:**
   `docker compose exec worker-analyze sh -c "cd /app/packages/shared && npx vitest run --root /app packages/shared/src/config/__tests__/NAME.test.ts"`
+- **A change to `.env` needs `docker compose up -d <service>`, never `docker compose restart`.**
+  `restart` reuses the existing container's configuration and does not re-read `env_file`, so the
+  variable appears set on disk while the process still sees the old value. This was observed on
+  2026-07-31: `MODEL_PRICES_JSON` was in `.env` and the worker kept logging it as unset until the
+  container was recreated. `up -d` recreates it, which then requires re-running `prisma generate`
+  in each recreated service.
 - **After ANY change under `packages/shared`:** run
   `docker compose exec worker-analyze sh -c "cd /app && npm run build -w @clipclap/shared"` and then
   `docker compose restart web`. The web app imports shared from `dist` and Next caches it; skipping this ships a stale module.
@@ -1140,7 +1146,7 @@ docker compose exec worker-analyze sh -c "cd /app/apps/worker && MODEL_PRICES_JS
 
 Expected: a line naming `gpt-4o-mini`, the critic model, the fallback and `whisper-1`.
 
-If that one-liner is awkward in your shell, the equivalent check is to temporarily blank `MODEL_PRICES_JSON` in `.env`, run `docker compose restart worker-analyze`, then `docker compose logs --tail 20 worker-analyze` - and restore `.env` afterwards.
+If that one-liner is awkward in your shell, the equivalent check is to temporarily blank `MODEL_PRICES_JSON` in `.env`, run `docker compose up -d worker-analyze` (NOT `restart` - it does not re-read `env_file`), then `docker compose logs --tail 20 worker-analyze` - and restore `.env` afterwards.
 
 - [ ] **Step 3: Verify it stays silent with the real config**
 
@@ -2505,7 +2511,7 @@ OPENAI_CRITIC_MODEL=gpt-5.6-luna
 - [ ] **Step 10: Deploy and verify the rollback path**
 
 ```bash
-docker compose restart worker-analyze worker-finalize
+docker compose up -d worker-analyze worker-finalize   # up -d, not restart: env_file
 docker compose logs --tail 20 worker-analyze | grep "\[cost\]" || echo "no missing prices - good"
 ```
 

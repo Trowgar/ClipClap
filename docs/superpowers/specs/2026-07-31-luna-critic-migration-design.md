@@ -299,9 +299,18 @@ before the clips do. The only real-world scoreboard this engine has is 2 postabl
 (engine-notes 5b), and on a base that thin any shift is easy to mistake for an improvement.
 
 **Rollback is one line.** The **default** changes in `config.ts` and `.env` overrides it, so
-rolling back is `OPENAI_CRITIC_MODEL=gpt-5.1` plus `OPENAI_FINALIZER_MODEL=gpt-5.1` in `.env` and
-a `worker-analyze` restart - no code revert, no deploy. The asymmetry is deliberate: the new
-behaviour is the default, the old one is one restart away.
+rolling back is `OPENAI_CRITIC_MODEL=gpt-5.1` plus `OPENAI_FINALIZER_MODEL=gpt-5.1` in `.env` -
+no code revert, no deploy. The asymmetry is deliberate: the new behaviour is the default, the old
+one is one edit away.
+
+**Apply it with `docker compose up -d worker-analyze worker-finalize`, NOT `restart`.** This
+sentence originally said "restart", and that would have made the rollback silently do nothing:
+`docker compose restart` reuses the existing container's configuration and never re-reads
+`env_file`. Observed on 2026-07-31 while adding `MODEL_PRICES_JSON` to `.env` - the variable was
+in the file, the worker still logged it as unset, and only `up -d` picked it up. A rollback path
+that appears to work and does not is worse than none, so it is stated here rather than left to
+the reader. Note `up -d` recreates the container, which per `docs/runbooks` means re-running
+`prisma generate` in each recreated service afterwards.
 
 ---
 
