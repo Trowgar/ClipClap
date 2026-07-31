@@ -36,13 +36,13 @@
 | `packages/shared/src/config/model-prices.ts` (new) | Parse and validate `MODEL_PRICES_JSON`; look up a token price or an audio price. Knows nothing about jobs. |
 | `packages/shared/src/config/__tests__/model-prices.test.ts` (new) | Parsing, validation, and the loud-failure behaviour. |
 | `packages/shared/src/config/index.ts` (modify) | Export the new module. |
-| `apps/worker/src/models.ts` (new) | Single source of truth for "which critic model" and "which transcription model". Removes the duplicated literals. |
-| `apps/worker/src/__tests__/models.test.ts` (new) | Ties `criticModel()` to `loadAnalyzeConfig()` so the two cannot drift. |
+| `apps/worker/src/model-selection.ts` (new) | Single source of truth for "which critic model" and "which transcription model". Removes the duplicated literals. |
+| `apps/worker/src/__tests__/model-selection.test.ts` (new) | Ties `criticModel()` to `loadAnalyzeConfig()` so the two cannot drift. |
 | `apps/worker/src/cost-telemetry.ts` (modify) | Compute costs from injected prices; return `null` when a price is unknown. No fabricated constants. |
 | `apps/worker/src/__tests__/cost-telemetry.test.ts` (modify) | Updated for the new signature and the null-on-unknown rule. |
 | `apps/worker/src/__tests__/env-prices-binding.test.ts` (new) | Reads `.env.example` and asserts the shipped price table covers the default models. This is the "changed model, forgot price" catcher. |
-| `apps/worker/src/stages/finalize.ts` (modify) | Use `models.ts` and pass prices in; write the two new model columns. |
-| `apps/worker/src/processors/transcribe.ts` (modify) | Use `models.ts` for the transcription model. |
+| `apps/worker/src/stages/finalize.ts` (modify) | Use `model-selection.ts` and pass prices in; write the two new model columns. |
+| `apps/worker/src/processors/transcribe.ts` (modify) | Use `model-selection.ts` for the transcription model. |
 | `apps/worker/src/index.ts` (modify) | Warn at boot when a configured model has no price. |
 | `prisma/schema.prisma` (modify) | Two nullable columns on `Job`. |
 | `apps/worker/src/scripts/backfill-job-models.ts` (new) | One-off backfill of the two columns for existing rows. |
@@ -364,18 +364,18 @@ empty cell gets investigated."
 `stages/finalize.ts` carries `process.env.OPENAI_CRITIC_MODEL || "gpt-5.1"`, independent of the default in `analyze-v2/config.ts`. Change the model in config alone and the engine uses one model while pricing uses another. `transcribe.ts` and `finalize.ts` duplicate the transcription model literal the same way.
 
 **Files:**
-- Create: `apps/worker/src/models.ts`
-- Create: `apps/worker/src/__tests__/models.test.ts`
+- Create: `apps/worker/src/model-selection.ts`
+- Create: `apps/worker/src/__tests__/model-selection.test.ts`
 - Modify: `apps/worker/src/processors/transcribe.ts:153`
 - Modify: `apps/worker/src/stages/finalize.ts:31-35`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `apps/worker/src/__tests__/models.test.ts`:
+Create `apps/worker/src/__tests__/model-selection.test.ts`:
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { criticModel, transcriptionModel } from "../models";
+import { criticModel, transcriptionModel } from "../model-selection";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 
 describe("criticModel", () => {
@@ -412,14 +412,14 @@ describe("transcriptionModel", () => {
 - [ ] **Step 2: Run the test to verify it fails**
 
 ```bash
-docker compose exec worker-analyze sh -c "cd /app/apps/worker && npx vitest run --root /app apps/worker/src/__tests__/models.test.ts"
+docker compose exec worker-analyze sh -c "cd /app/apps/worker && npx vitest run --root /app apps/worker/src/__tests__/model-selection.test.ts"
 ```
 
 Expected: FAIL, `Cannot find module '../models'`.
 
 - [ ] **Step 3: Write the implementation**
 
-Create `apps/worker/src/models.ts`:
+Create `apps/worker/src/model-selection.ts`:
 
 ```ts
 import { loadAnalyzeConfig } from "./analyze-v2/config";
@@ -448,7 +448,7 @@ export function transcriptionModel(env: Env = process.env): string {
 - [ ] **Step 4: Run the test to verify it passes**
 
 ```bash
-docker compose exec worker-analyze sh -c "cd /app/apps/worker && npx vitest run --root /app apps/worker/src/__tests__/models.test.ts"
+docker compose exec worker-analyze sh -c "cd /app/apps/worker && npx vitest run --root /app apps/worker/src/__tests__/model-selection.test.ts"
 ```
 
 Expected: PASS, 5 tests.
@@ -458,7 +458,7 @@ Expected: PASS, 5 tests.
 In `apps/worker/src/processors/transcribe.ts`, add to the imports at the top:
 
 ```ts
-import { transcriptionModel } from "../models";
+import { transcriptionModel } from "../model-selection";
 ```
 
 Replace line 153:
@@ -478,7 +478,7 @@ with:
 In `apps/worker/src/stages/finalize.ts`, add to the imports at the top:
 
 ```ts
-import { criticModel, transcriptionModel } from "../models";
+import { criticModel, transcriptionModel } from "../model-selection";
 ```
 
 Replace these two lines inside the `buildJobCostTelemetry({ ... })` call:
@@ -504,12 +504,12 @@ with:
 
 ```bash
 grep -rn '"gpt-5.1"\|"whisper-1"' apps/worker/src --include=*.ts \
-  | grep -v __tests__ | grep -v analyze-v2/config.ts | grep -v models.ts | grep -v cost-telemetry.ts
+  | grep -v __tests__ | grep -v analyze-v2/config.ts | grep -v model-selection.ts | grep -v cost-telemetry.ts
 ```
 
 Expected: no output.
 
-`cost-telemetry.ts` is excluded on purpose and is NOT a leftover: it still holds the old `TRANSCRIPTION_COST_PER_MINUTE` and `MODEL_TOKEN_PRICES` tables, whose keys are model names. Those tables are deleted in Task 3, and the grep line above drops the exclusion at that point. The only remaining *defaults* after this task are in `analyze-v2/config.ts` and `models.ts`.
+`cost-telemetry.ts` is excluded on purpose and is NOT a leftover: it still holds the old `TRANSCRIPTION_COST_PER_MINUTE` and `MODEL_TOKEN_PRICES` tables, whose keys are model names. Those tables are deleted in Task 3, and the grep line above drops the exclusion at that point. The only remaining *defaults* after this task are in `analyze-v2/config.ts` and `model-selection.ts`.
 
 - [ ] **Step 8: Run the worker suite to check nothing regressed**
 
@@ -522,7 +522,7 @@ Expected: PASS.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add apps/worker/src/models.ts apps/worker/src/__tests__/models.test.ts \
+git add apps/worker/src/model-selection.ts apps/worker/src/__tests__/model-selection.test.ts \
         apps/worker/src/processors/transcribe.ts apps/worker/src/stages/finalize.ts
 git -c user.name=Trowgar -c user.email=trowgar@yahoo.com commit -m "fix(worker): one source of truth for which model ran
 
@@ -929,11 +929,11 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { audioPricePerMinute, loadModelPrices, tokenPrice } from "@clipclap/shared";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
-import { transcriptionModel } from "../models";
+import { transcriptionModel } from "../model-selection";
 
 /**
  * Binds two files that otherwise have no reason to agree: the engine's default
- * models (analyze-v2/config.ts, models.ts) and the price table shipped in
+ * models (analyze-v2/config.ts, model-selection.ts) and the price table shipped in
  * .env.example.
  *
  * The failure it exists to catch is a model change that forgets the price. That
@@ -1062,7 +1062,7 @@ In `apps/worker/src/index.ts`, add to the imports:
 ```ts
 import { audioPricePerMinute, loadModelPrices, tokenPrice } from "@clipclap/shared";
 import { loadAnalyzeConfig } from "./analyze-v2/config";
-import { transcriptionModel } from "./models";
+import { transcriptionModel } from "./model-selection";
 ```
 
 Add this function and its call immediately after the existing
@@ -1178,7 +1178,38 @@ grep -n "criticModel\|transcriptionModel" apps/worker/src/stages/finalize.ts
 
 Expected: both appear inside the `buildJobCostTelemetry` call. They reach the row because the builder's return value is spread into `prisma.job.update({ data: ... })`.
 
-- [ ] **Step 5: Typecheck**
+- [ ] **Step 5: Close the coverage hole this plan opened in Task 2**
+
+Carried forward from the Task 2 code review, which found it and could not close it there. The reviewer re-inlined the original defect - reverted the critic model in `stages/finalize.ts` back to `process.env.OPENAI_CRITIC_MODEL || "gpt-5.1"` - and the full worker suite still passed 516/516. So the 8x mispricing defect can walk back in silently, and until this step the only guard is a manual grep. The Task 5 boot warning is **not** a backstop: it reads `cfg.criticModel`, so a stale copy inside `finalize.ts` leaves it silent.
+
+It could not be written before now, because `criticModel` did not reach any persisted payload. The two columns from this task are what make it assertable.
+
+`apps/worker/src/__tests__/stage-flow.test.ts` already captures the `prisma.job.update` payload via `mocks.jobUpdate` - see the existing assertion around line 392 for the shape. Add:
+
+```ts
+    // Pins the seam Task 2 created: the model finalize PRICES must be the model
+    // the engine RAN. Reverting either call site to its own env-var literal
+    // used to leave the whole suite green - see the Task 2 review.
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: "job1" },
+      data: expect.objectContaining({
+        criticModel: loadAnalyzeConfig({}).criticModel,
+        transcriptionModel: transcriptionModel({}),
+      }),
+    });
+```
+
+Import `loadAnalyzeConfig` from `../analyze-v2/config` and `transcriptionModel` from `../model-selection`. Adjust the `where` clause and job id to match whatever the surrounding test in that file already uses - do not invent one.
+
+The codebase already pins model selection this way: `finalize.test.ts:1041` asserts `body.model` equals `cfg.finalizerModel`.
+
+Then prove it is real, per the discipline in `docs/engine-notes.md` section 4. Copy `apps/worker/src/stages/finalize.ts` to `/tmp`, `md5sum` it, edit it in place to read `process.env.OPENAI_CRITIC_MODEL || "gpt-5.1"` again, run the suite and confirm this new assertion RED. Restore from `/tmp` and confirm the `md5sum` matches. Never restore with git.
+
+```bash
+docker compose exec worker-analyze sh -c "cd /app/apps/worker && npx vitest run --root /app apps/worker/src/__tests__/stage-flow.test.ts"
+```
+
+- [ ] **Step 6: Typecheck**
 
 ```bash
 docker compose exec worker-analyze sh -c "cd /app/apps/worker && npx tsc --noEmit -p tsconfig.json"
@@ -1186,10 +1217,10 @@ docker compose exec worker-analyze sh -c "cd /app/apps/worker && npx tsc --noEmi
 
 Expected: no errors.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add prisma/schema.prisma prisma/migrations
+git add prisma/schema.prisma prisma/migrations apps/worker/src/__tests__/stage-flow.test.ts
 git -c user.name=Trowgar -c user.email=trowgar@yahoo.com commit -m "feat(db): record the models that produced each job's cost figures
 
 Dollars are derived and prices move. Without the multiplier a row can never be
