@@ -8,6 +8,13 @@ export {
   estimatedFreeCostUsd,
 } from "./plans";
 export type { PlanLimits, TopupPack } from "./plans";
+export {
+  loadModelPrices,
+  tokenPrice,
+  audioPricePerMinute,
+  EMPTY_MODEL_PRICES,
+} from "./model-prices";
+export type { ModelPrices, TokenPrice } from "./model-prices";
 export { REFERRAL_CONFIG, REFERRAL_COOKIE_NAME, exchangeRateToUsd } from "./referral";
 export { WALLET_CONFIG, findWalletMethod } from "./wallet";
 export type { WalletMethod } from "./wallet";
