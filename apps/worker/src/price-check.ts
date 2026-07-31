@@ -36,8 +36,22 @@ export function configuredModels(env: Env = process.env): {
   };
 }
 
+export interface UnpricedModel {
+  model: string;
+  kind: "tokensPerMillionUsd" | "audioPerMinuteUsd";
+}
+
 /**
- * Names any configured model the price table does not cover.
+ * Names any configured model the price table does not cover, tagged with
+ * WHICH table it belongs in.
+ *
+ * The tag matters because a name alone is not enough to diagnose the one case
+ * that looks broken otherwise: an ASR model sitting in the wrong table (e.g.
+ * priced under tokensPerMillionUsd instead of audioPerMinuteUsd). An operator
+ * who reads a bare name, finds it right there in the table, and has no kind to
+ * check against will conclude the guard itself is wrong. A model missing from
+ * BOTH tables appears twice, once per kind, because those are two different
+ * fixes to make.
  *
  * A missing price is not fatal - jobs still run, they just record no cost - so
  * this line is the only thing standing between that and going unnoticed.
@@ -47,13 +61,23 @@ export function configuredModels(env: Env = process.env): {
  * inside a container can read .env. An operator who points OPENAI_CRITIC_MODEL
  * at an unpriced model is caught here and nowhere else.
  */
-export function unpricedModels(prices: ModelPrices, env: Env = process.env): string[] {
+export function unpricedModels(prices: ModelPrices, env: Env = process.env): UnpricedModel[] {
   const { token, audio } = configuredModels(env);
-  const missing = [
-    ...token.filter((m) => tokenPrice(prices, m) === undefined),
-    ...audio.filter((m) => audioPricePerMinute(prices, m) === undefined),
+  const missing: UnpricedModel[] = [
+    ...token
+      .filter((m) => tokenPrice(prices, m) === undefined)
+      .map((model) => ({ model, kind: "tokensPerMillionUsd" as const })),
+    ...audio
+      .filter((m) => audioPricePerMinute(prices, m) === undefined)
+      .map((model) => ({ model, kind: "audioPerMinuteUsd" as const })),
   ];
-  return [...new Set(missing)];
+  const seen = new Set<string>();
+  return missing.filter(({ model, kind }) => {
+    const key = `${kind}:${model}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** Emitted at boot rather than at the first job: the first job may be hours
@@ -64,8 +88,9 @@ export function warnAboutMissingPrices(
 ): void {
   const missing = unpricedModels(loadModelPrices(env, warn), env);
   if (missing.length > 0) {
+    const named = missing.map(({ model, kind }) => `${model} (${kind})`).join(", ");
     warn(
-      `[cost] no price in MODEL_PRICES_JSON for: ${missing.join(", ")}. ` +
+      `[cost] no price in MODEL_PRICES_JSON for: ${named}. ` +
         `Those jobs will record no cost figure. Add them to .env and restart.`
     );
   }

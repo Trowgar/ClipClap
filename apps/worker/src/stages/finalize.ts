@@ -10,8 +10,11 @@ import { settleFreeLedger } from "./free-settlement";
 import type { FinalizeStagePayload } from "./types";
 
 /** Parsed once at module load: the price table does not change under a running
- *  worker, and re-parsing per job would multiply the warning noise by traffic. */
-const MODEL_PRICES = loadModelPrices();
+ *  worker, and re-parsing per job would multiply the warning noise by traffic.
+ *
+ * price-check.ts reports missing prices once at boot; a second identical line
+ * here would land after the [cost] summary and read as a new problem. */
+const MODEL_PRICES = loadModelPrices(process.env, () => {});
 
 /** Optional. Unset means compute is not reported - see cost-telemetry.ts. */
 const COMPUTE_COST_PER_MINUTE_USD = readRate(

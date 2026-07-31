@@ -51,7 +51,7 @@ describe("configuredModels", () => {
 });
 
 describe("unpricedModels", () => {
-  it("returns empty when the table covers every configured model", () => {
+  it("returns empty when nothing is missing", () => {
     const prices = loadModelPrices(
       {
         MODEL_PRICES_JSON: JSON.stringify({
@@ -70,7 +70,7 @@ describe("unpricedModels", () => {
     expect(unpricedModels(prices, DISTINCT_ENV)).toEqual([]);
   });
 
-  it("names exactly the missing models, not the priced ones", () => {
+  it("names exactly the missing models, tagged with the table each belongs in", () => {
     const prices = loadModelPrices(
       {
         MODEL_PRICES_JSON: JSON.stringify({
@@ -85,8 +85,13 @@ describe("unpricedModels", () => {
       () => {}
     );
     const missing = unpricedModels(prices, DISTINCT_ENV);
-    expect(missing.sort()).toEqual(
-      ["critic-fallback-x", "finalizer-model-x", "highlights-model-x"].sort()
+    const byModel = (a: { model: string }, b: { model: string }) => a.model.localeCompare(b.model);
+    expect([...missing].sort(byModel)).toEqual(
+      [
+        { model: "critic-fallback-x", kind: "tokensPerMillionUsd" },
+        { model: "finalizer-model-x", kind: "tokensPerMillionUsd" },
+        { model: "highlights-model-x", kind: "tokensPerMillionUsd" },
+      ].sort(byModel)
     );
   });
 
@@ -110,7 +115,28 @@ describe("unpricedModels", () => {
       },
       () => {}
     );
-    expect(unpricedModels(prices, DISTINCT_ENV)).toEqual(["transcription-model-x"]);
+    expect(unpricedModels(prices, DISTINCT_ENV)).toEqual([
+      { model: "transcription-model-x", kind: "audioPerMinuteUsd" },
+    ]);
+  });
+
+  it("reports a model missing from both tables twice, once per kind", () => {
+    const prices = loadModelPrices(
+      { MODEL_PRICES_JSON: JSON.stringify({ tokensPerMillionUsd: {}, audioPerMinuteUsd: {} }) },
+      () => {}
+    );
+    // Force the same literal value to appear as both a token model and the
+    // audio model, so a name-only report would collapse it into a single hit.
+    const env = { ...DISTINCT_ENV, OPENAI_TRANSCRIPTION_MODEL: "critic-model-x" };
+    const missing = unpricedModels(prices, env);
+    const hits = missing.filter((m) => m.model === "critic-model-x");
+    expect(hits).toEqual(
+      expect.arrayContaining([
+        { model: "critic-model-x", kind: "tokensPerMillionUsd" },
+        { model: "critic-model-x", kind: "audioPerMinuteUsd" },
+      ])
+    );
+    expect(hits).toHaveLength(2);
   });
 });
 
@@ -146,12 +172,12 @@ describe("warnAboutMissingPrices", () => {
     warnAboutMissingPrices(env, warn);
     expect(warn).toHaveBeenCalledOnce();
     const message = warn.mock.calls[0][0];
-    expect(message).toContain("scan-model-x");
-    expect(message).toContain("critic-model-x");
-    expect(message).toContain("critic-fallback-x");
-    expect(message).toContain("finalizer-model-x");
-    expect(message).toContain("highlights-model-x");
-    expect(message).toContain("transcription-model-x");
+    expect(message).toContain("scan-model-x (tokensPerMillionUsd)");
+    expect(message).toContain("critic-model-x (tokensPerMillionUsd)");
+    expect(message).toContain("critic-fallback-x (tokensPerMillionUsd)");
+    expect(message).toContain("finalizer-model-x (tokensPerMillionUsd)");
+    expect(message).toContain("highlights-model-x (tokensPerMillionUsd)");
+    expect(message).toContain("transcription-model-x (audioPerMinuteUsd)");
   });
 
   it("emits both the loader's warning and its own when MODEL_PRICES_JSON is unset", () => {
