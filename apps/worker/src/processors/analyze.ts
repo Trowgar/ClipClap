@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import type { Highlight, TranscriptionResult } from "@clipclap/shared";
+import { highlightsModel } from "../model-selection";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -142,7 +143,7 @@ export async function analyzeHighlightsV1(
     .join("\n");
 
   const response = await openai.chat.completions.create({
-    model: process.env.OPENAI_HIGHLIGHTS_MODEL || "gpt-4o-mini",
+    model: highlightsModel(),
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
       {

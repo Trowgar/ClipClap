@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { criticModel, transcriptionModel } from "../model-selection";
+import { criticModel, highlightsModel, transcriptionModel } from "../model-selection";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 
 describe("criticModel", () => {
@@ -29,5 +29,19 @@ describe("transcriptionModel", () => {
 
   it("treats an empty value as unset rather than as a model named empty string", () => {
     expect(transcriptionModel({ OPENAI_TRANSCRIPTION_MODEL: "" })).toBe("whisper-1");
+  });
+});
+
+describe("highlightsModel", () => {
+  it("defaults to gpt-4o-mini", () => {
+    expect(highlightsModel({})).toBe("gpt-4o-mini");
+  });
+
+  it("honours OPENAI_HIGHLIGHTS_MODEL", () => {
+    expect(highlightsModel({ OPENAI_HIGHLIGHTS_MODEL: "gpt-5.1" })).toBe("gpt-5.1");
+  });
+
+  it("treats an empty value as unset rather than as a model named empty string", () => {
+    expect(highlightsModel({ OPENAI_HIGHLIGHTS_MODEL: "" })).toBe("gpt-4o-mini");
   });
 });

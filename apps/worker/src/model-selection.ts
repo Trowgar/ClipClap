@@ -26,3 +26,13 @@ export function criticModel(env: Env = process.env): string {
 export function transcriptionModel(env: Env = process.env): string {
   return env.OPENAI_TRANSCRIPTION_MODEL || "whisper-1";
 }
+
+/**
+ * Which model the LEGACY single-pass analyzer used. Kept here for the same
+ * reason as the other two: it is a model the deployment can select, so the
+ * price guard has to be able to see it. It is only reached when ANALYZE_ENGINE
+ * selects the legacy path.
+ */
+export function highlightsModel(env: Env = process.env): string {
+  return env.OPENAI_HIGHLIGHTS_MODEL || "gpt-4o-mini";
+}
