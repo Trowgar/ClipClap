@@ -1129,7 +1129,7 @@ Tokens are stored, dollars are stored, the multiplier between them is not. The t
 
 **Files:**
 - Modify: `prisma/schema.prisma`
-- Modify: `apps/worker/src/stages/finalize.ts` (nothing to change if Task 3 was done - the builder already returns the two fields and they are spread into the update; this step only verifies)
+- Modify: `apps/worker/src/stages/finalize.ts` - **required, not a no-op.** See Step 4a.
 
 - [ ] **Step 1: Add the columns**
 
@@ -1164,7 +1164,7 @@ done
 
 Expected: `ok` for each service.
 
-- [ ] **Step 4: Verify the columns exist and finalize writes them**
+- [ ] **Step 4: Verify the columns exist**
 
 ```bash
 docker compose exec -T postgres psql -U clipclap -d clipclap -c "\d jobs" | grep -E "criticModel|transcriptionModel"
@@ -1172,11 +1172,41 @@ docker compose exec -T postgres psql -U clipclap -d clipclap -c "\d jobs" | grep
 
 Expected: both columns listed as `text`.
 
-```bash
-grep -n "criticModel\|transcriptionModel" apps/worker/src/stages/finalize.ts
+- [ ] **Step 4a: Remove the guard Task 3 had to add, and let the models through**
+
+**This plan originally said this step was a no-op. That was wrong, and it would have taken production down.**
+
+Task 3 made `buildJobCostTelemetry` return `criticModel` and `transcriptionModel`, and `finalize.ts` spreads the builder's result into `prisma.job.update({ data: ... })`. The columns did not exist yet, and **Prisma rejects unknown arguments rather than ignoring them** - `PrismaClientValidationError: Unknown argument \`criticModel\``. That throw lands inside `runFinalizeStage`'s `try`, so every successfully rendered job would have been marked FAILED and then REFUNDED by `settleFreeLedger(jobId, "FAILED")`. Neither guard could catch it: spreading a non-literal object skips TypeScript's excess-property check, and the worker tests mock Prisma.
+
+So Task 3 destructures the two fields back out before the update, with a comment naming this step as the trigger to delete it. Now that the columns exist, delete it.
+
+In `apps/worker/src/stages/finalize.ts`, remove the destructuring line and its explanatory comment, and pass `telemetry` straight through:
+
+```ts
+    const { criticModel: _critic, transcriptionModel: _asr, ...costColumns } =
+      telemetry;
 ```
 
-Expected: both appear inside the `buildJobCostTelemetry` call. They reach the row because the builder's return value is spread into `prisma.job.update({ data: ... })`.
+The `data:` payload should spread `...telemetry` again instead of `...costColumns`. Delete the comment block above the destructuring at the same time - it describes a condition that no longer holds, and a stale comment is worse than none.
+
+Verify against the REAL database, not a mock, because a mock is what hid this in the first place:
+
+```bash
+docker compose restart worker-finalize
+docker compose logs --tail 20 worker-finalize | grep -i "unknown argument" || echo "no validation error - good"
+```
+
+- [ ] **Step 4b: Prove the columns are actually written end to end**
+
+The unit suite cannot prove this - it mocks Prisma. Run one real job through the pipeline (a short video is fine) and check the row:
+
+```bash
+docker compose exec -T postgres psql -U clipclap -d clipclap -c "
+SELECT id, \"criticModel\", \"transcriptionModel\", \"estimatedAnalysisCostUsd\"
+  FROM jobs ORDER BY \"createdAt\" DESC LIMIT 1;"
+```
+
+Expected: both model columns populated, not NULL. If they are NULL, Step 4a was not completed and the columns are dead weight.
 
 - [ ] **Step 5: Close the coverage hole this plan opened in Task 2**
 
