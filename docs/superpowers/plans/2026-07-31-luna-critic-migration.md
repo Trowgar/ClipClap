@@ -2611,6 +2611,22 @@ git -c user.name=Trowgar -c user.email=trowgar@yahoo.com commit -m "docs: record
 
 ---
 
+## Follow-up raised during Task 6, recorded rather than fixed
+
+**A FAILED job records nothing about which model burned its tokens.** The failure path in
+`stages/finalize.ts` writes only `status` and `error`, so a run that spent real money on
+analysis and then failed leaves no trace of what it spent it on. Raised by the Task 6
+implementer, and correct: the spend is as real as a successful run's.
+
+Not fixed there because it is not a migration detail - it changes what a failed job reports,
+which touches billing visibility and the free-tier ledger's refund path, and those deserve
+their own decision. Note the interaction: `settleFreeLedger` refunds failed jobs uncapped on
+purpose ("a failure here is our breakage, and our breakage must never spend a stranger's only
+look at the product"), so recording the cost of a failed run must not become a reason to
+charge for it.
+
+---
+
 ## Follow-ups this plan deliberately does NOT do
 
 Both are in the spec; neither belongs in this change.
