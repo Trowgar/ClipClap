@@ -2,11 +2,17 @@
  * Re-blesses eval snapshots after a DELIBERATE engine change.
  *
  *   docker compose exec worker-analyze sh -c \
- *     "cd /app/apps/worker && npx tsx src/scripts/eval-bless.ts [case-name ...]"
+ *     "cd /app/apps/worker && npx tsx src/scripts/eval-bless.ts [--variant NAME] [case-name ...]"
  *
  * Replays every fixture (or only the ones named) through the real engine with
  * recorded LLM responses, compares the result to the blessed snapshot, prints a
  * readable diff of what moved, and only then rewrites snapshot.json.
+ *
+ * `--variant NAME` blesses a variant instead of the engine default: it replays
+ * under that variant's config, diffs against snapshot.<NAME>.json, and writes
+ * back to the same file. Base and variant never read or write each other's
+ * snapshot, which is what lets both sit in the repo and be diffed against one
+ * another - that cross-variant diff is the model-migration decision.
  *
  * The diff is the point. It is the review artefact a human reads to decide
  * whether the change is desirable - two pretty-printed JSON blobs to compare by
@@ -23,14 +29,17 @@
 import { existsSync, readdirSync, writeFileSync } from "fs";
 import { join } from "path";
 import {
+  BASE_VARIANT,
   FIXTURES_DIR,
   loadFixture,
-  runFixture,
+  parseVariantArgs,
+  runFixtureVariant,
+  snapshotFileName,
   toShape,
+  variantConfig,
   type EvalShape,
 } from "../__tests__/helpers/eval-fixture";
 import { compareFingerprints, computeFingerprint } from "../__tests__/helpers/eval-fingerprint";
-import { loadAnalyzeConfig } from "../analyze-v2/config";
 
 type Clip = EvalShape["clips"][number];
 
@@ -179,7 +188,11 @@ function listFixtures(): string[] {
 }
 
 async function main() {
-  const names = process.argv.slice(2).filter((a) => !a.startsWith("-"));
+  const { variant, cases: names } = parseVariantArgs(process.argv.slice(2));
+  if (!variant) {
+    console.error("usage: eval-bless.ts [--variant NAME] [case-name ...]");
+    process.exit(1);
+  }
   const available = listFixtures();
   const cases = names.length > 0 ? names : available;
 
@@ -190,7 +203,9 @@ async function main() {
     process.exit(1);
   }
 
-  const current = computeFingerprint({ ...loadAnalyzeConfig({}), engine: "recall-critic" });
+  // Throws on an unknown variant, before anything is replayed or written.
+  const current = computeFingerprint(variantConfig(variant));
+  console.log(`variant: ${variant}`);
   let changed = 0;
   let refused = 0;
   let failed = 0;
@@ -201,37 +216,54 @@ async function main() {
     // Fingerprint first, and as a refusal rather than a throw: the fixture's
     // RECORDING is what is stale here. Blessing would freeze a shape produced
     // from answers the current engine would never have received.
-    if (fixture.fingerprint) {
-      const { mismatches } = compareFingerprints(fixture.fingerprint, current);
+    //
+    // Against THIS variant's recording, not the base one: a variant differs from
+    // the base by construction, so comparing to the base would refuse every
+    // variant bless for the one reason that is never a problem.
+    const recorded = fixture.fingerprints[variant] ?? null;
+    if (recorded) {
+      const { mismatches } = compareFingerprints(recorded, current);
       if (mismatches.length > 0) {
         refused++;
         console.log(`${name}: REFUSED - recorded under a different engine config`);
         for (const m of mismatches) console.log(`    - ${m}`);
+        // Same split as the WARNING branch below: eval-record.ts re-records the
+        // BASE, so handing that command to someone blessing a variant would
+        // spend money and destroy the base recording the variant is compared
+        // against - the one thing that must not move.
         console.log(
           `    The responses are stale, not the snapshot, so blessing would carve in a shape\n` +
             `    the current engine never produced. Either revert the knob(s) above, or re-record:\n` +
             `      docker compose exec worker-analyze sh -c "cd /app/apps/worker && ` +
-            `npx tsx src/scripts/eval-record.ts <jobId> ${name}"`
+            (variant === BASE_VARIANT
+              ? `npx tsx src/scripts/eval-record.ts <jobId> ${name}"`
+              : `npx tsx src/scripts/eval-topup.ts --variant ${variant} ${name}"`)
         );
         continue;
       }
     } else {
+      // The remediation differs by path, and pointing a variant at eval-record.ts
+      // would be worse than saying nothing: eval-record re-records the BASE, so
+      // following it would spend money and still leave the variant unrecorded.
       console.log(
-        `${name}: WARNING - no meta.json fingerprint, cannot verify the recording matches ` +
-          `the current config. Re-record with eval-record.ts.`
+        `${name}: WARNING - no meta.json fingerprint for variant "${variant}", cannot verify ` +
+          `the recording matches the current config. ` +
+          (variant === BASE_VARIANT
+            ? `Re-record with eval-record.ts.`
+            : `Record it with eval-topup.ts --variant ${variant} ${name}.`)
       );
     }
 
     let shape: EvalShape;
     try {
-      shape = toShape(await runFixture(fixture));
+      shape = toShape(await runFixtureVariant(fixture, variant));
     } catch (err) {
       failed++;
       console.log(`${name}: ERROR - ${(err as Error).message}`);
       continue;
     }
 
-    const lines = diffShapes(fixture.snapshot, shape);
+    const lines = diffShapes(fixture.snapshots[variant] ?? null, shape);
     if (lines.length === 0) {
       console.log(`${name}: unchanged`);
       continue;
@@ -240,12 +272,9 @@ async function main() {
     changed++;
     console.log(`${name}: CHANGED`);
     for (const line of lines) console.log(line);
-    writeFileSync(
-      join(FIXTURES_DIR, name, "snapshot.json"),
-      `${JSON.stringify(shape, null, 2)}\n`,
-      "utf-8"
-    );
-    console.log(`  -> rewrote ${join(FIXTURES_DIR, name, "snapshot.json")}`);
+    const snapshotPath = join(FIXTURES_DIR, name, snapshotFileName(variant));
+    writeFileSync(snapshotPath, `${JSON.stringify(shape, null, 2)}\n`, "utf-8");
+    console.log(`  -> rewrote ${snapshotPath}`);
   }
 
   console.log(
@@ -258,4 +287,10 @@ async function main() {
   process.exit(refused + failed > 0 ? 1 : 0);
 }
 
-main();
+// Only when run as a script. diffShapes above is exported, and an unguarded
+// main() would rewrite snapshot files on any import of this module. typeof-
+// guarded because tsx loads this as CJS while vitest transforms it to ESM,
+// where bare require/module would throw.
+if (typeof require !== "undefined" && typeof module !== "undefined" && require.main === module) {
+  main();
+}

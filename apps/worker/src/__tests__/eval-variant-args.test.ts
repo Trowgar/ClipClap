@@ -1,14 +1,16 @@
 import { describe, it, expect } from "vitest";
-import { parseArgs } from "../scripts/eval-topup";
-import { BASE_VARIANT } from "./helpers/eval-fixture";
+import { BASE_VARIANT, parseVariantArgs as parseArgs } from "./helpers/eval-fixture";
 
 /**
- * The parser decides what gets recorded, and recording costs real money. Every
- * way it can be wrong ends in either a fixture silently skipped or a paid call
- * made under the wrong model, and neither is visible until the bill arrives -
- * so it is pinned here, where the check is free.
+ * The parser decides what eval-topup records and what eval-bless blesses. Every
+ * way it can be wrong ends in either a fixture silently skipped or work done
+ * under the wrong model, and in eval-topup's case that is not visible until the
+ * bill arrives - so it is pinned here, where the check is free.
+ *
+ * One home, one test: the off-by-one below was originally written twice, once
+ * per script, which is exactly how it survived the first review.
  */
-describe("eval-topup parseArgs", () => {
+describe("parseVariantArgs", () => {
   it("defaults to the base variant and keeps every case when no flag is given", () => {
     expect(parseArgs(["podcast-ecology"])).toEqual({
       variant: BASE_VARIANT,

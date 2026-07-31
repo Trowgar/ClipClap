@@ -82,6 +82,35 @@ export function snapshotFileName(variant: string): string {
   return variant === BASE_VARIANT ? "snapshot.json" : `snapshot.${variant}.json`;
 }
 
+/**
+ * Splits a script's argv into a variant name and the fixture names.
+ *
+ * Lives here, not in either script, because eval-topup and eval-bless need the
+ * SAME parse and the first draft of this code carried an off-by-one that only
+ * existed twice because the code did. It is fiddly enough to earn one home and
+ * one test: it drops every `-`-prefixed token AND the token that follows
+ * `--variant`, and getting either half wrong silently drops a fixture or feeds
+ * the variant name in as a case - which, in eval-topup, surfaces only as a live
+ * paid API call under the wrong model.
+ *
+ * `variant` is undefined when `--variant` is the last token. Callers must treat
+ * that as a usage error rather than falling back to base, or a truncated command
+ * line would quietly record or bless the wrong thing.
+ */
+export function parseVariantArgs(argv: string[]): {
+  variant: string | undefined;
+  cases: string[];
+} {
+  const flagAt = argv.indexOf("--variant");
+  // indexOf returns -1 when absent, so `flagAt + 1` is 0 - the guard below stops
+  // that from excluding the FIRST case name on every flagless invocation.
+  const variant = flagAt === -1 ? BASE_VARIANT : argv[flagAt + 1];
+  const cases = argv.filter(
+    (a, i) => !a.startsWith("-") && (flagAt === -1 || i !== flagAt + 1)
+  );
+  return { variant, cases };
+}
+
 /** Effective engine config for a variant: the env-blind defaults plus overrides. */
 export function variantConfig(variant: string): AnalyzeConfig {
   const base: AnalyzeConfig = {

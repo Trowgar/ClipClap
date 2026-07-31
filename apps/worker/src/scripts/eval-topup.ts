@@ -57,38 +57,17 @@ import {
   BASE_VARIANT,
   FIXTURES_DIR,
   loadFixture,
+  parseVariantArgs,
   variantConfig,
 } from "../__tests__/helpers/eval-fixture";
 import { compareFingerprints, computeFingerprint } from "../__tests__/helpers/eval-fingerprint";
 
 const OUTCOME_KEYS = new Set(["refusal", "truncated"]);
 
-export const USAGE = "usage: eval-topup.ts [--variant NAME] <case-name> [case-name ...]";
-
-/**
- * Splits argv into a variant name and the case names.
- *
- * Exported because it is fiddly enough to be worth a test that costs nothing:
- * it drops every `-`-prefixed token AND the token that follows `--variant`, and
- * getting either half wrong silently drops a fixture or feeds the variant name
- * in as a case - both of which only surface as a live, paid API call.
- *
- * `variant` is undefined when `--variant` is the last token, which the caller
- * must treat as a usage error rather than as the base variant.
- */
-export function parseArgs(argv: string[]): { variant: string | undefined; cases: string[] } {
-  const flagAt = argv.indexOf("--variant");
-  const variant = flagAt === -1 ? BASE_VARIANT : argv[flagAt + 1];
-  const cases = argv.filter(
-    (a, i) => !a.startsWith("-") && (flagAt === -1 || i !== flagAt + 1)
-  );
-  return { variant, cases };
-}
-
 async function main() {
-  const { variant, cases } = parseArgs(process.argv.slice(2));
+  const { variant, cases } = parseVariantArgs(process.argv.slice(2));
   if (cases.length === 0 || !variant) {
-    console.error(USAGE);
+    console.error("usage: eval-topup.ts [--variant NAME] <case-name> [case-name ...]");
     process.exit(1);
   }
 
@@ -224,9 +203,10 @@ function readOutcome(raw: string): string | null {
   return null;
 }
 
-// Only when run as a script. parseArgs above is imported by a test, and an
-// unguarded main() would run on that import - parsing vitest's own argv and
-// then making real, paid API calls from inside the test suite.
+// Only when run as a script. This file spends money, so any future import of it
+// - a test reaching for a helper, a script reusing a piece - must not be able to
+// start a recording run by accident. typeof-guarded because tsx loads this as
+// CJS while vitest transforms it to ESM, where bare require/module would throw.
 if (typeof require !== "undefined" && typeof module !== "undefined" && require.main === module) {
   main();
 }
