@@ -14,6 +14,16 @@
  *
  * Rows that already carry a model are left alone: this is a backfill, not a
  * rewrite, and a later run must never overwrite something finalize wrote.
+ *
+ * BACKFILLED IS NOT THE SAME AS REPRICEABLE, and the difference is six rows
+ * versus ten. Measured after this ran: the six RECALL_CRITIC rows recompute
+ * from their stored token counts to within 5e-4 of the stored dollar figure -
+ * three-decimal rounding, nothing more - so those are genuinely repriceable.
+ * The four older rows are not, and the missing model was never what stopped
+ * them: they carry ZERO analysis tokens, and their stored analysis dollars came
+ * from the fabricated sourceMinutes * 0.00005 fallback that has since been
+ * deleted from cost-telemetry.ts. No backfill recovers a count that was never
+ * recorded. Do not read "backfilled 10 rows" as "10 rows can be repriced".
  */
 import { prisma } from "@clipclap/shared";
 
