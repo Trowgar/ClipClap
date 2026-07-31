@@ -401,9 +401,11 @@ model Job {
   analysisOutputTokens  Int?
   /// Which models produced the token counts and the cost figures above. Stored
   /// because dollars are DERIVED and prices move: without the multiplier, a row
-  /// can never be re-priced. The ten rows that predate this column had to be
-  /// backfilled from analyzeEngine and date, which only worked because the
-  /// engine changed at the same time the model did - not a repeatable trick.
+  /// can never be re-priced, which is the state the ten rows predating this
+  /// column are in until the backfill script runs. That backfill only works at
+  /// all because the engine changed at the same time the model did - it reads
+  /// analyzeEngine and date. Not a repeatable trick, which is why the column
+  /// exists.
   criticModel           String?
   transcriptionModel    String?
   createdAt                     DateTime  @default(now())

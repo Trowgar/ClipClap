@@ -4,10 +4,27 @@ import {
   prisma,
   readRate,
 } from "@clipclap/shared";
+import type { Prisma } from "@prisma/client";
 import { buildJobCostTelemetry } from "../cost-telemetry";
 import { criticModel, transcriptionModel } from "../model-selection";
 import { settleFreeLedger } from "./free-settlement";
 import type { FinalizeStagePayload } from "./types";
+
+/**
+ * Compile-time guard on the seam that nearly took production down.
+ *
+ * The telemetry object is spread into prisma.job.update, and Prisma REJECTS
+ * unknown arguments rather than ignoring them - the throw is caught by
+ * runFinalizeStage, which marks the job FAILED and refunds it. Spreading a
+ * non-literal skips TypeScript's excess-property check and the tests mock
+ * Prisma, so neither guard saw it the first time. This one does: adding a field
+ * to buildJobCostTelemetry that is not a Job column now fails the typecheck.
+ */
+type TelemetryFitsJobRow =
+  keyof ReturnType<typeof buildJobCostTelemetry> extends keyof Prisma.JobUncheckedUpdateInput
+    ? true
+    : { error: "buildJobCostTelemetry returns a field that is not a Job column" };
+const _telemetryFitsJobRow: TelemetryFitsJobRow = true;
 
 /** Parsed once at module load: the price table does not change under a running
  *  worker, and re-parsing per job would multiply the warning noise by traffic.
