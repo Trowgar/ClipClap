@@ -6,7 +6,7 @@ describe("loadAnalyzeConfig", () => {
     const cfg = loadAnalyzeConfig({});
     expect(cfg.engine).toBe("legacy");
     expect(cfg.scanModel).toBe("gpt-4o-mini");
-    expect(cfg.criticModel).toBe("gpt-5.1");
+    expect(cfg.criticModel).toBe("gpt-5.6-luna");
     expect(cfg.scoreThreshold).toBe(0.6);
     expect(cfg.weakFallbackMinScore).toBe(0.35);
     expect(cfg.softCap).toBe(12);

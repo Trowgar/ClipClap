@@ -43,6 +43,14 @@ const MAX_TITLE_CHARS = 70;
 //
 // One call per job, so unlike the critic there is no concurrency multiplier on
 // the TPM reservation: ~13k in flight once, against the critic's ~61k.
+//
+// Still ESTIMATED under the gpt-5.6-luna default. The eval fixtures recorded
+// against Luna (2026-07-31) produced no truncation at this stage, which is weak
+// positive evidence only: two jobs, well under the 16-clip worst case, and a
+// completed call says the cap was not hit - not how close it came. The critic's
+// Luna measurement showed a much smaller reasoning term, which if it carries
+// over would make these numbers conservative rather than tight, but that is an
+// inference from another stage and not a measurement of this one.
 const FINALIZER_BASE_TOKENS = 2000;
 const FINALIZER_TOKENS_PER_CLIP = 700;
 

@@ -30,10 +30,10 @@ const SYNTHETIC_FIXTURE = "synthetic";
  * A throwaway fixtures tree: one fixture with a base recording, plus whatever
  * variants the caller declares and does NOT record.
  *
- * The real tree cannot express "declared but unrecorded" any more - luna is
- * recorded in both fixtures - and it must not be edited to make it: those files
- * are paid recordings. The transcript and responses here are never replayed,
- * only parsed, so they can be empty.
+ * The real tree cannot express "declared but unrecorded" any more - every
+ * declared variant is recorded in both fixtures - and it must not be edited to
+ * make it: those files are paid recordings. The transcript and responses here
+ * are never replayed, only parsed, so they can be empty.
  */
 function syntheticFixture(opts: { declare: Record<string, unknown> }): string {
   const dir = variantsDir(opts.declare);
@@ -66,16 +66,16 @@ describe("variant definitions", () => {
   });
 
   it("reads declared variants from variants.json", () => {
-    expect(loadVariantDefs().luna).toEqual({
-      criticModel: "gpt-5.6-luna",
-      finalizerModel: "gpt-5.6-luna",
+    expect(loadVariantDefs().gpt51).toEqual({
+      criticModel: "gpt-5.1",
+      finalizerModel: "gpt-5.1",
     });
-    expect(variantNames()).toContain("luna");
+    expect(variantNames()).toContain("gpt51");
   });
 
   it("maps the base variant to snapshot.json and others to a suffixed file", () => {
     expect(snapshotFileName(BASE_VARIANT)).toBe("snapshot.json");
-    expect(snapshotFileName("luna")).toBe("snapshot.luna.json");
+    expect(snapshotFileName("gpt51")).toBe("snapshot.gpt51.json");
   });
 
   it("builds the base config from the engine defaults, unchanged", () => {
@@ -87,15 +87,17 @@ describe("variant definitions", () => {
   });
 
   it("applies overrides on top of the defaults for a named variant", () => {
-    const luna = variantConfig("luna");
+    const gpt51 = variantConfig("gpt51");
     const defaults = loadAnalyzeConfig({});
-    expect(luna.criticModel).toBe("gpt-5.6-luna");
-    expect(luna.finalizerModel).toBe("gpt-5.6-luna");
+    expect(gpt51.criticModel).toBe("gpt-5.1");
+    expect(gpt51.finalizerModel).toBe("gpt-5.1");
+    // and it really is an override, not the default under a second name
+    expect(gpt51.criticModel).not.toBe(defaults.criticModel);
     // everything not overridden must be identical, or the diff stops isolating
     // the model and starts mixing in a second changed knob
-    expect(luna.scanModel).toBe(defaults.scanModel);
-    expect(luna.reasoningEffort).toBe(defaults.reasoningEffort);
-    expect(luna.criticBatchSize).toBe(defaults.criticBatchSize);
+    expect(gpt51.scanModel).toBe(defaults.scanModel);
+    expect(gpt51.reasoningEffort).toBe(defaults.reasoningEffort);
+    expect(gpt51.criticBatchSize).toBe(defaults.criticBatchSize);
   });
 
   it("throws on an unknown variant rather than silently running the base", () => {
@@ -155,8 +157,8 @@ describe("fixture variant surface", () => {
     // un-fingerprinted variant is not comparable to anything, so it must throw.
     //
     // The fingerprint is forced onto the loaded object rather than read from
-    // disk: luna is recorded now, and this guard must keep being tested after
-    // every declared variant has a recording.
+    // disk: every declared variant is recorded now, and this guard must keep
+    // being tested after that is true.
     const variant = declaredVariant();
     const fixture = loadFixture("podcast-ecology");
     const unfingerprinted = {
@@ -192,8 +194,9 @@ describe("unrecorded variant announcement", () => {
   it("names every declared variant that has no recording, without failing", () => {
     // Fixture names that exist nowhere on disk, so no declared variant can have
     // a recording for them. Driving it with the REAL fixture names would make
-    // this test say "luna is unrecorded", which was true when it was written and
-    // is false the moment anybody records luna.
+    // this test say "gpt51 is unrecorded", which is false - it is recorded in
+    // both, and any declared variant becomes recorded the moment anybody tops it
+    // up.
     const variant = declaredVariant();
     const warnings: string[] = [];
     warnUnrecordedVariants(["ghost-fixture-a", "ghost-fixture-b"], (m) => warnings.push(m));
@@ -214,7 +217,8 @@ describe("unrecorded variant announcement", () => {
 
   it("stays silent for the fixtures that ARE fully recorded", () => {
     // the other half of the contract, and the half that only became testable
-    // once luna was recorded: no announcement for a pair that exists
+    // once every declared variant was recorded: no announcement for a pair that
+    // exists
     const warnings: string[] = [];
     warnUnrecordedVariants(["podcast-ecology", "podcast-answer-arc"], (m) => warnings.push(m));
     expect(warnings).toEqual([]);

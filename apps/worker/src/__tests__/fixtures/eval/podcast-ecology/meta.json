@@ -1,31 +1,31 @@
 {
-  "recordedAt": "2026-07-26T23:24:50.015Z",
+  "recordedAt": "2026-07-31T23:19:02.561Z",
   "engine": {
     "scanModel": "gpt-4o-mini",
-    "criticModel": "gpt-5.1",
+    "criticModel": "gpt-5.6-luna",
     "criticModelFallback": "gpt-5-mini",
     "reasoningEffort": "low",
     "criticBatchSize": 6,
     "criticMaxOutputTokensBase": 1200,
     "criticMaxOutputTokensPerCandidate": 800,
     "finalizerEnabled": true,
-    "finalizerModel": "gpt-5.1",
+    "finalizerModel": "gpt-5.6-luna",
     "finalizerMaxOutputTokensBase": 2000,
     "finalizerMaxOutputTokensPerClip": 700
   },
   "variants": {
-    "luna": {
-      "recordedAt": "2026-07-31T23:19:02.561Z",
+    "gpt51": {
+      "recordedAt": "2026-07-26T23:24:50.015Z",
       "engine": {
         "scanModel": "gpt-4o-mini",
-        "criticModel": "gpt-5.6-luna",
+        "criticModel": "gpt-5.1",
         "criticModelFallback": "gpt-5-mini",
         "reasoningEffort": "low",
         "criticBatchSize": 6,
         "criticMaxOutputTokensBase": 1200,
         "criticMaxOutputTokensPerCandidate": 800,
         "finalizerEnabled": true,
-        "finalizerModel": "gpt-5.6-luna",
+        "finalizerModel": "gpt-5.1",
         "finalizerMaxOutputTokensBase": 2000,
         "finalizerMaxOutputTokensPerClip": 700
       }

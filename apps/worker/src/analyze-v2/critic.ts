@@ -62,6 +62,46 @@ import type { CriticVerdict, LlmUsage, MergedCandidate, SentenceNode } from "./t
 // re-creates the starvation this constant exists to prevent: truncation ->
 // split cascade -> dropTruncated() -> thin or (at zero verdicts) failed jobs.
 // Re-measure this table before shipping a higher effort.
+//
+// ---------------------------------------------------------------------------
+// gpt-5.6-luna (the CURRENT default): MEASURED, UNCHANGED - 2026-07-31
+// ---------------------------------------------------------------------------
+// Everything above is gpt-5.1's table. It is kept, not stale: gpt-5.1 is what
+// these two constants were originally derived from, and deleting it would leave
+// the numbers standing with no derivation at all. But the engine no longer
+// defaults to that model, so read the table as history and this block as the
+// statement about what actually runs.
+//
+// Luna was re-measured against the SAME ladder, with a validated control run,
+// and needed NO CHANGE. The requirements it produced were:
+//     1 candidate  -> 2000     vs 1200 + 1*800 = 2000
+//     3 candidates -> 3600     vs 1200 + 3*800 = 3600
+//     6 candidates -> 3000     vs 1200 + 6*800 = 6000
+// So the existing formula clears every one of them. That is a measurement, not
+// an omission.
+//
+// The shape of the spend is DIFFERENT, and it inverts the assumption the whole
+// comment above is built around. Luna spends 68-171 reasoning tokens per
+// candidate against gpt-5.1's 207-620, so on Luna the visible JSON is the
+// dominant term and the reasoning is the small one. The batch-6 requirement
+// falling to 3000 from gpt-5.1's 5000-6000 is that inversion showing up in the
+// budget: the term that scales hardest with batch size got much cheaper.
+//
+// Consequence worth naming because it is the exact failure gpt-5.1's table was
+// written to explain: 6 / 2400 does NOT truncate on Luna. On gpt-5.1 it always
+// did - that row is the starvation cascade's origin.
+//
+// A tighter fit (1800 base / 600 per candidate) was proposed and REJECTED. It
+// would still clear all three measured requirements, but it shrinks the batch-6
+// budget from 6000 to 5400 on the strength of ONE sample per cell, and per-call
+// variance here is the same order as the headroom (see the CAVEAT above - a
+// repeat run of 6/6000 on gpt-5.1 moved 673 tokens). Trading measured headroom
+// for a rounding error of savings is the direction that produced the original
+// starvation cascade, and the cap is not billed when it is not used.
+//
+// Still CONDITIONAL ON reasoning_effort = "low". Luna's smaller reasoning term
+// makes it less sensitive to that knob than gpt-5.1 was, not immune to it -
+// the caveat above applies unchanged.
 const CRITIC_BASE_TOKENS = 1200; // shared rubric/JSON-scaffold pass + flat headroom
 const CRITIC_TOKENS_PER_CANDIDATE = 800; // ~450 reasoning + ~150 JSON + ~200 headroom
 const CRITIC_CONCURRENCY = 4;

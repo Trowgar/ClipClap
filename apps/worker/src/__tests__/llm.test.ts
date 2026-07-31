@@ -123,6 +123,24 @@ describe("callJsonSchema", () => {
     const body51 = client.chat.completions.create.mock.calls[1][0];
     expect(body51.reasoning_effort).toBe("low");
   });
+
+  it("still passes reasoning_effort to gpt-5.6-luna", async () => {
+    // The critic's whole token-budget table was measured with this parameter
+    // set. If the gate ever stops matching the default model's name, every
+    // number in that table describes a request the engine no longer makes -
+    // and reasoning tokens are the dominant term the budget is sized for.
+    const client = fakeClient([() => okResponse({ candidates: [] })]);
+    await callJsonSchema(client, newUsage(), {
+      model: "gpt-5.6-luna",
+      system: "s",
+      user: "u",
+      schema: SCANNER_SCHEMA,
+      reasoningEffort: "low",
+    });
+    expect(client.chat.completions.create.mock.calls[0][0]).toMatchObject({
+      reasoning_effort: "low",
+    });
+  });
 });
 
 describe("mapWithConcurrency", () => {

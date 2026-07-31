@@ -82,7 +82,7 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
       engine === "recall-critic" || engine === "shadow" ? engine : "legacy",
     v2Pct: Math.min(100, Math.max(0, num(env, "ANALYZE_V2_PCT", 0))),
     scanModel: env.OPENAI_SCAN_MODEL || "gpt-4o-mini",
-    criticModel: env.OPENAI_CRITIC_MODEL || "gpt-5.1",
+    criticModel: env.OPENAI_CRITIC_MODEL || "gpt-5.6-luna",
     criticModelFallback: env.CRITIC_MODEL_FALLBACK || "gpt-5-mini",
     reasoningEffort: env.SELECTION_REASONING_EFFORT || "low",
     scoreThreshold: num(env, "CLIP_SCORE_THRESHOLD", 0.6),
@@ -112,7 +112,7 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     teaserMinHits: num(env, "TEASER_MIN_HITS", 3),
     finalizerEnabled: env.ANALYZE_FINALIZER !== "off",
     finalizerModel:
-      env.OPENAI_FINALIZER_MODEL || env.OPENAI_CRITIC_MODEL || "gpt-5.1",
+      env.OPENAI_FINALIZER_MODEL || env.OPENAI_CRITIC_MODEL || "gpt-5.6-luna",
     finalizerHeadroom: num(env, "FINALIZER_HEADROOM", 4),
     hookDedupSimilarity: num(env, "HOOK_DEDUP_SIMILARITY", 0.8),
   };
