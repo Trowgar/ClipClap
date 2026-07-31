@@ -61,13 +61,46 @@ describe("parseVariantArgs", () => {
     });
   });
 
-  it("excludes any hyphen-prefixed token from the case list", () => {
-    expect(parseArgs(["--dry-run", "-v", "podcast-ecology"]).cases).toEqual([
-      "podcast-ecology",
-    ]);
-  });
-
   it("returns no cases at all when argv is empty", () => {
     expect(parseArgs([])).toEqual({ variant: BASE_VARIANT, cases: [] });
+  });
+
+  // Every case below used to be SILENT. The run proceeded against base, spent
+  // nothing, printed "unchanged" or "complete already", and the operator
+  // concluded the variant had been blessed or recorded.
+  describe("rejects the ways a variant silently becomes base", () => {
+    it("throws on the equals form, which indexOf does not match", () => {
+      expect(() => parseArgs(["--variant=luna", "podcast-ecology"])).toThrow(
+        /unknown option "--variant=luna"/
+      );
+    });
+
+    it("names the separate-argument form in the message, since that is the fix", () => {
+      expect(() => parseArgs(["--variant=luna"])).toThrow(/--variant=NAME" is not supported/);
+    });
+
+    it("throws on a misspelled flag instead of eating the name as a fixture", () => {
+      // The real damage here is "luna" arriving in cases: the run would look for
+      // a fixture called luna, not a variant.
+      expect(() => parseArgs(["--varient", "luna", "podcast-ecology"])).toThrow(
+        /unknown option "--varient"/
+      );
+    });
+
+    it("throws on any other unknown option", () => {
+      expect(() => parseArgs(["--dry-run", "podcast-ecology"])).toThrow(/unknown option/);
+      expect(() => parseArgs(["-v", "podcast-ecology"])).toThrow(/unknown option "-v"/);
+    });
+
+    it("throws on a repeated --variant rather than picking one", () => {
+      // indexOf would take "luna" and let "gpt5" through as a fixture name.
+      expect(() => parseArgs(["--variant", "luna", "--variant", "gpt5"])).toThrow(
+        /given more than once/
+      );
+    });
+
+    it("still accepts the one option it knows", () => {
+      expect(() => parseArgs(["--variant", "luna", "podcast-ecology"])).not.toThrow();
+    });
   });
 });

@@ -295,5 +295,10 @@ async function main() {
 // guarded because tsx loads this as CJS while vitest transforms it to ESM,
 // where bare require/module would throw.
 if (typeof require !== "undefined" && typeof module !== "undefined" && require.main === module) {
-  main();
+  // Same reason as eval-topup: an argv mistake throws now, and the operator
+  // needs to read what they got wrong, not a Node stack trace.
+  main().catch((err: unknown) => {
+    console.error(`eval-bless: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(1);
+  });
 }

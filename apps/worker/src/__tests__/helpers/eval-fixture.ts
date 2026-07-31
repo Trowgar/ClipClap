@@ -82,16 +82,32 @@ export function snapshotFileName(variant: string): string {
   return variant === BASE_VARIANT ? "snapshot.json" : `snapshot.${variant}.json`;
 }
 
+/** Every option these scripts accept. Anything else `-`-prefixed is rejected. */
+const KNOWN_FLAGS = new Set(["--variant"]);
+
 /**
  * Splits a script's argv into a variant name and the fixture names.
  *
  * Lives here, not in either script, because eval-topup and eval-bless need the
  * SAME parse and the first draft of this code carried an off-by-one that only
- * existed twice because the code did. It is fiddly enough to earn one home and
- * one test: it drops every `-`-prefixed token AND the token that follows
- * `--variant`, and getting either half wrong silently drops a fixture or feeds
- * the variant name in as a case - which, in eval-topup, surfaces only as a live
- * paid API call under the wrong model.
+ * existed twice because the code did.
+ *
+ * EVERY failure mode here is silent by default, which is why it throws so
+ * readily. An unparsed flag does not stop the run, it changes which variant the
+ * run is about, and both scripts then report success:
+ *
+ *   --variant=luna   `indexOf("--variant")` does not match it, so the whole token
+ *                    would be discarded as an option and the run would proceed as
+ *                    BASE. eval-bless replays base, diffs base, prints
+ *                    "unchanged"; eval-topup finds every base key on disk and
+ *                    prints "complete already". Nothing errors, nothing is spent,
+ *                    and the operator concludes luna was recorded or blessed.
+ *   --varient luna   a typo'd flag would be discarded the same way, and "luna"
+ *                    would arrive as a FIXTURE name.
+ *
+ * So unknown options are a hard error, and the equals-form gets named in the
+ * message because it is the standard spelling everywhere else and the one an
+ * operator will reach for.
  *
  * `variant` is undefined when `--variant` is the last token. Callers must treat
  * that as a usage error rather than falling back to base, or a truncated command
@@ -101,13 +117,37 @@ export function parseVariantArgs(argv: string[]): {
   variant: string | undefined;
   cases: string[];
 } {
+  // A repeat is ambiguous and both readings are wrong: indexOf takes the first
+  // name, and the second one is not even an option token, so it would arrive as
+  // a fixture name. One run records under one config and writes one snapshot
+  // file, so there is no honest interpretation of two - refuse rather than pick.
+  if (argv.filter((a) => a === "--variant").length > 1) {
+    throw new Error(
+      `"--variant" given more than once. A run records under exactly one config ` +
+        `and writes exactly one snapshot file, so there is no meaning to pick from - ` +
+        `run the script once per variant.`
+    );
+  }
+
   const flagAt = argv.indexOf("--variant");
   // indexOf returns -1 when absent, so `flagAt + 1` is 0 - the guard below stops
   // that from excluding the FIRST case name on every flagless invocation.
   const variant = flagAt === -1 ? BASE_VARIANT : argv[flagAt + 1];
-  const cases = argv.filter(
-    (a, i) => !a.startsWith("-") && (flagAt === -1 || i !== flagAt + 1)
-  );
+  const cases: string[] = [];
+  for (const [i, a] of argv.entries()) {
+    if (flagAt !== -1 && i === flagAt + 1) continue;
+    if (a.startsWith("-")) {
+      if (!KNOWN_FLAGS.has(a)) {
+        throw new Error(
+          `unknown option "${a}". Did you mean "--variant NAME"? ` +
+            `Note the name is a SEPARATE argument - "--variant=NAME" is not supported ` +
+            `and would silently run against the base variant.`
+        );
+      }
+      continue;
+    }
+    cases.push(a);
+  }
   return { variant, cases };
 }
 
