@@ -2611,6 +2611,25 @@ git -c user.name=Trowgar -c user.email=trowgar@yahoo.com commit -m "docs: record
 
 ---
 
+## Measured during Task 7: six rows became repriceable, not ten
+
+The backfill filled `criticModel` on all ten rows carrying cost telemetry, and the six
+`RECALL_CRITIC` rows now recompute from their stored token counts to within 5e-4 of the stored
+dollar figure - pure three-decimal rounding. Those six are genuinely repriceable, which is what
+the column was added for.
+
+The four older rows are not, and `criticModel` was never the blocker for them. They carry ZERO
+analysis tokens, and their stored analysis dollars came from the fabricated
+`sourceMinutes * 0.00005` fallback that Task 3 deleted. No backfill can recover a token count
+that was never recorded. So the accurate claim is six, and anyone reporting "all ten rows are
+repriceable" is wrong.
+
+Also worth recording, because it nearly bit: those four rows carry `analyzeEngine = NULL`, not
+`LEGACY`. The script branches on `!== "RECALL_CRITIC"`, which caught them; an equality test
+against `LEGACY` would have silently missed all four and left them NULL.
+
+---
+
 ## Follow-up raised during Task 6, recorded rather than fixed
 
 **A FAILED job records nothing about which model burned its tokens.** The failure path in
