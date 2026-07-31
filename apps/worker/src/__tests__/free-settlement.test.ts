@@ -37,6 +37,18 @@ vi.mock("@clipclap/shared", async () => ({
     )
   ).tagJobError,
   probeLocalFile: mocks.probeLocalFile,
+  // Pricing is not what this suite tests - the cost figures it asserts on are
+  // stubbed onto the prisma reads below. An empty table keeps finalize's
+  // telemetry deterministic no matter what MODEL_PRICES_JSON holds in the
+  // environment the tests happen to run in. The two lookups are the real ones:
+  // they are pure, and a mock of them would be a second implementation of the
+  // unknown-model-yields-undefined rule that the real cost tests rely on.
+  ...(await vi.importActual<
+    typeof import("@clipclap/shared/config/model-prices")
+  >("@clipclap/shared/config/model-prices")),
+  // ...but NOT the real loadModelPrices: it reads process.env. Overrides the
+  // spread above, so keep it below.
+  loadModelPrices: () => ({ tokensPerMillionUsd: {}, audioPerMinuteUsd: {} }),
   findFreeCharge: mocks.findFreeCharge,
   freeBalanceSeconds: mocks.freeBalanceSeconds,
   reviseFreeChargeSeconds: mocks.reviseFreeChargeSeconds,

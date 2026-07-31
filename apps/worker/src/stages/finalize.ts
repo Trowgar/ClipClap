@@ -1,8 +1,30 @@
-import { jobStepService, prisma } from "@clipclap/shared";
+import { jobStepService, loadModelPrices, prisma } from "@clipclap/shared";
 import { buildJobCostTelemetry } from "../cost-telemetry";
 import { criticModel, transcriptionModel } from "../model-selection";
 import { settleFreeLedger } from "./free-settlement";
 import type { FinalizeStagePayload } from "./types";
+
+/** Parsed once at module load: the price table does not change under a running
+ *  worker, and re-parsing per job would multiply the warning noise by traffic. */
+const MODEL_PRICES = loadModelPrices();
+
+/** Optional. Unset means compute is not reported - see cost-telemetry.ts. */
+const COMPUTE_COST_PER_MINUTE_USD = readOptionalRate(
+  process.env.COMPUTE_COST_PER_MINUTE_USD
+);
+
+function readOptionalRate(raw: string | undefined): number | null {
+  if (raw === undefined || raw.trim() === "") return null;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    console.warn(
+      `[cost] COMPUTE_COST_PER_MINUTE_USD=${JSON.stringify(raw)} is not a ` +
+        `non-negative number - compute cost will not be reported.`
+    );
+    return null;
+  }
+  return parsed;
+}
 
 export async function runFinalizeStage(
   payload: FinalizeStagePayload
@@ -33,6 +55,8 @@ export async function runFinalizeStage(
           analysisInputTokens: job.analysisInputTokens,
           analysisOutputTokens: job.analysisOutputTokens,
           criticModel: criticModel(),
+          prices: MODEL_PRICES,
+          computeCostPerMinuteUsd: COMPUTE_COST_PER_MINUTE_USD,
         }),
       },
     });

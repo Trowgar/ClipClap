@@ -40,6 +40,14 @@ vi.mock("@clipclap/shared", async () => ({
     )
   ).tagJobError,
   probeLocalFile: mocks.probeLocalFile,
+  // Pricing is not what this suite tests. The two lookups are the real ones -
+  // they are pure - but loadModelPrices is stubbed to an empty table, below the
+  // spread so it wins, because the real one reads process.env and would make
+  // this suite's telemetry depend on whether MODEL_PRICES_JSON happens to be set.
+  ...(await vi.importActual<
+    typeof import("@clipclap/shared/config/model-prices")
+  >("@clipclap/shared/config/model-prices")),
+  loadModelPrices: () => ({ tokensPerMillionUsd: {}, audioPerMinuteUsd: {} }),
   findFreeCharge: mocks.findFreeCharge,
   freeBalanceSeconds: mocks.freeBalanceSeconds,
   reviseFreeChargeSeconds: mocks.reviseFreeChargeSeconds,
