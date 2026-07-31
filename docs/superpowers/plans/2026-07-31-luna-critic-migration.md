@@ -2409,6 +2409,8 @@ Expected: PASS. If it fails, the gate does not match `gpt-5.6-luna` and `llm.ts:
 
 `criticModelFallback` stays `gpt-5-mini`, deliberately: the fallback exists for 429s and hard failures, and falling from one cheap model to another cheap model is the right shape. Do not change it unless the Task 12 measurement gave a reason to.
 
+**Recorded during the Task 5 review, because it bears on this step.** The finalizer's hard-error path falls back to `cfg.criticModelFallback`, not to a finalizer-specific variable. That is why the price guard's model set is complete today with exactly six env vars, verified by tracing every model name to its OpenAI call site. If anyone ever adds a `FINALIZER_MODEL_FALLBACK`, `configuredModels()` in `apps/worker/src/price-check.ts` must gain it - and nothing would catch the omission except a fresh audit, because both guards enumerate rather than discover.
+
 In `apps/worker/src/analyze-v2/config.ts`, replace:
 
 ```ts
