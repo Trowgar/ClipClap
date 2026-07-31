@@ -2445,6 +2445,61 @@ with:
 
 - [ ] **Step 3: Apply the measured token budgets, if they moved**
 
+**MEASURED 2026-07-31. They do not move - keep `CRITIC_BASE_TOKENS = 1200` and
+`CRITIC_TOKENS_PER_CANDIDATE = 800` exactly as they are.**
+
+The control run on gpt-5.1 validated the instrument first: all three truncation cells
+reproduced (1/400, 3/1200, 6/2400, each burning the full cap on reasoning for zero verdicts)
+and every completing cell matched `critic.ts`'s recorded table within a few percent.
+
+Luna's ladder, `reasoning_effort: low`, prompts pooled from both fixtures because neither
+carries all three batch sizes on its own:
+
+    batch /    cap ->  input / completion / reasoning / verdicts
+       1 /    400 ->   3122 /        400 /       400 / 0   (truncated)
+       1 /   1200 ->   3122 /        310 /       160 / 1
+       1 /   2000 ->   3122 /        389 /       225 / 1
+       1 /   3000 ->   3122 /        390 /       239 / 1
+       3 /   1200 ->   5092 /       1200 /      1200 / 0   (truncated)
+       3 /   3000 ->   5092 /        831 /       384 / 3
+       3 /   3600 ->   5092 /        865 /       421 / 3
+       3 /   6000 ->   5092 /        959 /       512 / 3
+       6 /   2400 ->   9100 /       1424 /       558 / 6
+       6 /   5000 ->   9100 /       1212 /       410 / 6
+       6 /   6000 ->   9100 /       1513 /       701 / 6
+       6 /   9000 ->   9100 /       1815 /       988 / 6
+       6 /  14000 ->   9100 /       1531 /       717 / 6
+
+Luna spends **68-171 reasoning tokens per candidate** against gpt-5.1's 207-620. So on Luna
+the visible JSON is the dominant term, not the reasoning - the opposite of the assumption
+`critic.ts`'s header is written around. Note 6/2400 does NOT truncate on Luna where it always
+did on gpt-5.1.
+
+By the existing rule - smallest round number strictly above a cap observed to complete - the
+requirements are 2000 / 3600 / 3000. The current constants yield 2000 / 3600 / 6000 and clear
+all three.
+
+**Why not tighten to the measured fit.** A 1800/600 pair was proposed and is a closer fit. It
+is rejected: it would shrink the size-6 budget from 6000 to 5400 on the strength of ONE sample
+per cell, when per-call variance is demonstrably the same order as the headroom (Luna measured
+410 reasoning tokens at cap 5000 and 988 at cap 9000 for the same batch). Tightening a budget
+toward its measured minimum is the exact direction that produced the original starvation
+cascade. The error direction here is also asymmetric and currently safe: Luna is leaner, so
+the unchanged budget is MORE generous relative to need than it was for gpt-5.1.
+
+**What to do in this step: nothing to `critic.ts`.** Rewrite only its header comment so it
+states the numbers are gpt-5.1's, that Luna was measured against them on 2026-07-31 and needed
+no change, and that Luna's dominant term is the JSON rather than the reasoning. Say "measured,
+unchanged" explicitly - a reader who finds gpt-5.1 numbers above a Luna default must not
+conclude they were simply never revisited.
+
+The finalizer's `FINALIZER_BASE_TOKENS` / `FINALIZER_TOKENS_PER_CLIP` were NOT measured - they
+are marked ESTIMATED in `finalize.ts` and remain so. The finalizer cannot split a batch, so
+starvation there costs the whole stage; Task 13's recording is the first real evidence about
+it, and a truncated finalizer response in that run is the signal to measure it properly.
+
+
+
 If Task 12 step 4 produced different numbers, edit `apps/worker/src/analyze-v2/critic.ts`:
 
 ```ts
