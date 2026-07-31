@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { criticModel, transcriptionModel } from "../models";
+import { criticModel, transcriptionModel } from "../model-selection";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 
 describe("criticModel", () => {

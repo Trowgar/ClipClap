@@ -15,7 +15,14 @@ export function criticModel(env: Env = process.env): string {
   return loadAnalyzeConfig(env).criticModel;
 }
 
-/** Which model the TRANSCRIBE stage used. Same argument, same failure mode. */
+/**
+ * Which model the TRANSCRIBE stage used. Same argument, same failure mode.
+ *
+ * The default lives HERE rather than being delegated, unlike criticModel: the
+ * transcription model has no config module to defer to (loadAnalyzeConfig is
+ * the ANALYZE engine's, and this is not an analyze setting). This is the only
+ * copy of the default in the tree, which is the property that matters.
+ */
 export function transcriptionModel(env: Env = process.env): string {
   return env.OPENAI_TRANSCRIPTION_MODEL || "whisper-1";
 }

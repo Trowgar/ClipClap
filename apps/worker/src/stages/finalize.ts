@@ -1,6 +1,6 @@
 import { jobStepService, prisma } from "@clipclap/shared";
 import { buildJobCostTelemetry } from "../cost-telemetry";
-import { criticModel, transcriptionModel } from "../models";
+import { criticModel, transcriptionModel } from "../model-selection";
 import { settleFreeLedger } from "./free-settlement";
 import type { FinalizeStagePayload } from "./types";
 

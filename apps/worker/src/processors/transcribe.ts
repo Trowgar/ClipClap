@@ -19,7 +19,7 @@ import {
   type SilenceInterval,
 } from "./audio-chunks";
 import { whisperLanguageToIso } from "../analyze-v2/language";
-import { transcriptionModel } from "../models";
+import { transcriptionModel } from "../model-selection";
 
 const execFileAsync = promisify(execFile);
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
