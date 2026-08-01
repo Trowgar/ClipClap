@@ -8,7 +8,7 @@ Rules for this file: every number here came from a measurement, not from reasoni
 reproduced, say how. When something is believed but unmeasured, mark it. Delete an entry when it stops being
 true - a stale note is worse than none, and this file has already caught two of its own.
 
-Last substantive update: 2026-07-27.
+Last substantive update: 2026-08-01.
 
 ---
 
@@ -31,11 +31,15 @@ transcript (Whisper verbose_json, word + segment timings)
   -> teaser filter           [code] drops intro-montage neighbourhoods
   -> mergeCandidates         overlap merge + span guard + split
   -> selectCriticCandidates  stratified: per-window quota, then global by interest, region-capped
-  -> runCritic               gpt-5.1, batches of 6, strict json_schema, returns NODE INDICES
+  -> runCritic               gpt-5.6-luna, batches of 6, strict json_schema, returns NODE INDICES
   -> evidenceGate            [code] title/description must cite nodes inside the range
   -> snapNodes               [code] OWNS ALL BOUNDARIES - clean start, payoff containment, clean end
   -> selectAndOrder          [code] tier thresholds + surcharges + time-overlap NMS + soft cap
 ```
+
+Two more stages run after that sketch and are documented where they were measured: the FINALIZE judge (§5a)
+and, last of all, the snippet-title repair pass (§4). Nothing runs after the repair pass, which is precisely
+why the defect it fixes could ship.
 
 **The invariant that makes this safe:** models emit node indices only, never timestamps. Every cut lands on a
 real word or segment edge because the code, not the model, converts indices to seconds. Mid-word cuts and
@@ -53,7 +57,9 @@ owns boundaries - never let a model move a boundary without re-running snap on t
 
 Numbers a future session should not have to re-derive.
 
-**Critic token budget.** gpt-5.1 spends `max_completion_tokens` on reasoning BEFORE writing any JSON. On the
+**Critic token budget, part 1: gpt-5.1.** This is the half of the story that produced the constants, and it is
+kept for two reasons: those constants still ship, and this is the cautionary case. The model that runs today
+is Luna - part 2 below. gpt-5.1 spends `max_completion_tokens` on reasoning BEFORE writing any JSON. On the
 real critic prompt at `reasoning_effort: low`, reasoning costs **330-450 tokens per candidate** (measured:
 354-603 for one candidate, 918-1478 for three, 1979-2677 for six). The visible JSON is small and stable, about
 **150 tokens per verdict**. The original budget of 400 tokens per candidate was BELOW the reasoning floor at
@@ -63,6 +69,86 @@ per fixture went **7 -> 0**, batch splits **6 -> 0**, API calls **18 -> 6**, and
 and **7 -> 10** with the survivors spread across the whole source instead of clustering on weak early
 material. Per-call variance is the same order as the headroom (a later run measured 2184 completion at a 6000
 budget, below the 2857 seen at 5000), which is why a truncation can genuinely heal on a retry.
+
+**Critic token budget, part 2: gpt-5.6-luna (the current default, `88a4435`).** Before measuring Luna, the
+instrument itself was validated with a control run on gpt-5.1: all three truncation cells above reproduced
+(1/400, 3/1200, 6/2400, each burning the whole cap on reasoning and returning zero verdicts) and every
+completing cell landed within a few percent of what is recorded here (3/3000 measured 1351 completion / 915
+reasoning against the recorded 1338/918; 6/5000 measured 2992/2131 against 2857/1979). So the numbers below
+are comparable to the numbers above, and the re-measurement widens gpt-5.1's per-candidate reasoning band from
+the 330-450 first recorded to roughly 207-620.
+
+Luna's ladder at `reasoning_effort: low`, prompts pooled from both fixtures because neither carries all three
+batch sizes on its own (`podcast-ecology` records batches of 6,6,6,6,1; `podcast-answer-arc` 6,6,6,6,3):
+
+| batch | cap | input | completion | reasoning | verdicts |
+|---|---|---|---|---|---|
+| 1 | 400 | 3122 | 400 | 400 | 0 (truncated) |
+| 1 | 1200 | 3122 | 310 | 160 | 1 |
+| 1 | 2000 | 3122 | 389 | 225 | 1 |
+| 1 | 3000 | 3122 | 390 | 239 | 1 |
+| 3 | 1200 | 5092 | 1200 | 1200 | 0 (truncated) |
+| 3 | 3000 | 5092 | 831 | 384 | 3 |
+| 3 | 3600 | 5092 | 865 | 421 | 3 |
+| 3 | 6000 | 5092 | 959 | 512 | 3 |
+| 6 | 2400 | 9100 | 1424 | 558 | 6 |
+| 6 | 5000 | 9100 | 1212 | 410 | 6 |
+| 6 | 6000 | 9100 | 1513 | 701 | 6 |
+| 6 | 9000 | 9100 | 1815 | 988 | 6 |
+| 6 | 14000 | 9100 | 1531 | 717 | 6 |
+
+Luna spends **68-171 reasoning tokens per candidate**. That inverts the assumption the budget comment is built
+around: on gpt-5.1 the reasoning term dominates and the visible JSON is a rounding error, on Luna the visible
+JSON is the dominant term. The clearest single symptom is that `6 / 2400` completes on Luna where it truncated
+every time on gpt-5.1.
+
+By this file's existing rule - the smallest round number above a cap observed to complete - Luna requires
+2000 / 3600 / 3000 at batch 1 / 3 / 6. The shipped constants yield 2000 / 3600 / 6000 and clear all three, so
+`CRITIC_BASE_TOKENS = 1200` and `CRITIC_TOKENS_PER_CANDIDATE = 800` are **unchanged, and that is a
+measurement, not an omission**. A tighter 1800/600 was proposed and rejected: it would shrink the batch-6
+budget on the strength of one sample per cell, and per-call variance is demonstrably the same order as the
+headroom being traded away - the same batch measured 410 reasoning tokens at cap 5000 and 988 at cap 9000. An
+unused cap is not billed; a starved one cascades (part 1).
+
+**What the model change did to the shipped set - Luna is not a drop-in.** Both fixtures were replayed with
+IDENTICAL scanner answers. The scanner's request keys do not contain the critic model, so its answers are
+shared byte for byte between variants and the candidate set entering the critic is exactly the one gpt-5.1
+judged. That is the whole point of the variant mechanism (§5) and it is what makes these numbers a statement
+about the judge rather than about run-to-run noise. (The migration's motive was cost - `88a4435` puts analysis
+at a measured $0.210 per 52-minute job on gpt-5.1 against $0.027 on Luna. The second figure is PROJECTED from
+list prices, not billed and observed, and is marked as such here.)
+
+- `podcast-ecology`: gpt-5.1 shipped 12 clips, Luna 10. Nine pair by time overlap; three are gpt-5.1-only, one
+  Luna-only. Luna's finalizer vetoed 3 clips where gpt-5.1's vetoed 0.
+- `podcast-answer-arc`: gpt-5.1 12 clips, Luna 11. **Only six pair**, and two of those at IoU 0.06 and 0.36 -
+  barely the same moment. Six are gpt-5.1-only, five Luna-only. NMS drops went 1 to 4.
+
+Where the two judges agree they agree tightly: on the six paired answer-arc clips Luna picks near-identical
+boundaries (three at IoU >= 0.88, one exact) and its titles are consistently tighter. But overall agreement is
+LOW. Luna is a materially different editor, not a cheaper spelling of the same one. That is a product fact
+before it is a technical one, and nothing in §5a or §5b that was measured on gpt-5.1's output can be assumed
+to transfer to what ships today.
+
+**Luna silently omits a verdict; gpt-5.1 never did.** On `podcast-ecology` Luna returned **24 verdicts for 25
+candidates**. Candidate `c8` got no row at all - no truncation, no refusal, no batch split, no `__outcome`
+marker on disk. The token budget is not implicated: it was measured (above), and this batch completed well
+inside its cap. gpt-5.1 did not omit once across 52 candidates in the same two fixtures. An omitted candidate
+is invisible recall loss, because `index.ts` raises only when ZERO clips survive - with survivors it ships a
+thinner set quietly and nothing in the job record says why.
+
+Fixed in `e85bf6b` by re-asking once about exactly the omitted ids, routed through the same recursive entry
+point that batch-splitting already uses, so the re-ask is a real critic prompt and inherits the existing
+truncation, refusal and fallback handling. The one-pass bound is **structural rather than a counter**: a
+`mayRetryOmissions` parameter that the retry passes as false, which everything reachable from it inherits.
+Removing the bound in a mutation produced 68,377 warnings and a heap out-of-memory, which is how it was proved
+load-bearing rather than decorative. A trap worth recording because it would have been silent:
+`mapWithConcurrency` calls `fn(item, index)`, so passing `processBatch` by reference would have bound the
+batch INDEX to that boolean - and index 0 is falsy, making batch 0 the one batch that never retries.
+
+Luna answered on the re-ask (`keep`, score 0.72) and **the shipped set did not change**, because c8 ranked
+16th of 20 keep-verdicts and only 13 clips reach the finalizer. The recall loss is real and is now recovered;
+on this one fixture it happened not to matter. Note what that implies about how it was found: it took someone
+counting verdicts against candidates. Nothing in the pipeline was going to report it.
 
 **Scanner order used to be non-deterministic.** `runScanner` pushed candidates into a shared array from
 inside `mapWithConcurrency`, so their order was API completion order. `mergeCandidates` sorts stably, so ties
@@ -105,14 +191,18 @@ returns at most 12 moments per window, one window per ~510s of speech). The rate
 minute** - above what real material produces, so K stops binding on ordinary sources, and below the scanner
 ceiling, so a pathological scan is still rationed. After the fix, judged 25/28 and 27/32; the residual is the
 per-region diversity cap, not the budget. Cost at batch size 6 and gpt-5.1 list price: **$0.103 -> $0.195**
-and **$0.110 -> $0.239** per 52-minute job. Shipped clips went **7 -> 12** and **10 -> 12**, and 5 of
+and **$0.110 -> $0.239** per 52-minute job. Shipped clips went **7 -> 12** and **10 -> 12** (all of this on
+gpt-5.1, which was the critic at the time; the same fixtures ship 10 and 11 under Luna today), and 5 of
 ecology's 12 come from candidates the old budget would have withheld.
 
-**What limits clip count today.** Before this change it was K. After it, on `podcast-answer-arc` it is the
-soft cap: 21 keep-verdicts -> 16 handed to the finalizer (= `softCap + finalizerHeadroom`, binding) -> 15
-survivors -> 12 shipped. On `podcast-ecology` the gate/snap/NMS funnel binds first: 20 keep-verdicts -> 12.
-`criticMaxCandidates` (40) is the spend ceiling and is not reached by a 52-minute source; a 90-minute one
-would reach it. `criticBudgetK` and `criticUnjudgedPool` are published per job so the next binding constraint
+**What limits clip count today.** Before this change it was K. After it, measured **on gpt-5.1**: on
+`podcast-answer-arc` it is the soft cap - 21 keep-verdicts -> 16 handed to the finalizer
+(= `softCap + finalizerHeadroom`, binding) -> 15 survivors -> 12 shipped; on `podcast-ecology` the
+gate/snap/NMS funnel binds first, 20 keep-verdicts -> 12. Under Luna the funnel's shape moved with the judge:
+ecology still produces 20 keep-verdicts, 13 reach the finalizer, the finalizer vetoes 3, and **10** ship;
+answer-arc ships **11** with NMS drops up from 1 to 4. So on both fixtures the last binding constraint is now
+downstream of the critic, not the budget. `criticMaxCandidates` (40) is the spend ceiling and is not reached
+by a 52-minute source; a 90-minute one would reach it. `criticBudgetK` and `criticUnjudgedPool` are published per job so the next binding constraint
 is visible in a job record rather than re-derived.
 
 **The anaphora rule: right diagnosis, wrong remedy, reverted the same day.** The owner's second-best clip
@@ -190,6 +280,38 @@ unrecoverable and unfalsifiable in production - nobody ever reports the clip tha
 false negative is caught downstream by the finalizer's judge AND by the 6-second duration floor. The good clip
 has no backstop; the bait fragment has two.
 
+**A length floor on titles - proposed, measured, and provably inert. The `Плюсы` defect was ours, not the
+model's.** The engine shipped a clip on `podcast-answer-arc` titled `Плюсы` - one word, "Pros" - at score
+0.66. The obvious reading is that the model wrote a bad title and that a minimum length would have caught it.
+**That reading is wrong and the measurement disproved it.**
+
+150 titles were gathered across all four snapshots and every critic verdict in both `responses.json` - kept
+and rejected, both models. 102 are distinct. Word counts: 3:1, 4:3, 5:9, 6:17, 7:28, 8:21, 9:10, 10:9, 11:2,
+13:1. Characters: min 21, median 49, max 77. **Nothing at one or two words, from either model, kept or
+rejected.** And `Плюсы` is not in `responses.json` at all. It is transcript node #316 verbatim, installed by
+`regroundCopy` at the SHIPPED stage: the finalizer's trim moved the clip past the nodes its title cited, the
+title was voided, and `snippetFallbackCopy` took the first speech node's text as-is. Nothing runs after that
+point.
+
+So the categorical unit is **provenance - authored or verbatim - not length**. A length floor inside the
+model-authored population fires 0 times in 102 and is provably inert, the same kind of theatre knob as the
+0.5 bar above. Inside the snippet population it is worse than inert: 788 clean-start nodes run smoothly
+through 1 word:27, 2:53, 3:77 and on, so a floor there is a cutoff through a continuum, which this file
+already documents as the wrong shape. The gap is BETWEEN the two populations - 3 words / 21 characters against
+1 word / 3 characters - and only a provenance flag can see it.
+
+Fixed in `25956a7` by tracking which titles are snippet-derived, clearing the flag when the finalizer rewrites
+one, and giving whatever still carries it exactly one `repairCopy` call. Repair, never drop: the clip cleared
+the critic, the evidence gate and the finalizer, and the copy broke only because our own code moved a
+boundary. No character count and no word splitting appears anywhere in the path, so the rule behaves
+identically across all six locales and in scripts without spaces.
+
+**The transferable point, and the reason this belongs in this file at all:** this is a latent engine defect
+that a more aggressive finalizer exposed. gpt-5.1's snapshots did not move when the fix landed - but that is
+because gpt-5.1's finalizer happened to trim differently, NOT because gpt-5.1 was immune. Any future model
+that trims harder will hit it. It also took a human reading 150 titles to establish that the model was
+innocent; the cheap conclusion would have shipped an inert knob and left the real bug in place.
+
 **Guards that turn a content answer into a technical failure - got it wrong four times.** Every round that
 ADDED a failure-classification mechanism shipped a user-facing defect on its first attempt: a guard too loose
 that billed unjudged work; a guard too tight that failed weak videos (the commonest honest answer there is,
@@ -213,8 +335,9 @@ comments have themselves been falsified once and re-verified, so re-check them w
 
 The only end-to-end proof this engine has. Live under `apps/worker/src/__tests__/`.
 
-**How it works.** The engine's only non-determinism is two LLM calls. They are recorded per fixture, keyed by
-a hash of (model, system, user) - order-independent, because the scanner runs windows concurrently - and
+**How it works.** The engine's only non-determinism is its LLM calls - scanner, critic, finalizer, and the
+copy repairs that hang off the critic model. They are recorded per fixture, keyed by
+`sha256(model, system, user)` - order-independent, because the scanner runs windows concurrently - and
 replayed through a stub client. Every deterministic layer runs for real, at zero cost, in milliseconds.
 
 - `helpers/replay-client.ts` - the stub. Records `truncated` and `refusal` outcomes as markers, because the
@@ -225,17 +348,40 @@ replayed through a stub client. Every deterministic layer runs for real, at zero
   certified an already-fixed bug as correct.
 - `eval-snapshot.test.ts` - replays both fixtures and compares to the blessed shape.
 - `eval-regressions.test.ts` - the named defects the owner found in real clips, each with its provenance.
+- `eval-variants.test.ts` / `eval-variant-args.test.ts` - the whitelist, the per-variant snapshot routing, and
+  the argument parser both scripts share. The parser is pinned because every way it can be wrong ends in a
+  fixture silently skipped or work recorded under the wrong model, and in `eval-topup`'s case that is not
+  visible until the bill arrives.
 - `scripts/eval-record.ts` - records a fixture from a real job against the LIVE API. Costs money. Manual.
+- `scripts/eval-topup.ts` - buys only the requests a fixture is missing, e.g. the single c8 re-ask that
+  `e85bf6b` needed. `--variant NAME` tops up only what that variant adds. Costs money, but a few cents
+  rather than a full re-record.
 - `scripts/eval-bless.ts` - prints a readable diff before rewriting a snapshot. The diff is the review
-  artefact: a human decides from it whether a change is desirable.
+  artefact: a human decides from it whether a change is desirable. `--variant NAME` blesses
+  `snapshot.<NAME>.json`; base and variant never read or write each other's file.
+
+**Variants: how one fixture holds two models' answers.** `fixtures/eval/variants.json` declares named variants
+that override only WHO ANSWERS - `criticModel`, `finalizerModel`, `criticModelFallback` - and nothing about
+what is asked. The narrowness is enforced twice: a whitelist that throws at load, and a `satisfies` clause
+that turns widening it into a `tsc` error. Widening it to windowing or batching would change every prompt,
+therefore every request key, and turn the cross-variant diff back into the mixed signal the mechanism exists
+to avoid. One fixture can hold both models' recorded answers because the model is part of the request key; the
+scanner's keys are identical across variants, so its answers are shared byte for byte and the candidate set
+entering the critic is provably the same one.
+
+Since `88a4435`, **`base` is Luna and `gpt51` is the variant** holding gpt-5.1's answers, so the migration
+comparison in §3 stays reproducible offline and for free. It also means the gpt-5.1 recordings are a live
+asset, not history: deleting them deletes the only control this engine has for a model swap.
 
 **The fixtures.** `podcast-ecology` (job `cmrzcqhl6000138lkg41n8bs0`) and `podcast-answer-arc`
 (job `cmrvawjxs00129pvw0oe1c1kv`). **They are two transcription runs of the SAME 52-minute episode.** The
 regression net therefore stands on ONE piece of source content - any content-level claim is single-sample. A
 genuinely different third source (a gameplay stream, a solo talk, another language) would add more than any
 number of further assertions on this one. The upside is that the pair is an honest A/B on transcription
-jitter, and it is unflattering: the same moment ships clean in one run and broken in the other, and the two
-runs yield 6 versus 10 clips from identical audio.
+jitter, and it is unflattering: the same moment ships clean in one run and broken in the other. The clip-count
+spread has narrowed as the budget defects were fixed - 6 versus 10 when that gap was first recorded, then 12
+versus 12 on gpt-5.1, and 10 versus 11 on Luna today - but a matching count is not agreement, and the
+per-clip differences never went away.
 
 **What the harness cannot do.** Replay uses the OLD recorded LLM responses, so it verifies that deterministic
 layers did not regress - it cannot measure a prompt change. For that, re-record and read the diff, or upload
@@ -248,6 +394,13 @@ a real video. A green run is not "quality is fine".
 One LLM call over the whole shipped set, with every model decision code-gated. Landed 2026-07-26. Measured on
 the fixtures by replaying the SAME scanner and critic answers twice, with the stage off and on - a git diff of
 re-recorded snapshots mixes the stage's effect with LLM variance and cannot answer "what did the judge do".
+
+**Everything in this section was measured with gpt-5.1 as the judge, which is now the `gpt51` variant and not
+what ships.** The mechanism, the gates and the question-detection measurement below are model-independent and
+stand. The behavioural claims - which rules fire, how often, how willing the judge is to drop - do not: Luna
+vetoed 3 clips on `podcast-ecology` where gpt-5.1 vetoed 0 (§3). Read the rest of this section as a
+characterisation of gpt-5.1's judging, and re-measure before quoting any of its frequencies about today's
+engine.
 
 What it earned:
 - It caught the owner's flagship defect verbatim. A 62s malaria clip ends on `"летающих пауков ядовитых"` -
@@ -269,6 +422,10 @@ What it got wrong, and this is the useful part:
   that defect.
 - **Rule 4 is roughly a coin flip.** The same malaria moment, ending 0.4s before the same reaction, was
   dropped in one fixture and shipped in the other.
+- **Its trims can void a title, and until `25956a7` nothing downstream could fix that.** A trim that moves the
+  clip past the nodes its title cited leaves `regroundCopy` installing a raw transcript node as the title -
+  the `Плюсы` defect, §4. This is the stage's most dangerous property: it is the last thing in the pipeline
+  that moves a boundary, so anything its move breaks has to be repaired by code that runs after it.
 - **Dropping is expensive medicine.** The malaria clip is otherwise strong; the real repair is three nodes on
   the END, but end-trimming is out of scope by spec (it protects payoffs), so `drop` is the only verb the
   stage has. That is a product decision the owner has not made: a broken-ending clip, or no clip.
@@ -288,6 +445,12 @@ sees one and misses the other, defeated by the same indel jitter as everything e
 2026-07-26. The owner uploaded a 52-minute Russian podcast (job `cms2c8ahm000droa7tcqh30ho`) and got 8 clips.
 This is the only judgement of shipped output by anyone other than the engine's own tests, so treat it as the
 scoreboard.
+
+**Caveat added 2026-08-01: those 8 clips were chosen by gpt-5.1.** The critic and finalizer are Luna now, and
+on the fixtures the two judges ship the same moment 9 times out of 12 on one and 6 out of 12 on the other
+(§3). Nobody has looked at a Luna clip. The 2-of-8 hit rate is still the best number this project has, and it
+is now a number about a judge that no longer runs - the defect vocabulary below is about the material and
+survives the swap, but the rate itself is unverified on what ships today.
 
 **He would post 2 of 8.** The reframing he called a clear win - wide two-person shots are stitched properly
 now, and that half of the product is settled. On the clips: one he would definitely post ("Что на самом деле
@@ -340,7 +503,10 @@ retries that cannot help, because the critic rejects the same moments every time
 
 **Boundaries are code-owned.** Any boundary a model proposes goes back through `snapNodes` and is discarded
 if snap rejects it. A rewritten title must cite evidence nodes inside the final range - and be re-checked
-AFTER any accepted trim, because a trim can move the evidence outside.
+AFTER any accepted trim, because a trim can move the evidence outside. When that re-check voids a title the
+replacement is a raw transcript node, so a boundary move can silently degrade copy that every gate already
+passed; whatever still carries the snippet flag at ship time gets one repair call, and a clip is never dropped
+for its copy (§4).
 
 **`NAME_TO_ISO` must cover everything Whisper can emit.** `analyze-v2/language.ts` maps Whisper's full
 English language name onto the ISO code stored in `Job.language`. A missing name is not cosmetic: the lookup
@@ -367,6 +533,11 @@ Ordered by expected effect on the owner's 2-of-8 hit rate, most valuable first.
 
 - **Arc stacking and drag - the "uninteresting" half.** See §5b. No mechanism measures either. This is the
   only item here that plausibly moves the hit rate rather than the polish.
+- **Nobody has judged a Luna clip.** The critic and finalizer swapped models on 2026-07-31 and the shipped
+  sets overlap on 9 of 12 and 6 of 12 (§3). The swap was justified on cost and on token budget, both
+  measured; whether Luna is a BETTER editor is unmeasured, and unmeasurable in the harness, which only proves
+  the deterministic layers did not regress. One real upload put in front of the owner answers this, and it is
+  cheap.
 - **Compression and trims enforce contradictory policies on the same structure.** `tryTrim` refuses a boundary
   move that orphans a question (`orphansQuestion`, shipped `6d24a55`); `snapNodes` compression performs one -
   its headline repair opens on `"Ну как живучий смотря по каким параметрам сравнивать"` while the question
@@ -374,7 +545,6 @@ Ordered by expected effect on the owner's 2-of-8 hit rate, most valuable first.
 - **The punchline-outside case has only a drop, not a repair.** Extending an end to a reaction the engine can
   already identify would turn a dropped clip into a good one. Blocked on an owner decision: end-trimming was
   ruled out of scope to protect payoffs, and lifting that is his call.
-
 - **Tell the finalizer's judge about the teaser region.** The detector publishes `teaserRegion`; passing it
   into the finalizer prompt ("the first N seconds of this video are a trailer montage") turns a deterministic
   drop into a prior the judge can weigh, and helps it reason about clips that start near the boundary.
@@ -399,9 +569,6 @@ Ordered by expected effect on the owner's 2-of-8 hit rate, most valuable first.
   against `[0, maxNode]`, not against the candidate. Observed on answer-arc: candidate `c16` spans nodes
   313-319 and its shipped clip spans 324-332. Snap re-validates, so this is not a boundary-safety problem, but
   it does mean candidate-to-clip attribution is approximate and any analysis keyed on it should say so.
-- **The punchline-outside case has no repair, only a drop.** Extending an end to a reaction the engine can
-  already identify would turn a dropped clip into a good one. Blocked on an owner decision, because
-  end-trimming was ruled out of scope to protect payoffs.
 
 ## 7. RENDER: smart reframe
 
@@ -439,6 +606,10 @@ ffmpeg filtergraph, single encode pass with the subtitle burn.
   container - the `web` container holds a stale `apps/bot` copy that silently passes.
 - Prisma migrations only, never `db push`. Postgres is reachable only inside the compose network.
 - `ANALYZE_ENGINE=recall-critic` and `REFRAME_ENGINE=faces` are set in the live `.env` (not in git).
+- The critic/finalizer model swap rolls back through `OPENAI_CRITIC_MODEL` and `OPENAI_FINALIZER_MODEL` in
+  `.env` followed by `docker compose up -d` - **not `restart`, which does not re-read `env_file`**. Both
+  default to `gpt-5.6-luna` in `analyze-v2/config.ts`, and `finalizerModel` falls back to
+  `OPENAI_CRITIC_MODEL` if only that one is set.
 
 ---
 
