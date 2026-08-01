@@ -103,7 +103,11 @@ import type { CriticVerdict, LlmUsage, MergedCandidate, SentenceNode } from "./t
 // makes it less sensitive to that knob than gpt-5.1 was, not immune to it -
 // the caveat above applies unchanged.
 const CRITIC_BASE_TOKENS = 1200; // shared rubric/JSON-scaffold pass + flat headroom
-const CRITIC_TOKENS_PER_CANDIDATE = 800; // ~450 reasoning + ~150 JSON + ~200 headroom
+// The decomposition differs by model and the header above carries both. On
+// gpt-5.1, which these numbers were derived from: ~450 reasoning + ~150 JSON +
+// ~200 headroom. On gpt-5.6-luna, which actually runs: ~70-170 reasoning and
+// ~150 JSON, so most of this is headroom and the JSON is the dominant term.
+const CRITIC_TOKENS_PER_CANDIDATE = 800;
 const CRITIC_CONCURRENCY = 4;
 
 /** Output cap for a batch. capMultiplier is the single-candidate retry hatch. */
