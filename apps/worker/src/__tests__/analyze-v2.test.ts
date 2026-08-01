@@ -311,6 +311,206 @@ describe("analyzeHighlightsV2", () => {
     }
   });
 
+  // ---------------------------------------------------------------------------
+  // Degenerate titles: a title that is verbatim transcript speech the ENGINE
+  // installed, with nothing downstream left to rewrite it. The trigger is
+  // PROVENANCE, never length - see the long note in index.ts for the measurement
+  // that ruled a length rule out.
+  // ---------------------------------------------------------------------------
+  /** Compresses over the 90s cap so snap strands the title's evidence: the
+   *  cheapest way to make the engine write a verbatim-snippet title. */
+  const scanLong = {
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          candidates: [
+            { start_node: 0, end_node: 22, payoff_node: 22, interest: 0.8, type: "story", thread: null },
+          ],
+        }),
+      },
+      finish_reason: "stop",
+    }],
+    usage: { prompt_tokens: 100, completion_tokens: 30 },
+  };
+  const criticLong = {
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          results: [{
+            id: "c0", keep: true, score: 0.9, grounded: true, self_contained: true,
+            start_node: 0, payoff_node: 22, end_node: 22,
+            hook_start_node: 20, hook_end_node: 21,
+            title: "Он назвал номер ноль",
+            description: "Спикер называет нулевое предложение.",
+            title_evidence_nodes: [0], description_evidence_nodes: [0],
+            language: "ru",
+          }],
+        }),
+      },
+      finish_reason: "stop",
+    }],
+    usage: { prompt_tokens: 200, completion_tokens: 80 },
+  };
+  const finalizerRow = (row: Record<string, unknown>) => ({
+    choices: [{
+      message: {
+        content: JSON.stringify({
+          clips: [{
+            id: "c0", verdict: "ship", drop_reason: null, duplicate_of: null,
+            shared_claim: null, title: null, title_evidence_nodes: null,
+            trim_start_node: null, ...row,
+          }],
+        }),
+      },
+      finish_reason: "stop",
+    }],
+    usage: { prompt_tokens: 300, completion_tokens: 90 },
+  });
+  const repairWith = (title: string, description: string) => ({
+    choices: [{
+      message: { content: JSON.stringify({ title, description }) },
+      finish_reason: "stop",
+    }],
+    usage: { prompt_tokens: 50, completion_tokens: 20 },
+  });
+
+  it("repairs a verbatim-snippet title with exactly one extra call", async () => {
+    const c = client(
+      scanLong,
+      criticLong,
+      finalizerRow({}),
+      repairWith("Спикер объясняет нумерацию предложений", "Он поясняет порядок.")
+    );
+    const r = await analyzeHighlightsV2(transcript(), { client: c, cfg, transcriptPartial: false });
+
+    expect(r.highlights).toHaveLength(1);
+    expect(r.highlights[0].title).toBe("Спикер объясняет нумерацию предложений");
+    // scan + critic + finalizer + ONE repair. The bound is the whole point.
+    expect(c.chat.completions.create).toHaveBeenCalledTimes(4);
+    expect(r.telemetry.snippetTitlesFlagged).toBe(1);
+    expect(r.telemetry.snippetTitlesRepaired).toBe(1);
+    expect(r.telemetry.snippetTitlesKept).toBe(0);
+    expect(r.telemetry.snippetTitleRepairs).toEqual([
+      {
+        id: "c0",
+        from: expect.stringContaining("предложение"),
+        to: "Спикер объясняет нумерацию предложений",
+        outcome: "repaired",
+      },
+    ]);
+  });
+
+  it("repairs a title the finalizer's own trim stranded", async () => {
+    // The production path, exactly: podcast-answer-arc c16. The critic's title is
+    // fine and cites node 5; the finalizer trims the opening to node 12; the
+    // post-trim re-grounding voids the title and installs node 12's speech
+    // verbatim. Nothing downstream of that point can rewrite it - which is why
+    // "Плюсы" shipped - so the repair pass is the last gate there is.
+    const criticWide = {
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            results: [{
+              id: "c0", keep: true, score: 0.9, grounded: true, self_contained: true,
+              start_node: 5, payoff_node: 14, end_node: 14,
+              hook_start_node: 12, hook_end_node: 13,
+              title: "Он назвал номер пять",
+              description: "Спикер называет пятое предложение.",
+              title_evidence_nodes: [5], description_evidence_nodes: [5],
+              language: "ru",
+            }],
+          }),
+        },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 200, completion_tokens: 80 },
+    };
+    const c = client(
+      scanResponse(),
+      criticWide,
+      finalizerRow({ trim_start_node: 12 }),
+      repairWith("Как устроена нумерация предложений", "Он поясняет порядок.")
+    );
+    const r = await analyzeHighlightsV2(transcript(), { client: c, cfg, transcriptPartial: false });
+
+    expect(r.telemetry.copyRegrounded).toEqual([
+      { id: "c0", at: "shipped", fields: ["title", "description"] },
+    ]);
+    expect(r.highlights[0].title).toBe("Как устроена нумерация предложений");
+    expect(c.chat.completions.create).toHaveBeenCalledTimes(4);
+    expect(r.telemetry.snippetTitlesFlagged).toBe(1);
+    expect(r.telemetry.snippetTitlesRepaired).toBe(1);
+  });
+
+  it("leaves a model-authored title alone and spends nothing on it", async () => {
+    const c = client(scanResponse(), criticResponse(0.85), finalizerRow({}));
+    const r = await analyzeHighlightsV2(transcript(), { client: c, cfg, transcriptPartial: false });
+
+    expect(r.highlights[0].title).toBe("Он назвал номер");
+    expect(c.chat.completions.create).toHaveBeenCalledTimes(3); // no repair
+    expect(r.telemetry.snippetTitlesFlagged).toBe(0);
+    expect(r.telemetry.snippetTitlesRepaired).toBe(0);
+    expect(r.telemetry.snippetTitleRepairs).toEqual([]);
+  });
+
+  it("ships the snippet title when the one repair comes back unusable", async () => {
+    // wrong script for a Russian clip - the same acceptance test the language
+    // repair path uses. The clip must still SHIP: the content was never at fault.
+    const c = client(
+      scanLong,
+      criticLong,
+      finalizerRow({}),
+      repairWith("An English title", "An English description.")
+    );
+    const r = await analyzeHighlightsV2(transcript(), { client: c, cfg, transcriptPartial: false });
+
+    expect(r.highlights).toHaveLength(1);
+    expect(r.highlights[0].title).toMatch(/предложение/); // the snippet, unchanged
+    expect(c.chat.completions.create).toHaveBeenCalledTimes(4); // tried once, not twice
+    expect(r.telemetry.snippetTitlesFlagged).toBe(1);
+    expect(r.telemetry.snippetTitlesRepaired).toBe(0);
+    expect(r.telemetry.snippetTitlesKept).toBe(1);
+    expect((r.telemetry.snippetTitleRepairs as Array<{ outcome: string; to: string | null }>)[0])
+      .toMatchObject({ outcome: "unusable", to: null });
+  });
+
+  it("a finalizer title rewrite clears the flag before any repair is spent", async () => {
+    const c = client(
+      scanLong,
+      criticLong,
+      finalizerRow({ title: "Почему нумерация вообще важна", title_evidence_nodes: [10] })
+    );
+    const r = await analyzeHighlightsV2(transcript(), { client: c, cfg, transcriptPartial: false });
+
+    expect(r.highlights[0].title).toBe("Почему нумерация вообще важна");
+    expect(c.chat.completions.create).toHaveBeenCalledTimes(3);
+    expect(r.telemetry.snippetTitlesFlagged).toBe(0);
+  });
+
+  it("never spends a second repair on a clip whose language repair already failed", async () => {
+    const badCopy = { ...JSON.parse(criticResponse(0.9).choices[0].message.content) };
+    badCopy.results[0].title = "English title on russian clip";
+    badCopy.results[0].description = "English description entirely.";
+    const c = client(
+      scanResponse(),
+      { choices: [{ message: { content: JSON.stringify(badCopy) }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 200, completion_tokens: 80 } },
+      repairWith("Still english", "Still english too."), // language repair fails -> snippet
+      finalizerRow({})
+    );
+    const r = await analyzeHighlightsV2(transcript(), { client: c, cfg, transcriptPartial: false });
+
+    expect(r.telemetry.snippetFallbacks).toBe(1);
+    // scan + critic + language repair + finalizer. The pass below adds NOTHING:
+    // the bound is one repairCopy per clip globally, not one per site.
+    expect(c.chat.completions.create).toHaveBeenCalledTimes(4);
+    expect(r.telemetry.snippetTitlesFlagged).toBe(1);
+    expect(r.telemetry.snippetTitlesRepaired).toBe(0);
+    expect(r.telemetry.snippetTitlesKept).toBe(1);
+    expect((r.telemetry.snippetTitleRepairs as Array<{ outcome: string }>)[0].outcome)
+      .toBe("already_repaired");
+  });
+
   it("drops far-outside evidence with a named gate reason", async () => {
     const verdict = JSON.parse(criticResponse(0.9).choices[0].message.content);
     verdict.results[0].title_evidence_nodes = [4]; // 6 nodes before start_node 10

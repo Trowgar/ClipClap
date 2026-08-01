@@ -248,6 +248,27 @@ export async function analyzeHighlightsV2(
   // the job record: nobody reports the description they never saw, and this
   // fires precisely when something upstream already went wrong.
   const copyRegrounded: Array<{ id: string; at: "snap" | "shipped"; fields: string[] }> = [];
+  /**
+   * Ids whose TITLE is, right now, verbatim transcript speech the ENGINE wrote -
+   * `snippetFallbackCopy` output, not a model's sentence. See the repair pass
+   * after the finalizer for why this is tracked by provenance rather than by the
+   * shape of the string.
+   *
+   * A set, not a flag on the clip, because membership is not monotonic: the
+   * finalizer's title rewrite takes a clip back OUT of it, and that removal is
+   * the whole reason the pass below costs one call on these fixtures instead of
+   * two.
+   */
+  const snippetTitleIds = new Set<string>();
+  /** Ids that have already spent their one repairCopy call, wherever it was
+   *  spent. The bound is per CLIP and global, not per site. */
+  const copyRepairAttempted = new Set<string>();
+  const snippetTitleRepairs: Array<{
+    id: string;
+    from: string;
+    to: string | null;
+    outcome: "repaired" | "unusable" | "already_repaired";
+  }> = [];
   const gateDropReasons: Record<string, number> = {};
   const droppedVerdicts: Array<{ id: string; stage: string; reason: string; score: number }> = [];
 
@@ -283,6 +304,7 @@ export async function analyzeHighlightsV2(
     if (reground.regrounded.length > 0) {
       copyRegrounded.push({ id: verdict.id, at: "snap", fields: reground.regrounded });
     }
+    if (reground.regrounded.includes("title")) snippetTitleIds.add(verdict.id);
     const clip = reground.clip;
 
     // The clip's OWN speech - snap's range, not the critic's proposal, because
@@ -295,17 +317,20 @@ export async function analyzeHighlightsV2(
     const copy = clip.verdict;
     if (scriptMismatch(`${copy.title} ${copy.description}`, clipText)) {
       copyRepairs += 1;
+      copyRepairAttempted.add(verdict.id);
       const repaired = await repairCopy(client, usage, nodes, copy, languageIso, cfg, {
         retryDelayMs: options.retryDelayMs,
       });
       if (repaired && !scriptMismatch(`${repaired.title} ${repaired.description}`, clipText)) {
         copy.title = repaired.title;
         copy.description = repaired.description;
+        snippetTitleIds.delete(verdict.id);
       } else {
         snippetFallbacks += 1;
         const snippet = snippetFallbackCopy(nodes, clip.finalStartNode, clip.finalEndNode);
         copy.title = snippet.title;
         copy.description = snippet.description;
+        snippetTitleIds.add(verdict.id);
       }
     }
     eligible.push(clip);
@@ -332,6 +357,13 @@ export async function analyzeHighlightsV2(
     cfg,
     { retryDelayMs: options.retryDelayMs }
   );
+  // A title the finalizer WROTE is a model's sentence again, so the clip leaves
+  // the snippet-title set. This is the only thing that removes an id from it,
+  // and it is why a snap-stage snippet title normally costs nothing below.
+  for (const rewrite of finalized.telemetry.titleRewrites) {
+    snippetTitleIds.delete(rewrite.id);
+  }
+
   // The backstop for the OTHER thing that moves boundaries: the finalizer's
   // opening trim re-snaps a clip, and it may move the start arbitrarily far
   // forward. Same rule, applied where the boundaries finally stop.
@@ -340,8 +372,118 @@ export async function analyzeHighlightsV2(
     if (result.regrounded.length > 0) {
       copyRegrounded.push({ id: clip.verdict.id, at: "shipped", fields: result.regrounded });
     }
+    if (result.regrounded.includes("title")) snippetTitleIds.add(clip.verdict.id);
     return result.clip;
   });
+
+  // ---------------------------------------------------------------------------
+  // DEGENERATE TITLES - the last stage that can write copy, and the only one
+  // that runs after every stage that can destroy it.
+  // ---------------------------------------------------------------------------
+  // podcast-answer-arc shipped a clip titled "Плюсы" - one word, "Pros" - at
+  // score 0.66. The clip was fine: it passed the critic, the evidence gate and
+  // the finalizer. The TITLE was not a model's bad sentence. It was node #316 of
+  // the transcript, verbatim, installed by the `regroundCopy` call above after
+  // the finalizer's trim moved the clip past the nodes its title cited.
+  //
+  // MEASURED, because the shape of the fix follows from which population the bad
+  // title came from. Two populations, all four eval snapshots plus every title in
+  // every critic verdict in both responses.json, gpt-5.6-luna and gpt-5.1
+  // together - 150 titles, 102 distinct:
+  //
+  //   A. MODEL-AUTHORED titles (critic + finalizer). Word counts:
+  //        3:1  4:3  5:9  6:17  7:28  8:21  9:10  10:9  11:2  13:1
+  //      Shortest: "Человек ускоряет эволюцию" - 3 words, 25 chars. NOTHING at
+  //      one or two words, in either model, kept or rejected. A length floor on
+  //      model output would have fired ZERO times on this corpus: it is the
+  //      inert knob engine-notes §4 warns about, and building it would have
+  //      claimed to fix a defect while never once executing.
+  //
+  //   B. SNIPPET titles - `snippetFallbackCopy` takes one node's text verbatim,
+  //      so its population is the transcript's clean-start nodes. 788 of them
+  //      across the two fixtures, by word count:
+  //        1:27  2:53  3:77  4:80  5:80  6:80  7:75  8:74  9:63  10:51  11+:128
+  //      A smooth continuum straight down to one word ("Нет", "Михаил",
+  //      "Плюсы"). Inside THIS population "Плюсы" is not an outlier at all -
+  //      it is an ordinary member of the short end, and a length floor drawn
+  //      inside it would be a cutoff through a continuum, which is the other
+  //      half of the same warning.
+  //
+  // The gap is BETWEEN the two populations - min 3 words / 21 chars against a
+  // floor of 1 word / 3 chars - not inside either. So the categorical unit of
+  // decision is not LENGTH, it is PROVENANCE: authored, or verbatim. That is
+  // what `snippetTitleIds` tracks, and it is why nothing here counts a character
+  // or splits on whitespace.
+  //
+  // MULTILINGUAL BY CONSTRUCTION, and this is the second reason to prefer
+  // provenance. A word-count or character-count rule has to answer what a word
+  // is in Chinese, Japanese or Thai, where a whole title is one whitespace token
+  // - it would flag every title in those languages while flagging none in
+  // German, where one compound word can be a sentence. "This string came out of
+  // snippetFallbackCopy" is the same true statement in all six supported locales
+  // and in every script beyond them. The only length in the whole path is
+  // `truncateTitle`'s pre-existing 70-CODE-POINT cap, which is already
+  // surrogate-safe.
+  //
+  // REPAIR, NEVER DROP. The clip cleared every content gate; the copy is broken
+  // because our own code moved a boundary. Dropping it would spend a real clip to
+  // avoid a bad line of text, and engine-notes §4's rule about staying quiet and
+  // retrying points the same way. So: one repair attempt, and if it does not
+  // produce something usable the snippet title SHIPS. That is the lesser harm in
+  // both directions - the snippet is grounded and in the clip's own language by
+  // construction, so the worst case is a dull title on a good clip, against a
+  // user who paid for a clip and got nothing.
+  //
+  // BOUNDED STRUCTURALLY, like the critic's omission retry: this is one pass over
+  // a fixed array with no recursion and no loop, and `copyRepairAttempted` is
+  // global per clip, so a clip whose language repair already failed upstream does
+  // not get a second call here. There is no counter to get wrong.
+  for (let i = 0; i < shipped.length; i++) {
+    const clip = shipped[i];
+    const id = clip.verdict.id;
+    if (!snippetTitleIds.has(id)) continue;
+    const from = clip.verdict.title;
+
+    if (copyRepairAttempted.has(id)) {
+      snippetTitleRepairs.push({ id, from, to: null, outcome: "already_repaired" });
+      continue;
+    }
+    copyRepairAttempted.add(id);
+
+    const clipText = nodes
+      .slice(clip.finalStartNode, clip.finalEndNode + 1)
+      .filter((n) => n.hasWords)
+      .map((n) => n.text)
+      .join(" ");
+    const repaired = await repairCopy(client, usage, nodes, clip.verdict, languageIso, cfg, {
+      retryDelayMs: options.retryDelayMs,
+    });
+    // Same acceptance test the language-repair path uses, plus "it actually
+    // changed something": a repair that hands back the snippet repaired nothing
+    // and must not be reported as a fix.
+    const usable =
+      repaired !== null &&
+      repaired.title !== from &&
+      !scriptMismatch(repaired.title, clipText);
+    if (!usable) {
+      snippetTitleRepairs.push({ id, from, to: null, outcome: "unusable" });
+      continue;
+    }
+    // TITLE ONLY. The description is a verbatim snippet too, and dull, but it is
+    // not the hook and it is not what broke; swapping it as well would widen the
+    // blast radius of a call whose only acceptance test is a script check.
+    // titleEvidenceNodes stays as regroundCopy set it - the clip's own first
+    // speech node, inside the shipped range - which remains a true in-range
+    // citation for a title the model wrote from that same clip's text.
+    shipped[i] = { ...clip, verdict: { ...clip.verdict, title: repaired.title } };
+    snippetTitleIds.delete(id);
+    snippetTitleRepairs.push({ id, from, to: repaired.title, outcome: "repaired" });
+  }
+
+  const snippetTitlesRepaired = snippetTitleRepairs.filter(
+    (r) => r.outcome === "repaired"
+  ).length;
+
   const highlights = shipped.map(toHighlight);
 
   const telemetry = {
@@ -359,6 +501,13 @@ export async function analyzeHighlightsV2(
     copyRepairs,
     snippetFallbacks,
     copyRegrounded,
+    // Shipped clips whose title was engine-written verbatim speech with nothing
+    // left downstream to rewrite it, and what the one repair call did about it.
+    // flagged = repaired + kept, always: the three are computed from one array.
+    snippetTitlesFlagged: snippetTitleRepairs.length,
+    snippetTitlesRepaired,
+    snippetTitlesKept: snippetTitleRepairs.length - snippetTitlesRepaired,
+    snippetTitleRepairs,
     tier: selection.tier,
     droppedByNms: selection.droppedByNms,
     // The three numbers that make the finalizer's arithmetic readable in a job
