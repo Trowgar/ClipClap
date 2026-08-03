@@ -1126,12 +1126,15 @@ Those three config fields do not exist yet. Add them now so the file compiles - 
   faceSmallFrac: number;
 ```
 
-and to the object returned by `loadReframeConfig`:
+and to the object returned by `loadReframeConfig`, importing `DEFAULT_PLAN_OPTIONS` from `./options` so the shared threshold has exactly one source of truth:
 
 ```ts
     pipMaxFrac: positive(env.REFRAME_PIP_MAX_FRAC, 0.5),
     pipEdgeMin: positive(env.REFRAME_PIP_EDGE_MIN, 3.0),
-    faceSmallFrac: positive(env.REFRAME_FACE_SMALL_FRAC, 0.06),
+    faceSmallFrac: positive(
+      env.REFRAME_FACE_SMALL_FRAC,
+      DEFAULT_PLAN_OPTIONS.faceSmallFrac
+    ),
 ```
 
 Task 9 rewrites this file in full and adds the remaining knobs; these three are only what this task needs to typecheck.
@@ -1715,9 +1718,11 @@ Expected: FAIL - `cfg.stream` is undefined.
 
 - [ ] **Step 3: Add the fields**
 
-Replace `apps/worker/src/reframe/config.ts` in full:
+Replace `apps/worker/src/reframe/config.ts` in full. Note the three layout thresholds default from `DEFAULT_PLAN_OPTIONS` rather than repeating their literals: `options.ts` stays the single source of truth for what the engine believes, and `config.ts` only decides whether the environment overrides it.
 
 ```ts
+import { DEFAULT_PLAN_OPTIONS } from "./options";
+
 export interface ReframeConfig {
   engine: "off" | "faces";
   sampleFps: number;
@@ -1750,14 +1755,22 @@ export function loadReframeConfig(
     faceMinScore: positive(env.REFRAME_FACE_MIN_SCORE, 0.7),
     maxDetectSec: positive(env.REFRAME_MAX_DETECT_SEC, 30),
     stream: env.REFRAME_STREAM === "on",
-    camShare: positive(env.REFRAME_CAM_SHARE, 0.4),
-    faceSmallFrac: positive(env.REFRAME_FACE_SMALL_FRAC, 0.06),
-    faceLargeFrac: positive(env.REFRAME_FACE_LARGE_FRAC, 0.1),
+    camShare: positive(env.REFRAME_CAM_SHARE, DEFAULT_PLAN_OPTIONS.camShare),
+    faceSmallFrac: positive(
+      env.REFRAME_FACE_SMALL_FRAC,
+      DEFAULT_PLAN_OPTIONS.faceSmallFrac
+    ),
+    faceLargeFrac: positive(
+      env.REFRAME_FACE_LARGE_FRAC,
+      DEFAULT_PLAN_OPTIONS.faceLargeFrac
+    ),
     pipMaxFrac: positive(env.REFRAME_PIP_MAX_FRAC, 0.5),
     pipEdgeMin: positive(env.REFRAME_PIP_EDGE_MIN, 3.0),
   };
 }
 ```
+
+`pipMaxFrac` and `pipEdgeMin` keep their literals here: they are detector knobs, not layout thresholds, and `PlanOptions` has no business knowing them.
 
 - [ ] **Step 4: Wire the rect into `computeCropPlan`**
 

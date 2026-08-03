@@ -93,9 +93,11 @@ Let `Ws`, `Hs` be source dimensions and `fw` the widest surviving face track's b
 |---|---|---|
 | no surviving face tracks | `faceless` | `center` (unchanged) |
 | `fw >= FACE_LARGE_FRAC * Ws` (default 0.10) | `normal_face` | existing `single`/`split` logic, **unchanged** |
-| `fw <= FACE_SMALL_FRAC * Ws` (default 0.06) **and** a cam rect is found (§5) | `stream` | **`stream` (new)** |
-| `fw <= FACE_SMALL_FRAC * Ws`, no cam rect | `small_face` | `center` (**changed - see §4.1**) |
+| `fw < FACE_SMALL_FRAC * Ws` (default 0.06) **and** a cam rect is found (§5) | `stream` | **`stream` (new)** |
+| `fw < FACE_SMALL_FRAC * Ws`, no cam rect | `small_face` | `center` (**changed - see §4.1**) |
 | otherwise (`fw` between the two fractions) | `normal_face` | existing `single`/`split` logic, **unchanged** |
+
+**The floor is exclusive.** A face exactly at `FACE_SMALL_FRAC * Ws` anchors; only one strictly below it is barred. Stated because the implementation is a single `>=` comparison and prose that disagreed with it at exactly the boundary would be trusted by whoever tunes the threshold next.
 
 `normal_face` deliberately does not re-decide between `single` and `split`. That choice already belongs
 to `buildCropPlan`'s bbox-spread and dominance rules, and this design does not touch them - it only
@@ -147,7 +149,7 @@ Runs inside `apps/worker/assets/reframe/detect_faces.py`, on the frames already 
 detection (`fps=REFRAME_SAMPLE_FPS`, `scale=640:-2`). Verified available in the worker image:
 OpenCV 4.12.0, numpy 2.3.5. **No new dependencies.**
 
-1. **Gate.** Run only when the dominant face track's width is `<= FACE_SMALL_FRAC * Ws`. Otherwise skip
+1. **Gate.** Run only when the dominant face track's width is `< FACE_SMALL_FRAC * Ws`. Otherwise skip
    entirely and return no rect - this keeps the cost at zero for podcasts and facecams.
 2. **Temporal edge map.** For a bounded sample of frames (`min(24, all)`), compute Sobel magnitude, then
    take the per-pixel **median** across frames. Median, not mean: it suppresses moving game content and
@@ -379,7 +381,7 @@ All defaults chosen so that **not setting anything reproduces today's behaviour 
 |---|---|---|
 | `REFRAME_STREAM` | `off` | killswitch for the stream layout; classification and telemetry run regardless |
 | `REFRAME_CAM_SHARE` | `0.40` | target cam tile share of output height |
-| `REFRAME_FACE_SMALL_FRAC` | `0.06` | at or below this, a face may not anchor a crop |
+| `REFRAME_FACE_SMALL_FRAC` | `0.06` | strictly below this, a face may not anchor a crop |
 | `REFRAME_FACE_LARGE_FRAC` | `0.10` | at or above this, existing facecam/podcast paths apply |
 | `REFRAME_PIP_MAX_FRAC` | `0.50` | a cam rect wider than this is not an inset |
 | `REFRAME_PIP_EDGE_MIN` | `3.0` | minimum normalised border energy to accept a rect |
