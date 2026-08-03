@@ -67,14 +67,16 @@ describe("solveStreamGeometry", () => {
     }
   });
 
-  it("never proposes a content window wider than the source", () => {
+  it("declines when even the narrowest window will not fit the band", () => {
+    // band.w = 480 (720 - 240), but the narrowest achievable contentW at the
+    // floor share (0.3) is 578 - no share fits, for every share tried.
     const g = solveStreamGeometry({
       ...FIXTURE,
       sourceWidth: 720,
       sourceHeight: 720,
       camRect: { x: 0, y: 0, w: 240, h: 136, score: 4 },
     });
-    if (g) expect(g.contentCrop.w).toBeLessThanOrEqual(720);
+    expect(g).toBeNull();
   });
 
   it("reduces the cam share when the free band is too narrow, never raises it", () => {
@@ -128,6 +130,133 @@ describe("solveStreamGeometry", () => {
     const g = solveStreamGeometry({ ...FIXTURE, camShare: 0.05 })!;
     expect(g.outCamH / 1920).toBeGreaterThanOrEqual(CAM_SHARE_MIN - 0.01);
   });
+
+  it("gives up rather than emitting a degenerate sub-pixel cam crop", () => {
+    // ws=8, hs=6, camRect={x:2,y:0,w:2,h:2}: the cover-crop's cam dimensions
+    // round to below 2px before any content-band check even applies.
+    expect(
+      solveStreamGeometry({
+        sourceWidth: 8,
+        sourceHeight: 6,
+        camRect: { x: 2, y: 0, w: 2, h: 2, score: 4 },
+        camShare: 0.4,
+      })
+    ).toBeNull();
+  });
+
+  it("rejects a rect whose left edge is outside the source", () => {
+    expect(
+      solveStreamGeometry({ ...FIXTURE, camRect: { x: -2, y: 0, w: 428, h: 240, score: 4 } })
+    ).toBeNull();
+  });
+
+  it("rejects a rect whose top edge is outside the source", () => {
+    expect(
+      solveStreamGeometry({ ...FIXTURE, camRect: { x: 0, y: -2, w: 428, h: 240, score: 4 } })
+    ).toBeNull();
+  });
+
+  it("rejects a rect whose right edge overflows the source", () => {
+    expect(
+      solveStreamGeometry({
+        ...FIXTURE,
+        camRect: { x: 1000, y: 0, w: 428, h: 240, score: 4 },
+      })
+    ).toBeNull();
+  });
+
+  it("rejects a rect whose bottom edge overflows the source", () => {
+    // The Task 7 scenario that motivated this guard: a bottom-flush inset
+    // whose independently-taken per-axis medians land 2px past the frame.
+    expect(
+      solveStreamGeometry({
+        ...FIXTURE,
+        camRect: { x: 0, y: 844, w: 428, h: 238, score: 4 },
+      })
+    ).toBeNull();
+  });
+
+  it("never emits a crop that leaves the source, over a swept space", () => {
+    for (const ws of [640, 854, 1280, 1920]) {
+      for (const hs of [360, 480, 720, 1080]) {
+        for (const cx of [0, 2, 100, 101, Math.floor(ws / 2)]) {
+          for (const cw of [120, 240, 427, 428, 640]) {
+            for (const ch of [72, 136, 240, 360]) {
+              const camRect = { x: cx, y: 0, w: cw, h: ch, score: 4 };
+              if (cx + cw > ws || ch > hs) continue;
+              const g = solveStreamGeometry({
+                sourceWidth: ws,
+                sourceHeight: hs,
+                camRect,
+                camShare: 0.4,
+              });
+              if (!g) continue;
+              expect(g.camCrop.w).toBeLessThanOrEqual(camRect.w);
+              expect(g.camCrop.y + g.camCrop.h).toBeLessThanOrEqual(
+                camRect.y + camRect.h
+              );
+              expect(g.contentCrop.w).toBeLessThanOrEqual(ws);
+              expect(g.outCamH + g.outContentH).toBe(1920);
+              for (const v of [
+                g.camCrop.w,
+                g.camCrop.h,
+                g.camCrop.y,
+                g.contentCrop.w,
+              ]) {
+                expect(v % 2).toBe(0);
+              }
+              const band = freeBand(camRect, ws);
+              const contentX = streamContentX(band, g.contentCrop.w, ws, ws / 2);
+              expect(contentX + g.contentCrop.w).toBeLessThanOrEqual(ws);
+              expect(contentX % 2).toBe(0);
+              const camX = streamCamX(
+                camRect,
+                g.camCrop.w,
+                camRect.x + camRect.w / 2
+              );
+              // The invariant that actually matters for ffmpeg safety: never
+              // leaves the SOURCE frame. Proven to hold unconditionally,
+              // including for a camRect.x that violates the CamRect contract
+              // ("x/y even") - see the dedicated test below for why the
+              // stricter inset-containment bound cannot always join it.
+              expect(camX).toBeGreaterThanOrEqual(0);
+              expect(camX + g.camCrop.w).toBeLessThanOrEqual(ws);
+              expect(camX % 2).toBe(0);
+              // Inset-containment is guaranteed only for a contract-compliant
+              // (even-origin) rect - verified over this whole swept space.
+              if (camRect.x % 2 === 0) {
+                expect(camX).toBeGreaterThanOrEqual(camRect.x);
+                expect(camX + g.camCrop.w).toBeLessThanOrEqual(
+                  camRect.x + camRect.w
+                );
+              }
+            }
+          }
+        }
+      }
+    }
+  });
+
+  it("tolerates an odd, out-of-contract inset origin by favouring frame safety over exact inset containment", () => {
+    // CamRect documents x/y as always even; this rect violates that. With
+    // camW landing at the full 120px (zero horizontal slack), no even camX
+    // can sit at exactly camRect.x (101, odd) - one bound must give. The
+    // fallback in clampEven resolves toward the bound closer to the frame
+    // edge (never overshoot), so it can undershoot the inset's left edge by
+    // one rounding step (2px) rather than ever risk exceeding the source.
+    const camRect = { x: 101, y: 0, w: 120, h: 136, score: 4 };
+    const g = solveStreamGeometry({
+      sourceWidth: 640,
+      sourceHeight: 360,
+      camRect,
+      camShare: 0.4,
+    })!;
+    expect(g.camCrop.w).toBe(120);
+    const camX = streamCamX(camRect, g.camCrop.w, camRect.x + camRect.w / 2);
+    expect(camX).toBe(100); // camRect.x - 1, rounded down to even - not 102.
+    expect(camX).toBeGreaterThanOrEqual(0);
+    expect(camX + g.camCrop.w).toBeLessThanOrEqual(640);
+  });
 });
 
 describe("per-shot x", () => {
@@ -144,5 +273,15 @@ describe("per-shot x", () => {
     // Ideal centring would start at 302, which is inside the inset.
     expect(streamContentX(band, g.contentCrop.w, 1280, 640)).toBe(428);
     expect(streamContentX(band, g.contentCrop.w, 1280, 9999)).toBe(604);
+  });
+
+  it("clamps the content window against a right-hand inset, where the tight bound is the inset's left edge, not the frame", () => {
+    const rightRect = { x: 852, y: 0, w: 428, h: 240, score: 1 };
+    const g = solveStreamGeometry({ ...FIXTURE, camRect: rightRect })!;
+    const band = freeBand(rightRect, 1280);
+    expect(band).toEqual({ x: 0, w: 852 });
+    // hi = camRect.x - contentW = 852 - 676 = 176, well short of the frame edge.
+    expect(streamContentX(band, g.contentCrop.w, 1280, 9999)).toBe(176);
+    expect(streamContentX(band, g.contentCrop.w, 1280, 0)).toBe(0);
   });
 });
