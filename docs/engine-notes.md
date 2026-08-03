@@ -592,6 +592,75 @@ ffmpeg filtergraph, single encode pass with the subtitle burn.
   and can trigger a false split. A static-face guard (a photo has zero mouth motion and zero box variance)
   would close it.
 
+### 7a. Stream sources: the webcam-inset layout (built 2026-08-02)
+
+Spec `docs/superpowers/specs/2026-08-02-stream-reframe-design.md`, plan `.../plans/2026-08-02-stream-reframe.md`.
+Ships **off**: `REFRAME_STREAM` defaults to unset, so classification and telemetry run while the picture does
+not change. The one exception is the min-face guard below, which is unconditional.
+
+**The defect it fixes, measured not assumed.** On a stream the streamer's webcam is a small inset over
+gameplay, so the detector correctly finds a face that is **3.4% of frame width** (43x56 in 1280x720) against
+15-30% for a podcast. The planner then centred a 9:16 window on it and produced a truncated webcam, the
+streamer's chat overlay, and a slice of game floor - the game essentially absent. Rendered and inspected on a
+real 55-minute CS2 VOD before any code was written.
+
+**The min-face guard is the cheap half and it ships alone.** A face below `REFRAME_FACE_SMALL_FRAC` (0.06) of
+frame width may not anchor a crop. That single rule removes the broken output on **every** unrecognised
+stream layout - including chroma-key webcams that have no rectangle to detect at all - and needs no flag, no
+detector and no plan-format change.
+
+**Tile geometry inverts the obvious adjustment.** `Hg = Hs * 1080 / Wg` and `Hc = 1920 - Hg`, so a TALLER cam
+tile needs a WIDER content window. When the window will not fit beside the inset, the cam share must be
+REDUCED. Got backwards once during design.
+
+**Four things that were wrong and are worth not rediscovering:**
+- OpenCV's Sobel uses `BORDER_REFLECT_101`, so at column 0 the virtual column -1 *is* column 1 and the
+  derivative is identically zero. `vx[:,0]` and `hy[0,:]` can never carry energy - and a corner-flush inset,
+  the primary case, has its borders exactly there. As first specified the detector scored the true rectangle
+  **0.00** and lost to an arbitrary interior box. Canvas-edge sides are now skipped rather than scored.
+- The inset size cap bounded **width only**. Under area-based selection that let a box of the inset's correct
+  width but the frame's full height beat every real candidate. That omission alone was the difference between
+  26 correct rectangles out of 26 and **0 out of 26**.
+- Selecting the highest-scoring rectangle rewards shrinking, because each border is a mean over the
+  candidate's own span: trimming `x0` inward raises the top and bottom means. Right, bottom and top edges were
+  exact in 26 of 26 windows while the left was exact in 16. Selection is by largest area among candidates
+  clearing the bar.
+- `evenRound` rounds UP, so using it on an upper bound raises the value past the ceiling it is clamping to.
+  Bounds must tighten to even BEFORE the clamp, never after. Demonstrated escape: a crop reaching x=946 with
+  a right edge of 1282 on a 1280-wide frame.
+
+**`REFRAME_PIP_EDGE_MIN` = 4.0 is the only threshold here that was measured.** 40 windows of the fixture: 26
+true detections scored 5.65-8.84, the strongest false candidate 1.54, and every threshold in 3.0-5.0 gave
+identical output. **The corridor exists because of the size cap** - measured without the height cap the usable
+gap was ~10% around 6.0. So 4.0 is robust GIVEN `PIP_MAX_FRAC = 0.5` on both axes; loosening the cap for a
+source with a large inset requires re-measuring. Two knobs that read as independent are not.
+
+**`setsar=1` after each `scale` is required, but not for the reason first recorded.** The segfault is real
+with `vstack`; the shipped graph composes with `overlay` and does not crash without it. The actual reason is
+that `scale` derives each tile's sample aspect from its own crop aspect, so the composite would be assembled
+from three different pixel aspects. Recorded precisely because a wrong justification invites someone to delete
+the filter, see no crash, and conclude it was superstition.
+
+**Pre-existing, unrelated, and worth fixing separately:** every reframe clip ships `SAR 406:405` rather than
+1:1, because `cropWidthFor` rounds the crop width to even (406 from a 720-high source) while `scale` preserves
+display aspect. Output displays about 0.25% wide of true 9:16. The legacy `crop=ih*9/16` path is exact; the
+split path drifts the same way. Found during the stream work's encode verification, not caused by it.
+
+**Backlog, deliberately not fixed:** `buildCropPlan` computes `maxSamples` over ALL tracks, including ones the
+min-face guard then discards, so `MIN_SAMPLE_FRAC` is measured against a track that will not survive. Never
+produces a wrong anchor - only "more conservative than necessary" - but it bites in an unmeasured case: a
+PODCAST with a persistently-detected background face plus an intermittently-detected speaker drops the
+speaker for being rare relative to a track that is itself discarded. A two-line reorder, but it changes which
+sources get anchored and needs its own measurement.
+
+**What this rests on, stated plainly: ONE video, one streamer, one OBS layout, corner inset.** The mechanism
+is validated end to end - detector, solver, classifier, filtergraph, and a real 1080x1920 encode. The numbers
+are not. 26 of 26 is 26 windows of the same static compositing box. A second and third source of a different
+shape are needed before any threshold here is treated as known.
+
+**`apps/worker/src/scripts/eval-reframe.ts`** exists so the next framing question is seen rather than argued:
+a video and a time range in, the computed plan as JSON and a contact sheet out.
+
 ---
 
 ## 8. Operational facts
