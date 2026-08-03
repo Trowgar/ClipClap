@@ -1201,20 +1201,20 @@ const r = (x: number, w: number): CamRect => ({ x, y: 0, w, h: 240, score: 4 });
 
 describe("resolveCamRect", () => {
   it("reports no rect when nothing was found", () => {
-    expect(resolveCamRect([null, null, null], 1280)).toEqual({
+    expect(resolveCamRect([null, null, null], 1280, 720)).toEqual({
       rect: null,
       reason: "stream_no_rect",
     });
   });
 
   it("takes the median when the shots agree", () => {
-    const got = resolveCamRect([r(0, 427), r(1, 428), r(0, 426)], 1280);
+    const got = resolveCamRect([r(0, 427), r(1, 428), r(0, 426)], 1280, 720);
     expect(got.rect).toMatchObject({ x: 0, w: 428 });
     expect(got.reason).toBeUndefined();
   });
 
   it("snaps outward to even so the crop never exceeds the inset", () => {
-    const got = resolveCamRect([r(3, 427), r(3, 427), r(3, 427)], 1280).rect!;
+    const got = resolveCamRect([r(3, 427), r(3, 427), r(3, 427)], 1280, 720).rect!;
     expect(got.x % 2).toBe(0);
     expect(got.w % 2).toBe(0);
     expect(got.x).toBeLessThanOrEqual(3);
@@ -1224,20 +1224,37 @@ describe("resolveCamRect", () => {
   it("distinguishes a composition that MOVES from one that was never found", () => {
     // Half the shots put the inset left, half put it right: found, but unstable.
     expect(
-      resolveCamRect([r(0, 428), r(0, 428), r(800, 428), r(800, 428)], 1280)
+      resolveCamRect([r(0, 428), r(0, 428), r(800, 428), r(800, 428)], 1280, 720)
     ).toEqual({ rect: null, reason: "stream_rect_unstable" });
   });
 
   it("reports no rect when fewer than half the shots found anything", () => {
-    expect(resolveCamRect([r(0, 428), null, null, null], 1280)).toEqual({
+    expect(resolveCamRect([r(0, 428), null, null, null], 1280, 720)).toEqual({
       rect: null,
       reason: "stream_no_rect",
     });
   });
 
-  it("keeps the rect inside the frame", () => {
-    const got = resolveCamRect([r(1200, 200), r(1200, 200)], 1280).rect!;
+  it("keeps the rect inside the frame on both axes", () => {
+    const got = resolveCamRect([r(1200, 200), r(1200, 200)], 1280, 720).rect!;
     expect(got.x + got.w).toBeLessThanOrEqual(1280);
+    expect(got.y + got.h).toBeLessThanOrEqual(720);
+  });
+
+  it("clamps a bottom edge that only the independent medians produce", () => {
+    // Each input is in frame on a 1080-tall source, but the medians of y and h
+    // are taken independently and the upper middle wins both: y=844 with h=238
+    // is a bottom edge of 1082. Unclamped this reaches ffmpeg as crop past the
+    // source and fails the encode with error -22, after every fallback.
+    const bottomFlush = (y: number, h: number): CamRect => ({
+      x: 0, y, w: 428, h, score: 4,
+    });
+    const got = resolveCamRect(
+      [bottomFlush(842, 238), bottomFlush(844, 236)],
+      1920,
+      1080
+    ).rect!;
+    expect(got.y + got.h).toBeLessThanOrEqual(1080);
   });
 });
 ```
@@ -1280,7 +1297,8 @@ function median(values: number[]): number {
  */
 export function resolveCamRect(
   perShot: Array<CamRect | null>,
-  sourceWidth: number
+  sourceWidth: number,
+  sourceHeight: number
 ): CamRectResolution {
   const found = perShot.filter((r): r is CamRect => r !== null);
   if (found.length === 0 || found.length * 2 < perShot.length) {
@@ -1307,7 +1325,15 @@ export function resolveCamRect(
     return { rect: null, reason: "stream_rect_unstable" };
   }
 
-  // Snap outward: the crop must never be asked for a pixel the inset lacks.
+  // Snap outward, then clamp BOTH axes back inside the frame.
+  //
+  // The medians of y and h are taken independently, so they can disagree: two
+  // shots of a bottom-flush inset that are each in frame (y=842,h=238 and
+  // y=844,h=236 on a 1080-tall source) yield the upper medians y=844 and h=238,
+  // a bottom edge of 1082. That reaches ffmpeg as a crop past the source and
+  // fails the encode with error -22, after every fallback in the pipeline.
+  // Clamping width alone - which is what an earlier draft of this did - leaves
+  // exactly that hole open on the vertical axis.
   const x = Math.max(0, 2 * Math.floor(rect.x / 2));
   const y = Math.max(0, 2 * Math.floor(rect.y / 2));
   const w = 2 * Math.ceil((rect.x + rect.w - x) / 2);
@@ -1317,7 +1343,7 @@ export function resolveCamRect(
       x,
       y,
       w: Math.min(w, 2 * Math.floor((sourceWidth - x) / 2)),
-      h,
+      h: Math.min(h, 2 * Math.floor((sourceHeight - y) / 2)),
       score: rect.score,
     },
   };
@@ -1787,7 +1813,8 @@ and replace the `buildCropPlan` call:
 ```ts
     const cam = resolveCamRect(
       tracks.map((t) => t.camRect),
-      width
+      width,
+      height
     );
     const plan = buildCropPlan(
       shots,
