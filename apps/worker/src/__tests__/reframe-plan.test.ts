@@ -321,8 +321,15 @@ describe("min-face guard", () => {
     ]);
   });
 
-  it("anchors on a face exactly at the floor, and centres just below it", () => {
-    // The floor is exclusive: 0.06 * 1920 = 115.2, so 116 anchors and 115 does not.
+  it("treats the floor as exclusive, and places it to within a pixel", () => {
+    // 0.06 * 1920 = 115.19999999999999. Only the floor as actually computed
+    // separates >= from >; 115 and 116 answer identically under both, so they
+    // pin the floor's POSITION while this case pins its INCLUSIVITY - which is
+    // what spec §4 promises.
+    const at = DEFAULT_PLAN_OPTIONS.faceSmallFrac * W;
+    expect(
+      buildCropPlan(oneShot, withTracks([track(900, at)]), W, H)?.shots[0].layout
+    ).toBe("single");
     expect(
       buildCropPlan(oneShot, withTracks([track(900, 116)]), W, H)?.shots[0].layout
     ).toBe("single");

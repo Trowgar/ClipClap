@@ -15,7 +15,7 @@ export interface PlanOptions {
   camShare: number;
 }
 
-export const DEFAULT_PLAN_OPTIONS: PlanOptions = Object.freeze({
+export const DEFAULT_PLAN_OPTIONS: Readonly<PlanOptions> = Object.freeze({
   faceSmallFrac: 0.06,
   faceLargeFrac: 0.1,
   stream: false,
