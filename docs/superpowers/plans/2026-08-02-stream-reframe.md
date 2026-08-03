@@ -1334,7 +1334,14 @@ export function resolveCamRect(
       Math.abs(r.w - rect.w) <= tol &&
       Math.abs(r.h - rect.h) <= tol
   );
-  if (agree.length * 2 < perShot.length) {
+  // Strict majority of the rects that were FOUND, not of all shots. Two
+  // separate traps live here. Measuring against perShot.length would flag
+  // "two shots agreed, two found nothing" as unstable, which is wrong - those
+  // two agreed. And a non-strict threshold can never trip at all: on a clean
+  // 50/50 split exactly half of `found` agrees with the median by
+  // construction, so "fewer than half agree" is unsatisfiable and the
+  // instability check is dead code that always accepts.
+  if (agree.length * 2 <= found.length) {
     return { rect: null, reason: "stream_rect_unstable" };
   }
 
