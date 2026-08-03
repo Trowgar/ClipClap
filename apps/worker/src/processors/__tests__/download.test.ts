@@ -10,9 +10,24 @@ const downloadFileMock = vi.hoisted(() => vi.fn());
 
 const MAX_SOURCE_FILESIZE_BYTES = vi.hoisted(() => 2 * 1024 * 1024 * 1024);
 
+// vi.hoisted like its neighbours: vi.mock is lifted above every const in this
+// file, so a plain declaration is still in the temporal dead zone when the
+// factory runs.
+const rotateWarpExitMock = vi.hoisted(() =>
+  vi.fn(async () => ({ rotated: false }) as { rotated: boolean; ip?: string })
+);
+
 vi.mock("@clipclap/shared", () => ({
   downloadFile: downloadFileMock,
   MAX_SOURCE_FILESIZE_BYTES,
+  // The WARP proxy trio. Defaults here are the PROXY-OFF, NO-ROTATION state on
+  // purpose: every existing test in this file asserts the plain yt-dlp command
+  // line and the plain error classification, and those must keep describing
+  // what happens when YTDLP_PROXY is unset. The rotation tests below opt in.
+  proxyArgs: () => [],
+  isBotCheckFailure: (text?: string | null) =>
+    !!text && /confirm\s+you.{0,3}re\s+not\s+a\s+bot/i.test(text),
+  rotateWarpExit: rotateWarpExitMock,
 }));
 
 import { writeFileSync } from "fs";
@@ -252,6 +267,86 @@ describe("downloadFromUrl", () => {
     expect(out).toMatch(/clipclap-.*\.mp4$/);
     await expect(readFile(out, "utf8")).resolves.toBe("videobytes");
     await unlink(out).catch(() => {});
+  });
+});
+
+describe("WARP rotate-and-retry", () => {
+  const URL = "https://www.youtube.com/watch?v=abc123";
+
+  /** A refusal of the EXIT, not of the link. Curly apostrophe, as yt-dlp
+   *  actually prints it - see the shared isBotCheckFailure test for why that
+   *  detail is the whole ballgame. */
+  function botCheckError(): Error {
+    return Object.assign(new Error("Command failed: yt-dlp"), {
+      code: 1,
+      killed: false,
+      signal: null,
+      stdout: "",
+      stderr:
+        "ERROR: [youtube] abc123: Sign in to confirm you’re not a bot. " +
+        "Use --cookies-from-browser or --cookies for the authentication.",
+    });
+  }
+
+  beforeEach(() => {
+    // execFileMock too: the reset in the sibling describe does not reach this
+    // one, so without this the call counts below carry over from earlier tests.
+    execFileMock.mockReset();
+    rotateWarpExitMock.mockReset();
+    rotateWarpExitMock.mockResolvedValue({ rotated: false });
+  });
+
+  it("rotates the exit and downloads again when YouTube refuses us as a bot", async () => {
+    rotateWarpExitMock.mockResolvedValue({ rotated: true, ip: "2.2.2.2" });
+    let call = 0;
+    execFileMock.mockImplementation((_file, args, _opts, cb) => {
+      const done = typeof _opts === "function" ? _opts : cb;
+      call += 1;
+      if (call === 1) return done(botCheckError());
+      // Second attempt is a REAL success: it writes the file, then exits zero.
+      writeFileSync(outputPathFrom(args), "videobytes");
+      return done(null, { stdout: "[download] 100%", stderr: "" });
+    });
+
+    const path = await downloadVideo(URL);
+
+    expect(path).toMatch(/\.mp4$/);
+    expect(rotateWarpExitMock).toHaveBeenCalledTimes(1);
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+    await unlink(path).catch(() => undefined);
+  });
+
+  // A rotation that did not move the exit means retrying would spend MINUTES
+  // reproducing the identical refusal, and would drop other jobs off the proxy
+  // for nothing.
+  it("does not retry when the rotation failed to move the exit", async () => {
+    rotateWarpExitMock.mockResolvedValue({ rotated: false });
+    execFileMock.mockImplementation((_file, _args, _opts, cb) => {
+      const done = typeof _opts === "function" ? _opts : cb;
+      return done(botCheckError());
+    });
+
+    await expect(downloadVideo(URL)).rejects.toBeInstanceOf(
+      SourceUnavailableError
+    );
+    expect(rotateWarpExitMock).toHaveBeenCalledTimes(1);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  // Rotation is a global side effect. An ordinary dead link must never cause
+  // one - that is the difference between repairing our exit and vandalising
+  // everyone else's downloads.
+  it("never rotates for a failure that is not the bot check", async () => {
+    execFileMock.mockImplementation((_file, _args, _opts, cb) => {
+      const done = typeof _opts === "function" ? _opts : cb;
+      return done(exitError(1));
+    });
+
+    await expect(downloadVideo(URL)).rejects.toBeInstanceOf(
+      SourceUnavailableError
+    );
+    expect(rotateWarpExitMock).not.toHaveBeenCalled();
+    expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -268,6 +268,8 @@ const ru: Dict = {
   checkingLink: "Проверяю ссылку…",
   urlAccessFailed:
     "Не удалось получить видео по этой ссылке. Попробуй другую ссылку или загрузи файл напрямую.",
+  urlYouTubeUnavailable:
+    "Ссылки на YouTube сейчас не работают - блокирует нас YouTube, а не твоя ссылка, поэтому другая ссылка с YouTube тоже не поможет. Загрузи видеофайл сюда напрямую или пришли ссылку с TikTok или Twitch.",
   referralInfo: (web, tg, earned, pending) =>
     `Ваши реферальные ссылки:\nСайт: ${web}\nTelegram: ${tg}\n\nЗаработано с рефералов: $${earned}\nВ ожидании (14-дневный холд): $${pending}`,
   referralWithdrawBtn: "💸 Запросить вывод средств",

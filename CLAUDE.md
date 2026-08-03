@@ -14,8 +14,14 @@ apps/web/        → Next.js 15 (App Router) — frontend + API routes
 apps/worker/     → BullMQ worker — video processing pipeline
 apps/bot/        → grammY Telegram bot (post-MVP)
 packages/shared/ → Types, config, services, lib clients (Prisma, Redis, R2, Queue)
+docker/warp/     → Cloudflare WARP SOCKS5 proxy, used by yt-dlp only
 prisma/          → Database schema
 ```
+
+**yt-dlp goes through the `warp` service.** YouTube refuses this host's
+datacenter IP outright, so URL sources depend on it; uploaded files do not.
+`YTDLP_PROXY` in `.env` is the kill switch. See `docs/engine-notes.md` §8 before
+touching it — several obvious fixes there are measured dead ends.
 
 ## Quick Start
 

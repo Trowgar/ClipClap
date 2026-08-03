@@ -43,7 +43,7 @@ import type {
 } from "@clipclap/shared";
 import type { JobStatus, User } from "@prisma/client";
 import type { TelegramClient } from "./telegram-client";
-import { extractVideoUrl, probeVideoUrl } from "./url-probe";
+import { extractVideoUrl, isYouTubeUrl, probeVideoUrl } from "./url-probe";
 import {
   LOCALES,
   detectLocale,
@@ -2225,7 +2225,20 @@ async function handleVideoUrl(
 
   const probe = await probeVideoUrl(url);
   if (!probe.ok) {
-    await client.sendMessage(message.chat.id, dict.urlAccessFailed);
+    // "Try a different URL" is actively harmful advice for a YouTube link: the
+    // refusal is against this host's IP, so the next YouTube link fails too.
+    // The four bot users who ever pasted links took that advice and retried
+    // 5, 3, 2 and 2 times before leaving. Only the fourth thought to upload a
+    // file - and that job produced 12 clips, so the product was never the
+    // problem. Name the cause and point at the path that works.
+    //
+    // Deliberately NOT gated on probe.reason: a YouTube link that times out or
+    // returns no duration is still a YouTube link the user cannot fix by
+    // pasting another one. Only the host decides which copy they get.
+    await client.sendMessage(
+      message.chat.id,
+      isYouTubeUrl(url) ? dict.urlYouTubeUnavailable : dict.urlAccessFailed
+    );
 
     // THE HOLE THAT COST US A REAL USER'S STORY.
     //

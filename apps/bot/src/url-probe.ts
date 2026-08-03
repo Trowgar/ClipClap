@@ -2,6 +2,7 @@
 // same probe. This file stays as the bot's import path.
 export {
   extractVideoUrl,
+  isYouTubeUrl,
   probeVideoUrl,
   probeLocalFile,
   type ProbeResult,

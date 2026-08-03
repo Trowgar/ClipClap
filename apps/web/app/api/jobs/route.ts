@@ -74,7 +74,15 @@ export async function POST(req: NextRequest) {
       : undefined;
 
   if (url) {
-    const probe = await probeVideoUrl(String(url), PROBE_TIMEOUT_MS);
+    const probe = await probeVideoUrl(String(url), PROBE_TIMEOUT_MS, {
+      // A browser is blocked on this response. The bot can afford the control
+      // server's full 75s worst case because its user has already been told
+      // "checking your link" and the answer arrives in chat either way; here an
+      // 80-second POST reads as a hang and invites a double submit. 20s keeps
+      // the whole request under ~40s even when a rotation is needed, and the
+      // cheap reconnect path - the common one - lands well inside it.
+      rotateBudgetMs: 20_000,
+    });
 
     if (!probe.ok && probe.reason === "probe-unavailable") {
       // yt-dlp is missing from this container. That is an operational fault,

@@ -1,11 +1,16 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.fn();
 vi.mock("child_process", () => ({
   execFile: (...args: unknown[]) => execFileMock(...args),
 }));
 
-import { extractVideoUrl, probeLocalFile, probeVideoUrl } from "../source-probe";
+import {
+  extractVideoUrl,
+  isYouTubeUrl,
+  probeLocalFile,
+  probeVideoUrl,
+} from "../source-probe";
 
 type ExecCb = (
   err: (Error & { code?: string }) | null,
@@ -20,6 +25,49 @@ function enoent(binary: string): Error & { code: string } {
   });
 }
 
+describe("isYouTubeUrl", () => {
+  it.each([
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://m.youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://music.youtube.com/watch?v=dQw4w9WgXcQ",
+    "https://youtu.be/dQw4w9WgXcQ",
+    "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+    "HTTPS://WWW.YOUTUBE.COM/watch?v=dQw4w9WgXcQ",
+  ])("recognises %s", (url) => {
+    expect(isYouTubeUrl(url)).toBe(true);
+  });
+
+  it.each([
+    "https://www.tiktok.com/@tiktok/video/7106594312292453675",
+    "https://www.twitch.tv/videos/123",
+    "https://vimeo.com/123",
+  ])("leaves %s to the generic message", (url) => {
+    expect(isYouTubeUrl(url)).toBe(false);
+  });
+
+  // Host-SUFFIX matching, not `includes`. A substring test would hand the
+  // "YouTube is blocking us" copy to links that have nothing to do with
+  // YouTube, and the user would be told to stop retrying a link that might
+  // actually have worked.
+  it.each([
+    "https://youtube.com.evil.test/watch?v=1",
+    "https://notyoutube.com/watch?v=1",
+    "https://myyoutu.be/abc",
+    "https://example.test/redirect?next=https://youtube.com/watch?v=1",
+  ])("does not mistake %s for YouTube", (url) => {
+    expect(isYouTubeUrl(url)).toBe(false);
+  });
+
+  // A string yt-dlp would reject anyway. It is a bad link, not a blocked one,
+  // so it must fall through to the generic copy rather than throw.
+  it("returns false for an unparseable URL instead of throwing", () => {
+    expect(isYouTubeUrl("youtube.com/watch?v=1")).toBe(false);
+    expect(isYouTubeUrl("not a url at all")).toBe(false);
+    expect(isYouTubeUrl("")).toBe(false);
+  });
+});
+
 describe("extractVideoUrl", () => {
   it("finds a URL embedded in surrounding text", () => {
     expect(
@@ -30,6 +78,106 @@ describe("extractVideoUrl", () => {
   it("returns null when there is no URL", () => {
     expect(extractVideoUrl("hello world")).toBeNull();
     expect(extractVideoUrl("")).toBeNull();
+  });
+});
+
+describe("probeVideoUrl rotate-and-retry", () => {
+  const BOT_CHECK =
+    "ERROR: [youtube] abc: Sign in to confirm you’re not a bot. " +
+    "Use --cookies-from-browser or --cookies for the authentication.";
+
+  beforeEach(() => {
+    execFileMock.mockReset();
+    process.env.WARP_CONTROL_URL = "http://warp:8080";
+  });
+
+  afterEach(() => {
+    delete process.env.WARP_CONTROL_URL;
+    delete process.env.YTDLP_PROXY;
+    vi.restoreAllMocks();
+  });
+
+  /** nth call fails with the bot check, the rest succeed. */
+  function botCheckThenSuccess() {
+    let call = 0;
+    execFileMock.mockImplementation(
+      (_cmd: string, _args: string[], _opts: unknown, cb: ExecCb) => {
+        call += 1;
+        if (call === 1) cb(new Error("exit code 1"), "", BOT_CHECK);
+        else cb(null, "42||Recovered\n", "");
+        return { kill: vi.fn() };
+      }
+    );
+  }
+
+  it("rotates the exit and re-probes when YouTube refuses us as a bot", async () => {
+    botCheckThenSuccess();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ rotated: true, previousIp: "1.1.1.1", ip: "2.2.2.2" }),
+        { status: 200 }
+      )
+    );
+
+    await expect(probeVideoUrl("https://youtube.com/abc")).resolves.toEqual({
+      ok: true,
+      durationSec: 42,
+      title: "Recovered",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  // A cooldown answer means the exit did NOT move. Re-probing would make the
+  // user wait twice for the identical refusal.
+  it("does not re-probe when the rotation did not move the exit", async () => {
+    botCheckThenSuccess();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ rotated: false, reason: "cooldown" }), {
+        status: 200,
+      })
+    );
+
+    await expect(probeVideoUrl("https://youtube.com/abc")).resolves.toEqual({
+      ok: false,
+      reason: "yt-dlp-error",
+    });
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  // Rotation drops every in-flight download through the shared exit. An
+  // ordinary dead link must never trigger it.
+  it("never rotates for a failure that is not the bot check", async () => {
+    execFileMock.mockImplementation(
+      (_cmd: string, _args: string[], _opts: unknown, cb: ExecCb) => {
+        cb(new Error("exit code 1"), "", "ERROR: [youtube] abc: Video unavailable");
+        return { kill: vi.fn() };
+      }
+    );
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    await expect(probeVideoUrl("https://youtube.com/abc")).resolves.toEqual({
+      ok: false,
+      reason: "yt-dlp-error",
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes --proxy to yt-dlp when YTDLP_PROXY is set", async () => {
+    process.env.YTDLP_PROXY = "socks5://warp:1080";
+    execFileMock.mockImplementation(
+      (_cmd: string, _args: string[], _opts: unknown, cb: ExecCb) => {
+        cb(null, "10||x\n", "");
+        return { kill: vi.fn() };
+      }
+    );
+
+    await probeVideoUrl("https://youtube.com/abc");
+
+    const [, args] = execFileMock.mock.calls[0] as [string, string[]];
+    expect(args).toContain("--proxy");
+    expect(args[args.indexOf("--proxy") + 1]).toBe("socks5://warp:1080");
   });
 });
 
@@ -225,5 +373,58 @@ describe("probeLocalFile", () => {
       ok: false,
       reason: "no-duration",
     });
+  });
+});
+
+describe("probeVideoUrl rotation budget", () => {
+  const BOT_CHECK = "ERROR: Sign in to confirm you’re not a bot.";
+
+  beforeEach(() => {
+    execFileMock.mockReset();
+    process.env.WARP_CONTROL_URL = "http://warp:8080";
+    execFileMock.mockImplementation(
+      (_cmd: string, _args: string[], _opts: unknown, cb: ExecCb) => {
+        cb(new Error("exit code 1"), "", BOT_CHECK);
+        return { kill: vi.fn() };
+      }
+    );
+  });
+
+  afterEach(() => {
+    delete process.env.WARP_CONTROL_URL;
+    vi.restoreAllMocks();
+  });
+
+  // /api/jobs blocks a browser on this call. A caller must be able to refuse
+  // the wait outright rather than hang a POST behind a 75s rotation.
+  it("skips rotation entirely when the budget is zero", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    await expect(
+      probeVideoUrl("https://youtube.com/abc", 10_000, { rotateBudgetMs: 0 })
+    ).resolves.toEqual({ ok: false, reason: "yt-dlp-error" });
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts the rotation request once the budget is spent", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((_url, init) => {
+      const signal = (init as RequestInit).signal!;
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () =>
+          reject(new Error("The operation was aborted."))
+        );
+      });
+    });
+
+    const result = await probeVideoUrl("https://youtube.com/abc", 10_000, {
+      rotateBudgetMs: 50,
+    });
+
+    // The rotation failed, so the ORIGINAL probe failure is what surfaces -
+    // never an error about the control server the user cannot act on.
+    expect(result).toEqual({ ok: false, reason: "yt-dlp-error" });
+    expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 });

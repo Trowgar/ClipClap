@@ -13,8 +13,17 @@ WORKDIR /app
 #
 # Installed the same way the bot does it (pip, not apk) so both surfaces run the
 # same yt-dlp and a site that breaks one breaks neither more nor less.
-RUN apk add --no-cache openssl python3 py3-pip
-RUN pip3 install --break-system-packages yt-dlp
+# deno: yt-dlp's JavaScript runtime for YouTube (EJS). See apps/bot/Dockerfile
+# for why Node cannot stand in for it on this image.
+RUN apk add --no-cache openssl python3 py3-pip deno
+# PINNED, and the pin MUST match apps/bot/Dockerfile and apps/worker/Dockerfile.
+# This is the same "both surfaces run the same yt-dlp" argument as the comment
+# above, made enforceable: identical install lines drifted anyway, because
+# unpinned pip resolves at BUILD time and these three images are built on
+# different days.
+# `[default]` pulls in yt-dlp-ejs, the challenge-solver scripts deno runs. See
+# apps/bot/Dockerfile for the full reasoning and its measured limits.
+RUN pip3 install --break-system-packages "yt-dlp[default]==2026.7.4"
 
 # --- Dependencies ---
 FROM base AS deps

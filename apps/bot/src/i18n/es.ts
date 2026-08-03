@@ -251,6 +251,8 @@ const es: Dict = {
   checkingLink: "Comprobando el enlace…",
   urlAccessFailed:
     "No pude acceder al video de ese enlace. Prueba con otro enlace o sube el archivo directamente.",
+  urlYouTubeUnavailable:
+    "Los enlaces de YouTube no funcionan ahora mismo - YouTube nos está bloqueando a nosotros, no es tu enlace, así que otro enlace de YouTube tampoco servirá. Sube el archivo de video aquí directamente, o manda un enlace de TikTok o Twitch.",
   referralInfo: (web, tg, earned, pending) =>
     `Tus enlaces de referidos:\nWeb: ${web}\nTelegram: ${tg}\n\nGanancias por referidos: $${earned}\nPendiente (retención de 14 días): $${pending}`,
   referralWithdrawBtn: "💸 Solicitar retiro",
