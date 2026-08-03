@@ -1663,6 +1663,8 @@ Finally, replace the return with:
 
 - [ ] **Step 4: Extend the merge rule**
 
+Until this step lands, `mergeAdjacentLayouts` simply never merges stream shots - all four `same` comparisons evaluate false and each shot is pushed separately. That fails safe (correct geometry, only a higher shot count against the 90-shot cap) but it is not the intended behaviour, and it is why this step exists.
+
 In `mergeAdjacentLayouts`, add a fourth clause to the `same` expression:
 
 ```ts
@@ -2025,6 +2027,8 @@ docker compose exec -T worker-render npx vitest run --root /app apps/worker/src/
 
 Expected: PASS.
 
+**One rule this branch must not break:** `buildFiltergraph` reads the plan and must never mutate it. On the clips path the *same* object is handed to `buildFiltergraph` and then persisted to `Clip.cropPlan` (`render.ts:142` then `render.ts:255`), and `sliceCropPlan` shares `stream` and `profile` by reference. So normalising geometry in place here - evening a width, clamping an x - would write that mutation into the database. Compute derived values into locals; treat `plan` and `plan.stream` as frozen.
+
 - [ ] **Step 5: Prove the graph actually encodes**
 
 A green string test does not prove ffmpeg accepts the graph. Render two seconds from the fixture:
@@ -2168,7 +2172,8 @@ import type { CropPlan, SourceProfile } from "./types";
 export interface ReframeCheck {
   shotCount: number;
   detectMs: number;
-  layouts?: Record<"single" | "split" | "center" | "stream", number>;
+  /** Derived from the counter so the two can never drift apart. */
+  layouts?: ReturnType<typeof planLayoutCounts>;
   profile?: SourceProfile;
   fallbackReason?: string;
 }
@@ -2225,7 +2230,9 @@ Replace the encode-failure mutation in the `catch` block:
         if (idx >= 0) reframeChecks[idx] = markEncodeFailed(reframeChecks[idx]);
 ```
 
-Replace the inline `reframeChecks` array type declaration with `const reframeChecks: ReframeCheck[] = [];`, and import `buildReframeCheck`, `markEncodeFailed` and the `ReframeCheck` type from `../reframe/telemetry`. The `skipped_after_timeouts` push becomes `buildReframeCheck({ plan: null, shotCount: 0, detectMs: 0, fallbackReason: "skipped_after_timeouts" })`.
+Replace the inline `reframeChecks` array type declaration with `const reframeChecks: ReframeCheck[] = [];`, and import `buildReframeCheck`, `markEncodeFailed` and the `ReframeCheck` type from `../reframe/telemetry`.
+
+This also closes a live type drift the Task 4 review found: `render.ts:98` currently declares `layouts?: Record<"single" | "split" | "center", number>`, which lost the `stream` key when `planLayoutCounts` gained it. It typechecks only because the assignment is not a fresh object literal, so no excess-property check fires - meaning the runtime JSON already carries a `stream` count that the type denies exists. Deriving the type from the counter removes the class of bug, not just this instance. The `skipped_after_timeouts` push becomes `buildReframeCheck({ plan: null, shotCount: 0, detectMs: 0, fallbackReason: "skipped_after_timeouts" })`.
 
 - [ ] **Step 5: Run the telemetry and render suites**
 
