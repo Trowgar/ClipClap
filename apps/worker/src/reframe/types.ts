@@ -53,7 +53,12 @@ export type FilterSpec =
 
 export type SourceClass = "faceless" | "normal_face" | "small_face" | "stream";
 
-/** Webcam inset in SOURCE pixels. x/y even and inside frame; w/h even. */
+/**
+ * Webcam inset in SOURCE pixels, as reported by the detector: possibly
+ * fractional, possibly extending past the frame. `resolveCamRect` is what
+ * makes a rect even and in-frame; consumers downstream of it may rely on
+ * that, consumers upstream may not.
+ */
 export interface CamRect {
   x: number;
   y: number;
