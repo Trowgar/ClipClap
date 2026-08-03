@@ -1898,7 +1898,7 @@ decision records its inputs in the plan."
 
 ### Task 10: The filtergraph branch
 
-Spec §8. `setsar=1` after each `scale` is not optional - ffmpeg 8.x segfaults stacking these exact tile sizes without it.
+Spec §8. `setsar=1` after each `scale` is not optional, but the reason is narrower than first written: the segfault reproduces with `vstack`, not with the `overlay` composition this design ships. The real reason is that `scale` derives each tile's sample aspect from its own crop aspect, so without pinning, the composite is assembled from three different pixel aspects.
 
 **Files:**
 - Modify: `apps/worker/src/reframe/filtergraph.ts`
@@ -1936,7 +1936,8 @@ describe("stream filtergraph", () => {
   });
 
   it("pins SAR on every scaled tile", () => {
-    // Without this ffmpeg 8.x segfaults while stacking these sizes.
+    // scale derives each tile's SAR from its own crop aspect, so without
+    // this the composite is assembled from three different pixel aspects.
     const graph = buildFiltergraph(plan).graph;
     expect(graph.match(/setsar=1/g)?.length).toBeGreaterThanOrEqual(2);
   });
@@ -2090,8 +2091,8 @@ Expected: `1080x1920`.
 git add apps/worker/src/reframe/filtergraph.ts apps/worker/src/__tests__/reframe-filtergraph.test.ts
 git commit -m "feat(reframe): stream branch of the filtergraph
 
-setsar=1 after each scale is required: without it ffmpeg 8.x segfaults
-stacking these exact tile sizes. Verified by encoding the real fixture."
+setsar=1 after each scale is required because scale derives each tile's
+sample aspect from its own crop aspect. Verified by encoding the real fixture."
 ```
 
 ---
@@ -2576,8 +2577,16 @@ Add to the "Measured gotchas" list in §7:
 - The cam/content tile relationship inverts the obvious adjustment. `Hg = Hs * 1080 / Wg` and `Hc = 1920 - Hg`,
   so a TALLER cam tile needs a WIDER content window. When the window will not fit beside the inset, the cam
   share must be REDUCED, not raised. This was got backwards once during design.
-- `setsar=1` is required after every `scale` in the stacked graph. Without it ffmpeg 8.x **segfaults** while
-  stacking 1080x770 over 1080x1150. Reproduced, then fixed by pinning SAR.
+- `setsar=1` is required after every `scale` in the stacked graph, but the segfault claim first recorded
+  here is narrower than written: it reproduces with `vstack`, not with the `overlay` composition that
+  shipped. ffmpeg 8.0.1 encodes fine without it. The real reason is that `scale` derives each tile's sample
+  aspect from its own crop aspect, so the composite would otherwise be assembled from three different pixel
+  aspects. Stated precisely because someone will eventually delete the filter to test the segfault claim,
+  see no crash, and conclude it is superstition.
+- Pre-existing and out of scope, but record it: every reframe clip today ships `SAR 406:405` rather than
+  1:1, because `cropWidthFor` rounds the crop width to even (406 from a 720-high source) while `scale`
+  preserves display aspect, so output displays about 0.25% wide of true 9:16. The legacy `crop=ih*9/16`
+  path is exact; the split path drifts the same way. Found during task 10's encode verification.
 - Webcam upscale is more forgiving than the arithmetic suggests: a 427px inset filling a 1080-wide tile is
   2.53x, and the 40% composition is 3.21x. Inspected at 1:1 against source pixels - a clean, well-lit webcam
   softens rather than breaks up. No resolution floor is imposed, because the measurement does not support one.

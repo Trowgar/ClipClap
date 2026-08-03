@@ -371,8 +371,16 @@ Notes carried from measurement, not from documentation:
 
 - `enable` uses the half-open `gte(t,s)*lt(t,e)` form already used by the podcast split. `between()` is
   inclusive at the end and flashes the overlay one frame past the seam.
-- `setsar=1` after each `scale` is **required**. Without it, ffmpeg 8.x segfaulted while stacking these
-  exact tile sizes during this design's own rendering work - reproduced, then fixed by pinning SAR.
+- `setsar=1` after each `scale` is **required**, but not for the reason first recorded here. The original
+  note claimed ffmpeg 8.x segfaults without it. That was observed during design while stacking with
+  **`vstack`**, and it is real - but the shipped graph composes with `overlay`, and there it does **not**
+  crash: ffmpeg 8.0.1 encodes a valid 1080x1920 file without `setsar`. Verified 2026-08-02 during
+  implementation.
+
+  The real reason to keep it: `scale` derives each tile's sample aspect from its own crop aspect, so
+  without pinning, the composite is assembled from three different pixel aspect ratios. Stated precisely
+  because someone will eventually delete the filter to "verify" the segfault claim, see no crash, and
+  conclude the filter is superstition.
 - Outside stream windows the tile x expressions carry the nearest stream geometry so the expressions
   stay total, exactly as the existing split branch does.
 
