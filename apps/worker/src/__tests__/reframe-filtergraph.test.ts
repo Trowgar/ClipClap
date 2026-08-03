@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildFiltergraph, piecewiseX } from "../reframe/filtergraph";
 import type { CropPlan } from "../reframe/types";
 
@@ -99,5 +99,146 @@ describe("buildFiltergraph", () => {
     expect(spec.graph).toContain(
       "enable='gte(t,0.00)*lt(t,10.00)+gte(t,20.00)*lt(t,30.00)'"
     );
+  });
+});
+
+describe("stream filtergraph", () => {
+  // 1280x720 -> cropW 406, centre 438. Geometry as solveStreamGeometry returns
+  // it for the CS2 fixture at camShare 0.40.
+  const streamPlan = (): CropPlan => ({
+    version: 2,
+    engine: "faces",
+    source: { width: 1280, height: 720 },
+    stream: {
+      camCrop: { w: 336, h: 240, y: 0 },
+      contentCrop: { w: 676, h: 720 },
+      outCamH: 770,
+      outContentH: 1150,
+    },
+    shots: [
+      { start: 0, end: 10, layout: "stream", cam: { x: 32 }, content: { x: 428 } },
+      { start: 10, end: 20, layout: "center", x: 302 },
+    ],
+  });
+
+  it("emits a complex graph with both tiles", () => {
+    const spec = buildFiltergraph(streamPlan());
+    expect(spec.kind).toBe("complex");
+    expect(spec.graph).toContain("crop=w=336:h=240");
+    expect(spec.graph).toContain("scale=1080:770");
+    expect(spec.graph).toContain("crop=w=676:h=ih");
+    expect(spec.graph).toContain("scale=1080:1150");
+  });
+
+  it("builds the exact stream graph, base crop centred on stream windows", () => {
+    expect(buildFiltergraph(streamPlan()).graph).toBe(
+      [
+        "[0:v]split=3[b0][c0][m0]",
+        "[b0]crop=w=406:h=ih:x='if(lt(t,10.00),438,302)':y=0,scale=1080:1920[base]",
+        "[c0]crop=w=336:h=240:x='if(lt(t,10.00),32,32)':y=0,scale=1080:770,setsar=1[cam]",
+        "[m0]crop=w=676:h=ih:x='if(lt(t,10.00),428,428)':y=0,scale=1080:1150,setsar=1[cont]",
+        "[base][cam]overlay=x=0:y=0:enable='gte(t,0.00)*lt(t,10.00)'[o1]",
+        "[o1][cont]overlay=x=0:y=770:enable='gte(t,0.00)*lt(t,10.00)'[vout]",
+      ].join(";")
+    );
+  });
+
+  it("pins SAR on every scaled tile", () => {
+    // Without this the two tiles carry the SAR `scale` derives from their own
+    // crop aspect, so a stacked frame is composed of three different pixel
+    // aspects. The design also recorded an ffmpeg 8.x segfault here.
+    const graph = buildFiltergraph(streamPlan()).graph;
+    expect(graph.match(/setsar=1/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("stacks the content tile directly under the cam tile", () => {
+    expect(buildFiltergraph(streamPlan()).graph).toContain("overlay=x=0:y=770");
+  });
+
+  it("emits tile heights that sum to the full 1920 output", () => {
+    const graph = buildFiltergraph(streamPlan()).graph;
+    const heights = [...graph.matchAll(/scale=1080:(\d+),setsar=1/g)].map((m) =>
+      Number(m[1])
+    );
+    expect(heights).toHaveLength(2);
+    expect(heights[0] + heights[1]).toBe(1920);
+  });
+
+  it("enables the tiles only on stream windows, half-open", () => {
+    const graph = buildFiltergraph(streamPlan()).graph;
+    expect(graph).toContain("gte(t,0.00)*lt(t,10.00)");
+    expect(graph).not.toContain("between(");
+  });
+
+  it("joins multiple stream windows and carries the nearest tile geometry", () => {
+    const plan = streamPlan();
+    plan.shots = [
+      { start: 0, end: 10, layout: "stream", cam: { x: 32 }, content: { x: 428 } },
+      { start: 10, end: 20, layout: "center", x: 302 },
+      { start: 20, end: 30, layout: "stream", cam: { x: 40 }, content: { x: 430 } },
+    ];
+    const graph = buildFiltergraph(plan).graph;
+    expect(graph).toContain(
+      "enable='gte(t,0.00)*lt(t,10.00)+gte(t,20.00)*lt(t,30.00)'"
+    );
+    // The gap window is disabled, so it carries the previous stream geometry.
+    expect(graph).toContain("x='if(lt(t,10.00),32,if(lt(t,20.00),32,40))'");
+    expect(graph).toContain("x='if(lt(t,10.00),428,if(lt(t,20.00),428,430))'");
+  });
+
+  it("appends the subtitle burn last", () => {
+    const graph = buildFiltergraph(streamPlan(), "ass=x.ass").graph;
+    expect(graph.endsWith("[o2]ass=x.ass[vout]")).toBe(true);
+    expect(graph).toContain("overlay=x=0:y=770:enable='gte(t,0.00)*lt(t,10.00)'[o2]");
+  });
+
+  it("degrades to the base crop when the stream geometry is missing", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const plan = streamPlan();
+    delete plan.stream;
+    // A stream shot with no geometry cannot be drawn; the base chain's centre
+    // crop is the fallback, and it must not throw on the way there.
+    expect(buildFiltergraph(plan)).toEqual({
+      kind: "vf",
+      graph: "crop=w=406:h=ih:x='if(lt(t,10.00),438,302)':y=0,scale=1080:1920",
+    });
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("never mutates the plan or its nested stream geometry", () => {
+    // render.ts hands the SAME object to buildFiltergraph and then persists it
+    // to Clip.cropPlan, and sliceCropPlan shares `stream` by reference, so any
+    // in-place normalisation here would be written to the database.
+    const plan = streamPlan();
+    const snapshot = structuredClone(plan);
+    Object.freeze(plan);
+    Object.freeze(plan.source);
+    Object.freeze(plan.stream);
+    Object.freeze(plan.stream?.camCrop);
+    Object.freeze(plan.stream?.contentCrop);
+    for (const shot of plan.shots) Object.freeze(shot);
+    Object.freeze(plan.shots);
+    expect(() => buildFiltergraph(plan)).not.toThrow();
+    expect(plan).toEqual(snapshot);
+  });
+
+  it("leaves a plan with no stream shots on the existing path", () => {
+    const v1: CropPlan = {
+      version: 1,
+      engine: "faces",
+      source: { width: 1920, height: 1080 },
+      shots: [{ start: 0, end: 10, layout: "center", x: 656 }],
+    };
+    expect(buildFiltergraph(v1).kind).toBe("vf");
+  });
+
+  it("ignores stream geometry a plan carries without any stream shot", () => {
+    const plan = streamPlan();
+    plan.shots = [{ start: 0, end: 20, layout: "center", x: 302 }];
+    expect(buildFiltergraph(plan)).toEqual({
+      kind: "vf",
+      graph: "crop=w=406:h=ih:x='302':y=0,scale=1080:1920",
+    });
   });
 });
