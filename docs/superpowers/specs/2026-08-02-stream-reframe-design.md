@@ -414,6 +414,13 @@ switch; a threshold tuned into a 10% gap - which one rejected variant of this de
 one video wearing a constant's clothing. That distinction is the reason the narrow single-threshold detector
 was chosen over the more general multi-threshold ones in §5.1.
 
+**The corridor exists BECAUSE of the size cap, and the two knobs are therefore coupled.** Measured without
+the height cap, the usable gap was ~10% around 6.0; the cap is what opened it to four units. So `4.0` is not
+independently robust - it is robust given `PIP_MAX_FRAC = 0.5` on both axes. Anyone loosening `PIP_MAX_FRAC`
+toward 1.0 to accommodate a source with a genuinely large inset **must re-measure the corridor**, because it
+will narrow again and 4.0 will stop being a safe middle. Two knobs that look independent in the table above
+are not.
+
 The other three thresholds are provisional and rest on the same single fixture. They are env-tunable for
 exactly that reason, and every decision writes its inputs to the plan (§11) so they can later be set from
 counted evidence rather than re-guessed.
