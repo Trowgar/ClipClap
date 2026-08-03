@@ -634,7 +634,7 @@ describe("v2 plan handling", () => {
       outContentH: 1150,
     },
     shots: [
-      { start: 0, end: 10, layout: "stream", cam: { x: 34 }, content: { x: 428 } },
+      { start: 0, end: 10, layout: "stream", cam: { x: 32 }, content: { x: 428 } },
       { start: 10, end: 20, layout: "center", x: 302 },
     ],
   };
@@ -1444,7 +1444,7 @@ describe("stream layout", () => {
     });
     expect(plan?.shots[0]).toMatchObject({
       layout: "stream",
-      cam: { x: 34 },
+      cam: { x: 32 },
       content: { x: 428 },
     });
   });
@@ -1490,6 +1490,12 @@ describe("stream layout", () => {
     expect(plan?.shots[1].layout).toBe("center");
   });
 
+  // NOTE: this test as first written was degenerate - its second shot's 200px
+  // faces made widestFace >= 0.06 * 1280, so the whole clip classified as
+  // normal_face and NO stream shot was ever produced. It asserted an absence
+  // on a plan of {center, split}. Keep the case, but assert that it really is
+  // normal_face and really does contain a split, and add the missing half: a
+  // plan that genuinely contains stream shots, asserted to contain no split.
   it("never mixes stream and split in one plan", () => {
     const wide: FaceTrack[] = [
       { ...insetFace, box: { x: 40, y: 200, w: 200, h: 260 } },
@@ -1633,6 +1639,8 @@ After `const byIndex = ...`, insert the classification block:
     }
   }
 ```
+
+The classification block declares `minFaceWidth`, which already exists further down in the `shots.map` callback from Task 1. Remove the original declaration and keep the hoisted one - pasted verbatim this is a block-scope redeclaration error.
 
 Inside the `shots.map` callback, immediately before the existing min-face guard, insert the stream branch:
 
@@ -1913,7 +1921,7 @@ describe("stream filtergraph", () => {
       outContentH: 1150,
     },
     shots: [
-      { start: 0, end: 10, layout: "stream", cam: { x: 34 }, content: { x: 428 } },
+      { start: 0, end: 10, layout: "stream", cam: { x: 32 }, content: { x: 428 } },
       { start: 10, end: 20, layout: "center", x: 302 },
     ],
   };
@@ -2058,7 +2066,7 @@ docker compose exec -T worker-render sh -lc '
 ffmpeg -nostdin -v error -ss 600 -t 2 -i /app/apps/worker/eval-media/stream-cs2.mp4 \
  -filter_complex "[0:v]split=3[b0][c0][m0];\
 [b0]crop=w=406:h=ih:x=437:y=0,scale=1080:1920,setsar=1[base];\
-[c0]crop=w=336:h=240:x=34:y=0,scale=1080:770,setsar=1[cam];\
+[c0]crop=w=336:h=240:x=32:y=0,scale=1080:770,setsar=1[cam];\
 [m0]crop=w=676:h=ih:x=428:y=0,scale=1080:1150,setsar=1[cont];\
 [base][cam]overlay=x=0:y=0:enable=1[o1];\
 [o1][cont]overlay=x=0:y=770:enable=1[vout]" \
@@ -2120,7 +2128,7 @@ const streamPlan: CropPlan = {
     outContentH: 1150,
   },
   shots: [
-    { start: 0, end: 10, layout: "stream", cam: { x: 34 }, content: { x: 428 } },
+    { start: 0, end: 10, layout: "stream", cam: { x: 32 }, content: { x: 428 } },
   ],
 };
 
