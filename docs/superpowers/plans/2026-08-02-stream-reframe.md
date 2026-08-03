@@ -1269,7 +1269,20 @@ docker compose exec -T worker-render npx vitest run --root /app apps/worker/src/
 
 Expected: FAIL, `Failed to resolve import "../reframe/cam-rect"`.
 
-- [ ] **Step 3: Implement it**
+- [ ] **Step 3: Correct the `CamRect` doc comment first**
+
+`apps/worker/src/reframe/types.ts` currently claims `/** Webcam inset in SOURCE pixels. x/y even and inside frame; w/h even. */`. **No producer establishes that.** The sidecar emits floats (`426.0`), and on a source whose width is not a multiple of 640 the detection scale is fractional - a 1500-wide source gives 2.34 - so the values arriving here are neither integral nor even. The invariant is established HERE, by `resolveCamRect`, and nowhere else. Fix the comment so it describes the contract that actually holds:
+
+```ts
+/**
+ * Webcam inset in SOURCE pixels, as reported by the detector: possibly
+ * fractional, possibly extending past the frame. `resolveCamRect` is what
+ * makes a rect even and in-frame; consumers downstream of it may rely on
+ * that, consumers upstream may not.
+ */
+```
+
+- [ ] **Step 4: Implement it**
 
 Create `apps/worker/src/reframe/cam-rect.ts`:
 
@@ -1350,15 +1363,15 @@ export function resolveCamRect(
 }
 ```
 
-- [ ] **Step 4: Run the tests and confirm green**
+- [ ] **Step 5: Run the tests and confirm green**
 
 ```bash
 docker compose exec -T worker-render npx vitest run --root /app apps/worker/src/__tests__/reframe-cam-rect.test.ts
 ```
 
-Expected: PASS, 6 tests.
+Expected: PASS. Add one further test pinning the fractional-input case, since that is the real contract and nothing else covers it: a rect of `{x: 10.5, y: 4.2, w: 426.9, h: 238.3}` must come back integral, even, and no smaller than the input on any side.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add apps/worker/src/reframe/cam-rect.ts apps/worker/src/__tests__/reframe-cam-rect.test.ts
