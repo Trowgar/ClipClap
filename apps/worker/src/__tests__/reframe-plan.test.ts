@@ -7,7 +7,13 @@ import {
   sliceCropPlan,
   tileWidthFor,
 } from "../reframe/plan";
-import type { CropPlan, FaceTrack, Shot, ShotTracks } from "../reframe/types";
+import type {
+  CamRect,
+  CropPlan,
+  FaceTrack,
+  Shot,
+  ShotTracks,
+} from "../reframe/types";
 import { DEFAULT_PLAN_OPTIONS } from "../reframe/options";
 
 const W = 1920;
@@ -416,5 +422,275 @@ describe("min-face guard", () => {
       faceSmallFrac: 0.2,
     });
     expect(plan?.shots[0].layout).toBe("center");
+  });
+});
+
+describe("stream layout", () => {
+  const SW = 1280;
+  const SH = 720;
+  // cropWidthFor(720) = 406, so the centered window sits at x = 438.
+  const SW_CENTER_X = 438;
+  const camRect: CamRect = { x: 0, y: 0, w: 428, h: 240, score: 4.7 };
+  const camRes = { rect: camRect };
+  const streamOpts = {
+    faceSmallFrac: 0.06,
+    faceLargeFrac: 0.1,
+    stream: true,
+    camShare: 0.4,
+  };
+  // Face measured on the fixture: 43x56 at (179,110), 3.4% of frame width.
+  const insetFace: FaceTrack = {
+    id: 0,
+    box: { x: 179, y: 110, w: 43, h: 56 },
+    score: 0.89,
+    samples: 111,
+    mouthActivity: 0.05,
+  };
+  const inInset = (x: number, id = 0): FaceTrack => ({
+    ...insetFace,
+    id,
+    box: { ...insetFace.box, x },
+  });
+
+  it("emits a stream layout with the solved geometry", () => {
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([insetFace]),
+      SW,
+      SH,
+      streamOpts,
+      camRes
+    );
+    expect(plan?.version).toBe(2);
+    expect(plan?.profile).toEqual({
+      class: "stream",
+      faceFrac: 43 / SW,
+      camRectScore: 4.7,
+    });
+    expect(plan?.stream).toEqual({
+      camCrop: { w: 336, h: 240, y: 0 },
+      contentCrop: { w: 676, h: 720 },
+      outCamH: 770,
+      outContentH: 1150,
+    });
+    // Face centre 200.5, camCrop.w 336 -> ideal 32.5, even-rounded DOWN to 32.
+    expect(plan?.shots[0]).toEqual({
+      start: 0,
+      end: 30,
+      layout: "stream",
+      cam: { x: 32 },
+      content: { x: 428 },
+    });
+  });
+
+  it("falls back to center when the killswitch is off", () => {
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([insetFace]),
+      SW,
+      SH,
+      { ...streamOpts, stream: false },
+      camRes
+    );
+    expect(plan?.shots[0].layout).toBe("center");
+    expect(plan?.profile?.class).toBe("small_face");
+    expect(plan?.profile?.reason).toBe("stream_disabled");
+    // A v2 plan with no stream geometry is representable but invalid.
+    expect(plan?.version).toBe(1);
+    expect(plan?.stream).toBeUndefined();
+  });
+
+  it("propagates an unstable rect as its own reason, not as 'no rect'", () => {
+    const plan = buildCropPlan(oneShot, withTracks([insetFace]), SW, SH, streamOpts, {
+      rect: null,
+      reason: "stream_rect_unstable",
+    });
+    expect(plan?.profile?.class).toBe("small_face");
+    expect(plan?.profile?.reason).toBe("stream_rect_unstable");
+    expect(plan?.version).toBe(1);
+  });
+
+  it("reports stream_no_rect when the resolver offers nothing at all", () => {
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([insetFace]),
+      SW,
+      SH,
+      streamOpts,
+      null
+    );
+    expect(plan?.profile?.reason).toBe("stream_no_rect");
+  });
+
+  it("classifies a clip with no surviving track as faceless", () => {
+    const plan = buildCropPlan(oneShot, withTracks([]), SW, SH, streamOpts, camRes);
+    expect(plan?.profile?.class).toBe("faceless");
+    expect(plan?.shots[0].layout).toBe("center");
+  });
+
+  it("centres a shot that has no face inside the inset", () => {
+    // Second shot's face sits in the game area, not in the webcam.
+    const shots: Shot[] = [
+      { start: 0, end: 10 },
+      { start: 10, end: 20 },
+    ];
+    const tracks: ShotTracks[] = [
+      { shotIndex: 0, tracks: [insetFace], camRect },
+      {
+        shotIndex: 1,
+        tracks: [{ ...insetFace, box: { x: 900, y: 400, w: 43, h: 56 } }],
+        camRect,
+      },
+    ];
+    const plan = buildCropPlan(shots, tracks, SW, SH, streamOpts, camRes);
+    expect(plan?.shots[0].layout).toBe("stream");
+    expect(plan?.shots[1]).toEqual({
+      start: 10,
+      end: 20,
+      layout: "center",
+      x: SW_CENTER_X,
+    });
+  });
+
+  it("never mixes stream and split in one plan", () => {
+    // Two halves of the same invariant.
+    // (1) A clip whose widest face clears the floor is never classified
+    //     `stream`, so the pair below drags the WHOLE clip to normal_face and
+    //     the small inset face gets center, not a stream tile.
+    const wide: FaceTrack[] = [
+      { ...insetFace, box: { x: 40, y: 200, w: 200, h: 260 } },
+      { ...insetFace, id: 1, box: { x: 1000, y: 200, w: 200, h: 260 } },
+    ];
+    const shots: Shot[] = [
+      { start: 0, end: 10 },
+      { start: 10, end: 20 },
+    ];
+    const withWide = buildCropPlan(
+      shots,
+      [
+        { shotIndex: 0, tracks: [insetFace], camRect },
+        { shotIndex: 1, tracks: wide, camRect },
+      ],
+      SW,
+      SH,
+      streamOpts,
+      camRes
+    );
+    expect(withWide?.profile?.class).toBe("normal_face");
+    const wideKinds = new Set(withWide!.shots.map((s) => s.layout));
+    expect(wideKinds.has("split")).toBe(true);
+
+    // (2) On a clip that DOES emit stream shots, the stream branch returns
+    //     before any single/split can be produced.
+    const streamPlan = buildCropPlan(
+      shots,
+      [
+        { shotIndex: 0, tracks: [insetFace], camRect },
+        {
+          shotIndex: 1,
+          tracks: [{ ...insetFace, box: { x: 900, y: 400, w: 43, h: 56 } }],
+          camRect,
+        },
+      ],
+      SW,
+      SH,
+      streamOpts,
+      camRes
+    );
+    const streamKinds = new Set(streamPlan!.shots.map((s) => s.layout));
+    expect(streamKinds.has("stream")).toBe(true);
+
+    for (const kinds of [wideKinds, streamKinds]) {
+      expect(kinds.has("stream") && kinds.has("split")).toBe(false);
+    }
+  });
+
+  it("declines the stream layout when no share fits the free band", () => {
+    const centred: CamRect = { x: 320, y: 0, w: 640, h: 360, score: 4 };
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([{ ...insetFace, box: { x: 600, y: 150, w: 43, h: 56 } }]),
+      SW,
+      SH,
+      streamOpts,
+      { rect: centred }
+    );
+    expect(plan?.shots[0].layout).toBe("center");
+    expect(plan?.profile?.reason).toBe("stream_no_fit");
+    expect(plan?.profile?.camRectScore).toBe(4);
+    expect(plan?.version).toBe(1);
+  });
+
+  it("merges adjacent stream shots when the cam window barely moves", () => {
+    // cam x 32 then 42; |dx| 10 <= 4% of 1280 (51.2). First geometry wins.
+    const plan = buildCropPlan(
+      [
+        { start: 0, end: 10 },
+        { start: 10, end: 20 },
+      ],
+      [
+        { shotIndex: 0, tracks: [insetFace], camRect },
+        { shotIndex: 1, tracks: [inInset(189)], camRect },
+      ],
+      SW,
+      SH,
+      streamOpts,
+      camRes
+    );
+    expect(plan?.shots).toEqual([
+      { start: 0, end: 20, layout: "stream", cam: { x: 32 }, content: { x: 428 } },
+    ]);
+  });
+
+  it("keeps stream shots separate when the cam window moves for real", () => {
+    // Second face sits at the inset's right edge: cam x clamps to 92, and
+    // |92 - 32| = 60 > 51.2.
+    const plan = buildCropPlan(
+      [
+        { start: 0, end: 10 },
+        { start: 10, end: 20 },
+      ],
+      [
+        { shotIndex: 0, tracks: [insetFace], camRect },
+        { shotIndex: 1, tracks: [inInset(380)], camRect },
+      ],
+      SW,
+      SH,
+      streamOpts,
+      camRes
+    );
+    expect(plan?.shots).toHaveLength(2);
+    expect(plan?.shots.every((s) => s.layout === "stream")).toBe(true);
+    expect(plan?.shots[1]).toMatchObject({ cam: { x: 92 }, content: { x: 428 } });
+  });
+
+  it("leaves podcast and facecam sources on the existing path, killswitch ON", () => {
+    // The classifier misfiring on a source that already works would be the
+    // worst outcome of this change, so pin it with the stream layout enabled
+    // and a rect available - the conditions most likely to trip it.
+    const podcastRect: CamRect = { x: 0, y: 0, w: 640, h: 360, score: 4.7 };
+    const opts = { ...streamOpts };
+    const facecam = buildCropPlan(oneShot, withTracks([track(600, 400)]), W, H, opts, {
+      rect: podcastRect,
+    });
+    expect(facecam?.profile?.class).toBe("normal_face");
+    expect(facecam?.version).toBe(1);
+    expect(facecam?.shots).toEqual([
+      { start: 0, end: 30, layout: "single", x: 496 },
+    ]);
+
+    const podcast = buildCropPlan(
+      oneShot,
+      withTracks([track(1570, 150, { id: 1 }), track(200, 150)]),
+      W,
+      H,
+      opts,
+      { rect: podcastRect }
+    );
+    expect(podcast?.profile?.class).toBe("normal_face");
+    expect(podcast?.version).toBe(1);
+    expect(podcast?.shots).toEqual([
+      { start: 0, end: 30, layout: "split", top: { x: 0 }, bottom: { x: 704 } },
+    ]);
   });
 });

@@ -1,5 +1,21 @@
-import type { CropPlan, FaceTrack, Shot, ShotLayout, ShotTracks } from "./types";
+import type {
+  CamRect,
+  CropPlan,
+  FaceTrack,
+  Shot,
+  ShotLayout,
+  ShotTracks,
+  SourceProfile,
+  StreamGeometry,
+} from "./types";
 import { DEFAULT_PLAN_OPTIONS, type PlanOptions } from "./options";
+import type { CamRectResolution } from "./cam-rect";
+import {
+  freeBand,
+  solveStreamGeometry,
+  streamCamX,
+  streamContentX,
+} from "./stream-geometry";
 
 // Layout constants - tuned via fixtures, deliberately NOT env knobs (spec §7).
 const FIT_MARGIN = 0.9; // face bbox must fit in 90% of the crop window
@@ -40,12 +56,38 @@ export function dominance(
   );
 }
 
+/** Tracks that clear the per-shot noise floor - the "surviving" tracks the
+ *  classifier and the min-face guard must agree about. A stray low-sample
+ *  track must not widen the fit bbox, become a split tile pointing at
+ *  nothing, or reclassify a stream source as a podcast. */
+function survivingTracks(shotTracks: FaceTrack[]): FaceTrack[] {
+  const maxSamples = Math.max(0, ...shotTracks.map((t) => t.samples));
+  return shotTracks.filter(
+    (t) =>
+      t.samples >= MIN_TRACK_SAMPLES && t.samples >= MIN_SAMPLE_FRAC * maxSamples
+  );
+}
+
+/** The face this shot shows inside the resolved inset, if any. Tolerant by a
+ *  pixel on each edge: the rect is a median of per-shot detections and the
+ *  track box is a median of per-sample boxes, so exact containment is luck. */
+function faceInInset(tracks: FaceTrack[], rect: CamRect): FaceTrack | undefined {
+  return tracks.find(
+    (t) =>
+      t.box.x >= rect.x - 2 &&
+      t.box.x + t.box.w <= rect.x + rect.w + 2 &&
+      t.box.y >= rect.y - 2 &&
+      t.box.y + t.box.h <= rect.y + rect.h + 2
+  );
+}
+
 export function buildCropPlan(
   shots: Shot[],
   tracksByShot: ShotTracks[],
   sourceWidth: number,
   sourceHeight: number,
-  opts: PlanOptions = DEFAULT_PLAN_OPTIONS
+  opts: PlanOptions = DEFAULT_PLAN_OPTIONS,
+  cam: CamRectResolution | null = null
 ): CropPlan | null {
   if (shots.length === 0) return null;
   const cropW = cropWidthFor(sourceHeight);
@@ -56,19 +98,90 @@ export function buildCropPlan(
   // would emit crop w > iw and fail the encode (error -22) - center instead.
   const splitPossible = tileW <= sourceWidth;
   const centerX = evenClamp((sourceWidth - cropW) / 2, cropW, sourceWidth);
-  const minFaceWidth = opts.faceSmallFrac * sourceWidth;
   const byIndex = new Map(tracksByShot.map((s) => [s.shotIndex, s.tracks]));
 
+  // --- Source classification (spec §4). One pass over the tracks the detector
+  // already produced, plus the clip-level rect resolved by resolveCamRect.
+  const camRect = cam?.rect ?? null;
+  const minFaceWidth = opts.faceSmallFrac * sourceWidth;
+  const allTracks = tracksByShot.flatMap((s) => survivingTracks(s.tracks));
+  const widestFace = Math.max(0, ...allTracks.map((t) => t.box.w));
+  const faceFrac = sourceWidth > 0 ? widestFace / sourceWidth : 0;
+
+  let streamGeom: StreamGeometry | null = null;
+  let contentX = centerX;
+  let profile: SourceProfile;
+
+  if (allTracks.length === 0) {
+    profile = { class: "faceless", faceFrac };
+  } else if (widestFace >= minFaceWidth) {
+    // Anything at or above the floor keeps the existing single/split rules.
+    profile = { class: "normal_face", faceFrac };
+  } else if (!camRect) {
+    // "no inset here" and "the inset moved" are different facts about a
+    // source, and section 11 counts them separately.
+    profile = {
+      class: "small_face",
+      faceFrac,
+      reason: cam?.reason ?? "stream_no_rect",
+    };
+  } else if (!opts.stream) {
+    profile = {
+      class: "small_face",
+      faceFrac,
+      reason: "stream_disabled",
+      camRectScore: camRect.score,
+    };
+  } else {
+    streamGeom = solveStreamGeometry({
+      sourceWidth,
+      sourceHeight,
+      camRect,
+      camShare: opts.camShare,
+    });
+    if (!streamGeom) {
+      profile = {
+        class: "small_face",
+        faceFrac,
+        reason: "stream_no_fit",
+        camRectScore: camRect.score,
+      };
+    } else {
+      profile = { class: "stream", faceFrac, camRectScore: camRect.score };
+      contentX = streamContentX(
+        freeBand(camRect, sourceWidth),
+        streamGeom.contentCrop.w,
+        sourceWidth,
+        sourceWidth / 2
+      );
+    }
+  }
+
   const layouts = shots.map((shot, i): ShotLayout => {
-    const shotTracks = byIndex.get(i) ?? [];
-    const maxSamples = Math.max(0, ...shotTracks.map((t) => t.samples));
     // Keep only tracks that clear the noise floor AND are seen often enough
-    // relative to the dominant track - a stray low-sample track must not widen
-    // the fit bbox or become a split tile pointing at nothing.
-    const tracks = shotTracks.filter(
-      (t) =>
-        t.samples >= MIN_TRACK_SAMPLES && t.samples >= MIN_SAMPLE_FRAC * maxSamples
-    );
+    // relative to the dominant track.
+    const tracks = survivingTracks(byIndex.get(i) ?? []);
+    if (streamGeom && camRect) {
+      // A shot only splits if it actually shows the streamer: advertisement
+      // cards, intermissions and replays have no face inside the inset.
+      const inInset = faceInInset(tracks, camRect);
+      if (!inInset) {
+        return { start: shot.start, end: shot.end, layout: "center", x: centerX };
+      }
+      return {
+        start: shot.start,
+        end: shot.end,
+        layout: "stream",
+        cam: {
+          x: streamCamX(
+            camRect,
+            streamGeom.camCrop.w,
+            inInset.box.x + inInset.box.w / 2
+          ),
+        },
+        content: { x: contentX },
+      };
+    }
     // Measured 3.4% of frame width on a 1280x720 stream VOD, against 15-30%
     // for podcasts and facecams. A face this small is a webcam inset or a
     // bystander; centring a 9:16 window on it yields a truncated inset plus
@@ -124,9 +237,14 @@ export function buildCropPlan(
   // falls back to a plain centered crop rather than emitting a broken graph.
   if (merged.length > MAX_PLAN_SHOTS) return null;
   return {
-    version: 1,
+    // v2 exists to carry stream geometry; a v2 plan without it would be a
+    // representable-but-invalid state every consumer would have to defend
+    // against.
+    version: streamGeom ? 2 : 1,
     engine: "faces",
     source: { width: sourceWidth, height: sourceHeight },
+    profile,
+    ...(streamGeom ? { stream: streamGeom } : {}),
     shots: merged,
   };
 }
@@ -150,7 +268,11 @@ export function mergeAdjacentLayouts(
         (prev.layout === "split" &&
           shot.layout === "split" &&
           Math.abs(prev.top.x - shot.top.x) <= maxDx &&
-          Math.abs(prev.bottom.x - shot.bottom.x) <= maxDx);
+          Math.abs(prev.bottom.x - shot.bottom.x) <= maxDx) ||
+        (prev.layout === "stream" &&
+          shot.layout === "stream" &&
+          Math.abs(prev.cam.x - shot.cam.x) <= maxDx &&
+          Math.abs(prev.content.x - shot.content.x) <= maxDx);
       if (same) {
         prev.end = shot.end;
         continue;
