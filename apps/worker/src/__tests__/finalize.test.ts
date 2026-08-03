@@ -963,22 +963,23 @@ describe("finalizeClips", () => {
   });
 
   it("degrades to the fallback model on a hard error", async () => {
+    // "The configured finalizer is unavailable" is a fact about the MODEL, so
+    // the fixture is written against the model rather than a call count and
+    // stays true whatever retry bound llm.ts spends before conceding.
     const clips = [clip("a", 0.9), clip("b", 0.8, 8, 14)];
     const models: string[] = [];
     const client = seqClient([
-      () => {
-        throw new Error("503");
-      },
-      () => {
-        throw new Error("503");
-      },
       (body) => {
         models.push(body.model);
+        if (body.model === cfg.finalizerModel) {
+          throw Object.assign(new Error("503"), { status: 503 });
+        }
         return ok([row("a"), row("b", { verdict: "drop", drop_reason: "redundant" })]);
       },
     ]);
     const r = await run(client, clips);
-    expect(models).toEqual([cfg.criticModelFallback]);
+    expect(models.at(-1)).toBe(cfg.criticModelFallback);
+    expect(new Set(models.slice(0, -1))).toEqual(new Set([cfg.finalizerModel]));
     expect(ids(r.clips)).toEqual(["a"]);
   });
 
@@ -994,13 +995,12 @@ describe("finalizeClips", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     const clips = [clip("a", 0.9), clip("b", 0.8, 8, 14)];
     const client = seqClient([
-      () => {
-        throw new Error("503");
+      (body) => {
+        if (body.model === cfg.finalizerModel) {
+          throw Object.assign(new Error("503"), { status: 503 });
+        }
+        return ok([row("a"), row("b")]);
       },
-      () => {
-        throw new Error("503");
-      },
-      () => ok([row("a"), row("b")]),
     ]);
     await run(client, clips);
 

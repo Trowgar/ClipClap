@@ -259,8 +259,8 @@ export async function runCritic(
     //   - the early return below, where the primary model refused the same
     //     prompt twice in a row - the only genuine double refusal;
     //   - the catch-all at the end, reached when the primary call died with a
-    //     hard error (a 503 that llm.ts already retried), the batch degraded to
-    //     the fallback model, and THAT model refused once. Nothing about this
+    //     hard error (a 503 llm.ts had already retried to its bound), the batch
+    //     degraded to the fallback model, and THAT model refused once. Nothing about this
     //     video was refused twice, and the primary model never expressed an
     //     opinion about it at all.
     // Nothing downstream may read this counter as "a re-run cannot help": the
@@ -290,7 +290,8 @@ export async function runCritic(
     }
 
     if (!result.ok && result.kind === "error") {
-      // llm.ts already retried once with backoff; try the fallback model.
+      // llm.ts has already spent its full retry budget on the primary model, or
+      // classified the failure as one no retry could fix; try the fallback.
       // The log fires on the FIRST batch to degrade only - the flag is the
       // latch, and there is no await between reading and setting it, so the
       // four concurrent batches cannot both see false.

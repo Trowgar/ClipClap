@@ -235,13 +235,19 @@ describe("runCritic", () => {
   });
 
   it("falls back to the fallback model on persistent API errors", async () => {
+    // "The primary model is down" is a statement about the MODEL, not about a
+    // number of calls. Writing it that way is what keeps this test - the one
+    // that guards the fallback still happening at all - independent of how hard
+    // llm.ts tries before conceding.
     const models: string[] = [];
     const client = {
       chat: {
         completions: {
           create: vi.fn(async (body: any) => {
             models.push(body.model);
-            if (models.length <= 2) throw Object.assign(new Error("down"), { status: 500 });
+            if (body.model === cfg.criticModel) {
+              throw Object.assign(new Error("down"), { status: 500 });
+            }
             return ok([verdictRow("a")]);
           }),
         },
@@ -250,7 +256,10 @@ describe("runCritic", () => {
     const r = await runCritic(client, newUsage(), nodes(10), [cand("a", 0)], "ru", { ...cfg, criticBatchSize: 1 }, { retryDelayMs: 1 });
     expect(r.verdicts).toHaveLength(1);
     expect(r.telemetry.fallbackModelUsed).toBe(true);
-    expect(models[2]).toBe(cfg.criticModelFallback);
+    expect(models.at(-1)).toBe(cfg.criticModelFallback);
+    // Every attempt before the concession went to the configured model, so the
+    // fallback is a last resort and not a race.
+    expect(new Set(models.slice(0, -1))).toEqual(new Set([cfg.criticModel]));
   });
 
   it("validates ids per batch - a batch cannot steal another batch's id", async () => {
@@ -369,13 +378,25 @@ describe("runCritic", () => {
     expect(r.telemetry.invariantDrops).toBe(1);
   });
 
+  /** Every call naming the primary model dies; the fallback gets `answer`. Same
+   *  reason as the test above - the fixture describes an unavailable model, not
+   *  a call count, so llm.ts's retry bound is free to move. */
+  const primaryDownThen = (answer: () => any) =>
+    seqClient([
+      (body: any) => {
+        if (body.model === cfg.criticModel) {
+          throw Object.assign(new Error("down"), { status: 500 });
+        }
+        return answer();
+      },
+    ]);
+
   it("degrades gracefully when the fallback model result is truncated", async () => {
-    const boom = () => { throw Object.assign(new Error("down"), { status: 500 }); };
     const truncated = () => ({
       choices: [{ message: { content: "{" }, finish_reason: "length" }],
       usage: { prompt_tokens: 10, completion_tokens: 512 },
     });
-    const client = seqClient([boom, boom, truncated]);
+    const client = primaryDownThen(truncated);
     const r = await runCritic(client, newUsage(), nodes(10), [cand("a", 0)], "ru", { ...cfg, criticBatchSize: 1 }, { retryDelayMs: 1 });
     expect(r.verdicts).toHaveLength(0);
     expect(r.telemetry.truncatedDrops).toBe(1);
@@ -383,8 +404,7 @@ describe("runCritic", () => {
   });
 
   it("flags verdicts produced by the fallback model as lowQuality", async () => {
-    const boom = () => { throw Object.assign(new Error("down"), { status: 500 }); };
-    const client = seqClient([boom, boom, () => ok([verdictRow("a")])]);
+    const client = primaryDownThen(() => ok([verdictRow("a")]));
     const r = await runCritic(client, newUsage(), nodes(10), [cand("a", 0)], "ru", { ...cfg, criticBatchSize: 1 }, { retryDelayMs: 1 });
     expect(r.verdicts).toHaveLength(1);
     expect(r.verdicts[0].lowQuality).toBe(true);

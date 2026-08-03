@@ -307,7 +307,8 @@ export async function runFixtureVariant(
     retryDelayMs: 1,
   });
   if (client.missing.length > 0) {
-    // keys repeat because callJsonSchema retries once before giving up
+    // keys repeat because callJsonSchema retries before giving up (the stub's
+    // throw carries no status, so it lands in the retryable bucket)
     const unique = [...new Set(client.missing)];
     // The remediation differs by path: base is produced by eval-record.ts, a
     // variant is topped up onto an existing recording.

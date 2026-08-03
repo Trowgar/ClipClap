@@ -52,7 +52,8 @@ export async function runScanner(
       retryDelayMs: options.retryDelayMs,
     });
     if (!result.ok) {
-      // callJsonSchema already retried once; a dead window costs recall, never the job
+      // callJsonSchema has already exhausted its retries (or classified the
+      // failure as hopeless); a dead window costs recall, never the job
       windowsFailed += 1;
       console.warn(
         `[analyze-v2] scanner window ${window.index} failed: ${"error" in result ? result.error : result.kind}`

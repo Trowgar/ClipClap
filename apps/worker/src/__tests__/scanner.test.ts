@@ -106,14 +106,21 @@ describe("runScanner", () => {
     expect(r.telemetry.candidatesPerWindow).toEqual([2, 2]);
   });
 
-  it("skips a window whose call fails twice and keeps going", async () => {
-    let call = 0;
+  it("skips a window whose call fails every attempt and keeps going", async () => {
+    // Keyed on WHICH window is being scanned, not on a call count: the point is
+    // that one window is unreachable however many times llm.ts asks, and a test
+    // that counted calls would silently change meaning the next time the retry
+    // bound moves.
+    let deadWindowPrompt: string | undefined;
     const client = {
       chat: {
         completions: {
-          create: vi.fn(async () => {
-            call += 1;
-            if (call <= 2) throw Object.assign(new Error("boom"), { status: 500 });
+          create: vi.fn(async (body: any) => {
+            const prompt = body.messages[1].content;
+            deadWindowPrompt ??= prompt;
+            if (prompt === deadWindowPrompt) {
+              throw Object.assign(new Error("boom"), { status: 500 });
+            }
             return ok([{ start_node: 12, end_node: 14, payoff_node: 13, interest: 0.6, type: "story", thread: null }]);
           }),
         },
