@@ -261,6 +261,8 @@ const uk: Dict = {
   checkingLink: "Перевіряю посилання…",
   urlAccessFailed:
     "Не вдалося отримати відео за цим посиланням. Спробуй інше посилання або надішли файл напряму.",
+  urlYouTubeUnavailable:
+    "Посилання на YouTube зараз не працюють - блокує нас YouTube, а не твоє посилання, тому інше посилання з YouTube теж не допоможе. Надішли відеофайл сюди напряму або дай посилання з TikTok чи Twitch.",
   referralInfo: (web, tg, earned, pending) =>
     `Твої реферальні посилання:\nВеб: ${web}\nTelegram: ${tg}\n\nРеферальний дохід: $${earned}\nВ очікуванні (утримання 14 днів): $${pending}`,
   referralWithdrawBtn: "💸 Запросити виплату",

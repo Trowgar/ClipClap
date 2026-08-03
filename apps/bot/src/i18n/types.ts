@@ -270,6 +270,10 @@ export interface Dict {
   manageSubscriptionBtn: string;
   checkingLink: string;
   urlAccessFailed: string;
+  /** Shown instead of urlAccessFailed when the refused link was a YouTube one.
+   *  The generic copy leads with "try a different URL", which is the one thing
+   *  that cannot work while YouTube refuses this host - see isYouTubeUrl. */
+  urlYouTubeUnavailable: string;
   referralInfo: (web: string, tg: string, earned: string, pending: string) => string;
   referralWithdrawBtn: string;
   referralWithdrawStub: string;

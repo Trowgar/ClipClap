@@ -67,6 +67,19 @@ services:
 
   worker-download:
     <<: *worker-base
+    # Repeats postgres and redis on purpose: a `depends_on` here REPLACES the
+    # anchor's rather than merging with it, so omitting them would silently
+    # drop the database and queue ordering.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      # service_started, NOT service_healthy. Only URL downloads use the proxy;
+      # an uploaded file needs nothing from WARP, and an unhealthy proxy must
+      # not stop this worker from draining those jobs.
+      warp:
+        condition: service_started
     environment:
       - NODE_ENV=${NODE_ENV:-development}
       - WORKER_ROLE=download
@@ -136,6 +149,11 @@ services:
         condition: service_started
       telegram-bot-api:
         condition: service_started
+      # service_started, NOT service_healthy: WARP is needed only to PROBE a
+      # pasted link. Gating the whole bot on it would take chat, uploads,
+      # settings and support down with the proxy.
+      warp:
+        condition: service_started
     env_file: .env
     environment:
       - NODE_ENV=${NODE_ENV:-development}
@@ -173,6 +191,44 @@ services:
     image: redis:7-alpine
     expose:
       - "6379"
+    restart: unless-stopped
+
+  # Cloudflare WARP as a SOCKS5 exit for yt-dlp ONLY.
+  #
+  # YouTube refuses this host's Hetzner address outright - "Sign in to confirm
+  # you're not a bot" - on IPv4 and IPv6 alike, and every documented workaround
+  # (player clients, PO tokens, a JS runtime, the Invidious fallback, a newer
+  # yt-dlp) was measured and failed. Routing yt-dlp through WARP is the one that
+  # worked: 12/12 metadata and a full 155 MB download at 10.8 MiB/s.
+  #
+  # Nothing else in the stack goes through here. Only the two yt-dlp call sites
+  # opt in, via YTDLP_PROXY.
+  warp:
+    build:
+      context: ./docker/warp
+    expose:
+      - "1080"   # SOCKS5, for yt-dlp
+      - "8080"   # rotate/health control, compose network only - never published
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0
+      - net.ipv4.conf.all.src_valid_mark=1
+    # NO named volume for /var/lib/cloudflare-warp ON PURPOSE. The stock
+    # entrypoint skips registration when reg.json already exists, so persisting
+    # it would pin us to one exit address forever - the opposite of what this
+    # service is for. A fresh container is a fresh IP, which makes "recreate it"
+    # a working last-resort rotation.
+    healthcheck:
+      # Proves the PROXY PATH reaches the internet, not merely that a daemon is
+      # up: /health reads the egress address through the SOCKS port itself.
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:8080/health || exit 1"]
+      interval: 30s
+      timeout: 15s
+      # WARP registration plus first connect is slow, and downloads must not be
+      # scheduled against a proxy that is not carrying traffic yet.
+      start_period: 60s
+      retries: 3
     restart: unless-stopped
 
 volumes:

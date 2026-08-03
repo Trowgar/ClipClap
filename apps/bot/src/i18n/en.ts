@@ -346,6 +346,8 @@ const en: Dict = {
   checkingLink: "Checking link…",
   urlAccessFailed:
     "Couldn't access the video at that link. Try a different URL or upload the file directly.",
+  urlYouTubeUnavailable:
+    "YouTube links don't work right now - YouTube is blocking us, not you, so another YouTube link won't help. Upload the video file here instead, or send a TikTok or Twitch link.",
   referralInfo: (web, tg, earned, pending) =>
     `Your referral links:\nWeb: ${web}\nTelegram: ${tg}\n\nReferral earnings: $${earned}\nPending (14-day hold): $${pending}`,
   referralWithdrawBtn: "💸 Request withdrawal",

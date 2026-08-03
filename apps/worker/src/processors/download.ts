@@ -6,7 +6,13 @@ import { pipeline } from "stream/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
-import { downloadFile, MAX_SOURCE_FILESIZE_BYTES } from "@clipclap/shared";
+import {
+  downloadFile,
+  isBotCheckFailure,
+  proxyArgs,
+  rotateWarpExit,
+  MAX_SOURCE_FILESIZE_BYTES,
+} from "@clipclap/shared";
 import { SourceTooLargeError, SourceUnavailableError } from "./errors";
 import type { Readable } from "stream";
 
@@ -36,16 +42,67 @@ export async function downloadVideo(
   throw new Error("No source URL or storage key provided");
 }
 
+/** Run yt-dlp, and on a bot check ask WARP for a new exit and run it once more.
+ *
+ *  Deliberately wraps ONLY the child process, so the caller's error handling
+ *  below - which decides what the user is told about their link - keeps seeing
+ *  exactly the error shapes it already documents.
+ *
+ *  ONE retry. A download is minutes long and rotation drops every connection
+ *  through the proxy, so a loop here would repeatedly kick other jobs off the
+ *  exit to keep re-fetching one file. If a fresh exit is refused too, the link
+ *  genuinely failed.
+ *
+ *  Retried only when the exit actually MOVED: `rotated` is false on a cooldown
+ *  hit or an unreachable control server, and re-downloading through the same
+ *  refused address would burn minutes to reproduce the same error. */
+async function runYtDlpWithRotation(
+  args: string[],
+  // The concrete shape the caller passes, NOT `Parameters<typeof
+  // execFileAsync>[2]`: the wide type includes the buffer-encoding overloads,
+  // which makes stdout `string | Buffer` and breaks every caller downstream.
+  options: { maxBuffer: number }
+): Promise<{ stdout: string; stderr: string }> {
+  try {
+    return await execFileAsync("yt-dlp", args, options);
+  } catch (error) {
+    // execFileAsync attaches the child's stderr to the rejection; the bot check
+    // is only ever visible there.
+    const stderr = (error as { stderr?: string })?.stderr ?? "";
+    if (!isBotCheckFailure(stderr)) throw error;
+
+    console.warn(
+      "[download] exit refused as a bot; asking WARP to rotate and retrying once"
+    );
+    const rotation = await rotateWarpExit();
+    if (!rotation.rotated) {
+      console.warn(
+        `[download] rotation did not move the exit (${rotation.reason ?? "unknown"}); ` +
+          "reporting the original failure"
+      );
+      throw error;
+    }
+    console.warn(
+      `[download] rotated ${rotation.previousIp ?? "?"} -> ${rotation.ip ?? "?"}, retrying`
+    );
+    return await execFileAsync("yt-dlp", args, options);
+  }
+}
+
 async function downloadFromUrl(
   url: string,
   outputPath: string
 ): Promise<string> {
   let stdout: string;
   try {
-    ({ stdout } = await execFileAsync(
-      "yt-dlp",
+    ({ stdout } = await runYtDlpWithRotation(
       [
         url,
+        // Empty when YTDLP_PROXY is unset, so this is exactly the pre-WARP
+        // command line. YouTube refuses this host's own address outright, so
+        // for YouTube links the proxy is the difference between a file and
+        // nothing at all.
+        ...proxyArgs(),
         "-f",
         "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
         "--merge-output-format",

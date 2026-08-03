@@ -680,6 +680,38 @@ a video and a time range in, the computed plan as JSON and a contact sheet out.
   default to `gpt-5.6-luna` in `analyze-v2/config.ts`, and `finalizerModel` falls back to
   `OPENAI_CRITIC_MODEL` if only that one is set.
 
+### DOWNLOAD: yt-dlp goes through Cloudflare WARP
+
+YouTube refuses this host's datacenter address outright - `Sign in to confirm you're not a bot` - on IPv4
+and IPv6 alike. Measured and failed: every player client, PO tokens, a real deno JS runtime, the
+`yt-dlp-invidious` fallback, and the newest yt-dlp. **Routing yt-dlp through WARP is what worked**, so for
+URL sources the `warp` service is not an optimisation - without it that path is dead. Uploaded files never
+touch it.
+
+- `YTDLP_PROXY=socks5://warp:1080` is the **kill switch**: clear it, `docker compose up -d`, and yt-dlp goes
+  direct again exactly as before. Both call sites read it - `lib/source-probe.ts` (bot + web) and
+  `processors/download.ts` (worker-download). Wiring only one means a link passes the gate and then fails
+  the job.
+- WARP exits are **shared** Cloudflare addresses, so one can pick up the bot check through no fault of ours.
+  On that failure alone the call sites POST `WARP_CONTROL_URL/rotate` and retry **once**. Rotation is a
+  global side effect - it drops every connection through the proxy - so the control server serializes it,
+  coalesces concurrent callers, holds a 30s cooldown, and verifies the address actually moved. Callers retry
+  only on `rotated: true`; a cooldown answer is not a rotation.
+- Two rotation facts that contradict the obvious implementation: `warp-cli disconnect && connect` changes
+  the exit only **sometimes** (anycast usually returns the same PoP - retry it), and `warp-cli registration
+  new` **fails on its own** with "Old registration is still around", so `registration delete` first is
+  mandatory or the escalation is a silent no-op.
+- The `warp` service deliberately has **no volume** for `/var/lib/cloudflare-warp`: the stock entrypoint
+  skips registration when `reg.json` exists, so persisting it would pin one exit forever. A fresh container
+  is a fresh IP.
+- yt-dlp is **pinned to the same version in all three images** (bot, worker, web) and installed as
+  `yt-dlp[default]` so the deno challenge-solver scripts come with it. Unpinned, the images drifted to
+  `2026.06.09` vs `2026.07.04` on build date alone - the bot probing with one version and the worker
+  downloading with another. Bump all three together.
+- **Heavy testing burns the exit.** A few dozen probes in a row earned an `HTTP Error 429` and then the bot
+  check on that address. Measure sparingly, and read a sudden "0 formats" as a rate limit before believing
+  it is a regression.
+
 ---
 
 ## 9. Where the product actually stands

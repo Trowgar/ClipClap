@@ -1,8 +1,15 @@
 # --- Base ---
 FROM node:20-alpine AS base
 WORKDIR /app
-RUN apk add --no-cache ffmpeg python3 py3-pip openssl fontconfig py3-opencv py3-numpy
-RUN pip3 install --break-system-packages yt-dlp
+# deno: yt-dlp's JavaScript runtime for YouTube (EJS). See apps/bot/Dockerfile
+# for why Node cannot stand in for it on this image.
+RUN apk add --no-cache ffmpeg python3 py3-pip openssl fontconfig py3-opencv py3-numpy deno
+# PINNED, and the pin MUST match apps/bot/Dockerfile and apps/web/Dockerfile -
+# the bot probes a link with one version and this image downloads it with
+# another, so a drift means a link that passes the gate and then fails the job.
+# `[default]` pulls in yt-dlp-ejs, the challenge-solver scripts deno runs. See
+# apps/bot/Dockerfile for the full reasoning and its measured limits.
+RUN pip3 install --break-system-packages "yt-dlp[default]==2026.7.4"
 
 # --- Dependencies ---
 FROM base AS deps
