@@ -399,6 +399,20 @@ model Job {
   transcriptPartial     Boolean        @default(false)
   analysisInputTokens   Int?
   analysisOutputTokens  Int?
+  /// The two counts above, split by the model that actually ANSWERED - shape
+  /// `{ "<model>": { inputTokens, outputTokens, requests } }`, the engine's own
+  /// LlmUsage.byModel stored as written. It exists because dollars are DERIVED:
+  /// the totals alone cannot be priced once a stage degrades to its fallback,
+  /// because then the model that answered is not the model the config named, and
+  /// criticModel below records only the CONFIGURED one. Pricing the aggregate at
+  /// that configured rate understated job cmscht6rp001xq41s5rhjx6q0 (2026-08-03,
+  /// first production job on gpt-5.6-luna, every critic batch and the finalizer
+  /// re-run on gpt-5-mini) by 27-51% depending on the price table applied - and
+  /// that figure is what settleFreeLedger charges against the free-tier budget.
+  /// Null means "we do not know", never "one model": rows analyzed before this
+  /// column, and the legacy engine, fall back to the aggregates at criticModel's
+  /// rate rather than being handed an invented breakdown.
+  analysisUsageByModel  Json?
   /// Which models produced the token counts and the cost figures above. Stored
   /// because dollars are DERIVED and prices move: without the multiplier, a row
   /// can never be re-priced, which is the state the ten rows predating this

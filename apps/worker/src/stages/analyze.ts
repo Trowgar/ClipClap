@@ -96,6 +96,14 @@ export async function runAnalyzeStage(
         noClipsReason: result.noClipsReason ?? null,
         analysisInputTokens: result.usage.inputTokens,
         analysisOutputTokens: result.usage.outputTokens,
+        // The same usage object, decomposed - written in the SAME update as the
+        // two totals above so the three can never disagree about a run. Stored
+        // exactly as the engine built it (byModel keeps `requests` too, which
+        // prices nothing but says how many attempts each model absorbed);
+        // reshaping it here would mean two definitions of the breakdown.
+        // finalize.ts prefers this column over the ANALYZE step's copy.
+        analysisUsageByModel:
+          result.usage.byModel as unknown as Prisma.InputJsonValue,
       },
     });
     await jobStepService.completeJobStep(payload.jobId, "ANALYZE", {

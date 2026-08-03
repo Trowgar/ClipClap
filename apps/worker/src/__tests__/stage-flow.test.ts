@@ -96,7 +96,10 @@ import {
 } from "../processors/errors";
 import { runAnalyzeStage } from "../stages/analyze";
 import { runDownloadStage } from "../stages/download";
-import { runFinalizeStage } from "../stages/finalize";
+import {
+  readAnalysisUsageColumn,
+  runFinalizeStage,
+} from "../stages/finalize";
 import { runTranscribeStage } from "../stages/transcribe";
 
 describe("stage handlers", () => {
@@ -412,6 +415,81 @@ describe("stage handlers", () => {
         error: null,
       }),
     });
+  });
+
+  /**
+   * The write side of the pricing seam: Job.analysisInputTokens,
+   * Job.analysisOutputTokens and Job.analysisUsageByModel are three views of ONE
+   * usage object and must be written from it together. Split across two updates
+   * (or fed from two objects) they can disagree about a run, and finalize's
+   * reconciliation would then reject the breakdown of every job - silently
+   * pricing everything at the configured critic again, which is the exact bug
+   * the column was added to end.
+   */
+  it("analyze writes the per-model breakdown from the same usage object as the totals", async () => {
+    vi.stubEnv("ANALYZE_ENGINE", "recall-critic");
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      transcriptJson: {
+        text: "hello",
+        segments: [{ start: 0, end: 10, text: "hello" }],
+      },
+      transcriptPartial: false,
+    });
+    const usage = {
+      requests: 4,
+      inputTokens: 30_000,
+      outputTokens: 4_000,
+      byModel: {
+        // the configured critic, which threw and so billed nothing we can see
+        "gpt-5.6-luna": { inputTokens: 0, outputTokens: 0, requests: 1 },
+        "gpt-5-mini": { inputTokens: 30_000, outputTokens: 4_000, requests: 3 },
+      },
+    };
+    mocks.analyzeHighlightsV2.mockResolvedValue({
+      highlights: [{ start: 0, end: 10, title: "Clip", reason: "Hook" }],
+      noClipsReason: null,
+      telemetry: {},
+      usage,
+    });
+
+    await runAnalyzeStage({ jobId: "job1", userId: "u1" });
+
+    const usageWrites = mocks.jobUpdate.mock.calls
+      .map((call) => call[0].data as Record<string, unknown>)
+      .filter(
+        (data) =>
+          "analysisInputTokens" in data ||
+          "analysisOutputTokens" in data ||
+          "analysisUsageByModel" in data
+      );
+    expect(usageWrites).toHaveLength(1);
+    expect(usageWrites[0]).toEqual(
+      expect.objectContaining({
+        analysisInputTokens: 30_000,
+        analysisOutputTokens: 4_000,
+        analysisUsageByModel: usage.byModel,
+      })
+    );
+
+    // ...and the row that was just written must satisfy the reader on the other
+    // side, reconciliation included. This is the only test that runs analyze's
+    // write through finalize's read, so a reshape on either side fails here.
+    const warn = vi.fn();
+    expect(
+      readAnalysisUsageColumn(
+        usageWrites[0].analysisUsageByModel,
+        {
+          inputTokens: usageWrites[0].analysisInputTokens as number,
+          outputTokens: usageWrites[0].analysisOutputTokens as number,
+        },
+        warn
+      )
+    ).toEqual({
+      "gpt-5.6-luna": { inputTokens: 0, outputTokens: 0 },
+      "gpt-5-mini": { inputTokens: 30_000, outputTokens: 4_000 },
+    });
+    expect(warn).not.toHaveBeenCalled();
   });
 
   // Pins the seam Task 2 created: the model finalize PRICES must be the model

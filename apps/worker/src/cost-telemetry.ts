@@ -26,15 +26,12 @@ import {
  * ANALYSIS IS PRICED PER MODEL, from `analysisUsageByModel` - the model that
  * ANSWERED, not the one the config names. The two differ exactly when a stage
  * degrades to the fallback, which is when the price gap is largest. The
- * breakdown is not a Job column today: it is read back out of the ANALYZE
- * JobStep's outputJson, where the engine already publishes its whole LlmUsage
- * (see stages/finalize.ts, readAnalysisUsageByModel). PROPOSED, deliberately not
- * done here because a production migration was out of scope for the change that
- * introduced this: `analysisUsageByModel Json?` on Job, written by
- * stages/analyze.ts beside analysisInputTokens/analysisOutputTokens, which would
- * put the breakdown on the same row as the totals it decomposes, make it
- * queryable for margin analysis, and remove this file's dependence on a step row
- * surviving.
+ * breakdown is now Job.analysisUsageByModel, written by stages/analyze.ts in the
+ * same update as the totals it decomposes, so it sits on the row it describes
+ * and is queryable for margin analysis. The ANALYZE JobStep's outputJson still
+ * carries the engine's whole LlmUsage and is read as a fallback for jobs
+ * analyzed before that column existed (see stages/finalize.ts, the precedence
+ * chain in runFinalizeStage).
  *
  * estimatedTotalCostUsd is CASH ONLY (transcription + analysis) and is null
  * unless both parts are known. It deliberately excludes compute: the server is
@@ -72,9 +69,9 @@ export interface JobCostTelemetryInput {
    * gpt-5.6-luna's rates and understated itself by ~48%, which is the figure
    * settleFreeLedger charges against the free-tier budget.
    *
-   * Absent (a legacy row, the legacy engine, an unreadable payload) falls back
-   * to the aggregate columns at the configured critic's rate - what shipped
-   * before, imperfect but unchanged rather than newly null.
+   * Absent from BOTH records (a legacy row, the legacy engine, an unreadable
+   * payload) falls back to the aggregate columns at the configured critic's rate
+   * - what shipped before, imperfect but unchanged rather than newly null.
    */
   analysisUsageByModel?: Record<string, ModelTokenUsage> | null;
   prices: ModelPrices;

@@ -59,41 +59,49 @@ const COMPUTE_COST_PER_MINUTE_USD = readRate(
   "COMPUTE_COST_PER_MINUTE_USD"
 );
 
+type Aggregate = { inputTokens: number | null; outputTokens: number | null };
+
+const obj = (value: unknown): Record<string, unknown> | null =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+
 /**
- * Per-model analysis token usage for a job, or null when it cannot be trusted.
+ * The refusals, in one place, applied to whichever record supplied the map.
  *
- * WHERE IT COMES FROM, and why not the job row: the engine already publishes its
- * whole LlmUsage - totals and, since 2026-08-03, the per-model breakdown - into
- * the ANALYZE JobStep's outputJson, in the same stage invocation that writes
- * Job.analysisInputTokens/analysisOutputTokens. Job has no column for a
- * breakdown, and adding one is a Prisma migration on production; this reads the
- * record that already exists rather than inventing a second one. See the note in
- * cost-telemetry.ts for the column proposal.
+ * There are two records of the same breakdown (the Job column and the ANALYZE
+ * step's copy) and they must be judged by identical rules - a source that is
+ * validated more loosely than the other is a source that can smuggle a wrong
+ * number past the strict one. Hence one parser, two thin readers below.
  *
  * REFUSES rather than repairs, in all three directions:
  *   - a payload of the wrong shape (legacy engine, pre-breakdown row, anything
- *     unreadable) yields null, and pricing falls back to the aggregate columns;
+ *     unreadable) yields null, and pricing falls back to the next source;
  *   - a malformed ENTRY nulls the whole map, because dropping it would silently
  *     under-count that model's tokens - the exact class of quiet wrong number
  *     this file exists to stop;
  *   - a breakdown whose totals disagree with the job row's totals is a
- *     breakdown from a DIFFERENT run (analyze writes the row first and the step
- *     second, and a crash between them leaves the previous attempt's step
- *     behind). The two records are then about different work, and pricing the
- *     older one would be a confident wrong number about this job.
+ *     breakdown from a DIFFERENT run (a step row can outlive the attempt that
+ *     wrote it, and a crash between two writes leaves the previous attempt's
+ *     copy behind). The two records are then about different work, and pricing
+ *     the older one would be a confident wrong number about this job.
  */
-export function readAnalysisUsageByModel(
-  outputJson: unknown,
-  aggregate: { inputTokens: number | null; outputTokens: number | null },
-  warn: (message: string) => void = console.warn
-): Record<string, ModelTokenUsage> | null {
-  const obj = (value: unknown): Record<string, unknown> | null =>
-    typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : null;
+type ByModelRead =
+  | { ok: true; map: Record<string, ModelTokenUsage> }
+  /** Nothing to read: not an object, or an object with no models in it. The
+   *  ordinary state of a legacy row and of a job that never called an LLM. */
+  | { ok: false; reason: "no-breakdown" }
+  /** Something is there and it is wrong - a defect, not an absence. */
+  | { ok: false; reason: "malformed" }
+  | { ok: false; reason: "mismatch" };
 
-  const byModel = obj(obj(obj(outputJson)?.usage)?.byModel);
-  if (!byModel) return null;
+function parseByModel(
+  candidate: unknown,
+  aggregate: Aggregate,
+  warn: (message: string) => void
+): ByModelRead {
+  const byModel = obj(candidate);
+  if (!byModel) return { ok: false, reason: "no-breakdown" };
 
   const out: Record<string, ModelTokenUsage> = {};
   let inputTokens = 0;
@@ -104,12 +112,12 @@ export function readAnalysisUsageByModel(
     const o = entry?.outputTokens;
     const usable = (v: unknown): v is number =>
       typeof v === "number" && Number.isFinite(v) && v >= 0;
-    if (!usable(i) || !usable(o)) return null;
+    if (!usable(i) || !usable(o)) return { ok: false, reason: "malformed" };
     out[model] = { inputTokens: i, outputTokens: o };
     inputTokens += i;
     outputTokens += o;
   }
-  if (Object.keys(out).length === 0) return null;
+  if (Object.keys(out).length === 0) return { ok: false, reason: "no-breakdown" };
 
   if (
     inputTokens !== (aggregate.inputTokens ?? 0) ||
@@ -121,9 +129,62 @@ export function readAnalysisUsageByModel(
         `out) - the two records are from different runs, so the breakdown is ignored and ` +
         `this job is priced at the configured critic's rate.`
     );
-    return null;
+    return { ok: false, reason: "mismatch" };
   }
-  return out;
+  return { ok: true, map: out };
+}
+
+/**
+ * The AUTHORITATIVE source: Job.analysisUsageByModel, written by stages/analyze.ts
+ * in the same update as the totals it decomposes. Preferred over the step copy
+ * because it cannot be orphaned by a step rewrite and is queryable for margin
+ * analysis without a join.
+ *
+ * A NULL column is the ordinary state of every job analyzed before 2026-08-03
+ * and of every legacy-engine job, and an EMPTY one is the state of a job that
+ * never reached an LLM. Both are silent, and the step reader below gets its
+ * turn. A column that holds something UNREADABLE is a different animal: only
+ * this worker writes it, so a shape it cannot parse is a defect in the
+ * analyze-side write rather than history. That warns - and then still falls
+ * through. See the note on the precedence chain in runFinalizeStage for why
+ * falling through, not refusing, is the right answer to a bad column.
+ */
+export function readAnalysisUsageColumn(
+  column: unknown,
+  aggregate: Aggregate,
+  warn: (message: string) => void = console.warn
+): Record<string, ModelTokenUsage> | null {
+  if (column === null || column === undefined) return null;
+  const read = parseByModel(column, aggregate, warn);
+  if (read.ok) return read.map;
+  // "mismatch" has already said its piece, and in far more detail.
+  if (read.reason === "malformed" || (read.reason === "no-breakdown" && !obj(column))) {
+    warn(
+      `[cost] Job.analysisUsageByModel is present but unreadable (${read.reason}) - ` +
+        `ignoring it and falling back to the ANALYZE step's copy.`
+    );
+  }
+  return null;
+}
+
+/**
+ * The FALLBACK source: the engine's whole LlmUsage as published into the ANALYZE
+ * JobStep's outputJson, which is where the breakdown lived before the column
+ * existed. Kept because jobs analyzed before this deploy - and any in flight at
+ * the moment it lands - have the step copy and nothing else, and dropping this
+ * path would price exactly those jobs at the configured critic's rate again.
+ */
+export function readAnalysisUsageByModel(
+  outputJson: unknown,
+  aggregate: Aggregate,
+  warn: (message: string) => void = console.warn
+): Record<string, ModelTokenUsage> | null {
+  const read = parseByModel(
+    obj(obj(outputJson)?.usage)?.byModel,
+    aggregate,
+    warn
+  );
+  return read.ok ? read.map : null;
 }
 
 export async function runFinalizeStage(
@@ -138,17 +199,37 @@ export async function runFinalizeStage(
     const processingEndedAt = new Date();
     const processingStartedAt = job.processingStartedAt ?? processingEndedAt;
 
-    const analyzeStep = await prisma.jobStep.findUnique({
-      where: { jobId_step: { jobId: payload.jobId, step: "ANALYZE" } },
-      select: { outputJson: true },
-    });
-    const analysisUsageByModel = readAnalysisUsageByModel(
-      analyzeStep?.outputJson,
-      {
-        inputTokens: job.analysisInputTokens,
-        outputTokens: job.analysisOutputTokens,
-      }
+    const aggregate = {
+      inputTokens: job.analysisInputTokens,
+      outputTokens: job.analysisOutputTokens,
+    };
+
+    // Precedence: the job's own column, then the ANALYZE step's copy, then the
+    // aggregate columns priced at the CONFIGURED critic (inside cost-telemetry).
+    //
+    // The two breakdown sources are two writes of one in-memory object, so a
+    // source that refuses is evidence about that RECORD, never about the other
+    // one - which is why an unreadable column falls through to the step rather
+    // than nulling the cost. Both are held to the identical refusals above,
+    // including reconciliation against this row's totals, so falling through
+    // cannot promote a wrong number: it can only reach a record that passes
+    // every check we have. Refusing outright would instead throw away a good
+    // record and report null cost - and null cost is what settleFreeLedger
+    // trues the free-tier ledger up against.
+    let analysisUsageByModel = readAnalysisUsageColumn(
+      job.analysisUsageByModel,
+      aggregate
     );
+    if (analysisUsageByModel === null) {
+      const analyzeStep = await prisma.jobStep.findUnique({
+        where: { jobId_step: { jobId: payload.jobId, step: "ANALYZE" } },
+        select: { outputJson: true },
+      });
+      analysisUsageByModel = readAnalysisUsageByModel(
+        analyzeStep?.outputJson,
+        aggregate
+      );
+    }
 
     const telemetry = buildJobCostTelemetry({
       sourceDurationSec: job.sourceDurationSec,
