@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import type { ReframeConfig } from "./config";
-import type { FaceTrack, Shot, ShotTracks } from "./types";
+import type { CamRect, FaceTrack, Shot, ShotTracks } from "./types";
 
 const execFileAsync = promisify(execFile);
 
@@ -62,7 +62,18 @@ export function parseDetectorOutput(raw: string, shotCount: number): ShotTracks[
         mouthActivity: tr.mouthActivity,
       };
     });
-    return { shotIndex: st.shotIndex, tracks };
+    // An ABSENT camRect is null, not a violation: an older sidecar must not
+    // break a newer worker. A PRESENT one is validated as strictly as a track.
+    const rawRect = (s as { camRect?: unknown }).camRect;
+    let camRect: CamRect | null = null;
+    if (rawRect != null) {
+      const r = rawRect as Record<string, unknown>;
+      if (!num(r.x) || !num(r.y) || !num(r.w) || !num(r.h) || !num(r.score)) {
+        throw new Error("detector_invalid_json");
+      }
+      camRect = { x: r.x, y: r.y, w: r.w, h: r.h, score: r.score };
+    }
+    return { shotIndex: st.shotIndex, tracks, camRect };
   });
 }
 
@@ -113,6 +124,9 @@ export async function detectFaces(
         "--fps", String(cfg.sampleFps),
         "--model", join(reframeAssetsDir(), "face_detection_yunet_2023mar.onnx"),
         "--min-score", String(cfg.faceMinScore),
+        "--face-small-frac", String(cfg.faceSmallFrac),
+        "--pip-max-frac", String(cfg.pipMaxFrac),
+        "--pip-edge-min", String(cfg.pipEdgeMin),
         "--source-width", String(sourceWidth),
         "--source-height", String(sourceHeight),
       ],

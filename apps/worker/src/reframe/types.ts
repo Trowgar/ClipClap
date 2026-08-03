@@ -15,6 +15,8 @@ export interface FaceTrack {
 export interface ShotTracks {
   shotIndex: number;
   tracks: FaceTrack[];
+  /** Null when the sidecar found no inset, or is an older build. */
+  camRect: CamRect | null;
 }
 
 export type ShotLayout =

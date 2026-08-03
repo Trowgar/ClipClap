@@ -26,7 +26,7 @@ function track(x: number, w: number, extra?: Partial<FaceTrack>): FaceTrack {
 
 const oneShot: Shot[] = [{ start: 0, end: 30 }];
 const withTracks = (tracks: FaceTrack[]): ShotTracks[] => [
-  { shotIndex: 0, tracks },
+  { shotIndex: 0, tracks, camRect: null },
 ];
 
 describe("geometry helpers", () => {
@@ -150,8 +150,9 @@ describe("adjacent-shot merging", () => {
     const plan = buildCropPlan(
       twoShots,
       [
-        { shotIndex: 0, tracks: [track(600, 400)] },
-        { shotIndex: 1, tracks: [track(620, 400)] }, // dx 20 < 4% of 1920
+        { shotIndex: 0, tracks: [track(600, 400)], camRect: null },
+        // dx 20 < 4% of 1920
+        { shotIndex: 1, tracks: [track(620, 400)], camRect: null },
       ],
       W,
       H
@@ -163,8 +164,8 @@ describe("adjacent-shot merging", () => {
     const plan = buildCropPlan(
       twoShots,
       [
-        { shotIndex: 0, tracks: [track(600, 400)] },
-        { shotIndex: 1, tracks: [track(1100, 400)] },
+        { shotIndex: 0, tracks: [track(600, 400)], camRect: null },
+        { shotIndex: 1, tracks: [track(1100, 400)], camRect: null },
       ],
       W,
       H
@@ -176,8 +177,8 @@ describe("adjacent-shot merging", () => {
     const plan = buildCropPlan(
       twoShots,
       [
-        { shotIndex: 0, tracks: [] },
-        { shotIndex: 1, tracks: [] },
+        { shotIndex: 0, tracks: [], camRect: null },
+        { shotIndex: 1, tracks: [], camRect: null },
       ],
       W,
       H
@@ -191,8 +192,16 @@ describe("adjacent-shot merging", () => {
     const plan = buildCropPlan(
       twoShots,
       [
-        { shotIndex: 0, tracks: [track(1570, 150, { id: 1 }), track(200, 150)] },
-        { shotIndex: 1, tracks: [track(1570, 150, { id: 1 }), track(585, 150)] },
+        {
+          shotIndex: 0,
+          tracks: [track(1570, 150, { id: 1 }), track(200, 150)],
+          camRect: null,
+        },
+        {
+          shotIndex: 1,
+          tracks: [track(1570, 150, { id: 1 }), track(585, 150)],
+          camRect: null,
+        },
       ],
       W,
       H
@@ -207,8 +216,16 @@ describe("adjacent-shot merging", () => {
     const plan = buildCropPlan(
       twoShots,
       [
-        { shotIndex: 0, tracks: [track(1570, 150, { id: 1 }), track(200, 150)] },
-        { shotIndex: 1, tracks: [track(1570, 150, { id: 1 }), track(725, 150)] },
+        {
+          shotIndex: 0,
+          tracks: [track(1570, 150, { id: 1 }), track(200, 150)],
+          camRect: null,
+        },
+        {
+          shotIndex: 1,
+          tracks: [track(1570, 150, { id: 1 }), track(725, 150)],
+          camRect: null,
+        },
       ],
       W,
       H
@@ -229,6 +246,7 @@ describe("plan complexity cap", () => {
     const tracksByShot: ShotTracks[] = shots.map((_, i) => ({
       shotIndex: i,
       tracks: [i % 2 === 0 ? track(100, 300) : track(1500, 300)],
+      camRect: null,
     }));
     expect(buildCropPlan(shots, tracksByShot, W, H)).toBeNull();
   });

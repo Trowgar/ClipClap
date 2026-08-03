@@ -173,6 +173,9 @@ def main():
     ap.add_argument("--fps", type=float, required=True)
     ap.add_argument("--model", required=True)
     ap.add_argument("--min-score", type=float, default=0.7)
+    ap.add_argument("--face-small-frac", type=float, default=0.06)
+    ap.add_argument("--pip-max-frac", type=float, default=0.50)
+    ap.add_argument("--pip-edge-min", type=float, default=CAM_EDGE_MIN)
     ap.add_argument("--source-width", type=int, required=True)
     ap.add_argument("--source-height", type=int, required=True)
     args = ap.parse_args()
@@ -185,7 +188,10 @@ def main():
 
     detector = None
     scale = 1.0
+    det_w = det_h = 0  # detection-space frame size, set from the first frame
     states = [[] for _ in shots]  # per-shot list of track dicts
+    edge_frames = []  # grayscales fed to the median edge map, capped below
+    edge_vx = edge_hy = None
 
     for idx, name in enumerate(frames):
         t = idx / args.fps
@@ -203,11 +209,16 @@ def main():
                 args.model, "", (w, h), score_threshold=args.min_score
             )
             scale = args.source_width / float(w)
+            det_w, det_h = w, h
         detector.setInputSize((w, h))
         _, dets = detector.detect(img)
         if dets is None:
             dets = np.zeros((0, 15), np.float32)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        # The cap lives HERE, in the caller: median_edge_map stacks every frame
+        # it is handed (44 MB and 240 ms at 24 frames) and has no bound itself.
+        if len(edge_frames) < EDGE_SAMPLE_MAX:
+            edge_frames.append(gray)
         tracks = states[shot_i]
         for det in dets:
             box = det[0:4]
@@ -253,7 +264,25 @@ def main():
                 "samples": len(tr["boxes"]),
                 "mouthActivity": float(np.mean(tr["mouth"])) if tr["mouth"] else 0.0,
             })
-        out["shots"].append({"shotIndex": i, "tracks": rendered})
+        # Gate: only a SMALL dominant face can be a webcam inset. Podcasts and
+        # facecams never reach median_edge_map, so they pay nothing for this.
+        rect = None
+        if rendered:
+            dom = max(rendered, key=lambda t: t["samples"])
+            if dom["box"]["w"] <= args.face_small_frac * args.source_width:
+                if edge_vx is None:
+                    edge_vx, edge_hy = median_edge_map(edge_frames)
+                # Boxes are rendered in SOURCE pixels; the search runs in
+                # detection pixels, and the rect is scaled back out again.
+                face = (dom["box"]["x"] / scale, dom["box"]["y"] / scale,
+                        dom["box"]["w"] / scale, dom["box"]["h"] / scale)
+                r = find_cam_rect(edge_vx, edge_hy, face, det_w, det_h,
+                                  args.pip_max_frac, args.pip_edge_min)
+                if r is not None:
+                    rect = {"x": r["x"] * scale, "y": r["y"] * scale,
+                            "w": r["w"] * scale, "h": r["h"] * scale,
+                            "score": r["score"]}
+        out["shots"].append({"shotIndex": i, "tracks": rendered, "camRect": rect})
     json.dump(out, sys.stdout)
 
 
