@@ -251,6 +251,7 @@ describe("getBotUsers", () => {
 
     expect(mocks.userFindMany.mock.calls[0][0].where).toEqual({
       telegramId: { not: null },
+      isSynthetic: false,
     });
     expect(mocks.userFindMany.mock.calls[0][0].orderBy).toEqual({ createdAt: "desc" });
     expect(result.rows[0]).toMatchObject({
@@ -282,6 +283,27 @@ describe("getBotUsers", () => {
 
     expect(result.rows).toHaveLength(1);
     expect(result.rows[0].isOwn).toBe(true);
+  });
+
+  it("leaves synthetic accounts out of the table AND out of its row count", async () => {
+    // The opposite treatment to isOwn above, and deliberately so. An own
+    // account is a person; the list has to be complete to be useful. A
+    // synthetic row is an artefact of a test run, and a table headed "users"
+    // that lists it is wrong in the same way the totals above it would be.
+    // find-test-debris.ts is where these become visible again.
+    mocks.userFindMany.mockResolvedValue([user()]);
+
+    await getBotUsers(1, undefined, NOW);
+
+    // Both queries, not just the page read: a count that still included them
+    // would paginate a table over rows it never shows, leaving a phantom last
+    // page.
+    expect(mocks.userCount).toHaveBeenCalledWith({
+      where: { telegramId: { not: null }, isSynthetic: false },
+    });
+    expect(mocks.userFindMany.mock.calls[0][0].where).toMatchObject({
+      isSynthetic: false,
+    });
   });
 
   it("falls back to the telegram id when there is no name", async () => {

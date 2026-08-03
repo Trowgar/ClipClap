@@ -143,6 +143,26 @@ model User {
   referralTermsAcceptedAt DateTime?
   referralTermsVersion    String?
   referralBannedAt        DateTime?
+  /// True for a row a test or a proof script minted. Never a person.
+  ///
+  /// It exists because cleanup is something you have to REMEMBER, and the day
+  /// somebody forgets, the leftover row joins the numbers this product is
+  /// judged by. At the scale that matters - four real signups in two days -
+  /// two forgotten proof accounts do not blur the signal, they invent one.
+  /// Analytics therefore EXCLUDES these rows rather than trusting that they
+  /// were deleted: see excludeSyntheticWhere in analytics.service.
+  ///
+  /// This is a column and not an entry in ANALYTICS_OWN_ACCOUNTS because a
+  /// proof script invents its address at the moment it runs - there is nothing
+  /// to enumerate in advance. And it is treated differently from an own
+  /// account: an own account is a real account that happens to be the owner's,
+  /// so it is shown and marked, while a synthetic row is not an account
+  /// anybody has and leaves every figure, the plain totals included.
+  ///
+  /// Excluded is not the same as invisible. find-test-debris.ts reports these
+  /// rows with their age and their jobs, so "I forgot to clean up" is a thing
+  /// you can check rather than a thing you discover in a chart.
+  isSynthetic             Boolean            @default(false)
   createdAt               DateTime           @default(now())
   updatedAt               DateTime           @updatedAt
 

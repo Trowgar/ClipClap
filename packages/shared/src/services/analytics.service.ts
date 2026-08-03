@@ -177,6 +177,7 @@ async function emailWalledAccounts(surface?: FunnelSurface): Promise<number> {
   return prisma.user.count({
     where: {
       ...surfaceWhere(surface),
+      ...excludeSyntheticWhere(),
       telegramId: null,
       accounts: { none: { provider: "google" } },
     },
@@ -211,7 +212,10 @@ const SCOPED_STEPS: Partial<
 export async function getFunnel(surface?: FunnelSurface): Promise<FunnelStep[]> {
   const grouped = await prisma.funnelEvent.groupBy({
     by: ["event"],
-    where: surface ? { surface } : undefined,
+    where: {
+      ...(surface ? { surface } : {}),
+      ...(await excludeSyntheticSubjectsWhere()),
+    },
     _count: { _all: true },
     _sum: { occurrences: true },
   });
@@ -306,6 +310,7 @@ export async function getRefusals(surface?: FunnelSurface): Promise<RefusalRow[]
     by: ["event"],
     where: {
       ...(surface ? { surface } : {}),
+      ...(await excludeSyntheticSubjectsWhere()),
       event: { startsWith: "upload_rejected_" },
     },
     _count: { _all: true },
@@ -444,8 +449,84 @@ export function excludeOwnAccountsWhere(own: {
   return clauses.length ? { AND: clauses } : {};
 }
 
+/**
+ * A Prisma User where-clause dropping rows nobody ever signed up for - the
+ * accounts a test or a proof script minted.
+ *
+ * Third member of the same family as surfaceWhere and excludeOwnAccountsWhere,
+ * and spread beside them for the same reason: one clause per question, merged
+ * on distinct keys, so a caller cannot answer one of the three and forget
+ * another. All three narrow the same `users` table.
+ *
+ * It reads a COLUMN where excludeOwnAccountsWhere reads a list, because the two
+ * populations are knowable in different ways. The owner's accounts can be
+ * enumerated in .env; a proof script invents its address the moment it runs,
+ * so there is nothing to put in a list until after the damage is done.
+ *
+ * And it is applied to the plain totals as well as the external ones, which the
+ * own-account clause deliberately is not. An own account is a real account that
+ * happens to be the owner's, so `users` counting it is a true statement about
+ * the table. A synthetic row is not an account anybody has: a total that
+ * includes two proof-script signups is not inclusive, it is wrong by two.
+ *
+ * `isSynthetic: false` rather than `{ not: true }` - the column is NOT NULL
+ * with a default, so unlike email and telegramId there is no third state for
+ * three-valued logic to swallow.
+ */
+export function excludeSyntheticWhere() {
+  return { isSynthetic: false };
+}
+
+/**
+ * The funnel_events rows that belong to synthetic users.
+ *
+ * `funnel_events` has no foreign key to `users` - recordFunnelEvent is handed a
+ * bare subject id, deliberately, because the top of the bot funnel fires for a
+ * stranger who has no row yet. The link is by convention: a `web` subject id is
+ * a User.id, a `bot` one is a User.telegramId. Both namespaces are collected
+ * here, so a synthetic account is dropped from the funnel whichever surface it
+ * was created through.
+ *
+ * Excluding on READ and not in the recorder is the deliberate choice:
+ *   - the recorder cannot know. It runs before any user lookup, on a stranger's
+ *     first interaction, and it is documented never to throw or delay - adding
+ *     a `users` read there buys a query and a failure mode on the hottest
+ *     telemetry path in the product.
+ *   - a reserved subject-id convention cannot reach the web surface at all: the
+ *     id there is a cuid Prisma mints, which no test chooses.
+ *   - an explicit parameter cannot reach it either. The one test path that
+ *     lands here (tests/api.integration.test.ts) arrives over HTTP through
+ *     /api/register; there is no argument to pass through a public route, and
+ *     one that existed would let anyone erase themselves from the funnel.
+ *   - and read-side exclusion is retroactive, which the other three are not. It
+ *     covers rows already written, including rows written by a test run that
+ *     predates the flag entirely.
+ *
+ * This is also how the rest of this file already works. Nothing here deletes a
+ * row - retired events keep their history, own accounts keep their rows - the
+ * reading is what decides what counts.
+ */
+async function syntheticSubjectIds(): Promise<string[]> {
+  const rows = await prisma.user.findMany({
+    where: { isSynthetic: true },
+    select: { id: true, telegramId: true },
+  });
+  return rows.flatMap((u) => (u.telegramId ? [u.id, u.telegramId] : [u.id]));
+}
+
+/** funnel_events where-clause with synthetic subjects removed, empty when
+ *  there are none - an empty `notIn` is a filter nobody needs. */
+async function excludeSyntheticSubjectsWhere(): Promise<{
+  subjectId?: { notIn: string[] };
+}> {
+  const ids = await syntheticSubjectIds();
+  return ids.length > 0 ? { subjectId: { notIn: ids } } : {};
+}
+
 export interface Totals {
-  /** All users, including the owner's own. */
+  /** Every real user, the owner's own accounts included. Synthetic rows are
+   *  not "real users the owner happens to have made" and are in none of these
+   *  figures - see excludeSyntheticWhere. */
   users: number;
   /** Users excluding the owner's own accounts. */
   externalUsers: number;
@@ -465,7 +546,10 @@ export async function getTotals(
   surface?: FunnelSurface,
   ownAccounts?: string
 ): Promise<Totals> {
-  const userWhere = surfaceWhere(surface);
+  // Synthetic rows are excluded from BOTH, so `users` stays the population the
+  // parenthetical on /admin claims it is and `users - externalUsers` still
+  // equals the owner's own accounts and nothing else.
+  const userWhere = { ...surfaceWhere(surface), ...excludeSyntheticWhere() };
   const own = parseOwnAccounts(ownAccounts);
   const externalWhere = { ...userWhere, ...excludeOwnAccountsWhere(own) };
 
@@ -519,7 +603,11 @@ export async function getPulse(
   ownAccounts: string | undefined
 ): Promise<Pulse> {
   const own = parseOwnAccounts(ownAccounts);
-  const externalWhere = { ...surfaceWhere(surface), ...excludeOwnAccountsWhere(own) };
+  const externalWhere = {
+    ...surfaceWhere(surface),
+    ...excludeSyntheticWhere(),
+    ...excludeOwnAccountsWhere(own),
+  };
 
   // The same boundary the users table bolds by. Two definitions of "today" on
   // one page is a bug, not a rounding difference.

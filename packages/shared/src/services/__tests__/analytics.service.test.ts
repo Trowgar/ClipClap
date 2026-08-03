@@ -4,19 +4,28 @@ const mocks = vi.hoisted(() => ({
   count: vi.fn(),
   funnelGroupBy: vi.fn(),
   userCount: vi.fn(),
+  userFindMany: vi.fn(),
+  jobCount: vi.fn(),
+  clipCount: vi.fn(),
 }));
 
 vi.mock("../../lib/prisma", () => ({
   prisma: {
     account: { count: mocks.count },
     funnelEvent: { groupBy: mocks.funnelGroupBy },
-    user: { count: mocks.userCount },
+    user: { count: mocks.userCount, findMany: mocks.userFindMany },
+    job: { count: mocks.jobCount },
+    clip: { count: mocks.clipCount },
   },
 }));
 
 import {
   excludeOwnAccountsWhere,
+  excludeSyntheticWhere,
   getFunnel,
+  getPulse,
+  getRefusals,
+  getTotals,
   isAdminEmail,
   isAdminUser,
   parseOwnAccounts,
@@ -24,6 +33,13 @@ import {
   SIDE_ACTION_EVENTS,
 } from "../analytics.service";
 import { FUNNEL_EVENTS } from "../funnel.service";
+
+// getFunnel and getRefusals now ask which accounts are synthetic before they
+// group. Default to "none", so every test that is not about that question
+// behaves exactly as it did.
+beforeEach(() => {
+  mocks.userFindMany.mockResolvedValue([]);
+});
 
 describe("isAdminEmail", () => {
   it("accepts an email on the list, case- and space-insensitively", () => {
@@ -308,7 +324,11 @@ describe("getFunnel scopes the email wall to the accounts it applies to", () => 
     await getFunnel();
 
     expect(mocks.userCount).toHaveBeenCalledWith({
-      where: { telegramId: null, accounts: { none: { provider: "google" } } },
+      where: {
+        isSynthetic: false,
+        telegramId: null,
+        accounts: { none: { provider: "google" } },
+      },
     });
   });
 
@@ -339,5 +359,311 @@ describe("getFunnel scopes the email wall to the accounts it applies to", () => 
     const wall = steps.find((s) => s.event === FUNNEL_EVENTS.EMAIL_VERIFIED);
 
     expect(wall?.scope?.pctOfApplicable).toBeNull();
+  });
+});
+
+/**
+ * A prisma stand-in that actually APPLIES the where-clause.
+ *
+ * Counting mocks that return a fixed number cannot tell a right filter from a
+ * wrong one - `mockResolvedValue(3)` says 3 whatever is asked - so a missing
+ * `isSynthetic: false` would pass every assertion about the returned Totals
+ * while /admin quietly counted proof accounts. These fixtures are filtered by
+ * the clause the service builds, which makes the clause the thing under test.
+ *
+ * It supports exactly the operators analytics.service uses and throws on
+ * anything else, so a clause this cannot model becomes a loud failure rather
+ * than a silent pass.
+ */
+type Where = Record<string, unknown>;
+
+function fieldMatches(value: unknown, cond: unknown): boolean {
+  if (cond === null) return value === null;
+  if (typeof cond !== "object") return value === cond;
+  const c = cond as Record<string, unknown>;
+  if ("not" in c) return c.not === null ? value !== null : value !== c.not;
+  if ("notIn" in c) return !(c.notIn as unknown[]).includes(value);
+  if ("in" in c) return (c.in as unknown[]).includes(value);
+  if ("gte" in c) return (value as Date) >= (c.gte as Date);
+  throw new Error(`fake prisma: unsupported condition ${JSON.stringify(cond)}`);
+}
+
+function matches(row: Record<string, unknown>, where: Where | undefined): boolean {
+  for (const [key, cond] of Object.entries(where ?? {})) {
+    if (key === "AND") {
+      if (!(cond as Where[]).every((w) => matches(row, w))) return false;
+      continue;
+    }
+    if (key === "OR") {
+      if (!(cond as Where[]).some((w) => matches(row, w))) return false;
+      continue;
+    }
+    if (key === "accounts") {
+      const provider = ((cond as Where).none as Where)?.provider;
+      const accounts = (row.accounts as { provider: string }[]) ?? [];
+      if (accounts.some((a) => a.provider === provider)) return false;
+      continue;
+    }
+    if (!fieldMatches(row[key], cond)) return false;
+  }
+  return true;
+}
+
+const OLD = new Date("2026-01-01T00:00:00.000Z");
+const RECENT = new Date();
+
+/**
+ * Five accounts covering every combination that matters: a plain web user, a
+ * plain bot user, the owner's own bot account, a proof-script account, and one
+ * that is BOTH the owner's and synthetic.
+ */
+const USERS = [
+  {
+    id: "u-web",
+    email: "someone@gmail.com",
+    telegramId: null,
+    isSynthetic: false,
+    plan: "NONE",
+    subscriptionStatus: "NONE",
+    createdAt: RECENT,
+    accounts: [],
+  },
+  {
+    id: "u-bot",
+    email: null,
+    telegramId: "111",
+    isSynthetic: false,
+    plan: "NONE",
+    subscriptionStatus: "NONE",
+    createdAt: RECENT,
+    accounts: [],
+  },
+  {
+    id: "u-own",
+    email: null,
+    telegramId: "999",
+    isSynthetic: false,
+    plan: "PLUS",
+    subscriptionStatus: "ACTIVE",
+    createdAt: OLD,
+    accounts: [],
+  },
+  {
+    id: "u-synth",
+    email: "column-proof@test.local",
+    telegramId: null,
+    isSynthetic: true,
+    plan: "PLUS",
+    subscriptionStatus: "ACTIVE",
+    createdAt: RECENT,
+    accounts: [],
+  },
+  {
+    id: "u-own-synth",
+    email: "me@example.com",
+    telegramId: null,
+    isSynthetic: true,
+    plan: "PLUS",
+    subscriptionStatus: "ACTIVE",
+    createdAt: RECENT,
+    accounts: [],
+  },
+];
+
+/** One job and one clip each, so a leak shows up as an off-by-one per user. */
+const JOBS = USERS.map((u) => ({ userId: u.id, createdAt: u.createdAt }));
+const CLIPS = USERS.map((u) => ({ userId: u.id, createdAt: u.createdAt }));
+
+const OWN = "me@example.com,999";
+
+function ownedMatch(
+  rows: { userId: string; createdAt: Date }[],
+  where: Where | undefined
+): number {
+  const { user, ...rest } = (where ?? {}) as Where & { user?: Where };
+  return rows.filter((row) => {
+    if (!matches(row, rest)) return false;
+    if (!user) return true;
+    const owner = USERS.find((u) => u.id === row.userId);
+    return owner !== undefined && matches(owner, user);
+  }).length;
+}
+
+function useFakeTable() {
+  mocks.userCount.mockImplementation(async ({ where }: { where?: Where }) =>
+    USERS.filter((u) => matches(u, where)).length
+  );
+  mocks.userFindMany.mockImplementation(async ({ where }: { where?: Where }) =>
+    USERS.filter((u) => matches(u, where)).map((u) => ({
+      id: u.id,
+      telegramId: u.telegramId,
+    }))
+  );
+  mocks.jobCount.mockImplementation(async ({ where }: { where?: Where }) =>
+    ownedMatch(JOBS, where)
+  );
+  mocks.clipCount.mockImplementation(async ({ where }: { where?: Where }) =>
+    ownedMatch(CLIPS, where)
+  );
+}
+
+describe("excludeSyntheticWhere", () => {
+  it("asks for the flag directly rather than tolerating a null", () => {
+    // The column is NOT NULL with a default, so there is no third state -
+    // `{ not: true }` would be the null-tolerant shape excludeOwnAccountsWhere
+    // needs and this one does not.
+    expect(excludeSyntheticWhere()).toEqual({ isSynthetic: false });
+  });
+
+  it("is a plain key, so it merges with the other two clauses", () => {
+    // The three clauses are spread into one object. If this ever grew an AND
+    // or an OR at the top level it would silently overwrite, or be overwritten
+    // by, excludeOwnAccountsWhere's AND.
+    const merged = {
+      telegramId: { not: null },
+      ...excludeSyntheticWhere(),
+      ...excludeOwnAccountsWhere({ emails: ["me@example.com"], telegramIds: ["999"] }),
+    };
+    expect(Object.keys(merged).sort()).toEqual(["AND", "isSynthetic", "telegramId"]);
+  });
+});
+
+describe("getTotals excludes synthetic accounts", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useFakeTable();
+  });
+
+  it("leaves them out of the PLAIN totals, not only the external ones", async () => {
+    const totals = await getTotals(undefined, OWN);
+
+    // u-web, u-bot, u-own. The two synthetic rows are in neither figure: a
+    // total that counts a proof-script signup is not inclusive, it is wrong.
+    expect(totals.users).toBe(3);
+    expect(totals.externalUsers).toBe(2);
+  });
+
+  it("leaves them out of paying, which is a plain total too", async () => {
+    const totals = await getTotals(undefined, OWN);
+
+    // u-own is the only real account with a plan. Both synthetic rows carry
+    // PLUS/ACTIVE, which is what a billing proof script leaves behind.
+    expect(totals.paying).toBe(1);
+    expect(totals.externalPayingActive).toBe(0);
+  });
+
+  it("leaves their jobs and clips out of both counts", async () => {
+    const totals = await getTotals(undefined, OWN);
+
+    expect(totals.jobs).toBe(3);
+    expect(totals.externalJobs).toBe(2);
+    expect(totals.clips).toBe(3);
+    expect(totals.externalClips).toBe(2);
+  });
+
+  it("still marks nothing and hides nothing about the owner's own accounts", async () => {
+    const totals = await getTotals(undefined, OWN);
+
+    // u-own is a real person's account that happens to be his: it stays in the
+    // plain totals and drops out of the external ones. That is the existing
+    // contract and this change must not have touched it.
+    expect(totals.users - totals.externalUsers).toBe(1);
+    expect(totals.jobs - totals.externalJobs).toBe(1);
+  });
+
+  it("removes an own-AND-synthetic account exactly once", async () => {
+    const totals = await getTotals(undefined, OWN);
+
+    // u-own-synth qualifies for both exclusions. Filters are not subtractions,
+    // so it must not be taken out twice: `users - externalUsers` has to keep
+    // meaning "the owner's own real accounts" and stay at 1, not fall to 0 or
+    // go negative.
+    expect(totals.users - totals.externalUsers).toBe(1);
+    expect(totals.externalUsers).toBeLessThanOrEqual(totals.users);
+  });
+
+  it("applies the same exclusion under a surface filter", async () => {
+    const bot = await getTotals("bot", OWN);
+
+    // Only the two telegram accounts are real; neither synthetic row has a
+    // telegramId, so the surface clause and the synthetic clause both hold.
+    expect(bot.users).toBe(2);
+    expect(bot.externalUsers).toBe(1);
+  });
+});
+
+describe("getPulse excludes synthetic accounts", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useFakeTable();
+  });
+
+  it("keeps them out of every window", async () => {
+    const pulse = await getPulse(undefined, OWN);
+
+    // u-web and u-bot were created just now; u-own is from January. The two
+    // synthetic rows are also "just now" - the shape a test run leaves - and
+    // must not appear in the number the owner reads first each morning.
+    for (const window of [pulse.today, pulse.last7, pulse.last30]) {
+      expect(window.newUsers).toBe(2);
+      expect(window.jobs).toBe(2);
+      expect(window.clips).toBe(2);
+    }
+  });
+});
+
+describe("getFunnel and getRefusals exclude synthetic subjects", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.funnelGroupBy.mockResolvedValue([]);
+    mocks.userCount.mockResolvedValue(8);
+  });
+
+  it("filters by subject id in both namespaces at once", async () => {
+    // web rows are keyed by User.id, bot rows by User.telegramId, and a
+    // synthetic account can have either. Both go into one notIn.
+    mocks.userFindMany.mockResolvedValue([
+      { id: "u-synth", telegramId: null },
+      { id: "u-synth-bot", telegramId: "424242" },
+    ]);
+
+    await getFunnel();
+
+    expect(mocks.funnelGroupBy.mock.calls[0][0].where).toEqual({
+      subjectId: { notIn: ["u-synth", "u-synth-bot", "424242"] },
+    });
+  });
+
+  it("asks the users table which ids are synthetic", async () => {
+    mocks.userFindMany.mockResolvedValue([]);
+
+    await getFunnel();
+
+    expect(mocks.userFindMany).toHaveBeenCalledWith({
+      where: { isSynthetic: true },
+      select: { id: true, telegramId: true },
+    });
+  });
+
+  it("sends no filter at all when nothing is synthetic", async () => {
+    mocks.userFindMany.mockResolvedValue([]);
+
+    await getFunnel("bot");
+
+    // An empty notIn is a filter nobody needs, and Prisma treats `notIn: []`
+    // as "match everything" only by accident of SQL - better not to send it.
+    expect(mocks.funnelGroupBy.mock.calls[0][0].where).toEqual({ surface: "bot" });
+  });
+
+  it("excludes them from the refusal breakdown too", async () => {
+    mocks.userFindMany.mockResolvedValue([{ id: "u-synth", telegramId: null }]);
+
+    await getRefusals("web");
+
+    expect(mocks.funnelGroupBy.mock.calls[0][0].where).toEqual({
+      surface: "web",
+      subjectId: { notIn: ["u-synth"] },
+      event: { startsWith: "upload_rejected_" },
+    });
   });
 });

@@ -9,7 +9,7 @@ import type {
 } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { isLocalToday } from "../config/analytics";
-import { parseOwnAccounts } from "./analytics.service";
+import { excludeSyntheticWhere, parseOwnAccounts } from "./analytics.service";
 
 /** Rows per page. Chosen for a phone screen, where the Mini App lives. */
 export const PAGE_SIZE = 25;
@@ -331,7 +331,13 @@ export async function getBotUsers(
   now: Date = new Date(),
   pageSize = PAGE_SIZE
 ): Promise<{ rows: UserRow[]; page: Page }> {
-  const where = { telegramId: { not: null } };
+  // Own accounts are marked and kept (see isOwn below); synthetic ones are not
+  // in the table at all. The difference is what the row IS. An own account is a
+  // person - the list has to be complete to be useful - while a synthetic row
+  // is an artefact of a test run, and a table of "users" that lists it is
+  // wrong in the same way the totals above it would be. They are not hidden
+  // outright: find-test-debris.ts is where they surface, with their age.
+  const where = { telegramId: { not: null }, ...excludeSyntheticWhere() };
   const total = await prisma.user.count({ where });
   const page = paginate(total, requestedPage, pageSize);
 

@@ -1,6 +1,23 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+// Imported by path rather than through the package barrel: the barrel is eager
+// and pulls in bullmq, ioredis and the R2 client, none of which this suite has
+// any use for.
+import { markSyntheticByEmail } from "@clipclap/shared/services/synthetic.service";
 
 const BASE = "http://localhost:80";
+
+/**
+ * Every address this suite has handed to /api/register.
+ *
+ * This suite runs against the PRODUCTION database - it registers real rows
+ * through the real route - and those rows have to be invisible to /admin, or a
+ * test run reads as fourteen signups on a product that gets four a week. They
+ * cannot be created with isSynthetic set: registration is a public route, and a
+ * route that accepted "leave me out of the numbers" from the request body would
+ * be a hole rather than a feature. So the row is created first and marked
+ * immediately after, which is what markSyntheticByEmail exists for.
+ */
+const registered = new Set<string>();
 
 async function post(path: string, body: Record<string, unknown>) {
   const res = await fetch(`${BASE}${path}`, {
@@ -9,8 +26,23 @@ async function post(path: string, body: Record<string, unknown>) {
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => null);
+
+  if (path === "/api/register" && typeof body.email === "string") {
+    registered.add(body.email);
+    // Marked here and not only in afterAll: a suite that is interrupted between
+    // the two would otherwise leave a live-looking account behind, which is
+    // exactly the failure this is meant to make impossible.
+    await markSyntheticByEmail([body.email]);
+  }
+
   return { status: res.status, data };
 }
+
+// A sweep, not the mechanism. It catches an address whose per-call marking
+// threw, and it is cheap because there are never more than a few dozen.
+afterAll(async () => {
+  await markSyntheticByEmail([...registered]);
+});
 
 async function get(path: string) {
   const res = await fetch(`${BASE}${path}`);

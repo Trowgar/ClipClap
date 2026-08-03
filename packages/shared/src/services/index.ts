@@ -34,6 +34,7 @@ export * from "./site-visit.service";
 export * from "./mini-app.service";
 export * from "./analytics.service";
 export * from "./analytics-detail.service";
+export * from "./synthetic.service";
 export * from "./email.service";
 export * from "./email-token.service";
 export * from "./free-tier.service";
