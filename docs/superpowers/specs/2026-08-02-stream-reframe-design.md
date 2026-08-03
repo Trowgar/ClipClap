@@ -159,8 +159,14 @@ OpenCV 4.12.0, numpy 2.3.5. **No new dependencies.**
    candidate `x` and `y` border positions. Always include frame edges 0, `Ws`, 0, `Hs` as candidates,
    since insets are commonly flush to a corner.
 4. **Rectangle assembly.** Form candidate rects `(x0,x1,y0,y1)` from those positions, keeping only rects
-   that: contain the face box entirely with `>= 2%` margin on every side; have width `<= PIP_MAX_FRAC * Ws`
-   (default 0.50); and have area `>= 4x` the face box area.
+   that: contain the face box entirely with `>= 2%` margin on every side; fit within `PIP_MAX_FRAC`
+   (default 0.50) of the frame on **both axes**; and have area `>= 4x` the face box area.
+
+   The height cap is not decoration. Capping width alone - which is how this was first specified - lets a
+   degenerate box the inset's correct width but the frame's full height beat every real candidate under
+   area-based selection. Measured: that omission alone took the detector from 26 correct rectangles out of
+   26 down to 0 out of 26. A webcam inset is small in both dimensions; there was never a reason to bound
+   only one.
 5. **Score.** For each candidate, score = **the minimum** of the four sides' mean edge energy along the
    side, normalised by the frame's mean edge energy. Minimum rather than mean, so a rectangle with one
    weak side is rejected rather than averaged into acceptance.
@@ -396,11 +402,20 @@ All defaults chosen so that **not setting anything reproduces today's behaviour 
 | `REFRAME_CAM_SHARE` | `0.40` | target cam tile share of output height |
 | `REFRAME_FACE_SMALL_FRAC` | `0.06` | strictly below this, a face may not anchor a crop |
 | `REFRAME_FACE_LARGE_FRAC` | `0.10` | at or above this, existing facecam/podcast paths apply |
-| `REFRAME_PIP_MAX_FRAC` | `0.50` | a cam rect wider than this is not an inset |
-| `REFRAME_PIP_EDGE_MIN` | `3.0` | minimum normalised border energy to accept a rect |
+| `REFRAME_PIP_MAX_FRAC` | `0.50` | a cam rect exceeding this on **either** axis is not an inset |
+| `REFRAME_PIP_EDGE_MIN` | `4.0` | minimum normalised border energy to accept a rect |
 
-The four thresholds are provisional and derived from **one** fixture. They are env-tunable for exactly
-that reason, and every decision writes its inputs to the plan (§11) so they can later be set from
+`REFRAME_PIP_EDGE_MIN` is the only one of these that was actually measured. On the 55-minute CS2 VOD,
+2026-08-02: 26 true detections scored **5.65 to 8.84**, the strongest false candidate scored **1.54**, and
+every threshold in **3.0 to 5.0** produced identical output. 4.0 is the middle of that empty corridor.
+
+The width of the corridor matters more than the number in it. A threshold sitting in a four-unit gap is a
+switch; a threshold tuned into a 10% gap - which one rejected variant of this design required - is a fit to
+one video wearing a constant's clothing. That distinction is the reason the narrow single-threshold detector
+was chosen over the more general multi-threshold ones in §5.1.
+
+The other three thresholds are provisional and rest on the same single fixture. They are env-tunable for
+exactly that reason, and every decision writes its inputs to the plan (§11) so they can later be set from
 counted evidence rather than re-guessed.
 
 ---

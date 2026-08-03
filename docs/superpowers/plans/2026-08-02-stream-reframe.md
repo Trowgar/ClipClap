@@ -1076,7 +1076,7 @@ In `detect_faces.py`, add the new arguments after `--min-score`:
 ```python
     ap.add_argument("--face-small-frac", type=float, default=0.06)
     ap.add_argument("--pip-max-frac", type=float, default=0.50)
-    ap.add_argument("--pip-edge-min", type=float, default=3.0)
+    ap.add_argument("--pip-edge-min", type=float, default=4.0)
 ```
 
 Collect grayscale frames for the edge map while the existing loop runs. **The cap lives here, in the caller** - `median_edge_map` does `np.stack` over every frame it is given, which is 44 MB and 240 ms for 24 frames and grows linearly with no bound of its own. Task 5 declared `EDGE_SAMPLE_MAX` without enforcing it; this is where it becomes real. Immediately after `gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)` add:
@@ -1132,7 +1132,7 @@ and to the object returned by `loadReframeConfig`, importing `DEFAULT_PLAN_OPTIO
 
 ```ts
     pipMaxFrac: positive(env.REFRAME_PIP_MAX_FRAC, 0.5),
-    pipEdgeMin: positive(env.REFRAME_PIP_EDGE_MIN, 3.0),
+    pipEdgeMin: positive(env.REFRAME_PIP_EDGE_MIN, 4.0),
     faceSmallFrac: positive(
       env.REFRAME_FACE_SMALL_FRAC,
       DEFAULT_PLAN_OPTIONS.faceSmallFrac
@@ -1165,7 +1165,7 @@ python3 /app/apps/worker/assets/reframe/detect_faces.py \
   --min-score 0.7 --source-width 1280 --source-height 720' | python3 -m json.tool | tail -20
 ```
 
-Expected: a `camRect` near `{x: 0, y: 0, w: 427, h: 240}` in source pixels. If it is absent, lower `--pip-edge-min` in the command until it appears and record the value that works - that number becomes the evidence for the default, replacing the provisional 3.0.
+Expected: a `camRect` near `{x: 0, y: 0, w: 427, h: 240}` in source pixels, with a score in the 5.65-8.84 band measured in Task 5. If it is absent, do NOT lower the threshold to make it appear - the corridor between the strongest false candidate (1.54) and the weakest true one (5.65) was measured across 40 windows of this exact video, so an absent rect here means something upstream changed, not that 4.0 is too strict.
 
 - [ ] **Step 9: Commit**
 
@@ -1715,7 +1715,7 @@ describe("stream knobs", () => {
     expect(cfg.faceSmallFrac).toBe(0.06);
     expect(cfg.faceLargeFrac).toBe(0.1);
     expect(cfg.pipMaxFrac).toBe(0.5);
-    expect(cfg.pipEdgeMin).toBe(3.0);
+    expect(cfg.pipEdgeMin).toBe(4.0);
   });
 
   it("enables the stream layout only on the exact literal", () => {
@@ -1795,7 +1795,7 @@ export function loadReframeConfig(
       DEFAULT_PLAN_OPTIONS.faceLargeFrac
     ),
     pipMaxFrac: positive(env.REFRAME_PIP_MAX_FRAC, 0.5),
-    pipEdgeMin: positive(env.REFRAME_PIP_EDGE_MIN, 3.0),
+    pipEdgeMin: positive(env.REFRAME_PIP_EDGE_MIN, 4.0),
   };
 }
 ```
@@ -1845,7 +1845,7 @@ REFRAME_CAM_SHARE=0.40
 REFRAME_FACE_SMALL_FRAC=0.06
 REFRAME_FACE_LARGE_FRAC=0.10
 REFRAME_PIP_MAX_FRAC=0.50
-REFRAME_PIP_EDGE_MIN=3.0
+REFRAME_PIP_EDGE_MIN=4.0
 ```
 
 - [ ] **Step 6: Run the tests and confirm green**
@@ -2457,7 +2457,7 @@ const cfg = {
   faceSmallFrac: 0.06,
   faceLargeFrac: 0.1,
   pipMaxFrac: 0.5,
-  pipEdgeMin: 3.0,
+  pipEdgeMin: 4.0,
 };
 
 describe("detectShots retry", () => {
