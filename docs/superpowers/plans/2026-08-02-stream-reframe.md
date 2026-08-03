@@ -1079,7 +1079,7 @@ In `detect_faces.py`, add the new arguments after `--min-score`:
     ap.add_argument("--pip-edge-min", type=float, default=3.0)
 ```
 
-Collect grayscale frames for the edge map while the existing loop runs. Immediately after `gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)` add:
+Collect grayscale frames for the edge map while the existing loop runs. **The cap lives here, in the caller** - `median_edge_map` does `np.stack` over every frame it is given, which is 44 MB and 240 ms for 24 frames and grows linearly with no bound of its own. Task 5 declared `EDGE_SAMPLE_MAX` without enforcing it; this is where it becomes real. Immediately after `gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)` add:
 
 ```python
         if len(edge_frames) < EDGE_SAMPLE_MAX:

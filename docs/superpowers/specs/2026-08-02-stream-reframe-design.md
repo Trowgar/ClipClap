@@ -164,8 +164,21 @@ OpenCV 4.12.0, numpy 2.3.5. **No new dependencies.**
 5. **Score.** For each candidate, score = **the minimum** of the four sides' mean edge energy along the
    side, normalised by the frame's mean edge energy. Minimum rather than mean, so a rectangle with one
    weak side is rejected rather than averaged into acceptance.
-6. **Accept** the highest-scoring candidate if its score `>= PIP_EDGE_MIN` (default 3.0, provisional).
-   Otherwise return no rect.
+
+   **A side lying on the canvas edge is skipped, not scored.** OpenCV's Sobel uses `BORDER_REFLECT_101`,
+   so at column 0 the virtual column -1 *is* column 1 and the derivative is identically zero: `vx[:,0]`
+   and `hy[0,:]` can never carry energy. A corner-flush inset - the primary case this design targets -
+   therefore scored **0.00** and lost to an arbitrary interior box. The canvas edge is a real border the
+   compositor clipped against, not a missing one. Measured 2026-08-02 during implementation; as originally
+   specified this algorithm could not have detected the fixture at all.
+6. **Accept** the winning candidate if its score `>= PIP_EDGE_MIN`. Otherwise return no rect.
+
+   **Selection is by largest area among candidates clearing the bar, not by highest score.** Each side is
+   a mean over the candidate's own span, so trimming `x0` inward raises the top and bottom means by
+   excluding a weak leftmost portion - `argmax(score)` actively rewards shrinking. Measured on the fixture:
+   the right, bottom and top edges were exact in 26 of 26 sampled windows while the left edge was exact in
+   only 16, trimming by 12-61 px elsewhere, a 20% width error. The `min`-of-sides rule still requires every
+   border to be real and `PIP_MAX_FRAC` still caps the top end, so "largest" cannot run away.
 
 Coordinates are reported in **source pixels**, matching the existing face-box contract. At 640-wide
 detection frames on a 1280-wide source, one detection pixel is two source pixels; the rect is scaled and
