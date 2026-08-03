@@ -40,3 +40,7 @@ tmp/
 # Local Docker override (host-specific, e.g. linearis-prod nginx/ports)
 docker-compose.override.yml
 apps/worker/eval-media/
+
+# Python bytecode (the reframe sidecar now has unit tests that import it)
+__pycache__/
+*.pyc

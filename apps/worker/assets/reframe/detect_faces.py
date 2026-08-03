@@ -19,6 +19,102 @@ import numpy as np
 IOU_MIN = 0.3
 MOUTH_PATCH = (32, 16)  # w, h - fixed size so motion energy is comparable
 
+EDGE_SAMPLE_MAX = 24     # frames fed to the median edge map
+BORDER_CANDIDATES = 12   # strongest projection peaks kept per axis
+MIN_RECT_PX = 16         # a rectangle thinner than this is noise
+FACE_MARGIN_FRAC = 0.02  # rect must clear the face by this much of frame width
+
+
+def median_edge_map(grays):
+    """Per-pixel MEDIAN Sobel magnitude across frames.
+
+    Median, not mean: moving game content contributes a strong edge in only
+    some frames and is suppressed, while a static compositing border survives.
+    """
+    xs, ys = [], []
+    for g in grays:
+        if g is None:
+            continue
+        xs.append(np.abs(cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)))
+        ys.append(np.abs(cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)))
+    if not xs:
+        return None, None
+    return np.median(np.stack(xs), axis=0), np.median(np.stack(ys), axis=0)
+
+
+def _peaks(proj, limit):
+    med = float(np.median(proj))
+    out = []
+    for i in range(1, len(proj) - 1):
+        if proj[i] > med and proj[i] >= proj[i - 1] and proj[i] >= proj[i + 1]:
+            out.append(i)
+    out.sort(key=lambda i: -float(proj[i]))
+    return out[:limit]
+
+
+def find_cam_rect(vx, hy, face, W, H, pip_max_frac, edge_min):
+    """Face-anchored rectangle search scored by border edge energy.
+
+    face is (x, y, w, h) in the SAME pixel space as vx/hy. Returns a dict with
+    x, y, w, h, score in that space, or None.
+    """
+    if vx is None or hy is None:
+        return None
+    gmean = (float(np.mean(vx)) + float(np.mean(hy))) / 2.0
+    if gmean <= 1e-6:
+        return None
+    fx, fy, fw, fh = face
+    margin = FACE_MARGIN_FRAC * W
+    need_x0, need_y0 = fx - margin, fy - margin
+    need_x1, need_y1 = fx + fw + margin, fy + fh + margin
+    face_area = max(1.0, fw * fh)
+    max_w = pip_max_frac * W
+
+    xs = sorted(set([0, W] + _peaks(vx.sum(axis=0), BORDER_CANDIDATES)))
+    ys = sorted(set([0, H] + _peaks(hy.sum(axis=1), BORDER_CANDIDATES)))
+
+    best = None
+    for x0 in xs:
+        if x0 > need_x0:
+            continue
+        for x1 in xs:
+            if x1 < need_x1 or x1 - x0 < MIN_RECT_PX or x1 - x0 > max_w:
+                continue
+            for y0 in ys:
+                if y0 > need_y0:
+                    continue
+                for y1 in ys:
+                    if y1 < need_y1 or y1 - y0 < MIN_RECT_PX:
+                        continue
+                    if (x1 - x0) * (y1 - y0) < 4.0 * face_area:
+                        continue
+                    # A side lying ON the canvas edge is skipped, not scored.
+                    # Sobel uses BORDER_REFLECT_101, so column 0 and row 0 are
+                    # identically zero - the outermost pixels cannot carry edge
+                    # energy. Scoring them would make a corner-flush inset (the
+                    # common stream layout) permanently undetectable. The canvas
+                    # edge is a real border the compositor clipped against.
+                    sides = []
+                    if x0 > 0:
+                        sides.append(float(np.mean(vx[y0:y1, x0])))
+                    if x1 < W:
+                        sides.append(float(np.mean(vx[y0:y1, x1 - 1])))
+                    if y0 > 0:
+                        sides.append(float(np.mean(hy[y0, x0:x1])))
+                    if y1 < H:
+                        sides.append(float(np.mean(hy[y1 - 1, x0:x1])))
+                    if not sides:
+                        continue
+                    # MINIMUM, not mean: one weak side must reject the
+                    # rectangle rather than be averaged into acceptance.
+                    score = min(sides) / gmean
+                    if best is None or score > best["score"]:
+                        best = {"x": x0, "y": y0, "w": x1 - x0,
+                                "h": y1 - y0, "score": score}
+    if best is None or best["score"] < edge_min:
+        return None
+    return best
+
 
 def iou(a, b):
     ax2, ay2 = a[0] + a[2], a[1] + a[3]
