@@ -56,6 +56,7 @@ export function buildCropPlan(
   // would emit crop w > iw and fail the encode (error -22) - center instead.
   const splitPossible = tileW <= sourceWidth;
   const centerX = evenClamp((sourceWidth - cropW) / 2, cropW, sourceWidth);
+  const minFaceWidth = opts.faceSmallFrac * sourceWidth;
   const byIndex = new Map(tracksByShot.map((s) => [s.shotIndex, s.tracks]));
 
   const layouts = shots.map((shot, i): ShotLayout => {
@@ -68,10 +69,10 @@ export function buildCropPlan(
       (t) =>
         t.samples >= MIN_TRACK_SAMPLES && t.samples >= MIN_SAMPLE_FRAC * maxSamples
     );
-    // A face occupying 3% of frame width is a webcam inset or a distant
-    // bystander, not a subject. Centring a 9:16 window on it yields a
-    // truncated inset plus whatever overlay sits under it (spec section 4.1).
-    const minFaceWidth = opts.faceSmallFrac * sourceWidth;
+    // Measured 3.4% of frame width on a 1280x720 stream VOD, against 15-30%
+    // for podcasts and facecams. A face this small is a webcam inset or a
+    // bystander; centring a 9:16 window on it yields a truncated inset plus
+    // whatever overlay sits under it (spec §4.1).
     const anchorable = tracks.filter((t) => t.box.w >= minFaceWidth);
     if (anchorable.length === 0) {
       return { start: shot.start, end: shot.end, layout: "center", x: centerX };

@@ -8,6 +8,7 @@ import {
   tileWidthFor,
 } from "../reframe/plan";
 import type { CropPlan, FaceTrack, Shot, ShotTracks } from "../reframe/types";
+import { DEFAULT_PLAN_OPTIONS } from "../reframe/options";
 
 const W = 1920;
 const H = 1080;
@@ -78,7 +79,7 @@ describe("buildCropPlan layouts", () => {
   });
 
   it("three faces with a clear dominant pair split on that pair", () => {
-    const tiny = track(940, 60, { id: 2, mouthActivity: 0 });
+    const tiny = track(940, 130, { id: 2, mouthActivity: 0 });
     const plan = buildCropPlan(
       oneShot,
       withTracks([track(200, 300), tiny, track(1400, 300, { id: 1 })]),
@@ -305,15 +306,36 @@ describe("min-face guard", () => {
     expect(plan?.shots[0].layout).toBe("single");
   });
 
-  it("ignores tiny tracks when deciding a split, rather than widening the bbox", () => {
-    // Two real faces at the edges plus one speck in the middle: the speck must
-    // not survive into the pair, and the two real faces must still split.
+  it("a tiny central track no longer vetoes a real pair through dominance", () => {
+    // The speck scores lowest and never enters the pair - but without the
+    // guard its centrality lifts the third-place score enough to fail
+    // DOMINANCE_LEAD, which flipped the whole shot to center.
     const plan = buildCropPlan(
       oneShot,
       withTracks([track(100, 200), track(1600, 200), track(950, 30)]),
       W,
       H
     );
-    expect(plan?.shots[0].layout).toBe("split");
+    expect(plan!.shots).toEqual([
+      { start: 0, end: 30, layout: "split", top: { x: 0 }, bottom: { x: 704 } },
+    ]);
+  });
+
+  it("anchors on a face exactly at the floor, and centres just below it", () => {
+    // The floor is exclusive: 0.06 * 1920 = 115.2, so 116 anchors and 115 does not.
+    expect(
+      buildCropPlan(oneShot, withTracks([track(900, 116)]), W, H)?.shots[0].layout
+    ).toBe("single");
+    expect(
+      buildCropPlan(oneShot, withTracks([track(900, 115)]), W, H)?.shots[0].layout
+    ).toBe("center");
+  });
+
+  it("reads the floor from opts rather than hardcoding it", () => {
+    const plan = buildCropPlan(oneShot, withTracks([track(900, 120)]), W, H, {
+      ...DEFAULT_PLAN_OPTIONS,
+      faceSmallFrac: 0.2,
+    });
+    expect(plan?.shots[0].layout).toBe("center");
   });
 });
