@@ -170,7 +170,7 @@ export function sliceCropPlan(
 ): CropPlan | null {
   if (
     !plan ||
-    plan.version !== 1 ||
+    (plan.version !== 1 && plan.version !== 2) ||
     !Array.isArray(plan.shots) ||
     !plan.source ||
     typeof plan.source.width !== "number" ||
@@ -192,8 +192,8 @@ export function sliceCropPlan(
 
 export function planLayoutCounts(
   plan: CropPlan
-): Record<"single" | "split" | "center", number> {
-  const counts = { single: 0, split: 0, center: 0 };
+): Record<"single" | "split" | "center" | "stream", number> {
+  const counts = { single: 0, split: 0, center: 0, stream: 0 };
   for (const s of plan.shots) counts[s.layout] += 1;
   return counts;
 }

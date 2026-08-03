@@ -257,7 +257,9 @@ describe("sliceCropPlan (trim re-render)", () => {
 
   it("returns null for an empty window or wrong version", () => {
     expect(sliceCropPlan(plan, 100, 120)).toBeNull();
-    expect(sliceCropPlan({ ...plan, version: 2 as unknown as 1 }, 0, 10)).toBeNull();
+    // version 2 is now a supported plan version (see "v2 plan handling" below);
+    // 3 is genuinely unknown and must still be rejected.
+    expect(sliceCropPlan({ ...plan, version: 3 as unknown as 1 }, 0, 10)).toBeNull();
   });
 
   it("returns null for a foreign/corrupt stored Json instead of throwing", () => {
@@ -290,7 +292,53 @@ describe("sliceCropPlan (trim re-render)", () => {
 describe("planLayoutCounts", () => {
   it("counts layouts for telemetry", () => {
     const plan = buildCropPlan(oneShot, withTracks([track(600, 400)]), W, H);
-    expect(planLayoutCounts(plan!)).toEqual({ single: 1, split: 0, center: 0 });
+    expect(planLayoutCounts(plan!)).toEqual({
+      single: 1,
+      split: 0,
+      center: 0,
+      stream: 0,
+    });
+  });
+});
+
+describe("v2 plan handling", () => {
+  const v2: CropPlan = {
+    version: 2,
+    engine: "faces",
+    source: { width: 1280, height: 720 },
+    profile: { class: "stream", faceFrac: 0.034, camRectScore: 4.7 },
+    stream: {
+      camCrop: { w: 336, h: 240, y: 0 },
+      contentCrop: { w: 676, h: 720 },
+      outCamH: 770,
+      outContentH: 1150,
+    },
+    shots: [
+      { start: 0, end: 10, layout: "stream", cam: { x: 34 }, content: { x: 428 } },
+      { start: 10, end: 20, layout: "center", x: 302 },
+    ],
+  };
+
+  it("slices a v2 plan and keeps the clip-level geometry", () => {
+    const sliced = sliceCropPlan(v2, 5, 15);
+    expect(sliced?.version).toBe(2);
+    expect(sliced?.stream).toEqual(v2.stream);
+    expect(sliced?.profile).toEqual(v2.profile);
+    expect(sliced?.shots).toHaveLength(2);
+    expect(sliced?.shots[0]).toMatchObject({ start: 0, end: 5, layout: "stream" });
+  });
+
+  it("counts stream shots", () => {
+    expect(planLayoutCounts(v2)).toEqual({
+      single: 0,
+      split: 0,
+      center: 1,
+      stream: 1,
+    });
+  });
+
+  it("still rejects an unknown version", () => {
+    expect(sliceCropPlan({ ...v2, version: 3 as 2 }, 0, 10)).toBeNull();
   });
 });
 
