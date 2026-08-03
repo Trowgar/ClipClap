@@ -595,8 +595,11 @@ ffmpeg filtergraph, single encode pass with the subtitle burn.
 ### 7a. Stream sources: the webcam-inset layout (built 2026-08-02)
 
 Spec `docs/superpowers/specs/2026-08-02-stream-reframe-design.md`, plan `.../plans/2026-08-02-stream-reframe.md`.
-Ships **off**: `REFRAME_STREAM` defaults to unset, so classification and telemetry run while the picture does
-not change. The one exception is the min-face guard below, which is unconditional.
+Defaults **off**, but **`REFRAME_STREAM=on` is LIVE in prod since 2026-08-03** (in `.env`, which is not in
+git; a backup of the previous file is at `.env.bak-pre-stream`). Rollback is `REFRAME_STREAM=off` followed by
+`docker compose up -d worker-render` - `compose restart` does NOT re-read `env_file` - and then
+`npx prisma generate --schema=/app/prisma/schema.prisma` inside the recreated container. The min-face guard
+below is unconditional and unaffected by the flag.
 
 **The defect it fixes, measured not assumed.** On a stream the streamer's webcam is a small inset over
 gameplay, so the detector correctly finds a face that is **3.4% of frame width** (43x56 in 1280x720) against
@@ -659,7 +662,19 @@ are not. 26 of 26 is 26 windows of the same static compositing box. A second and
 shape are needed before any threshold here is treated as known.
 
 **`apps/worker/src/scripts/eval-reframe.ts`** exists so the next framing question is seen rather than argued:
-a video and a time range in, the computed plan as JSON and a contact sheet out.
+a video and a time range in, the computed plan as JSON and a contact sheet out. **The CS2 fixture VOD it was
+developed against was deleted on 2026-08-03** at the owner's request (1 GB). The three 640-wide frames the
+sidecar tests need are committed at `apps/worker/assets/reframe/testdata/`, and both suites pass without the
+video - but the harness itself needs a video, so re-running it means sourcing a stream VOD again.
+
+**Regression check on existing sources, done before enabling.** Nine pre-existing layout assertions in
+`reframe-plan.test.ts` still carry byte-identical expected values (`x` of 496, 656, 596, 236, 96), still under
+exact `toEqual`. One test's FIXTURE changed - the middle face in the dominant-pair case went 60px to 130px -
+because the new min-face guard was silently discarding it and the test had begun passing through a different
+branch, leaving `DOMINANCE_LEAD`'s accept side with no coverage at all. The asserted outcome is unchanged.
+**No podcast was rendered end to end**, because this repository has no podcast VIDEO fixture, only transcripts.
+The guard fires below 6% of frame width, which is 115px on a 1920-wide source against the 15-30% a podcast
+actually shows, so the margin is wide - but it is an argument from geometry, not a measurement.
 
 ---
 
