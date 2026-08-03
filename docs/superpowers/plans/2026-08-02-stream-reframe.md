@@ -673,6 +673,8 @@ Expected: FAIL - `planLayoutCounts` returns an object without `stream`, and `sli
 
 - [ ] **Step 3: Widen the version guard**
 
+This is the load-bearing half of this task, and its failure mode is silent. `sliceCropPlan` currently bails on `plan.version !== 1`, and TypeScript narrows that against `1 | 2` without complaint - so once Task 8 starts emitting v2 plans, every trim re-render would degrade to a legacy centre crop with no throw and no red test. This task must land before Task 8 for that reason.
+
 In `apps/worker/src/reframe/plan.ts`, inside `sliceCropPlan`, replace:
 
 ```ts
@@ -1925,12 +1927,32 @@ In `apps/worker/src/reframe/filtergraph.ts`, add after the `SplitLayout` type:
 type StreamLayout = Extract<ShotLayout, { layout: "stream" }>;
 ```
 
-Inside `buildFiltergraph`, immediately after `const splits = ...`, insert:
+First fix `baseX`, because a `stream` shot has no flat `x` and the existing map reads `s.x` off every shot. Without this the file does not compile, and a stream shot would have no meaningful base-crop position anyway:
+
+```ts
+  const baseX = piecewiseX(
+    plan.shots.map((s) => ({
+      end: s.end,
+      x: s.layout === "split" || s.layout === "stream" ? centerX : s.x,
+    }))
+  );
+```
+
+Now insert the stream branch. **Placement matters:** it must go AFTER the `const baseChain = ...` line (the existing line 41) and BEFORE the `if (splits.length === 0)` early return. The branch reads `baseChain`, and `const` is not hoisted in a usable state - placing it up beside `const splits` throws `ReferenceError: Cannot access 'baseChain' before initialization` at render time, which no unit test on the returned string would catch.
 
 ```ts
   const streams = plan.shots.filter(
     (s): s is StreamLayout => s.layout === "stream"
   );
+  // plan.stream is optional on the type while a stream shot can exist, so this
+  // pairing is checked ONCE here rather than with ! assertions through the tile
+  // maths. A stream shot without geometry cannot be drawn; it degrades to the
+  // base chain's centre crop, which baseX already supplies for stream shots.
+  if (streams.length > 0 && !plan.stream) {
+    console.warn(
+      "[reframe] stream shots without stream geometry - falling back to base crop"
+    );
+  }
   if (streams.length > 0 && plan.stream) {
     const geom = plan.stream;
     // Outside stream windows the tile overlays are disabled, so their x values
@@ -1966,16 +1988,7 @@ Inside `buildFiltergraph`, immediately after `const splits = ...`, insert:
   }
 ```
 
-For non-stream shots the base chain already carries their own `x`; for stream shots `piecewiseX` receives the centre value, which is never visible because the overlays cover the full frame during those windows. Add `stream` to the ternary in `baseX` so it does not read a missing `.x`:
-
-```ts
-  const baseX = piecewiseX(
-    plan.shots.map((s) => ({
-      end: s.end,
-      x: s.layout === "split" || s.layout === "stream" ? centerX : s.x,
-    }))
-  );
-```
+For non-stream shots the base chain carries their own `x`; for stream shots `piecewiseX` receives the centre value, which is never visible because the two overlays cover the full frame during those windows - and which is exactly the graceful degradation the guard above relies on.
 
 - [ ] **Step 4: Run the tests and confirm green**
 
