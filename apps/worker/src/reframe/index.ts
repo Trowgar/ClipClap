@@ -4,6 +4,7 @@ import { loadReframeConfig, type ReframeConfig } from "./config";
 import { detectShots } from "./shots";
 import { detectFaces } from "./faces";
 import { buildCropPlan } from "./plan";
+import { resolveCamRect } from "./cam-rect";
 import type { CropPlan } from "./types";
 
 const execFileAsync = promisify(execFile);
@@ -88,7 +89,24 @@ export async function computeCropPlan(
       }
       return fail("detector_failed", shotCount);
     }
-    const plan = buildCropPlan(shots, tracks, width, height);
+    const cam = resolveCamRect(
+      tracks.map((t) => t.camRect),
+      width,
+      height
+    );
+    const plan = buildCropPlan(
+      shots,
+      tracks,
+      width,
+      height,
+      {
+        faceSmallFrac: cfg.faceSmallFrac,
+        faceLargeFrac: cfg.faceLargeFrac,
+        stream: cfg.stream,
+        camShare: cfg.camShare,
+      },
+      cam
+    );
     if (!plan) return fail("plan_empty", shotCount);
     return { plan, shotCount, detectMs: Date.now() - startedAt };
   } catch (error) {

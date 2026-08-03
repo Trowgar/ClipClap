@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { loadReframeConfig } from "../reframe/config";
+import { resolveCamRect } from "../reframe/cam-rect";
+import { buildCropPlan } from "../reframe/plan";
 import { DEFAULT_PLAN_OPTIONS } from "../reframe/options";
+import type { FaceTrack, Shot, ShotTracks } from "../reframe/types";
 
 describe("loadReframeConfig", () => {
   it("defaults to off with documented knob values", () => {
@@ -12,10 +15,13 @@ describe("loadReframeConfig", () => {
       minShotSec: 1.0,
       faceMinScore: 0.7,
       maxDetectSec: 30,
+      stream: false,
+      // Shared with the planner, so these must not drift from that constant.
+      camShare: DEFAULT_PLAN_OPTIONS.camShare,
+      faceSmallFrac: DEFAULT_PLAN_OPTIONS.faceSmallFrac,
+      faceLargeFrac: DEFAULT_PLAN_OPTIONS.faceLargeFrac,
       pipMaxFrac: 0.5,
       pipEdgeMin: 4.0,
-      // Shared with the planner, so it must not drift from that constant.
-      faceSmallFrac: DEFAULT_PLAN_OPTIONS.faceSmallFrac,
     });
   });
 
@@ -47,5 +53,83 @@ describe("loadReframeConfig", () => {
     const cfg = loadReframeConfig({ REFRAME_SAMPLE_FPS: "-1", REFRAME_SCENE_THRESHOLD: "abc" });
     expect(cfg.sampleFps).toBe(2);
     expect(cfg.sceneThreshold).toBe(0.3);
+  });
+});
+
+describe("stream knobs", () => {
+  it("defaults to the stream layout being OFF", () => {
+    const cfg = loadReframeConfig({});
+    expect(cfg.stream).toBe(false);
+    expect(cfg.camShare).toBe(0.4);
+    expect(cfg.faceSmallFrac).toBe(0.06);
+    expect(cfg.faceLargeFrac).toBe(0.1);
+    expect(cfg.pipMaxFrac).toBe(0.5);
+    expect(cfg.pipEdgeMin).toBe(4.0);
+  });
+
+  it("enables the stream layout only on the exact literal", () => {
+    expect(loadReframeConfig({ REFRAME_STREAM: "on" }).stream).toBe(true);
+    expect(loadReframeConfig({ REFRAME_STREAM: "true" }).stream).toBe(false);
+  });
+
+  it("overrides numeric knobs", () => {
+    const cfg = loadReframeConfig({
+      REFRAME_CAM_SHARE: "0.35",
+      REFRAME_PIP_EDGE_MIN: "2.2",
+    });
+    expect(cfg.camShare).toBe(0.35);
+    expect(cfg.pipEdgeMin).toBe(2.2);
+  });
+
+  it("ignores a nonsense override rather than emitting a broken plan", () => {
+    expect(loadReframeConfig({ REFRAME_CAM_SHARE: "banana" }).camShare).toBe(0.4);
+  });
+});
+
+describe("REFRAME_STREAM gates the stream layout end to end", () => {
+  // Same fixture as the "stream layout" describe block in reframe-plan.test.ts:
+  // a small inset face plus a resolvable camRect, which WOULD classify as
+  // `stream` once the killswitch is on. The seam under test is config ->
+  // buildCropPlan, not buildCropPlan alone, so opts here come from
+  // loadReframeConfig rather than a hand-written PlanOptions literal.
+  const SW = 1280;
+  const SH = 720;
+  const camRect = { x: 0, y: 0, w: 428, h: 240, score: 4.7 };
+  const insetFace: FaceTrack = {
+    id: 0,
+    box: { x: 179, y: 110, w: 43, h: 56 },
+    score: 0.89,
+    samples: 111,
+    mouthActivity: 0.05,
+  };
+  const shots: Shot[] = [{ start: 0, end: 30 }];
+  const tracksByShot: ShotTracks[] = [{ shotIndex: 0, tracks: [insetFace], camRect }];
+
+  function planFor(env: NodeJS.ProcessEnv) {
+    const cfg = loadReframeConfig(env);
+    const cam = resolveCamRect(tracksByShot.map((s) => s.camRect), SW, SH);
+    const opts = {
+      faceSmallFrac: cfg.faceSmallFrac,
+      faceLargeFrac: cfg.faceLargeFrac,
+      stream: cfg.stream,
+      camShare: cfg.camShare,
+    };
+    return buildCropPlan(shots, tracksByShot, SW, SH, opts, cam);
+  }
+
+  it("with REFRAME_STREAM unset, a would-be stream source gets no stream shot and no stream geometry", () => {
+    const plan = planFor({});
+    expect(plan?.shots.some((s) => s.layout === "stream")).toBe(false);
+    expect(plan?.stream).toBeUndefined();
+    expect(plan?.version).toBe(1);
+    expect(plan?.profile?.reason).toBe("stream_disabled");
+  });
+
+  it("with REFRAME_STREAM=on, the same source gets a stream shot and stream geometry", () => {
+    const plan = planFor({ REFRAME_STREAM: "on" });
+    expect(plan?.shots.some((s) => s.layout === "stream")).toBe(true);
+    expect(plan?.stream).toBeDefined();
+    expect(plan?.version).toBe(2);
+    expect(plan?.profile?.class).toBe("stream");
   });
 });

@@ -7,9 +7,13 @@ export interface ReframeConfig {
   minShotSec: number;
   faceMinScore: number;
   maxDetectSec: number;
+  /** Stream layout killswitch. Classification runs regardless. */
+  stream: boolean;
+  camShare: number;
+  faceSmallFrac: number;
+  faceLargeFrac: number;
   pipMaxFrac: number;
   pipEdgeMin: number;
-  faceSmallFrac: number;
 }
 
 function positive(v: string | undefined, fallback: number): number {
@@ -27,12 +31,20 @@ export function loadReframeConfig(
     minShotSec: positive(env.REFRAME_MIN_SHOT_SEC, 1.0),
     faceMinScore: positive(env.REFRAME_FACE_MIN_SCORE, 0.7),
     maxDetectSec: positive(env.REFRAME_MAX_DETECT_SEC, 30),
-    pipMaxFrac: positive(env.REFRAME_PIP_MAX_FRAC, 0.5),
-    pipEdgeMin: positive(env.REFRAME_PIP_EDGE_MIN, 4.0),
-    // Same threshold the planner uses to call a face small - one source.
+    // REFRAME_STREAM must match the exact literal "on" - not truthy, not
+    // "true", not "1". A killswitch that can be flipped by accident isn't one.
+    stream: env.REFRAME_STREAM === "on",
+    camShare: positive(env.REFRAME_CAM_SHARE, DEFAULT_PLAN_OPTIONS.camShare),
+    // Shared with the planner, so these must not drift from that constant.
     faceSmallFrac: positive(
       env.REFRAME_FACE_SMALL_FRAC,
       DEFAULT_PLAN_OPTIONS.faceSmallFrac
     ),
+    faceLargeFrac: positive(
+      env.REFRAME_FACE_LARGE_FRAC,
+      DEFAULT_PLAN_OPTIONS.faceLargeFrac
+    ),
+    pipMaxFrac: positive(env.REFRAME_PIP_MAX_FRAC, 0.5),
+    pipEdgeMin: positive(env.REFRAME_PIP_EDGE_MIN, 4.0),
   };
 }
