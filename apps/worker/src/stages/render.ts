@@ -27,7 +27,9 @@ import {
 import { computeCropPlan } from "../reframe";
 import { loadReframeConfig } from "../reframe/config";
 import { buildFiltergraph } from "../reframe/filtergraph";
-import { planLayoutCounts, sliceCropPlan } from "../reframe/plan";
+import { sliceCropPlan } from "../reframe/plan";
+import { buildReframeCheck, markEncodeFailed } from "../reframe/telemetry";
+import type { ReframeCheck } from "../reframe/telemetry";
 import type { CropPlan, FilterSpec } from "../reframe/types";
 
 export async function runRenderStage(
@@ -92,12 +94,7 @@ async function renderClips(
       renderAvStartSkewMs: number | null;
     }> = [];
     const reframeCfg = loadReframeConfig();
-    const reframeChecks: Array<{
-      shotCount: number;
-      detectMs: number;
-      layouts?: Record<"single" | "split" | "center", number>;
-      fallbackReason?: string;
-    }> = [];
+    const reframeChecks: ReframeCheck[] = [];
     // Detection has a wall-clock budget per highlight; when a source is too
     // heavy it times out repeatedly. Stop paying that cost for the rest of the
     // job after two timeouts in a row (reset on any non-timeout result).
@@ -127,11 +124,14 @@ async function renderClips(
           // Two detection timeouts in a row: skip the remaining highlights of
           // this job so we stop burning the wall-clock budget. Each skipped
           // highlight takes the legacy center crop (filterSpec stays null).
-          reframeChecks.push({
-            shotCount: 0,
-            detectMs: 0,
-            fallbackReason: "skipped_after_timeouts",
-          });
+          reframeChecks.push(
+            buildReframeCheck({
+              plan: null,
+              shotCount: 0,
+              detectMs: 0,
+              fallbackReason: "skipped_after_timeouts",
+            })
+          );
         } else {
           const reframe = await computeCropPlan(
             sourcePath,
@@ -152,14 +152,14 @@ async function renderClips(
           } else {
             consecutiveTimeouts = 0;
           }
-          reframeChecks.push({
-            shotCount: reframe.shotCount,
-            detectMs: reframe.detectMs,
-            ...(reframe.plan ? { layouts: planLayoutCounts(reframe.plan) } : {}),
-            ...(reframe.fallbackReason
-              ? { fallbackReason: reframe.fallbackReason }
-              : {}),
-          });
+          reframeChecks.push(
+            buildReframeCheck({
+              plan: reframe.plan,
+              shotCount: reframe.shotCount,
+              detectMs: reframe.detectMs,
+              fallbackReason: reframe.fallbackReason,
+            })
+          );
         }
       }
       // A filterSpec must never fail the render: if the reframe encode throws,
@@ -180,11 +180,8 @@ async function renderClips(
         );
         filterSpec = null;
         cropPlan = null;
-        const check = reframeChecks[reframeChecks.length - 1];
-        if (check) {
-          delete check.layouts;
-          check.fallbackReason = "encode_failed";
-        }
+        const idx = reframeChecks.length - 1;
+        if (idx >= 0) reframeChecks[idx] = markEncodeFailed(reframeChecks[idx]);
         [cutResult] = await cutClips(
           sourcePath,
           [highlight],
@@ -301,7 +298,7 @@ async function renderClips(
             engine: reframeCfg.engine,
             checks: reframeChecks,
           },
-        } as Prisma.InputJsonValue,
+        } as unknown as Prisma.InputJsonValue,
       },
     });
     await jobStepService.completeJobStep(payload.jobId, "RENDER", {
