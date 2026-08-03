@@ -24,6 +24,13 @@ BORDER_CANDIDATES = 12   # strongest projection peaks kept per axis
 MIN_RECT_PX = 16         # a rectangle thinner than this is noise
 FACE_MARGIN_FRAC = 0.02  # rect must clear the face by this much of frame width
 
+# Measured on a 55-minute CS2 VOD, 2026-08-02: 26 true detections scored
+# 5.65-8.84, the strongest false candidate scored 1.54, and every threshold
+# in 3.0-5.0 gave identical output. 4.0 is the middle of that empty corridor.
+# One streamer, one OBS layout, one video - the corridor is real but narrow
+# evidence. Re-measure before trusting it on a second source shape.
+CAM_EDGE_MIN = 4.0
+
 
 def median_edge_map(grays):
     """Per-pixel MEDIAN Sobel magnitude across frames.
@@ -52,11 +59,23 @@ def _peaks(proj, limit):
     return out[:limit]
 
 
-def find_cam_rect(vx, hy, face, W, H, pip_max_frac, edge_min):
+def find_cam_rect(vx, hy, face, W, H, pip_max_frac, edge_min=CAM_EDGE_MIN):
     """Face-anchored rectangle search scored by border edge energy.
 
     face is (x, y, w, h) in the SAME pixel space as vx/hy. Returns a dict with
     x, y, w, h, score in that space, or None.
+
+    pip_max_frac caps the inset extent on BOTH axes - width against W and
+    height against H. Capping width alone is not enough: the search would then
+    happily return the inset's true width run down the whole frame, a box whose
+    left, top and bottom sides all lie on the canvas and are therefore skipped,
+    leaving it to win on a single real border.
+
+    Selection is LARGEST AREA among candidates clearing edge_min, tie-broken on
+    score - not the highest score. Each border is a mean over the rectangle's
+    own span, so scoring highest rewards shrinking inward to exclude the weakest
+    part of a border; largest-area removes that incentive, and the height cap
+    plus min-of-sides keeps "largest" from running away.
     """
     if vx is None or hy is None:
         return None
@@ -69,11 +88,12 @@ def find_cam_rect(vx, hy, face, W, H, pip_max_frac, edge_min):
     need_x1, need_y1 = fx + fw + margin, fy + fh + margin
     face_area = max(1.0, fw * fh)
     max_w = pip_max_frac * W
+    max_h = pip_max_frac * H
 
     xs = sorted(set([0, W] + _peaks(vx.sum(axis=0), BORDER_CANDIDATES)))
     ys = sorted(set([0, H] + _peaks(hy.sum(axis=1), BORDER_CANDIDATES)))
 
-    best = None
+    best, best_key = None, None
     for x0 in xs:
         if x0 > need_x0:
             continue
@@ -84,7 +104,7 @@ def find_cam_rect(vx, hy, face, W, H, pip_max_frac, edge_min):
                 if y0 > need_y0:
                     continue
                 for y1 in ys:
-                    if y1 < need_y1 or y1 - y0 < MIN_RECT_PX:
+                    if y1 < need_y1 or y1 - y0 < MIN_RECT_PX or y1 - y0 > max_h:
                         continue
                     if (x1 - x0) * (y1 - y0) < 4.0 * face_area:
                         continue
@@ -108,11 +128,13 @@ def find_cam_rect(vx, hy, face, W, H, pip_max_frac, edge_min):
                     # MINIMUM, not mean: one weak side must reject the
                     # rectangle rather than be averaged into acceptance.
                     score = min(sides) / gmean
-                    if best is None or score > best["score"]:
+                    if score < edge_min:
+                        continue
+                    key = ((x1 - x0) * (y1 - y0), score)
+                    if best_key is None or key > best_key:
+                        best_key = key
                         best = {"x": x0, "y": y0, "w": x1 - x0,
                                 "h": y1 - y0, "score": score}
-    if best is None or best["score"] < edge_min:
-        return None
     return best
 
 
