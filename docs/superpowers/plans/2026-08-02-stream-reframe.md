@@ -2514,6 +2514,14 @@ Add to §9 or the open-follow-ups section:
 - Stream reframe thresholds (`REFRAME_FACE_SMALL_FRAC`, `REFRAME_PIP_EDGE_MIN`, `REFRAME_CAM_SHARE`) rest on
   ONE fixture - one streamer, one OBS layout, corner inset. The mechanism is validated; the numbers are not.
   A second and third source of different shape are needed before any of them is treated as known.
+- `buildCropPlan` computes `maxSamples` over ALL tracks, including ones the min-face guard is about to
+  discard, so `MIN_SAMPLE_FRAC` is measured against a track that will not survive. Never produces a wrong
+  anchor - the failure mode is only "more conservative than necessary" - but it bites in an unmeasured case:
+  a PODCAST with a persistently-detected background face plus an intermittently-detected speaker drops the
+  speaker for being rare relative to a track that is then discarded anyway. Applying the size filter first
+  is a two-line reorder and strictly at-least-as-good, but it silently changes which sources get anchored,
+  so it needs its own measurement rather than riding along on unrelated work. Found during the task 1 code
+  review, 2026-08-02, and deliberately not fixed then.
 ```
 
 - [ ] **Step 2: Commit**
