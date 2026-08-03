@@ -292,3 +292,28 @@ describe("planLayoutCounts", () => {
     expect(planLayoutCounts(plan!)).toEqual({ single: 1, split: 0, center: 0 });
   });
 });
+
+describe("min-face guard", () => {
+  it("centres instead of anchoring on a face below 6% of frame width", () => {
+    // 1920 * 0.06 = 115.2, so a 40px face is far below the floor.
+    const plan = buildCropPlan(oneShot, withTracks([track(900, 40)]), W, H);
+    expect(plan?.shots[0].layout).toBe("center");
+  });
+
+  it("still anchors on a face at or above the floor", () => {
+    const plan = buildCropPlan(oneShot, withTracks([track(900, 120)]), W, H);
+    expect(plan?.shots[0].layout).toBe("single");
+  });
+
+  it("ignores tiny tracks when deciding a split, rather than widening the bbox", () => {
+    // Two real faces at the edges plus one speck in the middle: the speck must
+    // not survive into the pair, and the two real faces must still split.
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([track(100, 200), track(1600, 200), track(950, 30)]),
+      W,
+      H
+    );
+    expect(plan?.shots[0].layout).toBe("split");
+  });
+});

@@ -1,4 +1,5 @@
 import type { CropPlan, FaceTrack, Shot, ShotLayout, ShotTracks } from "./types";
+import { DEFAULT_PLAN_OPTIONS, type PlanOptions } from "./options";
 
 // Layout constants - tuned via fixtures, deliberately NOT env knobs (spec §7).
 const FIT_MARGIN = 0.9; // face bbox must fit in 90% of the crop window
@@ -43,7 +44,8 @@ export function buildCropPlan(
   shots: Shot[],
   tracksByShot: ShotTracks[],
   sourceWidth: number,
-  sourceHeight: number
+  sourceHeight: number,
+  opts: PlanOptions = DEFAULT_PLAN_OPTIONS
 ): CropPlan | null {
   if (shots.length === 0) return null;
   const cropW = cropWidthFor(sourceHeight);
@@ -66,11 +68,16 @@ export function buildCropPlan(
       (t) =>
         t.samples >= MIN_TRACK_SAMPLES && t.samples >= MIN_SAMPLE_FRAC * maxSamples
     );
-    if (tracks.length === 0) {
+    // A face occupying 3% of frame width is a webcam inset or a distant
+    // bystander, not a subject. Centring a 9:16 window on it yields a
+    // truncated inset plus whatever overlay sits under it (spec section 4.1).
+    const minFaceWidth = opts.faceSmallFrac * sourceWidth;
+    const anchorable = tracks.filter((t) => t.box.w >= minFaceWidth);
+    if (anchorable.length === 0) {
       return { start: shot.start, end: shot.end, layout: "center", x: centerX };
     }
-    const minX = Math.min(...tracks.map((t) => t.box.x));
-    const maxX = Math.max(...tracks.map((t) => t.box.x + t.box.w));
+    const minX = Math.min(...anchorable.map((t) => t.box.x));
+    const maxX = Math.max(...anchorable.map((t) => t.box.x + t.box.w));
     if (maxX - minX <= FIT_MARGIN * cropW) {
       const x = evenClamp((minX + maxX) / 2 - cropW / 2, cropW, sourceWidth);
       return { start: shot.start, end: shot.end, layout: "single", x };
@@ -80,9 +87,9 @@ export function buildCropPlan(
     if (!splitPossible) {
       return { start: shot.start, end: shot.end, layout: "center", x: centerX };
     }
-    let pair = tracks;
-    if (tracks.length > 2) {
-      const scored = [...tracks].sort(
+    let pair = anchorable;
+    if (anchorable.length > 2) {
+      const scored = [...anchorable].sort(
         (a, b) =>
           dominance(b, sourceWidth, sourceHeight) -
           dominance(a, sourceWidth, sourceHeight)
