@@ -325,7 +325,13 @@ describe("v2 plan handling", () => {
     expect(sliced?.stream).toEqual(v2.stream);
     expect(sliced?.profile).toEqual(v2.profile);
     expect(sliced?.shots).toHaveLength(2);
-    expect(sliced?.shots[0]).toMatchObject({ start: 0, end: 5, layout: "stream" });
+    expect(sliced?.shots[0]).toEqual({
+      start: 0,
+      end: 5,
+      layout: "stream",
+      cam: { x: 34 },
+      content: { x: 428 },
+    });
   });
 
   it("counts stream shots", () => {
