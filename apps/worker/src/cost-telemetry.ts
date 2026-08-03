@@ -23,6 +23,19 @@ import {
  * measurement. Do not re-add either. Compute is now an env rate, unset by
  * default.
  *
+ * ANALYSIS IS PRICED PER MODEL, from `analysisUsageByModel` - the model that
+ * ANSWERED, not the one the config names. The two differ exactly when a stage
+ * degrades to the fallback, which is when the price gap is largest. The
+ * breakdown is not a Job column today: it is read back out of the ANALYZE
+ * JobStep's outputJson, where the engine already publishes its whole LlmUsage
+ * (see stages/finalize.ts, readAnalysisUsageByModel). PROPOSED, deliberately not
+ * done here because a production migration was out of scope for the change that
+ * introduced this: `analysisUsageByModel Json?` on Job, written by
+ * stages/analyze.ts beside analysisInputTokens/analysisOutputTokens, which would
+ * put the breakdown on the same row as the totals it decomposes, make it
+ * queryable for margin analysis, and remove this file's dependence on a step row
+ * surviving.
+ *
  * estimatedTotalCostUsd is CASH ONLY (transcription + analysis) and is null
  * unless both parts are known. It deliberately excludes compute: the server is
  * rented whether a job runs or not, so compute is not money leaving the account
@@ -30,6 +43,13 @@ import {
  * documents the same rule - if a third cash line is ever added, add it here and
  * there; if a second non-cash line is added, add it only here.
  */
+
+/** Tokens one model spent on a job. Structurally the persisted half of
+ *  analyze-v2's LlmUsage.byModel; `requests` is not needed to price anything. */
+export interface ModelTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
 
 export interface JobCostTelemetryInput {
   sourceDurationSec: number | null | undefined;
@@ -40,10 +60,23 @@ export interface JobCostTelemetryInput {
   renderMs: number;
   clipsGenerated: number;
   transcriptionModel: string;
-  /** Model whose price dominates analysis cost (the critic). */
+  /** The CONFIGURED critic. Recorded on the job row because a row must stay
+   *  re-priceable, and used to price only when no breakdown is available. */
   criticModel: string;
   analysisInputTokens?: number | null;
   analysisOutputTokens?: number | null;
+  /**
+   * What each model actually spent. AUTHORITATIVE when present: the configured
+   * critic is not necessarily the model that answered, and on 2026-08-03 it was
+   * not - job cmscht6rp001xq41s5rhjx6q0 priced gpt-5-mini's tokens at
+   * gpt-5.6-luna's rates and understated itself by ~48%, which is the figure
+   * settleFreeLedger charges against the free-tier budget.
+   *
+   * Absent (a legacy row, the legacy engine, an unreadable payload) falls back
+   * to the aggregate columns at the configured critic's rate - what shipped
+   * before, imperfect but unchanged rather than newly null.
+   */
+  analysisUsageByModel?: Record<string, ModelTokenUsage> | null;
   prices: ModelPrices;
   /** USD per source minute of rented capacity. Unset means "do not report it". */
   computeCostPerMinuteUsd?: number | null;
@@ -56,17 +89,7 @@ export function buildJobCostTelemetry(input: JobCostTelemetryInput) {
   const estimatedTranscriptionCostUsd =
     audioRate === undefined ? null : roundUsd(sourceMinutes * audioRate);
 
-  const inputTokens = input.analysisInputTokens ?? 0;
-  const outputTokens = input.analysisOutputTokens ?? 0;
-  const hasTokenUsage = inputTokens > 0 || outputTokens > 0;
-  const critic = tokenPrice(input.prices, input.criticModel);
-  const estimatedAnalysisCostUsd =
-    hasTokenUsage && critic !== undefined
-      ? roundUsd(
-          (inputTokens / 1_000_000) * critic.input +
-            (outputTokens / 1_000_000) * critic.output
-        )
-      : null;
+  const estimatedAnalysisCostUsd = priceAnalysis(input);
 
   const computeRate = input.computeCostPerMinuteUsd;
   const estimatedComputeCostUsd =
@@ -96,6 +119,53 @@ export function buildJobCostTelemetry(input: JobCostTelemetryInput) {
     estimatedComputeCostUsd,
     estimatedTotalCostUsd,
   };
+}
+
+/**
+ * What the analysis cost, priced at the rates of the models that RAN.
+ *
+ * Each model's own tokens at its own rate, summed. A fallback job really did pay
+ * two providers' prices - the failed attempts on the configured model plus the
+ * successful ones on the fallback - so the honest figure is the sum, not either
+ * side of it. (Tokens burned by an attempt that THREW are not in the breakdown
+ * at all: the SDK throws before any usage object exists. This is therefore a
+ * floor on a fallback job, and it is still much closer than the old figure.)
+ *
+ * One unpriced model makes the WHOLE sum null, never a partial: a sum missing
+ * one model reads exactly like a complete one, which is the same failure the
+ * removed DEFAULT_TOKEN_PRICE used to produce. Same rule as
+ * estimatedTotalCostUsd one level up.
+ */
+function priceAnalysis(input: JobCostTelemetryInput): number | null {
+  const byModel = input.analysisUsageByModel;
+  if (byModel && Object.keys(byModel).length > 0) {
+    let usd = 0;
+    let tokens = 0;
+    for (const [model, spent] of Object.entries(byModel)) {
+      const price = tokenPrice(input.prices, model);
+      if (price === undefined) return null;
+      const inputTokens = Math.max(0, spent?.inputTokens ?? 0);
+      const outputTokens = Math.max(0, spent?.outputTokens ?? 0);
+      tokens += inputTokens + outputTokens;
+      usd +=
+        (inputTokens / 1_000_000) * price.input +
+        (outputTokens / 1_000_000) * price.output;
+    }
+    // A breakdown of nothing is the same state as no token usage at all (the
+    // degenerate path returns before any LLM call), and that has always been
+    // reported as null rather than as a measured $0.
+    return tokens > 0 ? roundUsd(usd) : null;
+  }
+
+  const inputTokens = input.analysisInputTokens ?? 0;
+  const outputTokens = input.analysisOutputTokens ?? 0;
+  const hasTokenUsage = inputTokens > 0 || outputTokens > 0;
+  const critic = tokenPrice(input.prices, input.criticModel);
+  if (!hasTokenUsage || critic === undefined) return null;
+  return roundUsd(
+    (inputTokens / 1_000_000) * critic.input +
+      (outputTokens / 1_000_000) * critic.output
+  );
 }
 
 function roundUsd(value: number): number {

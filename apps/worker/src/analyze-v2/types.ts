@@ -119,10 +119,35 @@ export type SnapResult =
   | { ok: true; clip: SnappedClip }
   | { ok: false; reason: DropReason };
 
-export interface LlmUsage {
+/** Tokens and calls charged to ONE model id. */
+export interface ModelUsage {
   inputTokens: number;
   outputTokens: number;
   requests: number;
+}
+
+/**
+ * What the engine spent, in total AND per model.
+ *
+ * The totals came first and are kept: every caller and every persisted row reads
+ * them, and Job.analysisInputTokens/analysisOutputTokens are exactly these two.
+ *
+ * `byModel` exists because the totals cannot be priced. A job that degrades to
+ * the fallback model spends tokens on TWO models (job cmscht6rp001xq41s5rhjx6q0,
+ * 2026-08-03: every critic batch and the finalizer failed on gpt-5.6-luna and was
+ * re-run on gpt-5-mini), and the scanner has always run on a third and cheaper
+ * one. Pricing the sum at the CONFIGURED critic's rate understated that job by
+ * ~48%, and that figure is what settleFreeLedger charges against the free-tier
+ * budget. The totals are the sum of the buckets, always - callJsonSchema writes
+ * both in one place.
+ *
+ * A failed attempt appears here as a request with zero tokens: the SDK throws
+ * before any usage object exists, so the tokens it really billed are unknowable
+ * from our side. Truncated and refused responses DO carry usage and are counted
+ * in full, against the model that produced them.
+ */
+export interface LlmUsage extends ModelUsage {
+  byModel: Record<string, ModelUsage>;
 }
 
 export type NoClipsReasonValue =

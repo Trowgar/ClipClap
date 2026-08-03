@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   runCritic,
   repairCopy,
@@ -457,5 +457,78 @@ describe("repairCopy", () => {
     };
     const r = await repairCopy(client, newUsage(), nodes(10), v, "ru", cfg);
     expect(r).toBeNull();
+  });
+});
+
+/**
+ * The fallback is an OPERATIONAL event: the clips this job ships were judged by
+ * a model nobody selected. It has always been recorded - as one boolean among
+ * ~thirty fields of a JSON blob - and on job cmscht6rp001xq41s5rhjx6q0 the
+ * person investigating that very job read the blob and missed it. So it is a log
+ * line, and these tests pin the two properties that make it useful: it names
+ * both models and the stage, and it fires once per stage rather than once per
+ * batch (four concurrent batches die together in an outage; four identical lines
+ * teach nothing and bury the rest of the log).
+ */
+describe("critic fallback announcement", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  /** Fails every call on the primary model, answers on any other. */
+  function fallbackOnlyClient() {
+    return {
+      chat: {
+        completions: {
+          create: vi.fn(async (body: any) => {
+            if (body.model === cfg.criticModel) {
+              throw Object.assign(new Error("upstream down"), { status: 503 });
+            }
+            // Answer about exactly the candidates this batch was handed, so the
+            // per-batch id guard has nothing to drop.
+            const user: string = body.messages.find((m: any) => m.role === "user").content;
+            const ids = [...user.matchAll(/CANDIDATE (\w+) /g)].map((m) => m[1]);
+            return ok(ids.map((id) => verdictRow(id)));
+          }),
+        },
+      },
+    } as any;
+  }
+
+  it("announces the fallback once, naming both models and the stage", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const r = await runCritic(
+      fallbackOnlyClient(),
+      newUsage(),
+      nodes(20),
+      [cand("a", 0), cand("b", 4), cand("c", 8), cand("d", 12)],
+      "ru",
+      { ...cfg, criticBatchSize: 1 },
+      { retryDelayMs: 1 }
+    );
+
+    // four batches, every one of them degraded...
+    expect(r.verdicts).toHaveLength(4);
+    expect(r.telemetry.fallbackModelUsed).toBe(true);
+    // ...and exactly one announcement about it
+    const announcements = error.mock.calls
+      .map((c) => String(c[0]))
+      .filter((line) => line.includes("FALLBACK MODEL IN USE"));
+    expect(announcements).toHaveLength(1);
+    expect(announcements[0]).toContain("critic");
+    expect(announcements[0]).toContain(cfg.criticModel);
+    expect(announcements[0]).toContain(cfg.criticModelFallback);
+  });
+
+  it("says nothing when nothing falls back", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const client = seqClient([() => ok([verdictRow("a")])]);
+    const r = await runCritic(client, newUsage(), nodes(10), [cand("a", 0)], "ru", {
+      ...cfg,
+      criticBatchSize: 1,
+    });
+    expect(r.telemetry.fallbackModelUsed).toBe(false);
+    expect(
+      error.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("FALLBACK"))
+    ).toHaveLength(0);
   });
 });

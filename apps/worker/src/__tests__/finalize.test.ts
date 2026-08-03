@@ -982,6 +982,48 @@ describe("finalizeClips", () => {
     expect(ids(r.clips)).toEqual(["a"]);
   });
 
+  /**
+   * The finalizer's fallback leaves NO telemetry field at all - not even the
+   * critic's boolean - so this line is the only record that the judge holding
+   * veto authority over the shipped set was not the configured one. Job
+   * cmscht6rp001xq41s5rhjx6q0 fell back here too, and the only way anyone could
+   * tell was by reconstructing the request count by hand (18 = 3 scanner + 12
+   * critic + 3 finalizer).
+   */
+  it("announces the finalizer fallback, naming the stage and both models", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const clips = [clip("a", 0.9), clip("b", 0.8, 8, 14)];
+    const client = seqClient([
+      () => {
+        throw new Error("503");
+      },
+      () => {
+        throw new Error("503");
+      },
+      () => ok([row("a"), row("b")]),
+    ]);
+    await run(client, clips);
+
+    const announcements = error.mock.calls
+      .map((c) => String(c[0]))
+      .filter((line) => line.includes("FALLBACK MODEL IN USE"));
+    expect(announcements).toHaveLength(1);
+    expect(announcements[0]).toContain("finalizer");
+    expect(announcements[0]).toContain(cfg.finalizerModel);
+    expect(announcements[0]).toContain(cfg.criticModelFallback);
+    vi.restoreAllMocks();
+  });
+
+  it("says nothing about a fallback on the ordinary path", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const clips = [clip("a", 0.9), clip("b", 0.8, 8, 14)];
+    await run(seqClient([() => ok([row("a"), row("b")])]), clips);
+    expect(
+      error.mock.calls.map((c) => String(c[0])).filter((l) => l.includes("FALLBACK"))
+    ).toHaveLength(0);
+    vi.restoreAllMocks();
+  });
+
   it("never throws on malformed rows - it ignores what it cannot read", async () => {
     const clips = [clip("a", 0.9), clip("b", 0.8, 8, 14)];
     const client = seqClient([

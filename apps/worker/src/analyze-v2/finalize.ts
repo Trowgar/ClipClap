@@ -7,7 +7,7 @@ import {
   type DuplicateClaim,
 } from "./dedup";
 import { scriptMismatch } from "./language";
-import { callJsonSchema } from "./llm";
+import { callJsonSchema, logModelFallback } from "./llm";
 import { finalizerSystemPrompt, finalizerUserPrompt } from "./prompts";
 import { FINALIZER_SCHEMA } from "./schemas";
 import { nmsCollides } from "./select";
@@ -567,8 +567,12 @@ export async function finalizeClips(
     if (!result.ok && result.kind === "truncated") result = await call(cfg.finalizerModel, 2);
     if (!result.ok && result.kind === "refusal") result = await call(cfg.finalizerModel, 1);
     // llm.ts already retried a hard error once with backoff; try the fallback
-    // model exactly as the critic does.
+    // model exactly as the critic does. One call IS the stage, so this branch
+    // runs at most once and needs no latch - and unlike the critic it leaves no
+    // telemetry flag at all, which makes the log the ONLY record that the judge
+    // with veto authority over the shipped set was not the configured one.
     if (!result.ok && result.kind === "error") {
+      logModelFallback("finalizer", cfg.finalizerModel, cfg.criticModelFallback);
       result = await call(cfg.criticModelFallback, 1);
     }
     if (!result.ok) return skip(result.kind);

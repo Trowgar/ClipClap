@@ -5,7 +5,7 @@ import {
   readRate,
 } from "@clipclap/shared";
 import type { Prisma } from "@prisma/client";
-import { buildJobCostTelemetry } from "../cost-telemetry";
+import { buildJobCostTelemetry, type ModelTokenUsage } from "../cost-telemetry";
 import { criticModel, transcriptionModel } from "../model-selection";
 import { settleFreeLedger } from "./free-settlement";
 import type { FinalizeStagePayload } from "./types";
@@ -59,6 +59,73 @@ const COMPUTE_COST_PER_MINUTE_USD = readRate(
   "COMPUTE_COST_PER_MINUTE_USD"
 );
 
+/**
+ * Per-model analysis token usage for a job, or null when it cannot be trusted.
+ *
+ * WHERE IT COMES FROM, and why not the job row: the engine already publishes its
+ * whole LlmUsage - totals and, since 2026-08-03, the per-model breakdown - into
+ * the ANALYZE JobStep's outputJson, in the same stage invocation that writes
+ * Job.analysisInputTokens/analysisOutputTokens. Job has no column for a
+ * breakdown, and adding one is a Prisma migration on production; this reads the
+ * record that already exists rather than inventing a second one. See the note in
+ * cost-telemetry.ts for the column proposal.
+ *
+ * REFUSES rather than repairs, in all three directions:
+ *   - a payload of the wrong shape (legacy engine, pre-breakdown row, anything
+ *     unreadable) yields null, and pricing falls back to the aggregate columns;
+ *   - a malformed ENTRY nulls the whole map, because dropping it would silently
+ *     under-count that model's tokens - the exact class of quiet wrong number
+ *     this file exists to stop;
+ *   - a breakdown whose totals disagree with the job row's totals is a
+ *     breakdown from a DIFFERENT run (analyze writes the row first and the step
+ *     second, and a crash between them leaves the previous attempt's step
+ *     behind). The two records are then about different work, and pricing the
+ *     older one would be a confident wrong number about this job.
+ */
+export function readAnalysisUsageByModel(
+  outputJson: unknown,
+  aggregate: { inputTokens: number | null; outputTokens: number | null },
+  warn: (message: string) => void = console.warn
+): Record<string, ModelTokenUsage> | null {
+  const obj = (value: unknown): Record<string, unknown> | null =>
+    typeof value === "object" && value !== null && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : null;
+
+  const byModel = obj(obj(obj(outputJson)?.usage)?.byModel);
+  if (!byModel) return null;
+
+  const out: Record<string, ModelTokenUsage> = {};
+  let inputTokens = 0;
+  let outputTokens = 0;
+  for (const [model, raw] of Object.entries(byModel)) {
+    const entry = obj(raw);
+    const i = entry?.inputTokens;
+    const o = entry?.outputTokens;
+    const usable = (v: unknown): v is number =>
+      typeof v === "number" && Number.isFinite(v) && v >= 0;
+    if (!usable(i) || !usable(o)) return null;
+    out[model] = { inputTokens: i, outputTokens: o };
+    inputTokens += i;
+    outputTokens += o;
+  }
+  if (Object.keys(out).length === 0) return null;
+
+  if (
+    inputTokens !== (aggregate.inputTokens ?? 0) ||
+    outputTokens !== (aggregate.outputTokens ?? 0)
+  ) {
+    warn(
+      `[cost] per-model analysis usage (${inputTokens} in / ${outputTokens} out) does not ` +
+        `match the job row (${aggregate.inputTokens ?? 0} in / ${aggregate.outputTokens ?? 0} ` +
+        `out) - the two records are from different runs, so the breakdown is ignored and ` +
+        `this job is priced at the configured critic's rate.`
+    );
+    return null;
+  }
+  return out;
+}
+
 export async function runFinalizeStage(
   payload: FinalizeStagePayload
 ): Promise<void> {
@@ -71,6 +138,18 @@ export async function runFinalizeStage(
     const processingEndedAt = new Date();
     const processingStartedAt = job.processingStartedAt ?? processingEndedAt;
 
+    const analyzeStep = await prisma.jobStep.findUnique({
+      where: { jobId_step: { jobId: payload.jobId, step: "ANALYZE" } },
+      select: { outputJson: true },
+    });
+    const analysisUsageByModel = readAnalysisUsageByModel(
+      analyzeStep?.outputJson,
+      {
+        inputTokens: job.analysisInputTokens,
+        outputTokens: job.analysisOutputTokens,
+      }
+    );
+
     const telemetry = buildJobCostTelemetry({
       sourceDurationSec: job.sourceDurationSec,
       processingStartedAt,
@@ -82,6 +161,11 @@ export async function runFinalizeStage(
       transcriptionModel: transcriptionModel(),
       analysisInputTokens: job.analysisInputTokens,
       analysisOutputTokens: job.analysisOutputTokens,
+      analysisUsageByModel,
+      // The CONFIGURED critic, still stamped on the row - it is what the
+      // deployment asked for, and a row that records only the models that
+      // answered cannot show that they were not the ones chosen. The COST no
+      // longer comes from it whenever the breakdown above is available.
       criticModel: criticModel(),
       prices: MODEL_PRICES,
       computeCostPerMinuteUsd: COMPUTE_COST_PER_MINUTE_USD,

@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   jobFind: vi.fn(),
   jobFindUnique: vi.fn(),
   jobUpdate: vi.fn(),
+  jobStepFindUnique: vi.fn(),
   probeLocalFile: vi.fn(),
   findFreeCharge: vi.fn(),
   freeBalanceSeconds: vi.fn(),
@@ -61,6 +62,8 @@ vi.mock("@clipclap/shared", async () => ({
       findUnique: mocks.jobFindUnique,
       update: mocks.jobUpdate,
     },
+    // finalize reads the ANALYZE step for the per-model token breakdown.
+    jobStep: { findUnique: mocks.jobStepFindUnique },
   },
 }));
 
@@ -280,6 +283,9 @@ describe("finalize settlement", () => {
     // logged no-op.
     vi.resetAllMocks();
     mocks.getStageQueue.mockReturnValue({ add: mocks.queueAdd });
+    // No ANALYZE step row: this suite is about the ledger, and pricing falls
+    // back to the aggregate columns exactly as it did before the breakdown.
+    mocks.jobStepFindUnique.mockResolvedValue(null);
   });
 
   it("trues up before it refunds", async () => {

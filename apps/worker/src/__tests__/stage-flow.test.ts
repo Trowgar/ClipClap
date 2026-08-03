@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   jobFind: vi.fn(),
   jobFindUnique: vi.fn(),
   jobUpdate: vi.fn(),
+  jobStepFindUnique: vi.fn(),
   analyzeHighlightsV2: vi.fn(),
   probeLocalFile: vi.fn(),
   findFreeCharge: vi.fn(),
@@ -60,6 +61,8 @@ vi.mock("@clipclap/shared", async () => ({
       findUnique: mocks.jobFindUnique,
       update: mocks.jobUpdate,
     },
+    // finalize reads the ANALYZE step for the per-model token breakdown.
+    jobStep: { findUnique: mocks.jobStepFindUnique },
   },
 }));
 
@@ -110,6 +113,7 @@ describe("stage handlers", () => {
     });
     mocks.findFreeCharge.mockResolvedValue(null);
     mocks.jobFindUnique.mockResolvedValue(null);
+    mocks.jobStepFindUnique.mockResolvedValue(null);
     // pin the engine: these tests assert the legacy analyze path and must not
     // depend on the ambient ANALYZE_ENGINE of the environment they run in
     vi.stubEnv("ANALYZE_ENGINE", "legacy");

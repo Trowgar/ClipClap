@@ -1,6 +1,6 @@
 import type OpenAI from "openai";
 import type { AnalyzeConfig } from "./config";
-import { callJsonSchema, mapWithConcurrency } from "./llm";
+import { callJsonSchema, logModelFallback, mapWithConcurrency } from "./llm";
 import { criticSystemPrompt, criticUserPrompt } from "./prompts";
 import { CRITIC_SCHEMA, REPAIR_SCHEMA } from "./schemas";
 import { isoToLanguageName } from "./language";
@@ -290,7 +290,13 @@ export async function runCritic(
     }
 
     if (!result.ok && result.kind === "error") {
-      // llm.ts already retried once with backoff; try the fallback model
+      // llm.ts already retried once with backoff; try the fallback model.
+      // The log fires on the FIRST batch to degrade only - the flag is the
+      // latch, and there is no await between reading and setting it, so the
+      // four concurrent batches cannot both see false.
+      if (!telemetry.fallbackModelUsed) {
+        logModelFallback("critic", cfg.criticModel, cfg.criticModelFallback);
+      }
       telemetry.fallbackModelUsed = true;
       degraded = true;
       result = await callBatch(batch, cfg.criticModelFallback, 1);
