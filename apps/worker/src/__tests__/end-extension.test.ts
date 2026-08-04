@@ -417,6 +417,21 @@ describe("applyExtension", () => {
     expect(applyExtension(segment, n, 8, cfg)!.boundaryConfidence).toBe("segment");
   });
 
+  // The gate refuses opaque nodes as the NEW end; it says nothing about the end
+  // a clip arrives with. snap keeps an opaque end whenever the payoff is opaque
+  // itself - 2 of the 12 shipped sitcom-friends clips end that way - and moving
+  // such a clip onto a word-bearing end is the one case where this stage makes a
+  // boundary sharper rather than later. boundaryConfidence still reads "segment"
+  // afterwards, and correctly: it describes the payoff, which has not moved.
+  it("extends a clip OFF an opaque end onto a word-bearing one", () => {
+    const n = nodes(40);
+    n[5] = { ...n[5], hasWords: false, text: "[laughter]" };
+    const opaqueEnd = { ...clip(n), boundaryConfidence: "segment" as const };
+    const out = applyExtension(opaqueEnd, n, 8, cfg)!;
+    expect(out.finalEndNode).toBe(8);
+    expect(out.boundaryConfidence).toBe("segment");
+  });
+
   // The whole-object invariant, swept rather than spot-checked: across every
   // proposal this fixture admits, an accepted extension moves the end and
   // NOTHING else. Copy is grounded against [finalStartNode, finalEndNode]

@@ -1,9 +1,19 @@
 import { isCleanStart } from "./sentence-graph";
-// TYPE-ONLY on purpose, and it is the reason buildExtensionUser takes a window
-// rather than a cfg: end-extension.ts imports the two exports at the bottom of
-// this file, so calling back into it for the window would make the two modules
-// a runtime cycle. `import type` is erased, so there is none - and the type
-// still says what the argument has to be, which a bare number would not.
+// TYPE-ONLY, which is why buildExtensionUser takes a window rather than a cfg:
+// end-extension.ts imports the two exports at the bottom of this file, so
+// calling back into it for the window would make the two modules a cycle, and
+// `import type` is erased.
+//
+// That cycle would NOT have broken anything, and the claim that it would was
+// checked rather than repeated: the cfg-taking version was built and run in all
+// three runtimes this project uses - vitest/Vite-ESM, tsx in both import orders,
+// and tsc-emitted CommonJS required in both orders - and every cross-module
+// reference sits inside a function body, so it resolves lazily and nothing
+// fails. The real arguments for the window argument are that it computes
+// extensionWindow ONCE per offered clip instead of twice, and that it makes it
+// structurally impossible for this block and the gate to disagree about the
+// ceiling - the type says what the argument has to be, which a bare number
+// would not. The acyclic import graph is a bonus, not the reason.
 import type { ExtensionWindow } from "./end-extension";
 import type { MergedCandidate, SentenceNode, SnappedClip } from "./types";
 
@@ -439,14 +449,22 @@ Output ONLY the JSON object described by the schema.`;
  *
  * Not every OFFERED index is acceptable, and that is deliberate. applyExtension
  * additionally refuses opaque nodes, mid-clause ends and anything that would
- * breach maxSec, and on sitcom-friends 36 of the 111 candidates across 12 clips
- * fail one of those - so about a third of this list is a choice the gates will
- * turn down. Pre-filtering it was considered and rejected: every one of those 12
- * windows still contains a legal end (min 2, median 7), so the filter would have
- * changed no clip's outcome, and a list that hides the laughter and the
- * half-sentences between the beats would ask the model to judge a continuation
- * it cannot read. The `refused` counter in ExtensionTelemetry is what makes that
- * choice measurable rather than assumed.
+ * breach maxSec, and on sitcom-friends 41 of the 111 candidates across 12 clips
+ * fail one of those - 27 opaque, 9 mid-clause, 5 over the length cap, measured
+ * with applyExtension itself as the oracle - so well over a third of this list
+ * is a choice the gates will turn down. Pre-filtering it was considered and
+ * rejected: every one of those 12 windows still contains a legal end (min 2,
+ * median 6.5), so the filter would have changed no clip's outcome, and a list
+ * that hides the laughter and the half-sentences between the beats would ask the
+ * model to judge a continuation it cannot read. The `refused` counter in
+ * ExtensionTelemetry is what makes that choice measurable rather than assumed.
+ *
+ * The `<current end>` line prints its node's text verbatim even when that node
+ * is OPAQUE, which is 2 of the 12 shipped sitcom-friends clips - snap keeps an
+ * opaque end when the payoff itself is opaque. It reads as an inconsistency
+ * against WHAT IT CONTAINS, which filters those nodes out, and it is left alone
+ * deliberately: Whisper's segment text is the only text that line has, and
+ * "this clip ends in laughter" is precisely the signal that a reaction follows.
  *
  * PARTIAL, exactly like extensionWindow which mints the window it takes:
  * clip.finalEndNode must be a real index into `nodes`. extendClipEnds checks

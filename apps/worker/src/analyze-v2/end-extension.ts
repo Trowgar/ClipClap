@@ -104,8 +104,13 @@ export function extensionWindow(
  * - INSIDE THE WINDOW. The scene cut and the clock, above.
  * - WORD-BEARING. An opaque node's timings are segment-level (music, laughter,
  *   crosstalk), so ending on one puts the boundary at a coarse Whisper edge.
- *   snapNodes walks BACK off opaque ends for exactly this reason; walking ONTO
- *   one here would undo that.
+ *   snapNodes walks BACK off an opaque end - but only while a word-bearing node
+ *   exists at or after the payoff; when the PAYOFF itself is opaque it keeps the
+ *   opaque end and marks the clip segment-confidence, which is how 2 of the 12
+ *   shipped sitcom-friends clips end. So this gate is stricter than snap on
+ *   exactly those clips, and unconditionally: keeping an end the payoff forced
+ *   is not the same decision as MOVING onto one, and only the second is this
+ *   stage's to make.
  * - CLEAN END. The same test snap applies to every other end. A weak trailing
  *   boundary followed by a lowercase continuation is a mid-clause cut, and a
  *   clip that ends mid-clause is worse than a clip that ends early - which is
@@ -166,9 +171,13 @@ export function applyExtension(
   // on the answer, and the flag has to say so. Its consumer (select.ts) has
   // already run and priced the old end; nothing re-scores from it here.
   //
-  // boundaryConfidence is NOT recomputed and does not need to be: it degrades to
-  // "segment" for an opaque payoff or an opaque end, the payoff cannot move here
-  // and an opaque end is refused above, so the value snap derived still holds.
+  // boundaryConfidence is NOT recomputed and does not need to be. It reads
+  // "segment" exactly when the PAYOFF is opaque - snap walks an opaque end back
+  // to a word-bearing node whenever one exists at or after the payoff, and keeps
+  // the opaque end only when the payoff is opaque itself - and the payoff cannot
+  // move here. So the value snap derived still holds, including for a clip that
+  // extends OFF an opaque end onto a word-bearing one: the end got sharper, the
+  // payoff the flag describes did not.
   return {
     ...clip,
     endSec,
@@ -216,11 +225,14 @@ export function extensionMaxOutputTokens(clipCount: number): number {
  * is rows naming an id that is not in the set at all - a model inventing clips.
  *
  * A nonzero `refused` is expected rather than alarming, and the number it should
- * be read against is measured: of the 111 candidate ends offered across the 12
- * sitcom-friends clips, 36 are nodes applyExtension would turn down (opaque, or
- * a mid-clause end). `refused` climbing toward `proposed` is the finding worth
- * acting on - it would say the model is systematically choosing the beats the
- * gates cannot take, which is an argument for marking them in the prompt.
+ * be read against is measured with applyExtension itself as the oracle: of the
+ * 111 candidate ends offered across the 12 sitcom-friends clips, 41 are nodes it
+ * would turn down - 27 opaque, 9 mid-clause, 5 over maxSec. All three causes are
+ * counted here, so the comparison number is 41 and not the 27+9 an earlier
+ * version of this comment quoted. `refused` climbing toward `proposed` is the
+ * finding worth acting on - it would say the model is systematically choosing
+ * the beats the gates cannot take, which is an argument for marking them in the
+ * prompt.
  *
  * `secondsGained` is the only number that says whether the stage did anything a
  * viewer would notice; applied alone cannot distinguish twelve 0.4s nudges from
