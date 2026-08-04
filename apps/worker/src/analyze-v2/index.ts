@@ -538,7 +538,12 @@ export async function analyzeHighlightsV2(
     // record: what it was given, what it returned, what the soft cap then cut.
     // Without them a clip lost to the cap looks identical to a clip the judge
     // vetoed, and this stage's failure mode is an invisible loss.
-    selectedForFinalizer: selection.selected.length,
+    //
+    // Counted off the ARGUMENT the finalizer received, not off selection. The
+    // two agree today only because the extension stage returns its input 1:1 on
+    // every path, and nothing at this call site says so - a counter that reads
+    // "what it was given" has to read what was given.
+    selectedForFinalizer: extension.clips.length,
     finalizerSurvivors: finalized.clips.length,
     ...finalized.telemetry,
     kept: highlights.length,

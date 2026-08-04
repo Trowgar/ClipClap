@@ -209,6 +209,49 @@ describe("assertFingerprintMatches", () => {
     expect(error?.message).toContain("reasoningEffort");
   });
 
+  it("fails on a RENAMED knob rather than warning about half of it", () => {
+    // THE case the `stale` array exists for, and the one that produces nothing
+    // to look at without it. Rename criticBatchSize to criticBatchCount: the new
+    // name is merely unrecorded, so it warns; the old name is invisible to
+    // `mismatches`, which iterates the CURRENT keys only. Between the two, a
+    // recording made under the old knob would replay green against a config that
+    // sets the renamed one differently - the false MATCH, arriving through the
+    // one door nothing was watching.
+    const renamed = { ...current } as unknown as Record<string, unknown>;
+    delete renamed.criticBatchSize;
+    renamed.criticBatchCount = current.criticBatchSize;
+    const warn = vi.fn();
+    let error: Error | undefined;
+    try {
+      assertFingerprintMatches(
+        "case",
+        { ...current },
+        renamed as unknown as EngineFingerprint,
+        warn
+      );
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error?.message).toContain("criticBatchSize");
+    expect(error?.message).toContain("no such knob today");
+    expect(error?.message).toContain("eval-record.ts");
+    // and the other half is reported as what it is: unverified, not wrong
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain("criticBatchCount");
+  });
+
+  it("fails when the recording names a knob that was deleted outright", () => {
+    // Same verdict as the rename for the same reason: a recorded value nobody
+    // can evaluate is provenance that cannot be checked, and only a re-record
+    // fixes it. Deliberately NOT the `unrecorded` warn path - that one is about
+    // a value the recording never had, which asserts nothing either way.
+    const recorded = { ...current } as unknown as Record<string, unknown>;
+    recorded.criticTemperature = 0.7;
+    expect(() =>
+      assertFingerprintMatches("case", recorded as Partial<EngineFingerprint>, current, vi.fn())
+    ).toThrow(/criticTemperature/);
+  });
+
   it("warns instead of failing when the fixture has no fingerprint at all", () => {
     const warn = vi.fn();
     expect(() => assertFingerprintMatches("legacy-case", null, current, warn)).not.toThrow();
@@ -232,13 +275,17 @@ describe("assertFingerprintMatches", () => {
 });
 
 describe("compareFingerprints", () => {
-  it("separates value mismatches from knobs the recording never had", () => {
+  it("separates value mismatches, knobs the recording never had, and knobs it outlived", () => {
     const current = computeFingerprint(baseCfg);
     const recorded: Partial<EngineFingerprint> = { ...current, scanModel: "gpt-4.1-mini" };
     delete recorded.criticBatchSize;
+    // A knob this fingerprint has never heard of - what a recording made before
+    // a rename or a deletion carries.
+    (recorded as Record<string, unknown>).criticTemperature = 0.7;
     expect(compareFingerprints(recorded, current)).toEqual({
       mismatches: [`scanModel: recorded "gpt-4.1-mini", current ${JSON.stringify(current.scanModel)}`],
       unrecorded: ["criticBatchSize"],
+      stale: ["criticTemperature"],
     });
   });
 });

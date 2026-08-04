@@ -222,11 +222,15 @@ async function main() {
     // variant bless for the one reason that is never a problem.
     const recorded = fixture.fingerprints[variant] ?? null;
     if (recorded) {
-      const { mismatches } = compareFingerprints(recorded, current);
-      if (mismatches.length > 0) {
+      // Same reading as assertFingerprintMatches: a knob the recording names
+      // that no longer exists is stale provenance, not unknown provenance, and a
+      // rename produces exactly one of those beside one harmless warning.
+      const { mismatches, stale } = compareFingerprints(recorded, current);
+      if (mismatches.length > 0 || stale.length > 0) {
         refused++;
         console.log(`${name}: REFUSED - recorded under a different engine config`);
         for (const m of mismatches) console.log(`    - ${m}`);
+        for (const key of stale) console.log(`    - ${key}: recorded, but no longer a knob`);
         // Same split as the WARNING branch below: eval-record.ts re-records the
         // BASE, so handing that command to someone blessing a variant would
         // spend money and destroy the base recording the variant is compared

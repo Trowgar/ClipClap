@@ -169,6 +169,22 @@ export interface FingerprintComparison {
   mismatches: string[];
   /** Knobs the recording predates - unknown, not proven stale. */
   unrecorded: string[];
+  /**
+   * Knobs the recording names that the fingerprint no longer has - stale
+   * provenance, not unknown provenance, so callers FAIL on this rather than warn.
+   *
+   * A RENAME is what needs it, and a rename is the one edit that produces
+   * nothing to look at otherwise. `mismatches` iterates the CURRENT keys, so the
+   * old name is invisible to it; the new name lands in `unrecorded`, which only
+   * warns. Between them a fixture recorded under the old knob replays green
+   * against a config that sets the renamed one differently - the false MATCH
+   * this file exists to prevent, arriving through the one door it did not watch.
+   *
+   * Deleting a knob outright lands here too, and correctly: a recording naming a
+   * knob nobody can evaluate is provenance that cannot be checked, and the fix
+   * is the same re-record either way.
+   */
+  stale: string[];
 }
 
 export function compareFingerprints(
@@ -188,7 +204,12 @@ export function compareFingerprints(
       );
     }
   }
-  return { mismatches, unrecorded };
+  // The other direction, which the loop above cannot see by construction.
+  const stale = Object.keys(recorded).filter(
+    (key) =>
+      (recorded as Record<string, unknown>)[key] !== undefined && !(key in current)
+  );
+  return { mismatches, unrecorded, stale };
 }
 
 /**
@@ -203,6 +224,11 @@ export function compareFingerprints(
  * paid-re-record event for all existing fixtures. eval-record.ts always writes
  * meta.json now, so the warn path shrinks to zero on the next recording of any
  * fixture - and both fixtures in the repo carry one today.
+ *
+ * A knob the recording names that no longer EXISTS is the opposite case and
+ * throws: absence of a value asserts nothing, but a value nobody can evaluate
+ * asserts something unverifiable. See FingerprintComparison.stale for the rename
+ * this is really about.
  */
 export function assertFingerprintMatches(
   fixtureName: string,
@@ -217,18 +243,30 @@ export function assertFingerprintMatches(
     );
     return;
   }
-  const { mismatches, unrecorded } = compareFingerprints(recorded, current);
+  const { mismatches, unrecorded, stale } = compareFingerprints(recorded, current);
   if (unrecorded.length > 0) {
     warn(
       `[eval] fixture "${fixtureName}" fingerprint predates ${unrecorded.length} knob(s) ` +
         `[${unrecorded.join(", ")}] - those are unverified. Re-record to fix.`
     );
   }
-  if (mismatches.length > 0) {
+  // Both failures at once, because a rename produces one of each and reporting
+  // half of it is how the rename slipped through in the first place.
+  const problems = [
+    ...mismatches,
+    ...stale.map(
+      (key) =>
+        `${key}: recorded ${JSON.stringify(
+          (recorded as Record<string, unknown>)[key]
+        )}, and the fingerprint has no such knob today - renamed or removed, so ` +
+        `this recording's only statement about it can no longer be checked`
+    ),
+  ];
+  if (problems.length > 0) {
     throw new Error(
       `fixture "${fixtureName}" was recorded under a DIFFERENT engine config, so its responses no ` +
         `longer describe what the current engine would ask or be allowed to answer:\n` +
-        mismatches.map((m) => `  - ${m}`).join("\n") +
+        problems.map((m) => `  - ${m}`).join("\n") +
         `\nA green run here would be a lie. Either revert the knob(s) above, or re-record the ` +
         `fixture:\n  docker compose exec worker-analyze sh -c "cd /app/apps/worker && ` +
         `npx tsx src/scripts/eval-record.ts <jobId> ${fixtureName}"`

@@ -288,11 +288,18 @@ describe("end-extension wiring", () => {
     const { client, requests } = stubClient(
       baseReplies({ results: [extensionRow("c0", 17)] })
     );
-    await analyzeHighlightsV2(transcript(), { client, cfg: liveCfg });
+    const r = await analyzeHighlightsV2(transcript(), { client, cfg: liveCfg });
 
     const finalizerUser = userFor(requests, "clip_finalizer");
     expect(finalizerUser).toContain("CLIP c0 | score 0.85 | 40s");
     expect(finalizerUser).not.toContain("CLIP c0 | score 0.85 | 20s");
+    // And the counter published beside it counts THAT set. `selectedForFinalizer`
+    // is read as "what the finalizer was given"; the only reading that stays true
+    // if this stage ever returns a different number of clips is the argument it
+    // was actually handed, so the prompt is the oracle.
+    expect((finalizerUser.match(/^CLIP c\d+ \| score/gm) ?? []).length).toBe(
+      r.telemetry.selectedForFinalizer
+    );
   });
 
   it("runs after selection - a clip selection dropped is never offered an extension", async () => {
@@ -394,9 +401,10 @@ describe("end-extension wiring", () => {
     // pipeline.
     expect(schemasOf(requests)).toContain("clip_finalizer");
     // retryDelayMs has to reach the stage. Unforwarded, llm.ts falls back to its
-    // real backoff and these six attempts sleep for the better part of a minute
-    // while a user waits - visible only as a slow test, which is how it would
-    // ship.
+    // real backoff: DEFAULT_RETRY_BASE_MS doubling over MAX_ATTEMPTS is 2s + 4s
+    // per model, primary then fallback, so about 12s of sleeping (less up to 25%
+    // of jitter) while a user waits. Visible only as a slow test, which is
+    // exactly how it would ship.
     expect(elapsed).toBeLessThan(2000);
   });
 });
