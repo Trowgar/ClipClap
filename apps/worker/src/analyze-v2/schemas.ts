@@ -140,3 +140,43 @@ export const REPAIR_SCHEMA = {
     },
   },
 } as const;
+
+/** One row per clip offered to the end-extension pass. `end_node` is a PROPOSAL
+ *  and changes nothing until applyExtension accepts it.
+ *
+ *  `extend` and `end_node` are both required, and either alone could carry the
+ *  answer: a model that means "no" still has to echo an index, and a model that
+ *  means "yes" has to say so twice. The redundancy is deliberate - a
+ *  half-formed answer is then a contradiction rather than an instruction, and
+ *  the code resolves every contradiction by doing nothing (extendClipEnds reads
+ *  `extend` first, and applyExtension refuses the echo as a no-op regardless).
+ *
+ *  `reason` is required and deliberately NOT read by the code: it is here to
+ *  make the model name the beat it is reaching for before it commits to an
+ *  index. A proposal with no statable reason is the one this stage least wants,
+ *  and the field cannot be dropped without also dropping that pressure. */
+export const END_EXTENSION_SCHEMA = {
+  name: "end_extension",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["results"],
+    properties: {
+      results: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "extend", "end_node", "reason"],
+          properties: {
+            id: { type: "string" },
+            extend: { type: "boolean" },
+            end_node: { type: "integer" },
+            reason: { type: "string" },
+          },
+        },
+      },
+    },
+  },
+} as const;

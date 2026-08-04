@@ -1,8 +1,12 @@
+import type OpenAI from "openai";
 import type { AnalyzeConfig } from "./config";
+import { callJsonSchema, logModelFallback } from "./llm";
+import { EXTENSION_SYSTEM, buildExtensionUser } from "./prompts";
+import { END_EXTENSION_SCHEMA } from "./schemas";
 import { endsOnQuestionMark, isCleanEnd } from "./sentence-graph";
 import { sceneEndAfter } from "./scene-gaps";
 import { endSecFor } from "./snap";
-import type { SentenceNode, SnappedClip } from "./types";
+import type { LlmUsage, SentenceNode, SnappedClip } from "./types";
 
 export interface ExtensionWindow {
   /** Highest node index this clip may legally be extended to. Equals the clip's
@@ -172,4 +176,233 @@ export function applyExtension(
     shortMoment: endSec - clip.startSec < cfg.targetMinSec,
     endsOnQuestion: endsOnQuestionMark(e.text),
   };
+}
+
+// Output budget for the single extension call.
+//
+// ESTIMATED, NOT MEASURED (engine-notes §3 rule: say so). Per clip the visible
+// JSON is one small row - id, a boolean, an integer and a short clause, call it
+// 40-60 tokens against the critic's MEASURED ~150 for a row carrying a title, a
+// description and two evidence arrays. The reasoning term is borrowed from the
+// critic's Luna measurement, 68-171 tokens per candidate for a harder judgement
+// over a padded window, so ~230 is the worst case this shape suggests and 250
+// carries a small margin. The base covers the read of the rules plus the JSON
+// scaffold. At the softCap of 12 clips that is 3600 against an estimate near
+// 2800.
+//
+// The two errors are not symmetric, which is why the margin sits where it does.
+// There is no truncation retry here - unlike the finalizer, which retries with a
+// doubled cap because a skipped finalizer ships an unjudged set - so starvation
+// costs the WHOLE stage for the job. Over-sizing costs nothing at all: an unused
+// cap is not billed (the same argument critic.ts makes about its own headroom).
+// Re-measure from a real job's completion_tokens once the stage has run one.
+const EXTENSION_BASE_TOKENS = 600;
+const EXTENSION_TOKENS_PER_CLIP = 250;
+
+/** Output cap for the one call this stage makes. */
+export function extensionMaxOutputTokens(clipCount: number): number {
+  return EXTENSION_BASE_TOKENS + EXTENSION_TOKENS_PER_CLIP * clipCount;
+}
+
+/**
+ * What the stage did, in the numbers that can each be wrong differently.
+ *
+ * `offered` counts clips with somewhere to go - a non-empty window - not clips
+ * shipped: a set where offered is far below the shipped count means the scene
+ * rail or the clock is binding, not the model.
+ *
+ * `proposed` counts the model's extend:true rows. `applied` and `refused` split
+ * those by what the gates said, and the gap between proposed and applied+refused
+ * is rows naming an id that is not in the set at all - a model inventing clips.
+ *
+ * A nonzero `refused` is expected rather than alarming, and the number it should
+ * be read against is measured: of the 111 candidate ends offered across the 12
+ * sitcom-friends clips, 36 are nodes applyExtension would turn down (opaque, or
+ * a mid-clause end). `refused` climbing toward `proposed` is the finding worth
+ * acting on - it would say the model is systematically choosing the beats the
+ * gates cannot take, which is an argument for marking them in the prompt.
+ *
+ * `secondsGained` is the only number that says whether the stage did anything a
+ * viewer would notice; applied alone cannot distinguish twelve 0.4s nudges from
+ * one 13s rescue of a payoff.
+ */
+export interface ExtensionTelemetry {
+  offered: number;
+  proposed: number;
+  applied: number;
+  refused: number;
+  secondsGained: number;
+  fallbackModelUsed: boolean;
+}
+
+export interface ExtensionResult {
+  clips: SnappedClip[];
+  telemetry: ExtensionTelemetry;
+}
+
+/**
+ * The model's extend:true rows, keyed by clip id. Everything else is dropped
+ * silently: this stage's whole posture is that an answer it cannot read is an
+ * answer to ignore, and there is nothing to repair - the clip already ships.
+ *
+ * A REPEATED id drops the proposal instead of picking one of the two rows. Two
+ * rows about one clip is a model that does not have one answer, and both
+ * readings of "which one wins" are arbitrary; refusing costs at most one
+ * extension, while last-write-wins would let a garbled tail of the response
+ * override a considered first answer. Nothing upstream rules this out - strict
+ * mode constrains each ROW's shape and says nothing about the set, so two rows
+ * naming one clip is schema-legal and has to have a decided answer.
+ */
+function readProposals(raw: unknown): Map<string, number> {
+  const proposals = new Map<string, number>();
+  if (!Array.isArray(raw)) return proposals;
+
+  const seen = new Set<string>();
+  for (const row of raw) {
+    if (typeof row !== "object" || row === null) continue;
+    const { id, extend, end_node: endNode } = row as {
+      id?: unknown;
+      extend?: unknown;
+      end_node?: unknown;
+    };
+    if (typeof id !== "string") continue;
+    if (seen.has(id)) {
+      proposals.delete(id);
+      continue;
+    }
+    seen.add(id);
+    // `extend` is read FIRST and strictly: a false (or absent) flag beside a
+    // later end_node is a contradiction, and the answer to a contradiction here
+    // is to leave the clip alone. An extend:false echo needs no special case -
+    // applyExtension refuses the no-op it names.
+    if (extend !== true) continue;
+    if (typeof endNode !== "number") continue;
+    proposals.set(id, endNode);
+  }
+  return proposals;
+}
+
+/**
+ * Asks one focused question about every clip that has somewhere to go, and
+ * routes each answer through applyExtension.
+ *
+ * NEVER throws, and never returns fewer clips than it was given. This stage
+ * improves clips that are ALREADY shippable, so every failure - disabled,
+ * refusal, truncation, outage, a malformed payload, a defect in this file -
+ * ships the input set unchanged. The same discipline as finalizeClips and for
+ * the same reason: a content answer must not become a failed job (billing
+ * invariant, engine-notes §6). Unlike the finalizer it has no veto and no
+ * repair, so there is nothing to retry a truncation for - the budget above
+ * carries that argument.
+ *
+ * ONE call for the whole set, not one per clip. The question is per-clip and
+ * independent, so batching buys latency and nothing else - but it buys a lot of
+ * it: this runs while a user waits, after the critic's batches and before the
+ * finalizer, and twelve serial calls would be the slowest stage in the engine.
+ *
+ * The clip's own end node is validated HERE, before anything is offered.
+ * extensionWindow is partial by design and buildExtensionUser inherits that, so
+ * this loop is the last place where a real end node is a caller's obligation
+ * rather than a gate. A clip that fails the check is skipped rather than fatal:
+ * one stale end node must not cost every other clip in the job its extension,
+ * which is exactly what the outer catch alone would do.
+ */
+export async function extendClipEnds(
+  client: OpenAI,
+  usage: LlmUsage,
+  clips: SnappedClip[],
+  nodes: SentenceNode[],
+  cfg: AnalyzeConfig,
+  options: { retryDelayMs?: number } = {}
+): Promise<ExtensionResult> {
+  const telemetry: ExtensionTelemetry = {
+    offered: 0,
+    proposed: 0,
+    applied: 0,
+    refused: 0,
+    secondsGained: 0,
+    fallbackModelUsed: false,
+  };
+  if (!cfg.endExtensionEnabled) return { clips, telemetry };
+
+  try {
+    const offered: Array<{ clip: SnappedClip; window: ExtensionWindow }> = [];
+    for (const clip of clips) {
+      const end = clip.finalEndNode;
+      if (!Number.isInteger(end) || end < 0 || end > nodes.length - 1) continue;
+      const window = extensionWindow(clip, nodes, cfg);
+      // An empty window is not a question worth asking: every answer to it is
+      // the current end, which applyExtension refuses as a no-op anyway.
+      if (window.lastNode > end) offered.push({ clip, window });
+    }
+    telemetry.offered = offered.length;
+    if (offered.length === 0) return { clips, telemetry };
+
+    const user = offered
+      .map((o) => buildExtensionUser(o.clip, nodes, o.window))
+      .join("\n\n---\n\n");
+    const call = (model: string) =>
+      callJsonSchema<{ results?: unknown }>(client, usage, {
+        model,
+        system: EXTENSION_SYSTEM,
+        user,
+        schema: END_EXTENSION_SCHEMA,
+        reasoningEffort: cfg.reasoningEffort,
+        maxOutputTokens: extensionMaxOutputTokens(offered.length),
+        retryDelayMs: options.retryDelayMs,
+      });
+
+    // The critic's model and the critic's fallback: this is the same kind of
+    // judgement over the same transcript. No stage-specific knob exists, and
+    // none should until a measurement asks for one - the finalizer's own
+    // override was added because that stage judges the whole set at once.
+    let result = await call(cfg.criticModel);
+    // Only on a hard error, exactly as the critic and the finalizer degrade.
+    // A refusal or a truncation is an answer about THIS request, and llm.ts has
+    // already spent its retry budget on anything transient; re-asking a second
+    // model would double the wall clock for a stage whose failure is free.
+    if (!result.ok && result.kind === "error") {
+      logModelFallback("end-extension", cfg.criticModel, cfg.criticModelFallback);
+      telemetry.fallbackModelUsed = true;
+      result = await call(cfg.criticModelFallback);
+    }
+    if (!result.ok) return { clips, telemetry };
+
+    // `data` itself can be null - JSON.parse("null") is a legal parse, and
+    // callJsonSchema hands back whatever parsed.
+    const proposals = readProposals(result.data?.results);
+    telemetry.proposed = proposals.size;
+
+    const out = clips.map((clip) => {
+      const proposed = proposals.get(clip.verdict.id);
+      if (proposed === undefined) return clip;
+      // Every gate lives in applyExtension, including the ones this function
+      // could have pre-checked. A clip that was never offered can still be
+      // named by the model, and it is refused here on its own merits rather
+      // than by bookkeeping.
+      const extended = applyExtension(clip, nodes, proposed, cfg);
+      if (!extended) {
+        telemetry.refused += 1;
+        return clip;
+      }
+      telemetry.applied += 1;
+      // Safe to subtract without a guard: an accepted extension always has a
+      // strictly larger endSec (applyExtension's seconds gate), so this can
+      // only ever add.
+      telemetry.secondsGained += extended.endSec - clip.endSec;
+      return extended;
+    });
+
+    return { clips: out, telemetry };
+  } catch (error) {
+    // Belt and braces: callJsonSchema swallows API failures and applyExtension
+    // is total, so reaching here means a defect in this file or in prompt
+    // rendering. Clips that already passed every gate must still ship.
+    console.warn(
+      `[analyze-v2] end-extension threw, shipping the set unchanged: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+    return { clips, telemetry };
+  }
 }

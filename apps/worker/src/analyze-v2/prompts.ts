@@ -1,4 +1,10 @@
 import { isCleanStart } from "./sentence-graph";
+// TYPE-ONLY on purpose, and it is the reason buildExtensionUser takes a window
+// rather than a cfg: end-extension.ts imports the two exports at the bottom of
+// this file, so calling back into it for the window would make the two modules
+// a runtime cycle. `import type` is erased, so there is none - and the type
+// still says what the argument has to be, which a bare number would not.
+import type { ExtensionWindow } from "./end-extension";
 import type { MergedCandidate, SentenceNode, SnappedClip } from "./types";
 
 export const SCANNER_PROMPT = `You are a fast recall scanner for a short-form video clipping tool. You read a
@@ -368,4 +374,114 @@ export function finalizerUserPrompt(
       return lines.join("\n");
     })
     .join("\n\n---\n\n");
+}
+
+/**
+ * END-EXTENSION (spec 2026-08-04 §3.2) - the one question the engine has no
+ * other way to ask: does this moment KEEP GOING.
+ *
+ * It exists as its own call rather than a paragraph in the critic's prompt, and
+ * that is the whole design. The critic is already told to chase a sharper beat
+ * within ~10s (CRITIC_PROMPT_TEMPLATE, "PAYOFF CHASING") while judging a batch
+ * of candidates against everything else that prompt asks of it, and it does not
+ * fire: shipped tail after the payoff is 0.3s - exactly tailHoldSec - on 9 of 12
+ * clips of the sitcom-friends fixture, while three independent reviewers reading
+ * the full transcript put the right end 17 to 55 seconds later. engine-notes §5a
+ * records the same shape once already - a numbered rule in a crowded prompt
+ * firing ZERO times across both fixtures while the defect it names sat in the
+ * output. So the rule is not restated more loudly anywhere; it is asked on its
+ * own, about one clip, with the candidate ends listed.
+ *
+ * NO LANGUAGE PARAMETER, unlike the critic and finalizer prompts. Those two
+ * write copy a viewer reads and must be pinned to the clip's own language; this
+ * one emits an index and a `reason` nobody ships. The transcript in the user
+ * block carries the language on its own.
+ */
+export const EXTENSION_SYSTEM = `You decide where a short video clip should END.
+
+You are given a clip that already works: its setup and its payoff are inside it.
+Your only question is whether the moment KEEPS GOING - whether a stronger beat
+lands in the lines immediately after the current end.
+
+Extend when the lines after the end contain:
+- the reaction to the payoff (the comeback, the shock, the escalation)
+- a second, harder beat that tops the one the clip currently ends on
+- the answer to a question the clip ends on
+
+Do NOT extend when the lines after the end are:
+- a new subject, a goodbye, or the conversation winding down
+- more of the same with nothing added
+- anything that would make a viewer check how much is left
+
+Extending a good clip into a flat one is worse than leaving it short. When the
+following lines add nothing, say extend: false.
+
+Answer with node indices only, chosen from the CANDIDATE list you are shown -
+never a timestamp, never an index you were not offered.
+
+For each clip: id, extend, end_node (the LAST node to include; echo the current
+end when extend is false), and reason - one short clause naming the beat you are
+reaching for, or why nothing was worth reaching for.
+
+Output ONLY the JSON object described by the schema.`;
+
+/**
+ * One block per clip: what it already contains, then the numbered lines it may
+ * reach into.
+ *
+ * The candidate list is CONTIGUOUS and stops at `window.lastNode`. Contiguous
+ * because a clip is a range - choosing #9 plays #8 too, so a list with holes in
+ * it would describe a clip that cannot be cut. Stopping at lastNode because
+ * offering an index the gates will refuse is offering nothing: extensionWindow
+ * is the same ceiling applyExtension enforces, and the two must not be able to
+ * disagree, which is why the window is passed in rather than recomputed here
+ * from a cfg that could differ from the one applying the answer.
+ *
+ * Not every OFFERED index is acceptable, and that is deliberate. applyExtension
+ * additionally refuses opaque nodes, mid-clause ends and anything that would
+ * breach maxSec, and on sitcom-friends 36 of the 111 candidates across 12 clips
+ * fail one of those - so about a third of this list is a choice the gates will
+ * turn down. Pre-filtering it was considered and rejected: every one of those 12
+ * windows still contains a legal end (min 2, median 7), so the filter would have
+ * changed no clip's outcome, and a list that hides the laughter and the
+ * half-sentences between the beats would ask the model to judge a continuation
+ * it cannot read. The `refused` counter in ExtensionTelemetry is what makes that
+ * choice measurable rather than assumed.
+ *
+ * PARTIAL, exactly like extensionWindow which mints the window it takes:
+ * clip.finalEndNode must be a real index into `nodes`. extendClipEnds checks
+ * that before a clip is ever offered - it is the last place in this stage where
+ * a valid end node is still a caller's obligation rather than a gate.
+ */
+export function buildExtensionUser(
+  clip: SnappedClip,
+  nodes: SentenceNode[],
+  window: ExtensionWindow
+): string {
+  const { lastNode } = window;
+  // Opaque nodes are skipped in the clip's own text - their transcript is
+  // Whisper's segment-level guess at music or crosstalk, which reads as speech
+  // the clip does not contain.
+  const own = nodes
+    .slice(clip.finalStartNode, clip.finalEndNode + 1)
+    .filter((n) => n.hasWords)
+    .map((n) => n.text.trim())
+    .join(" ");
+  const lines = [
+    `CLIP ${clip.verdict.id} - currently ends at node #${clip.finalEndNode}`,
+    `WHAT IT CONTAINS: ${own}`,
+    "",
+    "CANDIDATE ENDINGS (you may choose any of these, or keep the current end):",
+    `  #${clip.finalEndNode} <current end> ${nodes[clip.finalEndNode].text.trim()}`,
+  ];
+  for (let i = clip.finalEndNode + 1; i <= lastNode; i++) {
+    lines.push(`  #${i} ${nodes[i].text.trim()}`);
+  }
+  // A legal answer, not a failure: the clip already ends at a scene cut, or the
+  // next line is more than the window away. Said out loud because the list above
+  // then holds a single line and reads like a formatting accident.
+  if (lastNode === clip.finalEndNode) {
+    lines.push("  (nothing follows inside this scene - answer extend: false)");
+  }
+  return lines.join("\n");
 }
