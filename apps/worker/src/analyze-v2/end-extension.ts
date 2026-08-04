@@ -66,7 +66,11 @@ export function extensionWindow(
  *
  * TOTAL, unlike extensionWindow: any clip, any number, either a widened clip or
  * null - never a throw. A stage that runs once per shipped clip must not be able
- * to fail a whole job over one bad answer.
+ * to fail a whole job over one bad answer. That holds only because the clip's
+ * OWN end node is checked at both ends before the window is computed - the
+ * upper bound falls out of the gate pairing below, the lower one needs its own
+ * line, and an earlier version of this comment claimed totality while -1 and
+ * NaN still threw.
  *
  * This stage may only ever move an end FORWARD: shortening is the finalizer's
  * `trim`, which has its own gates, and more importantly a shorter range can push
@@ -82,13 +86,17 @@ export function extensionWindow(
  *   a property off it.
  * - FORWARD ONLY, by index. The never-shorten rule, stated above.
  * - INSIDE THE GRAPH. Not a duplicate of the window gate, which would refuse an
- *   out-of-range proposal too. Paired with the forward-only gate above it is what
- *   PROVES clip.finalEndNode is itself a real index - nothing can be both
- *   `> finalEndNode` and `<= nodes.length - 1` unless finalEndNode is in the
- *   graph - and it proves it BEFORE extensionWindow dereferences
- *   nodes[finalEndNode].end. Delete it and a clip carrying a stale end node
- *   turns a null refusal into a TypeError thrown out of a stage that must never
- *   throw.
+ *   out-of-range proposal too. Paired with the forward-only gate above, it caps
+ *   clip.finalEndNode from ABOVE - nothing can be both `> finalEndNode` and
+ *   `<= nodes.length - 1` unless finalEndNode is under the top of the graph -
+ *   and it does so BEFORE extensionWindow dereferences nodes[finalEndNode].end.
+ *   Delete it and a clip carrying a stale end node turns a null refusal into a
+ *   TypeError thrown out of a stage that must never throw.
+ * - THE CLIP'S OWN END IS A REAL INDEX, from below. The pairing above proves
+ *   nothing about a negative or NaN finalEndNode, so that is its own gate. Not
+ *   reachable through snapNodes, whose idxOk already demands >= 0; it is here
+ *   because the totality promise above is unconditional and a future caller
+ *   handing this stage a clip from somewhere else must get null, not a throw.
  * - INSIDE THE WINDOW. The scene cut and the clock, above.
  * - WORD-BEARING. An opaque node's timings are segment-level (music, laughter,
  *   crosstalk), so ending on one puts the boundary at a coarse Whisper edge.
@@ -121,6 +129,12 @@ export function applyExtension(
   if (!Number.isInteger(proposedEndNode)) return null;
   if (proposedEndNode <= clip.finalEndNode) return null;
   if (proposedEndNode > nodes.length - 1) return null;
+
+  // The gates above bound the clip's own end from ABOVE only. Nothing there
+  // rules out a negative, fractional or NaN finalEndNode, and each of those
+  // reaches undefined inside extensionWindow - measured, not feared: -1 and NaN
+  // throw on `nodes[from].end`, 2.5 throws inside sceneEndAfter.
+  if (!Number.isInteger(clip.finalEndNode) || clip.finalEndNode < 0) return null;
 
   const { lastNode } = extensionWindow(clip, nodes, cfg);
   if (proposedEndNode > lastNode) return null;

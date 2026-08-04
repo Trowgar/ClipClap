@@ -196,11 +196,32 @@ describe("applyExtension", () => {
   // CLIP's own end node is real before extensionWindow reads
   // nodes[finalEndNode].end - without it a stale end node throws a TypeError
   // out of a stage Task 3 calls once per shipped clip and that must never throw.
-  it("refuses a clip whose own end node is outside the graph, rather than throwing", () => {
+  it("refuses a clip whose own end node is not a real index, rather than throwing", () => {
     const n = nodes(40);
     const stale = { ...clip(n), finalEndNode: 500 };
     expect(applyExtension(stale, n, 501, cfg)).toBeNull();
     expect(applyExtension(stale, n, 30, cfg)).toBeNull();
+    // and from below, which the gate pairing above proves nothing about: each
+    // of these reaches undefined inside extensionWindow - -1 and NaN on
+    // nodes[from].end, 2.5 inside sceneEndAfter - and a stage documented as
+    // never throwing has to answer null instead
+    for (const bad of [-1, 2.5, Number.NaN]) {
+      expect(applyExtension({ ...clip(n), finalEndNode: bad }, n, 3, cfg)).toBeNull();
+    }
+  });
+
+  // The lower bound is `< 0`, not `<= 0`: a clip ending on the FIRST node is a
+  // real clip and must still be extendable. Nothing else in the suite would
+  // notice that gate tightening by one.
+  it("still extends a clip that ends on node 0", () => {
+    const n = nodes(40);
+    const first: SnappedClip = {
+      ...clip(n),
+      startSec: n[0].start, endSec: n[0].end,
+      finalStartNode: 0, finalEndNode: 0,
+      hookStartSec: n[0].start, hookEndSec: n[0].end, payoffSec: n[0].end,
+    };
+    expect(applyExtension(first, n, 1, cfg)!.finalEndNode).toBe(1);
   });
 
   // Kills `> nodes.length - 1` -> `>=`. The last node in the graph is a legal
