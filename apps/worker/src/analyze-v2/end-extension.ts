@@ -1,6 +1,7 @@
 import type { AnalyzeConfig } from "./config";
 import { endsOnQuestionMark, isCleanEnd } from "./sentence-graph";
 import { sceneEndAfter } from "./scene-gaps";
+import { endSecFor } from "./snap";
 import type { SentenceNode, SnappedClip } from "./types";
 
 export interface ExtensionWindow {
@@ -15,17 +16,15 @@ export interface ExtensionWindow {
  *
  * A CEILING, never a target. Nothing here says a clip should end at lastNode -
  * it says nothing past lastNode may be offered to a model or accepted from one.
- * The common answer to "should this clip run longer" is no, and this function
- * has no opinion about it.
  *
  * The two bounds are not redundant and neither is decoration. The scene rail is
- * PARTIAL by construction: a cut the audience laughs through arrives as an
- * opaque node and leaves no silence behind, so only 8 of the 17 word-free
- * stretches on the sitcom-friends fixture are detectable at all (scene-gaps.ts).
- * When the rail is blind - which includes every podcast, where there are no cuts
- * to find - the clock is the only thing standing between a clip and the rest of
- * the video. And when the clock is generous the rail is what stops a compilation
- * clip from stapling two unrelated scenes together.
+ * PARTIAL by construction: it finds the cuts that fall silent and not the ones
+ * an audience laughs through, and it finds nothing at all in a source with no
+ * hard cuts, which is what both podcast fixtures are. scene-gaps.ts carries that
+ * measurement and is the single copy of it. Where the rail is blind the clock is
+ * the only thing standing between a clip and the rest of the video; where the
+ * clock is generous the rail is what stops a compilation clip from stapling two
+ * unrelated scenes together.
  *
  * The deadline is measured from the END NODE's last word, not from clip.endSec,
  * so the tail hold is not charged against the window: the hold is silence, and
@@ -37,7 +36,7 @@ export interface ExtensionWindow {
  * i, so a single long node closes the window for everything behind it. Skipping
  * would offer an end whose inclusion drags the clip far past the window - and
  * node ends really can overrun their successor's start, because word timings
- * nest (snap.ts:168).
+ * nest (the `max, not last` comment on `end:` in buildSentenceGraph).
  *
  * clip.finalEndNode must be a real index into `nodes` - sceneEndAfter refuses to
  * invent a ceiling for an invalid one, and neither does this.
@@ -65,6 +64,10 @@ export function extensionWindow(
  * model's proposal to be wrong, and the caller's only job is to keep the clip it
  * already had when one fires. Nothing here is advisory.
  *
+ * TOTAL, unlike extensionWindow: any clip, any number, either a widened clip or
+ * null - never a throw. A stage that runs once per shipped clip must not be able
+ * to fail a whole job over one bad answer.
+ *
  * This stage may only ever move an end FORWARD: shortening is the finalizer's
  * `trim`, which has its own gates, and more importantly a shorter range can push
  * titleEvidenceNodes outside the clip and silently degrade copy - engine-notes
@@ -78,9 +81,14 @@ export function extensionWindow(
  *   used as an array index - nodes[8.5] is undefined and every later gate reads
  *   a property off it.
  * - FORWARD ONLY, by index. The never-shorten rule, stated above.
- * - INSIDE THE GRAPH. Belt to the window's braces: the window can only ever
- *   return an index that exists, so this cannot fire today, and it stays because
- *   it is the gate that keeps that true if the window's own bound ever changes.
+ * - INSIDE THE GRAPH. Not a duplicate of the window gate, which would refuse an
+ *   out-of-range proposal too. Paired with the forward-only gate above it is what
+ *   PROVES clip.finalEndNode is itself a real index - nothing can be both
+ *   `> finalEndNode` and `<= nodes.length - 1` unless finalEndNode is in the
+ *   graph - and it proves it BEFORE extensionWindow dereferences
+ *   nodes[finalEndNode].end. Delete it and a clip carrying a stale end node
+ *   turns a null refusal into a TypeError thrown out of a stage that must never
+ *   throw.
  * - INSIDE THE WINDOW. The scene cut and the clock, above.
  * - WORD-BEARING. An opaque node's timings are segment-level (music, laughter,
  *   crosstalk), so ending on one puts the boundary at a coarse Whisper edge.
@@ -121,22 +129,9 @@ export function applyExtension(
   if (!e.hasWords) return null;
   if (!isCleanEnd(nodes, proposedEndNode)) return null;
 
-  // Same seconds arithmetic as snap.ts:121-123, and for the same two reasons:
-  // the tail hold may only ever move within silence, so it is capped at the next
-  // node's onset; and the cap may never cut the end node's own last word, so the
-  // node's end wins over the cap when timings nest.
-  //
-  // The `: null` branch has no effect - nodes[len] is undefined and the guard
-  // below treats undefined and null alike - and is kept anyway, for two reasons.
-  // It is snap's line verbatim, which is what lets the parity claim above be
-  // checked by eye. And with noUncheckedIndexedAccess off, dropping the bound
-  // check would type `next` non-nullable, leaving the guard below looking
-  // redundant to the next reader - and collapsing it into `next.start` throws on
-  // the last node in the graph, which is a legal end for any clip at the end of
-  // a video.
-  const next = proposedEndNode < nodes.length - 1 ? nodes[proposedEndNode + 1] : null;
-  let endSec = Math.min(e.end + cfg.tailHoldSec, next ? next.start : Infinity);
-  endSec = Math.max(endSec, e.end);
+  // snap's own arithmetic, called rather than copied: an end this stage MOVES
+  // has to land where snap would have put it.
+  const endSec = endSecFor(nodes, e, cfg);
   if (endSec <= clip.endSec) return null;
   if (endSec - clip.startSec > cfg.maxSec) return null;
 

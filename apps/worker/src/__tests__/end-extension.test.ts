@@ -3,7 +3,38 @@ import { applyExtension, extensionWindow } from "../analyze-v2/end-extension";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import type { CriticVerdict, SentenceNode, SnappedClip } from "../analyze-v2/types";
 
+// ---------------------------------------------------------------------------
+// This suite was built by attacking itself. The ten cases the plan sketched
+// were written before the code existed, and of the 29 mutations of this module
+// and its knobs that ran against them, NINETEEN survived - including deleting
+// the opaque-node gate, the clean-end gate and the maxSec gate outright. Every
+// case below names the mutation it kills, because a gate nobody can prove fires
+// is worse than no gate: it buys false confidence.
+//
+// Two warnings for whoever runs the next matrix over this file.
+//
+// A mutant that FAILS TO APPLY is an error, never a kill. One here had its
+// find-string go stale against a return that grew multi-line, and a summary
+// that subtracted survivors from the total published it as a kill. Check the
+// error count before trusting the score.
+//
+// One mutation is EQUIVALENT and no test can kill it: starting the window loop
+// at `from` rather than `from + 1`. `last` is already `from`, and the deadline
+// is at or after nodes[from].end for any non-negative window, so the extra
+// iteration can only re-assign what is already there. Checked over 20000 random
+// graphs. Two others were called equivalent and were not: the in-graph gate is
+// killed below by a clip carrying a stale end node, and the `: null` branch
+// that had no effect is gone entirely now that the seconds arithmetic is snap's
+// endSecFor rather than a copy of it.
+// ---------------------------------------------------------------------------
+
 const cfg = loadAnalyzeConfig({ SCENE_GAP_SEC: "8", END_EXTENSION_WINDOW_SEC: "25" });
+
+/** Window wide enough that maxSec, not the window, is the binding gate. */
+const cfgWide = loadAnalyzeConfig({
+  SCENE_GAP_SEC: "8",
+  END_EXTENSION_WINDOW_SEC: "1000",
+});
 
 function nodes(count: number, holeBefore?: number): SentenceNode[] {
   const out: SentenceNode[] = [];
@@ -60,84 +91,7 @@ describe("extensionWindow", () => {
     const n = nodes(20, 6);
     expect(extensionWindow(clip(n), n, cfg).lastNode).toBe(5);
   });
-});
 
-describe("applyExtension", () => {
-  it("accepts a legal forward move and returns the widened clip", () => {
-    const n = nodes(40);
-    const out = applyExtension(clip(n), n, 8, cfg);
-    expect(out).not.toBeNull();
-    expect(out!.finalEndNode).toBe(8);
-    expect(out!.endSec).toBeGreaterThan(n[5].end);
-  });
-
-  it("refuses a move that shortens the clip", () => {
-    const n = nodes(40);
-    expect(applyExtension(clip(n), n, 4, cfg)).toBeNull();
-  });
-
-  it("refuses a no-op", () => {
-    const n = nodes(40);
-    expect(applyExtension(clip(n), n, 5, cfg)).toBeNull();
-  });
-
-  it("refuses a move across a scene boundary", () => {
-    const n = nodes(20, 8);
-    expect(applyExtension(clip(n), n, 10, cfg)).toBeNull();
-  });
-
-  it("refuses a move that would push the clip past maxSec", () => {
-    const n = nodes(200);
-    expect(applyExtension(clip(n), n, 120, cfg)).toBeNull();
-  });
-
-  it("refuses an index outside the graph", () => {
-    const n = nodes(40);
-    expect(applyExtension(clip(n), n, 999, cfg)).toBeNull();
-  });
-
-  it("keeps the payoff, hook and start untouched", () => {
-    const n = nodes(40);
-    const before = clip(n);
-    const out = applyExtension(before, n, 8, cfg)!;
-    expect(out.startSec).toBe(before.startSec);
-    expect(out.payoffSec).toBe(before.payoffSec);
-    expect(out.hookStartSec).toBe(before.hookStartSec);
-    expect(out.finalStartNode).toBe(before.finalStartNode);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Everything below was added after mutation-testing the suite above. Nineteen
-// of the twenty-nine mutations of this module and its knobs that ran against
-// those ten cases SURVIVED them - including deleting the opaque-node gate, the
-// clean-end gate and the maxSec gate outright - so the ten proved almost
-// nothing about the gates. Each case here names the mutation it kills, because
-// a gate nobody can prove fires is worse than no gate: it buys false confidence.
-//
-// Two warnings for whoever runs the next matrix over this file. A mutant that
-// FAILS TO APPLY is an error, never a kill - one of these had a find-string go
-// stale against a return that grew multi-line, and subtracting survivors from
-// the total published it as a kill. Check the error count first.
-//
-// And three mutations here are EQUIVALENT, so do not go hunting for a case that
-// kills them: (1) starting the window loop at `from` rather than `from + 1` -
-// `last` is already `from`, and the deadline is at or after nodes[from].end for
-// any non-negative window; (2) dropping applyExtension's in-graph gate - the
-// window can never return an index outside the graph, so the window gate
-// already refuses everything that one would; (3) the `: null` branch of the
-// `next` lookup - nodes[len] is undefined, which the guard beside it treats
-// identically. All three were checked over 20000 random graphs, and (2) and (3)
-// are kept deliberately - end-extension.ts says why at each.
-// ---------------------------------------------------------------------------
-
-/** Window wide enough that maxSec, not the window, is the binding gate. */
-const cfgWide = loadAnalyzeConfig({
-  SCENE_GAP_SEC: "8",
-  END_EXTENSION_WINDOW_SEC: "1000",
-});
-
-describe("extensionWindow bounds", () => {
   // Kills `end > deadline` -> `end >= deadline`. A node ending exactly ON the
   // limit is inside it - "may look 25s past the end" reads inclusive. Nothing
   // measured hangs on the 0.0s difference, but the branch has to be pinned so
@@ -154,7 +108,8 @@ describe("extensionWindow bounds", () => {
   // the deadline closes the window for everything after it. `continue` skips
   // the long node and keeps collecting short ones behind it, which offers the
   // model an end that drags the clip 80s past a 25s window. Ends can overrun
-  // their successor's start for real - nested word timings, snap.ts:168.
+  // their successor's start for real - word timings nest, see the `max, not
+  // last` comment on `end:` in buildSentenceGraph.
   it("stops at a node that overruns the deadline, even when shorter ones follow", () => {
     const n = nodes(40);
     n[8] = { ...n[8], end: 100 };
@@ -197,7 +152,35 @@ describe("extensionWindow bounds", () => {
   });
 });
 
-describe("applyExtension gates", () => {
+describe("applyExtension", () => {
+  it("accepts a legal forward move and returns the widened clip", () => {
+    const n = nodes(40);
+    const out = applyExtension(clip(n), n, 8, cfg);
+    expect(out).not.toBeNull();
+    expect(out!.finalEndNode).toBe(8);
+    expect(out!.endSec).toBeGreaterThan(n[5].end);
+  });
+
+  it("refuses a move that shortens the clip", () => {
+    const n = nodes(40);
+    expect(applyExtension(clip(n), n, 4, cfg)).toBeNull();
+  });
+
+  it("refuses a no-op", () => {
+    const n = nodes(40);
+    expect(applyExtension(clip(n), n, 5, cfg)).toBeNull();
+  });
+
+  it("refuses a move across a scene boundary", () => {
+    const n = nodes(20, 8);
+    expect(applyExtension(clip(n), n, 10, cfg)).toBeNull();
+  });
+
+  it("refuses an index outside the graph", () => {
+    const n = nodes(40);
+    expect(applyExtension(clip(n), n, 999, cfg)).toBeNull();
+  });
+
   // Kills dropping Number.isInteger. A model that answers 8.5 - or a NaN from a
   // parsed empty string - must be refused, not indexed into the graph: nodes[8.5]
   // is undefined and every gate after it reads a property off it.
@@ -208,13 +191,24 @@ describe("applyExtension gates", () => {
     expect(applyExtension(clip(n), n, Number.POSITIVE_INFINITY, cfg)).toBeNull();
   });
 
+  // Kills dropping the in-graph gate, which the window gate does NOT cover.
+  // Paired with the forward-only gate, this is the only thing proving the
+  // CLIP's own end node is real before extensionWindow reads
+  // nodes[finalEndNode].end - without it a stale end node throws a TypeError
+  // out of a stage Task 3 calls once per shipped clip and that must never throw.
+  it("refuses a clip whose own end node is outside the graph, rather than throwing", () => {
+    const n = nodes(40);
+    const stale = { ...clip(n), finalEndNode: 500 };
+    expect(applyExtension(stale, n, 501, cfg)).toBeNull();
+    expect(applyExtension(stale, n, 30, cfg)).toBeNull();
+  });
+
   // Kills `> nodes.length - 1` -> `>=`. The last node in the graph is a legal
   // end - it is where every clip at the end of a video has to stop - and the
-  // bounds gate must reject only what is genuinely outside.
-  //
-  // Also kills dropping the `next` null-guard (nodes[len] is undefined, and
-  // reading .start off it throws) and kills tailHoldSec -> 0: with nothing
-  // after it, the last node gets the full tail hold and no bleed cap.
+  // bounds gate must reject only what is genuinely outside. Also kills dropping
+  // endSecFor's last-node guard (nodes[len] is undefined and reading .start off
+  // it throws) and tailHoldSec -> 0: with nothing after it, the last node gets
+  // the full tail hold and no bleed cap.
   it("accepts the last node in the graph and holds the full tail there", () => {
     const n = nodes(10);
     const out = applyExtension(clip(n), n, 9, cfg);
@@ -254,7 +248,7 @@ describe("applyExtension gates", () => {
   // still passes isCleanEnd - opacity has to be the ONLY reason this is
   // refused. An opaque node's timings are segment-level, not word-level (music,
   // laughter, crosstalk), so ending a clip on one puts the boundary at a coarse
-  // Whisper edge; snap.ts walks BACK off opaque ends for the same reason, and
+  // Whisper edge; snapNodes walks BACK off opaque ends for the same reason, and
   // this stage must not walk onto one.
   it("refuses an opaque node as the new end", () => {
     const n = nodes(40);
@@ -277,10 +271,12 @@ describe("applyExtension gates", () => {
   });
 
   // Kills dropping the maxSec gate AND `> maxSec` -> `>= maxSec`. The plan's
-  // "refuses a move that would push the clip past maxSec" does neither: with a
-  // 25s window the proposal it makes is already refused by the window gate, so
-  // maxSec could be deleted entirely and that test stays green. Only a window
-  // wide enough to let the clip reach 90s tests the length cap at all.
+  // own maxSec case tested neither: with a 25s window the proposal it made was
+  // already refused by the window gate, so maxSec could be deleted and it
+  // stayed green. That case was dropped rather than kept, because a test whose
+  // NAME claims a gate it never reaches sells the exact false confidence this
+  // file exists to refuse. Only a window wide enough to let the clip reach 90s
+  // tests the length cap at all.
   it("accepts a clip landing exactly on maxSec and refuses the next node", () => {
     const n = nodes(200);
     const c = clip(n);
@@ -289,19 +285,18 @@ describe("applyExtension gates", () => {
     expect(applyExtension(c, n, 47, cfgWide)).toBeNull();
   });
 
-  // Kills dropping the Math.min bleed cap. The tail hold is silence to breathe
-  // in, never a licence to play the next speaker's first word - the same cap
-  // snap.ts:122 applies. Here node 9 starts the instant node 8 ends, so the
-  // whole 0.3s hold has to be given up.
+  // Kills dropping endSecFor's bleed cap. The tail hold is silence to breathe
+  // in, never a licence to play the next speaker's first word. Here node 9
+  // starts the instant node 8 ends, so the whole 0.3s hold has to be given up.
   it("never lets the tail hold bleed into the next line", () => {
     const n = nodes(40);
     const out = applyExtension(clip(n), n, 8, cfg)!;
     expect(out.endSec).toBe(n[9].start);
   });
 
-  // Kills dropping the Math.max last-word clamp. Word timings nest, so a node
-  // can end AFTER its successor starts (snap.ts:168); the bleed cap must never
-  // then cut the last word of the very line the clip is being extended to.
+  // Kills dropping endSecFor's last-word clamp. Word timings nest, so a node
+  // can end AFTER its successor starts; the bleed cap must never then cut the
+  // last word of the very line the clip is being extended to.
   it("never cuts the last word of the new end node", () => {
     const n = nodes(40);
     n[8] = { ...n[8], end: 19 };
@@ -310,10 +305,11 @@ describe("applyExtension gates", () => {
   });
 
   // Kills mutating the input in place. The plan's "keeps the payoff, hook and
-  // start untouched" compares the RESULT against an object that in-place
-  // mutation has already changed, so it passes for a function that overwrites
-  // its argument. Clips are handed around by reference between stages; a
-  // refusal or an acceptance must not reach back into the caller's copy.
+  // start untouched" compared the RESULT against an object that in-place
+  // mutation had already changed, so it passed for a function that overwrites
+  // its argument; the sweep below replaces it. Clips are handed around by
+  // reference between stages - an acceptance must not reach back into the
+  // caller's copy.
   it("returns a new clip and leaves the caller's copy alone", () => {
     const n = nodes(40);
     const before = clip(n);
@@ -344,7 +340,7 @@ describe("applyExtension gates", () => {
   // forward by 18s: it passes the seconds gate on the way out. The result would
   // be a clip whose node range no longer contains its own titleEvidenceNodes
   // (node 4 here), which is the copy-degrading shape this stage is built never
-  // to produce (engine-notes §6).
+  // to produce (engine-notes §6, "boundaries are code-owned").
   it("refuses an earlier node even when its nested timings would end later", () => {
     const n = nodes(40);
     n[3] = { ...n[3], end: 30 };
@@ -379,6 +375,19 @@ describe("applyExtension gates", () => {
     expect(applyExtension(c, n, 6, cfg)).toBeNull();
   });
 
+  // boundaryConfidence is derived from the PAYOFF's opacity and the end snap
+  // landed on, and this stage moves neither into opacity: it refuses opaque
+  // ends outright and never touches the payoff, so the value passes through.
+  // The tempting edit is to recompute it beside shortMoment and endsOnQuestion
+  // three lines away - and that would silently promote a segment-confidence
+  // clip to word-confidence, in a field that ships as the `_boundaryConfidence`
+  // diagnostic.
+  it("carries boundaryConfidence through untouched - the end moved, the payoff did not", () => {
+    const n = nodes(40);
+    const segment = { ...clip(n), boundaryConfidence: "segment" as const };
+    expect(applyExtension(segment, n, 8, cfg)!.boundaryConfidence).toBe("segment");
+  });
+
   // The whole-object invariant, swept rather than spot-checked: across every
   // proposal this fixture admits, an accepted extension moves the end and
   // NOTHING else. Copy is grounded against [finalStartNode, finalEndNode]
@@ -386,7 +395,7 @@ describe("applyExtension gates", () => {
   // else in it is not (engine-notes §6, "boundaries are code-owned").
   it("moves the end forward and changes nothing else, for every legal proposal", () => {
     const n = nodes(40);
-    const before = clip(n);
+    const before = { ...clip(n), boundaryConfidence: "segment" as const };
     let accepted = 0;
     for (let i = 0; i < 40; i++) {
       const out = applyExtension(before, n, i, cfg);
@@ -400,15 +409,14 @@ describe("applyExtension gates", () => {
       expect(out.hookStartSec).toBe(before.hookStartSec);
       expect(out.hookEndSec).toBe(before.hookEndSec);
       expect(out.verdict).toBe(before.verdict);
+      expect(out.boundaryConfidence).toBe("segment");
       // the two fields that DO move are the two derived from the end
       expect(out.shortMoment).toBe(out.endSec - out.startSec < cfg.targetMinSec);
       expect(out.endsOnQuestion).toBe(false);
     }
     expect(accepted).toBe(12); // nodes 6..17, the whole window
   });
-});
 
-describe("applyExtension keeps the clip describing its own end", () => {
   // shortMoment is a verdict on LENGTH and this stage changes the length. It is
   // persisted onto the highlight (index.ts, toHighlight), so a carried-forward
   // `true` would file a 14s clip as a fragment.
@@ -421,8 +429,8 @@ describe("applyExtension keeps the clip describing its own end", () => {
   });
 
   // And it uses snap's definition of short, strictly under the target, so the
-  // same clip carries the same flag whichever stage last set its end
-  // (snap.ts:204). A clip landing exactly on the target is not short.
+  // same clip carries the same flag whichever stage last set its end. A clip
+  // landing exactly on the target is not short.
   it("calls a clip exactly on the target not short, as snap does", () => {
     const n = nodes(40);
     const exact = loadAnalyzeConfig({

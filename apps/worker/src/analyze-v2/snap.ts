@@ -6,6 +6,48 @@ const EPS = 0.05;
 const SENTENCE_SLACK_SEC = 3;
 const STRONG = 0.8;
 
+/**
+ * Where a clip ENDS in seconds, given the node it ends on. Two rules, both
+ * audible.
+ *
+ * The tail hold may only ever move within silence, so it is capped at the next
+ * node's onset: without the cap the clip plays the first word of the next
+ * sentence, an end-of-clip artifact. And the cap may never cut the end node's
+ * own last word, so the node's end outranks it - word timings NEST (see the
+ * `max, not last` comment on `end:` in buildSentenceGraph: a long word
+ * containing a short one passes the reliability check), which lets a node's end
+ * overrun its successor's start.
+ *
+ * Shared with end-extension.ts because an end this engine MOVES has to be placed
+ * by the same arithmetic as an end it snapped, or the same node would sound
+ * different depending on which stage put the boundary there. It was copied there
+ * once and defended with a comment; parity a reader has to re-verify by eye is
+ * parity that drifts, so it lives here, in the module that owns boundaries.
+ *
+ * Payoff containment is deliberately NOT here. snap applies it on the next line
+ * because snap is the only module that knows the payoff, and the one other
+ * caller only ever moves an end later, where the payoff cannot be stranded.
+ *
+ * One caveat, measured on 2026-08-04 rather than assumed: the eval fixtures
+ * cannot see the nested-word clamp. Deleting it leaves all six snapshot replays
+ * GREEN - no shipped clip on those four sources ends on a node whose nested end
+ * overruns its successor - while deleting the tail hold reddens all six, so the
+ * replay does watch these seconds, just not that branch. Its only guard in the
+ * repo is end-extension.test.ts, "never cuts the last word of the new end node".
+ * A green fixture run is not evidence about this line.
+ */
+export function endSecFor(
+  nodes: SentenceNode[],
+  e: SentenceNode,
+  cfg: AnalyzeConfig
+): number {
+  const next = e.index < nodes.length - 1 ? nodes[e.index + 1] : null;
+  return Math.max(
+    Math.min(e.end + cfg.tailHoldSec, next ? next.start : Infinity),
+    e.end
+  );
+}
+
 export function snapNodes(
   verdict: CriticVerdict,
   nodes: SentenceNode[],
@@ -111,16 +153,14 @@ export function snapNodes(
   }
 
   // 3. seconds from real node edges (lead-in/tail-hold only ever move within
-  //    silence). The next-node cap stops the tail-hold from bleeding into the
-  //    next sentence's first word - an audible end-of-clip artifact; it can only
-  //    trim hold-silence, never the payoff's last word, because of the max guard.
+  //    silence). The end side - the next-node bleed cap and the nested-word
+  //    clamp - is endSecFor above, shared with the stage that moves an end
+  //    forward so the two can never place the same node differently.
   const prevS = s.index > 0 ? nodes[s.index - 1] : null;
   // Nested prev.end must never push the start past the sentence onset; worst
   // case we start exactly at s.start with no lead-in.
   let startSec = Math.max(Math.min(prevS ? prevS.end : 0, s.start), s.start - cfg.leadInSec);
-  const nextE = e.index < maxIdx ? nodes[e.index + 1] : null;
-  let endSec = Math.min(e.end + cfg.tailHoldSec, nextE ? nextE.start : Infinity);
-  endSec = Math.max(endSec, e.end); // nested-word ends: the cap must never cut the last word
+  let endSec = endSecFor(nodes, e, cfg);
   endSec = Math.max(endSec, p.end); // payoff containment outranks the bleed cap - a nested long payoff word extends the clip
 
   const hookStartSec = nodes[verdict.hookStartNode].start;
