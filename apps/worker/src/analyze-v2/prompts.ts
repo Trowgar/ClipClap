@@ -417,8 +417,7 @@ following lines add nothing, say extend: false.
 
 The candidate list is not a menu. The lines are in order and the clip plays
 through them: choosing a line means playing EVERY line between the current end
-and it. A strong beat four lines later costs the three lines in between, and a
-viewer sits through all of them.
+and it.
 
 Answer with node indices only, chosen from the CANDIDATE list you are shown -
 never a timestamp, never an index you were not offered.
@@ -436,22 +435,23 @@ Output ONLY the JSON object described by the schema.`;
  * The candidate list is CONTIGUOUS and stops at `window.lastNode`. Contiguous
  * because a clip is a range - choosing #9 plays #8 too, so a list with holes in
  * it would describe a clip that cannot be cut. Stopping at lastNode because that
- * is the whole ceiling on the end INDEX: the scene cut, the clock and maxSec are
- * all inside it, so no index printed here is one the gates can turn down for
- * being too far. The window is passed in rather than recomputed so this block
- * and the gate cannot answer that question differently.
+ * is how far the scene cut and the clock allow the model to reach; the window is
+ * passed in rather than recomputed so this block and the gate cannot answer that
+ * question differently.
  *
  * What the gates can still refuse is a PROPERTY of the node itself - an opaque
- * one, or a mid-clause end - and those stay in the list deliberately. On
- * sitcom-friends 35 of the 105 candidates across 12 clips are such nodes (26
- * opaque, 9 mid-clause, measured with applyExtension itself as the oracle), so
- * a third of this list is a choice that will be turned down. Filtering them out
- * would not have COST an extension - every one of those 12 windows still holds a
- * legal end (min 2, median 6.5) - but it would hide the laughter and the
- * half-sentences between the beats, and those are what the continuation reads
- * like; which index the model then picks is not something that number can settle
- * either way. `refusedBy.opaque_end` and `refusedBy.no_clean_end` are how that
- * decision gets checked against a real run instead of assumed.
+ * one, a mid-clause end, or (only when word timings nest) one whose own end
+ * breaches maxSec - and those stay in the list deliberately. Of the 117 lines
+ * this block renders across the 12 sitcom-friends clips, 12 are the clips' own
+ * ends echoed back and 105 are real candidates; 35 of those 105 are nodes the
+ * gates would refuse - 26 opaque, 9 mid-clause, measured with applyExtension
+ * itself as the oracle. So a third of what is offered is a choice that will be
+ * turned down. Filtering it out would not have COST an extension - every one of
+ * those 12 windows still holds a legal end (min 2, median 6.5) - but it would
+ * hide the laughter and the half-sentences between the beats, and those are what
+ * the continuation reads like; which index the model then picks is not something
+ * that number can settle either way. `refusedBy` is how that decision gets
+ * checked against a real run instead of assumed.
  *
  * The `<current end>` line prints its node's text verbatim even when that node
  * is OPAQUE, which is 2 of the 12 shipped sitcom-friends clips - snap keeps an

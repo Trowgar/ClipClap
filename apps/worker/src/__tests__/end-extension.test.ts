@@ -41,23 +41,24 @@ import type { CriticVerdict, SentenceNode, SnappedClip } from "../analyze-v2/typ
 // that subtracted survivors from the total published it as a kill. Check the
 // error count before trusting the score.
 //
-// THREE mutations are EQUIVALENT, all three run and confirmed to survive rather
-// than assumed to:
+// TWO mutations are EQUIVALENT, both run and confirmed to survive rather than
+// assumed to:
 //   - starting the window loop at `from` rather than `from + 1`. `last` is
 //     already `from` and the deadline is at or after nodes[from].end for any
 //     non-negative window, so the extra iteration can only re-assign what is
 //     there (checked over 20000 random graphs).
-//   - deleting applyExtension's maxSec gate, a backstop since extensionWindow
-//     began stopping at maxSec: a proposal that would breach the cap is now
-//     outside the window and refused one gate earlier.
 //   - carrying the accumulated counters out of the catch instead of resetting
 //     them. Nothing between the first counter and the end of the map can throw,
 //     so the two returns are identical today; the reset is what keeps that true
 //     if something throwing is ever added there.
-// Each is documented at the code it applies to. Two others were called
-// equivalent and were not: the in-graph gate is killed below by a clip carrying
-// a stale end node, and the `: null` branch that had no effect is gone entirely
-// now that the seconds arithmetic is snap's endSecFor rather than a copy of it.
+// Three OTHERS were called equivalent and were not. The in-graph gate is killed
+// below by a clip carrying a stale end node. The `: null` branch that had no
+// effect is gone entirely now that the seconds arithmetic is snap's endSecFor.
+// And applyExtension's maxSec gate was called a dead backstop for exactly as
+// long as the window BROKE on maxSec - the same edit that made the gate
+// unreachable also lost every legal end behind an over-long node, and the fix
+// made the gate reachable again. A gate that looks unreachable is worth
+// re-deriving rather than filing: the argument for its deadness was the bug.
 // ---------------------------------------------------------------------------
 
 const cfg = loadAnalyzeConfig({ SCENE_GAP_SEC: "8", END_EXTENSION_WINDOW_SEC: "25" });
@@ -350,21 +351,51 @@ describe("applyExtension", () => {
     expect(verdictOf(applyExtension(c, n, 47, cfgWide))).toBe("outside_window");
   });
 
-  // The cap is not merely a stopping point for the loop - it must bind for the
-  // WHOLE tail behind an over-long node, exactly as the deadline does, because a
-  // clip is contiguous: node 41 cannot play without node 40. Node 40 here runs
-  // to 300s on a nested word while node 41 closes at 84s, well inside the cap -
-  // so a maxSec test that SKIPS instead of stopping would keep collecting and
-  // hand the model an end that drags the clip to three hundred seconds.
-  it("closes the window behind a node that overruns maxSec", () => {
+  // maxSec SKIPS where the deadline BREAKS, and this case is why. The shipped
+  // clip is cut at its END node, so an intervening node never lengthens it: node
+  // 40 carries a word running to 300s while node 41 closes at 84s, comfortably
+  // inside the 90s cap. Breaking there made the window stricter than the gate it
+  // mirrors - the clip lost every end from 40 to 46 and, when the over-long node
+  // fell early enough, dropped out of the prompt altogether.
+  //
+  // Built by hand and it has to be: no shipped clip on any of the four fixtures
+  // ends on a node whose nested end overruns its successor, so the harness is
+  // blind to this by construction (engine-notes §5).
+  it("steps over a node that overruns maxSec and keeps the ends behind it", () => {
     const n = nodes(200);
     n[40] = { ...n[40], end: 300 };
     const c = clip(n);
     expect(n[41].end - c.startSec).toBeLessThan(cfgWide.maxSec);
-    expect(extensionWindow(c, n, cfgWide).lastNode).toBe(39);
-    for (const i of [40, 41, 46]) {
-      expect(verdictOf(applyExtension(c, n, i, cfgWide))).toBe("outside_window");
-    }
+    expect(extensionWindow(c, n, cfgWide).lastNode).toBe(46);
+    expect(clipOf(applyExtension(c, n, 41, cfgWide)).finalEndNode).toBe(41);
+    expect(clipOf(applyExtension(c, n, 46, cfgWide)).finalEndNode).toBe(46);
+    // and the one node that really would breach the cap is refused by the gate,
+    // BY ITS OWN REASON - it is inside the offered run, not past the ceiling
+    expect(verdictOf(applyExtension(c, n, 40, cfgWide))).toBe("too_long");
+  });
+
+  // The same shape one step worse: the over-long node sits immediately after the
+  // clip's end, so a window that stopped there would report "nothing follows"
+  // and the clip would never reach the prompt at all. Nine legal ends, measured
+  // on the reviewer's construction, turn into zero.
+  it("still offers a clip whose very next node overruns maxSec", () => {
+    const n = nodes(60);
+    n[35] = { ...n[35], end: 92 };
+    const c: SnappedClip = {
+      ...clip(n),
+      startSec: n[0].start,
+      endSec: n[34].end,
+      finalStartNode: 0,
+      finalEndNode: 34,
+      hookStartSec: n[0].start,
+      hookEndSec: n[34].end,
+      payoffSec: n[34].end,
+    };
+    expect(n[35].end).toBeLessThan(n[34].end + cfg.endExtensionWindowSec); // inside the clock
+    expect(n[35].end - c.startSec).toBeGreaterThan(cfg.maxSec); // over the cap
+    expect(extensionWindow(c, n, cfg).lastNode).toBe(44);
+    expect(clipOf(applyExtension(c, n, 36, cfg)).endSec).toBe(n[36].end);
+    expect(verdictOf(applyExtension(c, n, 35, cfg))).toBe("too_long");
   });
 
   // Kills dropping endSecFor's bleed cap. The tail hold is silence to breathe
@@ -730,6 +761,12 @@ describe("buildExtensionUser", () => {
       .find((l) => l.startsWith("CANDIDATE ENDINGS"))!;
     expect(header).toContain("LAST line to include");
     expect(header).toContain("plays too");
+    // and in the rules, where the mechanic is stated once for the whole batch.
+    // It is the MECHANIC only: a prompt that also argued the lines in between
+    // are a cost would discourage the reach this stage exists for - the ends it
+    // is chasing are 17 to 55 seconds and many lines away.
+    expect(EXTENSION_SYSTEM).toContain("not a menu");
+    expect(EXTENSION_SYSTEM).toContain("playing EVERY line between the current end");
   });
 
   it("renders the empty-window case as an instruction to refuse", () => {
@@ -1177,15 +1214,26 @@ describe("extendClipEnds - applying what came back", () => {
   });
 
   // Three rows about one clip is still ONE clip contradicted - the counter names
-  // clips, not rows, so it can be read against `offered` without division.
-  it("counts a contradicted clip once however many times the model repeats it", async () => {
-    const n = nodes(40);
-    const client = seqClient([
-      () => ok([row("c0", 8), row("c0", 9), row("c0", 10)]),
+  // clips, not rows, so it can be read against `offered` without division. And
+  // two contradicted clips must read 2: a counter that cannot pass 1 is a
+  // boolean wearing a number, the same defect the histogram test above guards
+  // against, and "the model doubled back on one clip" and "on the whole batch"
+  // are the difference between noise and a broken prompt.
+  it("counts contradicted clips, once each and more than one", async () => {
+    const n = nodes(60);
+    const a = snappedClip(n, 2, 5, "a");
+    const b = snappedClip(n, 20, 23, "b");
+    const one = seqClient([() => ok([row("a", 8), row("a", 9), row("a", 10)])]);
+    expect((await run(one, [a, b], n)).telemetry.contradicted).toBe(1);
+
+    const both = seqClient([
+      () => ok([row("a", 8), row("a", 9), row("b", 26), row("b", 27)]),
     ]);
-    const r = await run(client, [clip(n)], n);
-    expect(r.telemetry.contradicted).toBe(1);
+    const r = await run(both, [a, b], n);
+    expect(r.telemetry.contradicted).toBe(2);
     expect(r.telemetry.proposed).toBe(0);
+    expect(r.clips[0]).toBe(a);
+    expect(r.clips[1]).toBe(b);
   });
 });
 
@@ -1253,11 +1301,27 @@ describe("extendClipEnds - saying why nothing happened", () => {
     spies.warn.mockRestore();
   });
 
-  // An unreadable payload is NOT a skip: the call succeeded and the stage read
-  // it. That is a model fault, and `proposed: 0` beside no skip reason is what
-  // says so.
-  it("stays silent on a payload it could read and found nothing in", async () => {
-    const r = await run(seqClient([() => raw('{"nope":1}')]), twoClips(), n);
+  // A payload with no results ARRAY is the fifth outcome that used to collapse
+  // onto the honest all-decline above: same zeros, no skip reason, and the
+  // comment that used to sit here claimed `proposed: 0` told them apart when the
+  // all-decline case emits exactly that. It does not; the reason does.
+  it("names a payload it could not read", async () => {
+    for (const body of ['{"nope":1}', "null", '{"results":{"a":8}}']) {
+      const r = await run(seqClient([() => raw(body)]), twoClips(), n);
+      expect(r.telemetry.skipped).toBe("unreadable");
+      expect(r.telemetry.proposed).toBe(0);
+    }
+  });
+
+  // But rows it CAN read and finds nothing usable in are an answer, not a skip:
+  // the array was there and the stage walked it. That is a model fault, and the
+  // pair of assertions below is the only place the two are contrasted directly.
+  it("stays silent on rows it could read and found nothing in", async () => {
+    const r = await run(
+      seqClient([() => ok([{ id: "a", extend: "yes", end_node: 8, reason: "x" }])]),
+      twoClips(),
+      n
+    );
     expect(r.telemetry.skipped).toBeUndefined();
     expect(r.telemetry.proposed).toBe(0);
   });

@@ -43,15 +43,31 @@ function fitsMaxSec(
  * snapNodes compresses an over-long clip by moving its START, and moving the
  * start is exactly what this stage promises not to do.
  *
- * maxSec belongs HERE rather than only in the gate because it is a ceiling on
- * the end INDEX, not a per-node predicate like opacity or a clean end. A node
- * past it can never be a legal end for this clip, so offering it is offering a
- * choice that will be thrown away - 5 of the 111 candidates this window used to
- * hand out on sitcom-friends were exactly that, and bounding it here dropped the
- * list to 105 while leaving all 70 legal ends in place. The contiguity argument
- * that keeps opaque and mid-clause nodes IN the list does not apply: maxSec
- * truncates the tail of the list rather than punching holes in it, so nothing
- * the model needs to read is hidden.
+ * maxSec is applied here as well as in the gate so that the model is not offered
+ * ends it cannot have: 5 of the 111 candidates this window used to hand out on
+ * sitcom-friends were over the cap, and every one of them was a choice destined
+ * to be thrown away.
+ *
+ * THE TWO BOUNDS BEHAVE DIFFERENTLY INSIDE THE LOOP, and the asymmetry is the
+ * whole correctness argument.
+ *
+ * The deadline BREAKS. It bounds the material the model may reach INTO, a node's
+ * own end is the right proxy for that, and being conservative there costs only
+ * reach. maxSec must not break, because it bounds the SHIPPED clip's duration -
+ * and the shipped clip is cut at endSecFor(END NODE), so an intervening node
+ * never lengthens it. Word timings nest (the `max, not last` comment on `end:`
+ * in buildSentenceGraph), so node 35 can carry a word running to 92s while node
+ * 36 closes at 74s: with a break, a clip ending at node 34 loses nine legal ends
+ * and drops out of the prompt entirely; with a skip it keeps all nine, and the
+ * one node that really is over the cap is refused by the gate as `too_long`.
+ * Breaking made this ceiling STRICTER than the gate it exists to mirror, which
+ * is the one thing a ceiling must never be. Built by hand, because no fixture
+ * can produce it: no shipped clip on any of the four ends on a node whose nested
+ * end overruns its successor (the harness blind spot, engine-notes §5).
+ *
+ * So maxSec is a PER-NODE predicate here, like opacity and a clean end, not a
+ * truncation of the list: `lastNode` is the furthest node that is itself a legal
+ * end, and the contiguous run up to it can contain one that is not.
  *
  * The deadline is measured from the END NODE's last word, not from clip.endSec,
  * so the tail hold is not charged against the window: the hold is silence, and
@@ -59,12 +75,9 @@ function fitsMaxSec(
  * exactly on the deadline is inside it, and so is a clip landing exactly on
  * maxSec.
  *
- * The loop BREAKS on the first node that overruns a bound rather than skipping
- * it. A clip is a contiguous range: node i+1 cannot play without node i, so a
- * single long node closes the window for everything behind it. Skipping would
- * offer an end that drags the clip far past the bound - and node ends really can
- * overrun their successor's start, because word timings nest (the `max, not
- * last` comment on `end:` in buildSentenceGraph).
+ * The deadline's break is not an accident of style. A clip is a contiguous
+ * range: node i+1 cannot play without node i, so a node whose end is past the
+ * window closes the reach behind it rather than being stepped over.
  *
  * clip.finalEndNode must be a real index into `nodes` - sceneEndAfter refuses to
  * invent a ceiling for an invalid one, and neither does this.
@@ -80,14 +93,21 @@ export function extensionWindow(
   let last = from;
   for (let i = from + 1; i <= sceneEnd; i++) {
     if (nodes[i].end > deadline) break;
-    if (!fitsMaxSec(clip, nodes[i], nodes, cfg)) break;
-    last = i;
+    if (fitsMaxSec(clip, nodes[i], nodes, cfg)) last = i;
   }
   return { lastNode: last };
 }
 
 /** Why a proposal was turned down, one value per `return` below. The spellings
  *  match snap's DropReason wherever they mean the same thing.
+ *
+ *  THE ORDER IS THE FILING RULE. The gates short-circuit in the order listed
+ *  here, so a node failing two of them is filed under the earlier one and the
+ *  histogram is a partition rather than a tally of independent faults. It is not
+ *  a rare tie-break: on sitcom-friends 3 of the 26 candidates counted
+ *  `opaque_end` also fail `isCleanEnd`, so 3 of 35 refusals would move if the
+ *  order changed. Anyone reading the split to choose a prompt edit needs that -
+ *  `opaque_end` means "opaque, and possibly more", never "opaque only".
  *
  *  A NAMED reason rather than a bare null because the histogram it feeds is the
  *  only thing that can answer the question the stage's telemetry poses: a
@@ -174,11 +194,11 @@ export type ExtensionAttempt =
  *   is the same no-op the index gate refuses, wearing a different index. So an
  *   ACCEPTED extension always moves endSec strictly later, which is the property
  *   callers and telemetry can rely on.
- * - MAX LENGTH. A BACKSTOP, unreachable while the window stops at maxSec (see
- *   there for why the cap lives in the ceiling). Same fitsMaxSec, so the two
- *   cannot drift; kept because the window's break is one edit away from being a
- *   deadline-only loop and that edit ships a clip too long to post. Deleting
- *   this line fails no test.
+ * - MAX LENGTH. The platform cap, and REACHABLE: the window skips over a node
+ *   that breaches it rather than stopping there (see extensionWindow for why),
+ *   so a node inside the offered run can still be over the cap when word timings
+ *   nest, and this is what refuses it. Shares fitsMaxSec with the window, so the
+ *   ceiling and the gate cannot answer differently.
  */
 export function applyExtension(
   clip: SnappedClip,
@@ -316,7 +336,8 @@ export interface ExtensionTelemetry {
   secondsGained: number;
   fallbackModelUsed: boolean;
   /** Absent when the stage ran to completion. "disabled", "no_window",
-   *  "exception", or the failing call's kind ("error"/"refusal"/"truncated"). */
+   *  "unreadable", "exception", or the failing call's kind
+   *  ("error"/"refusal"/"truncated"). */
   skipped?: string;
 }
 
@@ -359,16 +380,14 @@ function countRefusal(
  * this is schema-legal and needs a decided answer rather than an accidental
  * one. `contradicted` counts the clips it happened to.
  */
-function readProposals(raw: unknown): {
+function readProposals(rows: unknown[]): {
   proposals: Map<string, number>;
   contradicted: number;
 } {
   const proposals = new Map<string, number>();
   const contradictions = new Set<string>();
-  if (!Array.isArray(raw)) return { proposals, contradicted: 0 };
-
   const seen = new Set<string>();
-  for (const row of raw) {
+  for (const row of rows) {
     if (typeof row !== "object" || row === null) continue;
     const { id, extend, end_node: endNode } = row as {
       id?: unknown;
@@ -480,9 +499,18 @@ export async function extendClipEnds(
       return { clips, telemetry };
     }
 
-    // `data` itself can be null - JSON.parse("null") is a legal parse, and
-    // callJsonSchema hands back whatever parsed.
-    const { proposals, contradicted } = readProposals(result.data?.results);
+    // A payload with no `results` ARRAY in it is a skip, not an answer. It looks
+    // identical to an honest all-decline in every counter - zeros across the
+    // board - and they are opposite findings, so the one field that can separate
+    // them has to. `data` itself can be null: JSON.parse("null") is a legal
+    // parse and callJsonSchema hands back whatever parsed.
+    const rows = result.data?.results;
+    if (!Array.isArray(rows)) {
+      telemetry.skipped = "unreadable";
+      return { clips, telemetry };
+    }
+
+    const { proposals, contradicted } = readProposals(rows);
     telemetry.proposed = proposals.size;
     telemetry.contradicted = contradicted;
 
