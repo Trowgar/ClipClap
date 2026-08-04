@@ -715,6 +715,31 @@ Find the object literal the function returns as `telemetry` and add:
     endExtension: extension.telemetry,
 ```
 
+The object is no longer the six counters this plan first described. Tasks 2 and 3 added `skipped`,
+`refusedBy` and `contradicted`, and **Task 5 reads all three** - publish the whole object, never a
+hand-picked subset. `skipped` is the field that tells "the stage did not run" from "the stage ran and
+declined", which are otherwise the same zeros; `refusedBy` is what says WHICH prompt edit a rising
+`refused` argues for.
+
+- [ ] **Step 3b: Add the knobs to `.env.example`**
+
+`END_EXTENSION` and `END_EXTENSION_WINDOW_SEC`, next to `LEAD_IN_SEC`, `TAIL_HOLD_SEC` and
+`PAYOFF_MAX_TAIL_SEC` which are already documented there. Outstanding since Task 2.
+
+- [ ] **Step 3c: Add the extension knobs to the eval fingerprint**
+
+`apps/worker/src/__tests__/helpers/eval-fingerprint.ts`. This is not cosmetic and it must land
+BEFORE Task 5 records anything.
+
+A stage that is switched off produces **no request**, so the request hash cannot notice it - which is
+exactly the argument the fingerprint file already makes for `finalizerEnabled`. Without the keys, a
+fixture recorded with the stage dark replays green under a live stage and the snapshot moves with no
+warning, and Task 5 could not tell "the snapshot moved because the stage worked" from "the snapshot
+moved because it was recorded in a different configuration". `extensionMaxOutputTokens` is invisible
+to the hash for the same reason `criticMaxOutputTokens` was.
+
+Adding keys only WARNS on existing fixtures rather than failing them, so this is safe to do now.
+
 - [ ] **Step 4: Run the whole worker suite**
 
 Run: `docker compose exec -T worker-analyze sh -c "cd /app/apps/worker && ../../node_modules/.bin/vitest run --root ../.. apps/worker/src"`
