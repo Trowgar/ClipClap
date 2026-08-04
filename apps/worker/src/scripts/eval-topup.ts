@@ -240,6 +240,19 @@ async function main() {
         `${result.highlights.length} clips`
     );
     if (variant !== BASE_VARIANT) console.log(`  wrote variant fingerprint to ${metaPath}`);
+    // What this run cost, and it is exact rather than an estimate: a key served
+    // from disk is billed 0/0 by the stub above, so every token here belongs to
+    // a call that was really made. Printed because the script's own header says
+    // it spends money and, until 2026-08-04, it was the one fact it would not
+    // say - the first end-extension recording had to be costed afterwards from
+    // prompt sizes, and could only ever be bounded.
+    for (const [model, u] of Object.entries(result.usage.byModel)) {
+      if (u.inputTokens === 0 && u.outputTokens === 0) continue;
+      console.log(
+        `  billed ${model}: ${u.inputTokens} in, ${u.outputTokens} out ` +
+          `(${u.requests} request(s), of which ${count} were new)`
+      );
+    }
     reportDegradation(name, result, { apiErrors, nonContent, modelsCalled, cfg });
     // Naming the variant matters: someone who just paid to record luna and then
     // copies a bare "eval-bless.ts" blesses BASE, and the diff they read is not

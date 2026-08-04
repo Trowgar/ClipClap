@@ -19,21 +19,52 @@ export const BASE_VARIANT = "base";
 /**
  * Which config knobs a variant is allowed to move.
  *
- * Deliberately narrow. A variant exists to answer "does a different judge decide
- * differently on the SAME candidates" - so it may change who answers, and
- * nothing about what is asked. Widening this to windowing or batching would
- * change the prompts, change every request key, and turn the diff back into the
- * mixed signal this whole mechanism exists to avoid.
+ * Deliberately narrow, and narrow along a particular line: a variant may change
+ * WHO answers, or WHICH stages run, and never what an existing stage is asked.
+ * Widening it to windowing or batching would rewrite the scanner and critic
+ * prompts, move every request key, and turn the diff back into the mixed signal
+ * this whole mechanism exists to avoid.
+ *
+ * `endExtensionEnabled` is the second kind, admitted 2026-08-04 because without
+ * it the end-extension stage could not be measured at all. Every config in this
+ * harness is built from `loadAnalyzeConfig({})` - an explicitly EMPTY env, so
+ * that a stray variable in an operator's shell can never change what a replay
+ * means - which left `END_EXTENSION=on` with no door into a fixture run. The
+ * stage shipped dark, all four fixtures replayed green with it dark, and nothing
+ * in the repo could make it run. `docker compose exec -e END_EXTENSION=on` reads
+ * as though it would and does not.
+ *
+ * It preserves comparability, which is the property this list actually protects.
+ * Turning the stage on ADDS a prompt; it does not edit one. Every scanner and
+ * critic request key stays byte-identical, so the candidates and the verdicts
+ * arriving at selection are the ones base judged, and anything that differs
+ * downstream is the stage and nothing else.
+ *
+ * The finalizer's keys DO move, because its prompt renders the clips it is
+ * handed and those clips are now wider. That is the measurement arriving rather
+ * than a leak: an extension the finalizer never saw would be an extension
+ * nothing judged, and the finalizer holds the veto. It is also why topping this
+ * variant up buys more than the single call the stage itself makes.
+ *
+ * `endExtensionWindowSec` is deliberately NOT here, and it is the one addition
+ * that would look natural next to the boolean. It is a tuning door: the question
+ * the variant exists to answer is whether ends move toward the scout consensus
+ * at the window the stage was documented with, and an answer obtained by moving
+ * the window is not an answer to it.
  */
 export type VariantOverrides = Partial<
-  Pick<AnalyzeConfig, "criticModel" | "finalizerModel" | "criticModelFallback">
+  Pick<
+    AnalyzeConfig,
+    "criticModel" | "finalizerModel" | "criticModelFallback" | "endExtensionEnabled"
+  >
 >;
 
-/** The only knobs a variant may move. See VariantOverrides for why this is narrow. */
+/** The only knobs a variant may move. See VariantOverrides for where the line is. */
 export const VARIANT_OVERRIDE_KEYS = [
   "criticModel",
   "finalizerModel",
   "criticModelFallback",
+  "endExtensionEnabled",
 ] as const satisfies ReadonlyArray<keyof VariantOverrides>;
 
 /**
@@ -62,10 +93,11 @@ export function loadVariantDefs(dir: string = FIXTURES_DIR): Record<string, Vari
       if (!allowed.includes(key)) {
         throw new Error(
           `variant "${name}" in ${path} overrides "${key}", which is not allowed. A variant may ` +
-            `only change WHO answers (${VARIANT_OVERRIDE_KEYS.join(", ")}), never what is asked - ` +
-            `anything else moves the prompts, moves every request key, and makes the diff between ` +
-            `variants mix the model change with a second changed knob, while still looking like a ` +
-            `clean model comparison.`
+            `only change WHO answers or WHICH stages run ` +
+            `(${VARIANT_OVERRIDE_KEYS.join(", ")}), never what an existing stage is asked - ` +
+            `anything else rewrites the prompts, moves every request key, and makes the diff ` +
+            `between variants mix the change under review with a second changed knob, while ` +
+            `still looking like a clean comparison.`
         );
       }
     }

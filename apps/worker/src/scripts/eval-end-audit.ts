@@ -2,7 +2,14 @@
  * Where did each clip's END come from - the critic, or snap pulling it back?
  *
  *   docker compose exec worker-analyze sh -c \
- *     "cd /app/apps/worker && npx tsx src/scripts/eval-end-audit.ts <fixture>"
+ *     "cd /app/apps/worker && npx tsx src/scripts/eval-end-audit.ts [--variant NAME] <fixture>"
+ *
+ * `--variant NAME` audits a variant's recording instead of the engine default,
+ * which is the only way to see the end-extension stage at all: the harness builds
+ * every config from an empty env (eval-fixture.ts), so END_EXTENSION in the
+ * environment cannot reach a replay and the stage is dark under base by
+ * construction. Base stays the default here so the pre-change baseline is still
+ * one word away.
  *
  * "The engine ends clips before the payoff" (spec 2026-08-04 3.2) names a
  * symptom, not a layer. snapNodes HONOURS a late end from the critic and only
@@ -13,24 +20,36 @@
  *
  * Replay only - costs nothing and reproduces the recorded run exactly.
  */
-import { loadFixture, runFixture } from "../__tests__/helpers/eval-fixture";
+import {
+  BASE_VARIANT,
+  loadFixture,
+  parseVariantArgs,
+  runFixtureVariant,
+} from "../__tests__/helpers/eval-fixture";
 
 async function main() {
-  const [fixtureName] = process.argv.slice(2);
-  if (!fixtureName) {
-    console.error("usage: eval-end-audit.ts <fixture>");
+  // parseVariantArgs, not a hand-rolled argv read: it is the same parse
+  // eval-topup and eval-bless use, and it hard-errors on "--variant=NAME" and on
+  // a typo'd flag rather than silently auditing base under a variant's name.
+  const { variant, cases } = parseVariantArgs(process.argv.slice(2));
+  const [fixtureName] = cases;
+  if (!fixtureName || !variant) {
+    console.error("usage: eval-end-audit.ts [--variant NAME] <fixture>");
     process.exit(1);
   }
 
   const fixture = loadFixture(fixtureName);
-  const result = await runFixture(fixture);
+  const result = await runFixtureVariant(fixture, variant);
 
   const rows = result.highlights.map((h) => {
     const t = (h as unknown as { telemetry?: Record<string, unknown> }).telemetry;
     return { h, t };
   });
 
-  console.log(`fixture: ${fixtureName}  clips: ${rows.length}`);
+  console.log(
+    `fixture: ${fixtureName}${variant === BASE_VARIANT ? "" : `[${variant}]`}  ` +
+      `clips: ${rows.length}`
+  );
   console.log(
     "shipped_range".padEnd(20) +
       "dur".padStart(7) +
@@ -71,6 +90,15 @@ async function main() {
     );
     console.log(`PAYOFF_MAX_TAIL_SEC is 4 - count at or above it: ${tails.filter((t) => t >= 3.9).length}/${tails.length}`);
   }
+
+  // The tail distribution says WHERE the ends landed; this says why. Without it
+  // "the end did not move" and "the end was never offered anywhere to move to"
+  // read identically off the table above, and they argue for opposite repairs -
+  // a prompt edit against a window widening. `skipped` separates a stage that
+  // declined from a stage that never ran, and `refusedBy` names which gate a
+  // model's proposal died on.
+  const ext = (result.telemetry as Record<string, unknown>).endExtension;
+  if (ext) console.log(`\nend-extension telemetry: ${JSON.stringify(ext)}`);
 }
 
 main().catch((error) => {
