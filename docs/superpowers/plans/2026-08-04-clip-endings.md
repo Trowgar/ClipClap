@@ -810,6 +810,14 @@ Add under §3, in the file's own voice - what IS true, with the numbers it was m
 
 If a claim in §6a about the punchline-outside case is now false, delete it - the file's own rule is that a stale note is worse than none.
 
+- [ ] **Step 1b: Record the harness blind spot in §5, not only in §3**
+
+Found during Task 2 and confirmed twice, by the implementer and independently by the reviewer with a control run. It is a property of the FIXTURES, not of this feature, so it belongs in §5 (the regression harness) where the next person reading "the replays are green" about any boundary change will meet it:
+
+Deleting the nested-word clamp from `endSecFor` leaves **all six eval replays green** and fails exactly one test in 791. Deleting the tail hold reddens **all six** replays and 22 tests. So the harness does watch clip-edge seconds - it is blind specifically to the nested-word branch, because no shipped clip on any of the four sources ends on a node whose nested end overruns its successor. Before Task 2 that clamp, which exists to stop the last word being cut, was guarded by nothing in the repo.
+
+State the general form too, because it is the reusable part: **an eval fixture can only exercise the branches its own recorded run happened to reach.** A green replay is evidence about the sources in the corpus, never about the code. This is the same argument §6a already makes for wanting a genuinely different source, now with a measured instance behind it.
+
 - [ ] **Step 2: Commit**
 
 ```bash
