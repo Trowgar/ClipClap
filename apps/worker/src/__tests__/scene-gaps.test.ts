@@ -65,6 +65,14 @@ describe("sceneEndAfter", () => {
     expect(sceneEndAfter(nodesWithHole(10, 6), 5, cfg)).toBe(5);
   });
 
+  // The LAST gap in the graph has to be examined like any other. A loop that
+  // stops one short of it still passes everything else here, and the clip it
+  // gets wrong is one at the very end of a compilation - free to extend across
+  // the final cut, which is the single thing this module exists to prevent.
+  it("sees a cut that falls immediately before the last node", () => {
+    expect(sceneEndAfter(nodesWithHole(10, 9), 2, cfg)).toBe(8);
+  });
+
   it("honours cfg.sceneGapSec rather than the built-in default", () => {
     const n = nodesWithHole(10, 6, 6);
     expect(sceneEndAfter(n, 2, cfg)).toBe(9);
