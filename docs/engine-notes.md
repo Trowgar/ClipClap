@@ -8,7 +8,7 @@ Rules for this file: every number here came from a measurement, not from reasoni
 reproduced, say how. When something is believed but unmeasured, mark it. Delete an entry when it stops being
 true - a stale note is worse than none, and this file has already caught two of its own.
 
-Last substantive update: 2026-08-01.
+Last substantive update: 2026-08-04.
 
 ---
 
@@ -37,9 +37,11 @@ transcript (Whisper verbose_json, word + segment timings)
   -> selectAndOrder          [code] tier thresholds + surcharges + time-overlap NMS + soft cap
 ```
 
-Two more stages run after that sketch and are documented where they were measured: the FINALIZE judge (§5a)
-and, last of all, the snippet-title repair pass (§4). Nothing runs after the repair pass, which is precisely
-why the defect it fixes could ship.
+Three more stages run after that sketch and are documented where they were measured: end extension (§3, off by
+default), then the FINALIZE judge (§5a), then, last of all, the snippet-title repair pass (§4). Nothing runs
+after the repair pass, which is precisely why the defect it fixes could ship. The order of the first two is
+load-bearing: extension may only WIDEN, the finalizer may only shorten, and the shortener has to get the last
+word on a boundary.
 
 **The invariant that makes this safe:** models emit node indices only, never timestamps. Every cut lands on a
 real word or segment edge because the code, not the model, converts indices to seconds. Mid-word cuts and
@@ -235,6 +237,125 @@ contradictory policies on the same structure, and that is unfinished business.
 and 2 of 10 in the other - same video, same engine, same config, different transcription run. It fires on the
 highest-scoring clip in the set. Do not build a rule on it; a plan task that did was dropped for this reason.
 
+### End extension (built 2026-08-04, ships OFF)
+
+**The stage works and the clips did not get better.** Spec
+`docs/superpowers/specs/2026-08-04-clip-quality-programme-design.md` §3.2, plan
+`.../plans/2026-08-04-clip-endings.md`. `extendClipEnds` sits between `selectAndOrder` and FINALIZE, offers the
+critic model a window of material past each shipped clip's end, and may move that end FORWARD only. It met its
+acceptance bar on the deterministic criterion and **nothing in the judged quality of the output moved**. Read
+the rest of this subsection before proposing it again: the honest summary is that the mechanism is sound, the
+podcasts got better and the compilation reel got worse, and the instrument used to judge the compilation
+cannot resolve a change of this size.
+
+**Before, and the cap was never the culprit.** `sitcom-friends`, base, 12 clips: tail after payoff min 0.1s,
+**median 0.3s**, max 1.8s, and **0 of 12** at the `payoffMaxTailSec` cap of 4. The cap never fired. The critic
+was setting `end_node` to `payoff_node` and snap was honouring it, so raising the cap would have changed
+nothing - the defect the audit named ("the engine ends clips before the payoff") lived in the PROMPT, not in a
+constant. `scripts/eval-end-audit.ts` prints this distribution per fixture and is how the layer was
+identified; it is worth running before any future boundary work for the same reason.
+
+**After, against the scouts.** The audit's three blind scouts put five of six shared ends 17 to 55 seconds
+later than the engine's. Acceptance was "at least three of those five move toward the consensus". Three moved:
+
+| base clip | base end | extended end | scout consensus |
+|---|---|---|---|
+| 636.9 | 658.0 | **682.3** | 682.0 |
+| 1413.3 | 1433.3 | **1451.0** | 1450.7 |
+| 0.0 | 28.8 | **42.7** | 83.4 (one scout, not a consensus) |
+| 175.1 | 190.6 | unmoved | 217.3 |
+| 2148.0 | 2167.2 | unmoved | 2175.5 |
+
+The first two are exact, not close: both land on the very NODE the scouts named, and the 0.3s residual is
+`tailHoldSec`. Tail after payoff across the whole set went median **0.3s -> 7.0s**, max **1.8s -> 24.3s**, and
+**7 of 11** clips now sit at or past the old 4s cap. Telemetry:
+`offered 12, proposed 8, applied 8, refused 0, secondsGained 110.24`.
+
+**The two that did not move were not gate refusals - the model declined them in writing.** `refused` is 0 on
+this fixture; both clips were offered a window and answered `extend: false`. 175.1 got *"nothing after the
+payoff adds a worthwhile beat"*, 2148.0 got *"the firing line is already the strongest beat"*. Their positions
+are different and only one is a model error:
+
+- **2148.0 is the honest miss.** Its consensus end is node 841, inside the window, word-bearing and a clean
+  end. Every gate would have passed it. The model looked at a legal answer and preferred its own.
+- **175.1 is unreachable at any window size.** The node carrying its consensus end is opaque, with no word
+  timings, so `opaque_end` refuses it however wide the window is opened. Widening `endExtensionWindowSec` is
+  not the fix for this clip and never will be.
+- **0.0 missed by 1.0s.** It needed 54.6s of reach; the window ceiling on that clip is 53.6s. The one place a
+  window widening would have paid.
+
+**Podcasts improved, and this is the defect the owner named by eye.** `podcast-ecology`'s 87.4 clip ended at
+157.0 on the bare claim `"Планета еще и не такое видала"` and now ends at 176.3, after its support:
+`"Планета видала вулканические катастрофы. Планета видала астероидные импакты. Планете 4,5 миллиарда лет..."`
+That is his 2026-07-26 "it seems to cut off" (§5b), and the same figure the reverted anaphora rule was built
+for - repaired here by asking a model rather than by a detector. Two further podcast ends moved
+(`podcast-answer-arc` 2289.2 and 2877.9) and read better too. Judged by reading the transcript, not by an
+agent.
+
+**Judged quality did not change.** The same 12 clips were re-rendered as real product output and put in front
+of the same `clip-viewer` and `clip-editor` agents with the same prompts:
+
+| | base, 12 clips | extended, 11 clips |
+|---|---|---|
+| `publish` | 0 | 0 |
+| `publish after one fix` | 4 | 4 |
+| `bin it` | 8 | 7 |
+| mean viewer score | 3.2/10 | 2.8/10 |
+| likes | 1 | 2 |
+
+**And the instrument cannot resolve a change this size.** Two clips the model declined to extend entered the
+second set BYTE-IDENTICAL, which makes them a free control. Both moved one step anyway: 175.1 scored 3 then 2
+with the viewer, and 2148.0 went from `publish after one fix` to `bin it` with the editor. So the agents' own
+variance on identical input is at least one step on both axes, and the table above is noise. **The
+deterministic criterion - ends against the scout consensus - is the only thing here that measured anything.**
+Any future project in this programme that plans to prove itself with those agents needs this control run
+alongside it.
+
+**Where it helped and hurt on the compilation.** Helped: 1413.3 now ends on *"Were you, or were you not, on a
+gay cruise?"*, the line all three scouts named, and its editor verdict dropped from needing a re-crop AND a
+caption to needing only a caption. Hurt: 1165.4 extended past its punchline into an unrelated scene. `"I chose
+not to hear that."` is followed by a **3.82s** hole and then a Swedish-massage sketch; `sceneGapSec` is 5, so
+the scene rail was blind to it and the editor called the result *"two unrelated scenes stapled into one
+clip"*. Neither: 0.0 gained 15.4s and lands on the *"Tramp"* punchline, which is a real improvement and still
+40 seconds short of what the scout wanted, and it cannot get there - the window ceiling on that clip is 53.6s.
+
+**It also deleted a clip, which is the anaphora lesson repeating exactly.** `sitcom-friends` ships 12 clips in
+base and **11** with the stage on. The extension is upstream of FINALIZE by design, so widening a clip changes
+the finalizer's prompt - and the finalizer vetoed `c8` as `no_payoff`, the Pottery Barn clip, which is the very
+clip the stage had just widened (*"the spilled-wine comeback tops the antique-table joke"*). Every other
+fixture's shipped set moved too, mostly the other way: `podcast-ecology` goes **10 -> 12**,
+`creator-challenge` **7 -> 8**, and `podcast-answer-arc` stays at 11 with two clips swapped out for two
+others. Scanner and critic answers are shared byte for byte across the variants,
+so the candidate set and the selection are provably identical and all of this churn is downstream of the moved
+boundary. A boundary rule never acts alone - measure the SHIPPED SET, not the boundary.
+
+**What the audit says is actually binding, measured on the extended set.** `broken framing` appears in **11 of
+11** editor verdicts. `title is a recap` appears in **11 of 11**. Two clips are one caption rewrite from
+publishable, with the editor stating no cut to the video is required. Early ends were real and were roughly
+the fourth-largest defect in this material, not the first. That ordering is the useful output of the whole
+exercise.
+
+**The refusal population, measured across the four fixtures.** `opaque_end` is **11 of 15** refusals on the
+three non-sitcom fixtures (ecology 3 of 5, answer-arc 5 of 6, creator-challenge 3 of 4); `sitcom-friends`
+refuses nothing. The model keeps reaching for nodes Whisper left without word timings. So the lever for
+reducing refusals is word-timing coverage - the same defect that silently drops the last word of a sentence
+from burned-in subtitles (~13.8% of segments). Two of the programme's six projects share that root cause, and
+the refusal histogram is what makes it visible; a bare null would have said only that the gates and the model
+disagree.
+
+**`sceneGapSec` is 5**, and it is a rail, not a detector. Node-to-node holes measured on all four fixtures:
+`podcast-ecology` and `podcast-answer-arc` max **4.26s** with **zero** holes at or above 5, `creator-challenge`
+max 9.98s with 6, `sitcom-friends` max **17.0s** with 20 and a median gap of 0.44s. 5 is the smallest integer
+that leaves both no-cut fixtures at zero boundaries; 4 would give each of them one. The errors are asymmetric -
+a false cut costs one forgone extension, a missed cut ships two unrelated scenes - which is why it sits at the
+bottom of the admissible range. It is **partial** by construction: a cut the audience laughs through gets a
+segment from Whisper, becomes an opaque NODE, and leaves no hole at all, so of the 17 word-free stretches of
+8s or more on `sitcom-friends` only 8 contain a true silence. The 1165.4 defect above is exactly that failure.
+
+**On this evidence the stage should stay off until the scene rail is fixed.** It is net positive on podcasts
+and net negative on compilation reels. That is the first concrete job for a genre profile (programme item 6):
+one knob, two source types, opposite settings, with a measurement behind each. Rollout mechanics are in §8.
+
 ---
 
 ## 4. Approaches that were tried and failed
@@ -360,9 +481,10 @@ replayed through a stub client. Every deterministic layer runs for real, at zero
   artefact: a human decides from it whether a change is desirable. `--variant NAME` blesses
   `snapshot.<NAME>.json`; base and variant never read or write each other's file.
 
-**Variants: how one fixture holds two models' answers.** `fixtures/eval/variants.json` declares named variants
-that override only WHO ANSWERS - `criticModel`, `finalizerModel`, `criticModelFallback` - and nothing about
-what is asked. The narrowness is enforced twice: a whitelist that throws at load, and a `satisfies` clause
+**Variants: how one fixture holds two engines' answers.** `fixtures/eval/variants.json` declares named
+variants that override only WHO ANSWERS - `criticModel`, `finalizerModel`, `criticModelFallback` - or WHICH
+STAGES RUN, which since 2026-08-04 means `endExtensionEnabled` and nothing else. Never what an existing stage
+is asked. The narrowness is enforced twice: a whitelist that throws at load, and a `satisfies` clause
 that turns widening it into a `tsc` error. Widening it to windowing or batching would change every prompt,
 therefore every request key, and turn the cross-variant diff back into the mixed signal the mechanism exists
 to avoid. One fixture can hold both models' recorded answers because the model is part of the request key; the
@@ -373,19 +495,55 @@ Since `88a4435`, **`base` is Luna and `gpt51` is the variant** holding gpt-5.1's
 comparison in §3 stays reproducible offline and for free. It also means the gpt-5.1 recordings are a live
 asset, not history: deleting them deletes the only control this engine has for a model swap.
 
-**The fixtures.** `podcast-ecology` (job `cmrzcqhl6000138lkg41n8bs0`) and `podcast-answer-arc`
-(job `cmrvawjxs00129pvw0oe1c1kv`). **They are two transcription runs of the SAME 52-minute episode.** The
-regression net therefore stands on ONE piece of source content - any content-level claim is single-sample. A
-genuinely different third source (a gameplay stream, a solo talk, another language) would add more than any
-number of further assertions on this one. The upside is that the pair is an honest A/B on transcription
-jitter, and it is unflattering: the same moment ships clean in one run and broken in the other. The clip-count
-spread has narrowed as the budget defects were fixed - 6 versus 10 when that gap was first recorded, then 12
-versus 12 on gpt-5.1, and 10 versus 11 on Luna today - but a matching count is not agreement, and the
-per-clip differences never went away.
+**The fixtures.** Four sources, ten replay cases (each fixture's base, plus `gpt51` on the two podcasts and
+`end-extension` on all four).
+
+- `podcast-ecology` (job `cmrzcqhl6000138lkg41n8bs0`) and `podcast-answer-arc` (job
+  `cmrvawjxs00129pvw0oe1c1kv`). **These two are transcription runs of the SAME 52-minute Russian episode**, so
+  they are one piece of source content and an honest A/B on transcription jitter at the same time. The A/B is
+  unflattering: the same moment ships clean in one run and broken in the other. The clip-count spread has
+  narrowed as the budget defects were fixed - 6 versus 10 when that gap was first recorded, then 12 versus 12
+  on gpt-5.1, and 10 versus 11 on Luna today - but a matching count is not agreement, and the per-clip
+  differences never went away.
+- `sitcom-friends` (job `cmscht6rp001xq41s5rhjx6q0`, recorded 2026-08-03) - 41 minutes, English, and the first
+  fixture that is not a podcast. It is a user-uploaded COMPILATION REEL: roughly 30 unrelated scenes with hard
+  cuts and no through-line, which is a source class nobody had listed. It is the only fixture with scene
+  boundaries in it and therefore the only one on which the scene rail (§3) does anything at all.
+- `creator-challenge` (recorded 2026-08-03, also a real outside upload) - English, unscripted group banter,
+  and the second source with hard cuts (max node-to-node hole 9.98s, 6 at or above `sceneGapSec`).
+
+Two of the four are still the same episode, so a Russian, conversational, uncut source remains
+over-represented, and §6a still wants a fifth of a different shape again. But the corpus is no longer
+single-content, and that is what made the end-extension measurement mean anything: the stage is net positive
+on the podcasts and net negative on the compilation, and a two-podcast corpus would have reported an
+unqualified win.
 
 **What the harness cannot do.** Replay uses the OLD recorded LLM responses, so it verifies that deterministic
 layers did not regress - it cannot measure a prompt change. For that, re-record and read the diff, or upload
 a real video. A green run is not "quality is fine".
+
+**A green replay is evidence about the CORPUS, never about the code.** Measured 2026-08-04, and worth stating
+as a general property because it is the reusable part: an eval fixture can only exercise the branches its own
+recorded run happened to reach. The instance that produced it: the nested-word clamp in `endSecFor` is the
+guard that stops a clip cutting its own last word, and deleting it leaves **all six replays then in the corpus
+green** while failing exactly **one** test out of the 791 the worker suite held at the time. Deleting the tail
+hold, the line directly beside it, reddens **all six** replays and 22 tests. So the harness does watch clip-edge
+seconds; it is blind specifically to that branch, because no shipped clip on any of the four sources ends on a
+node whose nested end overruns its successor. Until 2026-08-04 that clamp was guarded by nothing in this
+repository. Confirmed twice, by the implementer and independently by a reviewer running the tail-hold control,
+because a single mutation run that stays green is indistinguishable from a mutation that did not apply.
+
+§6a already argues for a genuinely different source on RECALL grounds. This is the same argument from the
+coverage side, now with a measured instance behind it: a fifth fixture buys branches, not just assertions.
+
+**The harness is env-blind by construction, and a default-off stage is therefore invisible to it.** Every
+config in `eval-fixture.ts` is built from `loadAnalyzeConfig({})` - an explicitly EMPTY env - so
+`END_EXTENSION=on` in the environment cannot reach a replay no matter where it is set. That is deliberate: a
+fixture must replay identically on any machine. The consequence is that measuring a stage that ships off
+requires a declared VARIANT, which is why `endExtensionEnabled` was admitted to `VARIANT_OVERRIDE_KEYS` - a
+variant may now change WHICH STAGES RUN, not only who answers. `endExtensionWindowSec` was deliberately
+refused at the same time: a variant that tunes a threshold is a tuning door, and the whitelist exists to keep
+the cross-variant diff to one changed thing.
 
 ---
 
@@ -428,7 +586,9 @@ What it got wrong, and this is the useful part:
   that moves a boundary, so anything its move breaks has to be repaired by code that runs after it.
 - **Dropping is expensive medicine.** The malaria clip is otherwise strong; the real repair is three nodes on
   the END, but end-trimming is out of scope by spec (it protects payoffs), so `drop` is the only verb the
-  stage has. That is a product decision the owner has not made: a broken-ending clip, or no clip.
+  stage has. Answered on 2026-08-04, and not by giving the judge a third verb: the repair lives in a separate
+  stage that runs BEFORE it (§3), so the finalizer still gets the last word on a boundary and still has only
+  `drop` and `trim`.
 
 **Question detection, measured.** Word-bearing node text is virtually punctuation-free - 2 of 609 nodes on one
 fixture, 2 of 584 on the other - because those nodes are assembled from Whisper WORD tokens while only opaque
@@ -488,6 +648,12 @@ Names for things the engine could not previously talk about. Each has a real exa
 | Drag | An interior clarification ping-pong nothing can see - the critic reads a padded window, the finalizer has no verb for interior content | `"Надежда на эволюцию для кого? - Для человека. - Для человека? - Или только на прогресс?"` |
 | Arc stacking | One clip carries several complete arguments; a viewer who came for one question is asked to sit through three | The 0.90, 86.9s clip: successful species -> closing the carbon cycle -> spaceflight as biosphere immortality |
 
+**Arc stacking has a second and much sharper instance, from 2026-08-04.** On `sitcom-friends` the extended
+clip at 1165.4 carries two UNRELATED SCENES, not two arguments in one conversation: the editor's phrasing is
+"two unrelated scenes stapled into one clip" (§3). It is the same defect at a source-cut boundary rather than a
+topic boundary, and it is worth having both cases under one name, because the compilation instance is
+mechanically detectable (a silent hole in the timeline) where the podcast instance is not.
+
 **Arc stacking and drag are the "uninteresting" half of his complaint, and NOTHING in the engine measures
 them.** `maxSec` of 90 is a platform limit, not a taste bound. Every fix shipped so far addresses edges. If the
 hit rate is to move, this is where the next work goes - the shape of the question would be "one clip, one
@@ -502,7 +668,14 @@ the commonest honest answer there is, and turning it into FAILED denies the user
 retries that cannot help, because the critic rejects the same moments every time.
 
 **Boundaries are code-owned.** Any boundary a model proposes goes back through `snapNodes` and is discarded
-if snap rejects it. A rewritten title must cite evidence nodes inside the final range - and be re-checked
+if snap rejects it. The one stage that does not re-run snap is end extension, and it is allowed to skip it
+only because it can never shorten: it converts its own node index to seconds through `endSecFor`, the exact
+function snap uses for the same job, so the two cannot place the same node differently, and it re-checks
+opacity, `isCleanEnd` and `maxSec` itself. Widening also cannot invalidate copy - evidence already inside a
+range stays inside a larger one - which is why it needs no `regroundCopy` re-run and why the same shortcut
+would be wrong for anything that can pull a boundary back.
+
+A rewritten title must cite evidence nodes inside the final range - and be re-checked
 AFTER any accepted trim, because a trim can move the evidence outside. When that re-check voids a title the
 replacement is a raw transcript node, so a boundary move can silently degrade copy that every gate already
 passed; whatever still carries the snippet flag at ship time gets one repair call, and a clip is never dropped
@@ -529,7 +702,11 @@ work is uncommitted there (67 insertions / 9 deletions as of 2026-07-25). `git s
 
 ## 6a. Open follow-ups on ANALYZE
 
-Ordered by expected effect on the owner's 2-of-8 hit rate, most valuable first.
+Ordered by expected effect on the owner's 2-of-8 hit rate, most valuable first. That ordering is a guess and
+was partly falsified on 2026-08-04: on the one source that has been audited clip by clip, broken framing and
+recap titles each appear in 11 of 11 editor verdicts while early ends were roughly the fourth-largest defect.
+`docs/superpowers/specs/2026-08-04-clip-quality-programme-design.md` §5 carries the measured order; this list
+is the residue that programme does not cover.
 
 - **Arc stacking and drag - the "uninteresting" half.** See §5b. No mechanism measures either. This is the
   only item here that plausibly moves the hit rate rather than the polish.
@@ -542,15 +719,20 @@ Ordered by expected effect on the owner's 2-of-8 hit rate, most valuable first.
   move that orphans a question (`orphansQuestion`, shipped `6d24a55`); `snapNodes` compression performs one -
   its headline repair opens on `"Ну как живучий смотря по каким параметрам сравнивать"` while the question
   `"…самый живучий вид на планете или все-таки нет?"` sits immediately outside. Unify them.
-- **The punchline-outside case has only a drop, not a repair.** Extending an end to a reaction the engine can
-  already identify would turn a dropped clip into a good one. Blocked on an owner decision: end-trimming was
-  ruled out of scope to protect payoffs, and lifting that is his call.
+- **The punchline-outside case now has a repair, and it is switched off.** The owner lifted the
+  protect-payoffs restriction on 2026-08-04 and `extendClipEnds` shipped (§3). What is still open is not the
+  mechanism but the routing: it is net positive on podcasts, net negative on compilation reels, and off by
+  default until the scene rail can see a cut the audience laughs through. Note also that FINALIZE itself still
+  has only `drop` and `trim` - the extension is a separate stage upstream of it, so a clip the judge drops as
+  `no_payoff` still has no repair path, and the extension made exactly one such drop happen.
 - **Tell the finalizer's judge about the teaser region.** The detector publishes `teaserRegion`; passing it
   into the finalizer prompt ("the first N seconds of this video are a trailer montage") turns a deterministic
   drop into a prior the judge can weigh, and helps it reason about clips that start near the boundary.
   Suggested by the design that produced the detector; not implemented.
-- **The fixtures are one episode.** A genuinely different third source - a gameplay stream, a solo talk,
-  another language - would strengthen the regression net more than any further assertion on this one.
+- **The corpus is still short of shapes.** Two English sources landed 2026-08-03 and immediately earned their
+  keep (§5), so this is no longer "one episode" - but everything in it is people talking to each other in a
+  room. A gameplay stream, a solo talk to camera, or a third language would each buy branches the current four
+  cannot reach, which is the coverage half of the argument as well as the recall half.
 - **Clips that open one node after a question, chosen by the CRITIC with no trim involved.** Two ship today.
   The trim gate cannot reach them; closing this means a rule on original critic boundaries, which is snap's
   territory and a strictly larger change than the gate was.
@@ -694,6 +876,14 @@ actually shows, so the margin is wide - but it is an argument from geometry, not
   `.env` followed by `docker compose up -d` - **not `restart`, which does not re-read `env_file`**. Both
   default to `gpt-5.6-luna` in `analyze-v2/config.ts`, and `finalizerModel` falls back to
   `OPENAI_CRITIC_MODEL` if only that one is set.
+- **End extension ships OFF.** `END_EXTENSION` is not in the live `.env` and `endExtensionEnabled` defaults
+  false, so the stage does not run in production. Turning it on is `END_EXTENSION=on` plus
+  `docker compose up -d worker-analyze` (again, not `restart`), then `prisma generate` in whatever compose
+  recreated; the kill switch is deleting the line and repeating. On the evidence in §3 it should stay off
+  until the scene rail is fixed: it is net positive on podcast material and net negative on compilation
+  reels, so a single global setting is wrong for one of the two. `END_EXTENSION_WINDOW_SEC` (25) and
+  `SCENE_GAP_SEC` (5) are the other two knobs; both have measurements behind them and neither should move
+  without a new one.
 
 ### DOWNLOAD: yt-dlp goes through Cloudflare WARP
 
