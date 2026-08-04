@@ -135,8 +135,24 @@ For EACH candidate return, in the clip's OWN language ({{LANGUAGE_NAME}}, {{LANG
    - hook_start_node / hook_end_node: the untouchable core (reaction/punchline). Must
      satisfy start_node <= hook_start_node <= hook_end_node <= end_node.
    Do NOT choose a node marked as music / no-speech as the start or end.
-6. title: <= 70 characters, curiosity-driven but TRUTHFUL to what the clip delivers.
-   No clickbait the clip does not pay off.
+6. title: <= 70 characters. Its job is to make a stranger who never saw the source
+   WANT TO WATCH - not to tell them what happens. A title that RECAPS the clip is
+   the failure this rule exists to stop, and it is the most common defect in
+   shipped copy: it hands the viewer the clip and gives them nothing to stay for.
+   It must stay TRUTHFUL to what the clip delivers: no clickbait the clip does not
+   pay off, and no promise the speech never keeps.
+   AND IT MUST NOT STATE THE PAYOFF. A title may REFER to the payoff; it must never
+   RESTATE it. If the clip's best line can be read off the caption, the clip has
+   nothing left to pay and there is no reason to press play.
+   The contrast, from two real clips - same shape, opposite copy:
+   - the punchline is "playing Scrabble with Monica" and the title said "Scrabble
+     with Monica": RESTATED. The joke is now in the caption, the clip is spent
+     before it plays. WRONG.
+   - the punchline is "Please just promise you won't tell" and the title said "They
+     Beg Someone Not to Reveal Their Big News": REFERRED to. The caption points at
+     the secret and never says what it is or whether it survives. RIGHT.
+   Before you settle a title, ask: after reading it, is there still something a
+   viewer has to watch the clip to find out? If there is not, rewrite it.
 7. description: ONE grounded sentence describing what actually happens. No hype.
 8. title_evidence_nodes / description_evidence_nodes: 1-3 node indices each, inside
    [start_node, end_node], containing the words that directly support your title and
@@ -248,15 +264,25 @@ Judge in this order.
    drop_reason "teaser_montage" - the complete moment lives later in the video
    and competes on its own.
 
-3. HONEST TITLE. A question title is valid ONLY when the answer is spoken inside
-   the clip. A title that asks something the speech never answers is a promise
-   the clip does not keep, and the viewer feels cheated at the cut - this is the
-   single most common defect in shipped sets. Rewrite it as a truthful statement
-   built from the clip's own words and cite title_evidence_nodes: 1-3 node
-   indices INSIDE this clip whose words carry the claim. Keep it under 70
-   characters. If nothing in the clip can support an honest title, drop with
-   "unanswered_title". Never promise what the clip does not deliver, and never
-   repair a clip with its caption - the SPEECH has to hold up alone.
+3. A TITLE THAT IS HONEST AND IS STILL A HOOK. The title's job is to make a
+   stranger want to press play. Both halves below are failures; watch for both.
+   HONEST: a title that promises what the speech never delivers - an answer never
+   spoken, a claim never made - is a promise the clip does not keep, and the
+   viewer feels cheated at the cut. A question title is fine, and is often the
+   strongest hook there is, WHENEVER the answer is spoken inside the clip; it is
+   broken only when the clip never answers it. If nothing in the clip can support
+   an honest title, drop with "unanswered_title".
+   AND IT MUST NOT STATE THE PAYOFF. A title may REFER to the payoff; it must
+   never RESTATE it. When the punchline is "playing Scrabble with Monica", the
+   title "Scrabble with Monica" has spent the clip before it plays; "They Beg
+   Someone Not to Reveal Their Big News" points at a secret it never tells, and
+   that is the shape to aim for. A caption that recaps the clip is a defect even
+   when every word of it is true - rewrite it into a hook, do not drop the clip
+   for it.
+   Whenever you rewrite, cite title_evidence_nodes: 1-3 node indices INSIDE this
+   clip whose words carry the claim, and keep it under 70 characters. Never
+   promise what the clip does not deliver, and never repair a clip with its
+   caption - the SPEECH has to hold up alone.
 
 4. UNFINISHED ARC: THE PUNCHLINE FELL OUTSIDE THE CLIP. Read the LAST line as
    the viewer experiences it - the video stops there. A clip must end on the
