@@ -420,8 +420,16 @@ git commit -m "feat(analyze): gates for moving a clip end forward"
 
 **Files:**
 - Modify: `apps/worker/src/analyze-v2/schemas.ts`
+- Modify: `apps/worker/src/analyze-v2/prompts.ts`
 - Modify: `apps/worker/src/analyze-v2/end-extension.ts`
 - Test: `apps/worker/src/__tests__/end-extension.test.ts`
+
+> **Correction, 2026-08-04, from Task 2's quality review.** The code blocks below put
+> `EXTENSION_SYSTEM` and `buildExtensionUser` inside `end-extension.ts`. That is wrong for this
+> codebase: every other prompt in the engine lives in `prompts.ts` next to its user builder -
+> `SCANNER_PROMPT`, `CRITIC_PROMPT_TEMPLATE`, `FINALIZER_PROMPT_TEMPLATE` all do - while the stage
+> module holds only gates, the call and telemetry. Put both in `prompts.ts`, where `prompts.test.ts`
+> can reach them, and import them here. Everything else in this task is unchanged.
 
 - [ ] **Step 1: Add the schema**
 
