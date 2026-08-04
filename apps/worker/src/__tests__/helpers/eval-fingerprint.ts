@@ -1,5 +1,6 @@
 import type { AnalyzeConfig } from "../../analyze-v2/config";
 import { criticMaxOutputTokens } from "../../analyze-v2/critic";
+import { extensionMaxOutputTokens } from "../../analyze-v2/end-extension";
 import { finalizerMaxOutputTokens } from "../../analyze-v2/finalize";
 
 /**
@@ -55,10 +56,47 @@ import { finalizerMaxOutputTokens } from "../../analyze-v2/finalize";
  *                                and the numbers behind the formula are marked
  *                                ESTIMATED in finalize.ts - i.e. they are
  *                                expected to move once measured.
+ *   endExtensionEnabled          finalizerEnabled's argument, verbatim: off
+ *                                makes NO request, so the hash cannot notice it.
+ *                                Sharper here, because this stage is the one
+ *                                that ships dark. Every fixture in the repo was
+ *                                recorded with it off, so the direction that
+ *                                matters is a LIVE stage replaying against a
+ *                                dark recording: the ends move, the snapshot
+ *                                moves with them, and without this key nothing
+ *                                says whether it moved because the stage worked
+ *                                or because the recording predates it. That is
+ *                                the one question the measurement asks.
+ *   endExtensionWindowSec        bounds what the model is SHOWN and what it may
+ *                                choose. It changes prompt text like the
+ *                                windowing knobs below - but unlike them it can
+ *                                shrink until NO clip has anywhere to go, and
+ *                                then the stage makes no request at all and the
+ *                                hash has nothing to fail on. A knob that can
+ *                                silence the call belongs on finalizerEnabled's
+ *                                side of the line, not finalizerHeadroom's.
+ *   endExtensionMaxOutputTokens* the critic-budget bug again, and this stage has
+ *                                no truncation retry at all - a starved cap
+ *                                costs the whole stage for the job. Replay is
+ *                                blind to it by construction: the recorded
+ *                                answer is served in full whatever the cap says,
+ *                                so a budget that would truncate in production
+ *                                replays green. end-extension.ts marks both
+ *                                constants ESTIMATED, NOT MEASURED and asks for
+ *                                a re-measure from the first real run, i.e. they
+ *                                are expected to move.
  *
  * finalizerHeadroom is deliberately NOT here: it changes how many clips reach
  * the prompt, so it changes the prompt text and the requestKey already fails
- * loudly on its own - the same reason the windowing knobs are out.
+ * loudly on its own - the same reason the windowing knobs are out. It cannot
+ * silence the call, which is what separates it from endExtensionWindowSec.
+ *
+ * sceneGapSec is NOT here either, and it is the closest call in this file: it
+ * also bounds the offered range and can also empty a window. It stays out
+ * because it is not a knob about what the model may do - it is a measured
+ * property of the SOURCE (the hole a hard cut leaves, scene-gaps.ts), inert on
+ * every podcast fixture by construction, and moving it is a re-measurement that
+ * has to be argued from the transcripts rather than a configuration choice.
  *
  * WHAT IS DELIBERATELY OUT:
  *   - Scoring/gating/snapping knobs (scoreThreshold, softCap, gap*, hardMinSec,
@@ -91,11 +129,22 @@ export interface EngineFingerprint {
   finalizerMaxOutputTokensBase: number;
   /** Marginal cap per extra clip in the single finalizer call. */
   finalizerMaxOutputTokensPerClip: number;
+  /** Whether the END-EXTENSION LLM pass ran at all. Off makes no request, so the
+   *  request hash cannot notice it. */
+  endExtensionEnabled: boolean;
+  /** How far past its current end a clip may reach - the offered node list, and
+   *  at zero, no offer at all. */
+  endExtensionWindowSec: number;
+  /** extensionMaxOutputTokens(0) - the flat part of the extension budget. */
+  endExtensionMaxOutputTokensBase: number;
+  /** Marginal cap per extra clip in the single extension call. */
+  endExtensionMaxOutputTokensPerClip: number;
 }
 
 export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
   const base = criticMaxOutputTokens(0);
   const finalizerBase = finalizerMaxOutputTokens(0);
+  const extensionBase = extensionMaxOutputTokens(0);
   return {
     scanModel: cfg.scanModel,
     criticModel: cfg.criticModel,
@@ -108,6 +157,10 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     finalizerModel: cfg.finalizerModel,
     finalizerMaxOutputTokensBase: finalizerBase,
     finalizerMaxOutputTokensPerClip: finalizerMaxOutputTokens(1) - finalizerBase,
+    endExtensionEnabled: cfg.endExtensionEnabled,
+    endExtensionWindowSec: cfg.endExtensionWindowSec,
+    endExtensionMaxOutputTokensBase: extensionBase,
+    endExtensionMaxOutputTokensPerClip: extensionMaxOutputTokens(1) - extensionBase,
   };
 }
 

@@ -15,6 +15,7 @@ import {
 } from "./gates";
 import { dominantScript, isoToLanguageName, scriptMismatch } from "./language";
 import { selectAndOrder } from "./select";
+import { extendClipEnds } from "./end-extension";
 import { finalizeClips } from "./finalize";
 import { detectTeaserRegion, isInTeaserRegion } from "./teaser";
 import { newUsage } from "./llm";
@@ -342,6 +343,20 @@ export async function analyzeHighlightsV2(
   // user's clip count. The headroom absorbs them without a second LLM round
   // (spec §3, §9: backfilling from fresh candidates was rejected for that cost).
   const selection = selectAndOrder(eligible, cfg, cfg.softCap + cfg.finalizerHeadroom);
+  // Ends move FORWARD here and nowhere else, and only for clips that will ship.
+  // Before the finalizer on purpose: the finalizer is the stage that trims, and
+  // it must get the last word on a boundary. Widening cannot invalidate copy -
+  // evidence already inside the range stays inside a larger one - so this needs
+  // no regroundCopy re-run, which is exactly why it is safe here and would not
+  // be if it could shorten.
+  const extension = await extendClipEnds(
+    client,
+    usage,
+    selection.selected,
+    nodes,
+    cfg,
+    { retryDelayMs: options.retryDelayMs }
+  );
   // NEVER throws: any error, refusal, truncation or malformed output ships the
   // input set with a reason in telemetry. A stage with veto authority over
   // already-approved clips must not be able to turn a content answer into a
@@ -350,7 +365,7 @@ export async function analyzeHighlightsV2(
   const finalized = await finalizeClips(
     client,
     usage,
-    selection.selected,
+    extension.clips,
     nodes,
     languageIso,
     isoToLanguageName(languageIso),
@@ -510,6 +525,15 @@ export async function analyzeHighlightsV2(
     snippetTitleRepairs,
     tier: selection.tier,
     droppedByNms: selection.droppedByNms,
+    // THE WHOLE OBJECT, never a hand-picked subset of its counters. `skipped` is
+    // the only field that separates "the stage never ran" from "it ran and
+    // declined every clip" - both are zeros everywhere else - and `refusedBy` is
+    // the only thing that says WHICH prompt edit a rising `refused` argues for.
+    // This engine has already shipped one defect from two facts sharing one
+    // field: `lowQuality` meant "a degraded model judged this" while the bot
+    // printed "no strong moments found" from it, so a user got 12 good clips
+    // each headed by a false apology (job cmscht6rp001xq41s5rhjx6q0).
+    endExtension: extension.telemetry,
     // The three numbers that make the finalizer's arithmetic readable in a job
     // record: what it was given, what it returned, what the soft cap then cut.
     // Without them a clip lost to the cap looks identical to a clip the judge
