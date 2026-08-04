@@ -34,6 +34,16 @@ export interface AnalyzeConfig {
   leadInSec: number;
   tailHoldSec: number;
   payoffMaxTailSec: number;
+  /** A silent hole this long or longer between consecutive nodes is a cut to a
+   *  different scene, and nothing may be extended across one. Measured, not
+   *  guessed (2026-08-04, all four eval fixtures, gaps between nodes of ANY
+   *  kind): the two podcast fixtures have no cuts and top out at 4.26s over
+   *  52 minutes each (p99 2.0s), while the compilation reel's verified cut at
+   *  t=1370 leaves 17.0s. 5 is the smallest integer that still leaves both
+   *  podcasts at ZERO boundaries - deliberately the low end of the admissible
+   *  range, because a boundary that is not there only forgoes an extension
+   *  while a missed one ships two unrelated scenes in one clip. */
+  sceneGapSec: number;
   /** How far into a video an intro trailer montage may reach. Bounds the region
    *  scan in analyze-v2/teaser.ts; 0 switches montage detection off entirely,
    *  which is the kill switch. (spec 2026-07-24 §4.1) */
@@ -108,6 +118,7 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     leadInSec: num(env, "LEAD_IN_SEC", 0.15),
     tailHoldSec: num(env, "TAIL_HOLD_SEC", 0.3),
     payoffMaxTailSec: num(env, "PAYOFF_MAX_TAIL_SEC", 4),
+    sceneGapSec: num(env, "SCENE_GAP_SEC", 5),
     teaserWindowSec: num(env, "TEASER_WINDOW_SEC", 120),
     teaserMinHits: num(env, "TEASER_MIN_HITS", 3),
     finalizerEnabled: env.ANALYZE_FINALIZER !== "off",
