@@ -44,3 +44,6 @@ apps/worker/eval-media/
 # Python bytecode (the reframe sidecar now has unit tests that import it)
 __pycache__/
 *.pyc
+
+# Frame strips extracted for clip audits - regenerable, not source
+apps/worker/.eval-frames/

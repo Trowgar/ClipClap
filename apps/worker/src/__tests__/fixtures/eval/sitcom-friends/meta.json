@@ -1,0 +1,16 @@
+{
+  "recordedAt": "2026-08-03T23:19:21.791Z",
+  "engine": {
+    "scanModel": "gpt-4o-mini",
+    "criticModel": "gpt-5.6-luna",
+    "criticModelFallback": "gpt-5-mini",
+    "reasoningEffort": "low",
+    "criticBatchSize": 6,
+    "criticMaxOutputTokensBase": 1200,
+    "criticMaxOutputTokensPerCandidate": 800,
+    "finalizerEnabled": true,
+    "finalizerModel": "gpt-5.6-luna",
+    "finalizerMaxOutputTokensBase": 2000,
+    "finalizerMaxOutputTokensPerClip": 700
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "count": 7,
+  "tier": "strong",
+  "clips": [
+    {
+      "range": "223.3-249.7",
+      "score": 0.82,
+      "title": "He Was Told the Word Twice—and Still Spelled It Wrong"
+    },
+    {
+      "range": "20.2-33.6",
+      "score": 0.78,
+      "title": "He Needed the Definition of “Flower” to Spell It"
+    },
+    {
+      "range": "1044.9-1072.0",
+      "score": 0.78,
+      "title": "“You Can’t Villainize the Villain”"
+    },
+    {
+      "range": "1808.9-1861.0",
+      "score": 0.74,
+      "title": "Why Put Someone Up for Elimination—Then Save Them?"
+    },
+    {
+      "range": "551.8-629.1",
+      "score": 0.73,
+      "title": "The Winner Gets to Choose Who Might Go Home"
+    },
+    {
+      "range": "1996.1-2015.0",
+      "score": 0.73,
+      "title": "He Realized Nobody Was Going Home"
+    },
+    {
+      "range": "37.9-85.5",
+      "score": 0.67,
+      "title": "He Could Spell Elephant—Not Beautiful"
+    }
+  ],
+  "dropReasons": {}
+}
