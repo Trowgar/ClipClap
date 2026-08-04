@@ -1,21 +1,10 @@
 import { isCleanStart } from "./sentence-graph";
-// TYPE-ONLY, which is why buildExtensionUser takes a window rather than a cfg:
-// end-extension.ts imports the two exports at the bottom of this file, so
-// calling back into it for the window would make the two modules a cycle, and
-// `import type` is erased.
-//
-// That cycle would NOT have broken anything, and the claim that it would was
-// checked rather than repeated: the cfg-taking version was built and run in all
-// three runtimes this project uses - vitest/Vite-ESM, tsx in both import orders,
-// and tsc-emitted CommonJS required in both orders - and every cross-module
-// reference sits inside a function body, so it resolves lazily and nothing
-// fails. The real arguments for the window argument are that it computes
-// extensionWindow ONCE per offered clip instead of twice, and that it makes it
-// structurally impossible for this block and the gate to disagree about the
-// ceiling - the type says what the argument has to be, which a bare number
-// would not. The acyclic import graph is a bonus, not the reason.
-import type { ExtensionWindow } from "./end-extension";
-import type { MergedCandidate, SentenceNode, SnappedClip } from "./types";
+import type {
+  ExtensionWindow,
+  MergedCandidate,
+  SentenceNode,
+  SnappedClip,
+} from "./types";
 
 export const SCANNER_PROMPT = `You are a fast recall scanner for a short-form video clipping tool. You read a
 slice of a long-video transcript and list EVERY moment that could plausibly
@@ -411,7 +400,7 @@ export const EXTENSION_SYSTEM = `You decide where a short video clip should END.
 
 You are given a clip that already works: its setup and its payoff are inside it.
 Your only question is whether the moment KEEPS GOING - whether a stronger beat
-lands in the lines immediately after the current end.
+lands in the lines that follow the current end.
 
 Extend when the lines after the end contain:
 - the reaction to the payoff (the comeback, the shock, the escalation)
@@ -426,12 +415,17 @@ Do NOT extend when the lines after the end are:
 Extending a good clip into a flat one is worse than leaving it short. When the
 following lines add nothing, say extend: false.
 
+The candidate list is not a menu. The lines are in order and the clip plays
+through them: choosing a line means playing EVERY line between the current end
+and it. A strong beat four lines later costs the three lines in between, and a
+viewer sits through all of them.
+
 Answer with node indices only, chosen from the CANDIDATE list you are shown -
 never a timestamp, never an index you were not offered.
 
-For each clip: id, extend, end_node (the LAST node to include; echo the current
-end when extend is false), and reason - one short clause naming the beat you are
-reaching for, or why nothing was worth reaching for.
+For each clip, in this order: id; then reason - one short clause naming the beat
+you are reaching for, or why nothing was worth reaching for; then extend; then
+end_node, the LAST node to include, echoing the current end when extend is false.
 
 Output ONLY the JSON object described by the schema.`;
 
@@ -441,23 +435,23 @@ Output ONLY the JSON object described by the schema.`;
  *
  * The candidate list is CONTIGUOUS and stops at `window.lastNode`. Contiguous
  * because a clip is a range - choosing #9 plays #8 too, so a list with holes in
- * it would describe a clip that cannot be cut. Stopping at lastNode because
- * offering an index the gates will refuse is offering nothing: extensionWindow
- * is the same ceiling applyExtension enforces, and the two must not be able to
- * disagree, which is why the window is passed in rather than recomputed here
- * from a cfg that could differ from the one applying the answer.
+ * it would describe a clip that cannot be cut. Stopping at lastNode because that
+ * is the whole ceiling on the end INDEX: the scene cut, the clock and maxSec are
+ * all inside it, so no index printed here is one the gates can turn down for
+ * being too far. The window is passed in rather than recomputed so this block
+ * and the gate cannot answer that question differently.
  *
- * Not every OFFERED index is acceptable, and that is deliberate. applyExtension
- * additionally refuses opaque nodes, mid-clause ends and anything that would
- * breach maxSec, and on sitcom-friends 41 of the 111 candidates across 12 clips
- * fail one of those - 27 opaque, 9 mid-clause, 5 over the length cap, measured
- * with applyExtension itself as the oracle - so well over a third of this list
- * is a choice the gates will turn down. Pre-filtering it was considered and
- * rejected: every one of those 12 windows still contains a legal end (min 2,
- * median 6.5), so the filter would have changed no clip's outcome, and a list
- * that hides the laughter and the half-sentences between the beats would ask the
- * model to judge a continuation it cannot read. The `refused` counter in
- * ExtensionTelemetry is what makes that choice measurable rather than assumed.
+ * What the gates can still refuse is a PROPERTY of the node itself - an opaque
+ * one, or a mid-clause end - and those stay in the list deliberately. On
+ * sitcom-friends 35 of the 105 candidates across 12 clips are such nodes (26
+ * opaque, 9 mid-clause, measured with applyExtension itself as the oracle), so
+ * a third of this list is a choice that will be turned down. Filtering them out
+ * would not have COST an extension - every one of those 12 windows still holds a
+ * legal end (min 2, median 6.5) - but it would hide the laughter and the
+ * half-sentences between the beats, and those are what the continuation reads
+ * like; which index the model then picks is not something that number can settle
+ * either way. `refusedBy.opaque_end` and `refusedBy.no_clean_end` are how that
+ * decision gets checked against a real run instead of assumed.
  *
  * The `<current end>` line prints its node's text verbatim even when that node
  * is OPAQUE, which is 2 of the 12 shipped sitcom-friends clips - snap keeps an
@@ -489,7 +483,8 @@ export function buildExtensionUser(
     `CLIP ${clip.verdict.id} - currently ends at node #${clip.finalEndNode}`,
     `WHAT IT CONTAINS: ${own}`,
     "",
-    "CANDIDATE ENDINGS (you may choose any of these, or keep the current end):",
+    "CANDIDATE ENDINGS - the LAST line to include. Everything between the " +
+      "current end and your choice plays too. Keep the current end by choosing it:",
     `  #${clip.finalEndNode} <current end> ${nodes[clip.finalEndNode].text.trim()}`,
   ];
   for (let i = clip.finalEndNode + 1; i <= lastNode; i++) {

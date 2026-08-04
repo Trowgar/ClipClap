@@ -80,6 +80,14 @@ export interface SnappedClip {
   endsOnQuestion?: boolean;
 }
 
+/** How far the end-extension stage may reach for one clip: the highest node
+ *  index it may be extended to, and equal to the clip's own end when no
+ *  extension is possible. Minted only by extensionWindow, which is where the
+ *  three bounds behind it are documented. */
+export interface ExtensionWindow {
+  lastNode: number;
+}
+
 /** Closed set of reasons the FINALIZE judge may drop a shipped clip. Mirrored
  *  in FINALIZER_SCHEMA's enum and explained one-by-one in the finalizer prompt;
  *  finalizer-prompt.test.ts holds those three in sync. */

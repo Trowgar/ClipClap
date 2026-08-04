@@ -9,15 +9,30 @@ import { EXTENSION_SYSTEM, buildExtensionUser } from "../analyze-v2/prompts";
 import { END_EXTENSION_SCHEMA } from "../analyze-v2/schemas";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { newUsage } from "../analyze-v2/llm";
+import type { ExtensionAttempt } from "../analyze-v2/end-extension";
 import type { CriticVerdict, SentenceNode, SnappedClip } from "../analyze-v2/types";
 
 // ---------------------------------------------------------------------------
-// This suite was built by attacking itself. The ten cases the plan sketched
-// were written before the code existed, and of the 29 mutations of this module
-// and its knobs that ran against them, NINETEEN survived - including deleting
-// the opaque-node gate, the clean-end gate and the maxSec gate outright. Every
-// case below names the mutation it kills, because a gate nobody can prove fires
-// is worse than no gate: it buys false confidence.
+// THE CONTRACT THIS FILE EXISTS TO HOLD
+//
+// The stage can only ever IMPROVE the set it was handed. No failure mode - not
+// an outage, not a refusal, not a malformed payload, not a defect in the module
+// itself - returns a clip that is worse, shorter, missing or reordered, and none
+// of them fails the job. An end moves forward or it does not move.
+//
+// Every test below is a way of stating that, and the gates are asserted BY THE
+// REASON they fire, never by a bare refusal: a test that only proves "this was
+// turned down" passes just as happily when the wrong gate turned it down.
+//
+// ---------------------------------------------------------------------------
+// HOW THE SUITE WAS BUILT, for whoever changes it
+//
+// It was built by attacking itself. The ten cases the plan sketched were written
+// before the code existed, and of the 29 mutations of this module and its knobs
+// that ran against them, NINETEEN survived - including deleting the opaque-node
+// gate, the clean-end gate and the maxSec gate outright. Every case below names
+// the mutation it kills, because a gate nobody can prove fires is worse than no
+// gate: it buys false confidence.
 //
 // Two warnings for whoever runs the next matrix over this file.
 //
@@ -26,14 +41,23 @@ import type { CriticVerdict, SentenceNode, SnappedClip } from "../analyze-v2/typ
 // that subtracted survivors from the total published it as a kill. Check the
 // error count before trusting the score.
 //
-// One mutation is EQUIVALENT and no test can kill it: starting the window loop
-// at `from` rather than `from + 1`. `last` is already `from`, and the deadline
-// is at or after nodes[from].end for any non-negative window, so the extra
-// iteration can only re-assign what is already there. Checked over 20000 random
-// graphs. Two others were called equivalent and were not: the in-graph gate is
-// killed below by a clip carrying a stale end node, and the `: null` branch
-// that had no effect is gone entirely now that the seconds arithmetic is snap's
-// endSecFor rather than a copy of it.
+// THREE mutations are EQUIVALENT, all three run and confirmed to survive rather
+// than assumed to:
+//   - starting the window loop at `from` rather than `from + 1`. `last` is
+//     already `from` and the deadline is at or after nodes[from].end for any
+//     non-negative window, so the extra iteration can only re-assign what is
+//     there (checked over 20000 random graphs).
+//   - deleting applyExtension's maxSec gate, a backstop since extensionWindow
+//     began stopping at maxSec: a proposal that would breach the cap is now
+//     outside the window and refused one gate earlier.
+//   - carrying the accumulated counters out of the catch instead of resetting
+//     them. Nothing between the first counter and the end of the map can throw,
+//     so the two returns are identical today; the reset is what keeps that true
+//     if something throwing is ever added there.
+// Each is documented at the code it applies to. Two others were called
+// equivalent and were not: the in-graph gate is killed below by a clip carrying
+// a stale end node, and the `: null` branch that had no effect is gone entirely
+// now that the seconds arithmetic is snap's endSecFor rather than a copy of it.
 // ---------------------------------------------------------------------------
 
 const cfg = loadAnalyzeConfig({ SCENE_GAP_SEC: "8", END_EXTENSION_WINDOW_SEC: "25" });
@@ -81,6 +105,17 @@ function clip(n: SentenceNode[]): SnappedClip {
     payoffSec: n[5].end, shortMoment: false,
   };
 }
+
+/** applyExtension's answer as ONE comparable value: the gate that refused, or
+ *  "accepted". Every refusal below is asserted through this, so a case cannot
+ *  quietly pass because a different gate turned the proposal down - which is
+ *  exactly how the plan's own maxSec case passed while maxSec was deletable. */
+const verdictOf = (a: ExtensionAttempt): string => (a.ok ? "accepted" : a.reason);
+
+const clipOf = (a: ExtensionAttempt): SnappedClip => {
+  if (!a.ok) throw new Error(`expected an accepted extension, got "${a.reason}"`);
+  return a.clip;
+};
 
 describe("extensionWindow", () => {
   it("stops at the scene boundary even when the time window reaches further", () => {
@@ -163,30 +198,29 @@ describe("extensionWindow", () => {
 describe("applyExtension", () => {
   it("accepts a legal forward move and returns the widened clip", () => {
     const n = nodes(40);
-    const out = applyExtension(clip(n), n, 8, cfg);
-    expect(out).not.toBeNull();
-    expect(out!.finalEndNode).toBe(8);
-    expect(out!.endSec).toBeGreaterThan(n[5].end);
+    const out = clipOf(applyExtension(clip(n), n, 8, cfg));
+    expect(out.finalEndNode).toBe(8);
+    expect(out.endSec).toBeGreaterThan(n[5].end);
   });
 
   it("refuses a move that shortens the clip", () => {
     const n = nodes(40);
-    expect(applyExtension(clip(n), n, 4, cfg)).toBeNull();
+    expect(verdictOf(applyExtension(clip(n), n, 4, cfg))).toBe("not_forward");
   });
 
   it("refuses a no-op", () => {
     const n = nodes(40);
-    expect(applyExtension(clip(n), n, 5, cfg)).toBeNull();
+    expect(verdictOf(applyExtension(clip(n), n, 5, cfg))).toBe("not_forward");
   });
 
   it("refuses a move across a scene boundary", () => {
     const n = nodes(20, 8);
-    expect(applyExtension(clip(n), n, 10, cfg)).toBeNull();
+    expect(verdictOf(applyExtension(clip(n), n, 10, cfg))).toBe("outside_window");
   });
 
   it("refuses an index outside the graph", () => {
     const n = nodes(40);
-    expect(applyExtension(clip(n), n, 999, cfg)).toBeNull();
+    expect(verdictOf(applyExtension(clip(n), n, 999, cfg))).toBe("outside_graph");
   });
 
   // Kills dropping Number.isInteger. A model that answers 8.5 - or a NaN from a
@@ -194,9 +228,9 @@ describe("applyExtension", () => {
   // is undefined and every gate after it reads a property off it.
   it("refuses a proposal that is not a whole node index", () => {
     const n = nodes(40);
-    expect(applyExtension(clip(n), n, 8.5, cfg)).toBeNull();
-    expect(applyExtension(clip(n), n, Number.NaN, cfg)).toBeNull();
-    expect(applyExtension(clip(n), n, Number.POSITIVE_INFINITY, cfg)).toBeNull();
+    for (const bad of [8.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(verdictOf(applyExtension(clip(n), n, bad, cfg))).toBe("not_an_index");
+    }
   });
 
   // Kills dropping the in-graph gate, which the window gate does NOT cover.
@@ -207,14 +241,16 @@ describe("applyExtension", () => {
   it("refuses a clip whose own end node is not a real index, rather than throwing", () => {
     const n = nodes(40);
     const stale = { ...clip(n), finalEndNode: 500 };
-    expect(applyExtension(stale, n, 501, cfg)).toBeNull();
-    expect(applyExtension(stale, n, 30, cfg)).toBeNull();
+    expect(verdictOf(applyExtension(stale, n, 501, cfg))).toBe("outside_graph");
+    expect(verdictOf(applyExtension(stale, n, 30, cfg))).toBe("not_forward");
     // and from below, which the gate pairing above proves nothing about: each
     // of these reaches undefined inside extensionWindow - -1 and NaN on
     // nodes[from].end, 2.5 inside sceneEndAfter - and a stage documented as
     // never throwing has to answer null instead
     for (const bad of [-1, 2.5, Number.NaN]) {
-      expect(applyExtension({ ...clip(n), finalEndNode: bad }, n, 3, cfg)).toBeNull();
+      expect(verdictOf(applyExtension({ ...clip(n), finalEndNode: bad }, n, 3, cfg))).toBe(
+        "clip_end_unusable"
+      );
     }
   });
 
@@ -229,7 +265,7 @@ describe("applyExtension", () => {
       finalStartNode: 0, finalEndNode: 0,
       hookStartSec: n[0].start, hookEndSec: n[0].end, payoffSec: n[0].end,
     };
-    expect(applyExtension(first, n, 1, cfg)!.finalEndNode).toBe(1);
+    expect(clipOf(applyExtension(first, n, 1, cfg)).finalEndNode).toBe(1);
   });
 
   // Kills `> nodes.length - 1` -> `>=`. The last node in the graph is a legal
@@ -240,10 +276,9 @@ describe("applyExtension", () => {
   // the full tail hold and no bleed cap.
   it("accepts the last node in the graph and holds the full tail there", () => {
     const n = nodes(10);
-    const out = applyExtension(clip(n), n, 9, cfg);
-    expect(out).not.toBeNull();
-    expect(out!.finalEndNode).toBe(9);
-    expect(out!.endSec).toBeCloseTo(n[9].end + cfg.tailHoldSec, 6);
+    const out = clipOf(applyExtension(clip(n), n, 9, cfg));
+    expect(out.finalEndNode).toBe(9);
+    expect(out.endSec).toBeCloseTo(n[9].end + cfg.tailHoldSec, 6);
   });
 
   // Kills `> lastNode` -> `>= lastNode`, on BOTH branches of the window, which
@@ -254,15 +289,15 @@ describe("applyExtension", () => {
   it("accepts exactly the last node the scene allows and refuses the next", () => {
     const n = nodes(20, 8);
     expect(extensionWindow(clip(n), n, cfg).lastNode).toBe(7);
-    expect(applyExtension(clip(n), n, 7, cfg)!.finalEndNode).toBe(7);
-    expect(applyExtension(clip(n), n, 8, cfg)).toBeNull();
+    expect(clipOf(applyExtension(clip(n), n, 7, cfg)).finalEndNode).toBe(7);
+    expect(verdictOf(applyExtension(clip(n), n, 8, cfg))).toBe("outside_window");
   });
 
   it("accepts exactly the last node the clock allows and refuses the next", () => {
     const n = nodes(40);
     expect(extensionWindow(clip(n), n, cfg).lastNode).toBe(17);
-    expect(applyExtension(clip(n), n, 17, cfg)!.finalEndNode).toBe(17);
-    expect(applyExtension(clip(n), n, 18, cfg)).toBeNull();
+    expect(clipOf(applyExtension(clip(n), n, 17, cfg)).finalEndNode).toBe(17);
+    expect(verdictOf(applyExtension(clip(n), n, 18, cfg))).toBe("outside_window");
   });
 
   // The tightest crossing: the node immediately after the cut. A window loop
@@ -270,7 +305,7 @@ describe("applyExtension", () => {
   // unrelated scene, which is the single thing the scene rail exists to stop.
   it("refuses the very first node on the far side of a cut", () => {
     const n = nodes(20, 6);
-    expect(applyExtension(clip(n), n, 6, cfg)).toBeNull();
+    expect(verdictOf(applyExtension(clip(n), n, 6, cfg))).toBe("outside_window");
   });
 
   // Kills dropping the hasWords gate. trailingStrength stays 1 so the node
@@ -282,7 +317,7 @@ describe("applyExtension", () => {
   it("refuses an opaque node as the new end", () => {
     const n = nodes(40);
     n[8] = { ...n[8], hasWords: false };
-    expect(applyExtension(clip(n), n, 8, cfg)).toBeNull();
+    expect(verdictOf(applyExtension(clip(n), n, 8, cfg))).toBe("opaque_end");
   });
 
   // Kills dropping the isCleanEnd gate. Node 8 keeps its words, so the clean-end
@@ -293,25 +328,43 @@ describe("applyExtension", () => {
     const n = nodes(40);
     n[8] = { ...n[8], trailingStrength: 0.2 };
     n[9] = { ...n[9], leadingStrength: 0.2, text: "and then." };
-    expect(applyExtension(clip(n), n, 8, cfg)).toBeNull();
+    expect(verdictOf(applyExtension(clip(n), n, 8, cfg))).toBe("no_clean_end");
     // and the node before it, which IS a clean end, is still accepted - the
     // gate must refuse this node, not the whole neighbourhood
-    expect(applyExtension(clip(n), n, 7, cfg)!.finalEndNode).toBe(7);
+    expect(clipOf(applyExtension(clip(n), n, 7, cfg)).finalEndNode).toBe(7);
   });
 
-  // Kills dropping the maxSec gate AND `> maxSec` -> `>= maxSec`. The plan's
-  // own maxSec case tested neither: with a 25s window the proposal it made was
-  // already refused by the window gate, so maxSec could be deleted and it
-  // stayed green. That case was dropped rather than kept, because a test whose
-  // NAME claims a gate it never reaches sells the exact false confidence this
-  // file exists to refuse. Only a window wide enough to let the clip reach 90s
-  // tests the length cap at all.
-  it("accepts a clip landing exactly on maxSec and refuses the next node", () => {
+  // maxSec is a ceiling on the end INDEX, so it lives in the window and the
+  // refusal past it is "outside_window" - the node is never offered in the first
+  // place. A clip landing EXACTLY on the cap is inside it. Only a time window
+  // wide enough to let the clip reach 90s tests this at all; the plan's own
+  // maxSec case used a 25s window, so its proposal was already out of the window
+  // and the length cap could be deleted while it stayed green.
+  it("stops the window at maxSec, accepting a clip that lands exactly on it", () => {
     const n = nodes(200);
     const c = clip(n);
-    const at = applyExtension(c, n, 46, cfgWide)!;
-    expect(at.endSec - c.startSec).toBe(cfgWide.maxSec);
-    expect(applyExtension(c, n, 47, cfgWide)).toBeNull();
+    expect(extensionWindow(c, n, cfgWide).lastNode).toBe(46);
+    expect(clipOf(applyExtension(c, n, 46, cfgWide)).endSec - c.startSec).toBe(
+      cfgWide.maxSec
+    );
+    expect(verdictOf(applyExtension(c, n, 47, cfgWide))).toBe("outside_window");
+  });
+
+  // The cap is not merely a stopping point for the loop - it must bind for the
+  // WHOLE tail behind an over-long node, exactly as the deadline does, because a
+  // clip is contiguous: node 41 cannot play without node 40. Node 40 here runs
+  // to 300s on a nested word while node 41 closes at 84s, well inside the cap -
+  // so a maxSec test that SKIPS instead of stopping would keep collecting and
+  // hand the model an end that drags the clip to three hundred seconds.
+  it("closes the window behind a node that overruns maxSec", () => {
+    const n = nodes(200);
+    n[40] = { ...n[40], end: 300 };
+    const c = clip(n);
+    expect(n[41].end - c.startSec).toBeLessThan(cfgWide.maxSec);
+    expect(extensionWindow(c, n, cfgWide).lastNode).toBe(39);
+    for (const i of [40, 41, 46]) {
+      expect(verdictOf(applyExtension(c, n, i, cfgWide))).toBe("outside_window");
+    }
   });
 
   // Kills dropping endSecFor's bleed cap. The tail hold is silence to breathe
@@ -319,7 +372,7 @@ describe("applyExtension", () => {
   // starts the instant node 8 ends, so the whole 0.3s hold has to be given up.
   it("never lets the tail hold bleed into the next line", () => {
     const n = nodes(40);
-    const out = applyExtension(clip(n), n, 8, cfg)!;
+    const out = clipOf(applyExtension(clip(n), n, 8, cfg));
     expect(out.endSec).toBe(n[9].start);
   });
 
@@ -329,7 +382,7 @@ describe("applyExtension", () => {
   it("never cuts the last word of the new end node", () => {
     const n = nodes(40);
     n[8] = { ...n[8], end: 19 };
-    const out = applyExtension(clip(n), n, 8, cfg)!;
+    const out = clipOf(applyExtension(clip(n), n, 8, cfg));
     expect(out.endSec).toBe(19);
   });
 
@@ -342,7 +395,7 @@ describe("applyExtension", () => {
   it("returns a new clip and leaves the caller's copy alone", () => {
     const n = nodes(40);
     const before = clip(n);
-    const out = applyExtension(before, n, 8, cfg)!;
+    const out = clipOf(applyExtension(before, n, 8, cfg));
     expect(out).not.toBe(before);
     expect(before.finalEndNode).toBe(5);
     expect(before.endSec).toBe(n[5].end);
@@ -360,7 +413,7 @@ describe("applyExtension", () => {
     n[5] = { ...n[5], end: 16 };
     const c = clip(n);
     expect(c.endSec).toBe(16);
-    expect(applyExtension(c, n, 6, cfg)).toBeNull();
+    expect(verdictOf(applyExtension(c, n, 6, cfg))).toBe("no_gain");
   });
 
   // The index gate is NOT made redundant by the seconds gate, and this is the
@@ -375,7 +428,7 @@ describe("applyExtension", () => {
     n[3] = { ...n[3], end: 30 };
     const c = clip(n);
     expect(c.verdict.titleEvidenceNodes).toContain(4);
-    expect(applyExtension(c, n, 3, cfg)).toBeNull();
+    expect(verdictOf(applyExtension(c, n, 3, cfg))).toBe("not_forward");
   });
 
   // The same gate at its own boundary: proposing the node the clip already ends
@@ -387,7 +440,7 @@ describe("applyExtension", () => {
     const n = nodes(20, 6);
     const c = clip(n);
     expect(n[6].start - n[5].end).toBeGreaterThan(cfg.tailHoldSec);
-    expect(applyExtension(c, n, 5, cfg)).toBeNull();
+    expect(verdictOf(applyExtension(c, n, 5, cfg))).toBe("not_forward");
   });
 
   // The other half of the seconds rule: a proposal that moves the index forward
@@ -401,7 +454,7 @@ describe("applyExtension", () => {
     n[7] = { ...n[7], start: 12 };
     const c = clip(n);
     expect(c.endSec).toBe(12);
-    expect(applyExtension(c, n, 6, cfg)).toBeNull();
+    expect(verdictOf(applyExtension(c, n, 6, cfg))).toBe("no_gain");
   });
 
   // boundaryConfidence is derived from the PAYOFF's opacity and the end snap
@@ -414,7 +467,7 @@ describe("applyExtension", () => {
   it("carries boundaryConfidence through untouched - the end moved, the payoff did not", () => {
     const n = nodes(40);
     const segment = { ...clip(n), boundaryConfidence: "segment" as const };
-    expect(applyExtension(segment, n, 8, cfg)!.boundaryConfidence).toBe("segment");
+    expect(clipOf(applyExtension(segment, n, 8, cfg)).boundaryConfidence).toBe("segment");
   });
 
   // The gate refuses opaque nodes as the NEW end; it says nothing about the end
@@ -427,7 +480,7 @@ describe("applyExtension", () => {
     const n = nodes(40);
     n[5] = { ...n[5], hasWords: false, text: "[laughter]" };
     const opaqueEnd = { ...clip(n), boundaryConfidence: "segment" as const };
-    const out = applyExtension(opaqueEnd, n, 8, cfg)!;
+    const out = clipOf(applyExtension(opaqueEnd, n, 8, cfg));
     expect(out.finalEndNode).toBe(8);
     expect(out.boundaryConfidence).toBe("segment");
   });
@@ -442,8 +495,9 @@ describe("applyExtension", () => {
     const before = { ...clip(n), boundaryConfidence: "segment" as const };
     let accepted = 0;
     for (let i = 0; i < 40; i++) {
-      const out = applyExtension(before, n, i, cfg);
-      if (!out) continue;
+      const attempt = applyExtension(before, n, i, cfg);
+      if (!attempt.ok) continue;
+      const out = attempt.clip;
       accepted++;
       expect(out.finalEndNode).toBeGreaterThan(before.finalEndNode);
       expect(out.endSec).toBeGreaterThan(before.endSec);
@@ -467,7 +521,7 @@ describe("applyExtension", () => {
   it("recomputes shortMoment against the new duration", () => {
     const n = nodes(40);
     const wasShort = { ...clip(n), shortMoment: true };
-    const out = applyExtension(wasShort, n, 8, cfg)!;
+    const out = clipOf(applyExtension(wasShort, n, 8, cfg));
     expect(out.endSec - out.startSec).toBeGreaterThanOrEqual(cfg.targetMinSec);
     expect(out.shortMoment).toBe(false);
   });
@@ -482,7 +536,7 @@ describe("applyExtension", () => {
       END_EXTENSION_WINDOW_SEC: "25",
       CLIP_TARGET_MIN_SEC: "14",
     });
-    const out = applyExtension(clip(n), n, 8, exact)!;
+    const out = clipOf(applyExtension(clip(n), n, 8, exact));
     expect(out.endSec - out.startSec).toBe(exact.targetMinSec);
     expect(out.shortMoment).toBe(false);
   });
@@ -493,10 +547,10 @@ describe("applyExtension", () => {
   it("recomputes endsOnQuestion from the new end node", () => {
     const n = nodes(40);
     const asked = { ...clip(n), endsOnQuestion: true };
-    expect(applyExtension(asked, n, 8, cfg)!.endsOnQuestion).toBe(false);
+    expect(clipOf(applyExtension(asked, n, 8, cfg)).endsOnQuestion).toBe(false);
 
     n[8] = { ...n[8], text: "line 8?" };
-    expect(applyExtension(clip(n), n, 8, cfg)!.endsOnQuestion).toBe(true);
+    expect(clipOf(applyExtension(clip(n), n, 8, cfg)).endsOnQuestion).toBe(true);
   });
 });
 
@@ -534,6 +588,27 @@ describe("END_EXTENSION_SCHEMA", () => {
     expect([...END_EXTENSION_SCHEMA.schema.required]).toEqual(
       Object.keys(END_EXTENSION_SCHEMA.schema.properties)
     );
+  });
+
+  // Field ORDER is load-bearing here, unlike in the other schemas: structured
+  // output decodes in schema order, so `reason` before `extend` and `end_node`
+  // is what makes the model name the beat before it commits to a decision and an
+  // index. Move it to the end and the field survives while its whole purpose
+  // does not - a rationalisation written after the fact instead of a reason
+  // arrived at before it. The test above deliberately sorts, so only this one
+  // holds the order.
+  it("decodes reason before the decision it is supposed to precede", () => {
+    const item = END_EXTENSION_SCHEMA.schema.properties.results.items;
+    expect(Object.keys(item.properties)).toEqual(["id", "reason", "extend", "end_node"]);
+    expect([...item.required]).toEqual(["id", "reason", "extend", "end_node"]);
+    // and the prompt asks for them in the order the schema will decode them, so
+    // the model is never told to answer in one order and parsed in another
+    const asked = EXTENSION_SYSTEM.slice(
+      EXTENSION_SYSTEM.indexOf("For each clip, in this order:")
+    );
+    const at = ["id", "reason", "extend", "end_node"].map((f) => asked.indexOf(f));
+    expect(at.every((i) => i >= 0)).toBe(true);
+    expect([...at].sort((x, y) => x - y)).toEqual(at);
   });
 });
 
@@ -632,16 +707,31 @@ describe("buildExtensionUser", () => {
     const offered = offeredIndices(buildExtensionUser(c, n, windowFor(c, n)));
     expect(offered.length).toBeGreaterThan(1);
     for (const i of offered.slice(1)) {
-      expect(applyExtension(c, n, i, cfg)).not.toBeNull();
+      expect(verdictOf(applyExtension(c, n, i, cfg))).toBe("accepted");
     }
     // and the first entry is the clip's own end, which is a no-op by design
     expect(offered[0]).toBe(c.finalEndNode);
-    expect(applyExtension(c, n, offered[0], cfg)).toBeNull();
+    expect(verdictOf(applyExtension(c, n, offered[0], cfg))).toBe("not_forward");
   });
 
   // The empty window is a legal answer, not an error - a clip already ending at
   // a scene cut produces it - and the block has to say so, or the model is
   // handed a one-line list with no explanation and a schema demanding an index.
+  // The list is not a menu: a clip is a contiguous range, so choosing #12 plays
+  // #9, #10 and #11 too. That sentence is the only thing telling the model the
+  // beats in between are a cost, and without it "is there a stronger beat later"
+  // and "is the whole stretch worth watching" are different questions with the
+  // same answer format.
+  it("tells the model the lines in between play too", () => {
+    const n = nodes(40);
+    const c = clip(n);
+    const header = buildExtensionUser(c, n, windowFor(c, n))
+      .split("\n")
+      .find((l) => l.startsWith("CANDIDATE ENDINGS"))!;
+    expect(header).toContain("LAST line to include");
+    expect(header).toContain("plays too");
+  });
+
   it("renders the empty-window case as an instruction to refuse", () => {
     const n = nodes(20, 6);
     const c = clip(n);
@@ -773,8 +863,11 @@ describe("extendClipEnds - when it must not call at all", () => {
       proposed: 0,
       applied: 0,
       refused: 0,
+      refusedBy: {},
+      contradicted: 0,
       secondsGained: 0,
       fallbackModelUsed: false,
+      skipped: "disabled",
     });
   });
 
@@ -878,9 +971,14 @@ describe("extendClipEnds - applying what came back", () => {
       proposed: 1,
       applied: 1,
       refused: 0,
+      refusedBy: {},
+      contradicted: 0,
       secondsGained: n[8].end - a.endSec,
       fallbackModelUsed: false,
     });
+    // the whole point of `skipped`: absent means the stage ran to completion,
+    // and this is the only shape in the suite where that is true
+    expect(r.telemetry.skipped).toBeUndefined();
   });
 
   // The gates own the decision, and a proposal they refuse must cost nothing
@@ -896,6 +994,7 @@ describe("extendClipEnds - applying what came back", () => {
     expect(r.telemetry.refused).toBe(1);
     expect(r.telemetry.applied).toBe(0);
     expect(r.telemetry.secondsGained).toBe(0);
+    expect(r.telemetry.refusedBy).toEqual({ outside_window: 1 });
   });
 
   // The full arithmetic on a mixed batch, which is the only shape that can tell
@@ -992,6 +1091,64 @@ describe("extendClipEnds - applying what came back", () => {
     expect(r.clips[0]).toBe(atCut);
   });
 
+  // ...and when a call DID happen, that refusal is filed under the model's
+  // fault, not the gate's. Both are true of clip b - the window is empty AND it
+  // was never in the prompt - and only the second is worth acting on, so
+  // "outside_window" here would inflate the exact histogram an operator reads to
+  // decide whether the gates are too strict.
+  it("files a proposal for a clip that was never shown as not_offered", async () => {
+    const n = nodes(40, 30);
+    const offeredClip = snappedClip(n, 2, 5, "a");
+    const atCut = snappedClip(n, 26, 29, "b");
+    const client = seqClient([() => ok([row("b", 31)])]);
+    const r = await run(client, [offeredClip, atCut], n);
+    expect(userOf(client)).not.toContain("CLIP b");
+    expect(r.telemetry.refused).toBe(1);
+    expect(r.telemetry.refusedBy).toEqual({ not_offered: 1 });
+  });
+
+  // The histogram is the whole point of naming the reasons: a `refused` count
+  // that is climbing says the model and the gates disagree, and only the split
+  // says which prompt edit would fix it - marking opaque lines and explaining
+  // clean ends are different repairs. Three clips, three different gates, one
+  // batch.
+  it("splits refusals by the gate that fired", async () => {
+    const n = nodes(60);
+    n[26] = { ...n[26], hasWords: false, text: "[laughter]" };
+    n[44] = { ...n[44], trailingStrength: 0.2 };
+    n[45] = { ...n[45], leadingStrength: 0.2, text: "and then." };
+    const a = snappedClip(n, 2, 5, "a");
+    const b = snappedClip(n, 20, 23, "b");
+    const c = snappedClip(n, 38, 41, "c");
+    const client = seqClient([
+      () => ok([row("a", 30), row("b", 26), row("c", 44)]),
+    ]);
+    const r = await run(client, [a, b, c], n);
+    expect(r.telemetry.refused).toBe(3);
+    expect(r.telemetry.refusedBy).toEqual({
+      outside_window: 1,
+      opaque_end: 1,
+      no_clean_end: 1,
+    });
+    expect(r.clips).toEqual([a, b, c]);
+  });
+
+  // A histogram that cannot count past one is not a histogram: "the model picked
+  // a laugh track once" and "it did so on every clip in the job" are the same
+  // reading under an overwrite, and they are the difference between leaving the
+  // prompt alone and rewriting it.
+  it("counts repeats of one reason rather than flagging it once", async () => {
+    const n = nodes(60);
+    n[8] = { ...n[8], hasWords: false, text: "[laughter]" };
+    n[26] = { ...n[26], hasWords: false, text: "[laughter]" };
+    const a = snappedClip(n, 2, 5, "a");
+    const b = snappedClip(n, 20, 23, "b");
+    const client = seqClient([() => ok([row("a", 8), row("b", 26)])]);
+    const r = await run(client, [a, b], n);
+    expect(r.telemetry.refused).toBe(2);
+    expect(r.telemetry.refusedBy).toEqual({ opaque_end: 2 });
+  });
+
   // Two rows about one clip is a model that does not have one answer. Neither
   // last-write-wins nor first-write-wins is defensible, so the proposal is
   // dropped - and both mutants are killed here, because either would extend.
@@ -1004,6 +1161,9 @@ describe("extendClipEnds - applying what came back", () => {
     expect(r.telemetry.proposed).toBe(0);
     expect(r.telemetry.applied).toBe(0);
     expect(r.telemetry.refused).toBe(0);
+    // and it is COUNTED, or a self-contradicting model looks exactly like a
+    // model that answered nothing - the same blindness `skipped` exists to end
+    expect(r.telemetry.contradicted).toBe(1);
   });
 
   it("drops a proposal a later row withdrew", async () => {
@@ -1013,6 +1173,108 @@ describe("extendClipEnds - applying what came back", () => {
     const r = await run(client, [a], n);
     expect(r.clips[0]).toBe(a);
     expect(r.telemetry.proposed).toBe(0);
+    expect(r.telemetry.contradicted).toBe(1);
+  });
+
+  // Three rows about one clip is still ONE clip contradicted - the counter names
+  // clips, not rows, so it can be read against `offered` without division.
+  it("counts a contradicted clip once however many times the model repeats it", async () => {
+    const n = nodes(40);
+    const client = seqClient([
+      () => ok([row("c0", 8), row("c0", 9), row("c0", 10)]),
+    ]);
+    const r = await run(client, [clip(n)], n);
+    expect(r.telemetry.contradicted).toBe(1);
+    expect(r.telemetry.proposed).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `skipped` is the field that separates "the stage never ran" from "the stage
+// ran and declined". Without it those two emit identical zeros, and they are
+// opposite findings: one is a bug or an outage, the other is the stage working
+// as designed. finalizeClips carries finalizerSkipped for the same reason, and
+// the console.warn this stage emits is not a substitute - a degradation that
+// only reaches a log line is one nobody notices (job cmscht6rp001xq41s5rhjx6q0).
+// ---------------------------------------------------------------------------
+describe("extendClipEnds - saying why nothing happened", () => {
+  const n = nodes(60);
+  const twoClips = () => [snappedClip(n, 2, 5, "a"), snappedClip(n, 20, 23, "b")];
+
+  it("says nothing at all when the stage ran to completion", async () => {
+    const client = seqClient([() => ok([row("a", 8)])]);
+    const r = await run(client, twoClips(), n);
+    expect(r.telemetry.skipped).toBeUndefined();
+    expect(r.telemetry.applied).toBe(1);
+  });
+
+  // THE distinction: a model that read every clip and declined every one emits
+  // the same four zeros as an outage, and must not be reported as one.
+  it("stays silent when the model declined every clip - that is not a skip", async () => {
+    const client = seqClient([
+      () => ok([row("a", 5, { extend: false }), row("b", 23, { extend: false })]),
+    ]);
+    const r = await run(client, twoClips(), n);
+    expect(r.telemetry.skipped).toBeUndefined();
+    expect(r.telemetry.offered).toBe(2);
+    expect(r.telemetry.proposed).toBe(0);
+    expect(r.telemetry.applied).toBe(0);
+    expect(r.telemetry.refused).toBe(0);
+  });
+
+  it("names the killswitch", async () => {
+    const r = await run(seqClient([() => ok([])]), twoClips(), n, cfg);
+    expect(r.telemetry.skipped).toBe("disabled");
+  });
+
+  it("names an empty offer set", async () => {
+    const graph = nodes(20, 6);
+    const r = await run(seqClient([() => ok([])]), [clip(graph)], graph);
+    expect(r.telemetry.skipped).toBe("no_window");
+    expect(r.telemetry.offered).toBe(0);
+  });
+
+  it("names the call's own failure kind", async () => {
+    for (const [handler, kind] of [
+      [refusal, "refusal"],
+      [truncated, "truncated"],
+    ] as const) {
+      const r = await run(seqClient([handler]), twoClips(), n);
+      expect(r.telemetry.skipped).toBe(kind);
+    }
+  });
+
+  it("names a hard error after the fallback model failed too", async () => {
+    const spies = quiet();
+    const r = await run(seqClient([boom]), twoClips(), n);
+    expect(r.telemetry.skipped).toBe("error");
+    expect(r.telemetry.fallbackModelUsed).toBe(true);
+    spies.error.mockRestore();
+    spies.warn.mockRestore();
+  });
+
+  // An unreadable payload is NOT a skip: the call succeeded and the stage read
+  // it. That is a model fault, and `proposed: 0` beside no skip reason is what
+  // says so.
+  it("stays silent on a payload it could read and found nothing in", async () => {
+    const r = await run(seqClient([() => raw('{"nope":1}')]), twoClips(), n);
+    expect(r.telemetry.skipped).toBeUndefined();
+    expect(r.telemetry.proposed).toBe(0);
+  });
+
+  // The catch resets the counters as finalizeClips does, keeping only what was
+  // asked: an `applied` accumulated before a throw would describe a set that
+  // never shipped.
+  it("names an exception and keeps only what was asked", async () => {
+    const spies = quiet();
+    const graph = nodes(40);
+    graph[6] = { ...graph[6], text: undefined as unknown as string };
+    const r = await run(seqClient([() => ok([row("c0", 8)])]), [clip(graph)], graph);
+    expect(r.telemetry.skipped).toBe("exception");
+    expect(r.telemetry.applied).toBe(0);
+    expect(r.telemetry.secondsGained).toBe(0);
+    spies.error.mockRestore();
+    spies.warn.mockRestore();
   });
 });
 

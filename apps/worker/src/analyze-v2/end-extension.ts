@@ -6,41 +6,65 @@ import { END_EXTENSION_SCHEMA } from "./schemas";
 import { endsOnQuestionMark, isCleanEnd } from "./sentence-graph";
 import { sceneEndAfter } from "./scene-gaps";
 import { endSecFor } from "./snap";
-import type { LlmUsage, SentenceNode, SnappedClip } from "./types";
+import type {
+  ExtensionWindow,
+  LlmUsage,
+  SentenceNode,
+  SnappedClip,
+} from "./types";
 
-export interface ExtensionWindow {
-  /** Highest node index this clip may legally be extended to. Equals the clip's
-   *  own end when no extension is possible. */
-  lastNode: number;
+/** Would a clip ending on this node still fit the platform cap? One expression,
+ *  two callers - the window that stops offering ends past the cap, and the gate
+ *  that would refuse one - so the ceiling and its backstop cannot drift apart. */
+function fitsMaxSec(
+  clip: SnappedClip,
+  node: SentenceNode,
+  nodes: SentenceNode[],
+  cfg: AnalyzeConfig
+): boolean {
+  return endSecFor(nodes, node, cfg) - clip.startSec <= cfg.maxSec;
 }
 
 /**
- * How far this clip is allowed to reach. The tighter of two bounds: the next
- * scene cut, and endExtensionWindowSec of wall clock.
+ * How far this clip is allowed to reach. The tightest of three bounds: the next
+ * scene cut, endExtensionWindowSec of wall clock, and maxSec.
  *
  * A CEILING, never a target. Nothing here says a clip should end at lastNode -
  * it says nothing past lastNode may be offered to a model or accepted from one.
  *
- * The two bounds are not redundant and neither is decoration. The scene rail is
- * PARTIAL by construction: it finds the cuts that fall silent and not the ones
- * an audience laughs through, and it finds nothing at all in a source with no
- * hard cuts, which is what both podcast fixtures are. scene-gaps.ts carries that
- * measurement and is the single copy of it. Where the rail is blind the clock is
- * the only thing standing between a clip and the rest of the video; where the
- * clock is generous the rail is what stops a compilation clip from stapling two
- * unrelated scenes together.
+ * No bound here is decoration. The scene rail is PARTIAL by construction: it
+ * finds the cuts that fall silent and not the ones an audience laughs through,
+ * and nothing at all in a source with no hard cuts, which is what both podcast
+ * fixtures are (scene-gaps.ts holds that measurement and is the single copy of
+ * it). Where the rail is blind the clock is the only thing between a clip and
+ * the rest of the video; where the clock is generous the rail is what stops a
+ * compilation clip from stapling two unrelated scenes together. And maxSec is
+ * the platform cap, which this is the only stage that can approach from below:
+ * snapNodes compresses an over-long clip by moving its START, and moving the
+ * start is exactly what this stage promises not to do.
+ *
+ * maxSec belongs HERE rather than only in the gate because it is a ceiling on
+ * the end INDEX, not a per-node predicate like opacity or a clean end. A node
+ * past it can never be a legal end for this clip, so offering it is offering a
+ * choice that will be thrown away - 5 of the 111 candidates this window used to
+ * hand out on sitcom-friends were exactly that, and bounding it here dropped the
+ * list to 105 while leaving all 70 legal ends in place. The contiguity argument
+ * that keeps opaque and mid-clause nodes IN the list does not apply: maxSec
+ * truncates the tail of the list rather than punching holes in it, so nothing
+ * the model needs to read is hidden.
  *
  * The deadline is measured from the END NODE's last word, not from clip.endSec,
  * so the tail hold is not charged against the window: the hold is silence, and
  * "25 seconds further" should mean 25 seconds of further material. A node ending
- * exactly on the deadline is inside it.
+ * exactly on the deadline is inside it, and so is a clip landing exactly on
+ * maxSec.
  *
- * The loop BREAKS on the first node that overruns the deadline rather than
- * skipping it. A clip is a contiguous range: node i+1 cannot play without node
- * i, so a single long node closes the window for everything behind it. Skipping
- * would offer an end whose inclusion drags the clip far past the window - and
- * node ends really can overrun their successor's start, because word timings
- * nest (the `max, not last` comment on `end:` in buildSentenceGraph).
+ * The loop BREAKS on the first node that overruns a bound rather than skipping
+ * it. A clip is a contiguous range: node i+1 cannot play without node i, so a
+ * single long node closes the window for everything behind it. Skipping would
+ * offer an end that drags the clip far past the bound - and node ends really can
+ * overrun their successor's start, because word timings nest (the `max, not
+ * last` comment on `end:` in buildSentenceGraph).
  *
  * clip.finalEndNode must be a real index into `nodes` - sceneEndAfter refuses to
  * invent a ceiling for an invalid one, and neither does this.
@@ -56,25 +80,52 @@ export function extensionWindow(
   let last = from;
   for (let i = from + 1; i <= sceneEnd; i++) {
     if (nodes[i].end > deadline) break;
+    if (!fitsMaxSec(clip, nodes[i], nodes, cfg)) break;
     last = i;
   }
   return { lastNode: last };
 }
 
+/** Why a proposal was turned down, one value per `return` below. The spellings
+ *  match snap's DropReason wherever they mean the same thing.
+ *
+ *  A NAMED reason rather than a bare null because the histogram it feeds is the
+ *  only thing that can answer the question the stage's telemetry poses: a
+ *  `refused` count that is rising says the model and the gates disagree, and
+ *  only the reason says WHAT to do about it - a prompt that marks opaque lines
+ *  and a prompt that explains what a clean end is are different edits. Both
+ *  siblings discriminate for the same reason (critic.ts's four drop counters,
+ *  finalize.ts's TrimRejectReason). */
+export type ExtensionRefuseReason =
+  | "not_an_index"
+  | "not_forward"
+  | "outside_graph"
+  | "clip_end_unusable"
+  | "outside_window"
+  | "opaque_end"
+  | "no_clean_end"
+  | "no_gain"
+  | "too_long";
+
+/** Mirrors SnapResult and finalize's RewriteAttempt: the widened clip, or the
+ *  reason there is none. */
+export type ExtensionAttempt =
+  | { ok: true; clip: SnappedClip }
+  | { ok: false; reason: ExtensionRefuseReason };
+
 /**
  * Applies a proposed end node, or refuses it.
  *
- * Refusal is the default and returns null. Every branch below is a way for a
- * model's proposal to be wrong, and the caller's only job is to keep the clip it
- * already had when one fires. Nothing here is advisory.
+ * Refusal is the default. Every branch below is a way for a model's proposal to
+ * be wrong, and the caller's only job is to keep the clip it already had when
+ * one fires. Nothing here is advisory.
  *
  * TOTAL, unlike extensionWindow: any clip, any number, either a widened clip or
- * null - never a throw. A stage that runs once per shipped clip must not be able
- * to fail a whole job over one bad answer. That holds only because the clip's
- * OWN end node is checked at both ends before the window is computed - the
- * upper bound falls out of the gate pairing below, the lower one needs its own
- * line, and an earlier version of this comment claimed totality while -1 and
- * NaN still threw.
+ * a reason - never a throw. A stage that runs once per shipped clip must not be
+ * able to fail a whole job over one bad answer. That holds only because the
+ * clip's OWN end node is checked at both ends before the window is computed:
+ * the upper bound falls out of the gate pairing below, the lower one needs its
+ * own line, and -1 and NaN both proved it by throwing.
  *
  * This stage may only ever move an end FORWARD: shortening is the finalizer's
  * `trim`, which has its own gates, and more importantly a shorter range can push
@@ -94,14 +145,14 @@ export function extensionWindow(
  *   clip.finalEndNode from ABOVE - nothing can be both `> finalEndNode` and
  *   `<= nodes.length - 1` unless finalEndNode is under the top of the graph -
  *   and it does so BEFORE extensionWindow dereferences nodes[finalEndNode].end.
- *   Delete it and a clip carrying a stale end node turns a null refusal into a
+ *   Delete it and a clip carrying a stale end node turns a refusal into a
  *   TypeError thrown out of a stage that must never throw.
  * - THE CLIP'S OWN END IS A REAL INDEX, from below. The pairing above proves
  *   nothing about a negative or NaN finalEndNode, so that is its own gate. Not
  *   reachable through snapNodes, whose idxOk already demands >= 0; it is here
  *   because the totality promise above is unconditional and a future caller
- *   handing this stage a clip from somewhere else must get null, not a throw.
- * - INSIDE THE WINDOW. The scene cut and the clock, above.
+ *   handing this stage a clip from somewhere else must get a reason, not a throw.
+ * - INSIDE THE WINDOW. The scene cut, the clock and maxSec, above.
  * - WORD-BEARING. An opaque node's timings are segment-level (music, laughter,
  *   crosstalk), so ending on one puts the boundary at a coarse Whisper edge.
  *   snapNodes walks BACK off an opaque end - but only while a word-bearing node
@@ -123,53 +174,56 @@ export function extensionWindow(
  *   is the same no-op the index gate refuses, wearing a different index. So an
  *   ACCEPTED extension always moves endSec strictly later, which is the property
  *   callers and telemetry can rely on.
- * - MAX LENGTH. maxSec is the platform ceiling, and this is the only stage that
- *   can approach it from below. snapNodes compresses an over-long clip by moving
- *   its START; there is no equivalent repair here, because moving the start is
- *   exactly what this stage promises not to do. So an over-long proposal is
- *   refused outright and the clip keeps the end it had.
+ * - MAX LENGTH. A BACKSTOP, unreachable while the window stops at maxSec (see
+ *   there for why the cap lives in the ceiling). Same fitsMaxSec, so the two
+ *   cannot drift; kept because the window's break is one edit away from being a
+ *   deadline-only loop and that edit ships a clip too long to post. Deleting
+ *   this line fails no test.
  */
 export function applyExtension(
   clip: SnappedClip,
   nodes: SentenceNode[],
   proposedEndNode: number,
   cfg: AnalyzeConfig
-): SnappedClip | null {
-  if (!Number.isInteger(proposedEndNode)) return null;
-  if (proposedEndNode <= clip.finalEndNode) return null;
-  if (proposedEndNode > nodes.length - 1) return null;
+): ExtensionAttempt {
+  const no = (reason: ExtensionRefuseReason): ExtensionAttempt => ({ ok: false, reason });
+
+  if (!Number.isInteger(proposedEndNode)) return no("not_an_index");
+  if (proposedEndNode <= clip.finalEndNode) return no("not_forward");
+  if (proposedEndNode > nodes.length - 1) return no("outside_graph");
 
   // The gates above bound the clip's own end from ABOVE only. Nothing there
   // rules out a negative, fractional or NaN finalEndNode, and each of those
   // reaches undefined inside extensionWindow - measured, not feared: -1 and NaN
   // throw on `nodes[from].end`, 2.5 throws inside sceneEndAfter.
-  if (!Number.isInteger(clip.finalEndNode) || clip.finalEndNode < 0) return null;
+  if (!Number.isInteger(clip.finalEndNode) || clip.finalEndNode < 0) {
+    return no("clip_end_unusable");
+  }
 
   const { lastNode } = extensionWindow(clip, nodes, cfg);
-  if (proposedEndNode > lastNode) return null;
+  if (proposedEndNode > lastNode) return no("outside_window");
 
   const e = nodes[proposedEndNode];
-  if (!e.hasWords) return null;
-  if (!isCleanEnd(nodes, proposedEndNode)) return null;
+  if (!e.hasWords) return no("opaque_end");
+  if (!isCleanEnd(nodes, proposedEndNode)) return no("no_clean_end");
 
   // snap's own arithmetic, called rather than copied: an end this stage MOVES
   // has to land where snap would have put it.
   const endSec = endSecFor(nodes, e, cfg);
-  if (endSec <= clip.endSec) return null;
-  if (endSec - clip.startSec > cfg.maxSec) return null;
+  if (endSec <= clip.endSec) return no("no_gain");
+  if (!fitsMaxSec(clip, e, nodes, cfg)) return no("too_long");
 
   // A NEW clip, never the argument mutated: clips travel by reference between
   // stages, and an accepted extension must not reach back into the caller's copy.
   //
-  // Two fields are DERIVED from the end and are recomputed with the same
-  // expressions snap.ts:204-206 used, because carrying them forward would leave
-  // the clip describing an end it no longer has. shortMoment is a length verdict
-  // and this stage changes the length; it is persisted onto the highlight, so a
-  // stale `true` would mark a 20s clip a fragment. endsOnQuestion names the last
-  // sentence, and "the answer to a question the clip ends on" is one of the beats
-  // this stage exists to reach - the clip that ended on "so is it true?" now ends
-  // on the answer, and the flag has to say so. Its consumer (select.ts) has
-  // already run and priced the old end; nothing re-scores from it here.
+  // Two fields are DERIVED from the end and are recomputed with snap's own
+  // expressions (snap.ts:204-206), because carrying them forward would leave the
+  // clip describing an end it no longer has. shortMoment is a length verdict and
+  // this stage changes the length; it is persisted onto the highlight, so a stale
+  // `true` would file a 20s clip as a fragment. endsOnQuestion names the last
+  // sentence, and reaching the answer to a question the clip ended on is one of
+  // the beats this stage exists for - the flag has to move with the end. Its
+  // consumer (select.ts) has already run and priced the old end.
   //
   // boundaryConfidence is NOT recomputed and does not need to be. It reads
   // "segment" exactly when the PAYOFF is opaque - snap walks an opaque end back
@@ -179,11 +233,14 @@ export function applyExtension(
   // extends OFF an opaque end onto a word-bearing one: the end got sharper, the
   // payoff the flag describes did not.
   return {
-    ...clip,
-    endSec,
-    finalEndNode: proposedEndNode,
-    shortMoment: endSec - clip.startSec < cfg.targetMinSec,
-    endsOnQuestion: endsOnQuestionMark(e.text),
+    ok: true,
+    clip: {
+      ...clip,
+      endSec,
+      finalEndNode: proposedEndNode,
+      shortMoment: endSec - clip.startSec < cfg.targetMinSec,
+      endsOnQuestion: endsOnQuestionMark(e.text),
+    },
   };
 }
 
@@ -199,12 +256,11 @@ export function applyExtension(
 // scaffold. At the softCap of 12 clips that is 3600 against an estimate near
 // 2800.
 //
-// The two errors are not symmetric, which is why the margin sits where it does.
-// There is no truncation retry here - unlike the finalizer, which retries with a
-// doubled cap because a skipped finalizer ships an unjudged set - so starvation
-// costs the WHOLE stage for the job. Over-sizing costs nothing at all: an unused
-// cap is not billed (the same argument critic.ts makes about its own headroom).
-// Re-measure from a real job's completion_tokens once the stage has run one.
+// The two errors are not symmetric, which is why the margin sits where it does:
+// there is no truncation retry here, so starvation costs the WHOLE stage for the
+// job, while over-sizing costs nothing - an unused cap is not billed (the same
+// argument critic.ts makes about its own headroom). Re-measure from a real job's
+// completion_tokens once the stage has run one.
 const EXTENSION_BASE_TOKENS = 600;
 const EXTENSION_TOKENS_PER_CLIP = 250;
 
@@ -216,23 +272,33 @@ export function extensionMaxOutputTokens(clipCount: number): number {
 /**
  * What the stage did, in the numbers that can each be wrong differently.
  *
+ * `skipped` is the first thing to read, and the reason it exists is that every
+ * other field is zero in two situations that mean opposite things: the stage
+ * never ran, and the stage ran and declined every clip. A refusal, a truncation,
+ * an unreadable payload and an honest `extend: false` on all twelve clips all
+ * emit the same zeros. `finalizerSkipped` solves this for FINALIZE and this is
+ * the same field for the same reason - a degradation recorded only in a log line
+ * is a degradation nobody notices (job cmscht6rp001xq41s5rhjx6q0).
+ *
  * `offered` counts clips with somewhere to go - a non-empty window - not clips
  * shipped: a set where offered is far below the shipped count means the scene
- * rail or the clock is binding, not the model.
+ * rail, the clock or maxSec is binding, not the model.
  *
  * `proposed` counts the model's extend:true rows. `applied` and `refused` split
  * those by what the gates said, and the gap between proposed and applied+refused
  * is rows naming an id that is not in the set at all - a model inventing clips.
+ * `contradicted` counts the clips it answered about TWICE, whose proposals are
+ * dropped and which would otherwise be invisible in the zeros above.
  *
- * A nonzero `refused` is expected rather than alarming, and the number it should
- * be read against is measured with applyExtension itself as the oracle: of the
- * 111 candidate ends offered across the 12 sitcom-friends clips, 41 are nodes it
- * would turn down - 27 opaque, 9 mid-clause, 5 over maxSec. All three causes are
- * counted here, so the comparison number is 41 and not the 27+9 an earlier
- * version of this comment quoted. `refused` climbing toward `proposed` is the
- * finding worth acting on - it would say the model is systematically choosing
- * the beats the gates cannot take, which is an argument for marking them in the
- * prompt.
+ * `refusedBy` is what makes `refused` actionable. A rising refused count says
+ * the model and the gates disagree; only the reason says what to do about it,
+ * and the repairs are different - mark opaque lines in the prompt, explain what
+ * a clean end is, or leave the prompt alone because the model is naming clips it
+ * was never shown (`not_offered` is a hallucination, not a strict gate, and must
+ * not be read as one). The fixture split cannot substitute: 26 of the 35
+ * refusable candidates on sitcom-friends are opaque, and that is a laugh-track
+ * sitcom - the podcasts have neither the laugh track nor the opaque rate, which
+ * is why Task 5 judges them separately.
  *
  * `secondsGained` is the only number that says whether the stage did anything a
  * viewer would notice; applied alone cannot distinguish twelve 0.4s nudges from
@@ -243,8 +309,15 @@ export interface ExtensionTelemetry {
   proposed: number;
   applied: number;
   refused: number;
+  /** Counts only what fired, like index.ts's gateDropReasons. `not_offered` is
+   *  the stage's own reason and never comes from applyExtension. */
+  refusedBy: Partial<Record<ExtensionRefuseReason | "not_offered", number>>;
+  contradicted: number;
   secondsGained: number;
   fallbackModelUsed: boolean;
+  /** Absent when the stage ran to completion. "disabled", "no_window",
+   *  "exception", or the failing call's kind ("error"/"refusal"/"truncated"). */
+  skipped?: string;
 }
 
 export interface ExtensionResult {
@@ -252,22 +325,47 @@ export interface ExtensionResult {
   telemetry: ExtensionTelemetry;
 }
 
+function emptyExtensionTelemetry(): ExtensionTelemetry {
+  return {
+    offered: 0,
+    proposed: 0,
+    applied: 0,
+    refused: 0,
+    refusedBy: {},
+    contradicted: 0,
+    secondsGained: 0,
+    fallbackModelUsed: false,
+  };
+}
+
+function countRefusal(
+  telemetry: ExtensionTelemetry,
+  reason: ExtensionRefuseReason | "not_offered"
+): void {
+  telemetry.refused += 1;
+  telemetry.refusedBy[reason] = (telemetry.refusedBy[reason] ?? 0) + 1;
+}
+
 /**
  * The model's extend:true rows, keyed by clip id. Everything else is dropped
  * silently: this stage's whole posture is that an answer it cannot read is an
  * answer to ignore, and there is nothing to repair - the clip already ships.
  *
- * A REPEATED id drops the proposal instead of picking one of the two rows. Two
- * rows about one clip is a model that does not have one answer, and both
- * readings of "which one wins" are arbitrary; refusing costs at most one
- * extension, while last-write-wins would let a garbled tail of the response
- * override a considered first answer. Nothing upstream rules this out - strict
- * mode constrains each ROW's shape and says nothing about the set, so two rows
- * naming one clip is schema-legal and has to have a decided answer.
+ * A REPEATED id drops the proposal instead of picking one of the two rows: a
+ * model that answered twice does not have one answer, both readings of "which
+ * wins" are arbitrary, and refusing costs at most one extension while
+ * last-write-wins would let a garbled tail override a considered first answer.
+ * Strict mode constrains each ROW's shape and says nothing about the set, so
+ * this is schema-legal and needs a decided answer rather than an accidental
+ * one. `contradicted` counts the clips it happened to.
  */
-function readProposals(raw: unknown): Map<string, number> {
+function readProposals(raw: unknown): {
+  proposals: Map<string, number>;
+  contradicted: number;
+} {
   const proposals = new Map<string, number>();
-  if (!Array.isArray(raw)) return proposals;
+  const contradictions = new Set<string>();
+  if (!Array.isArray(raw)) return { proposals, contradicted: 0 };
 
   const seen = new Set<string>();
   for (const row of raw) {
@@ -280,6 +378,7 @@ function readProposals(raw: unknown): Map<string, number> {
     if (typeof id !== "string") continue;
     if (seen.has(id)) {
       proposals.delete(id);
+      contradictions.add(id);
       continue;
     }
     seen.add(id);
@@ -291,7 +390,7 @@ function readProposals(raw: unknown): Map<string, number> {
     if (typeof endNode !== "number") continue;
     proposals.set(id, endNode);
   }
-  return proposals;
+  return { proposals, contradicted: contradictions.size };
 }
 
 /**
@@ -301,16 +400,16 @@ function readProposals(raw: unknown): Map<string, number> {
  * NEVER throws, and never returns fewer clips than it was given. This stage
  * improves clips that are ALREADY shippable, so every failure - disabled,
  * refusal, truncation, outage, a malformed payload, a defect in this file -
- * ships the input set unchanged. The same discipline as finalizeClips and for
- * the same reason: a content answer must not become a failed job (billing
- * invariant, engine-notes §6). Unlike the finalizer it has no veto and no
- * repair, so there is nothing to retry a truncation for - the budget above
- * carries that argument.
+ * ships the input set unchanged, and says which one it was in `skipped`. The
+ * same discipline as finalizeClips and for the same reason: a content answer
+ * must not become a failed job (billing invariant, engine-notes §6). Unlike the
+ * finalizer it has no veto and no repair, so there is nothing to retry a
+ * truncation for - the budget above carries that argument.
  *
  * ONE call for the whole set, not one per clip. The question is per-clip and
- * independent, so batching buys latency and nothing else - but it buys a lot of
- * it: this runs while a user waits, after the critic's batches and before the
- * finalizer, and twelve serial calls would be the slowest stage in the engine.
+ * independent, so batching buys only latency - but it buys a lot of it: this
+ * runs while a user waits, between the critic's batches and the finalizer, and
+ * twelve serial calls would be the slowest stage in the engine.
  *
  * The clip's own end node is validated HERE, before anything is offered.
  * extensionWindow is partial by design and buildExtensionUser inherits that, so
@@ -327,15 +426,10 @@ export async function extendClipEnds(
   cfg: AnalyzeConfig,
   options: { retryDelayMs?: number } = {}
 ): Promise<ExtensionResult> {
-  const telemetry: ExtensionTelemetry = {
-    offered: 0,
-    proposed: 0,
-    applied: 0,
-    refused: 0,
-    secondsGained: 0,
-    fallbackModelUsed: false,
-  };
-  if (!cfg.endExtensionEnabled) return { clips, telemetry };
+  const telemetry = emptyExtensionTelemetry();
+  if (!cfg.endExtensionEnabled) {
+    return { clips, telemetry: { ...telemetry, skipped: "disabled" } };
+  }
 
   try {
     const offered: Array<{ clip: SnappedClip; window: ExtensionWindow }> = [];
@@ -348,7 +442,10 @@ export async function extendClipEnds(
       if (window.lastNode > end) offered.push({ clip, window });
     }
     telemetry.offered = offered.length;
-    if (offered.length === 0) return { clips, telemetry };
+    if (offered.length === 0) {
+      telemetry.skipped = "no_window";
+      return { clips, telemetry };
+    }
 
     const user = offered
       .map((o) => buildExtensionUser(o.clip, nodes, o.window))
@@ -378,31 +475,40 @@ export async function extendClipEnds(
       telemetry.fallbackModelUsed = true;
       result = await call(cfg.criticModelFallback);
     }
-    if (!result.ok) return { clips, telemetry };
+    if (!result.ok) {
+      telemetry.skipped = result.kind;
+      return { clips, telemetry };
+    }
 
     // `data` itself can be null - JSON.parse("null") is a legal parse, and
     // callJsonSchema hands back whatever parsed.
-    const proposals = readProposals(result.data?.results);
+    const { proposals, contradicted } = readProposals(result.data?.results);
     telemetry.proposed = proposals.size;
+    telemetry.contradicted = contradicted;
 
+    const offeredIds = new Set(offered.map((o) => o.clip.verdict.id));
     const out = clips.map((clip) => {
       const proposed = proposals.get(clip.verdict.id);
       if (proposed === undefined) return clip;
-      // Every gate lives in applyExtension, including the ones this function
-      // could have pre-checked. A clip that was never offered can still be
-      // named by the model, and it is refused here on its own merits rather
-      // than by bookkeeping.
-      const extended = applyExtension(clip, nodes, proposed, cfg);
-      if (!extended) {
-        telemetry.refused += 1;
+      // The gate decides, always - a clip that was never offered is refused on
+      // its own merits and not by bookkeeping. The bookkeeping only chooses
+      // which REASON to record, because "the window is empty" describes the
+      // clip while "the model named a clip it was never shown" describes the
+      // model, and only the second is a fault worth acting on.
+      const attempt = applyExtension(clip, nodes, proposed, cfg);
+      if (!attempt.ok) {
+        countRefusal(
+          telemetry,
+          offeredIds.has(clip.verdict.id) ? attempt.reason : "not_offered"
+        );
         return clip;
       }
       telemetry.applied += 1;
       // Safe to subtract without a guard: an accepted extension always has a
       // strictly larger endSec (applyExtension's seconds gate), so this can
       // only ever add.
-      telemetry.secondsGained += extended.endSec - clip.endSec;
-      return extended;
+      telemetry.secondsGained += attempt.clip.endSec - clip.endSec;
+      return attempt.clip;
     });
 
     return { clips: out, telemetry };
@@ -410,11 +516,24 @@ export async function extendClipEnds(
     // Belt and braces: callJsonSchema swallows API failures and applyExtension
     // is total, so reaching here means a defect in this file or in prompt
     // rendering. Clips that already passed every gate must still ship.
+    //
+    // Counters are RESET rather than carried out, as finalizeClips does here:
+    // nothing was applied, so an `applied` accumulated before a throw would
+    // describe a set that never shipped. `offered` and the fallback flag survive
+    // because they describe what was ASKED, which is still true.
     console.warn(
       `[analyze-v2] end-extension threw, shipping the set unchanged: ${
         error instanceof Error ? error.message : String(error)
       }`
     );
-    return { clips, telemetry };
+    return {
+      clips,
+      telemetry: {
+        ...emptyExtensionTelemetry(),
+        offered: telemetry.offered,
+        fallbackModelUsed: telemetry.fallbackModelUsed,
+        skipped: "exception",
+      },
+    };
   }
 }
