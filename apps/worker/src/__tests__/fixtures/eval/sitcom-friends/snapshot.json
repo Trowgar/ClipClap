@@ -1,67 +1,54 @@
 {
-  "count": 12,
+  "count": 9,
   "tier": "strong",
   "clips": [
     {
       "range": "1165.4-1186.0",
-      "score": 0.88,
-      "title": "Joey Heard “No Strippers” and Ignored It"
+      "score": 0.91,
+      "title": "Joey Finds a Loophole in One Simple Rule"
     },
     {
-      "range": "175.1-190.6",
+      "range": "175.1-189.1",
       "score": 0.86,
-      "title": "Chandler Gets Caught in an Apparent Affair"
+      "title": "Why Were Chandler and a Blonde Together?"
     },
     {
-      "range": "0.0-28.8",
+      "range": "5.6-18.6",
       "score": 0.84,
-      "title": "He Loves Rachel—Just Not That Way"
+      "title": "A Father Demands to Know What His Daughter Means to Him"
     },
     {
-      "range": "1062.8-1089.0",
-      "score": 0.78,
-      "title": "Pottery Barn May Have Made Ross's Table Valuable"
-    },
-    {
-      "range": "2148.0-2167.2",
-      "score": 0.78,
-      "title": "He Announces His Student Girlfriend—and Gets Fired"
+      "range": "2117.3-2167.2",
+      "score": 0.76,
+      "title": "They Go Public—Then His Job Is on the Line"
     },
     {
       "range": "1610.3-1632.5",
-      "score": 0.72,
-      "title": "Spelling tips become a jab about Scrabble with Monica"
-    },
-    {
-      "range": "1932.8-2011.8",
-      "score": 0.72,
-      "title": "The test result changes from negative to positive"
-    },
-    {
-      "range": "636.9-658.0",
-      "score": 0.7,
-      "title": "Joey Exposes the Secret Kissing"
+      "score": 0.73,
+      "title": "A Breakup Gets Weirdly Educational"
     },
     {
       "range": "1138.3-1151.0",
-      "score": 0.7,
-      "title": "The bachelor party was in a Pizza Hut basement"
-    },
-    {
-      "range": "1413.3-1433.3",
-      "score": 0.68,
-      "title": "The Eyelash Curler Was His"
-    },
-    {
-      "range": "1511.8-1527.7",
-      "score": 0.67,
-      "title": "They Beg Someone Not to Reveal Their Big News"
+      "score": 0.72,
+      "title": "His Friends Remember the Last Bachelor Party Differently"
     },
     {
       "range": "2374.2-2426.4",
-      "score": 0.63,
-      "title": "The Weak Coffee Joke Needs Explaining"
+      "score": 0.7,
+      "title": "She Misses the Joke—and Makes Him Explain It"
+    },
+    {
+      "range": "1419.0-1433.3",
+      "score": 0.67,
+      "title": "The Evidence in His Hotel Room Raises Questions"
+    },
+    {
+      "range": "2202.0-2225.4",
+      "score": 0.67,
+      "title": "Bing's Boss Has an Unforgettable Way to Name a Law Firm"
     }
   ],
-  "dropReasons": {}
+  "dropReasons": {
+    "description_evidence_out_of_range": 3
+  }
 }

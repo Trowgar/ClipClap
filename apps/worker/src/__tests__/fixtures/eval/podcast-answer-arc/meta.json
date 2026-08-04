@@ -15,7 +15,7 @@
   },
   "variants": {
     "gpt51": {
-      "recordedAt": "2026-07-26T23:26:13.742Z",
+      "recordedAt": "2026-08-04T22:48:59.038Z",
       "engine": {
         "scanModel": "gpt-4o-mini",
         "criticModel": "gpt-5.1",
@@ -27,11 +27,15 @@
         "finalizerEnabled": true,
         "finalizerModel": "gpt-5.1",
         "finalizerMaxOutputTokensBase": 2000,
-        "finalizerMaxOutputTokensPerClip": 700
+        "finalizerMaxOutputTokensPerClip": 700,
+        "endExtensionEnabled": false,
+        "endExtensionWindowSec": 25,
+        "endExtensionMaxOutputTokensBase": 600,
+        "endExtensionMaxOutputTokensPerClip": 250
       }
     },
     "end-extension": {
-      "recordedAt": "2026-08-04T18:16:22.920Z",
+      "recordedAt": "2026-08-04T22:46:58.705Z",
       "engine": {
         "scanModel": "gpt-4o-mini",
         "criticModel": "gpt-5.6-luna",
