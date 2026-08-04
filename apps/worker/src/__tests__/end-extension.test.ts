@@ -114,6 +114,21 @@ describe("applyExtension", () => {
 // clean-end gate and the maxSec gate outright - so the ten proved almost
 // nothing about the gates. Each case here names the mutation it kills, because
 // a gate nobody can prove fires is worse than no gate: it buys false confidence.
+//
+// Two warnings for whoever runs the next matrix over this file. A mutant that
+// FAILS TO APPLY is an error, never a kill - one of these had a find-string go
+// stale against a return that grew multi-line, and subtracting survivors from
+// the total published it as a kill. Check the error count first.
+//
+// And three mutations here are EQUIVALENT, so do not go hunting for a case that
+// kills them: (1) starting the window loop at `from` rather than `from + 1` -
+// `last` is already `from`, and the deadline is at or after nodes[from].end for
+// any non-negative window; (2) dropping applyExtension's in-graph gate - the
+// window can never return an index outside the graph, so the window gate
+// already refuses everything that one would; (3) the `: null` branch of the
+// `next` lookup - nodes[len] is undefined, which the guard beside it treats
+// identically. All three were checked over 20000 random graphs, and (2) and (3)
+// are kept deliberately - end-extension.ts says why at each.
 // ---------------------------------------------------------------------------
 
 /** Window wide enough that maxSec, not the window, is the binding gate. */

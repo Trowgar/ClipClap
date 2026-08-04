@@ -121,10 +121,19 @@ export function applyExtension(
   if (!e.hasWords) return null;
   if (!isCleanEnd(nodes, proposedEndNode)) return null;
 
-  // Same seconds arithmetic as snap.ts:122-123, and for the same two reasons:
+  // Same seconds arithmetic as snap.ts:121-123, and for the same two reasons:
   // the tail hold may only ever move within silence, so it is capped at the next
   // node's onset; and the cap may never cut the end node's own last word, so the
   // node's end wins over the cap when timings nest.
+  //
+  // The `: null` branch has no effect - nodes[len] is undefined and the guard
+  // below treats undefined and null alike - and is kept anyway, for two reasons.
+  // It is snap's line verbatim, which is what lets the parity claim above be
+  // checked by eye. And with noUncheckedIndexedAccess off, dropping the bound
+  // check would type `next` non-nullable, leaving the guard below looking
+  // redundant to the next reader - and collapsing it into `next.start` throws on
+  // the last node in the graph, which is a legal end for any clip at the end of
+  // a video.
   const next = proposedEndNode < nodes.length - 1 ? nodes[proposedEndNode + 1] : null;
   let endSec = Math.min(e.end + cfg.tailHoldSec, next ? next.start : Infinity);
   endSec = Math.max(endSec, e.end);
