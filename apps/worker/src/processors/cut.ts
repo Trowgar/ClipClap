@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import type { Highlight } from "@clipclap/shared";
 import type { FilterSpec } from "../reframe/types";
+import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
 
 const execFileAsync = promisify(execFile);
 
@@ -67,7 +68,8 @@ export async function cutClips(
     const clipPath = join(tmpdir(), `clipclap-clip-${randomUUID()}.mp4`);
     await execFileAsync(
       "ffmpeg",
-      buildCutArgs(videoPath, highlight.start, highlight.end, clipPath, extraFilter, filterSpec)
+      buildCutArgs(videoPath, highlight.start, highlight.end, clipPath, extraFilter, filterSpec),
+      { maxBuffer: CHILD_MAX_BUFFER_BYTES }
     );
     results.push({ highlight, clipPath });
   }
@@ -94,7 +96,7 @@ export async function trimClipFile(
     "-movflags", "+faststart",
     clipPath,
     "-y",
-  ]);
+  ], { maxBuffer: CHILD_MAX_BUFFER_BYTES });
 
   return clipPath;
 }

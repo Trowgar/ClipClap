@@ -21,6 +21,7 @@ import {
 import { whisperLanguageToIso } from "../analyze-v2/language";
 import { transcriptionModel } from "../model-selection";
 
+import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
 const execFileAsync = promisify(execFile);
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -55,7 +56,7 @@ export async function transcribeVideo(
     await execFileAsync("ffmpeg", [
       "-i", videoPath, "-vn", "-acodec", "libmp3lame",
       "-ar", "16000", "-ac", "1", "-b:a", "32k", audioPath, "-y",
-    ]);
+    ], { maxBuffer: CHILD_MAX_BUFFER_BYTES });
 
     const bytes = statSync(audioPath).size;
     const durationSec = await probeDurationSec(audioPath);
@@ -93,7 +94,7 @@ export async function transcribeVideo(
           await execFileAsync("ffmpeg", [
             "-ss", String(from), "-to", String(plan.end),
             "-i", audioPath, "-c", "copy", chunkPath, "-y",
-          ]);
+          ], { maxBuffer: CHILD_MAX_BUFFER_BYTES });
           let raw: RawWhisperResponse;
           try {
             raw = await whisperCall(chunkPath, probed?.iso ?? undefined);
@@ -190,7 +191,7 @@ async function probeDurationSec(audioPath: string): Promise<number> {
   const { stdout } = await execFileAsync("ffprobe", [
     "-v", "error", "-show_entries", "format=duration",
     "-of", "default=noprint_wrappers=1:nokey=1", audioPath,
-  ]);
+  ], { maxBuffer: CHILD_MAX_BUFFER_BYTES });
   return Number(stdout.trim()) || 0;
 }
 
@@ -199,7 +200,7 @@ async function runSilenceDetect(audioPath: string): Promise<string> {
     const { stderr } = await execFileAsync("ffmpeg", [
       "-i", audioPath, "-af", "silencedetect=noise=-30dB:d=0.3",
       "-f", "null", "-",
-    ]);
+    ], { maxBuffer: CHILD_MAX_BUFFER_BYTES });
     return stderr ?? "";
   } catch (error) {
     // ffmpeg exits non-zero on some null-muxer paths; stderr still has the data
@@ -221,7 +222,7 @@ async function probeLanguage(
   await execFileAsync("ffmpeg", [
     "-ss", String(speechStart), "-t", String(PROBE_SEC),
     "-i", audioPath, "-c", "copy", probePath, "-y",
-  ]);
+  ], { maxBuffer: CHILD_MAX_BUFFER_BYTES });
   try {
     const raw = await whisperCall(probePath, undefined);
     if (!raw.language) return null;

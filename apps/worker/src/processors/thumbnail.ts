@@ -3,6 +3,7 @@ import { promisify } from "util";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
+import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
 
 const execFileAsync = promisify(execFile);
 
@@ -39,7 +40,7 @@ export async function generateThumbnail(
     "3",
     thumbPath,
     "-y",
-  ]);
+  ], { maxBuffer: CHILD_MAX_BUFFER_BYTES });
 
   return thumbPath;
 }

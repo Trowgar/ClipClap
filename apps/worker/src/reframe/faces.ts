@@ -6,6 +6,7 @@ import { tmpdir } from "os";
 import type { ReframeConfig } from "./config";
 import type { CamRect, FaceTrack, Shot, ShotTracks } from "./types";
 
+import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
 const execFileAsync = promisify(execFile);
 
 // assets/ ships beside src/ in dev (tsx) and beside dist/ in the production
@@ -110,7 +111,7 @@ export async function detectFaces(
         join(framesDir, "frame-%05d.jpg"),
         "-y",
       ],
-      { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }
+      { timeout: timeoutMs, maxBuffer: CHILD_MAX_BUFFER_BYTES }
     );
     const shotsPath = join(workDir, "shots.json");
     await writeFile(shotsPath, JSON.stringify(shots), "utf-8");
@@ -130,7 +131,7 @@ export async function detectFaces(
         "--source-width", String(sourceWidth),
         "--source-height", String(sourceHeight),
       ],
-      { timeout: pythonTimeout, maxBuffer: 16 * 1024 * 1024 }
+      { timeout: pythonTimeout, maxBuffer: CHILD_MAX_BUFFER_BYTES }
     );
     return parseDetectorOutput(stdout, shots.length);
   } finally {

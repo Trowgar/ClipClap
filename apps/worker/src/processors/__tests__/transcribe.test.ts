@@ -38,9 +38,12 @@ describe("transcribeVideo", () => {
     vi.clearAllMocks();
     // execFileAsync (via promisify) resolves with the value after the err arg;
     // ffprobe duration reads `.stdout`, ffmpeg extract ignores the result.
-    mocks.execFile.mockImplementation((_cmd, _args, callback) =>
-      callback(null, { stdout: "12.5", stderr: "" })
-    );
+    mocks.execFile.mockImplementation((_cmd, _args, optsOrCb, maybeCb) => {
+      // promisify(execFile) always passes the callback LAST, so adding an
+      // options object moves it from the 3rd argument to the 4th.
+      const callback = typeof optsOrCb === "function" ? optsOrCb : maybeCb;
+      return callback(null, { stdout: "12.5", stderr: "" });
+    });
     mocks.statSync.mockReturnValue({ size: 1024 });
     mocks.unlink.mockResolvedValue(undefined);
     mocks.transcriptionCreate.mockResolvedValue({
@@ -85,6 +88,10 @@ describe("transcribeVideo", () => {
     expect(mocks.execFile).toHaveBeenCalledWith(
       "ffmpeg",
       expect.arrayContaining(["-b:a", "32k"]),
+      // The maxBuffer is asserted here rather than ignored: ffmpeg's stderr at
+      // Node's 1 MiB default is what killed a real user's job, and silencedetect
+      // in this same file emits a stderr line per silence over the whole audio.
+      expect.objectContaining({ maxBuffer: expect.any(Number) }),
       expect.any(Function)
     );
     const args = mocks.execFile.mock.calls[0][1] as string[];

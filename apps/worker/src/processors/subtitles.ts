@@ -5,6 +5,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import type { SubtitleCue, SubtitleWord, WhisperSegment } from "@clipclap/shared";
+import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
 
 const execFileAsync = promisify(execFile);
 
@@ -234,7 +235,7 @@ export async function burnSubtitles(
         "+faststart",
         outputPath,
         "-y",
-      ]);
+      ], { maxBuffer: CHILD_MAX_BUFFER_BYTES });
     } catch (error) {
       const stderr = (error as { stderr?: string }).stderr ?? "";
       throw new Error(

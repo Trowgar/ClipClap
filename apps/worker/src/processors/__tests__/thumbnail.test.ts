@@ -12,9 +12,12 @@ describe("generateThumbnail", () => {
   beforeEach(() => {
     execFileMock.mockReset();
     // promisify(execFile) invokes the original with a node-style callback last.
-    execFileMock.mockImplementation((_file, _args, cb) =>
-      cb(null, { stdout: "", stderr: "" })
-    );
+    execFileMock.mockImplementation((_file, _args, optsOrCb, maybeCb) => {
+      // promisify(execFile) always passes the callback LAST, so adding an
+      // options object moves it from the 3rd argument to the 4th.
+      const cb = typeof optsOrCb === "function" ? optsOrCb : maybeCb;
+      return cb(null, { stdout: "", stderr: "" });
+    });
   });
 
   it("runs ffmpeg with the thumbnail filter and returns a jpg temp path", async () => {
