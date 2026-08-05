@@ -39,33 +39,55 @@ export function resolveFontsDir(): string {
 }
 
 // Comparison form ONLY. Never rendered, never stored, never shown to a user -
-// what reaches the viewer is always an exact substring of the segment's own
-// text. NFC and not NFKC: NFKC folds compatibility forms, which would let two
-// visibly different strings compare equal, the opposite of what this is for.
+// what reaches the viewer is always an exact substring of the NFC form of the
+// segment's own text. NFC and not NFKC: NFKC folds compatibility forms, which
+// would let two visibly different strings compare equal, the opposite of what
+// this is for.
 // \p{L}\p{N} and not [a-z0-9]: the latter reduces every Russian segment to the
 // empty string and would report a total loss on the whole language.
-export function comparableStream(value: string): string {
+export function comparableText(value: string): string {
   return value.normalize("NFC").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 }
 
 const COMPARABLE_CHAR = /[\p{L}\p{N}]/u;
+const COMBINING_MARK = /\p{M}/u;
 
-/** Splits `text` immediately after its `keep`-th comparable character, so the
- *  head carries exactly `keep` of them and the tail carries the rest with its
- *  original punctuation and spacing intact. Iterates code points, not code
- *  units, so a surrogate pair is never cut in half. */
-export function splitAtComparable(text: string, keep: number): [string, string] {
-  if (keep <= 0) return ["", text];
+/** Splits `text` immediately after its `keepComparable`-th comparable
+ *  character, so the head carries exactly that many of them and the tail
+ *  carries the rest with its original punctuation and spacing intact.
+ *  Iterates code points, not code units, so a surrogate pair is never cut in
+ *  half. */
+export function splitAtComparable(
+  text: string,
+  keepComparable: number
+): [string, string] {
+  // Slice from the NFC form, the same form comparableText counts, so a caller
+  // can spend a count produced there. Canonically equivalent, so the viewer
+  // sees identical glyphs.
+  const src = text.normalize("NFC");
+  if (keepComparable <= 0) return ["", src];
   let seen = 0;
   let idx = 0;
-  for (const ch of text) {
+  for (const ch of src) {
     idx += ch.length;
     if (COMPARABLE_CHAR.test(ch)) {
       seen += 1;
-      if (seen === keep) return [text.slice(0, idx), text.slice(idx)];
+      if (seen === keepComparable) {
+        // A combining mark belongs to the letter before it. Splitting between
+        // them orphans the mark into the tail and strips it from the head, so
+        // the last drawn word loses its diacritic. Code points here too, to
+        // match the loop above: src[idx] would be a lone surrogate for an
+        // astral mark, which \p{M} does not match.
+        while (idx < src.length) {
+          const next = String.fromCodePoint(src.codePointAt(idx)!);
+          if (!COMBINING_MARK.test(next)) break;
+          idx += next.length;
+        }
+        return [src.slice(0, idx), src.slice(idx)];
+      }
     }
   }
-  return [text, ""];
+  return [src, ""];
 }
 
 export function segmentsToCues(

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  comparableStream,
+  comparableText,
   generateAss,
   segmentsToCues,
   sliceCues,
@@ -163,33 +163,43 @@ describe("generateAss", () => {
   });
 });
 
-describe("comparableStream", () => {
+describe("comparableText", () => {
   it("keeps letters and digits, drops everything else, folds case", () => {
-    expect(comparableStream("It was 5.30 in the morning,")).toBe("itwas530inthemorning");
-    expect(comparableStream("Bing?")).toBe("bing");
-    expect(comparableStream("Y-O-U-R means you're.")).toBe("yourmeansyoure");
+    expect(comparableText("It was 5.30 in the morning,")).toBe("itwas530inthemorning");
+    expect(comparableText("Bing?")).toBe("bing");
+    expect(comparableText("Y-O-U-R means you're.")).toBe("yourmeansyoure");
+  });
+
+  it("is empty for empty and punctuation-only input", () => {
+    expect(comparableText("")).toBe("");
+    expect(comparableText("...!?")).toBe("");
   });
 
   it("does not erase Cyrillic", () => {
-    expect(comparableStream("Там хорошая компания подбирается.")).toBe(
+    expect(comparableText("Там хорошая компания подбирается.")).toBe(
       "тамхорошаякомпанияподбирается"
     );
   });
 
-  it("treats composed and decomposed forms as equal", () => {
-    // "й" as one code point vs "и" + combining breve
-    expect(comparableStream("й")).toBe(comparableStream("й"));
+  it("normalises composed and decomposed forms to the same NFC letter", () => {
+    // U+0439 as one code point, vs U+0438 + U+0306 combining breve. Literal
+    // expectations, not f(x) === f(y): a tool that NFC-normalises this file
+    // would turn that comparison into a tautology without anyone noticing.
+    expect(comparableText("й")).toBe("й");
+    expect(comparableText("й")).toBe("й");
   });
 
   it("does not fold compatibility forms - NFC, not NFKC", () => {
     // U+FB01 LATIN SMALL LIGATURE FI. NFKC would decompose it to "fi" and make
     // these compare equal; NFC leaves it alone. Two visibly different strings
     // must not be treated as the same text (spec 3.1).
-    expect(comparableStream("ﬁ")).not.toBe(comparableStream("fi"));
+    expect(comparableText("ﬁ")).toBe("ﬁ");
+    expect(comparableText("ﬁ")).not.toBe(comparableText("fi"));
   });
 
   it("agrees when Whisper splits a number into two tokens", () => {
-    expect(comparableStream("5.30")).toBe(comparableStream(["5", "30"].join("")));
+    expect(comparableText("5.30")).toBe("530");
+    expect(comparableText(["5", "30"].join(""))).toBe("530");
   });
 });
 
@@ -205,7 +215,73 @@ describe("splitAtComparable", () => {
     expect(splitAtComparable("Там", 3)).toEqual(["Там", ""]);
   });
 
+  it("returns the whole string as the head when N overshoots", () => {
+    expect(splitAtComparable("abc.", 99)).toEqual(["abc.", ""]);
+  });
+
   it("returns an empty head for N of 0", () => {
     expect(splitAtComparable("Там", 0)).toEqual(["", "Там"]);
+  });
+
+  it("handles an empty string", () => {
+    expect(splitAtComparable("", 3)).toEqual(["", ""]);
+  });
+
+  it("puts an all-punctuation string in the head, the mirror of the N-of-0 branch", () => {
+    expect(splitAtComparable("...!?", 1)).toEqual(["...!?", ""]);
+  });
+
+  it("splits the NFC form, so a decomposed letter is not cut in two", () => {
+    // U+0438 + U+0306 composes to U+0439. Splitting the raw string put the
+    // bare "и" in the head and left the combining breve opening the tail.
+    expect(splitAtComparable("й хорошо", 1)).toEqual([
+      "й",
+      " хорошо",
+    ]);
+  });
+
+  it("keeps a combining mark with its base letter even in NFC", () => {
+    // Devanagari vowel signs are Mc and never compose, so NFC alone does not
+    // save this: "कि" is क (Lo) + ि (Mc). Splitting between them orphans the
+    // vowel sign into the tail, where it renders as a dotted circle.
+    expect(splitAtComparable("कितना समय", 1)).toEqual(["कि", "तना समय"]);
+  });
+
+  it("never cuts a surrogate pair in half", () => {
+    // U+20BB7 and U+20BB8 are astral CJK: two UTF-16 units each, one code
+    // point each. This is the claim the doc comment makes.
+    expect(splitAtComparable("\u{20BB7}\u{20BB8} tail", 1)).toEqual([
+      "\u{20BB7}",
+      "\u{20BB8} tail",
+    ]);
+  });
+
+  it("keeps an astral combining mark with its base letter", () => {
+    // U+1D167 MUSICAL SYMBOL COMBINING TREMOLO-1, category Mn, two UTF-16
+    // units. Indexing the mark by code unit would see a lone high surrogate,
+    // which \p{M} does not match, and orphan it into the tail.
+    expect(splitAtComparable("a\u{1D167}bc", 1)).toEqual(["a\u{1D167}", "bc"]);
+  });
+
+  it("head + tail reconstructs the NFC input, and the head carries exactly N", () => {
+    const cases = [
+      "a\u{1D167}bc",
+      "We think an affair.",
+      "Там хорошая компания подбирается.",
+      "й хорошо",
+      "कितना समय",
+      "\u{20BB7}\u{20BB8} tail",
+      "It was 5.30 in the morning,",
+      "...!?",
+      "",
+    ];
+    for (const text of cases) {
+      const total = [...comparableText(text)].length;
+      for (let keep = 0; keep <= total + 2; keep++) {
+        const [head, tail] = splitAtComparable(text, keep);
+        expect(head + tail).toBe(text.normalize("NFC"));
+        expect([...comparableText(head)].length).toBe(Math.min(keep, total));
+      }
+    }
   });
 });
