@@ -230,6 +230,17 @@ That is visible corruption rather than a cosmetic slip, and it is worse than the
 looks to a viewer. Preserving the original separator fixes both examples and leaves `"an affair."`
 unchanged, because that seam really did carry a space.
 
+**A seam with no whitespace merges unconditionally, whatever the gap.** Preserving the separator is
+not enough on its own: it governs the merge join, while a span that gets its own timing entry stands
+alone and `chunkWords` later joins entries with a space, reproducing `во -первых.` by another route in
+45 measured restores. The rule that closes it is not about spacing at all - **a span that continues
+the adjacent word is not a separate word**, so the question `MIN_RESTORED_SEC` answers ("can this word
+have its own timing entry") does not apply to it. Splitting `во` from `-первых.` would also hand half
+a word its own karaoke highlight.
+
+So the precedence is: no whitespace at the seam means merge; whitespace and room means its own entry;
+whitespace and no room means merge.
+
 ### 4.3 Timing
 
 Timing for the restored entry, using **real segment boundaries and never an invented number**:
