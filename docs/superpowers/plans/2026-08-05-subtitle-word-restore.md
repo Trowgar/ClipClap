@@ -73,11 +73,22 @@ describe("comparableStream", () => {
   it("agrees when Whisper splits a number into two tokens", () => {
     expect(comparableStream("5.30")).toBe(comparableStream(["5", "30"].join("")));
   });
+
+  it("does not fold compatibility forms - NFC, not NFKC", () => {
+    // U+FB01 LATIN SMALL LIGATURE FI. NFKC would decompose it to "fi" and make
+    // these compare equal; NFC leaves it alone (spec 3.1). Without this the
+    // NFC-to-NFKC mutation survives every other test in the file - found by
+    // mutation-testing the first implementation, not by reasoning.
+    expect(comparableStream("ﬁ")).not.toBe(comparableStream("fi"));
+  });
 });
 
 describe("splitAtComparable", () => {
   it("splits right after the Nth comparable character", () => {
-    expect(splitAtComparable("We think an affair.", 10)).toEqual([
+    // "We think an" is 9 comparable characters: W,e + t,h,i,n,k + a,n.
+    // Count them before trusting this number; an earlier draft said 10, which
+    // would have split inside "affair".
+    expect(splitAtComparable("We think an affair.", 9)).toEqual([
       "We think an",
       " affair.",
     ]);
@@ -155,7 +166,11 @@ export function splitAtComparable(text: string, keep: number): [string, string] 
 docker compose exec -T worker-render sh -c 'cd /app && npx vitest run apps/worker/src/processors/__tests__/subtitles.test.ts'
 ```
 
-Expected: PASS, 19 tests (12 existing + 7 new).
+Expected: PASS, 20 tests (12 existing + 8 new).
+
+**Then mutate the implementation and confirm each mutation is caught**, because a guard that no test can kill is the failure mode this repo has already shipped once. Flip `NFC` to `NFKC`, `\p{L}\p{N}` to `a-z0-9`, `seen === keep` to `seen === keep + 1`, and remove `.toLowerCase()`; each must turn at least one test red. Restore the correct implementation afterwards.
+
+Test counts quoted in later tasks assume 20 here. They are guidance for spotting a missing test, not contracts.
 
 - [ ] **Step 5: Commit**
 
@@ -319,7 +334,7 @@ export function restoreDroppedWords(
 docker compose exec -T worker-render sh -c 'cd /app && npx vitest run apps/worker/src/processors/__tests__/subtitles.test.ts'
 ```
 
-Expected: PASS, 23 tests.
+Expected: PASS, 24 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -418,7 +433,7 @@ In `restoreDroppedWords`, between the tail branch and the final `unresolved` ret
 docker compose exec -T worker-render sh -c 'cd /app && npx vitest run apps/worker/src/processors/__tests__/subtitles.test.ts'
 ```
 
-Expected: PASS, 25 tests.
+Expected: PASS, 26 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -748,7 +763,7 @@ export function summariseRestores(
 docker compose exec -T worker-render sh -c 'cd /app && npx vitest run apps/worker/src/processors/__tests__/subtitles.test.ts'
 ```
 
-Expected: PASS, 34 tests.
+Expected: PASS, 35 tests.
 
 - [ ] **Step 5: Record it in the render manifest**
 
