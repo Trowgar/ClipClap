@@ -36,63 +36,94 @@ When the span fits, `x = (minX + maxX) / 2 - cropW / 2` centres the window on th
 
 ---
 
-### Task 1: Measure the geometry before changing it
+## MEASURED 2026-08-05 - half this diagnosis was wrong, and the real defect is a third branch
 
-**Files:** none - measurement only
+Task 1 ran and is committed (`b704924`, `engine-notes` §7). What it found rewrites the rest of this plan.
 
-- [ ] **Step 1: Instrument and replay.**
+**The split arithmetic reproduces, and the defect is structural rather than a bad threshold.** Two
+tiles of `h*9/8` need `2.25h` of width; a 16:9 source has `1.778h`. **They cannot be disjoint.** The
+floor is 42% overlap, reached only at an aspect of 2.25:1, and **55 of 124 shipped splits already sit
+on that floor** with both tiles clamped to opposite edges. Median overlap 48.0%, max 98.5% - the same
+picture stacked on itself 8px apart. 124 of 124 exceed 25%. So "split only when the tiles are
+separate" means "never split" on every source this product has seen, and the original Task 2 is
+withdrawn.
 
-For every shot of every clip on a rendered fixture, record: the chosen layout, `sourceWidth`, `cropW`, `tileW`, the anchorable face boxes, their span, the resulting tile x positions, and the **tile overlap as a fraction of tile width**. `computeCropPlan` needs a real video; the rendered eval jobs in the database carry their `cropPlan` per clip, and `Job.renderManifest` carries the per-clip reframe checks - start there before re-running detection, which is expensive.
+**The single branch was not guilty.** Of 22 single shots only 4 carry two or more anchorable faces,
+and the anchor sits at most 0.118 `cropW` - 23px on a 198px window - from the nearest face centre,
+with every face inside the window. Structural, not luck: that branch is only reached when the span
+already fits in `0.9 * cropW`. The original Task 3 is withdrawn.
 
-Report:
-- the distribution of tile overlap across every `split` shot, and how many exceed 25% / 50%
-- for every `single` shot with two or more anchorable faces, how far the anchor sits from the nearest face centre, as a fraction of `cropW`
-- how often `mouthActivity` actually distinguishes the faces in a shot - if it is near-zero everywhere, the anchor fix has no signal to use and you must say so
+**The crop that tracks the table is the CENTRE branch.** 12 of 16 centre shots HAVE anchorable faces
+and are centred blind anyway, because the three-plus-face `DOMINANCE_LEAD` test failed. That is
+**147.8s of 333.5s - 44% of shot time - across 9 of 12 clips**, median centre-to-nearest-face 0.27
+`cropW`, max 0.59, and **in 4 of 12 clips the nearest face is outside the crop window entirely**. The
+weak-coffee clip closes on 26.2 seconds of it. Centre is the modal layout by screen time, 47.2%.
 
-**If the measured overlap does not match the arithmetic above, stop and report.** The arithmetic is mine and it has been wrong before on this work.
-
-- [ ] **Step 2: Commit the measurement** as a note in `docs/engine-notes.md` §7, whether or not it confirms the diagnosis.
+**`mouthActivity` is live but is not trustworthy yet.** 126 observations, median 0.049, no zeros,
+within-shot max/min ratio median 1.83. But `dominance` weights it 0.2 against 0.8 for area and
+centrality and agrees with the mouthiest face in only **17 of 35** multi-face shots. More
+importantly the signal itself is unvalidated: it is a 2fps mean-absolute-difference of a mouth patch,
+and a head turn or box jitter produces it as readily as speech. **Do not anchor on it before a
+per-shot ground truth exists.**
 
 ---
 
-### Task 2: Split only when the tiles are actually separate
+### Task 2 (rewritten): stop splitting where a split cannot work
 
 **Files:** `apps/worker/src/reframe/plan.ts`, `apps/worker/src/__tests__/reframe-plan.test.ts`
 
-- [ ] **Step 1:** Replace the split condition so a split requires the two tiles to be genuinely separate, not the faces. Derive the threshold from Task 1's distribution - do not take a number from this plan.
+- [ ] **Step 1: Decide what replaces a split, and justify it from the measurement.**
 
-The hard case is the middle: two faces further apart than `FIT_MARGIN * cropW` (so a single window cannot hold both) but closer than a tile width (so tiles would overlap). Decide what that case gets - a single crop anchored on the dominant face, a centre crop, or something else - and **justify it from the measurement**, then check what it does to the fixtures.
+The split layout is sound only where `2 * tileW <= sourceWidth`, i.e. an aspect at or beyond 2.25:1.
+Gate it on that, and send everything else to whichever branch the measurement says is better -
+which will usually mean a single crop anchored on one face rather than a centre crop, given the
+centre branch's own numbers above.
 
-- [ ] **Step 2:** TDD, then mutation-test and report a full matrix. The previous branch measured plan-supplied test sketches letting 6 of 8 and 19 of 29 mutants through; design your own cases.
+Do not redesign the tiles. Making them narrower means cropping each tile vertically as well, which is
+a different filtergraph and a different project; say so and leave it.
 
-- [ ] **Step 3:** Verify with pixels, not argument. `eval-reframe.ts` writes a contact sheet through the computed plan - that is what it is for, and `docs/engine-notes.md` records that reframe decisions are checked against pixels. Produce before/after sheets for at least the clips Task 1 found worst.
+- [ ] **Step 2: TDD, then mutation-test with a full matrix.** Include a source at exactly 2.25:1 and
+  either side of it.
+
+- [ ] **Step 3: Contact sheets before and after** on the clips §7 names as worst. Pixels, not
+  argument - `engine-notes` §7 already says reframe decisions are checked that way.
 
 ---
 
-### Task 3: Anchor the single crop on a face, not a midpoint
+### Task 3 (rewritten): stop centring blind when a face is available
 
 **Files:** `apps/worker/src/reframe/plan.ts`, `apps/worker/src/__tests__/reframe-plan.test.ts`
 
-- [ ] **Step 1:** When a single crop cannot hold every anchorable face comfortably, anchor it on the dominant face rather than the span midpoint. Use `dominance`, which already carries `mouthActivity`.
+- [ ] **Step 1:** When `DOMINANCE_LEAD` fails among three or more faces, the current answer is a
+  centre crop that ignores every face it just measured. Anchor on a face instead. Which face is the
+  design question, and `dominance` is the obvious candidate **with the caveat above** - it is
+  size-and-centrality-led, and the mouth term it carries is unvalidated.
 
-Keep the case that works: when the faces genuinely fit with room to spare, the midpoint is right and must not move. Task 1's measurement decides where "comfortably" sits.
+  Prefer a choice that does not depend on `mouthActivity` being speech. If you conclude the honest
+  answer needs that ground truth first, say so and stop - a wrong anchor is worse than a centre crop,
+  because it points confidently at the wrong person.
 
-- [ ] **Step 2:** TDD plus mutation matrix, as Task 2.
+- [ ] **Step 2:** TDD plus mutation matrix.
 
-- [ ] **Step 3:** Contact sheets, before and after.
+- [ ] **Step 3:** Contact sheets, before and after, including the weak-coffee clip's closing 26s.
 
 ---
 
 ### Task 4: Re-render and look
 
-- [ ] Re-render the sitcom set through `eval-render-set.ts`, rebuild the frame strips, and put both sets side by side. The verification for this project is **visual and human** - no agent score, and no snapshot, because `cropPlan` is not in the eval snapshots at all.
+- [ ] Re-render the sitcom set, rebuild the frame strips, put both sets side by side. Verification
+  here is **visual and human**: `cropPlan` is not in the eval snapshots, so no snapshot and no agent
+  score can see this change.
 
 ---
 
 ## Acceptance
 
-**No shipped clip may contain a stacked pair whose tiles overlap by more than the threshold Task 1 sets.** Measured, not judged.
+**No shipped clip may contain a stacked pair on a source narrower than 2.25:1.** Measured from
+`cropPlan`, not judged.
 
-**The payoff frame of the clips the audit named must contain a face.** Read the contact sheets: the weak-coffee clip's closing frame is a flower vase today, and the eyelash-curler clip's opening frame has no readable face.
+**Centre-with-faces-available must fall from 12 of 16 shots** to whatever the fix leaves, and the
+four clips whose nearest face is outside the crop window must be zero.
 
-No clip may be lost. Reframe failures degrade to a centre crop by design (`engine-notes` §7) and must continue to - a geometry change that drops a clip is a bug in the change.
+No clip may be lost. Reframe failures degrade to a centre crop by design (`engine-notes` §7) and must
+continue to.
