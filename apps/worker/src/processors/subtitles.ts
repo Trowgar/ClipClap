@@ -38,6 +38,36 @@ export function resolveFontsDir(): string {
   );
 }
 
+// Comparison form ONLY. Never rendered, never stored, never shown to a user -
+// what reaches the viewer is always an exact substring of the segment's own
+// text. NFC and not NFKC: NFKC folds compatibility forms, which would let two
+// visibly different strings compare equal, the opposite of what this is for.
+// \p{L}\p{N} and not [a-z0-9]: the latter reduces every Russian segment to the
+// empty string and would report a total loss on the whole language.
+export function comparableStream(value: string): string {
+  return value.normalize("NFC").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+}
+
+const COMPARABLE_CHAR = /[\p{L}\p{N}]/u;
+
+/** Splits `text` immediately after its `keep`-th comparable character, so the
+ *  head carries exactly `keep` of them and the tail carries the rest with its
+ *  original punctuation and spacing intact. Iterates code points, not code
+ *  units, so a surrogate pair is never cut in half. */
+export function splitAtComparable(text: string, keep: number): [string, string] {
+  if (keep <= 0) return ["", text];
+  let seen = 0;
+  let idx = 0;
+  for (const ch of text) {
+    idx += ch.length;
+    if (COMPARABLE_CHAR.test(ch)) {
+      seen += 1;
+      if (seen === keep) return [text.slice(0, idx), text.slice(idx)];
+    }
+  }
+  return [text, ""];
+}
+
 export function segmentsToCues(
   segments: WhisperSegment[],
   clipStart: number,

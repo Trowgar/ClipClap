@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { generateAss, segmentsToCues, sliceCues } from "../subtitles";
+import {
+  comparableStream,
+  generateAss,
+  segmentsToCues,
+  sliceCues,
+  splitAtComparable,
+} from "../subtitles";
 import type { SubtitleCue, WhisperSegment } from "@clipclap/shared";
 
 const segments: WhisperSegment[] = [
@@ -154,5 +160,52 @@ describe("generateAss", () => {
       { id: "x", start: 0, end: 1, text: "line1\nline2 {evil}" },
     ]);
     expect(ass).toContain("line1\\Nline2 (evil)");
+  });
+});
+
+describe("comparableStream", () => {
+  it("keeps letters and digits, drops everything else, folds case", () => {
+    expect(comparableStream("It was 5.30 in the morning,")).toBe("itwas530inthemorning");
+    expect(comparableStream("Bing?")).toBe("bing");
+    expect(comparableStream("Y-O-U-R means you're.")).toBe("yourmeansyoure");
+  });
+
+  it("does not erase Cyrillic", () => {
+    expect(comparableStream("Там хорошая компания подбирается.")).toBe(
+      "тамхорошаякомпанияподбирается"
+    );
+  });
+
+  it("treats composed and decomposed forms as equal", () => {
+    // "й" as one code point vs "и" + combining breve
+    expect(comparableStream("й")).toBe(comparableStream("й"));
+  });
+
+  it("does not fold compatibility forms - NFC, not NFKC", () => {
+    // U+FB01 LATIN SMALL LIGATURE FI. NFKC would decompose it to "fi" and make
+    // these compare equal; NFC leaves it alone. Two visibly different strings
+    // must not be treated as the same text (spec 3.1).
+    expect(comparableStream("ﬁ")).not.toBe(comparableStream("fi"));
+  });
+
+  it("agrees when Whisper splits a number into two tokens", () => {
+    expect(comparableStream("5.30")).toBe(comparableStream(["5", "30"].join("")));
+  });
+});
+
+describe("splitAtComparable", () => {
+  it("splits right after the Nth comparable character", () => {
+    expect(splitAtComparable("We think an affair.", 9)).toEqual([
+      "We think an",
+      " affair.",
+    ]);
+  });
+
+  it("returns the whole string as the head when N covers everything", () => {
+    expect(splitAtComparable("Там", 3)).toEqual(["Там", ""]);
+  });
+
+  it("returns an empty head for N of 0", () => {
+    expect(splitAtComparable("Там", 0)).toEqual(["", "Там"]);
   });
 });
