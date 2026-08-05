@@ -1339,10 +1339,8 @@ Add to `apps/worker/src/reframe/plan.ts`, above `buildCropPlan`:
 export function buildTargetSamples(
   group: FaceTrack[],
   spanStart: number,
-  spanEnd: number,
-  sourceWidth: number
+  spanEnd: number
 ): TargetSample[] {
-  void sourceWidth;
   const withPath = group.filter((t) => t.path && t.path.length > 0);
   if (withPath.length === 0) return [];
   const times = [
@@ -1407,39 +1405,49 @@ Add to `plan.ts`, below `mergeAdjacentLayouts`:
  * `x` is never touched.
  */
 export function attachTrajectories(
-  shots: ShotLayout[],
+  merged: ShotLayout[],
+  shots: Shot[],
   groupsByShot: Map<number, FaceTrack[]>,
   cropW: number,
   sourceWidth: number,
   camera: CameraConfig = DEFAULT_CAMERA
 ): ShotLayout[] {
-  const allGroups = [...groupsByShot.values()].flat();
-  if (allGroups.length === 0) return shots;
-  return shots.map((shot) => {
-    if (shot.layout !== "single") return shot;
-    const targets = buildTargetSamples(
-      allGroups,
-      shot.start,
-      shot.end,
-      sourceWidth
-    );
+  return merged.map((span) => {
+    if (span.layout !== "single") return span;
+    // Each DETECTOR shot overlapping this merged span contributes samples from
+    // its OWN selected group, over its own time range clipped to the span.
+    //
+    // Not a union of every group: carry-forward would then place a face from an
+    // unrelated shot into the bounding box at a time it was never on screen,
+    // moving the target with no change of selection - the confound spec 4.3
+    // exists to prevent, arriving through the back door.
+    const targets: TargetSample[] = [];
+    for (const [i, shot] of shots.entries()) {
+      if (!(shot.end > span.start && shot.start < span.end)) continue;
+      const group = groupsByShot.get(i);
+      if (!group) continue;
+      targets.push(
+        ...buildTargetSamples(
+          group,
+          Math.max(shot.start, span.start),
+          Math.min(shot.end, span.end)
+        )
+      );
+    }
     const xs = solveCamera(
       targets,
-      shot.x,
+      span.x,
       cropW,
       sourceWidth,
-      shot.start,
-      shot.end,
+      span.start,
+      span.end,
       camera
     );
-    return xs ? { ...shot, xs } : shot;
+    return xs ? { ...span, xs } : span;
   });
 }
 ```
 
-Note: `allGroups` unions the members of every shot's group. `buildTargetSamples` then filters to the span,
-so a member whose path lies entirely outside the span contributes only its carried-forward box, which is what
-"the union of the target samples of every detector shot inside it" means in practice.
 
 - [ ] **Step 5: Extract the selection, then capture it in `buildCropPlan`**
 
@@ -1585,7 +1593,7 @@ with:
   // consideration can change WHICH shots merge (spec §4.5).
   const mergedByX = mergeAdjacentLayouts(layouts, sourceWidth);
   const merged = opts.motion
-    ? attachTrajectories(mergedByX, groupsByShot, cropW, sourceWidth, opts.camera)
+    ? attachTrajectories(mergedByX, shots, groupsByShot, cropW, sourceWidth, opts.camera)
     : mergedByX;
 ```
 
