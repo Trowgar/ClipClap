@@ -12,7 +12,7 @@ import {
   variantNames,
   warnUnrecordedVariants,
 } from "./helpers/eval-fixture";
-import { computeFingerprint } from "./helpers/eval-fingerprint";
+import { compareFingerprints, computeFingerprint } from "./helpers/eval-fingerprint";
 
 /**
  * The eval fixtures are the only end-to-end proof this engine has: real
@@ -60,10 +60,32 @@ describe("eval fixtures", () => {
     }
   });
 
+  /**
+   * KNOB BY KNOB, not object by object, and the difference is what happens when
+   * a knob is ADDED to the fingerprint.
+   *
+   * Every consumer of that file - assertFingerprintMatches, which the replay
+   * below runs through, plus eval-topup and eval-bless - fails on `mismatches`
+   * and `stale` while treating a key the recording predates as UNKNOWN. That is
+   * the documented policy: the failure worth reddening a suite for is a false
+   * MATCH, and absence asserts nothing. A `toEqual` here quietly opted out of
+   * it, so adding a knob turned every existing fixture red and made "add the key
+   * now, re-record later" - the sequence the finalizer knobs actually shipped in
+   * (dee5687) - impossible without paying for four recordings first.
+   *
+   * The two arrays this reads are NOT a relaxation and are not spelled out here
+   * on purpose: they are compareFingerprints' own verdict, so the fixtures and
+   * the scripts cannot drift into two definitions of a stale recording.
+   */
   it.each(CASES)("%s[%s] was recorded on the config that variant describes", (name, variant) => {
     const fixture = loadFixture(name);
-    expect(fixture.fingerprints[variant]).not.toBeNull();
-    expect(fixture.fingerprints[variant]).toEqual(computeFingerprint(variantConfig(variant)));
+    const recorded = fixture.fingerprints[variant];
+    expect(recorded).not.toBeNull();
+    const current = computeFingerprint(variantConfig(variant));
+    expect(compareFingerprints(recorded!, current)).toMatchObject({
+      mismatches: [],
+      stale: [],
+    });
   });
 
   it.each(CASES)("%s[%s] replays to its recorded snapshot", async (name, variant) => {

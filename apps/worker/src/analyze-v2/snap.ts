@@ -1,10 +1,82 @@
 import type { AnalyzeConfig } from "./config";
-import { endsOnQuestionMark, isCleanEnd, isCleanStart } from "./sentence-graph";
+import {
+  endsOnQuestionMark,
+  endsOnSentenceMark,
+  isCleanEnd,
+  isCleanStart,
+} from "./sentence-graph";
 import type { CriticVerdict, SentenceNode, SnapResult } from "./types";
 
 const EPS = 0.05;
+/** Extra window the PAYOFF-CONTAINMENT fallback may borrow when no strong
+ *  boundary exists within payoffMaxTailSec. Untouched at 3s. */
 const SENTENCE_SLACK_SEC = 3;
+/**
+ * How far the clean-end repair may reach FORWARD to close a sentence the end
+ * node left open.
+ *
+ * 5, not 3, and the number came from the transcripts rather than from taste: the
+ * two `"...космические корабли,"` offenders are completed by an opaque node
+ * **4.22s** past their end node, so a 3s reach rescued 1 of the 4 clips this
+ * repair can save and 5s rescues 4 of 4. It is a CEILING on how much foreign
+ * material a repair may add, so it should be the smallest number that clears the
+ * measured cases, and 5 is a 0.78s margin over 4.22.
+ *
+ * DELIBERATELY ITS OWN CONSTANT rather than a second use of SENTENCE_SLACK_SEC,
+ * which it was on 2026-08-05. The two answer different questions - how far past
+ * the payoff a strong boundary may be hunted, versus how far past the end node a
+ * sentence may be closed - and sharing one number means widening this reach
+ * silently widens the payoff window too, which nothing measured.
+ *
+ * MEASURED ON FOUR SOURCES ONLY (two Russian podcast transcriptions of the same
+ * episode, one sitcom, one creator vlog). On its own - the old rule, this reach -
+ * it moves no shipped clip on any of them; it only extends the repair's arm.
+ * Anyone widening it again should say which source asked for it.
+ */
+const CLEAN_END_REACH_SEC = 5;
 const STRONG = 0.8;
+
+/**
+ * Where a clip ENDS in seconds, given the node it ends on. Two rules, both
+ * audible.
+ *
+ * The tail hold may only ever move within silence, so it is capped at the next
+ * node's onset: without the cap the clip plays the first word of the next
+ * sentence, an end-of-clip artifact. And the cap may never cut the end node's
+ * own last word, so the node's end outranks it - word timings NEST (see the
+ * `max, not last` comment on `end:` in buildSentenceGraph: a long word
+ * containing a short one passes the reliability check), which lets a node's end
+ * overrun its successor's start.
+ *
+ * Shared with end-extension.ts because an end this engine MOVES has to be placed
+ * by the same arithmetic as an end it snapped, or the same node would sound
+ * different depending on which stage put the boundary there. It was copied there
+ * once and defended with a comment; parity a reader has to re-verify by eye is
+ * parity that drifts, so it lives here, in the module that owns boundaries.
+ *
+ * Payoff containment is deliberately NOT here. snap applies it on the next line
+ * because snap is the only module that knows the payoff, and the one other
+ * caller only ever moves an end later, where the payoff cannot be stranded.
+ *
+ * One caveat, measured on 2026-08-04 rather than assumed: the eval fixtures
+ * cannot see the nested-word clamp. Deleting it leaves all six snapshot replays
+ * GREEN - no shipped clip on those four sources ends on a node whose nested end
+ * overruns its successor - while deleting the tail hold reddens all six, so the
+ * replay does watch these seconds, just not that branch. Its only guard in the
+ * repo is end-extension.test.ts, "never cuts the last word of the new end node".
+ * A green fixture run is not evidence about this line.
+ */
+export function endSecFor(
+  nodes: SentenceNode[],
+  e: SentenceNode,
+  cfg: AnalyzeConfig
+): number {
+  const next = e.index < nodes.length - 1 ? nodes[e.index + 1] : null;
+  return Math.max(
+    Math.min(e.end + cfg.tailHoldSec, next ? next.start : Infinity),
+    e.end
+  );
+}
 
 export function snapNodes(
   verdict: CriticVerdict,
@@ -86,9 +158,12 @@ export function snapNodes(
   //     потому,") is a mid-clause cut. Repair order: BACKWARD first - trimming
   //     the dangling fragment to the latest clean end at or after the payoff
   //     never adds foreign content ("...единорога." wins over "...потому,").
-  //     FORWARD (within SENTENCE_SLACK) only when no clean end exists between
-  //     the payoff and e - i.e. the payoff's own sentence is still open and
-  //     must be completed. Neither works -> drop, better lost than broken.
+  //     FORWARD (within CLEAN_END_REACH_SEC) only when no clean end exists
+  //     between the payoff and e - i.e. the payoff's own sentence is still open
+  //     and must be completed. The forward scan takes the NEAREST node that can
+  //     end the clip, word-bearing or opaque: everything in between plays either
+  //     way, so the nearer end adds the least. Neither works -> drop, better lost
+  //     than broken.
   if (e.hasWords && !isCleanEnd(nodes, e.index)) {
     let repaired: SentenceNode | null = null;
     for (let i = e.index - 1; i >= p.index; i--) {
@@ -99,9 +174,24 @@ export function snapNodes(
     }
     if (!repaired) {
       for (let i = e.index + 1; i < nodes.length; i++) {
-        if (nodes[i].end - e.end > SENTENCE_SLACK_SEC) break;
+        if (nodes[i].end - e.end > CLEAN_END_REACH_SEC) break;
         if (nodes[i].hasWords && isCleanEnd(nodes, i)) {
           repaired = nodes[i];
+          break;
+        }
+        // An OPAQUE node may close the sentence, and usually it is the node that
+        // does: the continuation the end node was cut off from is inside the gap,
+        // not past it. Ending here is not a new kind of clip - 12 of the 44 clips
+        // the four eval fixtures ship already end on an opaque node - and its
+        // segment edge is a real Whisper boundary, just coarser than a word edge,
+        // which is exactly what "segment" confidence records.
+        //
+        // Only when the text CLOSES a sentence. Without that guard this branch
+        // would end clips in the middle of a laugh, and the guard refuses 46-52
+        // opaque nodes per fixture, so it is doing the work its name claims.
+        if (!nodes[i].hasWords && endsOnSentenceMark(nodes[i].text)) {
+          repaired = nodes[i];
+          boundaryConfidence = "segment";
           break;
         }
       }
@@ -111,16 +201,14 @@ export function snapNodes(
   }
 
   // 3. seconds from real node edges (lead-in/tail-hold only ever move within
-  //    silence). The next-node cap stops the tail-hold from bleeding into the
-  //    next sentence's first word - an audible end-of-clip artifact; it can only
-  //    trim hold-silence, never the payoff's last word, because of the max guard.
+  //    silence). The end side - the next-node bleed cap and the nested-word
+  //    clamp - is endSecFor above, shared with the stage that moves an end
+  //    forward so the two can never place the same node differently.
   const prevS = s.index > 0 ? nodes[s.index - 1] : null;
   // Nested prev.end must never push the start past the sentence onset; worst
   // case we start exactly at s.start with no lead-in.
   let startSec = Math.max(Math.min(prevS ? prevS.end : 0, s.start), s.start - cfg.leadInSec);
-  const nextE = e.index < maxIdx ? nodes[e.index + 1] : null;
-  let endSec = Math.min(e.end + cfg.tailHoldSec, nextE ? nextE.start : Infinity);
-  endSec = Math.max(endSec, e.end); // nested-word ends: the cap must never cut the last word
+  let endSec = endSecFor(nodes, e, cfg);
   endSec = Math.max(endSec, p.end); // payoff containment outranks the bleed cap - a nested long payoff word extends the clip
 
   const hookStartSec = nodes[verdict.hookStartNode].start;

@@ -90,10 +90,15 @@ async function main() {
     // the variant's own previous recording means that recording is stale.
     const recorded = fixture.fingerprints[variant] ?? null;
     if (recorded) {
-      const { mismatches } = compareFingerprints(recorded, current);
-      if (mismatches.length > 0) {
+      // `stale` counts too, and it is the half a rename shows up in: the old
+      // knob's recorded value stops being checkable while the new name only
+      // warns, so reading `mismatches` alone would top up onto a recording
+      // nobody can prove matches (helpers/eval-fingerprint.ts).
+      const { mismatches, stale } = compareFingerprints(recorded, current);
+      if (mismatches.length > 0 || stale.length > 0) {
         console.log(`${name}: REFUSED - recorded under a different engine config`);
         for (const m of mismatches) console.log(`    - ${m}`);
+        for (const key of stale) console.log(`    - ${key}: recorded, but no longer a knob`);
         console.log("    Topping up would mix answers from two configs. Re-record instead.");
         process.exitCode = 1;
         continue;
@@ -235,6 +240,19 @@ async function main() {
         `${result.highlights.length} clips`
     );
     if (variant !== BASE_VARIANT) console.log(`  wrote variant fingerprint to ${metaPath}`);
+    // What this run cost, and it is exact rather than an estimate: a key served
+    // from disk is billed 0/0 by the stub above, so every token here belongs to
+    // a call that was really made. Printed because the script's own header says
+    // it spends money and, until 2026-08-04, it was the one fact it would not
+    // say - the first end-extension recording had to be costed afterwards from
+    // prompt sizes, and could only ever be bounded.
+    for (const [model, u] of Object.entries(result.usage.byModel)) {
+      if (u.inputTokens === 0 && u.outputTokens === 0) continue;
+      console.log(
+        `  billed ${model}: ${u.inputTokens} in, ${u.outputTokens} out ` +
+          `(${u.requests} request(s), of which ${count} were new)`
+      );
+    }
     reportDegradation(name, result, { apiErrors, nonContent, modelsCalled, cfg });
     // Naming the variant matters: someone who just paid to record luna and then
     // copies a bare "eval-bless.ts" blesses BASE, and the diff they read is not

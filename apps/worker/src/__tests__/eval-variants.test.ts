@@ -4,6 +4,7 @@ import { join } from "path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   BASE_VARIANT,
+  VARIANT_OVERRIDE_KEYS,
   loadFixture,
   loadVariantDefs,
   runFixtureVariant,
@@ -12,6 +13,10 @@ import {
   variantNames,
   warnUnrecordedVariants,
 } from "./helpers/eval-fixture";
+import {
+  assertFingerprintMatches,
+  computeFingerprint,
+} from "./helpers/eval-fingerprint";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 
 /** Writes a throwaway variants.json so the whitelist can be exercised without
@@ -115,18 +120,46 @@ describe("variant definitions", () => {
   });
 
   it("accepts every whitelisted knob, so the check is a whitelist and not a ban", () => {
-    const dir = variantsDir({
-      whole: {
-        criticModel: "a",
-        finalizerModel: "b",
-        criticModelFallback: "c",
-      },
-    });
-    expect(loadVariantDefs(dir).whole).toEqual({
+    const whole = {
       criticModel: "a",
       finalizerModel: "b",
       criticModelFallback: "c",
-    });
+      endExtensionEnabled: true,
+    };
+    // Driven off VARIANT_OVERRIDE_KEYS rather than a literal, because the way
+    // this test rots is that a knob is admitted to the list and nobody adds it
+    // here - and then "every whitelisted knob" is a claim about whichever
+    // subset the last author happened to type.
+    expect(Object.keys(whole).sort()).toEqual([...VARIANT_OVERRIDE_KEYS].sort());
+    expect(loadVariantDefs(variantsDir({ whole })).whole).toEqual(whole);
+  });
+
+  /**
+   * The end-extension variant is not just another declaration - it is the only
+   * thing that makes `endExtensionEnabled` observable.
+   *
+   * The key was added to the fingerprint (helpers/eval-fingerprint.ts) to catch
+   * a LIVE stage replaying against a DARK recording, on the argument that a
+   * disabled stage makes no request so the request hash cannot notice it. But
+   * the harness builds every config from an empty env, and until this variant
+   * existed the whitelist refused the only knob that could set it - so no two
+   * configs reachable from this harness could differ on the key, and the check
+   * it was bought for could never fire. It was live in unit tests against a
+   * synthetic config, and dead everywhere real.
+   */
+  it("makes the end-extension fingerprint key able to fire, which it could not before", () => {
+    const dark = computeFingerprint(variantConfig(BASE_VARIANT));
+    const live = computeFingerprint(variantConfig("end-extension"));
+    expect(dark.endExtensionEnabled).toBe(false);
+    expect(live.endExtensionEnabled).toBe(true);
+    // Nothing else may move with it, or the diff stops being about the stage.
+    expect({ ...live, endExtensionEnabled: false }).toEqual(dark);
+    // The direction that matters: recorded with the stage on, replayed with it
+    // off. This must THROW, not warn - a warn is what absence gets, and this is
+    // a recording that positively describes a different engine.
+    expect(() => assertFingerprintMatches("recorded-live", live, dark)).toThrow(
+      /endExtensionEnabled/
+    );
   });
 });
 
@@ -197,14 +230,23 @@ describe("unrecorded variant announcement", () => {
     // this test say "gpt51 is unrecorded", which is false - it is recorded in
     // both, and any declared variant becomes recorded the moment anybody tops it
     // up.
-    const variant = declaredVariant();
+    //
+    // One warning per DECLARATION, asserted over every declaration rather than
+    // the first: the announcement is per (variant, fixture) pair, and a version
+    // of this test that read warnings[0] passed while a second declared variant
+    // went unannounced - which is the exact silence the announcement exists to
+    // break.
+    const declared = variantNames().filter((v) => v !== BASE_VARIANT);
     const warnings: string[] = [];
     warnUnrecordedVariants(["ghost-fixture-a", "ghost-fixture-b"], (m) => warnings.push(m));
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain(`variant "${variant}" is declared`);
-    expect(warnings[0]).toContain("ghost-fixture-a");
-    expect(warnings[0]).toContain("ghost-fixture-b");
-    expect(warnings[0]).toMatch(/NOT being tested/);
+    expect(warnings).toHaveLength(declared.length);
+    for (const variant of declared) {
+      const line = warnings.find((w) => w.includes(`variant "${variant}" is declared`));
+      expect(line, `no announcement for declared variant "${variant}"`).toBeDefined();
+      expect(line).toContain("ghost-fixture-a");
+      expect(line).toContain("ghost-fixture-b");
+      expect(line).toMatch(/NOT being tested/);
+    }
   });
 
   it("says nothing when a declared variant is recorded everywhere", () => {

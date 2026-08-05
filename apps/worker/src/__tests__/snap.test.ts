@@ -203,6 +203,254 @@ describe("snapNodes", () => {
     expect(r).toEqual({ ok: false, reason: "no_clean_end" });
   });
 
+  // -------------------------------------------------------------------------
+  // Forward clean-end repair onto an OPAQUE node.
+  //
+  // The completion of a sentence a word-bearing node left open frequently lives
+  // in the very next node, which is opaque - Whisper lost the word timings to
+  // laughter or crosstalk but still transcribed the segment, with punctuation.
+  // Ending there is not a new kind of clip: 12 of the 44 clips the four eval
+  // fixtures ship already end on an opaque node, at "segment" confidence.
+  //
+  // These build the ecology #576/#577 geometry by hand: a weak-ended node, then
+  // an opaque node whose text completes the sentence 4.22s later.
+  // -------------------------------------------------------------------------
+
+  /** node 8 ends mid-clause; node 9 is opaque and `text` decides its fate. */
+  function opaqueTailNodes(text: string, opaqueEnd = 18 + 4.22): SentenceNode[] {
+    return strongNodes().map((n, i) => {
+      if (i === 7) return { ...n, text: "Без разумного вида,", trailingStrength: 0.4, leadingStrength: 1.0 };
+      if (i === 8) {
+        // the clip's end node: weak trailing, opaque successor
+        return { ...n, text: "строящего космические корабли,", trailingStrength: 0.8, leadingStrength: 0.4, end: 18 };
+      }
+      if (i === 9) return { ...n, hasWords: false, text, start: 18.3, end: opaqueEnd, leadingStrength: 0.8 };
+      if (i === 10) return { ...n, start: opaqueEnd + 1, end: opaqueEnd + 2.8, leadingStrength: 0.2 };
+      return n;
+    });
+  }
+
+  const tailVerdict = { startNode: 2, payoffNode: 8, endNode: 8, hookStartNode: 5, hookEndNode: 6 };
+
+  it("completes a dangling clause on the opaque node that carries the rest of the sentence", () => {
+    const nodes = opaqueTailNodes("любая биосфера обречена, срок ее жизни ограничен сроком жизни звезды.");
+    const r = snapNodes(verdict(tailVerdict), nodes, cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.finalEndNode).toBe(9);
+    // the opaque node's own segment edge, plus the tail hold, capped by the next
+    // node's onset - snap's ordinary arithmetic, not a special case
+    expect(r.clip.endSec).toBeCloseTo(22.22 + cfg.tailHoldSec, 5);
+    expect(r.clip.boundaryConfidence).toBe("segment");
+  });
+
+  it("REFUSES an opaque node whose text does not close the sentence", () => {
+    // The load-bearing half of the guard: without it the repair would end a clip
+    // inside a laugh on any opaque node at all. answer-arc #847's real shape.
+    const nodes = opaqueTailNodes("и с шеей, и с поясницей, и с тем, что роды стали сложнее,");
+    const r = snapNodes(verdict(tailVerdict), nodes, cfg);
+    expect(r).toEqual({ ok: false, reason: "no_clean_end" });
+  });
+
+  it("leaves a clip alone when the opaque successor is pure music", () => {
+    // No letters means no evidence that speech continued, so the end was clean
+    // all along and no repair runs. The clip keeps its own end node and word
+    // confidence - this is the case the original "music follows" rule was
+    // written for, and it must survive the change untouched.
+    for (const text of ["", "[Музыка]", "♪♪♪"]) {
+      const r = snapNodes(verdict(tailVerdict), opaqueTailNodes(text), cfg);
+      if (!r.ok) throw new Error(`unexpected drop on ${JSON.stringify(text)}: ${r.reason}`);
+      expect(r.clip.finalEndNode, JSON.stringify(text)).toBe(8);
+      expect(r.clip.boundaryConfidence, JSON.stringify(text)).toBe("word");
+    }
+  });
+
+  it("reaches an opaque completion at exactly the reach limit but not past it", () => {
+    // The two offenders that motivated the 5s reach sit 4.22s out; the boundary
+    // is pinned from both sides so widening it again is a deliberate act.
+    const at = opaqueTailNodes("любая биосфера обречена.", 18 + 5);
+    expect(snapNodes(verdict(tailVerdict), at, cfg).ok).toBe(true);
+
+    const past = opaqueTailNodes("любая биосфера обречена.", 18 + 5.01);
+    expect(snapNodes(verdict(tailVerdict), past, cfg)).toEqual({
+      ok: false,
+      reason: "no_clean_end",
+    });
+  });
+
+  it("prefers a backward trim to reaching forward onto an opaque node", () => {
+    // Repair order is BACKWARD first: trimming to a clean end at or after the
+    // payoff never adds foreign content, while reaching forward always does.
+    const nodes = opaqueTailNodes("любая биосфера обречена.").map((n, i) =>
+      i === 7 ? { ...n, trailingStrength: 1.0 } : n
+    );
+    const r = snapNodes(verdict({ ...tailVerdict, payoffNode: 7 }), nodes, cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.finalEndNode).toBe(7);
+    expect(r.clip.boundaryConfidence).toBe("word");
+  });
+
+  it("takes the NEAREST forward completion, opaque or not", () => {
+    // Both candidates are inside the reach here, so this really does choose. The
+    // scan stops at the first node that can end the clip: every node in between
+    // would play anyway, so the nearer end is the one that adds least.
+    const nodes = strongNodes().map((n, i) => {
+      if (i === 8) return { ...n, text: "космические корабли,", trailingStrength: 0.8, end: 18 };
+      if (i === 9) {
+        return { ...n, hasWords: false, text: "любая биосфера обречена.", start: 18.3, end: 20 };
+      }
+      // word-bearing, a legal clean end, and still inside the 5s reach at 4s out
+      if (i === 10) return { ...n, start: 20.5, end: 22, trailingStrength: 1.0, leadingStrength: 0.2 };
+      if (i === 11) return { ...n, start: 22.5, end: 24.3, leadingStrength: 1.0 };
+      return n;
+    });
+    const r = snapNodes(verdict(tailVerdict), nodes, cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.finalEndNode).toBe(9);
+  });
+
+  it("walks through a leading non-terminating opaque node to a later completion", () => {
+    // A run of opaque nodes: the first cannot end the clip, the second can, and
+    // both are inside the reach.
+    const nodes = opaqueTailNodes("и с поясницей,", 18 + 1).map((n, i) =>
+      i === 10
+        ? { ...n, hasWords: false, text: "любая биосфера обречена.", start: 19.2, end: 21, leadingStrength: 0.2 }
+        : i === 11
+          ? { ...n, start: 22, end: 23.8, leadingStrength: 0.2 }
+          : n
+    );
+    const r = snapNodes(verdict(tailVerdict), nodes, cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.finalEndNode).toBe(10);
+    expect(r.clip.boundaryConfidence).toBe("segment");
+  });
+
+  it("may end on an opaque node that is last in the graph", () => {
+    const nodes = opaqueTailNodes("любая биосфера обречена.").slice(0, 10);
+    const r = snapNodes(verdict(tailVerdict), nodes, cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.finalEndNode).toBe(9);
+    // no successor to cap the tail hold against
+    expect(r.clip.endSec).toBeCloseTo(22.22 + cfg.tailHoldSec, 5);
+  });
+
+  it("never ends on a WORD-BEARING node just because its text closes a sentence", () => {
+    // The sentence-mark test is for opaque nodes ONLY. A word-bearing node is
+    // judged by isCleanEnd, which knows what follows it; its text is assembled
+    // from word tokens and means much less.
+    //
+    // Reachable rather than theoretical: `Да!"` does not match the builder's
+    // TERMINAL regex (which wants the mark at the very end), so such a node
+    // really does carry a weak trailing boundary AND a sentence-final mark.
+    const nodes = strongNodes().map((n, i) => {
+      if (i === 8) return { ...n, text: "космические корабли,", trailingStrength: 0.4, end: 18 };
+      if (i === 9) {
+        return { ...n, text: 'Да!"', trailingStrength: 0.4, leadingStrength: 0.4, start: 18.3, end: 20 };
+      }
+      if (i === 10) {
+        return { ...n, text: "и дальше", trailingStrength: 0.4, leadingStrength: 0.4, start: 20.3, end: 22 };
+      }
+      if (i === 11) return { ...n, leadingStrength: 0.4, start: 22.5, end: 24.3 };
+      return n;
+    });
+    const r = snapNodes(verdict(tailVerdict), nodes, cfg);
+    expect(r).toEqual({ ok: false, reason: "no_clean_end" });
+  });
+
+  it("takes the nearest of two word-bearing forward completions", () => {
+    // The opaque case is covered above; this pins the same nearest-wins rule on
+    // the branch that was already there, with both candidates inside the reach.
+    const nodes = strongNodes().map((n, i) => {
+      if (i === 8) return { ...n, text: "космические корабли,", trailingStrength: 0.4, end: 18 };
+      if (i === 9) {
+        return { ...n, text: "Первый чистый конец.", leadingStrength: 0.4, start: 18.3, end: 20 };
+      }
+      if (i === 10) return { ...n, text: "Второй чистый конец.", start: 20.3, end: 22 };
+      if (i === 11) return { ...n, start: 22.5, end: 24.3 };
+      return n;
+    });
+    const r = snapNodes(verdict(tailVerdict), nodes, cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.finalEndNode).toBe(9);
+  });
+
+  it("never trims BACKWARD onto an opaque node", () => {
+    // The backward walk keeps its word-bearing requirement. Landing on an opaque
+    // node here would swap a word edge for a coarse segment edge while still
+    // reporting "word" confidence - a silent lie about the boundary. Reaching
+    // forward onto one is a different decision: there it is the only way to
+    // close the sentence, and it marks the clip accordingly.
+    const nodes = strongNodes().map((n, i) => {
+      if (i === 7) return { ...n, trailingStrength: 0.4 };
+      if (i === 8) {
+        return { ...n, hasWords: false, text: "Новая мысль.", trailingStrength: 0.2, leadingStrength: 0.4 };
+      }
+      if (i === 9) {
+        return { ...n, text: "Продолжение", leadingStrength: 0.2, trailingStrength: 0.4 };
+      }
+      if (i === 10) return { ...n, text: "и дальше", leadingStrength: 0.4 };
+      return n;
+    });
+    const r = snapNodes(
+      verdict({ startNode: 2, payoffNode: 7, endNode: 9, hookStartNode: 5, hookEndNode: 6 }),
+      nodes,
+      cfg
+    );
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.finalEndNode).toBe(7);
+    expect(r.clip.boundaryConfidence).toBe("word");
+  });
+
+  it("does not repair an end that the opaque payoff forced", () => {
+    // When the PAYOFF itself is opaque, snap keeps the opaque end and marks the
+    // clip segment-confidence: that end is not a choice, it is where the payoff
+    // is. Running the clean-end repair on it would move the boundary off the
+    // payoff the critic named.
+    const nodes = strongNodes().map((n, i) => {
+      if (i === 8) {
+        return { ...n, hasWords: false, text: "смех и аплодисменты", trailingStrength: 0.2 };
+      }
+      if (i === 9) {
+        return { ...n, text: "и потом он добавил", leadingStrength: 0.2, trailingStrength: 1.0 };
+      }
+      return n;
+    });
+    const r = snapNodes(
+      verdict({ startNode: 2, payoffNode: 8, endNode: 8, hookStartNode: 5, hookEndNode: 6 }),
+      nodes,
+      cfg
+    );
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.finalEndNode).toBe(8);
+    expect(r.clip.boundaryConfidence).toBe("segment");
+  });
+
+  it("keeps the payoff-containment fallback at its own 3s window", () => {
+    // The forward clean-end reach was widened to 5s; the payoff-tail fallback was
+    // deliberately NOT, and they are separate constants for exactly this reason.
+    // Node 10's strong boundary sits 8s past the payoff - inside payoffMaxTailSec
+    // (4) + 5 but outside payoffMaxTailSec + 3 - so this reds the moment anyone
+    // makes the fallback borrow the clean-end reach.
+    const nodes = strongNodes().map((n, i) => {
+      // weak payoff, or pickEnd would return it at once and the window would
+      // never be consulted at all
+      if (i === 6) return { ...n, trailingStrength: 0.4 };
+      // opaque and sentence-final: keeps isCleanEnd(6) true (so no repair runs
+      // and this case stays about the payoff window) while pickEnd skips it
+      if (i === 7) return { ...n, hasWords: false, text: "Новая мысль.", leadingStrength: 0.4 };
+      if (i === 8 || i === 9) return { ...n, trailingStrength: 0.4, leadingStrength: 0.4 };
+      if (i === 10) return { ...n, leadingStrength: 0.4 }; // strong trailing, end 21.8 = payoff.end + 8
+      return n;
+    });
+    const r = snapNodes(
+      verdict({ startNode: 2, payoffNode: 6, endNode: 12, hookStartNode: 5, hookEndNode: 6 }),
+      nodes,
+      cfg
+    );
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    // fell back to the payoff itself; reaching node 10 would mean the window grew
+    expect(r.clip.finalEndNode).toBe(6);
+  });
+
   it("flags clips whose final sentence is a question", () => {
     const nodes = strongNodes().map((n, i) =>
       i === 7 ? { ...n, text: "Так ли это? Самые ли мы страшные?" } : n

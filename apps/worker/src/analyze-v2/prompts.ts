@@ -1,5 +1,10 @@
 import { isCleanStart } from "./sentence-graph";
-import type { MergedCandidate, SentenceNode, SnappedClip } from "./types";
+import type {
+  ExtensionWindow,
+  MergedCandidate,
+  SentenceNode,
+  SnappedClip,
+} from "./types";
 
 export const SCANNER_PROMPT = `You are a fast recall scanner for a short-form video clipping tool. You read a
 slice of a long-video transcript and list EVERY moment that could plausibly
@@ -130,8 +135,24 @@ For EACH candidate return, in the clip's OWN language ({{LANGUAGE_NAME}}, {{LANG
    - hook_start_node / hook_end_node: the untouchable core (reaction/punchline). Must
      satisfy start_node <= hook_start_node <= hook_end_node <= end_node.
    Do NOT choose a node marked as music / no-speech as the start or end.
-6. title: <= 70 characters, curiosity-driven but TRUTHFUL to what the clip delivers.
-   No clickbait the clip does not pay off.
+6. title: <= 70 characters. Its job is to make a stranger who never saw the source
+   WANT TO WATCH - not to tell them what happens. A title that RECAPS the clip is
+   the failure this rule exists to stop, and it is the most common defect in
+   shipped copy: it hands the viewer the clip and gives them nothing to stay for.
+   It must stay TRUTHFUL to what the clip delivers: no clickbait the clip does not
+   pay off, and no promise the speech never keeps.
+   AND IT MUST NOT STATE THE PAYOFF. A title may REFER to the payoff; it must never
+   RESTATE it. If the clip's best line can be read off the caption, the clip has
+   nothing left to pay and there is no reason to press play.
+   The contrast, from two real clips - same shape, opposite copy:
+   - the punchline is "playing Scrabble with Monica" and the title said "Scrabble
+     with Monica": RESTATED. The joke is now in the caption, the clip is spent
+     before it plays. WRONG.
+   - the punchline is "Please just promise you won't tell" and the title said "They
+     Beg Someone Not to Reveal Their Big News": REFERRED to. The caption points at
+     the secret and never says what it is or whether it survives. RIGHT.
+   Before you settle a title, ask: after reading it, is there still something a
+   viewer has to watch the clip to find out? If there is not, rewrite it.
 7. description: ONE grounded sentence describing what actually happens. No hype.
 8. title_evidence_nodes / description_evidence_nodes: 1-3 node indices each, inside
    [start_node, end_node], containing the words that directly support your title and
@@ -243,15 +264,25 @@ Judge in this order.
    drop_reason "teaser_montage" - the complete moment lives later in the video
    and competes on its own.
 
-3. HONEST TITLE. A question title is valid ONLY when the answer is spoken inside
-   the clip. A title that asks something the speech never answers is a promise
-   the clip does not keep, and the viewer feels cheated at the cut - this is the
-   single most common defect in shipped sets. Rewrite it as a truthful statement
-   built from the clip's own words and cite title_evidence_nodes: 1-3 node
-   indices INSIDE this clip whose words carry the claim. Keep it under 70
-   characters. If nothing in the clip can support an honest title, drop with
-   "unanswered_title". Never promise what the clip does not deliver, and never
-   repair a clip with its caption - the SPEECH has to hold up alone.
+3. A TITLE THAT IS HONEST AND IS STILL A HOOK. The title's job is to make a
+   stranger want to press play. Both halves below are failures; watch for both.
+   HONEST: a title that promises what the speech never delivers - an answer never
+   spoken, a claim never made - is a promise the clip does not keep, and the
+   viewer feels cheated at the cut. A question title is fine, and is often the
+   strongest hook there is, WHENEVER the answer is spoken inside the clip; it is
+   broken only when the clip never answers it. If nothing in the clip can support
+   an honest title, drop with "unanswered_title".
+   AND IT MUST NOT STATE THE PAYOFF. A title may REFER to the payoff; it must
+   never RESTATE it. When the punchline is "playing Scrabble with Monica", the
+   title "Scrabble with Monica" has spent the clip before it plays; "They Beg
+   Someone Not to Reveal Their Big News" points at a secret it never tells, and
+   that is the shape to aim for. A caption that recaps the clip is a defect even
+   when every word of it is true - rewrite it into a hook, do not drop the clip
+   for it.
+   Whenever you rewrite, cite title_evidence_nodes: 1-3 node indices INSIDE this
+   clip whose words carry the claim, and keep it under 70 characters. Never
+   promise what the clip does not deliver, and never repair a clip with its
+   caption - the SPEECH has to hold up alone.
 
 4. UNFINISHED ARC: THE PUNCHLINE FELL OUTSIDE THE CLIP. Read the LAST line as
    the viewer experiences it - the video stops there. A clip must end on the
@@ -368,4 +399,128 @@ export function finalizerUserPrompt(
       return lines.join("\n");
     })
     .join("\n\n---\n\n");
+}
+
+/**
+ * END-EXTENSION (spec 2026-08-04 §3.2) - the one question the engine has no
+ * other way to ask: does this moment KEEP GOING.
+ *
+ * It exists as its own call rather than a paragraph in the critic's prompt, and
+ * that is the whole design. The critic is already told to chase a sharper beat
+ * within ~10s (CRITIC_PROMPT_TEMPLATE, "PAYOFF CHASING") while judging a batch
+ * of candidates against everything else that prompt asks of it, and it does not
+ * fire: shipped tail after the payoff is 0.3s - exactly tailHoldSec - on 9 of 12
+ * clips of the sitcom-friends fixture, while three independent reviewers reading
+ * the full transcript put the right end 17 to 55 seconds later. engine-notes §5a
+ * records the same shape once already - a numbered rule in a crowded prompt
+ * firing ZERO times across both fixtures while the defect it names sat in the
+ * output. So the rule is not restated more loudly anywhere; it is asked on its
+ * own, about one clip, with the candidate ends listed.
+ *
+ * NO LANGUAGE PARAMETER, unlike the critic and finalizer prompts. Those two
+ * write copy a viewer reads and must be pinned to the clip's own language; this
+ * one emits an index and a `reason` nobody ships. The transcript in the user
+ * block carries the language on its own.
+ */
+export const EXTENSION_SYSTEM = `You decide where a short video clip should END.
+
+You are given a clip that already works: its setup and its payoff are inside it.
+Your only question is whether the moment KEEPS GOING - whether a stronger beat
+lands in the lines that follow the current end.
+
+Extend when the lines after the end contain:
+- the reaction to the payoff (the comeback, the shock, the escalation)
+- a second, harder beat that tops the one the clip currently ends on
+- the answer to a question the clip ends on
+
+Do NOT extend when the lines after the end are:
+- a new subject, a goodbye, or the conversation winding down
+- more of the same with nothing added
+- anything that would make a viewer check how much is left
+
+Extending a good clip into a flat one is worse than leaving it short. When the
+following lines add nothing, say extend: false.
+
+The candidate list is not a menu. The lines are in order and the clip plays
+through them: choosing a line means playing EVERY line between the current end
+and it.
+
+Answer with node indices only, chosen from the CANDIDATE list you are shown -
+never a timestamp, never an index you were not offered.
+
+For each clip, in this order: id; then reason - one short clause naming the beat
+you are reaching for, or why nothing was worth reaching for; then extend; then
+end_node, the LAST node to include, echoing the current end when extend is false.
+
+Output ONLY the JSON object described by the schema.`;
+
+/**
+ * One block per clip: what it already contains, then the numbered lines it may
+ * reach into.
+ *
+ * The candidate list is CONTIGUOUS and stops at `window.lastNode`. Contiguous
+ * because a clip is a range - choosing #9 plays #8 too, so a list with holes in
+ * it would describe a clip that cannot be cut. Stopping at lastNode because that
+ * is how far the scene cut and the clock allow the model to reach; the window is
+ * passed in rather than recomputed so this block and the gate cannot answer that
+ * question differently.
+ *
+ * What the gates can still refuse is a PROPERTY of the node itself - an opaque
+ * one, a mid-clause end, or (only when word timings nest) one whose own end
+ * breaches maxSec - and those stay in the list deliberately. Of the 117 lines
+ * this block renders across the 12 sitcom-friends clips, 12 are the clips' own
+ * ends echoed back and 105 are real candidates; 35 of those 105 are nodes the
+ * gates would refuse - 26 opaque, 9 mid-clause, measured with applyExtension
+ * itself as the oracle. So a third of what is offered is a choice that will be
+ * turned down. Filtering it out would not have COST an extension - every one of
+ * those 12 windows still holds a legal end (min 2, median 6.5) - but it would
+ * hide the laughter and the half-sentences between the beats, and those are what
+ * the continuation reads like; which index the model then picks is not something
+ * that number can settle either way. `refusedBy` is how that decision gets
+ * checked against a real run instead of assumed.
+ *
+ * The `<current end>` line prints its node's text verbatim even when that node
+ * is OPAQUE, which is 2 of the 12 shipped sitcom-friends clips - snap keeps an
+ * opaque end when the payoff itself is opaque. It reads as an inconsistency
+ * against WHAT IT CONTAINS, which filters those nodes out, and it is left alone
+ * deliberately: Whisper's segment text is the only text that line has, and
+ * "this clip ends in laughter" is precisely the signal that a reaction follows.
+ *
+ * PARTIAL, exactly like extensionWindow which mints the window it takes:
+ * clip.finalEndNode must be a real index into `nodes`. extendClipEnds checks
+ * that before a clip is ever offered - it is the last place in this stage where
+ * a valid end node is still a caller's obligation rather than a gate.
+ */
+export function buildExtensionUser(
+  clip: SnappedClip,
+  nodes: SentenceNode[],
+  window: ExtensionWindow
+): string {
+  const { lastNode } = window;
+  // Opaque nodes are skipped in the clip's own text - their transcript is
+  // Whisper's segment-level guess at music or crosstalk, which reads as speech
+  // the clip does not contain.
+  const own = nodes
+    .slice(clip.finalStartNode, clip.finalEndNode + 1)
+    .filter((n) => n.hasWords)
+    .map((n) => n.text.trim())
+    .join(" ");
+  const lines = [
+    `CLIP ${clip.verdict.id} - currently ends at node #${clip.finalEndNode}`,
+    `WHAT IT CONTAINS: ${own}`,
+    "",
+    "CANDIDATE ENDINGS - the LAST line to include. Everything between the " +
+      "current end and your choice plays too. Keep the current end by choosing it:",
+    `  #${clip.finalEndNode} <current end> ${nodes[clip.finalEndNode].text.trim()}`,
+  ];
+  for (let i = clip.finalEndNode + 1; i <= lastNode; i++) {
+    lines.push(`  #${i} ${nodes[i].text.trim()}`);
+  }
+  // A legal answer, not a failure: the clip already ends at a scene cut, or the
+  // next line is more than the window away. Said out loud because the list above
+  // then holds a single line and reads like a formatting accident.
+  if (lastNode === clip.finalEndNode) {
+    lines.push("  (nothing follows inside this scene - answer extend: false)");
+  }
+  return lines.join("\n");
 }

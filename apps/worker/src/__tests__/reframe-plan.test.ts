@@ -18,6 +18,11 @@ import { DEFAULT_PLAN_OPTIONS } from "../reframe/options";
 
 const W = 1920;
 const H = 1080;
+// A split needs two ih*9/8 tiles side by side, i.e. 2.25h of width, so 16:9
+// can never carry one (engine-notes §7b). Split cases therefore need a source
+// wide enough to hold both tiles apart: 3200x1080 is 2.96:1, tileW 1216, max
+// tile x 1984.
+const WIDE_W = 3200;
 
 function track(x: number, w: number, extra?: Partial<FaceTrack>): FaceTrack {
   return {
@@ -55,17 +60,31 @@ describe("buildCropPlan layouts", () => {
     expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 496 }]);
   });
 
-  it("screenshot 2 regression: a far-apart duet becomes a split, left on top", () => {
-    // A center 275 -> tile x clamps to 0; B center 1645 -> clamps to 704
+  it("a far-apart duet becomes a split where the tiles fit apart, left on top", () => {
+    // 3200x1080: A center 600 -> tile x 0 (clamped); B center 2500 -> 1892.
+    // Separation 1892 >= tileW 1216, so the two tiles share no pixel.
     const plan = buildCropPlan(
       oneShot,
-      withTracks([track(1570, 150, { id: 1 }), track(200, 150)]),
-      W,
+      withTracks([track(2400, 200, { id: 1 }), track(500, 200)]),
+      WIDE_W,
       H
     );
     expect(plan!.shots).toEqual([
-      { start: 0, end: 30, layout: "split", top: { x: 0 }, bottom: { x: 704 } },
+      { start: 0, end: 30, layout: "split", top: { x: 0 }, bottom: { x: 1892 } },
     ]);
+  });
+
+  it("screenshot 2 regression: the same 16:9 duet anchors instead of stacking", () => {
+    // Two 1216-wide tiles need 2430 of width; this source has 1920, so the
+    // tiles would overlap by 512px whatever the faces do. Anchor on the face
+    // with the most face area instead - here the wider left one, centre 690.
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([track(1570, 150, { id: 1 }), track(600, 180)]),
+      W,
+      H
+    );
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 386 }]);
   });
 
   it("zero faces fall back to a centered window", () => {
@@ -85,17 +104,40 @@ describe("buildCropPlan layouts", () => {
   });
 
   it("three faces with a clear dominant pair split on that pair", () => {
-    const tiny = track(940, 130, { id: 2, mouthActivity: 0 });
+    // The middle face is 200px against a 192px floor, so it survives the
+    // min-face guard and DOMINANCE_LEAD's accept side really is under test:
+    // 0.675 and 0.675 against 1.5 * 0.432 = 0.648.
+    const tiny = track(1400, 200, { id: 2, mouthActivity: 0 });
     const plan = buildCropPlan(
       oneShot,
-      withTracks([track(200, 300), tiny, track(1400, 300, { id: 1 })]),
-      W,
+      withTracks([track(100, 600), tiny, track(2500, 600, { id: 1 })]),
+      WIDE_W,
       H
     );
     expect(plan!.shots[0].layout).toBe("split");
   });
 
-  it("three similar faces with no dominant pair fall back to center", () => {
+  it("three similar faces with no dominant pair anchor instead of centring", () => {
+    // DOMINANCE_LEAD fails (0.79 vs 1.5 * 0.56), and the old code centred on a
+    // window whose nearest face centre was 0.51 cropW away. Anchor on the best
+    // group instead: three equal-area singletons, so the most central wins.
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([
+        track(100, 300),
+        track(1200, 300, { id: 1 }),
+        track(2800, 300, { id: 2 }),
+      ]),
+      WIDE_W,
+      H
+    );
+    expect(plan!.shots[0]).toEqual({ start: 0, end: 30, layout: "single", x: 1046 });
+  });
+
+  it("three similar faces on 16:9 anchor on the most central face", () => {
+    // The 12-of-16 case from engine-notes §7b: anchorable faces, no dominant
+    // pair, and the old planner centred blind at x = 656 with the nearest face
+    // centre 0.48 cropW away. Faces at 250 / 950 / 1650, frame centre 960.
     const plan = buildCropPlan(
       oneShot,
       withTracks([
@@ -106,7 +148,7 @@ describe("buildCropPlan layouts", () => {
       W,
       H
     );
-    expect(plan!.shots[0]).toEqual({ start: 0, end: 30, layout: "center", x: 656 });
+    expect(plan!.shots[0]).toEqual({ start: 0, end: 30, layout: "single", x: 646 });
   });
 
   it("ignores 1-sample noise tracks", () => {
@@ -120,16 +162,18 @@ describe("buildCropPlan layouts", () => {
     expect(buildCropPlan([], [], W, H)).toBeNull();
   });
 
-  it("square source with far-apart faces centers instead of splitting", () => {
-    // 1080x1080: tileW 1216 > 1080 so a split's crop would exceed iw and fail
-    // the encode (error -22). The narrow-source guard must center instead.
+  it("square source with far-apart faces anchors on the bigger face", () => {
+    // 1080x1080: tileW 1216 > 1080, so a split's crop would exceed iw and fail
+    // the encode (error -22). The disjointness gate refuses it; the shot then
+    // anchors on the larger face (200px beats 150px) rather than centring.
+    // Ideal x is 626, clamped to 1080 - 608 = 472, which still holds all of it.
     const plan = buildCropPlan(
       oneShot,
-      withTracks([track(50, 150), track(880, 150, { id: 1 })]),
+      withTracks([track(50, 150), track(830, 200, { id: 1 })]),
       1080,
       1080
     );
-    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "center", x: 236 }]);
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 472 }]);
   });
 
   it("square source still crops a single face (cropW 608 < 1080)", () => {
@@ -143,6 +187,273 @@ describe("buildCropPlan layouts", () => {
     const stray = track(1700, 150, { id: 1, samples: 2 });
     const plan = buildCropPlan(oneShot, withTracks([track(600, 400), stray]), W, H);
     expect(plan!.shots[0]).toEqual({ start: 0, end: 30, layout: "single", x: 496 });
+  });
+});
+
+describe("split gate: two tiles must be able to sit apart", () => {
+  // tileWidthFor(720) = 810 exactly, so 2 * tileW = 1620 = 720 * 2.25. This
+  // family puts the aspect floor on a pixel boundary; at 1080 high the tile
+  // rounds UP to 1216 and the true floor is 2432, not 2430.
+  const SH = 720;
+  const far = withTracks([track(60, 150), track(1400, 150, { id: 1 })]);
+
+  it("splits at exactly 2.25:1, where the tiles abut and share nothing", () => {
+    const plan = buildCropPlan(oneShot, far, 1620, SH);
+    expect(plan!.shots).toEqual([
+      { start: 0, end: 30, layout: "split", top: { x: 0 }, bottom: { x: 810 } },
+    ]);
+    // 810 - 0 = tileW: disjoint by exactly zero pixels of margin.
+    expect(tileWidthFor(SH)).toBe(810);
+  });
+
+  it("refuses the split two pixels below the floor and anchors instead", () => {
+    const plan = buildCropPlan(oneShot, far, 1618, SH);
+    expect(plan!.shots[0].layout).toBe("single");
+  });
+
+  it("still splits two pixels above the floor", () => {
+    const plan = buildCropPlan(oneShot, far, 1622, SH);
+    expect(plan!.shots[0].layout).toBe("split");
+  });
+
+  it("refuses a split whose tiles would overlap even on a wide source", () => {
+    // 3200 wide, faces at 600 and 1500: the span (1100) is too wide for one
+    // 608px window, and the tiles land 892 apart against a tileW of 1216. The
+    // aspect allows a split; THESE faces do not. Anchor on the central face.
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([track(500, 200), track(1400, 200, { id: 1 })]),
+      WIDE_W,
+      H
+    );
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 1196 }]);
+  });
+
+  it("never emits overlapping tiles across a sweep of widths and positions", () => {
+    for (const width of [1080, 1280, 1618, 1620, 1920, 2560, 3200, 3840]) {
+      const tileW = tileWidthFor(H);
+      for (let bx = 200; bx + 300 <= width; bx += 100) {
+        const plan = buildCropPlan(
+          oneShot,
+          withTracks([track(100, 300), track(bx, 300, { id: 1 })]),
+          width,
+          H
+        );
+        const shot = plan?.shots[0];
+        if (!shot || shot.layout !== "split") continue;
+        expect(shot.bottom.x - shot.top.x).toBeGreaterThanOrEqual(tileW);
+      }
+    }
+  });
+});
+
+describe("anchoring when no window holds every face", () => {
+  it("prefers the group showing the most face area over the one with more faces", () => {
+    // A alone (260px wide) carries 87,880px of face; the B+C pair carries
+    // 84,240. The bigger single face wins, and it is NOT the pair.
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([
+        track(200, 260),
+        track(1200, 180, { id: 1 }),
+        track(1500, 180, { id: 2 }),
+      ]),
+      W,
+      H
+    );
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 26 }]);
+  });
+
+  it("flips to the pair when the pair carries more face area", () => {
+    // Same positions, B and C grown to 200px: 104,000 against A's 87,880.
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([
+        track(200, 260),
+        track(1200, 200, { id: 1 }),
+        track(1500, 200, { id: 2 }),
+      ]),
+      W,
+      H
+    );
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 1146 }]);
+  });
+
+  it("does not depend on the order the detector returned the tracks", () => {
+    const tracks = [
+      track(200, 260),
+      track(1200, 200, { id: 1 }),
+      track(1500, 200, { id: 2 }),
+    ];
+    const forwards = buildCropPlan(oneShot, withTracks(tracks), W, H);
+    const backwards = buildCropPlan(oneShot, withTracks([...tracks].reverse()), W, H);
+    expect(backwards!.shots).toEqual(forwards!.shots);
+    expect(forwards!.shots[0]).toMatchObject({ x: 1146 });
+  });
+
+  it("does not move when mouthActivity moves", () => {
+    // mouthActivity is a 2fps frame difference that a head turn produces as
+    // readily as speech, and nothing in this repo validates it (§7b). The
+    // anchor must not read it: same geometry, opposite mouth signals, same x.
+    const quiet = buildCropPlan(
+      oneShot,
+      withTracks([
+        track(200, 260, { mouthActivity: 0.25 }),
+        track(1200, 200, { id: 1, mouthActivity: 0.001 }),
+        track(1500, 200, { id: 2, mouthActivity: 0.001 }),
+      ]),
+      W,
+      H
+    );
+    const loud = buildCropPlan(
+      oneShot,
+      withTracks([
+        track(200, 260, { mouthActivity: 0.001 }),
+        track(1200, 200, { id: 1, mouthActivity: 0.25 }),
+        track(1500, 200, { id: 2, mouthActivity: 0.25 }),
+      ]),
+      W,
+      H
+    );
+    expect(quiet!.shots).toEqual(loud!.shots);
+    expect(quiet!.shots[0]).toMatchObject({ x: 1146 });
+  });
+
+  it("keeps every face of the chosen group whole, even against the frame edge", () => {
+    // The pair sits at 1500..1910; its ideal window starts at 1401 and clamps
+    // to 1312. Both faces must still be inside 1312..1920.
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([
+        track(100, 150),
+        track(1500, 180, { id: 1 }),
+        track(1740, 170, { id: 2 }),
+      ]),
+      W,
+      H
+    );
+    const shot = plan!.shots[0];
+    expect(shot).toEqual({ start: 0, end: 30, layout: "single", x: 1312 });
+    const x = (shot as { x: number }).x;
+    for (const [left, right] of [
+      [1500, 1680],
+      [1740, 1910],
+    ]) {
+      expect(left).toBeGreaterThanOrEqual(x);
+      expect(right).toBeLessThanOrEqual(x + cropWidthFor(H));
+    }
+  });
+
+  it("breaks an exact tie toward the leftmost group, and says so", () => {
+    // Two identical faces mirrored about the frame centre: equal area, equal
+    // distance from centre. There is no measurable reason to prefer either, so
+    // the rule is "leftmost", pinned here so it cannot drift into "whichever
+    // the detector listed first".
+    const mirrored = [track(200, 150), track(1570, 150, { id: 1 })];
+    const plan = buildCropPlan(oneShot, withTracks(mirrored), W, H);
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 0 }]);
+    const reversed = buildCropPlan(oneShot, withTracks([...mirrored].reverse()), W, H);
+    expect(reversed!.shots).toEqual(plan!.shots);
+  });
+
+  it("centres the window on a face too wide to fit inside it", () => {
+    // A 600px face against a 608px window fails the 0.9 fit margin, and with
+    // one face there is no pair to split. Anchor on it anyway - the old code
+    // reached the split branch with a one-element pair and threw.
+    const plan = buildCropPlan(oneShot, withTracks([track(500, 600)]), W, H);
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 496 }]);
+  });
+
+  it("anchors rather than splitting when the top two do not lead the third", () => {
+    // DOMINANCE_LEAD's REJECT side, on a source wide enough that the refusal
+    // is the lead test and not the tile geometry: the outer pair score 0.656
+    // and 0.658 against 1.5 * 0.550 = 0.826. At a lead of 1.0 this same shot
+    // splits into disjoint tiles at 0 and 1984, so the constant is pinned.
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([
+        track(100, 400),
+        track(1500, 200, { id: 1 }),
+        track(2680, 420, { id: 2 }),
+      ]),
+      WIDE_W,
+      H
+    );
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 2586 }]);
+  });
+
+  it("admits a group spanning exactly 90% of the window, and no more", () => {
+    // 1084 high makes cropW 610 and the fit margin an exact 549, the only way
+    // to land a face bbox ON the boundary (at 1080 it is 547.2, which no
+    // integer span can equal). A+B span exactly 549 and must group; C is far
+    // enough away to keep the shot off the plain single path.
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([
+        track(100, 150),
+        track(499, 150, { id: 1 }),
+        track(1700, 150, { id: 2 }),
+      ]),
+      W,
+      1084
+    );
+    expect(cropWidthFor(1084)).toBe(610);
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 70 }]);
+  });
+
+  it("rejects a group that fills the window with no margin", () => {
+    // A+B span 580: inside the 608px window but past the 0.9 fit margin, so
+    // they are not a group and the shot anchors on the single most central
+    // face instead of framing two faces flush against the borders.
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([
+        track(100, 150),
+        track(530, 150, { id: 1 }),
+        track(1700, 150, { id: 2 }),
+      ]),
+      W,
+      H
+    );
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 302 }]);
+  });
+
+  it("falls back to the biggest face when every face is wider than the window", () => {
+    // Two close-ups, 560px and 600px against a 608px window: no group fits, no
+    // split is possible (tiles 704 apart, tileW 1216), and the bigger face is
+    // the one worth centring on.
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([track(100, 560), track(1200, 600, { id: 1 })]),
+      W,
+      H
+    );
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 1196 }]);
+  });
+
+  it("still degrades to centre for the shots that have nothing to anchor on", () => {
+    // Per shot, not per clip: shot 1 is an establishing wide with only a
+    // sub-floor face, and must keep the centre crop while shot 0 anchors.
+    const plan = buildCropPlan(
+      [
+        { start: 0, end: 10 },
+        { start: 10, end: 20 },
+      ],
+      [
+        {
+          shotIndex: 0,
+          tracks: [track(200, 260), track(1200, 200, { id: 1 }), track(1500, 200, { id: 2 })],
+          camRect: null,
+        },
+        { shotIndex: 1, tracks: [track(900, 40, { id: 3 })], camRect: null },
+      ],
+      W,
+      H
+    );
+    expect(plan!.shots).toEqual([
+      { start: 0, end: 10, layout: "single", x: 1146 },
+      { start: 10, end: 20, layout: "center", x: 656 },
+    ]);
   });
 });
 
@@ -193,47 +504,48 @@ describe("adjacent-shot merging", () => {
   });
 
   it("merges split-split adjacent shots, first tile geometry wins", () => {
-    // shot 0 tiles resolve to top 0 / bottom 704; shot 1's left face nudges the
-    // top tile to 52 (dx < 4% of iw) so the pair merges keeping shot 0 geometry.
+    // 3200 wide: shot 0 tiles resolve to top 0 / bottom 1892; shot 1's right
+    // face nudges the bottom tile to 1942 (dx 50 < 4% of iw = 128) so the pair
+    // merges keeping shot 0 geometry.
     const plan = buildCropPlan(
       twoShots,
       [
         {
           shotIndex: 0,
-          tracks: [track(1570, 150, { id: 1 }), track(200, 150)],
+          tracks: [track(2400, 200, { id: 1 }), track(500, 200)],
           camRect: null,
         },
         {
           shotIndex: 1,
-          tracks: [track(1570, 150, { id: 1 }), track(585, 150)],
+          tracks: [track(2450, 200, { id: 1 }), track(500, 200)],
           camRect: null,
         },
       ],
-      W,
+      WIDE_W,
       H
     );
     expect(plan!.shots).toEqual([
-      { start: 0, end: 30, layout: "split", top: { x: 0 }, bottom: { x: 704 } },
+      { start: 0, end: 30, layout: "split", top: { x: 0 }, bottom: { x: 1892 } },
     ]);
   });
 
   it("keeps split-split shots separate when a tile moves past 4% of iw", () => {
-    // shot 1's left face pushes the top tile to 192 (dx > 4% of 1920) -> no merge.
+    // shot 0's bottom tile is 1492, shot 1's is 1692: dx 200 > 128 -> no merge.
     const plan = buildCropPlan(
       twoShots,
       [
         {
           shotIndex: 0,
-          tracks: [track(1570, 150, { id: 1 }), track(200, 150)],
+          tracks: [track(2000, 200, { id: 1 }), track(500, 200)],
           camRect: null,
         },
         {
           shotIndex: 1,
-          tracks: [track(1570, 150, { id: 1 }), track(725, 150)],
+          tracks: [track(2200, 200, { id: 1 }), track(500, 200)],
           camRect: null,
         },
       ],
-      W,
+      WIDE_W,
       H
     );
     expect(plan!.shots).toHaveLength(2);
@@ -390,12 +702,12 @@ describe("min-face guard", () => {
     // DOMINANCE_LEAD, which flipped the whole shot to center.
     const plan = buildCropPlan(
       oneShot,
-      withTracks([track(100, 200), track(1600, 200), track(950, 30)]),
-      W,
+      withTracks([track(100, 300), track(2800, 300), track(1550, 30)]),
+      WIDE_W,
       H
     );
     expect(plan!.shots).toEqual([
-      { start: 0, end: 30, layout: "split", top: { x: 0 }, bottom: { x: 704 } },
+      { start: 0, end: 30, layout: "split", top: { x: 0 }, bottom: { x: 1984 } },
     ]);
   });
 
@@ -557,9 +869,12 @@ describe("stream layout", () => {
     // (1) A clip whose widest face clears the floor is never classified
     //     `stream`, so the pair below drags the WHOLE clip to normal_face and
     //     the small inset face gets center, not a stream tile.
+    // 1728x720 is 2.4:1 - wide enough for two 810px tiles to sit apart, which
+    // a 1280-wide stream source never is.
+    const ULTRA_W = 1728;
     const wide: FaceTrack[] = [
       { ...insetFace, box: { x: 40, y: 200, w: 200, h: 260 } },
-      { ...insetFace, id: 1, box: { x: 1000, y: 200, w: 200, h: 260 } },
+      { ...insetFace, id: 1, box: { x: 1500, y: 200, w: 200, h: 260 } },
     ];
     const shots: Shot[] = [
       { start: 0, end: 10 },
@@ -571,7 +886,7 @@ describe("stream layout", () => {
         { shotIndex: 0, tracks: [insetFace], camRect },
         { shotIndex: 1, tracks: wide, camRect },
       ],
-      SW,
+      ULTRA_W,
       SH,
       streamOpts,
       camRes
@@ -679,9 +994,12 @@ describe("stream layout", () => {
       { start: 0, end: 30, layout: "single", x: 496 },
     ]);
 
+    // The 16:9 duet no longer stacks (the tiles cannot be disjoint at 1920) -
+    // it anchors on the larger face, centre 1560. What this test pins is the
+    // CLASSIFIER: a podcast must stay normal_face on the v1 path.
     const podcast = buildCropPlan(
       oneShot,
-      withTracks([track(1570, 150, { id: 1 }), track(200, 150)]),
+      withTracks([track(1450, 220, { id: 1 }), track(200, 150)]),
       W,
       H,
       opts,
@@ -690,7 +1008,7 @@ describe("stream layout", () => {
     expect(podcast?.profile?.class).toBe("normal_face");
     expect(podcast?.version).toBe(1);
     expect(podcast?.shots).toEqual([
-      { start: 0, end: 30, layout: "split", top: { x: 0 }, bottom: { x: 704 } },
+      { start: 0, end: 30, layout: "single", x: 1256 },
     ]);
   });
 });

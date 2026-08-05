@@ -34,6 +34,30 @@ export interface AnalyzeConfig {
   leadInSec: number;
   tailHoldSec: number;
   payoffMaxTailSec: number;
+  /** A silent hole this long or longer between consecutive nodes is a cut to a
+   *  different scene, and nothing may be extended across one. Measured on all
+   *  four eval fixtures 2026-08-04, not guessed: 5 is the smallest integer that
+   *  leaves both podcast fixtures at ZERO boundaries. The derivation, the reason
+   *  the gap is measured between nodes of ANY kind, and what this guard cannot
+   *  see are all in analyze-v2/scene-gaps.ts - re-measure there before moving
+   *  this, and keep that doc the single copy. */
+  sceneGapSec: number;
+  /** Master switch for the end-extension stage - the pass that may move a
+   *  clip's end FORWARD to a later beat. Off until measured: it is the only
+   *  stage that lets a model move a shipped boundary, so it ships dark and is
+   *  turned on per-job once the eval numbers justify it. */
+  endExtensionEnabled: boolean;
+  /** How far past the current end the stage may look, in seconds. Bounds both
+   *  what the model is SHOWN and what it is allowed to choose, so it is the one
+   *  number deciding how much foreign material a proposal can reach.
+   *  25 is a starting value, not a measurement. What IS measured (spec
+   *  2026-08-04 §3.2): of six clips three human-proxy reviewers read in full,
+   *  five ended early - the four the spec puts numbers on by 17, 24, 27 and 55
+   *  seconds - so a window under ~17s cannot reach the ends that were wrong.
+   *  The far end of that range is out of reach on purpose: maxSec still caps the
+   *  clip, and a 55s reach on one model call is more trust than this stage has
+   *  earned. Re-measure with eval-end-audit.ts before moving it. */
+  endExtensionWindowSec: number;
   /** How far into a video an intro trailer montage may reach. Bounds the region
    *  scan in analyze-v2/teaser.ts; 0 switches montage detection off entirely,
    *  which is the kill switch. (spec 2026-07-24 §4.1) */
@@ -108,6 +132,11 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     leadInSec: num(env, "LEAD_IN_SEC", 0.15),
     tailHoldSec: num(env, "TAIL_HOLD_SEC", 0.3),
     payoffMaxTailSec: num(env, "PAYOFF_MAX_TAIL_SEC", 4),
+    sceneGapSec: num(env, "SCENE_GAP_SEC", 5),
+    // Exact literal "on", the same discipline as REFRAME_STREAM: a stage that
+    // moves boundaries must not be switched on by a stray truthy value.
+    endExtensionEnabled: env.END_EXTENSION === "on",
+    endExtensionWindowSec: num(env, "END_EXTENSION_WINDOW_SEC", 25),
     teaserWindowSec: num(env, "TEASER_WINDOW_SEC", 120),
     teaserMinHits: num(env, "TEASER_MIN_HITS", 3),
     finalizerEnabled: env.ANALYZE_FINALIZER !== "off",

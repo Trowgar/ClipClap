@@ -1,4 +1,7 @@
 {
+  "end-extension": {
+    "endExtensionEnabled": true
+  },
   "gpt51": {
     "criticModel": "gpt-5.1",
     "finalizerModel": "gpt-5.1"

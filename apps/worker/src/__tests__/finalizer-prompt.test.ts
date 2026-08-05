@@ -119,7 +119,10 @@ describe("finalizerSystemPrompt", () => {
     // shipped anyway, so a general restatement is not an acceptable
     // substitute and this test exists to make replacing one go red.
     const defects: Array<[string, string]> = [
-      ["question title with no answer inside", "question title is valid ONLY when"],
+      [
+        "title promising what the speech never delivers",
+        "promises what the speech never delivers",
+      ],
       ["duplicate clips across the set", "watched the same thing twice"],
       ["meandering opening", "crosstalk runs before the real topic"],
       ["punchline outside the clip", "летающих пауков ядовитых"],

@@ -140,3 +140,46 @@ export const REPAIR_SCHEMA = {
     },
   },
 } as const;
+
+/** One row per clip offered to the end-extension pass. `end_node` is a PROPOSAL
+ *  and changes nothing until applyExtension accepts it.
+ *
+ *  FIELD ORDER IS THE POINT, not house style. Structured output decodes in
+ *  schema order, so `reason` sits before `extend` and `end_node` to make the
+ *  model name the beat it is reaching for BEFORE it commits to a decision and an
+ *  index - the same reason the field exists at all. The code never reads it; it
+ *  is required so it cannot be skipped, and a proposal with no statable reason
+ *  is exactly the one this stage least wants to receive. Moving it after the
+ *  index would keep the field and drop its whole purpose.
+ *
+ *  `extend` and `end_node` are both required, and either alone could carry the
+ *  answer: a model that means "no" still has to echo an index, and a model that
+ *  means "yes" has to say so twice. The redundancy is deliberate - a half-formed
+ *  answer is then a contradiction rather than an instruction, and the code
+ *  resolves every contradiction by doing nothing (extendClipEnds reads `extend`
+ *  first, and applyExtension refuses the echo as a no-op regardless). */
+export const END_EXTENSION_SCHEMA = {
+  name: "end_extension",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["results"],
+    properties: {
+      results: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "reason", "extend", "end_node"],
+          properties: {
+            id: { type: "string" },
+            reason: { type: "string" },
+            extend: { type: "boolean" },
+            end_node: { type: "integer" },
+          },
+        },
+      },
+    },
+  },
+} as const;

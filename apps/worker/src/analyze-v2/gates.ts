@@ -3,6 +3,12 @@ import type { CriticVerdict, SentenceNode, SnappedClip } from "./types";
 export interface GateResult {
   ok: boolean;
   reason?: string;
+  /**
+   * Fields whose citations sit outside the critic's own proposed range. NOT a
+   * rejection - see `evidenceGate` - and absent on any `ok: false` result,
+   * because a dropped verdict has no copy left to report on.
+   */
+  outOfRange?: Array<"title" | "description">;
 }
 
 /**
@@ -29,13 +35,48 @@ export interface GateResult {
  */
 export const EVIDENCE_BOUNDARY_SLACK_NODES = 2;
 
-/** Evidence-node grounding gate (spec §7): replaces lexical word-matching. */
+/**
+ * Evidence-node grounding gate (spec §7): replaces lexical word-matching.
+ *
+ * WHAT IT DROPS, and it is one category: the critic broke the protocol. It said
+ * the clip is not grounded or not self-contained; it cited nothing; or it cited
+ * something that is not a node of this graph. None of those has a repair, and
+ * none of them is about the copy being wrong - they are about there being no
+ * usable answer at all.
+ *
+ * WHAT IT ONLY REPORTS, since 2026-08-04: a citation OUTSIDE the critic's own
+ * proposed range. This used to cost the whole clip, and it contradicted
+ * engine-notes §4 - a clip is never dropped for its copy - for as long as it
+ * existed. Two things make dropping the wrong answer:
+ *
+ * - The repair already exists and runs immediately afterwards. `regroundCopy`
+ *   asks the SAME question against a strictly better range (the one that shipped,
+ *   after snap and any trim, rather than the one the critic proposed) and answers
+ *   it by voiding the offending field's copy while keeping the moment. Every clip
+ *   that leaves this gate alive and survives snap goes through it; a clip that
+ *   does not survive snap was never going to ship anyway.
+ * - The cases are bookkeeping, not lost premises. On sitcom-friends the critic
+ *   tightened its own range and reused the citations it had written for the wider
+ *   one - c8 moved start 443 -> 447 still citing 443, c6 moved end 276 -> 267
+ *   still citing 274 - and the ca8dfec prompt change took this reason from 2 to 9
+ *   across the eval suite, costing that fixture 3 of 12 clips including two a
+ *   reviewer wanted to publish. The moment was never the thing that was wrong.
+ *
+ * A citation far outside is not a separate case needing a separate answer: it is
+ * stale for `regroundCopy` too, and the field it grounds is replaced with the
+ * clip's own speech, verbatim. Losing the copy is the whole cost either way.
+ *
+ * The count is NOT lost. It comes back as `outOfRange`, lands in telemetry as
+ * `evidenceOutOfRange` and in the eval snapshots as `outOfRange`, which is the
+ * signal the 2 -> 9 regression was found with.
+ */
 export function evidenceGate(
   verdict: CriticVerdict,
   nodes: SentenceNode[]
 ): GateResult {
   if (!verdict.grounded) return { ok: false, reason: "critic_ungrounded" };
   if (!verdict.selfContained) return { ok: false, reason: "not_self_contained" };
+  const outOfRange: Array<"title" | "description"> = [];
   for (const [label, evidence] of [
     ["title", verdict.titleEvidenceNodes],
     ["description", verdict.descriptionEvidenceNodes],
@@ -45,18 +86,23 @@ export function evidenceGate(
     }
     for (const idx of evidence) {
       const node = nodes[idx];
+      // ORDER MATTERS: a citation outside the GRAPH is invalid and fatal, and it
+      // is also outside the range. Reporting it as drift instead would ship a
+      // clip whose copy is grounded in a node that does not exist.
       if (!Number.isInteger(idx) || !node) {
         return { ok: false, reason: `${label}_evidence_invalid` };
-      }
-      if (idx < verdict.startNode || idx > verdict.endNode) {
-        return { ok: false, reason: `${label}_evidence_out_of_range` };
       }
       // NOTE: opaque nodes (hasWords=false) are VALID evidence - their segment
       // TEXT is real Whisper output; only the word TIMINGS are unreliable.
       // Grounding is about text; timing integrity belongs to snap's edge rules.
     }
+    // Once per FIELD, not once per citation: the unit `regroundCopy` repairs is
+    // the field, so a field with three stale citations is one thing gone wrong.
+    if (evidence.some((idx) => idx < verdict.startNode || idx > verdict.endNode)) {
+      outOfRange.push(label);
+    }
   }
-  return { ok: true };
+  return { ok: true, outOfRange };
 }
 
 /** Word-bearing node indices inside a range - the nodes a verbatim snippet can
@@ -106,11 +152,14 @@ export interface RegroundResult {
  * the PREVIOUS clip's ending - nuclear war and climate - which the viewer never
  * hears. Every gate passed; none of them ran again.
  *
- * WHY REPLACE THE COPY RATHER THAN DROP THE CLIP. Pre-snap, a citation outside
- * the range costs the whole clip (`*_evidence_out_of_range`). Post-snap the
- * cause is different - the CODE moved the boundary, the critic did nothing
- * wrong - and the moment is still good, so only the narration is void. This is
- * deliberately the lenient branch of the rule the engine already enforces.
+ * WHY REPLACE THE COPY RATHER THAN DROP THE CLIP. Because the moment is still
+ * good and only the narration is void, whichever stage broke it - the code
+ * moving a boundary here, or the critic editing its range without re-reading its
+ * own citations before the gate. This is now the ONLY answer the engine gives to
+ * an out-of-range citation: `evidenceGate` used to drop the clip for the same
+ * condition and stopped on 2026-08-04, because a clip is never dropped for its
+ * copy (engine-notes §4) and because this function is a strictly better place to
+ * ask - it knows the range the viewer actually hears.
  *
  * WHY ALL-OR-NOTHING PER FIELD, and this is the uncomfortable part. A citation
  * list is the critic's claim about where a field is grounded, and the surviving

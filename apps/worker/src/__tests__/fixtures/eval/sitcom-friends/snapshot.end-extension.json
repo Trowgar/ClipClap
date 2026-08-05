@@ -1,0 +1,60 @@
+{
+  "count": 10,
+  "tier": "strong",
+  "clips": [
+    {
+      "range": "1165.4-1206.4",
+      "score": 0.91,
+      "title": "Joey Finds a Loophole in One Simple Rule"
+    },
+    {
+      "range": "175.1-195.6",
+      "score": 0.86,
+      "title": "Why Are Phoebe and Rachel Tracking Chandler?"
+    },
+    {
+      "range": "0.0-42.7",
+      "score": 0.84,
+      "title": "Her Father Won't Let That Insult Slide"
+    },
+    {
+      "range": "1068.6-1098.9",
+      "score": 0.8,
+      "title": "Pottery Barn Changes How They See Their Antique"
+    },
+    {
+      "range": "2117.3-2167.2",
+      "score": 0.76,
+      "title": "They Make Their Relationship Official—Then Everything Changes"
+    },
+    {
+      "range": "636.9-658.0",
+      "score": 0.72,
+      "title": "Joey's Version of the Kissing Story Keeps Changing"
+    },
+    {
+      "range": "1138.3-1155.9",
+      "score": 0.72,
+      "title": "Joey's Idea of a Great Bachelor Party Is..."
+    },
+    {
+      "range": "2374.2-2437.1",
+      "score": 0.7,
+      "title": "He Has to Explain Why the Joke Was Funny"
+    },
+    {
+      "range": "1413.3-1451.0",
+      "score": 0.67,
+      "title": "The Hotel Room Clue Has a Surprisingly Simple Explanation"
+    },
+    {
+      "range": "2202.0-2225.4",
+      "score": 0.67,
+      "title": "The New Law Firm Has an Unforgettable Name"
+    }
+  ],
+  "dropReasons": {},
+  "outOfRange": {
+    "description_evidence_out_of_range": 3
+  }
+}

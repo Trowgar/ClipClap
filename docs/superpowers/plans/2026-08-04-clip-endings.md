@@ -420,8 +420,16 @@ git commit -m "feat(analyze): gates for moving a clip end forward"
 
 **Files:**
 - Modify: `apps/worker/src/analyze-v2/schemas.ts`
+- Modify: `apps/worker/src/analyze-v2/prompts.ts`
 - Modify: `apps/worker/src/analyze-v2/end-extension.ts`
 - Test: `apps/worker/src/__tests__/end-extension.test.ts`
+
+> **Correction, 2026-08-04, from Task 2's quality review.** The code blocks below put
+> `EXTENSION_SYSTEM` and `buildExtensionUser` inside `end-extension.ts`. That is wrong for this
+> codebase: every other prompt in the engine lives in `prompts.ts` next to its user builder -
+> `SCANNER_PROMPT`, `CRITIC_PROMPT_TEMPLATE`, `FINALIZER_PROMPT_TEMPLATE` all do - while the stage
+> module holds only gates, the call and telemetry. Put both in `prompts.ts`, where `prompts.test.ts`
+> can reach them, and import them here. Everything else in this task is unchanged.
 
 - [ ] **Step 1: Add the schema**
 
@@ -707,6 +715,31 @@ Find the object literal the function returns as `telemetry` and add:
     endExtension: extension.telemetry,
 ```
 
+The object is no longer the six counters this plan first described. Tasks 2 and 3 added `skipped`,
+`refusedBy` and `contradicted`, and **Task 5 reads all three** - publish the whole object, never a
+hand-picked subset. `skipped` is the field that tells "the stage did not run" from "the stage ran and
+declined", which are otherwise the same zeros; `refusedBy` is what says WHICH prompt edit a rising
+`refused` argues for.
+
+- [ ] **Step 3b: Add the knobs to `.env.example`**
+
+`END_EXTENSION` and `END_EXTENSION_WINDOW_SEC`, next to `LEAD_IN_SEC`, `TAIL_HOLD_SEC` and
+`PAYOFF_MAX_TAIL_SEC` which are already documented there. Outstanding since Task 2.
+
+- [ ] **Step 3c: Add the extension knobs to the eval fingerprint**
+
+`apps/worker/src/__tests__/helpers/eval-fingerprint.ts`. This is not cosmetic and it must land
+BEFORE Task 5 records anything.
+
+A stage that is switched off produces **no request**, so the request hash cannot notice it - which is
+exactly the argument the fingerprint file already makes for `finalizerEnabled`. Without the keys, a
+fixture recorded with the stage dark replays green under a live stage and the snapshot moves with no
+warning, and Task 5 could not tell "the snapshot moved because the stage worked" from "the snapshot
+moved because it was recorded in a different configuration". `extensionMaxOutputTokens` is invisible
+to the hash for the same reason `criticMaxOutputTokens` was.
+
+Adding keys only WARNS on existing fixtures rather than failing them, so this is safe to do now.
+
 - [ ] **Step 4: Run the whole worker suite**
 
 Run: `docker compose exec -T worker-analyze sh -c "cd /app/apps/worker && ../../node_modules/.bin/vitest run --root ../.. apps/worker/src"`
@@ -801,6 +834,14 @@ git commit -m "test(analyze): record the end-extension call and re-bless the sna
 Add under §3, in the file's own voice - what IS true, with the numbers it was measured from. It must state: the pre-change tail distribution (0.3s median, 0/12 at the 4s cap), the `sceneGapSec` value and the distribution it came from, how many of the five acceptance clips moved, what the agents scored before and after, and whether the podcast fixtures moved.
 
 If a claim in §6a about the punchline-outside case is now false, delete it - the file's own rule is that a stale note is worse than none.
+
+- [ ] **Step 1b: Record the harness blind spot in §5, not only in §3**
+
+Found during Task 2 and confirmed twice, by the implementer and independently by the reviewer with a control run. It is a property of the FIXTURES, not of this feature, so it belongs in §5 (the regression harness) where the next person reading "the replays are green" about any boundary change will meet it:
+
+Deleting the nested-word clamp from `endSecFor` leaves **all six eval replays green** and fails exactly one test in 791. Deleting the tail hold reddens **all six** replays and 22 tests. So the harness does watch clip-edge seconds - it is blind specifically to the nested-word branch, because no shipped clip on any of the four sources ends on a node whose nested end overruns its successor. Before Task 2 that clamp, which exists to stop the last word being cut, was guarded by nothing in the repo.
+
+State the general form too, because it is the reusable part: **an eval fixture can only exercise the branches its own recorded run happened to reach.** A green replay is evidence about the sources in the corpus, never about the code. This is the same argument §6a already makes for wanting a genuinely different source, now with a measured instance behind it.
 
 - [ ] **Step 2: Commit**
 

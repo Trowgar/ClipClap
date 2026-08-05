@@ -7,13 +7,14 @@ import {
 } from "./helpers/eval-fingerprint";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { criticMaxOutputTokens } from "../analyze-v2/critic";
+import { extensionMaxOutputTokens } from "../analyze-v2/end-extension";
 import { finalizerMaxOutputTokens } from "../analyze-v2/finalize";
 
 /** Fixture-free: everything here works off a synthetic config. */
 const baseCfg = { ...loadAnalyzeConfig({}), engine: "recall-critic" as const };
 
 describe("computeFingerprint", () => {
-  it("captures the models, reasoning effort, batch size and both LLM budgets", () => {
+  it("captures the models, reasoning effort, batch size and all three LLM budgets", () => {
     expect(computeFingerprint(baseCfg)).toEqual({
       scanModel: baseCfg.scanModel,
       criticModel: baseCfg.criticModel,
@@ -26,7 +27,19 @@ describe("computeFingerprint", () => {
       finalizerModel: baseCfg.finalizerModel,
       finalizerMaxOutputTokensBase: finalizerMaxOutputTokens(0),
       finalizerMaxOutputTokensPerClip: finalizerMaxOutputTokens(1) - finalizerMaxOutputTokens(0),
+      endExtensionEnabled: baseCfg.endExtensionEnabled,
+      endExtensionWindowSec: baseCfg.endExtensionWindowSec,
+      endExtensionMaxOutputTokensBase: extensionMaxOutputTokens(0),
+      endExtensionMaxOutputTokensPerClip:
+        extensionMaxOutputTokens(1) - extensionMaxOutputTokens(0),
     });
+  });
+
+  it("records the extension stage as DARK on the default config", () => {
+    // Every fixture in the repo was recorded like this, and it is what makes the
+    // key worth having: the recordings assert "no clip was extended", so a
+    // replay under a live stage is a different engine and has to say so.
+    expect(computeFingerprint(baseCfg).endExtensionEnabled).toBe(false);
   });
 });
 
@@ -93,6 +106,55 @@ describe("assertFingerprintMatches", () => {
     );
   });
 
+  it("fails when the end-extension stage was switched on, which every fixture predates", () => {
+    // The same shape as the finalizer case above and the one that will actually
+    // happen: the stage ships dark, so a live replay against a dark recording
+    // moves clip ends while every recorded response still fits its request. The
+    // snapshot would move and nothing would say whether the stage or the
+    // recording explains it.
+    const changed = computeFingerprint({ ...baseCfg, endExtensionEnabled: true });
+    expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
+      /endExtensionEnabled/
+    );
+  });
+
+  it("fails when the extension window changed, which the hash can miss entirely", () => {
+    // Narrowing it far enough leaves no clip with anywhere to go, and a stage
+    // with nothing to ask makes no request at all - so this is not covered by
+    // "the prompt text changed, the request key changed".
+    const changed = computeFingerprint({ ...baseCfg, endExtensionWindowSec: 40 });
+    expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
+      /endExtensionWindowSec/
+    );
+  });
+
+  it("fails when the extension output budget changed", () => {
+    // end-extension.ts marks both constants ESTIMATED, NOT MEASURED and asks for
+    // a re-measure from the first real run. Replay serves a recorded answer in
+    // full whatever the cap says, so nothing else can notice a cap that would
+    // truncate in production - and this stage has no truncation retry, so that
+    // costs the whole stage for the job.
+    // The drifted values are DERIVED from the current ones rather than written
+    // as literals: a literal would red this test the day someone re-measures the
+    // constants, which is the cry-wolf failure the fingerprint file is careful
+    // to avoid. The numbers themselves are pinned where pinning them means
+    // something - in each fixture's meta.json, once the stage has been recorded.
+    const perClip: EngineFingerprint = {
+      ...current,
+      endExtensionMaxOutputTokensPerClip: current.endExtensionMaxOutputTokensPerClip + 50,
+    };
+    expect(() => assertFingerprintMatches("case", perClip, current, vi.fn())).toThrow(
+      /endExtensionMaxOutputTokensPerClip/
+    );
+    const base: EngineFingerprint = {
+      ...current,
+      endExtensionMaxOutputTokensBase: current.endExtensionMaxOutputTokensBase + 300,
+    };
+    expect(() => assertFingerprintMatches("case", base, current, vi.fn())).toThrow(
+      /endExtensionMaxOutputTokensBase/
+    );
+  });
+
   it("fails when the fallback model changed even though it never reaches the request hash", () => {
     const changed = computeFingerprint({ ...baseCfg, criticModelFallback: "gpt-4o-mini" });
     expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
@@ -121,6 +183,10 @@ describe("assertFingerprintMatches", () => {
       // request hash already fails loudly on it - fingerprinting it too would
       // demand a paid re-record for a knob replay cannot miss
       finalizerHeadroom: 9,
+      // sceneGapSec is the closest call in that file and is deliberately out: it
+      // is a measured property of the SOURCE, not a choice about what the model
+      // may do, and moving it is a re-measurement argued from transcripts
+      sceneGapSec: 9,
     });
     const warn = vi.fn();
     expect(() => assertFingerprintMatches("case", { ...current }, changed, warn)).not.toThrow();
@@ -141,6 +207,49 @@ describe("assertFingerprintMatches", () => {
     }
     expect(error?.message).toContain("criticModel");
     expect(error?.message).toContain("reasoningEffort");
+  });
+
+  it("fails on a RENAMED knob rather than warning about half of it", () => {
+    // THE case the `stale` array exists for, and the one that produces nothing
+    // to look at without it. Rename criticBatchSize to criticBatchCount: the new
+    // name is merely unrecorded, so it warns; the old name is invisible to
+    // `mismatches`, which iterates the CURRENT keys only. Between the two, a
+    // recording made under the old knob would replay green against a config that
+    // sets the renamed one differently - the false MATCH, arriving through the
+    // one door nothing was watching.
+    const renamed = { ...current } as unknown as Record<string, unknown>;
+    delete renamed.criticBatchSize;
+    renamed.criticBatchCount = current.criticBatchSize;
+    const warn = vi.fn();
+    let error: Error | undefined;
+    try {
+      assertFingerprintMatches(
+        "case",
+        { ...current },
+        renamed as unknown as EngineFingerprint,
+        warn
+      );
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error?.message).toContain("criticBatchSize");
+    expect(error?.message).toContain("no such knob today");
+    expect(error?.message).toContain("eval-record.ts");
+    // and the other half is reported as what it is: unverified, not wrong
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain("criticBatchCount");
+  });
+
+  it("fails when the recording names a knob that was deleted outright", () => {
+    // Same verdict as the rename for the same reason: a recorded value nobody
+    // can evaluate is provenance that cannot be checked, and only a re-record
+    // fixes it. Deliberately NOT the `unrecorded` warn path - that one is about
+    // a value the recording never had, which asserts nothing either way.
+    const recorded = { ...current } as unknown as Record<string, unknown>;
+    recorded.criticTemperature = 0.7;
+    expect(() =>
+      assertFingerprintMatches("case", recorded as Partial<EngineFingerprint>, current, vi.fn())
+    ).toThrow(/criticTemperature/);
   });
 
   it("warns instead of failing when the fixture has no fingerprint at all", () => {
@@ -166,13 +275,17 @@ describe("assertFingerprintMatches", () => {
 });
 
 describe("compareFingerprints", () => {
-  it("separates value mismatches from knobs the recording never had", () => {
+  it("separates value mismatches, knobs the recording never had, and knobs it outlived", () => {
     const current = computeFingerprint(baseCfg);
     const recorded: Partial<EngineFingerprint> = { ...current, scanModel: "gpt-4.1-mini" };
     delete recorded.criticBatchSize;
+    // A knob this fingerprint has never heard of - what a recording made before
+    // a rename or a deletion carries.
+    (recorded as Record<string, unknown>).criticTemperature = 0.7;
     expect(compareFingerprints(recorded, current)).toEqual({
       mismatches: [`scanModel: recorded "gpt-4.1-mini", current ${JSON.stringify(current.scanModel)}`],
       unrecorded: ["criticBatchSize"],
+      stale: ["criticTemperature"],
     });
   });
 });

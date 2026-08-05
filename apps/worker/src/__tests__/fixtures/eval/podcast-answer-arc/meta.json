@@ -15,7 +15,7 @@
   },
   "variants": {
     "gpt51": {
-      "recordedAt": "2026-07-26T23:26:13.742Z",
+      "recordedAt": "2026-08-05T12:39:43.413Z",
       "engine": {
         "scanModel": "gpt-4o-mini",
         "criticModel": "gpt-5.1",
@@ -27,7 +27,31 @@
         "finalizerEnabled": true,
         "finalizerModel": "gpt-5.1",
         "finalizerMaxOutputTokensBase": 2000,
-        "finalizerMaxOutputTokensPerClip": 700
+        "finalizerMaxOutputTokensPerClip": 700,
+        "endExtensionEnabled": false,
+        "endExtensionWindowSec": 25,
+        "endExtensionMaxOutputTokensBase": 600,
+        "endExtensionMaxOutputTokensPerClip": 250
+      }
+    },
+    "end-extension": {
+      "recordedAt": "2026-08-05T12:40:34.098Z",
+      "engine": {
+        "scanModel": "gpt-4o-mini",
+        "criticModel": "gpt-5.6-luna",
+        "criticModelFallback": "gpt-5-mini",
+        "reasoningEffort": "low",
+        "criticBatchSize": 6,
+        "criticMaxOutputTokensBase": 1200,
+        "criticMaxOutputTokensPerCandidate": 800,
+        "finalizerEnabled": true,
+        "finalizerModel": "gpt-5.6-luna",
+        "finalizerMaxOutputTokensBase": 2000,
+        "finalizerMaxOutputTokensPerClip": 700,
+        "endExtensionEnabled": true,
+        "endExtensionWindowSec": 25,
+        "endExtensionMaxOutputTokensBase": 600,
+        "endExtensionMaxOutputTokensPerClip": 250
       }
     }
   }

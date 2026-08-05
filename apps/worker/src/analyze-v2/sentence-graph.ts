@@ -49,11 +49,40 @@ export function isCleanStart(nodes: SentenceNode[], index: number): boolean {
   return boundaryOk && !startsLowercase(n.text);
 }
 
+/** Closing quotes and brackets a sentence-final mark may hide behind - `он
+ *  сказал: "Да!"`. Shared by the two tests below rather than spelled twice:
+ *  parity a reader has to re-verify by eye is parity that drifts. */
+const CLOSERS = `["»')\\]]*\\s*$`;
+const QUESTION_END = new RegExp(`[?？]${CLOSERS}`, "u");
+const SENTENCE_END = new RegExp(`[.!?…。！？]${CLOSERS}`, "u");
+
 /** Terminal question mark, tolerating a trailing quote or bracket. THE
  *  punctuation question test - snap's `endsOnQuestion` telemetry and the
  *  finalizer's orphaned-question gate must agree, so both consume this. */
 export function endsOnQuestionMark(text: string): boolean {
-  return /[?？]["»')\]]*\s*$/u.test(text.trim());
+  return QUESTION_END.test(text.trim());
+}
+
+/**
+ * Does this text close a sentence?
+ *
+ * Only ever asked of an OPAQUE node, and only by snap's clean-end repair. Such a
+ * node carries Whisper's raw segment text, which is the one place punctuation
+ * survives in these transcripts - word tokens are virtually punctuation-free (2
+ * of 609 nodes on podcast-answer-arc, engine-notes §5a), which is why a
+ * word-bearing node can never be judged this way and is not.
+ *
+ * LOAD-BEARING, not decorative: it refuses 46 / 47 / 52 / 11 of the opaque nodes
+ * on the four eval fixtures. Without it the repair would happily end a clip on
+ * any opaque node at all, including one that is nothing but the middle of a
+ * laugh, which is a worse defect than the one the repair exists to fix.
+ *
+ * It trusts Whisper's punctuation, and that trust is the rule's weak point on a
+ * source Whisper punctuates badly - see engine-notes §3 for what was and was not
+ * measured about that.
+ */
+export function endsOnSentenceMark(text: string): boolean {
+  return SENTENCE_END.test(text.trim());
 }
 
 /**
@@ -126,16 +155,46 @@ export function looksLikeQuestion(text: string): boolean {
   return false;
 }
 
-/** A node ENDS cleanly when its own trailing boundary is terminal, the
- *  transcript ends, music follows, or the next node opens cleanly. Mirrors
- *  isCleanStart - "…искала ты его потому," followed by a lowercase
- *  continuation is a mid-clause cut, not an ending. */
+/**
+ * A node ENDS cleanly when its own trailing boundary is terminal, the transcript
+ * ends, the opaque region after it starts no mid-clause continuation, or the next
+ * node opens cleanly. Mirrors isCleanStart - "…искала ты его потому," followed by
+ * a lowercase continuation is a mid-clause cut, not an ending.
+ *
+ * THE OPAQUE BRANCH USED TO BE AN UNCONDITIONAL `return true`, justified as
+ * "music follows", and that was the engine's longest-lived boundary defect: it
+ * shipped clips ending "...строящего космические корабли," on two fixtures.
+ * `hasWords === false` does not mean speech ended. It means Whisper's word
+ * timings were unreliable - laughter, crosstalk, an unintelligible stretch - and
+ * the speaker usually continues, IN THAT NODE.
+ *
+ * So the opaque node's own text is what decides, and a lowercase onset is the
+ * evidence: Whisper capitalizes real sentence starts, so `"любая биосфера
+ * обречена, ..."` following `"...космические корабли"` is visibly the same
+ * sentence continuing. Text with no letters at all - `""`, `[Музыка]`, `♪♪♪` -
+ * carries no such evidence and stays clean, which is the music case the old rule
+ * was written for and the one it got right.
+ *
+ * ONLY THE FIRST node of an opaque run is consulted, deliberately. If speech
+ * continued out of this node it continued immediately; a lowercase onset two
+ * opaque nodes later is a continuation of the GAP's own speech, not of this
+ * node's last word.
+ *
+ * WHAT THIS DOES NOT DO is look THROUGH the gap to the next word-bearing node and
+ * test that. Measured 2026-08-05 and inert - it fixes none of the three offenders
+ * and changes no clip on any of the four fixtures, because the node on the far
+ * side of a gap is by construction preceded by an opaque node and `isCleanStart`
+ * hands it a clean boundary for that very reason. engine-notes §3 carries the
+ * measurement; it is the obvious idea and it is wrong.
+ */
 export function isCleanEnd(nodes: SentenceNode[], index: number): boolean {
   const n = nodes[index];
   if (!n) return false;
   if (n.trailingStrength >= 1.0) return true;
   if (index === nodes.length - 1) return true;
-  if (nodes[index + 1].hasWords === false) return true;
+  if (nodes[index + 1].hasWords === false) {
+    return !startsLowercase(nodes[index + 1].text);
+  }
   return isCleanStart(nodes, index + 1);
 }
 

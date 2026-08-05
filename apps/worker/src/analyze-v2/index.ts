@@ -15,6 +15,7 @@ import {
 } from "./gates";
 import { dominantScript, isoToLanguageName, scriptMismatch } from "./language";
 import { selectAndOrder } from "./select";
+import { extendClipEnds } from "./end-extension";
 import { finalizeClips } from "./finalize";
 import { detectTeaserRegion, isInTeaserRegion } from "./teaser";
 import { newUsage } from "./llm";
@@ -270,6 +271,14 @@ export async function analyzeHighlightsV2(
     outcome: "repaired" | "unusable" | "already_repaired";
   }> = [];
   const gateDropReasons: Record<string, number> = {};
+  /**
+   * Copy the critic grounded outside its own proposed range, by field. NOT a
+   * drop - `regroundCopy` repairs it below - and deliberately a SEPARATE counter
+   * from gateDropReasons, which means "this clip is gone" and must keep meaning
+   * exactly that. Kept because it is a direct measure of critic-prompt drift: the
+   * ca8dfec title rule took it from 2 to 9 across the eval suite in one commit.
+   */
+  const evidenceOutOfRange: Record<string, number> = {};
   const droppedVerdicts: Array<{ id: string; stage: string; reason: string; score: number }> = [];
 
   for (const verdict of critic.verdicts) {
@@ -277,7 +286,9 @@ export async function analyzeHighlightsV2(
 
     // Evidence just past the chosen boundary is a boundary problem, not a
     // grounding failure: widen the range to contain its own evidence (snap
-    // re-validates clean start, invariants and the 90s cap afterwards).
+    // re-validates clean start, invariants and the 90s cap afterwards). Evidence
+    // FURTHER out is a copy problem - the gate below reports it and regroundCopy
+    // replaces the field - so between them nothing here can cost a clip.
     if (widenRangeToEvidence(verdict, nodes.length - 1)) evidenceWidened += 1;
 
     const gate = evidenceGate(verdict, nodes);
@@ -287,6 +298,10 @@ export async function analyzeHighlightsV2(
       gateDropReasons[reason] = (gateDropReasons[reason] ?? 0) + 1;
       droppedVerdicts.push({ id: verdict.id, stage: "gate", reason, score: verdict.score });
       continue;
+    }
+    for (const label of gate.outOfRange ?? []) {
+      const key = `${label}_evidence_out_of_range`;
+      evidenceOutOfRange[key] = (evidenceOutOfRange[key] ?? 0) + 1;
     }
     const snapped = snapNodes(verdict, nodes, cfg);
     if (!snapped.ok) {
@@ -342,6 +357,20 @@ export async function analyzeHighlightsV2(
   // user's clip count. The headroom absorbs them without a second LLM round
   // (spec §3, §9: backfilling from fresh candidates was rejected for that cost).
   const selection = selectAndOrder(eligible, cfg, cfg.softCap + cfg.finalizerHeadroom);
+  // Ends move FORWARD here and nowhere else, and only for clips that will ship.
+  // Before the finalizer on purpose: the finalizer is the stage that trims, and
+  // it must get the last word on a boundary. Widening cannot invalidate copy -
+  // evidence already inside the range stays inside a larger one - so this needs
+  // no regroundCopy re-run, which is exactly why it is safe here and would not
+  // be if it could shorten.
+  const extension = await extendClipEnds(
+    client,
+    usage,
+    selection.selected,
+    nodes,
+    cfg,
+    { retryDelayMs: options.retryDelayMs }
+  );
   // NEVER throws: any error, refusal, truncation or malformed output ships the
   // input set with a reason in telemetry. A stage with veto authority over
   // already-approved clips must not be able to turn a content answer into a
@@ -350,7 +379,7 @@ export async function analyzeHighlightsV2(
   const finalized = await finalizeClips(
     client,
     usage,
-    selection.selected,
+    extension.clips,
     nodes,
     languageIso,
     isoToLanguageName(languageIso),
@@ -496,6 +525,7 @@ export async function analyzeHighlightsV2(
     evidenceDrops,
     evidenceWidened,
     gateDropReasons,
+    evidenceOutOfRange,
     droppedVerdicts,
     snapDrops,
     copyRepairs,
@@ -510,11 +540,25 @@ export async function analyzeHighlightsV2(
     snippetTitleRepairs,
     tier: selection.tier,
     droppedByNms: selection.droppedByNms,
+    // THE WHOLE OBJECT, never a hand-picked subset of its counters. `skipped` is
+    // the only field that separates "the stage never ran" from "it ran and
+    // declined every clip" - both are zeros everywhere else - and `refusedBy` is
+    // the only thing that says WHICH prompt edit a rising `refused` argues for.
+    // This engine has already shipped one defect from two facts sharing one
+    // field: `lowQuality` meant "a degraded model judged this" while the bot
+    // printed "no strong moments found" from it, so a user got 12 good clips
+    // each headed by a false apology (job cmscht6rp001xq41s5rhjx6q0).
+    endExtension: extension.telemetry,
     // The three numbers that make the finalizer's arithmetic readable in a job
     // record: what it was given, what it returned, what the soft cap then cut.
     // Without them a clip lost to the cap looks identical to a clip the judge
     // vetoed, and this stage's failure mode is an invisible loss.
-    selectedForFinalizer: selection.selected.length,
+    //
+    // Counted off the ARGUMENT the finalizer received, not off selection. The
+    // two agree today only because the extension stage returns its input 1:1 on
+    // every path, and nothing at this call site says so - a counter that reads
+    // "what it was given" has to read what was given.
+    selectedForFinalizer: extension.clips.length,
     finalizerSurvivors: finalized.clips.length,
     ...finalized.telemetry,
     kept: highlights.length,

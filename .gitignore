@@ -46,4 +46,4 @@ __pycache__/
 *.pyc
 
 # Frame strips extracted for clip audits - regenerable, not source
-apps/worker/.eval-frames/
+apps/worker/.eval-frames*/
