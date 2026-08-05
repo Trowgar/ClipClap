@@ -786,3 +786,101 @@ describe("restoreDroppedWords - head", () => {
     expect(out.words).toEqual(words);
   });
 });
+
+describe("segmentsToCues with restoration", () => {
+  const dropped: WhisperSegment[] = [
+    {
+      start: 10.0,
+      end: 12.6,
+      text: "We think Chandler might be having an affair.",
+      words: [
+        { text: "We", start: 10.0, end: 10.2 },
+        { text: "think", start: 10.2, end: 10.5 },
+        { text: "Chandler", start: 10.5, end: 10.9 },
+        { text: "might", start: 10.9, end: 11.1 },
+        { text: "be", start: 11.1, end: 11.3 },
+        { text: "having", start: 11.3, end: 11.7 },
+        { text: "an", start: 11.7, end: 11.9 },
+      ],
+    },
+  ];
+
+  it("draws the whole sentence", () => {
+    const cues = segmentsToCues(dropped, 10.0, 12.6);
+    const drawn = comparableText(cues.map((c) => c.text).join(""));
+    expect(drawn).toBe(comparableText(dropped[0].text));
+  });
+
+  it("keeps the outer window even though the inner split may move", () => {
+    const cues = segmentsToCues(dropped, 10.0, 12.6);
+    expect(cues[0].start).toBeCloseTo(0);
+    expect(cues[cues.length - 1].end).toBeCloseTo(2.6);
+  });
+
+  it("does not treat a segment straddling the window edge as a loss", () => {
+    // window starts mid-segment: words before 11.3 are filtered out by design
+    const cues = segmentsToCues(dropped, 11.3, 12.6);
+    const drawn = cues.map((c) => c.text).join(" ");
+    expect(drawn).not.toContain("Chandler");
+    expect(drawn).toContain("affair.");
+  });
+
+  it("leaves complete segments byte-identical", () => {
+    // `segments` is the fixture at the top of this file: no segment in it has a
+    // gap between text and words, so restoration must be a no-op for all of it.
+    const cues = segmentsToCues(segments, 10.0, 25.0);
+    expect(cues.map((c) => c.text)).toEqual([
+      "Hello everyone",
+      "Welcome to the",
+      "stream",
+      "Today we are going to talk about AI",
+    ]);
+    // Float noise: 14.6 - 10.0 is not exactly 4.6, so compare approximately -
+    // the same reason the pre-existing tests in this file use toBeCloseTo.
+    const bounds = [[0, 3.5], [3.5, 4.6], [4.6, 8], [8, 15]];
+    cues.forEach((c, i) => {
+      expect(c.start).toBeCloseTo(bounds[i][0]);
+      expect(c.end).toBeCloseTo(bounds[i][1]);
+    });
+  });
+
+  // The next two pin the ARGUMENT, not the call site: the restore is handed the
+  // segment's own bounds. Every test above uses a window whose edges coincide
+  // with the segment's, where clip bounds and segment bounds are the same
+  // numbers and the mutation that swaps them survives untouched. Here the clip
+  // is far longer than the segment, so the two disagree, and the restored span
+  // - the only entry whose timing is invented rather than measured - is given
+  // the clip's edge instead of the sentence's.
+  it("times a restored tail against the segment end, not the clip end", () => {
+    const cues = segmentsToCues(dropped, 10.0, 30.0);
+    const last = cues[cues.length - 1].words!.slice(-1)[0];
+    expect(last.text).toBe("affair.");
+    // 12.6 - 10.0. With the clip end it would be 20, and the karaoke fill would
+    // creep across the word for another 17 seconds of silence.
+    expect(last.end).toBeCloseTo(2.6);
+  });
+
+  it("times a restored head against the segment start, not the clip start", () => {
+    const headDropped: WhisperSegment[] = [
+      {
+        start: 20.0,
+        end: 22.0,
+        text: "Honestly, that was the whole joke.",
+        words: [
+          { text: "that", start: 20.5, end: 20.8 },
+          { text: "was", start: 20.8, end: 21.0 },
+          { text: "the", start: 21.0, end: 21.2 },
+          { text: "whole", start: 21.2, end: 21.6 },
+          { text: "joke.", start: 21.6, end: 22.0 },
+        ],
+      },
+    ];
+    const cues = segmentsToCues(headDropped, 10.0, 30.0);
+    const first = cues[0].words![0];
+    expect(first.text).toBe("Honestly,");
+    // 20.0 - 10.0. With the clip start it would be 0, and the word would be
+    // highlighted from the first frame of a clip it is not spoken in until
+    // ten seconds later.
+    expect(first.start).toBeCloseTo(10.0);
+  });
+});

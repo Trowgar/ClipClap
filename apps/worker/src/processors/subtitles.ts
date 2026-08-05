@@ -331,7 +331,14 @@ export function segmentsToCues(
     .flatMap((s) => {
       const segStart = Math.max(0, s.start - clipStart);
       const segEnd = Math.min(clipEnd - clipStart, s.end - clipStart);
-      const words = s.words
+      // Restore BEFORE windowing: reconciling after the filter would read every
+      // segment straddling the window edge as a loss and append text the window
+      // deliberately excludes (spec 4).
+      const whole =
+        s.words && s.words.length > 0
+          ? restoreDroppedWords(s.text, s.words, s.start, s.end).words
+          : s.words;
+      const words = whole
         ?.filter((w) => w.end > clipStart && w.start < clipEnd)
         .map((w) => shiftWord(w, clipStart));
 
