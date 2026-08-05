@@ -202,7 +202,37 @@ REFRAME_MOTION=on + xs   -> read xs
 no xs / degenerate xs    -> read x
 ```
 
-### 4.5 Fallbacks
+### 4.5 Order of operations, and why the merge pass forces it
+
+Found while planning, not during design, and it changes the pipeline order.
+
+`mergeAdjacentLayouts` collapses adjacent same-layout shots whose `x` differs by under 4% of source width, and
+**the first shot's geometry wins**. If trajectories were computed per detector shot and then merged, the
+merge would discard every trajectory but the first - re-freezing the camera over exactly the merged spans
+that §2.2 shows are the longest. §7c also made this pass reach much further (one clip went from 5 plan shots
+to 1), so this is not an edge case.
+
+Computing trajectories per shot and *concatenating* them is also wrong: two independently-solved
+trajectories meet at a seam with a discontinuity that does not exist today, because today the first shot's
+`x` simply covers the whole merged span.
+
+So the order is:
+
+1. build layouts with legacy `x`, exactly as today
+2. run `mergeAdjacentLayouts` on those, exactly as today - **the merged shot list is byte-identical to v2**
+3. build one clip-wide list of target samples, each `{ t, cx }`, where `cx` is the bbox midpoint of the
+   selected group of whichever *detector* shot contains `t`
+4. for each merged `single` shot, slice that list to `[start, end)` and run the controller **once** over the
+   slice
+
+The controller therefore sees a target path that may step at a detector-shot seam inside a merged span, and
+the deadzone decides what to do with the step: a soft cut that barely moves the subject leaves the camera
+still, a cut that moves them a long way eases the camera across. That is the intended behaviour and it is
+strictly better than today, where the second shot's framing is simply discarded.
+
+Merging still decides on `x` alone, so no motion consideration can change which shots merge.
+
+### 4.6 Fallbacks
 
 | condition | behaviour |
 |---|---|
@@ -213,6 +243,12 @@ no xs / degenerate xs    -> read x
 | path yields fewer than 2 keyframes | emit `x` only, no `xs` |
 | controller proposes more than 200 keyframes | **omit `xs`, emit `x` only.** Never truncate a trajectory - a truncated ramp parks the camera somewhere no rule chose. |
 | global | `REFRAME_MOTION` off by default, the `REFRAME_STREAM` pattern |
+
+**One more consumer, found while planning.** `sliceCropPlan` re-windows a stored plan for `renderTrim`, and
+it currently rejects any version that is not 1 or 2. It must accept 3 and shift `xs` timestamps by the same
+offset it applies to `start` and `end`, dropping keyframes outside the range and keeping the trajectory
+anchored at the new boundaries. A v3 plan that slices into a v3 plan with stale keyframe times would move the
+camera to positions belonging to a different part of the clip.
 
 ---
 
