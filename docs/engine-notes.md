@@ -1411,6 +1411,56 @@ same segment inside two clips.
 
 ---
 
+## 8b. The judge panel, and what it cannot see (measured 2026-08-05)
+
+`clip-editor` and `clip-viewer` have now judged the same sitcom set three times. **Read this before
+running them again, and before reading anything into a single run.**
+
+| | 08-04, 12 clips | 08-05 midday, 10 clips | 08-05 evening, 10 clips |
+|---|---|---|---|
+| `publish` | 0 | 0 | 0 |
+| `publish after one fix` | 4 | 6 | 6 |
+| `bin it` | 8 | 4 | 4 |
+| mean viewer score | 3.2 | 3.1 | 3.0 |
+| `like` reactions | 1 | 1 | 0 |
+
+**The midday and evening sets differ in subtitles and nothing else.** Clip boundaries, titles and
+`cropPlan` are byte-identical - verified in SQL before judging. The aggregate did not move.
+
+**Per-clip verdicts are about 40% unstable.** Four of ten flipped with the picture unchanged: clips 03
+and 05 went `publish after one fix` to `bin it`, clips 06 and 09 went the other way. The aggregate held
+at 0/6/4 across all three runs anyway. **So the panel's resolution is coarser than any single fix
+shipped so far, and the programme's gate - three `publish` and mean >= 6 - cannot be evaluated from one
+run per clip.** Either judge each clip several times, or read only the aggregate and only when it moves
+by more than one clip.
+
+**The panel is structurally blind to the subtitle repair.** A judge sees six frames from a clip
+carrying roughly thirty cues, and a frame shows one cue. Once `chunkWords` splits a sentence across
+three cues, every individual frame looks truncated whether or not a word was lost. Two judges asserted
+the loss was still happening; both were checked against the stored cue track and both were wrong:
+
+```
+clip 08  "think I'm about" | "to leave."          the words are there, split by the 3-word chunker
+clip 09  "Yeah Dewey"      | "Cheatham and Howe"  the punchline is in the next cue
+```
+
+The clip-09 viewer wrote that "the one thing the clip exists for is destroyed by its own subtitles".
+It was in a frame they were not shown. **A defect that only a full playback can see must not be
+measured with a frame strip** - the corpus metric and a rendered burn are the instruments for that.
+
+**What the panel does say stably, across all three runs.** The dead first frame (6 of 10 viewers would
+swipe on frame 1 alone), fragmentary cues (10 of 10, and now purely the chunker rather than the drop),
+missing context - "who is Bing", "who is Monica", "what show is this" - and ends that stop before the
+reaction (editors ask for a later out-point on 6 of 10).
+
+**What this says about today's three engine fixes.** Reframe geometry, clip endings and the subtitle
+restore all shipped and all are verified by their own measurements. None of them is visible in this
+panel's aggregate. That is a statement about the panel, not about the fixes - but it also means the
+panel cannot be the thing that tells us the product got better. The owner's own eye on a real upload
+remains the only instrument that has ever moved a decision here (§5b).
+
+---
+
 ## 9. Where the product actually stands
 
 Measured 2026-07-25: **95 registered users, 3 have ever run a job, 8 jobs total, 38 clips ever made.** 92 of
