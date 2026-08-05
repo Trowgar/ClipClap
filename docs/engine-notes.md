@@ -434,6 +434,71 @@ changes WHICH clips reach the last two stages. Budget a topup for those, and exp
 to re-title and re-trim the WHOLE set, not just the new clip - most of the lines in those four snapshot diffs
 are that, not the change under review.
 
+### The mid-clause end defect: looking THROUGH an opaque node is inert (2026-08-05)
+
+`isCleanEnd` certifies a node as a clean end whenever the NEXT node is opaque, justified in its doc comment as
+"music follows". The justification is wrong - `hasWords=false` means Whisper's word timings were unreliable
+(laughter, crosstalk, an unintelligible stretch), and the speaker usually continues. This is the defect behind
+`eval-regressions`' "no clip ends mid-clause on a dangling comma", red at `efc007f` on exactly three shipped
+clips: podcast-ecology 1905.71-1945.76 and podcast-answer-arc 1905.71-1945.76 both ending `"корабли,"`, and
+podcast-answer-arc 2956.44-2976.06 ending `"воде,"`.
+
+**THE OBVIOUS FIX IS A NO-OP. Measured, not reasoned.** The natural repair - when the next node is opaque, look
+THROUGH it to the next word-bearing node and apply `isCleanStart` there - fixes NONE of the three, and changes
+NOTHING anywhere. Dark-stage replay (finalizer and end extension held off on both sides, so no recorded prompt
+can move) is byte-identical to baseline on all four fixtures: 12 / 12 / 11 / 9 clips, same ranges, same titles,
+same snap drop reasons. It is not inert for lack of reach either - it flips 48 / 49 / 26 / 12 word-bearing
+nodes from clean to dirty across the four graphs. It simply never touches a node any clip ends on.
+
+**Why it cannot work, and this is the part worth keeping.** `isCleanStart` contains the SAME opaque-adjacency
+assumption:
+
+```
+const boundaryOk = n.leadingStrength >= 0.8 || (index > 0 && nodes[index - 1].hasWords === false);
+```
+
+The node you reach by looking through a gap is BY CONSTRUCTION preceded by an opaque node, so `boundaryOk` is
+automatically true and the only surviving test is capitalization. Looking through therefore deletes the
+assumption from one function and immediately re-consumes it from the other. In all three offenders the
+post-gap node is a genuinely new capitalized sentence (ecology #579 / answer-arc #586 "Человек же все таки
+приостановил...", answer-arc #844 "Позвоночник стал балкой..."), so it is certified clean and the offender
+survives.
+
+**The continuation is INSIDE the opaque node, which is why looking past it is the wrong direction.** ecology
+#576 ends "Без разумного вида строящего космические корабли"; the missing predicate is the opaque #577,
+`"любая биосфера обречена, срок ее жизни ограничен сроком жизни звезды."` Same shape at answer-arc #841 ->
+opaque #842 `"нагрузки на него были на сжатие."` Opaque nodes carry Whisper's PUNCTUATED segment text (§5a: only
+2 of 609 word-bearing nodes carry a mark), so the opaque node is the one place the continuation is legible at
+all. The rule has to read it, not skip it.
+
+**The rule that does work, measured but NOT shipped:** when the next node is opaque, the end is clean unless
+that opaque node's own text starts lowercase (`!startsLowercase(nodes[index + 1].text)`). It kills all three
+offenders. Dark-stage replay, four fixtures, base:
+
+| fixture | clips before | clips after | new `no_clean_end` snap drops |
+|---|---|---|---|
+| podcast-ecology | 12 | 12 | +1 (c21 @0.86) |
+| podcast-answer-arc | 12 | 12 | +3 (c35 @0.72, c22 @0.78, c23 @0.84) |
+| sitcom-friends | 11 | 11 | 0 |
+| creator-challenge | 9 | 9 | 0 |
+
+**READ THAT TABLE CAREFULLY: the offenders are DROPPED, not repaired.** Snap's clean-end repair walks backward
+to the latest clean end at or after the payoff, then forward within `SENTENCE_SLACK_SEC` (3s). Behind ecology
+#576 there is no clean end at or after the payoff, and forward the next word-bearing node is #579 at 1962.08s,
+16.6s past - far outside the slack. So the clip dies as `no_clean_end` and the soft cap backfills a lower-ranked
+clip. The shipped COUNT is unchanged only because all four fixtures had surplus; a source without surplus would
+lose clips outright. 4 new drops across the suite is the number that decides whether this ships, and it is a
+product call, not an engineering one.
+
+**The strictest variant measured** (also refuse when any node in the opaque RUN starts lowercase, then still
+look through) costs a fifth drop on ecology (c10 @0.84) and moves a second shipped clip; it buys nothing over
+the simple rule on these four sources.
+
+**Cost of this measurement: zero.** No topup was needed and none was bought. `isCleanEnd` has exactly two
+consumers, `snapNodes` and `applyExtension`, and neither `prompts.ts` marker path nor the scanner/critic
+prompts read it - so with the finalizer and end extension dark, a clean-end change moves no request hash at
+all. That control is what makes this comparison free, and it is reusable for any future boundary-only change.
+
 ---
 
 ## 4. Approaches that were tried and failed
