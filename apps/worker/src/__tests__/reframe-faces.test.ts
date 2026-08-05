@@ -84,3 +84,40 @@ describe("camRect in the sidecar contract", () => {
     expect(() => parseDetectorOutput(raw, 1)).toThrow("detector_invalid_json");
   });
 });
+
+describe("parseDetectorOutput path", () => {
+  const track = (extra: string) =>
+    `{"shots":[{"shotIndex":0,"tracks":[{"id":0,"box":{"x":1,"y":2,"w":3,"h":4},` +
+    `"score":0.9,"samples":2,"mouthActivity":0.05${extra}}]}]}`;
+
+  it("accepts a track with no path at all", () => {
+    const out = parseDetectorOutput(track(""), 1);
+    expect(out[0].tracks[0].path).toBeUndefined();
+  });
+
+  it("parses a well-formed path", () => {
+    const out = parseDetectorOutput(
+      track(`,"path":[{"t":0,"x":1,"y":2,"w":3,"h":4}]`),
+      1
+    );
+    expect(out[0].tracks[0].path).toEqual([{ t: 0, x: 1, y: 2, w: 3, h: 4 }]);
+  });
+
+  it("rejects a path entry missing a field", () => {
+    expect(() =>
+      parseDetectorOutput(track(`,"path":[{"t":0,"x":1,"y":2,"w":3}]`), 1)
+    ).toThrow("detector_invalid_json");
+  });
+
+  it("rejects a path that is not an array", () => {
+    expect(() => parseDetectorOutput(track(`,"path":5`), 1)).toThrow(
+      "detector_invalid_json"
+    );
+  });
+
+  it("rejects a non-finite coordinate rather than passing NaN downstream", () => {
+    expect(() =>
+      parseDetectorOutput(track(`,"path":[{"t":0,"x":null,"y":2,"w":3,"h":4}]`), 1)
+    ).toThrow("detector_invalid_json");
+  });
+});
