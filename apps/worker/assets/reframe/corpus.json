@@ -1,0 +1,23 @@
+{
+  "outDir": ".corpus",
+  "items": [
+    { "id": "podcast-2p",   "url": "", "in": "00:00:00", "len": 90,
+      "tests": "two people seated, shifting and leaning - the core case" },
+    { "id": "sitcom-multi", "url": "", "in": "00:00:00", "len": 90,
+      "tests": "multi-camera scripted comedy - closest to our only real user material" },
+    { "id": "lockedoff-1p", "url": "", "in": "00:00:00", "len": 90,
+      "tests": "single talking head, camera locked off - MUST NOT MOVE, the false-positive control" },
+    { "id": "vlog-mixed",   "url": "", "in": "00:00:00", "len": 120,
+      "tests": "talking head, then street, then a phone screen - mixed material at shot level" },
+    { "id": "stream-cam",   "url": "", "in": "00:00:00", "len": 90,
+      "tests": "gameplay with a webcam inset - stream layout regression" },
+    { "id": "gameplay",     "url": "", "in": "00:00:00", "len": 90,
+      "tests": "no faces - byte-identical regression guard" },
+    { "id": "sports",       "url": "", "in": "00:00:00", "len": 90,
+      "tests": "no anchorable faces - byte-identical regression guard" },
+    { "id": "screencast",   "url": "", "in": "00:00:00", "len": 90,
+      "tests": "screen recording - byte-identical regression guard" },
+    { "id": "animation",    "url": "", "in": "00:00:00", "len": 90,
+      "tests": "stylised faces YuNet is expected to miss - byte-identical regression guard" }
+  ]
+}
