@@ -1,7 +1,9 @@
 # In-Point Repair: The Black Opening Frame
 
 **Date:** 2026-08-05
-**Status:** Draft - awaiting owner review
+**Status:** Draft - **ON HOLD. See §1a: the defect fires once in 73 measured clips, and never on a
+clip a real user received.** The design below is sound and the measurement is the reason to wait,
+not to rewrite it. Revisit when a source with a black leader reaches production.
 **Scope:** RENDER stage only. Adds a new module `apps/worker/src/inpoint/` and moves one variable
 inside the highlights loop of `apps/worker/src/stages/render.ts`. Does **not** touch ANALYZE, the
 `reframe` module, the queue, the Prisma schema, or any user-facing surface.
@@ -66,6 +68,40 @@ audit recorded *"11 of 12 clips open on a frame that loses the viewer"*
 That was a subjective judgement covering black frames, letterboxed wide shots, backs of heads and
 empty rooms. Measured mechanically, only **one** clip in ten opens black. This design repairs that
 one case and claims nothing about the others.
+
+## 1a. How often this fires, measured across every source we still hold
+
+Asked by the owner on 2026-08-05: does this work on one video and one clip only? The probe was run
+over **every clip in-point in the database whose source artifact still exists** - 73 in-points across
+four distinct source videos.
+
+| Clip set | Source | Clips | Black run at the in-point |
+|---|---|---|---|
+| `cmscht6rp` real user upload | IMG_1900 (the sitcom compilation) | 12 | **0** |
+| `cmsd6vaop` real user upload | IMG_2228 | 7 | **0** |
+| `cms7jhcbz` real user upload | videoplayback | 11 | **0** |
+| `cmsdlw9mt` real user upload | 1280x720 | 1 | **0** |
+| `cmsei6r19` eval render (the audited set) | IMG_1900 | 12 | 1 |
+| `cmsf9puh4` eval render | IMG_1900 | 9 | **0** |
+| `cmseznc0l` eval render, end-extension | IMG_1900 | 11 | 1 |
+| `cmsg4y7rw` eval render | IMG_1900 | 10 | 1 |
+
+**The three hits are one moment counted three times.** All three eval renders open their first clip
+at exactly t=0.0, and the file IMG_1900 begins with eight frames of black. So the defect is not
+"clips open on black frames" - it is "a clip that starts at the very beginning of a video inherits
+that file's own black leader".
+
+**Across the 31 clips that real users actually received, there are zero black in-points.**
+
+This does not make the design wrong. It makes it premature: the mechanism is general, the rule has
+no source-specific constant in it, and the repair would work the first time a user uploads a file
+with a black leader and the engine picks a highlight at its start. But nothing measured justifies
+building it now, and the same effort spent on the burned-in subtitle fragments - which every judge
+flagged on every clip, and which a user cannot fix because they are pixels - buys more.
+
+**Do not read the audit's "11 of 12 clips open on a frame that loses the viewer" as contradicting
+this.** That figure counted wide shots, backs of heads and empty rooms as well. Of those eleven,
+exactly one was black.
 
 ## 2. Fixed product decisions
 
