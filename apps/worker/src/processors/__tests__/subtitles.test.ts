@@ -439,3 +439,108 @@ describe("restoreDroppedWords - tail", () => {
     expect(out.words).toEqual(words);
   });
 });
+
+describe("restoreDroppedWords - head", () => {
+  it("restores the first word, the Russian shape of the defect", () => {
+    // Verbatim from job cms7jhcbz0003nb7fkfdki0lp
+    const words = [
+      { text: "хорошая", start: 5.4, end: 5.9 },
+      { text: "компания", start: 5.9, end: 6.4 },
+      { text: "подбирается", start: 6.4, end: 7.1 },
+    ];
+    const out = restoreDroppedWords(
+      "Там хорошая компания подбирается.",
+      words,
+      5.0,
+      7.1
+    );
+    expect(out.outcome).toBe("head");
+    expect(out.words).toHaveLength(4);
+    expect(out.words[0]).toEqual({ text: "Там", start: 5.0, end: 5.4 });
+    expect(out.words[1].text).toBe("хорошая");
+  });
+
+  it("merges into the first word when there is no gap, the common head shape", () => {
+    // Verbatim from job cms2c8ahm000droa7tcqh30ho. 500 of 560 measured head
+    // drops have a gap of exactly 0.000, so this - not the branch above - is
+    // what nearly all real traffic takes.
+    const words = [
+      { text: "сексом", start: 34.74, end: 35.14 },
+      { text: "и", start: 35.14, end: 35.36 },
+      { text: "заботиться", start: 35.36, end: 35.66 },
+      { text: "о", start: 35.66, end: 35.9 },
+      { text: "младенчиках", start: 35.9, end: 36.46 },
+    ];
+    const out = restoreDroppedWords(
+      "Заниматься сексом и заботиться о младенчиках.",
+      words,
+      34.74,
+      36.46
+    );
+    expect(out.outcome).toBe("head");
+    expect(out.words).toHaveLength(5);
+    expect(out.words[0]).toEqual({
+      text: "Заниматься сексом",
+      start: 34.74,
+      end: 35.14,
+    });
+  });
+
+  it("merges a gap that is real but under the floor", () => {
+    // Verbatim from job cms2c8ahm000droa7tcqh30ho. 0.06s of head room: too
+    // little to be a duration, and unlike the tail side this band is populated
+    // - 14 measured head drops sit strictly between 0 and the floor, so the
+    // floor decides real segments here rather than being decorative.
+    const words = [
+      { text: "для", start: 967.28, end: 967.4 },
+      { text: "человека", start: 967.4, end: 967.8 },
+      { text: "это", start: 967.8, end: 968.02 },
+      { text: "проблема", start: 968.02, end: 968.48 },
+    ];
+    const out = restoreDroppedWords(
+      "Естественно, для человека это проблема.",
+      words,
+      967.22,
+      968.48
+    );
+    expect(out.outcome).toBe("head");
+    expect(out.words).toHaveLength(4);
+    // The comma at the seam is NOT kept: the split ends after the last missing
+    // letter, so punctuation separating the restored span from the timed words
+    // lands in the other half and is trimmed. 83 of 560 head drops lose one
+    // this way. The shipped tail branch loses leading punctuation on 79 of 743
+    // by the same mechanism, so this pins the symmetry rather than a fix - the
+    // seam belongs to both branches at once.
+    expect(out.words[0]).toEqual({
+      text: "Естественно для",
+      start: 967.28,
+      end: 967.4,
+    });
+  });
+
+  it("strips leading whitespace off the restored head", () => {
+    // The head split never leaves TRAILING space - it ends on a letter - so the
+    // only thing trim() can remove here is a leading space on the segment text.
+    // That is 0 of 560 in the current corpus, but it is exactly the shape
+    // Whisper's verbose_json emits, and without this the trim is untested: the
+    // mutation that deletes it survived the rest of the suite.
+    const out = restoreDroppedWords(
+      " Там хорошая компания.",
+      [
+        { text: "хорошая", start: 5.4, end: 5.9 },
+        { text: "компания", start: 5.9, end: 6.4 },
+      ],
+      5.0,
+      6.4
+    );
+    expect(out.outcome).toBe("head");
+    expect(out.words[0]).toEqual({ text: "Там", start: 5.0, end: 5.4 });
+  });
+
+  it("reports unresolved when both ends are missing and changes nothing", () => {
+    const words = [{ text: "middle", start: 1.0, end: 1.5 }];
+    const out = restoreDroppedWords("start middle end", words, 0.5, 2.0);
+    expect(out.outcome).toBe("unresolved");
+    expect(out.words).toEqual(words);
+  });
+});

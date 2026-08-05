@@ -95,9 +95,12 @@ export type RestoreOutcome = "none" | "head" | "tail" | "unresolved";
 // Below this, the gap between the segment boundary and the nearest timed word
 // is too small to be a duration. The text is merged into its neighbour rather
 // than given a made-up one. The gap is exactly 0 in 698 of 743 measured drops
-// and >= 0.08 in the other 45 - nothing in between, so the exact value is not
-// load-bearing today, and the merge is the common path rather than the
-// exception the name suggests.
+// and >= 0.08 in the other 45 - nothing in between, so on that side the exact
+// value is not load-bearing. On the head side it is: of 560 measured head
+// drops 500 have a gap of exactly 0 and 14 more sit strictly between 0 and
+// 0.08, the smallest at 0.020, so moving this floor changes what real segments
+// do. Either way the merge is the common path rather than the exception the
+// name suggests - 514 of 560 heads and 698 of 743 tails take it.
 const MIN_RESTORED_SEC = 0.08;
 
 /**
@@ -134,6 +137,7 @@ export function restoreDroppedWords(
   // split run one character too far and eat the next word's first letter,
   // restoring "ord" for "word".
   const wordChars = [...flatWords].length;
+  const textChars = [...flatText].length;
 
   if (flatText.startsWith(flatWords)) {
     const missing = splitAtComparable(text, wordChars)[1].trim();
@@ -161,6 +165,37 @@ export function restoreDroppedWords(
         { ...last, text: `${last.text} ${missing}` },
       ],
       outcome: "tail",
+    };
+  }
+
+  if (flatText.endsWith(flatWords)) {
+    // The count is what the timed words do NOT cover, so the head split keeps
+    // exactly the missing characters. The tail branch spends wordChars because
+    // there the timed words come first; here they come last.
+    const missing = splitAtComparable(text, textChars - wordChars)[0].trim();
+    // Unreachable for the same reason as the tail branch's guard, and
+    // "unresolved" for the same reason: a desync between the two helpers must
+    // not pass for a healthy segment.
+    if (!missing) return { words, outcome: "unresolved" };
+    const first = words[0];
+    if (first.start - segStart >= MIN_RESTORED_SEC) {
+      return {
+        words: [
+          { text: missing, start: segStart, end: first.start },
+          ...words,
+        ],
+        outcome: "head",
+      };
+    }
+    return {
+      words: [
+        // Merged into the FIRST word rather than given a duration, the mirror
+        // of the tail branch. The space carries the same CJK caveat noted
+        // there.
+        { ...first, text: `${missing} ${first.text}` },
+        ...words.slice(1),
+      ],
+      outcome: "head",
     };
   }
 
