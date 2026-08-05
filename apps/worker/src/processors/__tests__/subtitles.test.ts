@@ -381,6 +381,50 @@ describe("restoreDroppedWords - tail", () => {
     expect(out.words[5]).toEqual({ text: "the morning,", start: 1.0, end: 1.2 });
   });
 
+  it("merges when the last word ends exactly on the segment boundary", () => {
+    // 698 of 743 measured drops look like this - Whisper's last timed word
+    // ends on the boundary, leaving no room at all. This is the common path,
+    // not the exception the constant's name suggests.
+    const out = restoreDroppedWords(
+      "We think Chandler might be having an affair.",
+      [
+        { text: "We", start: 10.0, end: 10.2 },
+        { text: "think", start: 10.2, end: 10.5 },
+        { text: "Chandler", start: 10.5, end: 10.9 },
+        { text: "might", start: 10.9, end: 11.1 },
+        { text: "be", start: 11.1, end: 11.3 },
+        { text: "having", start: 11.3, end: 11.7 },
+        { text: "an", start: 11.7, end: 12.6 },
+      ],
+      10.0,
+      12.6
+    );
+    expect(out.outcome).toBe("tail");
+    expect(out.words).toHaveLength(7);
+    expect(out.words[6]).toEqual({ text: "an affair.", start: 11.7, end: 12.6 });
+  });
+
+  it("never invents a negative duration when a word outruns the segment end", () => {
+    // transcribe.ts assigns words to segments by time overlap, so a word
+    // straddling a boundary lands in both and can end after its own segment.
+    // 157 such segments exist in the corpus. The negative gap falls into the
+    // merge, which reuses the word's own timings and cannot go backwards.
+    const out = restoreDroppedWords(
+      "We think an affair.",
+      [
+        { text: "We", start: 10.0, end: 10.2 },
+        { text: "think", start: 10.2, end: 10.5 },
+        { text: "an", start: 10.5, end: 12.9 },
+      ],
+      10.0,
+      12.6
+    );
+    expect(out.outcome).toBe("tail");
+    expect(out.words).toHaveLength(3);
+    expect(out.words[2]).toEqual({ text: "an affair.", start: 10.5, end: 12.9 });
+    for (const w of out.words) expect(w.end).toBeGreaterThanOrEqual(w.start);
+  });
+
   it("changes nothing when the mismatch is at neither end", () => {
     // Whisper timed a word the text does not contain, so the drift is interior:
     // no prefix and no suffix agrees, and there is no honest place to put it.

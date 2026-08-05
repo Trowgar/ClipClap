@@ -94,7 +94,10 @@ export type RestoreOutcome = "none" | "head" | "tail" | "unresolved";
 
 // Below this, the gap between the segment boundary and the nearest timed word
 // is too small to be a duration. The text is merged into its neighbour rather
-// than given a made-up one.
+// than given a made-up one. The gap is exactly 0 in 698 of 743 measured drops
+// and >= 0.08 in the other 45 - nothing in between, so the exact value is not
+// load-bearing today, and the merge is the common path rather than the
+// exception the name suggests.
 const MIN_RESTORED_SEC = 0.08;
 
 /**
@@ -110,8 +113,9 @@ const MIN_RESTORED_SEC = 0.08;
  * (8 of 133 measured spans do, the worst holding nine). Splitting it would need
  * a per-word timestamp that nothing here can honestly produce; the cost is a
  * cue that can exceed the chunker's character limit, and that is bounded by
- * what already ships - the wordless fallback path draws cues of median 46 and
- * up to 103 characters today.
+ * what already ships - over all 1866 cues in the corpus the wordless fallback
+ * path draws median 30 and up to 115 characters, and a restored entry tops out
+ * at 54.
  */
 export function restoreDroppedWords(
   text: string,
@@ -129,12 +133,15 @@ export function restoreDroppedWords(
   // alphanumerics. Measured before the fix: a one-letter astral word made the
   // split run one character too far and eat the next word's first letter,
   // restoring "ord" for "word".
-  const textChars = [...flatText].length;
   const wordChars = [...flatWords].length;
 
   if (flatText.startsWith(flatWords)) {
     const missing = splitAtComparable(text, wordChars)[1].trim();
-    if (!missing) return { words, outcome: "none" };
+    // Unreachable: the two guards above mean the tail holds at least one
+    // comparable character, which cannot trim away. Kept as insurance against
+    // the helpers desyncing, which has now happened twice - and if it does,
+    // "unresolved" makes it visible instead of passing for a healthy segment.
+    if (!missing) return { words, outcome: "unresolved" };
     const last = words[words.length - 1];
     if (segEnd - last.end >= MIN_RESTORED_SEC) {
       return {
@@ -145,6 +152,12 @@ export function restoreDroppedWords(
     return {
       words: [
         ...words.slice(0, -1),
+        // The space is wrong for Japanese, Chinese and Thai, and is left that
+        // way deliberately: segmentsToCues and karaokeText already join CJK
+        // with spaces, so fixing it here alone changes nothing visible. What
+        // makes it worth labelling is that every other space in the pipeline is
+        // applied at render time and can be undone there, while this one is
+        // baked into a word's text and would outlive a render-seam fix.
         { ...last, text: `${last.text} ${missing}` },
       ],
       outcome: "tail",
