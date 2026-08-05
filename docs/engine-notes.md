@@ -1461,6 +1461,71 @@ remains the only instrument that has ever moved a decision here (§5b).
 
 ---
 
+## 8c. SUBTITLES: the chunker stopped filling and started choosing (fixed 2026-08-05)
+
+A separate defect from 8a, measured at the same time and repeatedly confused with it. 8a was about a word
+that was never drawn. This is about the words that were drawn, arranged badly.
+
+`chunkWords` filled each cue to `MAX_CHUNK_WORDS = 3` / `MAX_CHUNK_CHARS = 18` and then started a new one.
+A four-word segment therefore became three words and then one, and that one flashed for exactly as long as
+it took to say. **936 of 4083 cues held a single word, and 537 of those were on screen for under half a
+second.**
+
+The limits were never the problem. The greed was.
+
+**What replaced it.** The number of cues is fixed FIRST, at the fewest the same hard limits allow - which is
+exactly what the greedy fill produced, so the number of times the text changes is unchanged and the pace of
+the subtitles is untouched. Then the words are distributed among that many cues by a small dynamic program
+minimising three terms:
+
+| term | what it costs |
+|---|---|
+| `W_EVEN` 1 | squared distance from an equal share of the words |
+| `W_FLASH` 2 | squared shortfall against `MIN_CUE_SEC` = 0.5s on screen |
+| `W_BREAK` 0.5 | paid when a cue ends on a 1-2 letter word, refunded at punctuation |
+
+Measured over 4000 cues from all 124 clips, reproducible with
+`apps/worker/src/scripts/eval-subtitle-cues.ts`, which reprints the greedy fill it is measured against:
+
+| | before | after |
+|---|---|---|
+| single-word cues | 23.4% | **11.7%** |
+| on screen under 0.35s | 11.6% | **7.7%** |
+| single-word AND under 0.5s | 13.4% | **4.8%** |
+| ends on a 1-2 letter word | 15.9% | **9.2%** |
+| cue count | 4000 | 4000 |
+| median time on screen | 0.70s | 0.72s |
+
+**The break term carries no word list, in any language.** A one-or-two-letter word is a preposition,
+conjunction or article in every language this product transcribes, so `эволюция шла в` / `сторону` is caught
+without knowing any Russian. A word list would be more precise and would need maintaining in six languages,
+and this is a tiebreak, not a parser.
+
+**The character budget was measured against the real burn, not assumed.** At font size 100 in the shipped
+style: 19 Cyrillic characters sit comfortably inside the 1080-wide frame, 26 touch both edges, 18 of the
+font's widest glyph overflow it, and 31 Latin characters wrap to two lines and read fine. **18 is safe
+rather than tight.** Raising it to 4 words / 24 characters was simulated on the same corpus and gives
+single-word 4.8%, under-0.35s 4.0% and a median of 0.94s - but it also drops the cue count from 4000 to 3119,
+which is a 22% slower subtitle pace. That is a look decision and is deliberately left to the owner.
+
+**Two traps, both hit while writing the tests for this.**
+
+1. **A test whose expected split is also the tie-break default proves nothing.** Both break-term tests
+   originally expected 2+3, which is what this chunker produces when the cost function is indifferent, so
+   both passed with `W_BREAK` set to zero. Build the fixture so the term has to OVERCOME the default.
+2. **Check both arrangements are legal before claiming a term chose between them.** The second attempt used
+   `"понятно. Идём дальше"` - 20 characters, over the limit - so 2+3 was never available and the test was
+   measuring the character limit while claiming to measure punctuation.
+
+Everything except one mutation is killed by the suite. `j < n` in the break term can be widened to `j <= n`
+with no test failing, and that is an equivalent mutant rather than a gap: every path ends at `n`, so judging
+the final word adds the same constant to all of them and cannot move the argmin.
+
+**Not fixed by this and still true:** 81 of 4083 cues take the wordless fallback path, drawing a whole
+segment at a median of 52 and a maximum of 106 characters. Those segments have no word timings to chunk.
+
+---
+
 ## 9. Where the product actually stands
 
 Measured 2026-07-25: **95 registered users, 3 have ever run a job, 8 jobs total, 38 clips ever made.** 92 of
