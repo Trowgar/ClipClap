@@ -481,6 +481,26 @@ describe("restoreDroppedWords - tail", () => {
     expect(out.words[0]).toEqual({ text: "Nice, bro.", start: 42.24, end: 42.96 });
   });
 
+  it("does not draw punctuation the timed word already carries", () => {
+    // Whisper attaches punctuation to word tokens - 2023 of 75378 in the corpus
+    // - and the span rules anchor on comparable characters, so they cannot see
+    // it. Without this the closing guillemet is drawn twice: "жизнь»»".
+    const out = restoreDroppedWords(
+      "«Это наша жизнь» каждый месяц.",
+      [
+        { text: "«Это", start: 0, end: 0.3 },
+        { text: "наша", start: 0.3, end: 0.6 },
+        { text: "жизнь»", start: 0.6, end: 1.0 },
+      ],
+      0,
+      2.0
+    );
+    expect(out.outcome).toBe("tail");
+    expect(out.words).toHaveLength(4);
+    expect(out.words[2]).toEqual({ text: "жизнь»", start: 0.6, end: 1.0 });
+    expect(out.words[3]).toEqual({ text: "каждый месяц.", start: 1.0, end: 2.0 });
+  });
+
   it("merges a span that continues the adjacent word, however much room there is", () => {
     // "во-первых" is one word Whisper tokenised in two. A separate entry would
     // put a space inside the word and give half of it its own karaoke
@@ -680,6 +700,21 @@ describe("restoreDroppedWords - head", () => {
       start: 967.22,
       end: 967.5,
     });
+  });
+
+  it("does not draw punctuation the timed word already carries", () => {
+    // The head mirror: the opening guillemet is part of the "«Наука" token, so
+    // the head span must not bring its own copy - "Он читал ««Наука".
+    const words = [
+      { text: "«Наука", start: 1.0, end: 1.5 },
+      { text: "и", start: 1.5, end: 1.6 },
+      { text: "жизнь».", start: 1.6, end: 2.2 },
+    ];
+    const out = restoreDroppedWords("Он читал «Наука и жизнь».", words, 0, 2.2);
+    expect(out.outcome).toBe("head");
+    expect(out.words).toHaveLength(4);
+    expect(out.words[0]).toEqual({ text: "Он читал", start: 0, end: 1.0 });
+    expect(out.words[1]).toEqual({ text: "«Наука", start: 1.0, end: 1.5 });
   });
 
   it("gives an opening mark to the word it opens, not to the span before it", () => {

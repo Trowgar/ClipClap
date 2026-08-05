@@ -142,6 +142,36 @@ function divideSeam(run: string): { left: string; right: string; isWordBoundary:
   };
 }
 
+/** Drops from a seam run the punctuation the adjacent timed word already
+ *  carries, so it is not drawn twice.
+ *
+ *  Whisper attaches punctuation to word tokens - 2023 of 75378 corpus tokens
+ *  carry some - while the span rules anchor on comparable characters and cannot
+ *  see it. A token of `"жизнь»"` beside a span of `"» каждый месяц."` burns
+ *  "жизнь»»" into the video, and a burned glyph cannot be repaired downstream.
+ *  Zero occurrences today against 1362 drop boundaries, but 45 tokens have the
+ *  enabling shape.
+ *
+ *  Code points, never UTF-16 units, so a surrogate pair is never half-matched.
+ *  Only the run is searched, never the span's words: a comparable character is
+ *  by construction absent from the timed side, so an overlap reaching one would
+ *  mean the two helpers had desynced. */
+function dropCarriedPunctuation(
+  run: string,
+  neighbour: string,
+  edge: "leading" | "trailing"
+): string {
+  const cps = [...run];
+  for (let n = cps.length; n > 0; n -= 1) {
+    if (edge === "leading") {
+      if (neighbour.endsWith(cps.slice(0, n).join(""))) return cps.slice(n).join("");
+    } else if (neighbour.startsWith(cps.slice(cps.length - n).join(""))) {
+      return cps.slice(0, cps.length - n).join("");
+    }
+  }
+  return run;
+}
+
 /**
  * Puts back the head or tail of a segment that Whisper transcribed but never
  * timed. `segmentsToCues` builds cue text from `words[]` alone, so anything
@@ -199,7 +229,9 @@ export function restoreDroppedWords(
     // the helpers desyncing, which has now happened twice - and if it does,
     // "unresolved" makes it visible instead of passing for a healthy segment.
     if (!body) return { words, outcome: "unresolved" };
-    const { left, right, isWordBoundary } = divideSeam(run);
+    const { left, right, isWordBoundary } = divideSeam(
+      dropCarriedPunctuation(run, last.text, "leading")
+    );
     // The seam decides whether there are two words here at all, and only then
     // does the gap decide whether the second can be timed on its own.
     // MIN_RESTORED_SEC answers "can this word have an entry of its own", which
@@ -256,7 +288,9 @@ export function restoreDroppedWords(
     // The mirror of the tail branch, asking its two questions in the same order
     // for the same reasons - the seam first, the gap second. "Во-" is not a
     // word, however much head room there is.
-    const { left, right, isWordBoundary } = divideSeam(run);
+    const { left, right, isWordBoundary } = divideSeam(
+      dropCarriedPunctuation(run, first.text, "trailing")
+    );
     if (isWordBoundary && first.start - segStart >= MIN_RESTORED_SEC) {
       return {
         words: [
