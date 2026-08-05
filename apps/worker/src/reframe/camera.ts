@@ -84,6 +84,17 @@ export function solveCamera(
     if (!moving && Math.abs(err) > deadzone) moving = true;
     if (moving) {
       const step = Math.sign(err) * Math.min(Math.abs(err), maxSpeed * dt);
+      // The even rounding here is NOT what makes the render safe, and a reader
+      // who assumes it is will draw the wrong conclusion. The filtergraph
+      // interpolates linearly BETWEEN these keyframes, so the rendered x(t) is
+      // fractional at almost every t by construction - nothing done here can
+      // make the interpolated values even. Nor does it need to: measured on
+      // ffmpeg 8.0.1 against a yuv420p source, a fractional crop x is accepted
+      // without error and quantised to the nearest integer and then down to the
+      // nearest even pixel (x=101.4 renders as 100, x=101.5 as 102).
+      // What evenClamp buys is at the keyframes themselves: they stay exactly
+      // comparable with the legacy static x, which is evenClamp'd the same way,
+      // and the emitted av_expr stays free of long float tails.
       x = evenClamp(x + step, cropW, sourceWidth);
       if (Math.abs(desired - x) <= settle) moving = false;
     }

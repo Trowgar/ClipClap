@@ -43,7 +43,14 @@ describe("solveCamera", () => {
       ...Array.from({ length: 19 }, (_, i) => ({ t: 0.5 + i * 0.5, cx: 1100 })),
     ];
     const keys = solveCamera(targets, 0, CROP, W, 0, 10, DEFAULT_CAMERA)!;
-    const cap = DEFAULT_CAMERA.maxSpeedFrac * CROP;
+    // Pinned as a literal, and the cap below is hard-coded rather than read
+    // back from the config that was passed in. Deriving the bound from the
+    // object under test asserts nothing: mutation testing raised this default
+    // to 100 and the camera teleported at a measured 1748 px/s against a
+    // 101.5 px/s cap while this test stayed green, because the assertion moved
+    // with the mutation.
+    expect(DEFAULT_CAMERA.maxSpeedFrac).toBe(0.25);
+    const cap = 0.25 * CROP;
     for (let i = 1; i < keys.length; i++) {
       const dt = keys[i].t - keys[i - 1].t;
       const dx = Math.abs(keys[i].x - keys[i - 1].x);
@@ -121,6 +128,64 @@ describe("solveCamera", () => {
     const keys = solveCamera(targets, 437, CROP, W, 0, 20, DEFAULT_CAMERA);
     if (keys) {
       expect(keys.at(-1)!.x).toBe(keys.at(-2)!.x);
+    }
+  });
+
+  it("settles centred on the target, not merely inside the deadzone", () => {
+    // "comes to rest" above proves the camera stops. It does NOT prove it
+    // stopped in the right place: its target at cx=700 is reached by a single
+    // capped step that lands inside BOTH bands, so it passes whatever settle
+    // is. cx=720 separates them - desired x is 518, the first 50.75px step
+    // from 437 lands at 488, which is inside the 48.7px deadzone but outside
+    // the 16.2px settle band.
+    //
+    // Measured: with settle tighter than deadzone the camera keeps easing and
+    // comes to rest at 518, dead centre on the target. With settle raised to
+    // equal deadzone it stops at 488 and stays 30px off-centre for the rest of
+    // the shot - the subject sits permanently off to one side, and a sustained
+    // move becomes a stop-start step per sample instead of one smooth ramp.
+    //
+    // The 518 and the bound below are literals on purpose. Written as
+    // `DEFAULT_CAMERA.settleFrac * CROP` the bound would widen to 48.7 under
+    // exactly the mutation this test exists to catch, and 30 would pass.
+    const targets: TargetSample[] = [
+      ...still(640, 4),
+      ...Array.from({ length: 36 }, (_, i) => ({ t: 2 + i * 0.5, cx: 720 })),
+    ];
+    const keys = solveCamera(targets, 437, CROP, W, 0, 20, DEFAULT_CAMERA)!;
+    expect(keys.at(-1)!.x).toBe(518);
+    expect(Math.abs(keys.at(-1)!.x + CROP / 2 - 720)).toBeLessThanOrEqual(
+      0.04 * CROP
+    );
+  });
+
+  it("emits integer keyframes, even ones for every position it computes", () => {
+    // The clamp in the moving step is redundant for range - `desired` is
+    // already clamped and a step never overshoots it - so a mutation that
+    // deletes it leaves every keyframe inside the frame and "keeps every
+    // keyframe inside the frame" green. What it destroys is the rounding:
+    // the mutant emitted x values of 507.5 and 690.75.
+    //
+    // A held keyframe carries the caller's legacy x through verbatim, and this
+    // fixture passes a deliberately odd 437 to prove the controller does not
+    // quietly reshape it. The real planner supplies an evenClamp'd value, so
+    // in production every keyframe is even. Everything the controller computes
+    // itself must be even here.
+    const LEGACY = 437;
+    const ramp: TargetSample[] = [
+      ...still(640, 4),
+      ...Array.from({ length: 16 }, (_, i) => ({ t: 2 + i * 0.5, cx: 900 })),
+    ];
+    const edges: TargetSample[] = Array.from({ length: 20 }, (_, i) => ({
+      t: i * 0.5,
+      cx: i < 10 ? -500 : 5000,
+    }));
+    for (const targets of [ramp, edges]) {
+      const keys = solveCamera(targets, LEGACY, CROP, W, 0, 10, DEFAULT_CAMERA)!;
+      for (const k of keys) {
+        expect(Number.isInteger(k.x)).toBe(true);
+        expect(k.x === LEGACY || k.x % 2 === 0).toBe(true);
+      }
     }
   });
 });
