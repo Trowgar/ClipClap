@@ -194,11 +194,11 @@ export function restoreDroppedWords(
   words: SubtitleWord[],
   segStart: number,
   segEnd: number
-): { words: SubtitleWord[]; outcome: RestoreOutcome } {
-  if (words.length === 0) return { words, outcome: "none" };
+): { words: SubtitleWord[]; outcome: RestoreOutcome; merged: boolean } {
+  if (words.length === 0) return { words, outcome: "none", merged: false };
   const flatText = comparableText(text);
   const flatWords = comparableText(words.map((w) => w.text).join(""));
-  if (flatText === flatWords) return { words, outcome: "none" };
+  if (flatText === flatWords) return { words, outcome: "none", merged: false };
   // Code POINTS, not code units. splitAtComparable counts comparable
   // characters as code points; String.length counts UTF-16 units and the two
   // disagree on every astral letter - CJK Extension B, mathematical
@@ -228,7 +228,7 @@ export function restoreDroppedWords(
     // comparable character, which cannot trim away. Kept as insurance against
     // the helpers desyncing, which has now happened twice - and if it does,
     // "unresolved" makes it visible instead of passing for a healthy segment.
-    if (!body) return { words, outcome: "unresolved" };
+    if (!body) return { words, outcome: "unresolved", merged: false };
     const { left, right, isWordBoundary } = divideSeam(
       dropCarriedPunctuation(run, last.text, "leading")
     );
@@ -249,6 +249,7 @@ export function restoreDroppedWords(
           { text: `${right}${body}`, start: last.end, end: segEnd },
         ],
         outcome: "tail",
+        merged: false,
       };
     }
     return {
@@ -262,6 +263,7 @@ export function restoreDroppedWords(
         },
       ],
       outcome: "tail",
+      merged: true,
     };
   }
 
@@ -284,7 +286,7 @@ export function restoreDroppedWords(
     // Unreachable for the same reason as the tail branch's guard, and
     // "unresolved" for the same reason: a desync between the two helpers must
     // not pass for a healthy segment.
-    if (!body) return { words, outcome: "unresolved" };
+    if (!body) return { words, outcome: "unresolved", merged: false };
     // The mirror of the tail branch, asking its two questions in the same order
     // for the same reasons - the seam first, the gap second. "Во-" is not a
     // word, however much head room there is.
@@ -302,6 +304,7 @@ export function restoreDroppedWords(
           ...words.slice(1),
         ],
         outcome: "head",
+        merged: false,
       };
     }
     return {
@@ -315,10 +318,63 @@ export function restoreDroppedWords(
         ...words.slice(1),
       ],
       outcome: "head",
+      merged: true,
     };
   }
 
-  return { words, outcome: "unresolved" };
+  return { words, outcome: "unresolved", merged: false };
+}
+
+export interface RestoreSummary {
+  /** (clip, segment) pairs, NOT unique transcript segments - a segment falling
+   *  inside two clips counts twice. Measured at 6 of 1265 in the corpus, small
+   *  but enough to make a rate computed the other way wrong. */
+  segmentOccurrences: number;
+  restoredHead: number;
+  restoredTail: number;
+  unresolved: number;
+  /** Of the restores above, how many were glued onto a neighbouring word
+   *  rather than given their own timing entry. Measured at 1212 of 1303, so a
+   *  metric without this would report that drops are being repaired while
+   *  hiding that almost none of them get word-level karaoke of their own. */
+  merged: number;
+}
+
+/** What the repair did over one clip window. Pure; mirrors the filter in
+ *  segmentsToCues so the two can never disagree about what is in range.
+ *
+ *  Segments with no `words[]` are skipped rather than counted intact: they take
+ *  the wordless fallback cue, which draws `s.text` whole and so cannot drop a
+ *  word in the first place. Counting them would dilute the rate with segments
+ *  the repair never runs on.
+ *
+ *  Times passed through are the SEGMENT's own, not the window's, exactly as
+ *  segmentsToCues does - the gap that decides whether a restored span can hold
+ *  a timing of its own is a property of the segment, and a window edge falling
+ *  mid-segment would otherwise invent head room that does not exist. */
+export function summariseRestores(
+  segments: WhisperSegment[],
+  clipStart: number,
+  clipEnd: number
+): RestoreSummary {
+  const summary: RestoreSummary = {
+    segmentOccurrences: 0,
+    restoredHead: 0,
+    restoredTail: 0,
+    unresolved: 0,
+    merged: 0,
+  };
+  for (const s of segments) {
+    if (!(s.end > clipStart && s.start < clipEnd)) continue;
+    if (!s.words || s.words.length === 0) continue;
+    summary.segmentOccurrences += 1;
+    const { outcome, merged } = restoreDroppedWords(s.text, s.words, s.start, s.end);
+    if (outcome === "head") summary.restoredHead += 1;
+    else if (outcome === "tail") summary.restoredTail += 1;
+    else if (outcome === "unresolved") summary.unresolved += 1;
+    if (merged) summary.merged += 1;
+  }
+  return summary;
 }
 
 export function segmentsToCues(

@@ -18,6 +18,7 @@ import {
   createAssFilter,
   segmentsToCues,
   sliceCues,
+  summariseRestores,
 } from "../processors/subtitles";
 import {
   asHighlights,
@@ -96,6 +97,15 @@ async function renderClips(
     }> = [];
     const reframeCfg = loadReframeConfig();
     const reframeChecks: ReframeCheck[] = [];
+    // Telemetry for the dropped-word repair, summed over the job's clips.
+    // `unresolved` growing is the signal that Whisper's output shape changed.
+    const subtitleSummary = {
+      segmentOccurrences: 0,
+      restoredHead: 0,
+      restoredTail: 0,
+      unresolved: 0,
+      merged: 0,
+    };
     // Detection has a wall-clock budget per highlight; when a source is too
     // heavy it times out repeatedly. Stop paying that cost for the rest of the
     // job after two timeouts in a row (reset on any non-timeout result).
@@ -108,6 +118,18 @@ async function renderClips(
         highlight.start,
         highlight.end
       );
+      // Same segments, same window, same repair as the cues above - counted
+      // rather than re-derived, so the manifest describes what was drawn.
+      const restores = summariseRestores(
+        transcription.segments,
+        highlight.start,
+        highlight.end
+      );
+      subtitleSummary.segmentOccurrences += restores.segmentOccurrences;
+      subtitleSummary.restoredHead += restores.restoredHead;
+      subtitleSummary.restoredTail += restores.restoredTail;
+      subtitleSummary.unresolved += restores.unresolved;
+      subtitleSummary.merged += restores.merged;
 
       // Crop and subtitle burn happen in ONE encode pass - re-encoding the
       // cut a second time just for subtitles doubled render time.
@@ -299,6 +321,7 @@ async function renderClips(
             engine: reframeCfg.engine,
             checks: reframeChecks,
           },
+          subtitles: subtitleSummary,
         } as unknown as Prisma.InputJsonValue,
       },
     });

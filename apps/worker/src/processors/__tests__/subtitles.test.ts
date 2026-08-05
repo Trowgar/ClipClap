@@ -6,6 +6,7 @@ import {
   segmentsToCues,
   sliceCues,
   splitAtComparable,
+  summariseRestores,
 } from "../subtitles";
 import type { SubtitleCue, WhisperSegment } from "@clipclap/shared";
 
@@ -882,5 +883,106 @@ describe("segmentsToCues with restoration", () => {
     // highlighted from the first frame of a clip it is not spoken in until
     // ten seconds later.
     expect(first.start).toBeCloseTo(10.0);
+  });
+});
+
+describe("summariseRestores", () => {
+  it("counts occurrences and outcomes over a clip window", () => {
+    const segs: WhisperSegment[] = [
+      { start: 0, end: 2, text: "one two", words: [{ text: "one", start: 0, end: 0.5 }] },
+      { start: 2, end: 4, text: "три четыре", words: [{ text: "четыре", start: 3, end: 3.5 }] },
+      { start: 4, end: 6, text: "all here", words: [
+        { text: "all", start: 4, end: 4.5 },
+        { text: "here", start: 4.5, end: 5 },
+      ] },
+    ];
+    expect(summariseRestores(segs, 0, 6)).toEqual({
+      segmentOccurrences: 3,
+      restoredHead: 1,
+      restoredTail: 1,
+      unresolved: 0,
+      merged: 0,
+    });
+  });
+
+  it("skips segments with no word timings, so they are not counted as intact", () => {
+    const segs: WhisperSegment[] = [
+      { start: 0, end: 2, text: "no timings at all" },
+      { start: 2, end: 4, text: "empty timings", words: [] },
+      { start: 4, end: 6, text: "all here", words: [
+        { text: "all", start: 4, end: 4.5 },
+        { text: "here", start: 4.5, end: 5 },
+      ] },
+    ];
+    expect(summariseRestores(segs, 0, 6)).toEqual({
+      segmentOccurrences: 1,
+      restoredHead: 0,
+      restoredTail: 0,
+      unresolved: 0,
+      merged: 0,
+    });
+  });
+
+  it("counts only segments overlapping the window, on the same rule as segmentsToCues", () => {
+    const segs: WhisperSegment[] = [
+      // Ends exactly at the clip start: excluded, as `s.end > clipStart`.
+      { start: 8, end: 10, text: "before it", words: [{ text: "before", start: 8, end: 9 }] },
+      // Straddles the start: counted whole, restore reads the segment not the window.
+      { start: 9.5, end: 11, text: "straddle it", words: [{ text: "straddle", start: 9.5, end: 10.5 }] },
+      { start: 12, end: 14, text: "inside it", words: [{ text: "inside", start: 12, end: 13 }] },
+      // Starts exactly at the clip end: excluded, as `s.start < clipEnd`.
+      { start: 20, end: 22, text: "after it", words: [{ text: "after", start: 20, end: 21 }] },
+    ];
+    expect(summariseRestores(segs, 10, 20)).toEqual({
+      segmentOccurrences: 2,
+      restoredHead: 0,
+      restoredTail: 2,
+      unresolved: 0,
+      merged: 0,
+    });
+  });
+
+  it("counts a merge separately from a restore with its own timing entry", () => {
+    // The tail gap is 0.03s, under MIN_RESTORED_SEC, so "bc" is glued onto "a".
+    // Read against the CLIP end (20) instead of the segment end it would clear
+    // the floor easily and take an entry of its own.
+    const segs: WhisperSegment[] = [
+      { start: 10, end: 10.53, text: "a bc", words: [{ text: "a", start: 10, end: 10.5 }] },
+    ];
+    expect(summariseRestores(segs, 10, 20)).toEqual({
+      segmentOccurrences: 1,
+      restoredHead: 0,
+      restoredTail: 1,
+      unresolved: 0,
+      merged: 1,
+    });
+  });
+
+  it("counts a merged head against the segment start, not the clip start", () => {
+    // 0.04s of head room: merged. Against the clip start (10) the gap would
+    // read as 2.5s and the head would take its own entry.
+    const segs: WhisperSegment[] = [
+      { start: 12.46, end: 14, text: "Там хорошо", words: [{ text: "хорошо", start: 12.5, end: 13 }] },
+    ];
+    expect(summariseRestores(segs, 10, 20)).toEqual({
+      segmentOccurrences: 1,
+      restoredHead: 1,
+      restoredTail: 0,
+      unresolved: 0,
+      merged: 1,
+    });
+  });
+
+  it("counts text missing at both ends as unresolved, never as a restore", () => {
+    const segs: WhisperSegment[] = [
+      { start: 0, end: 3, text: "lost middle lost", words: [{ text: "middle", start: 1, end: 2 }] },
+    ];
+    expect(summariseRestores(segs, 0, 6)).toEqual({
+      segmentOccurrences: 1,
+      restoredHead: 0,
+      restoredTail: 0,
+      unresolved: 1,
+      merged: 0,
+    });
   });
 });
