@@ -429,10 +429,11 @@ In `restoreDroppedWords`, between the tail branch and the final `unresolved` ret
 
 ```ts
   if (flatText.endsWith(flatWords)) {
-    const missing = splitAtComparable(
-      text,
-      flatText.length - flatWords.length
-    )[0].trim();
+    // textChars and wordChars are code-point counts, computed once at the top
+    // of the function. String.length would be UTF-16 units and disagree with
+    // splitAtComparable on any astral letter - found on Task 2, where it
+    // restored "ord" for "word".
+    const missing = splitAtComparable(text, textChars - wordChars)[0].trim();
     if (!missing) return { words, outcome: "none" };
     const first = words[0];
     if (first.start - segStart >= MIN_RESTORED_SEC) {

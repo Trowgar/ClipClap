@@ -161,6 +161,12 @@ Slicing the NFC form means the restored text is canonically equivalent to the or
 byte-identical to it. That is the correct trade: canonical equivalence guarantees identical glyphs,
 and the alternative is a cut in the wrong place.
 
+**The count handed to it is in code points.** `splitAtComparable` counts comparable characters as code
+points; `String.length` counts UTF-16 units, and the two disagree on every astral letter - CJK
+Extension B, mathematical alphanumerics. Caught on the first implementation of §4, where
+`comparableText("𠮷").length` is 2 for one letter, so the split ran a character too far and restored
+`"ord"` where the text said `"word"`. Callers pass `[...flat].length`, never `flat.length`.
+
 ## 4. Where the restored text goes
 
 **Restore into the word list, then chunk.** The recovered text becomes one entry in `words[]` before
