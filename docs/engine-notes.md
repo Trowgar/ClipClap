@@ -338,8 +338,10 @@ exercise.
 **The refusal population, measured across the four fixtures.** `opaque_end` is **11 of 15** refusals on the
 three non-sitcom fixtures (ecology 3 of 5, answer-arc 5 of 6, creator-challenge 3 of 4); `sitcom-friends`
 refuses nothing. The model keeps reaching for nodes Whisper left without word timings. So the lever for
-reducing refusals is word-timing coverage - the same defect that silently drops the last word of a sentence
-from burned-in subtitles (~13.8% of segments). Two of the programme's six projects share that root cause, and
+reducing refusals is word-timing coverage - the same defect that silently drops a word from burned-in
+subtitles. **The subtitle half of that is fixed as of 2026-08-05 (§8a), and the measurement corrects this
+sentence: it is 10.7% of segments, not 13.8%, and it is the last word only in English - Russian loses the
+first.** The refusal half is untouched. Two of the programme's six projects share that root cause, and
 the refusal histogram is what makes it visible; a bare null would have said only that the gates and the model
 disagree.
 
@@ -1304,6 +1306,78 @@ touch it.
 - **Heavy testing burns the exit.** A few dozen probes in a row earned an `HTTP Error 429` and then the bot
   check on that address. Measure sparingly, and read a sudden "0 formats" as a rate limit before believing
   it is a regression.
+
+---
+
+## 8a. SUBTITLES: the word Whisper did not time (fixed 2026-08-05)
+
+Design `docs/superpowers/specs/2026-08-05-subtitle-word-restore-design.md`, plan
+`.../plans/2026-08-05-subtitle-word-restore.md`. **Shipped without a flag**, deliberately: the output is
+deterministic, the acceptance number is corpus-wide, and rollback is a `git revert` that goes live
+immediately on bind-mounted source. A killswitch here would mean shipping the defect on by default.
+
+**The defect.** `segmentsToCues` built each cue's text from the segment's `words[]` alone, so any word
+Whisper transcribed but never gave a word timing was never drawn. It was in the transcript, in the analysis
+and in the audio, and absent from the picture.
+
+**Measured over every job in the database with clips and a transcript - 13 jobs, 1265 segments lying fully
+inside a clip window:**
+
+| | segments | first word lost | last word lost | other | loss |
+|---|---|---|---|---|---|
+| en | 748 | 10 | **64** | 1 | 10.0% |
+| ru | 517 | **53** | 6 | 1 | 11.6% |
+| all | 1265 | 63 | 70 | 2 | **10.7%** |
+
+**The rate is the same in both languages and the position flips: English loses the last word, Russian the
+first.** §3 above and the 2026-08-04 audit both say "almost always the sentence's last word" - true of
+English only. Real losses included `fight` and `joke`, each carrying its clip's punchline, and `affair`,
+whose loss left the chunk `an` alone on screen - the frame a judge singled out as "nonsense on its own".
+
+**Acceptance: 135 of 1265 incomplete before, 2 after**, the survivors being the `unresolved` pair where text
+is missing at both ends and the repair declines to guess. Reproducible with
+`apps/worker/src/scripts/eval-subtitle-coverage.ts`, and confirmed in pixels on a real burn.
+
+**Measure the CUES, not the transcript.** The repair never rewrites `words[]`, so re-running the survey that
+found the defect reports the same number on a repaired engine as on a broken one. That mistake was made once
+during design and is why the acceptance script exists in the shape it does.
+
+### Four defects, all on one seam, none of them found by reasoning
+
+Every one of these was found by measurement or mutation and none by reading the code. The seam is the joint
+between `comparableText`, `splitAtComparable`, and the caller that spends a count produced by one inside the
+other.
+
+1. **The two helpers counted in different normal forms.** Either the `normalize("NFC")` was dead code or the
+   split landed in the wrong place; both could not be true. Decomposed Cyrillic put the wrong letter in the
+   head; Devanagari orphaned a vowel sign even in NFC, because U+093F is category Mc.
+2. **They counted in different units.** `comparableText("𠮷").length` is 2 for one letter, so the split ran a
+   character too far and restored `"ord"` for `"word"`. Callers pass `[...flat].length`, never `flat.length`.
+3. **The seam rule was derived from examples that never occur.** A rule meant to keep `во-первых` and `y'all`
+   whole tested the span's first character. Enumerated over the corpus, **all 45 restores it changed were
+   `", bro."` shapes and none were continuations** - neither example occurs at a seam anywhere in the data. It
+   folded up to 1.16s of speech into the previous word's entry. The correct test is whether the whole
+   non-comparable run at the seam contains whitespace.
+4. **The span repeated punctuation the boundary word already carried.** Whisper attaches punctuation to word
+   tokens - 2,023 of 75,378 - so `"жизнь»"` plus a span opening `"»"` drew `"жизнь»»"`. Zero occurrences
+   today, 45 tokens with the enabling shape.
+
+**The merge is the common path, not the exception.** 698 of 743 tail gaps are exactly 0.000 and 45 are at
+least 0.08, with nothing between; on the head side 14 of 560 do land inside `(0, 0.08)`, so `MIN_RESTORED_SEC`
+is load-bearing on the head branch and inert on the tail. A distribution measured on one branch must not be
+quoted about the other - we did exactly that once.
+
+**Known limitations, recorded rather than papered over.** A seam with no separator at all merges, which is
+right for `во-первых` and wrong for CJK and Thai; no heuristic is offered because the corpus contains no
+material to validate one. Existing clips are not backfilled - `Clip.subtitleTrack` keeps its losses and only
+new renders benefit. The chunker is untouched: 56 of 285 cues on the audited set are single-word, and some of
+those were the residue of this defect while the rest come from `chunkWords` filling greedily to 3 words or 18
+characters. That is separate work with its own measurement.
+
+**Telemetry.** `renderManifest.subtitles` carries `segmentOccurrences`, `restoredHead`, `restoredTail`,
+`unresolved` and `merged`. `unresolved` growing is the signal that Whisper's output shape has changed.
+`segmentOccurrences` counts (clip, segment) pairs and not unique segments - 6 of 1265 in the corpus are the
+same segment inside two clips.
 
 ---
 
