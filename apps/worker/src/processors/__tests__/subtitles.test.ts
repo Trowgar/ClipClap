@@ -461,6 +461,44 @@ describe("restoreDroppedWords - tail", () => {
     expect(out.words[2]).toEqual({ text: "y'all.", start: 0.6, end: 0.7 });
   });
 
+  it("keeps a multi-word span as ONE timing entry", () => {
+    // The worst measured span holds nine lexical words and 36 characters. The
+    // docstring calls the span indivisible on purpose - splitting it would need
+    // a per-word timestamp nothing here can produce honestly - and this is the
+    // invariant a future contributor is most likely to "fix", so it is pinned.
+    const out = restoreDroppedWords(
+      "Honestly I'm not sure I'm going to be able to",
+      [{ text: "Honestly", start: 0, end: 0.5 }],
+      0,
+      3.0
+    );
+    expect(out.outcome).toBe("tail");
+    expect(out.words).toHaveLength(2);
+    expect(out.words[1]).toEqual({
+      text: "I'm not sure I'm going to be able to",
+      start: 0.5,
+      end: 3.0,
+    });
+    expect(out.words[1].text).toHaveLength(36);
+  });
+
+  it("takes the tail branch when words[] carries no comparable character", () => {
+    // A words[] of pure punctuation flattens to "", and "" is both a prefix and
+    // a suffix of the text, so both branches are eligible. The tail branch wins
+    // because it is written first, and this pins that precedence rather than
+    // leaving it to the order of two if-statements. 136 punctuation-only word
+    // entries exist in the corpus; no segment where every entry is one does.
+    const out = restoreDroppedWords(
+      "Hello there.",
+      [{ text: "-", start: 0, end: 0.5 }],
+      0,
+      2.0
+    );
+    expect(out.outcome).toBe("tail");
+    expect(out.words).toHaveLength(2);
+    expect(out.words[1]).toEqual({ text: "Hello there.", start: 0.5, end: 2.0 });
+  });
+
   it("changes nothing when the mismatch is at neither end", () => {
     // Whisper timed a word the text does not contain, so the drift is interior:
     // no prefix and no suffix agrees, and there is no honest place to put it.

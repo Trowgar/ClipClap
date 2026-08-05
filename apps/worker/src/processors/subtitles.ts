@@ -148,6 +148,13 @@ export function restoreDroppedWords(
   const wordChars = [...flatWords].length;
   const textChars = [...flatText].length;
 
+  // Both branches when flatWords is empty: "" is a prefix AND a suffix of any
+  // text, so a words[] of pure punctuation makes both tests true and the tail
+  // wins purely by being written first. That is the intended precedence - with
+  // no comparable character to anchor either end, restoring the whole text
+  // after the punctuation is as good as before it - and it is pinned by a test
+  // rather than left to the order of two if-statements. 136 punctuation-only
+  // word entries exist in the corpus; no segment where every entry is one.
   if (flatText.startsWith(flatWords)) {
     // Everything after the LAST comparable character that belongs to words[],
     // so punctuation sitting at the seam comes back with the missing span
