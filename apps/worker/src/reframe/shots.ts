@@ -3,6 +3,7 @@ import { promisify } from "util";
 import type { ReframeConfig } from "./config";
 import type { Shot } from "./types";
 
+import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
 const execFileAsync = promisify(execFile);
 
 /**
@@ -87,7 +88,7 @@ async function scdetPass(
       "-vf", `scale=320:-2,select='gte(scene,${threshold})',showinfo`,
       "-f", "null", "-",
     ],
-    { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 }
+    { timeout: timeoutMs, maxBuffer: CHILD_MAX_BUFFER_BYTES }
   );
   return [...stderr.matchAll(/pts_time:([0-9]+(?:\.[0-9]+)?)/g)].map((m) =>
     Number(m[1])

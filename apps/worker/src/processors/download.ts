@@ -16,6 +16,8 @@ import {
 import { SourceTooLargeError, SourceUnavailableError } from "./errors";
 import type { Readable } from "stream";
 
+import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
+
 const execFileAsync = promisify(execFile);
 
 // The authoritative ffprobe of the downloaded file now happens one level up, in
@@ -120,11 +122,10 @@ async function downloadFromUrl(
       // yt-dlp streams progress to stdout for the whole download and we buffer
       // all of it. Node's default cap is 1 MiB, which a multi-hour VOD - the
       // core workload - passes long before it finishes; Node then SIGTERMs a
-      // download that was working fine. 16 MiB matches the ceiling the reframe
-      // modules already use for chatty children (reframe/shots.ts,
-      // reframe/faces.ts) and is far above the few hundred KiB a 3-hour fetch
-      // actually prints.
-      { maxBuffer: 16 * 1024 * 1024 }
+      // download that was working fine. The ceiling is now shared by every
+      // child this worker spawns - see child-buffer.ts, which records what the
+      // render path cost before it had one.
+      { maxBuffer: CHILD_MAX_BUFFER_BYTES }
     ));
   } catch (error) {
     // Only yt-dlp's own verdict may be turned into a verdict about the user's
