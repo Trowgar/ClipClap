@@ -103,6 +103,15 @@ export type RestoreOutcome = "none" | "head" | "tail" | "unresolved";
 // name suggests - 514 of 560 heads and 698 of 743 tails take it.
 const MIN_RESTORED_SEC = 0.08;
 
+/** The separator that rejoins a restored span with the timed word beside it:
+ *  one space where the source text carried whitespace at that seam, nothing
+ *  where it did not. `edge` names the end of the UNTRIMMED span that faces the
+ *  timed word - "leading" for a restored tail, "trailing" for a restored head -
+ *  so both branches ask the same question of the same string. */
+function seamSeparator(rawSpan: string, edge: "leading" | "trailing"): string {
+  return (edge === "leading" ? /^\s/u : /\s$/u).test(rawSpan) ? " " : "";
+}
+
 /**
  * Puts back the head or tail of a segment that Whisper transcribed but never
  * timed. `segmentsToCues` builds cue text from `words[]` alone, so anything
@@ -140,7 +149,12 @@ export function restoreDroppedWords(
   const textChars = [...flatText].length;
 
   if (flatText.startsWith(flatWords)) {
-    const missing = splitAtComparable(text, wordChars)[1].trim();
+    // Everything after the LAST comparable character that belongs to words[],
+    // so punctuation sitting at the seam comes back with the missing span
+    // instead of being stranded on the timed side. The head branch reaches to
+    // the FIRST such character for the same reason.
+    const rawMissing = splitAtComparable(text, wordChars)[1];
+    const missing = rawMissing.trim();
     // Unreachable: the two guards above mean the tail holds at least one
     // comparable character, which cannot trim away. Kept as insurance against
     // the helpers desyncing, which has now happened twice - and if it does,
@@ -156,23 +170,34 @@ export function restoreDroppedWords(
     return {
       words: [
         ...words.slice(0, -1),
-        // The space is wrong for Japanese, Chinese and Thai, and is left that
-        // way deliberately: segmentsToCues and karaokeText already join CJK
-        // with spaces, so fixing it here alone changes nothing visible. What
-        // makes it worth labelling is that every other space in the pipeline is
-        // applied at render time and can be undone there, while this one is
-        // baked into a word's text and would outlive a render-seam fix.
-        { ...last, text: `${last.text} ${missing}` },
+        // Rejoined with the separator the source text actually had at this
+        // seam, which is a space or nothing at all. An unconditional space put
+        // one INSIDE a word wherever Whisper split a hyphenated or
+        // apostrophised token - "во" + "-первых." drew as "во -первых.", "y" +
+        // "'all." as "y 'all." - on 34 of 743 measured tail drops. Reading the
+        // separator off the source also gets CJK right for free: there is no
+        // whitespace at the seam, so no space is invented.
+        { ...last, text: `${last.text}${seamSeparator(rawMissing, "leading")}${missing}` },
       ],
       outcome: "tail",
     };
   }
 
   if (flatText.endsWith(flatWords)) {
-    // The count is what the timed words do NOT cover, so the head split keeps
-    // exactly the missing characters. The tail branch spends wordChars because
-    // there the timed words come first; here they come last.
-    const missing = splitAtComparable(text, textChars - wordChars)[0].trim();
+    // The count is what the timed words do NOT cover, so the split keeps
+    // exactly the missing comparable characters. The tail branch spends
+    // wordChars because there the timed words come first; here they come last.
+    const [before, after] = splitAtComparable(text, textChars - wordChars);
+    // ...and then the span is extended TO the timed words. splitAtComparable
+    // cuts right after the last missing letter, which leaves the punctuation
+    // separating the two halves at the front of `after`, where trim() cannot
+    // save it: "Естественно, для человека это проблема." restored as
+    // "Естественно" and the comma was gone, on 68 of 560 measured head drops.
+    // So the head span is everything before the FIRST comparable character
+    // that belongs to words[], the mirror of the tail's LAST.
+    const firstTimed = after.search(COMPARABLE_CHAR);
+    const rawMissing = before + (firstTimed < 0 ? after : after.slice(0, firstTimed));
+    const missing = rawMissing.trim();
     // Unreachable for the same reason as the tail branch's guard, and
     // "unresolved" for the same reason: a desync between the two helpers must
     // not pass for a healthy segment.
@@ -190,9 +215,10 @@ export function restoreDroppedWords(
     return {
       words: [
         // Merged into the FIRST word rather than given a duration, the mirror
-        // of the tail branch. The space carries the same CJK caveat noted
-        // there.
-        { ...first, text: `${missing} ${first.text}` },
+        // of the tail branch - and rejoined with the source's own separator
+        // for the reason spelled out there. "Во-" + "первых" must not become
+        // "Во- первых".
+        { ...first, text: `${missing}${seamSeparator(rawMissing, "trailing")}${first.text}` },
         ...words.slice(1),
       ],
       outcome: "head",

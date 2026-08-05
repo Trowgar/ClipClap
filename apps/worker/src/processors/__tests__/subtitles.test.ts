@@ -425,6 +425,42 @@ describe("restoreDroppedWords - tail", () => {
     for (const w of out.words) expect(w.end).toBeGreaterThanOrEqual(w.start);
   });
 
+  it("rejoins a hyphenated word with no space at the seam", () => {
+    // Whisper tokenises "во-первых" as "во" plus an untimed "-первых.", so an
+    // unconditional space join writes "во -первых." into the picture. 34 of 743
+    // measured tail drops look like this, and to a viewer a space inside a word
+    // is worse than the missing word this repair exists to put back.
+    const out = restoreDroppedWords(
+      "Это во-первых.",
+      [
+        { text: "Это", start: 0, end: 0.3 },
+        { text: "во", start: 0.3, end: 0.6 },
+      ],
+      0,
+      0.6
+    );
+    expect(out.outcome).toBe("tail");
+    expect(out.words).toHaveLength(2);
+    expect(out.words[1]).toEqual({ text: "во-первых.", start: 0.3, end: 0.6 });
+  });
+
+  it("rejoins an apostrophised word with no space at the seam", () => {
+    // The English shape of the same defect: "y" is timed, "'all." is not.
+    const out = restoreDroppedWords(
+      "Alright, see y'all.",
+      [
+        { text: "Alright", start: 0, end: 0.4 },
+        { text: "see", start: 0.4, end: 0.6 },
+        { text: "y", start: 0.6, end: 0.7 },
+      ],
+      0,
+      0.7
+    );
+    expect(out.outcome).toBe("tail");
+    expect(out.words).toHaveLength(3);
+    expect(out.words[2]).toEqual({ text: "y'all.", start: 0.6, end: 0.7 });
+  });
+
   it("changes nothing when the mismatch is at neither end", () => {
     // Whisper timed a word the text does not contain, so the drift is interior:
     // no prefix and no suffix agrees, and there is no honest place to put it.
@@ -505,17 +541,54 @@ describe("restoreDroppedWords - head", () => {
     );
     expect(out.outcome).toBe("head");
     expect(out.words).toHaveLength(4);
-    // The comma at the seam is NOT kept: the split ends after the last missing
-    // letter, so punctuation separating the restored span from the timed words
-    // lands in the other half and is trimmed. 83 of 560 head drops lose one
-    // this way. The shipped tail branch loses leading punctuation on 79 of 743
-    // by the same mechanism, so this pins the symmetry rather than a fix - the
-    // seam belongs to both branches at once.
+    // The comma at the seam IS kept: the head span reaches to the timed words
+    // rather than stopping after the last missing letter, so the punctuation
+    // between the two halves stays on the side it was written on. 68 of 560
+    // measured head drops lose one without this. The space is kept too,
+    // because this seam really did carry one.
     expect(out.words[0]).toEqual({
-      text: "Естественно для",
+      text: "Естественно, для",
       start: 967.28,
       end: 967.4,
     });
+  });
+
+  it("keeps the seam punctuation on a head that gets its own timing entry", () => {
+    // The same measured segment with room to time the restored span: the comma
+    // belongs to the head in both branches, not only in the merge.
+    const words = [
+      { text: "для", start: 967.5, end: 967.7 },
+      { text: "человека", start: 967.7, end: 968.1 },
+      { text: "это", start: 968.1, end: 968.3 },
+      { text: "проблема", start: 968.3, end: 968.48 },
+    ];
+    const out = restoreDroppedWords(
+      "Естественно, для человека это проблема.",
+      words,
+      967.22,
+      968.48
+    );
+    expect(out.outcome).toBe("head");
+    expect(out.words).toHaveLength(5);
+    expect(out.words[0]).toEqual({
+      text: "Естественно,",
+      start: 967.22,
+      end: 967.5,
+    });
+  });
+
+  it("rejoins a hyphenated head with no space at the seam", () => {
+    // The head mirror of the tail's "во-первых": the hyphen sits at the seam,
+    // so an unconditional space would split the word in the picture.
+    const words = [
+      { text: "первых", start: 12.0, end: 12.4 },
+      { text: "это", start: 12.4, end: 12.6 },
+      { text: "работает", start: 12.6, end: 13.1 },
+    ];
+    const out = restoreDroppedWords("Во-первых, это работает.", words, 12.0, 13.1);
+    expect(out.outcome).toBe("head");
+    expect(out.words).toHaveLength(3);
+    expect(out.words[0]).toEqual({ text: "Во-первых", start: 12.0, end: 12.4 });
   });
 
   it("strips leading whitespace off the restored head", () => {
