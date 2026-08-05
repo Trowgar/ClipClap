@@ -207,7 +207,30 @@ not to lexical words inside an indivisible restored span, and its character limi
 such a span. Splitting the span properly is possible future work and needs a way to time the words
 inside it.
 
-### 4.2 Timing
+### 4.2 The seam: where the cut falls and how the pieces rejoin
+
+Two rules, both measured into existence after the first implementation shipped.
+
+**The span reaches to the timed words, not from the missing ones.** The head span is everything before
+the **first** comparable character that belongs to `words[]`; the tail span is everything after the
+**last** one. Cutting the head "after the last missing letter" instead leaves punctuation on the wrong
+side and drops it: `"Естественно, для человека это проблема."` restores as `Естественно` and the comma
+is lost, in 68 of 560 measured head restores.
+
+**Rejoin with a space only where the source had whitespace at that seam.** Whisper splits hyphenated
+and apostrophised words into separate tokens, so an unconditional space join inserts a space inside a
+word. Measured on the tail branch, 34 of 743:
+
+```
+"Это во-первых."       words end "во"  -> span "-первых."  -> "во -первых."
+"Alright, see y'all."  words end "y"   -> span "'all."     -> "y 'all."
+```
+
+That is visible corruption rather than a cosmetic slip, and it is worse than the defect being repaired
+looks to a viewer. Preserving the original separator fixes both examples and leaves `"an affair."`
+unchanged, because that seam really did carry a space.
+
+### 4.3 Timing
 
 Timing for the restored entry, using **real segment boundaries and never an invented number**:
 
@@ -231,9 +254,28 @@ drops in the database:
 **The gap is exactly 0.000 in 698 cases and at least 0.08 in the other 45. Nothing lands strictly
 between.** Whisper's last timed word either ends precisely on the segment boundary or leaves a large
 untimed span. So the merge is the ordinary path and the separate entry is the exception - the reverse
-of how this design described them - and `MIN_RESTORED_SEC` discriminates nothing on real data: every
-threshold in `(0, 0.08]` produces byte-identical output corpus-wide. The constant is a guard against
-a shape the corpus does not contain, which is worth knowing before anyone tunes it.
+of how this design described them.
+
+**The head side is not the same, and the difference matters.** Measured over 560 head drops:
+
+| head gap | count |
+|---|---|
+| exactly 0.000 | 500 |
+| inside `(0, 0.08)` - merges | **14** |
+| `[0.08, 0.2)` | 17 |
+| `[0.2, 0.5)` | 19 |
+| `>= 0.5` | 10 |
+
+Fourteen real segments sit inside the band the tail side left empty, the smallest gap being 0.020. So
+**`MIN_RESTORED_SEC` is load-bearing on the head branch and inert on the tail**: moving it anywhere in
+0.021 to 0.08 changes what real head segments do and changes nothing at all for tails. An earlier
+draft of this section, written from the tail measurement alone, said the value was not load-bearing
+full stop. It is a good example of why a distribution measured on one branch must not be quoted about
+another.
+
+Also measured there: **560 head drops against 743 tail, so the head is 43% of the defect**, and 136 of
+those head drops are in English jobs. The "English loses the tail, Russian the head" split in §1.1 is
+a strong tendency measured over clip-window segments, not a dichotomy over whole transcripts.
 
 The practical consequence is that **94% of restored words carry no word-level karaoke granularity of
 their own** - they highlight together with the word they were glued to. The text is drawn for the
