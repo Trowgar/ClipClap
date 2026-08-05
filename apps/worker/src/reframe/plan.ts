@@ -16,6 +16,11 @@ import {
   streamCamX,
   streamContentX,
 } from "./stream-geometry";
+// These three moved to `geometry.ts` so that `camera.ts` can use them without
+// importing this module, which will import `camera.ts` back. Re-exported here
+// so that every existing importer of `plan.ts` keeps working unchanged.
+import { cropWidthFor, evenClamp, tileWidthFor } from "./geometry";
+export { cropWidthFor, evenClamp, tileWidthFor };
 
 // Layout constants - tuned via fixtures, deliberately NOT env knobs (spec §7).
 const FIT_MARGIN = 0.9; // face bbox must fit in 90% of the crop window
@@ -27,19 +32,6 @@ const MAX_PLAN_SHOTS = 90; // ffmpeg av_expr nesting fails at ~100 segments; hea
 const W_AREA = 0.5;
 const W_CENTER = 0.3;
 const W_MOUTH = 0.2;
-
-export function cropWidthFor(sourceHeight: number): number {
-  return 2 * Math.round((sourceHeight * 9) / 16 / 2);
-}
-
-export function tileWidthFor(sourceHeight: number): number {
-  return 2 * Math.round((sourceHeight * 9) / 8 / 2);
-}
-
-export function evenClamp(x: number, cropW: number, sourceWidth: number): number {
-  const clamped = Math.min(Math.max(0, x), sourceWidth - cropW);
-  return 2 * Math.round(clamped / 2);
-}
 
 export function dominance(
   t: FaceTrack,
