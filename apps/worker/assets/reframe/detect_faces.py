@@ -166,6 +166,32 @@ def mouth_patch(gray, det):
     return cv2.resize(patch, MOUTH_PATCH).astype(np.float32) / 255.0
 
 
+def render_path(track, scale):
+    """Per-sample boxes in SOURCE pixels, sorted by time.
+
+    The median in `box` is what every existing consumer reads and it is
+    unchanged. This is the same data before the median was taken, which is the
+    whole of what Layer 0 needs: the planner could not express a moving camera
+    because this was discarded here.
+
+    Sorted explicitly rather than trusting insertion order. Frames are walked in
+    order today, so the list is already sorted - but a caller that ever batches
+    or parallelises frames would produce a path that silently runs backwards in
+    time, and every consumer downstream assumes monotonic t.
+    """
+    rows = sorted(zip(track["times"], track["boxes"]), key=lambda r: r[0])
+    return [
+        {
+            "t": float(t),
+            "x": float(b[0]) * scale,
+            "y": float(b[1]) * scale,
+            "w": float(b[2]) * scale,
+            "h": float(b[3]) * scale,
+        }
+        for t, b in rows
+    ]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--frames-dir", required=True)
@@ -231,6 +257,7 @@ def main():
             if best is None:
                 tracks.append({
                     "boxes": [box],
+                    "times": [t],
                     "scores": [float(det[14])],
                     "last_box": box,
                     "mouth": [],
@@ -238,6 +265,7 @@ def main():
                 })
             else:
                 best["boxes"].append(box)
+                best["times"].append(t)
                 best["scores"].append(float(det[14]))
                 best["last_box"] = box
                 if patch is not None and best["last_patch"] is not None:
@@ -263,6 +291,7 @@ def main():
                 "score": float(np.mean(tr["scores"])),
                 "samples": len(tr["boxes"]),
                 "mouthActivity": float(np.mean(tr["mouth"])) if tr["mouth"] else 0.0,
+                "path": render_path(tr, scale),
             })
         # Gate: only a SMALL dominant face can be a webcam inset. Podcasts and
         # facecams never reach median_edge_map, so they pay nothing for this.
