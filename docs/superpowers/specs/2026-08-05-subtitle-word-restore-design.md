@@ -230,16 +230,47 @@ That is visible corruption rather than a cosmetic slip, and it is worse than the
 looks to a viewer. Preserving the original separator fixes both examples and leaves `"an affair."`
 unchanged, because that seam really did carry a space.
 
-**A seam with no whitespace merges unconditionally, whatever the gap.** Preserving the separator is
-not enough on its own: it governs the merge join, while a span that gets its own timing entry stands
-alone and `chunkWords` later joins entries with a space, reproducing `во -первых.` by another route in
-45 measured restores. The rule that closes it is not about spacing at all - **a span that continues
-the adjacent word is not a separate word**, so the question `MIN_RESTORED_SEC` answers ("can this word
-have its own timing entry") does not apply to it. Splitting `во` from `-первых.` would also hand half
-a word its own karaoke highlight.
+**A span that continues the adjacent word merges, whatever the gap** - because it is not a separate
+word, so the question `MIN_RESTORED_SEC` answers ("can this word have its own timing entry") does not
+apply to it, and splitting `во` from `-первых.` would also hand half a word its own karaoke highlight.
 
-So the precedence is: no whitespace at the seam means merge; whitespace and room means its own entry;
-whitespace and no room means merge.
+**Continuation is decided by the whole non-comparable run at the seam, not by its first character, and
+the difference is the whole rule.** The first draft of this section tested `/^\s/` on the span and
+described the result as "no whitespace at the seam". That is wrong: `", bro."` also begins with a
+non-space character and is a comma followed by a separate word. Enumerated over the corpus, **all 45
+restores the rule changed were of that shape and none were continuations** - neither `во-первых` nor
+`y'all` occurs at a seam anywhere in the data. As written it folded up to 1.16 s of speech into the
+previous word's entry and pushed 4 merged entries past `MAX_CHUNK_CHARS`, which `chunkWords` cannot
+split. A rule derived from two examples that never occur, firing only on a third shape nobody looked
+at.
+
+The correct test is whether the non-comparable run **contains whitespace**: `", "` does and is a word
+boundary; `"-"`, `"'"` and `""` do not and are continuations. When it is a boundary, the run glues to
+the adjacent word and the remainder becomes its own entry - `"Nice, bro."` restores as `["Nice,",
+"bro."]`, keeping the comma attached and giving `bro.` back its real 0.52 s.
+
+Precedence: a continuation merges; a word boundary with room takes its own entry; a word boundary
+without room merges.
+
+**A seam with no separator at all merges, and for CJK and Thai that is wrong.** Those scripts never
+put whitespace at a seam, so an entire untimed phrase folds into one entry. No heuristic is offered,
+because the corpus contains no CJK or Thai and nothing could validate one. Recorded as a known
+limitation rather than papered over.
+
+**The span must not repeat punctuation the boundary word already carries.** Whisper attaches
+punctuation to word tokens - 2,023 of 75,378 in the corpus - and the span rules anchor on comparable
+characters, so neither side can see it:
+
+```
+last timed word "жизнь»",  span "» каждый месяц."  ->  "жизнь»» каждый месяц."
+first timed word "«Наука",  head span "Он читал «"  ->  "Он читал ««Наука"
+```
+
+Zero occurrences today, but 45 tokens carry the enabling shape against 1362 drop boundaries, so it
+will happen and it burns a doubled glyph into the video. The span drops the longest overlap its
+seam-facing end shares with the adjacent word - for the tail, the longest prefix also a suffix of
+`last.text`; the mirror for the head. The tail exposure predates the seam work; the head one was
+introduced by the first rule above, in exchange for the 68 lost commas.
 
 ### 4.3 Timing
 
