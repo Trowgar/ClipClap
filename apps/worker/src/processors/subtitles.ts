@@ -94,22 +94,52 @@ export type RestoreOutcome = "none" | "head" | "tail" | "unresolved";
 
 // Below this, the gap between the segment boundary and the nearest timed word
 // is too small to be a duration. The text is merged into its neighbour rather
-// than given a made-up one. The gap is exactly 0 in 698 of 743 measured drops
-// and >= 0.08 in the other 45 - nothing in between, so on that side the exact
-// value is not load-bearing. On the head side it is: of 560 measured head
-// drops 500 have a gap of exactly 0 and 14 more sit strictly between 0 and
-// 0.08, the smallest at 0.020, so moving this floor changes what real segments
-// do. Either way the merge is the common path rather than the exception the
-// name suggests - 514 of 560 heads and 698 of 743 tails take it.
+// than given a made-up one.
+//
+// Two different quantities live in this decision and an earlier version of this
+// comment ran them together. The GAP DISTRIBUTION: on the tail the gap is
+// exactly 0 in 698 of 743 measured drops and >= 0.08 in the other 45, with
+// nothing in between, so the exact value of the floor is not load-bearing
+// there; on the head 500 of 560 are exactly 0 and 14 more sit strictly inside
+// (0, 0.08), the smallest at 0.020, so moving the floor anywhere in 0.021 to
+// 0.08 changes what real head segments do. The PATH TAKEN is a different count,
+// because a seam with no whitespace merges whatever the gap says: measured 698
+// of 743 tails and 514 of 560 heads merge. The two agree in today's corpus only
+// because no drop lands on a continuation seam that also has room to spare.
 const MIN_RESTORED_SEC = 0.08;
 
-/** The separator that rejoins a restored span with the timed word beside it:
- *  one space where the source text carried whitespace at that seam, nothing
- *  where it did not. `edge` names the end of the UNTRIMMED span that faces the
- *  timed word - "leading" for a restored tail, "trailing" for a restored head -
- *  so both branches ask the same question of the same string. */
-function seamSeparator(rawSpan: string, edge: "leading" | "trailing"): string {
-  return (edge === "leading" ? /^\s/u : /\s$/u).test(rawSpan) ? " " : "";
+// The run of non-comparable characters at either end of a span: everything
+// between the restored words and the timed word beside them.
+const LEADING_NON_COMPARABLE = /^[^\p{L}\p{N}]*/u;
+const TRAILING_NON_COMPARABLE = /[^\p{L}\p{N}]*$/u;
+
+/** How the seam between a restored span and the timed word beside it divides
+ *  between the two, read off the source text and nothing else.
+ *
+ *  Whitespace anywhere in the run makes it a word boundary, and then what sits
+ *  BEFORE the whitespace belongs to the word on the left and what sits AFTER it
+ *  to the word on the right: `", "` leaves its comma on "Nice" and `" «"` gives
+ *  its guillemet to "«Наука". Testing only the run's first character called
+ *  `", bro."` a continuation of "Nice", which is how 45 restores lost their own
+ *  timing.
+ *
+ *  A run with NO whitespace is not a boundary at all: the two pieces are one
+ *  word Whisper tokenised in two ("во" + "-первых."), and the whole run belongs
+ *  to the left, where the source wrote it.
+ *
+ *  That last rule is right for "во-первых" and WRONG for Chinese, Japanese and
+ *  Thai, which never write whitespace at a seam: there every restore reads as a
+ *  continuation, so a whole untimed phrase folds into the neighbouring entry and
+ *  is drawn with its timing. Nothing available here can tell where a CJK word
+ *  boundary falls, and the corpus holds no CJK at all, so a heuristic could not
+ *  be checked against anything. Stated rather than papered over. */
+function divideSeam(run: string): { left: string; right: string; isWordBoundary: boolean } {
+  if (!/\s/u.test(run)) return { left: run, right: "", isWordBoundary: false };
+  return {
+    left: run.match(/^\S*/u)?.[0] ?? "",
+    right: run.match(/\S*$/u)?.[0] ?? "",
+    isWordBoundary: true,
+  };
 }
 
 /**
@@ -161,37 +191,43 @@ export function restoreDroppedWords(
     // instead of being stranded on the timed side. The head branch reaches to
     // the FIRST such character for the same reason.
     const rawMissing = splitAtComparable(text, wordChars)[1];
-    const missing = rawMissing.trim();
+    const last = words[words.length - 1];
+    const run = rawMissing.match(LEADING_NON_COMPARABLE)?.[0] ?? "";
+    const body = rawMissing.slice(run.length).trim();
     // Unreachable: the two guards above mean the tail holds at least one
     // comparable character, which cannot trim away. Kept as insurance against
     // the helpers desyncing, which has now happened twice - and if it does,
     // "unresolved" makes it visible instead of passing for a healthy segment.
-    if (!missing) return { words, outcome: "unresolved" };
-    const last = words[words.length - 1];
-    // The separator the source text actually had at this seam: a space, or
-    // nothing at all. An unconditional space put one INSIDE a word wherever
-    // Whisper split a hyphenated or apostrophised token - "во" + "-первых."
-    // drew as "во -первых.", "y" + "'all." as "y 'all." - on 34 of 743
-    // measured tail drops. Reading the separator off the source also gets CJK
-    // right for free: no whitespace at the seam, so no space is invented.
-    const separator = seamSeparator(rawMissing, "leading");
-    // No whitespace at the seam means the span CONTINUES the timed word rather
-    // than following it, so it is not a word that can hold a timing of its own
-    // and MIN_RESTORED_SEC is the wrong question to ask - half of "во-первых"
-    // would get its own karaoke highlight, and whatever draws the two entries
-    // would put a space between them. The gap is consulted only once the seam
-    // says there really are two words here. 45 measured restores took their own
-    // entry off a seam like this before the order was fixed.
-    if (separator && segEnd - last.end >= MIN_RESTORED_SEC) {
+    if (!body) return { words, outcome: "unresolved" };
+    const { left, right, isWordBoundary } = divideSeam(run);
+    // The seam decides whether there are two words here at all, and only then
+    // does the gap decide whether the second can be timed on its own.
+    // MIN_RESTORED_SEC answers "can this word have an entry of its own", which
+    // is not a question to ask of half a word: splitting "во" from "-первых."
+    // would hand half a word its own karaoke highlight and let whatever draws
+    // the two entries put a space between them.
+    if (isWordBoundary && segEnd - last.end >= MIN_RESTORED_SEC) {
       return {
-        words: [...words, { text: missing, start: last.end, end: segEnd }],
+        words: [
+          ...words.slice(0, -1),
+          // The seam's left half stays on the word it was written on - the
+          // comma of "Nice, bro." belongs to "Nice" - and its right half opens
+          // the restored span, which keeps the timing that is genuinely its own.
+          { ...last, text: `${last.text}${left}` },
+          { text: `${right}${body}`, start: last.end, end: segEnd },
+        ],
         outcome: "tail",
       };
     }
     return {
       words: [
         ...words.slice(0, -1),
-        { ...last, text: `${last.text}${separator}${missing}` },
+        // Merged, so the two halves of the seam meet again and the source text
+        // is rebuilt exactly: comma, space and all.
+        {
+          ...last,
+          text: `${last.text}${left}${isWordBoundary ? " " : ""}${right}${body}`,
+        },
       ],
       outcome: "tail",
     };
@@ -209,24 +245,27 @@ export function restoreDroppedWords(
     // "Естественно" and the comma was gone, on 68 of 560 measured head drops.
     // So the head span is everything before the FIRST comparable character
     // that belongs to words[], the mirror of the tail's LAST.
-    const firstTimed = after.search(COMPARABLE_CHAR);
-    const rawMissing = before + (firstTimed < 0 ? after : after.slice(0, firstTimed));
-    const missing = rawMissing.trim();
+    const rawMissing = before + (after.match(LEADING_NON_COMPARABLE)?.[0] ?? "");
+    const first = words[0];
+    const run = rawMissing.match(TRAILING_NON_COMPARABLE)?.[0] ?? "";
+    const body = rawMissing.slice(0, rawMissing.length - run.length).trim();
     // Unreachable for the same reason as the tail branch's guard, and
     // "unresolved" for the same reason: a desync between the two helpers must
     // not pass for a healthy segment.
-    if (!missing) return { words, outcome: "unresolved" };
-    const first = words[0];
-    // The mirror of the tail branch, and it asks its two questions in the same
-    // order for the same reasons: the seam decides whether this is a separate
-    // word at all, and only then does the gap decide whether it can be timed
-    // separately. "Во-" is not a word, however much head room there is.
-    const separator = seamSeparator(rawMissing, "trailing");
-    if (separator && first.start - segStart >= MIN_RESTORED_SEC) {
+    if (!body) return { words, outcome: "unresolved" };
+    // The mirror of the tail branch, asking its two questions in the same order
+    // for the same reasons - the seam first, the gap second. "Во-" is not a
+    // word, however much head room there is.
+    const { left, right, isWordBoundary } = divideSeam(run);
+    if (isWordBoundary && first.start - segStart >= MIN_RESTORED_SEC) {
       return {
         words: [
-          { text: missing, start: segStart, end: first.start },
-          ...words,
+          // Mirror of the tail's division: the seam's left half closes the
+          // restored span ("Естественно,") and its right half opens the timed
+          // word it was written against ("«" + "Наука").
+          { text: `${body}${left}`, start: segStart, end: first.start },
+          { ...first, text: `${right}${first.text}` },
+          ...words.slice(1),
         ],
         outcome: "head",
       };
@@ -235,7 +274,10 @@ export function restoreDroppedWords(
       words: [
         // Merged into the FIRST word rather than given a duration, the mirror
         // of the tail branch. "Во-" + "первых" must not become "Во- первых".
-        { ...first, text: `${missing}${separator}${first.text}` },
+        {
+          ...first,
+          text: `${body}${left}${isWordBoundary ? " " : ""}${right}${first.text}`,
+        },
         ...words.slice(1),
       ],
       outcome: "head",

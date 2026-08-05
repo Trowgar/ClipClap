@@ -289,7 +289,9 @@ describe("splitAtComparable", () => {
 
 describe("restoreDroppedWords - tail", () => {
   it("restores the last word Whisper never timed", () => {
-    // Verbatim from job cmsg4y7rw0001fqbf8dimdrb0; "affair" is absent from words[]
+    // Text verbatim from job cmscht6rp001xq41s5rhjx6q0, where "affair" is absent
+    // from words[]. Timings ADJUSTED to reach this branch: the real segment ends
+    // on its last timed word, so in production it merges.
     const words = [
       { text: "We", start: 10.0, end: 10.2 },
       { text: "think", start: 10.2, end: 10.5 },
@@ -444,6 +446,41 @@ describe("restoreDroppedWords - tail", () => {
     expect(out.words[1]).toEqual({ text: "во-первых.", start: 0.3, end: 0.6 });
   });
 
+  it("gives the seam punctuation to the word it was written on and times the rest", () => {
+    // Verbatim from job cmsd6vaop002gq41s3wobd2w3, timings included and rounded
+    // to two decimals: "bro." has
+    // 0.52s of its own. A comma at the seam is a word boundary, not a
+    // continuation - "bro." is a separate word and gets a separate entry, while
+    // the comma stays on "Nice" where it was written. 45 measured restores have
+    // this shape, and folding them into the previous entry buried up to 1.16s
+    // of speech in a neighbour's timing.
+    const out = restoreDroppedWords(
+      "Nice, bro.",
+      [{ text: "Nice", start: 42.24, end: 42.44 }],
+      42.24,
+      42.96
+    );
+    expect(out.outcome).toBe("tail");
+    expect(out.words).toHaveLength(2);
+    expect(out.words[0]).toEqual({ text: "Nice,", start: 42.24, end: 42.44 });
+    expect(out.words[1]).toEqual({ text: "bro.", start: 42.44, end: 42.96 });
+  });
+
+  it("still merges a seam-punctuated span when there is no room to time it", () => {
+    // Same shape with the segment ending on the last timed word: the split is
+    // not available, so the whole span rides along and must rebuild the source
+    // text exactly - comma, space and all.
+    const out = restoreDroppedWords(
+      "Nice, bro.",
+      [{ text: "Nice", start: 42.24, end: 42.96 }],
+      42.24,
+      42.96
+    );
+    expect(out.outcome).toBe("tail");
+    expect(out.words).toHaveLength(1);
+    expect(out.words[0]).toEqual({ text: "Nice, bro.", start: 42.24, end: 42.96 });
+  });
+
   it("merges a span that continues the adjacent word, however much room there is", () => {
     // "во-первых" is one word Whisper tokenised in two. A separate entry would
     // put a space inside the word and give half of it its own karaoke
@@ -543,7 +580,9 @@ describe("restoreDroppedWords - tail", () => {
 
 describe("restoreDroppedWords - head", () => {
   it("restores the first word, the Russian shape of the defect", () => {
-    // Verbatim from job cms7jhcbz0003nb7fkfdki0lp
+    // Text verbatim from job cms2c8ahm000droa7tcqh30ho. Timings ADJUSTED to reach
+    // this branch: the real segment has a head gap of 0.000 and merges in
+    // production.
     const words = [
       { text: "хорошая", start: 5.4, end: 5.9 },
       { text: "компания", start: 5.9, end: 6.4 },
@@ -562,9 +601,9 @@ describe("restoreDroppedWords - head", () => {
   });
 
   it("merges into the first word when there is no gap, the common head shape", () => {
-    // Verbatim from job cms2c8ahm000droa7tcqh30ho. 500 of 560 measured head
-    // drops have a gap of exactly 0.000, so this - not the branch above - is
-    // what nearly all real traffic takes.
+    // Verbatim from job cms7jhcbz0003nb7fkfdki0lp, timings included, rounded to
+    // two decimals. 500 of 560 measured head drops have a gap of exactly 0.000,
+    // so this - not the branch above - is what nearly all real traffic takes.
     const words = [
       { text: "сексом", start: 34.74, end: 35.14 },
       { text: "и", start: 35.14, end: 35.36 },
@@ -588,7 +627,8 @@ describe("restoreDroppedWords - head", () => {
   });
 
   it("merges a gap that is real but under the floor", () => {
-    // Verbatim from job cms2c8ahm000droa7tcqh30ho. 0.06s of head room: too
+    // Verbatim from job cms2c8ahm000droa7tcqh30ho, timings included, rounded to
+    // two decimals. 0.06s of head room: too
     // little to be a duration, and unlike the tail side this band is populated
     // - 14 measured head drops sit strictly between 0 and the floor, so the
     // floor decides real segments here rather than being decorative.
@@ -619,8 +659,8 @@ describe("restoreDroppedWords - head", () => {
   });
 
   it("keeps the seam punctuation on a head that gets its own timing entry", () => {
-    // The same measured segment with room to time the restored span: the comma
-    // belongs to the head in both branches, not only in the merge.
+    // The same measured segment, timings ADJUSTED to give the span room of its
+    // own: the comma belongs to the head in both branches, not only the merge.
     const words = [
       { text: "для", start: 967.5, end: 967.7 },
       { text: "человека", start: 967.7, end: 968.1 },
@@ -640,6 +680,22 @@ describe("restoreDroppedWords - head", () => {
       start: 967.22,
       end: 967.5,
     });
+  });
+
+  it("gives an opening mark to the word it opens, not to the span before it", () => {
+    // Same text, but Whisper left the guillemet out of the token. It sits at
+    // the seam, and the source says which side it belongs to: the whitespace is
+    // before it, so it opens "Наука" rather than closing "читал".
+    const words = [
+      { text: "Наука", start: 1.0, end: 1.5 },
+      { text: "и", start: 1.5, end: 1.6 },
+      { text: "жизнь».", start: 1.6, end: 2.2 },
+    ];
+    const out = restoreDroppedWords("Он читал «Наука и жизнь».", words, 0, 2.2);
+    expect(out.outcome).toBe("head");
+    expect(out.words).toHaveLength(4);
+    expect(out.words[0]).toEqual({ text: "Он читал", start: 0, end: 1.0 });
+    expect(out.words[1]).toEqual({ text: "«Наука", start: 1.0, end: 1.5 });
   });
 
   it("merges a head that continues the adjacent word, however much room there is", () => {
