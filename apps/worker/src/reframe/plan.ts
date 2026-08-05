@@ -2,6 +2,8 @@ import type {
   CamRect,
   CropPlan,
   FaceTrack,
+  Keyframe,
+  PathSample,
   Shot,
   ShotLayout,
   ShotTracks,
@@ -9,6 +11,12 @@ import type {
   StreamGeometry,
 } from "./types";
 import { DEFAULT_PLAN_OPTIONS, type PlanOptions } from "./options";
+import {
+  DEFAULT_CAMERA,
+  solveCamera,
+  type CameraConfig,
+  type TargetSample,
+} from "./camera";
 import type { CamRectResolution } from "./cam-rect";
 import {
   freeBand,
@@ -204,6 +212,80 @@ function faceInInset(tracks: FaceTrack[], rect: CamRect): FaceTrack | undefined 
   );
 }
 
+/**
+ * The face group a shot's window is anchored on, or null when the shot has no
+ * anchorable face at all.
+ *
+ * Extracted so that `buildCropPlan` and the containment metric cannot disagree
+ * about which faces the window was pointed at. Runs on the MEDIAN boxes and is
+ * called exactly once per shot: this layer changes how the window moves, never
+ * whom it follows.
+ *
+ * Knows nothing about the split layout. `buildCropPlan` tries a split between
+ * the two branches below, and a shot that splits is not a `single` shot, so
+ * nothing downstream asks this about it.
+ */
+export function selectGroupForShot(
+  tracks: FaceTrack[],
+  minFaceWidth: number,
+  cropW: number,
+  sourceWidth: number
+): FaceTrack[] | null {
+  const anchorable = survivingTracks(tracks).filter(
+    (t) => t.box.w >= minFaceWidth
+  );
+  if (anchorable.length === 0) return null;
+  const minX = Math.min(...anchorable.map((t) => t.box.x));
+  const maxX = Math.max(...anchorable.map((t) => t.box.x + t.box.w));
+  if (maxX - minX <= FIT_MARGIN * cropW) return anchorable;
+  return bestFaceGroup(anchorable, cropW, sourceWidth);
+}
+
+/**
+ * Where the anchored group's centre sits at each detector sample inside
+ * `[spanStart, spanEnd]`.
+ *
+ * Every member contributes at every sample time. When a member has no
+ * detection at some time its last known box is carried forward - its first
+ * known box, before it appears at all. Dropping the member instead would
+ * shrink the bounding box and move the target with no change of selection,
+ * which is the confound the frozen-anchor rule exists to prevent, arriving
+ * through the back door.
+ */
+export function buildTargetSamples(
+  group: FaceTrack[],
+  spanStart: number,
+  spanEnd: number
+): TargetSample[] {
+  const withPath = group.filter((t) => t.path && t.path.length > 0);
+  if (withPath.length === 0) return [];
+  const times = [...new Set(withPath.flatMap((t) => t.path!.map((p) => p.t)))]
+    .filter((t) => t >= spanStart && t <= spanEnd)
+    .sort((a, b) => a - b);
+
+  return times.map((t) => {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    for (const track of withPath) {
+      const box = boxAt(track.path!, t);
+      minX = Math.min(minX, box.x);
+      maxX = Math.max(maxX, box.x + box.w);
+    }
+    return { t, cx: (minX + maxX) / 2 };
+  });
+}
+
+/** The track's box at time `t`: the exact sample if there is one, otherwise the
+ *  most recent earlier sample, otherwise the earliest sample. */
+function boxAt(path: PathSample[], t: number): PathSample {
+  let chosen = path[0];
+  for (const p of path) {
+    if (p.t > t) break;
+    chosen = p;
+  }
+  return chosen;
+}
+
 export function buildCropPlan(
   shots: Shot[],
   tracksByShot: ShotTracks[],
@@ -277,6 +359,10 @@ export function buildCropPlan(
     }
   }
 
+  // The group each shot's `single` window was anchored on, recorded as the
+  // layouts are built so the trajectory layer below cannot re-run selection and
+  // silently follow someone else.
+  const groupsByShot = new Map<number, FaceTrack[]>();
   const layouts = shots.map((shot, i): ShotLayout => {
     // Keep only tracks that clear the noise floor AND are seen often enough
     // relative to the dominant track.
@@ -314,6 +400,7 @@ export function buildCropPlan(
     const maxX = Math.max(...anchorable.map((t) => t.box.x + t.box.w));
     if (maxX - minX <= FIT_MARGIN * cropW) {
       const x = evenClamp((minX + maxX) / 2 - cropW / 2, cropW, sourceWidth);
+      groupsByShot.set(i, anchorable);
       return { start: shot.start, end: shot.end, layout: "single", x };
     }
     const split = trySplit(anchorable, tileW, sourceWidth, sourceHeight);
@@ -322,19 +409,24 @@ export function buildCropPlan(
     // faces one window CAN hold rather than centring blind on the furniture
     // between them (engine-notes §7b: 44% of shot time, and in 4 of 12 clips
     // the nearest face was outside the centred window altogether).
+    // Called exactly once: the same group object decides `x` and, later, the
+    // trajectory. Two calls would be two chances to disagree.
+    const group = bestFaceGroup(anchorable, cropW, sourceWidth);
+    groupsByShot.set(i, group);
     return {
       start: shot.start,
       end: shot.end,
       layout: "single",
-      x: windowXFor(
-        bestFaceGroup(anchorable, cropW, sourceWidth),
-        cropW,
-        sourceWidth
-      ),
+      x: windowXFor(group, cropW, sourceWidth),
     };
   });
 
-  const merged = mergeAdjacentLayouts(layouts, sourceWidth);
+  // Merge decides on `x` alone and is byte-identical to v2, so no motion
+  // consideration can change WHICH shots merge.
+  const mergedByX = mergeAdjacentLayouts(layouts, sourceWidth);
+  const merged = opts.motion
+    ? attachTrajectories(mergedByX, shots, groupsByShot, cropW, sourceWidth, opts.camera)
+    : mergedByX;
   // piecewiseX nests one if() per shot; ffmpeg's av_expr parser fails at 100
   // nested segments ("Missing ')' or too many args"). Bail so the orchestrator
   // falls back to a plain centered crop rather than emitting a broken graph.
@@ -343,7 +435,13 @@ export function buildCropPlan(
     // v2 exists to carry stream geometry; a v2 plan without it would be a
     // representable-but-invalid state every consumer would have to defend
     // against.
-    version: streamGeom ? 2 : 1,
+    // v3 iff a trajectory is actually present. A motion-enabled run that
+    // produced no movement stays v2/v1 and is byte-identical to legacy.
+    version: merged.some((s) => s.layout === "single" && s.xs)
+      ? 3
+      : streamGeom
+        ? 2
+        : 1,
     engine: "faces",
     source: { width: sourceWidth, height: sourceHeight },
     profile,
@@ -384,6 +482,58 @@ export function mergeAdjacentLayouts(
     merged.push({ ...shot });
   }
   return merged;
+}
+
+/**
+ * Attaches a trajectory to every `single` span that earns one, AFTER merging.
+ *
+ * Order matters. `mergeAdjacentLayouts` keeps the FIRST shot's geometry, so a
+ * trajectory computed per detector shot and then merged would have every
+ * trajectory but the first discarded - re-freezing the camera over exactly the
+ * merged spans that are longest. Concatenating separately-solved trajectories
+ * is also wrong: they meet at a seam with a discontinuity that does not exist
+ * today. So the solver runs ONCE per merged span.
+ *
+ * `x` is never touched.
+ */
+export function attachTrajectories<T extends ShotLayout>(
+  merged: T[],
+  shots: Shot[],
+  groupsByShot: Map<number, FaceTrack[]>,
+  cropW: number,
+  sourceWidth: number,
+  camera: CameraConfig = DEFAULT_CAMERA
+): (T & { xs?: Keyframe[] })[] {
+  // Generic in the element type only so that a caller holding a narrower type
+  // than the full `ShotLayout` union - a test with a `single` literal, say -
+  // gets that type back with `xs` on it, instead of a union whose other arms
+  // have no `x` to read. Runtime behaviour is exactly the non-generic version.
+  return merged.map((span) => {
+    if (span.layout !== "single") return span as T & { xs?: Keyframe[] };
+    // Each DETECTOR shot overlapping this merged span contributes samples from
+    // its OWN selected group, over its own time range clipped to the span.
+    //
+    // Not a union of every group: carry-forward would then place a face from an
+    // unrelated shot into the bounding box at a time it was never on screen,
+    // moving the target with no change of selection.
+    const targets: TargetSample[] = [];
+    for (const [i, shot] of shots.entries()) {
+      if (!(shot.end > span.start && shot.start < span.end)) continue;
+      const group = groupsByShot.get(i);
+      if (!group) continue;
+      targets.push(
+        ...buildTargetSamples(
+          group,
+          Math.max(shot.start, span.start),
+          Math.min(shot.end, span.end)
+        )
+      );
+    }
+    const xs = solveCamera(
+      targets, span.x, cropW, sourceWidth, span.start, span.end, camera
+    );
+    return (xs ? { ...span, xs } : span) as T & { xs?: Keyframe[] };
+  });
 }
 
 /** Re-window a stored plan to a [start, end] sub-range of the same clip

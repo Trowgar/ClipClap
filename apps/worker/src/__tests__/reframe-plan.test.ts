@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  attachTrajectories,
   buildCropPlan,
+  buildTargetSamples,
   cropWidthFor,
   evenClamp,
   planLayoutCounts,
+  selectGroupForShot,
   sliceCropPlan,
   tileWidthFor,
 } from "../reframe/plan";
+// DEFAULT_CAMERA lives in camera.ts and plan.ts does not re-export it, so this
+// is a second import statement by necessity, not by preference.
+import { DEFAULT_CAMERA } from "../reframe/camera";
 import type {
   CamRect,
   CropPlan,
@@ -1010,5 +1016,150 @@ describe("stream layout", () => {
     expect(podcast?.shots).toEqual([
       { start: 0, end: 30, layout: "single", x: 1256 },
     ]);
+  });
+});
+
+describe("selectGroupForShot", () => {
+  const t = (id: number, x: number, w = 60) => ({
+    id, box: { x, y: 0, w, h: 60 }, score: 0.9, samples: 10, mouthActivity: 0.05,
+  });
+
+  it("returns every anchorable face when they all fit one window", () => {
+    const group = selectGroupForShot([t(0, 100), t(1, 200)], 40, 406, 1280);
+    expect(group!.map((g) => g.id).sort()).toEqual([0, 1]);
+  });
+
+  it("falls back to bestFaceGroup when they do not fit", () => {
+    const group = selectGroupForShot([t(0, 0), t(1, 600), t(2, 660)], 40, 406, 1280);
+    expect(group!.map((g) => g.id).sort()).toEqual([1, 2]);
+  });
+
+  it("returns null when no face clears the min-face guard", () => {
+    expect(selectGroupForShot([t(0, 100, 10)], 40, 406, 1280)).toBeNull();
+  });
+
+  it("does not move when mouthActivity moves", () => {
+    // engine-notes 7c's invariant, restated on the extracted function so it
+    // cannot be lost now that the measurement script reuses this selection.
+    const quiet = [t(0, 0), t(1, 600), t(2, 660)];
+    const loud = quiet.map((x, i) => ({ ...x, mouthActivity: i === 0 ? 0.9 : 0.01 }));
+    expect(selectGroupForShot(loud, 40, 406, 1280)!.map((g) => g.id)).toEqual(
+      selectGroupForShot(quiet, 40, 406, 1280)!.map((g) => g.id)
+    );
+  });
+});
+
+describe("buildTargetSamples", () => {
+  const trackWithPath = (id: number, xs: number[]) => ({
+    id,
+    box: { x: xs[0], y: 0, w: 100, h: 100 },
+    score: 0.9,
+    samples: xs.length,
+    mouthActivity: 0.05,
+    path: xs.map((x, i) => ({ t: i * 0.5, x, y: 0, w: 100, h: 100 })),
+  });
+
+  it("takes the midpoint of the group bounding box at each sample time", () => {
+    const samples = buildTargetSamples(
+      [trackWithPath(0, [100, 120]), trackWithPath(1, [300, 320])], 0, 1
+    );
+    expect(samples[0]).toEqual({ t: 0, cx: 250 });
+    expect(samples[1]).toEqual({ t: 0.5, cx: 270 });
+  });
+
+  it("carries a missing member forward rather than dropping it", () => {
+    // Dropping an absent member shrinks the bbox and moves the target with no
+    // change of selection - the confound the frozen-anchor rule forbids.
+    const a = trackWithPath(0, [100, 120, 140]);
+    const b = trackWithPath(1, [300]);
+    const samples = buildTargetSamples([a, b], 0, 2);
+    expect(samples[1]).toEqual({ t: 0.5, cx: 260 });
+  });
+
+  it("returns nothing when no member has a path", () => {
+    const noPath = {
+      id: 0, box: { x: 10, y: 0, w: 100, h: 100 },
+      score: 0.9, samples: 3, mouthActivity: 0,
+    };
+    expect(buildTargetSamples([noPath], 0, 2)).toEqual([]);
+  });
+
+  it("ignores samples outside the span", () => {
+    const samples = buildTargetSamples([trackWithPath(0, [100, 120, 140])], 0.4, 0.6);
+    expect(samples.map((s) => s.t)).toEqual([0.5]);
+  });
+});
+
+describe("attachTrajectories", () => {
+  const track = (id: number, xs: number[], step = 0.5, from = 0) => ({
+    id,
+    box: { x: xs[0], y: 0, w: 60, h: 60 },
+    score: 0.9,
+    samples: xs.length,
+    mouthActivity: 0.05,
+    path: xs.map((x, i) => ({ t: from + i * step, x, y: 0, w: 60, h: 60 })),
+  });
+  const moving = (n: number, from = 0, x0 = 100, dx = 40) =>
+    track(0, Array.from({ length: n }, (_, i) => x0 + i * dx), 0.5, from);
+
+  it("leaves center, split and stream layouts untouched", () => {
+    const merged = [
+      { start: 0, end: 5, layout: "center" as const, x: 100 },
+      { start: 5, end: 10, layout: "split" as const, top: { x: 0 }, bottom: { x: 500 } },
+    ];
+    const shots = [{ start: 0, end: 5 }, { start: 5, end: 10 }];
+    expect(attachTrajectories(merged, shots, new Map(), 406, 1280, DEFAULT_CAMERA))
+      .toEqual(merged);
+  });
+
+  it("leaves x untouched when it adds a trajectory", () => {
+    // The whole rollback story rests on this.
+    const groups = new Map([[0, [moving(20)]]]);
+    const merged = [{ start: 0, end: 10, layout: "single" as const, x: 437 }];
+    const out = attachTrajectories(merged, [{ start: 0, end: 10 }], groups, 406, 1280, DEFAULT_CAMERA);
+    expect(out[0].x).toBe(437);
+  });
+
+  it("omits xs entirely when the camera does not move", () => {
+    const groups = new Map([[0, [track(0, Array.from({ length: 20 }, () => 640))]]]);
+    const merged = [{ start: 0, end: 10, layout: "single" as const, x: 437 }];
+    const out = attachTrajectories(merged, [{ start: 0, end: 10 }], groups, 406, 1280, DEFAULT_CAMERA);
+    expect("xs" in out[0]).toBe(false);
+  });
+
+  it("uses every detector shot inside a merged span, not only the first", () => {
+    // This is the defect the order-of-operations rule exists to prevent: the
+    // merge keeps the FIRST shot's geometry, so a trajectory built per shot and
+    // then merged would lose the second half entirely.
+    const groups = new Map([
+      [0, [track(0, [300, 300, 300, 300, 300, 300, 300, 300, 300, 300])]],
+      [1, [track(1, Array.from({ length: 10 }, (_, i) => 300 + i * 60), 0.5, 5)]],
+    ]);
+    const shots = [{ start: 0, end: 5 }, { start: 5, end: 10 }];
+    const merged = [{ start: 0, end: 10, layout: "single" as const, x: 100 }];
+    const out = attachTrajectories(merged, shots, groups, 406, 1280, DEFAULT_CAMERA);
+    expect(out[0].xs).toBeDefined();
+    // Movement must occur in the SECOND half, which only shot 1 supplies.
+    const late = out[0].xs!.filter((k) => k.t > 5);
+    expect(late.length).toBeGreaterThan(0);
+  });
+
+  it("does not let a face from another shot widen the target", () => {
+    // Carry-forward is per detector shot. Pooling all groups would place shot
+    // 1's face into shot 0's bounding box at a time it was never on screen.
+    const groups = new Map([
+      [0, [track(0, Array.from({ length: 10 }, (_, i) => 100 + i * 40))]],
+      [1, [track(1, Array.from({ length: 10 }, () => 1200), 0.5, 5)]],
+    ]);
+    const shots = [{ start: 0, end: 5 }, { start: 5, end: 10 }];
+    const merged = [{ start: 0, end: 5, layout: "single" as const, x: 0 }];
+    const out = attachTrajectories(merged, shots, groups, 406, 1280, DEFAULT_CAMERA);
+    // Only shot 0 overlaps [0,5); shot 1's distant face must not appear at all.
+    const targets = buildTargetSamples(groups.get(0)!, 0, 5);
+    const maxCx = Math.max(...targets.map((s) => s.cx));
+    expect(maxCx).toBeLessThan(700);
+    if (out[0].xs) {
+      expect(Math.max(...out[0].xs.map((k) => k.x))).toBeLessThan(700);
+    }
   });
 });
