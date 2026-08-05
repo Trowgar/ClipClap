@@ -88,6 +88,7 @@ const manifest = () => {
   );
   return call![0].data.renderManifest as {
     reframe: { engine: string; checks: Array<Record<string, unknown>> };
+    subtitles: Record<string, number>;
   };
 };
 
@@ -258,5 +259,133 @@ describe("renderClips reframe branch", () => {
     expect(
       manifest().reframe.checks.map((c) => c.fallbackReason)
     ).toEqual(["timeout", "plan_empty", "timeout"]);
+  });
+});
+
+// The dropped-word repair reports what it did through renderManifest.subtitles,
+// and `unresolved` growing there is the documented signal that Whisper's output
+// shape has changed. Nothing asserted that manifest field: the five hand-written
+// += lines and the hand-rolled object literal that duplicates RestoreSummary
+// could be transposed - restoredHead += restores.restoredTail - and the whole
+// suite stayed green. A mis-summed tripwire is worse than no tripwire.
+describe("renderClips subtitle telemetry", () => {
+  // One segment per outcome, inside the highlight window, with the head and
+  // tail counts DIFFERENT so a transposition of the two cannot pass.
+  const segments = [
+    {
+      // tail restore with its own timing entry: 0.8s of room and a spaced seam.
+      start: 100.0,
+      end: 101.0,
+      text: "Nice, bro.",
+      words: [{ text: "Nice", start: 100.0, end: 100.2 }],
+    },
+    {
+      // tail restore that merges: "во-первых" is one word tokenised in two.
+      start: 101.0,
+      end: 102.0,
+      text: "Это во-первых.",
+      words: [
+        { text: "Это", start: 101.0, end: 101.3 },
+        { text: "во", start: 101.3, end: 101.6 },
+      ],
+    },
+    {
+      // head restore that merges: no head room at all, the common Russian shape.
+      start: 102.0,
+      end: 103.0,
+      text: "Заниматься сексом.",
+      words: [{ text: "сексом.", start: 102.0, end: 102.5 }],
+    },
+    {
+      // text missing at BOTH ends - the repair declines to guess.
+      start: 103.0,
+      end: 104.0,
+      text: "start middle end",
+      words: [{ text: "middle", start: 103.4, end: 103.6 }],
+    },
+    {
+      // nothing dropped: counted as an occurrence, restored nowhere.
+      start: 104.0,
+      end: 104.5,
+      text: "All good.",
+      words: [
+        { text: "All", start: 104.0, end: 104.2 },
+        { text: "good.", start: 104.2, end: 104.5 },
+      ],
+    },
+    // No words[] at all: takes the wordless fallback cue, which cannot drop a
+    // word, so it must not be counted as an occurrence.
+    { start: 104.5, end: 105.0, text: "Silent." },
+    // Outside the highlight window entirely.
+    {
+      start: 200.0,
+      end: 201.0,
+      text: "Nice, bro.",
+      words: [{ text: "Nice", start: 200.0, end: 200.2 }],
+    },
+  ];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv("REFRAME_ENGINE", "off");
+    mocks.userFindUniqueOrThrow.mockResolvedValue({
+      plan: "STARTER",
+      billingCycle: "MONTHLY",
+    });
+    mocks.downloadVideo.mockResolvedValue("/tmp/fake-source.mp4");
+    mocks.cutClips.mockImplementation(async (_src: string, hs: unknown[]) =>
+      hs.map(() => ({ highlight: hs[0], clipPath: "/tmp/fake-clip.mp4" }))
+    );
+    mocks.probeTimeline.mockResolvedValue({
+      formatStart: 0,
+      videoStart: 0,
+      audioStart: 0,
+      hasAudio: true,
+      hasVideo: true,
+    });
+    mocks.generateThumbnail.mockResolvedValue("/tmp/fake-thumb.jpg");
+    mocks.uploadFile.mockResolvedValue(undefined);
+    mocks.clipCreate.mockResolvedValue({ id: "clip1" });
+    mocks.jobUpdate.mockResolvedValue(undefined);
+    mocks.computeClipExpiresAt.mockReturnValue(undefined);
+  });
+
+  it("writes the summary the segments imply", async () => {
+    mocks.jobFindUniqueOrThrow.mockResolvedValue({
+      ...jobWith([highlight]),
+      transcriptJson: { text: "", segments },
+    });
+
+    await runRenderStage({ mode: "clips", jobId: "job1", userId: "u1" });
+
+    expect(manifest().subtitles).toEqual({
+      // Five of the seven segments overlap the window and carry words[].
+      segmentOccurrences: 5,
+      restoredHead: 1,
+      restoredTail: 2,
+      unresolved: 1,
+      // The merged head plus the merged tail, and NOT the tail that got its
+      // own entry.
+      merged: 2,
+    });
+  });
+
+  it("sums over the job's clips rather than keeping the last one", async () => {
+    // Two highlights over the same segments: every field doubles. Written to
+    // kill an assignment where an accumulation is meant.
+    mocks.jobFindUniqueOrThrow.mockResolvedValue({
+      ...jobWith([highlight, highlight]),
+      transcriptJson: { text: "", segments },
+    });
+
+    await runRenderStage({ mode: "clips", jobId: "job1", userId: "u1" });
+
+    expect(manifest().subtitles).toEqual({
+      segmentOccurrences: 10,
+      restoredHead: 2,
+      restoredTail: 4,
+      unresolved: 2,
+      merged: 4,
+    });
   });
 });

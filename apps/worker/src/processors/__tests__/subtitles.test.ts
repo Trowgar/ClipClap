@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   comparableText,
+  dropCarriedPunctuation,
   generateAss,
   restoreDroppedWords,
   segmentsToCues,
@@ -288,6 +289,102 @@ describe("splitAtComparable", () => {
   });
 });
 
+describe("dropCarriedPunctuation", () => {
+  /** The shape this function had before it was made linear: compare every
+   *  prefix (or suffix) of the run by cutting a fresh string for each. Kept
+   *  here as the reference the rewrite must agree with everywhere, because the
+   *  rewrite is meant to change the cost and nothing else. */
+  function naive(
+    run: string,
+    neighbour: string,
+    edge: "leading" | "trailing"
+  ): string {
+    const cps = [...run];
+    for (let n = cps.length; n > 0; n -= 1) {
+      if (edge === "leading") {
+        if (neighbour.endsWith(cps.slice(0, n).join(""))) return cps.slice(n).join("");
+      } else if (neighbour.startsWith(cps.slice(cps.length - n).join(""))) {
+        return cps.slice(0, cps.length - n).join("");
+      }
+    }
+    return run;
+  }
+
+  it("drops the longest prefix the neighbour already ends with", () => {
+    expect(dropCarriedPunctuation("» каждый", "жизнь»", "leading")).toBe(" каждый");
+    expect(dropCarriedPunctuation("»» x", "жизнь»»", "leading")).toBe(" x");
+  });
+
+  it("drops the longest suffix the neighbour already starts with", () => {
+    expect(dropCarriedPunctuation("читал «", "«Наука", "trailing")).toBe("читал ");
+  });
+
+  it("keeps the run when the neighbour carries none of it", () => {
+    expect(dropCarriedPunctuation(", ", "Nice", "leading")).toBe(", ");
+    expect(dropCarriedPunctuation(" - ", "хорошо", "trailing")).toBe(" - ");
+    expect(dropCarriedPunctuation("", "Nice", "leading")).toBe("");
+    expect(dropCarriedPunctuation("...", "", "trailing")).toBe("...");
+  });
+
+  it("never half-matches a surrogate pair", () => {
+    // The neighbour ends with the low half of "𝄞" only if the comparison is
+    // made in UTF-16 units; in code points there is no overlap at all.
+    //
+    // This is the ONE input where the rewrite and the reference below disagree,
+    // and it is why the random comparison draws whole code points only. The
+    // prefix-by-prefix version compared with String.endsWith, i.e. in UTF-16
+    // units, so it half-matched here and returned "!" - contradicting the
+    // docstring's own code-point promise. The input is malformed (a lone
+    // surrogate cannot occur in NFC text), so nothing real changes; the
+    // promised behaviour is simply now true.
+    expect(dropCarriedPunctuation("\uDD1E!", "x𝄞", "leading")).toBe("\uDD1E!");
+    // Well-formed astral characters DO match, on both edges.
+    expect(dropCarriedPunctuation("x\u{1D11E}", "\u{1D11E}y", "trailing")).toBe("x");
+    expect(dropCarriedPunctuation("\u{1D11E}y", "x\u{1D11E}", "leading")).toBe("y");
+  });
+
+  it("agrees with the prefix-by-prefix reference on 4000 random runs", () => {
+    // Deterministic PRNG: a flaky property test is worse than none. The
+    // alphabet is small on purpose - overlaps have to actually happen for the
+    // comparison to mean anything - and it includes an astral character so the
+    // code-point contract is exercised, not just asserted.
+    let seed = 20260805;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed / 2147483648;
+    };
+    const alphabet = [...".,-»«'!", "\u{1D11E}", "a", " "];
+    const pick = (n: number) =>
+      Array.from({ length: n }, () => alphabet[Math.floor(rand() * alphabet.length)]).join("");
+    for (let i = 0; i < 4000; i += 1) {
+      const run = pick(Math.floor(rand() * 8));
+      const neighbour = pick(Math.floor(rand() * 8));
+      const edge = rand() < 0.5 ? "leading" : "trailing";
+      expect({ run, neighbour, edge, out: dropCarriedPunctuation(run, neighbour, edge) }).toEqual({
+        run,
+        neighbour,
+        edge,
+        out: naive(run, neighbour, edge),
+      });
+    }
+  });
+
+  it("stays fast on a run long enough to make the old shape unusable", () => {
+    // Transcript text is model output over user-supplied audio, and Whisper's
+    // known failure mode on silence and music is a long run of repeated
+    // punctuation. The prefix-by-prefix version cost 5.6s on 32k characters
+    // (4x per doubling, measured); this one is linear. The bound is loose by
+    // two orders of magnitude so it can only fail on a return to quadratic.
+    const run = "!".repeat(16000) + "?" + "!".repeat(16000);
+    const neighbour = "!".repeat(32000);
+    const started = Date.now();
+    expect(dropCarriedPunctuation(run, neighbour, "leading")).toBe(
+      "?" + "!".repeat(16000)
+    );
+    expect(Date.now() - started).toBeLessThan(500);
+  });
+});
+
 describe("restoreDroppedWords - tail", () => {
   it("restores the last word Whisper never timed", () => {
     // Text verbatim from job cmscht6rp001xq41s5rhjx6q0, where "affair" is absent
@@ -430,9 +527,12 @@ describe("restoreDroppedWords - tail", () => {
 
   it("rejoins a hyphenated word with no space at the seam", () => {
     // Whisper tokenises "во-первых" as "во" plus an untimed "-первых.", so an
-    // unconditional space join writes "во -первых." into the picture. 34 of 743
-    // measured tail drops look like this, and to a viewer a space inside a word
-    // is worse than the missing word this repair exists to put back.
+    // unconditional space join writes "во -первых." into the picture. Re-counted
+    // 2026-08-05 over every transcript in the database: 4 of 743 tail drops and
+    // 5 of 560 head drops have a seam with no whitespace in it. The comment
+    // said 34 of 743, which was wrong by 8x. It is rare, and to a viewer a
+    // space inside a word is worse than the missing word this repair exists to
+    // put back.
     const out = restoreDroppedWords(
       "Это во-первых.",
       [
@@ -465,6 +565,73 @@ describe("restoreDroppedWords - tail", () => {
     expect(out.words).toHaveLength(2);
     expect(out.words[0]).toEqual({ text: "Nice,", start: 42.24, end: 42.44 });
     expect(out.words[1]).toEqual({ text: "bro.", start: 42.44, end: 42.96 });
+  });
+
+  it("keeps a dash standing alone at the seam, and gives it to the span it opens", () => {
+    // A spaced dash is ordinary typography in both languages and the seam run
+    // is then " - ": nothing before its first space, nothing after its last,
+    // and the dash between the two. Reconstructing the run from those two ends
+    // deleted it and burned "Nice bro." - the same class of defect this whole
+    // file exists to remove, and invisible to the acceptance metric because
+    // comparableText strips exactly the character being lost.
+    const out = restoreDroppedWords(
+      "Nice - bro.",
+      [{ text: "Nice", start: 42.24, end: 42.44 }],
+      42.24,
+      42.96
+    );
+    expect(out.outcome).toBe("tail");
+    expect(out.words).toHaveLength(2);
+    expect(out.words[0]).toEqual({ text: "Nice", start: 42.24, end: 42.44 });
+    expect(out.words[1]).toEqual({ text: "- bro.", start: 42.44, end: 42.96 });
+  });
+
+  it("keeps a dash standing alone at the seam when the span merges", () => {
+    // The merge branch lost it too, and there the whole seam run is rebuilt
+    // verbatim, so the source text comes back character for character.
+    const out = restoreDroppedWords(
+      "Nice - bro.",
+      [{ text: "Nice", start: 42.24, end: 42.96 }],
+      42.24,
+      42.96
+    );
+    expect(out.outcome).toBe("tail");
+    expect(out.words).toHaveLength(1);
+    expect(out.words[0]).toEqual({ text: "Nice - bro.", start: 42.24, end: 42.96 });
+  });
+
+  it("keeps an em dash at the seam, the Russian shape of the same run", () => {
+    // The em dash below is SOURCE DATA, not prose: Russian writes a spaced em
+    // dash where English writes "is", and it is the commonest way this seam run
+    // occurs in the wild. It is also multi-byte, which is why it is worth a
+    // case of its own next to the ASCII hyphen.
+    const out = restoreDroppedWords(
+      "Он читал — Наука",
+      [
+        { text: "Он", start: 0, end: 0.3 },
+        { text: "читал", start: 0.3, end: 0.8 },
+      ],
+      0,
+      1.5
+    );
+    expect(out.outcome).toBe("tail");
+    expect(out.words).toHaveLength(3);
+    expect(out.words[1]).toEqual({ text: "читал", start: 0.3, end: 0.8 });
+    expect(out.words[2]).toEqual({ text: "— Наука", start: 0.8, end: 1.5 });
+  });
+
+  it("keeps a multi-character token standing alone at the seam", () => {
+    // The interior of the run is copied, not classified: whatever stands
+    // between the first space and the last is preserved as written.
+    const out = restoreDroppedWords(
+      "Hey -- you",
+      [{ text: "Hey", start: 0, end: 0.3 }],
+      0,
+      1.0
+    );
+    expect(out.outcome).toBe("tail");
+    expect(out.words).toHaveLength(2);
+    expect(out.words[1]).toEqual({ text: "-- you", start: 0.3, end: 1.0 });
   });
 
   it("still merges a seam-punctuated span when there is no room to time it", () => {
@@ -745,6 +912,36 @@ describe("restoreDroppedWords - head", () => {
     expect(out.outcome).toBe("head");
     expect(out.words).toHaveLength(2);
     expect(out.words[0]).toEqual({ text: "Во-первых", start: 12.5, end: 12.9 });
+  });
+
+  it("keeps a dash standing alone at the seam, and gives it to the word it opens", () => {
+    // The head mirror. The dash goes with the word to its right in both
+    // branches, so the two entries drawn side by side rebuild "Там - хорошо"
+    // exactly - the renderer joins entries with one space.
+    const out = restoreDroppedWords(
+      "Там - хорошо",
+      [{ text: "хорошо", start: 5.4, end: 5.9 }],
+      5.0,
+      5.9
+    );
+    expect(out.outcome).toBe("head");
+    expect(out.words).toHaveLength(2);
+    expect(out.words[0]).toEqual({ text: "Там", start: 5.0, end: 5.4 });
+    expect(out.words[1]).toEqual({ text: "- хорошо", start: 5.4, end: 5.9 });
+  });
+
+  it("keeps a dash standing alone at the seam when the head merges", () => {
+    // No head room, so the span is glued on - and the run comes back verbatim
+    // rather than as a single invented space.
+    const out = restoreDroppedWords(
+      "Там - хорошо",
+      [{ text: "хорошо", start: 5.0, end: 5.9 }],
+      5.0,
+      5.9
+    );
+    expect(out.outcome).toBe("head");
+    expect(out.words).toHaveLength(1);
+    expect(out.words[0]).toEqual({ text: "Там - хорошо", start: 5.0, end: 5.9 });
   });
 
   it("rejoins a hyphenated head with no space at the seam", () => {

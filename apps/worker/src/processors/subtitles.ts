@@ -117,11 +117,30 @@ const TRAILING_NON_COMPARABLE = /[^\p{L}\p{N}]*$/u;
  *  between the two, read off the source text and nothing else.
  *
  *  Whitespace anywhere in the run makes it a word boundary, and then what sits
- *  BEFORE the whitespace belongs to the word on the left and what sits AFTER it
- *  to the word on the right: `", "` leaves its comma on "Nice" and `" «"` gives
- *  its guillemet to "«Наука". Testing only the run's first character called
- *  `", bro."` a continuation of "Nice", which is how 45 restores lost their own
- *  timing.
+ *  BEFORE the first whitespace belongs to the word on the left and what sits
+ *  AFTER the last whitespace to the word on the right: `", "` leaves its comma
+ *  on "Nice" and `" «"` gives its guillemet to "«Наука". Testing only the run's
+ *  first character called `", bro."` a continuation of "Nice", which is how 45
+ *  restores lost their own timing.
+ *
+ *  `interior` is everything STRICTLY BETWEEN those two, whitespace-trimmed: a
+ *  token the source separated from both neighbours, like the dash of
+ *  "Там - хорошо". It is returned rather than dropped because an earlier
+ *  version rebuilt the run from its two ends and silently deleted it - "Там -
+ *  хорошо" was burned as "Там хорошо", a source character lost in the picture,
+ *  which is the same defect this file exists to remove. Zero occurrences in the
+ *  1303 corpus restores (the runs there are only `" "`, `", "`, `"-"`, `". "`
+ *  and `"'"`), and a spaced dash is ordinary Russian and English typography, so
+ *  16 jobs is far too thin a sample to call it unreachable.
+ *
+ *  It goes to the RIGHT-hand span, for two reasons. It stands after a
+ *  whitespace, so the rule above already assigns it there - no second rule is
+ *  needed. And a token written alone opens what follows rather than closing
+ *  what precedes ("- хорошо", "« Наука"), so on the split branch it appears
+ *  with the words it introduces instead of hanging on screen ahead of them.
+ *  Nothing visible turns on the choice - the renderer joins the two entries
+ *  with one space either way, so the drawn line is identical - which is why the
+ *  weaker argument decides it.
  *
  *  A run with NO whitespace is not a boundary at all: the two pieces are one
  *  word Whisper tokenised in two ("во" + "-первых."), and the whole run belongs
@@ -133,11 +152,24 @@ const TRAILING_NON_COMPARABLE = /[^\p{L}\p{N}]*$/u;
  *  is drawn with its timing. Nothing available here can tell where a CJK word
  *  boundary falls, and the corpus holds no CJK at all, so a heuristic could not
  *  be checked against anything. Stated rather than papered over. */
-function divideSeam(run: string): { left: string; right: string; isWordBoundary: boolean } {
-  if (!/\s/u.test(run)) return { left: run, right: "", isWordBoundary: false };
+function divideSeam(run: string): {
+  left: string;
+  interior: string;
+  right: string;
+  isWordBoundary: boolean;
+} {
+  if (!/\s/u.test(run)) {
+    return { left: run, interior: "", right: "", isWordBoundary: false };
+  }
+  const left = run.match(/^\S*/u)?.[0] ?? "";
+  const right = run.match(/\S*$/u)?.[0] ?? "";
   return {
-    left: run.match(/^\S*/u)?.[0] ?? "",
-    right: run.match(/\S*$/u)?.[0] ?? "",
+    left,
+    // Whitespace-trimmed at the edges only: any whitespace the source wrote
+    // INSIDE the interior survives, because the caller re-separates it from the
+    // words on either side with exactly one space.
+    interior: run.slice(left.length, run.length - right.length).trim(),
+    right,
     isWordBoundary: true,
   };
 }
@@ -149,27 +181,66 @@ function divideSeam(run: string): { left: string; right: string; isWordBoundary:
  *  carry some - while the span rules anchor on comparable characters and cannot
  *  see it. A token of `"жизнь»"` beside a span of `"» каждый месяц."` burns
  *  "жизнь»»" into the video, and a burned glyph cannot be repaired downstream.
- *  Zero occurrences today against 1362 drop boundaries, but 45 tokens have the
- *  enabling shape.
+ *  Zero occurrences today, but 45 tokens have the enabling shape. Re-measured
+ *  2026-08-05 over every transcript in the database: this runs on the 1303
+ *  seams that head and tail restores produce and removes nothing at any of
+ *  them. 1362 segments there disagree with their own `words[]`; the other 59
+ *  are unresolved and never reach a seam. The comment used to quote that 1362
+ *  as the number of boundaries this had been checked against, which is 59 more
+ *  than it has ever run on.
  *
  *  Code points, never UTF-16 units, so a surrogate pair is never half-matched.
+ *  The prefix-by-prefix version this replaced compared with String.endsWith and
+ *  did half-match a lone surrogate; that input is malformed and cannot occur in
+ *  NFC text, and it is the only input on which the two versions differ.
  *  Only the run is searched, never the span's words: a comparable character is
  *  by construction absent from the timed side, so an overlap reaching one would
- *  mean the two helpers had desynced. */
-function dropCarriedPunctuation(
+ *  mean the two helpers had desynced.
+ *
+ *  Exported for its own tests: the linear rewrite below has to be shown to
+ *  agree with the prefix-by-prefix version it replaced, and that comparison
+ *  cannot be made through restoreDroppedWords. */
+export function dropCarriedPunctuation(
   run: string,
   neighbour: string,
   edge: "leading" | "trailing"
 ): string {
   const cps = [...run];
-  for (let n = cps.length; n > 0; n -= 1) {
-    if (edge === "leading") {
-      if (neighbour.endsWith(cps.slice(0, n).join(""))) return cps.slice(n).join("");
-    } else if (neighbour.startsWith(cps.slice(cps.length - n).join(""))) {
-      return cps.slice(0, cps.length - n).join("");
-    }
+  const nb = [...neighbour];
+  if (edge === "leading") {
+    return cps.slice(overlap(cps, nb)).join("");
   }
-  return run;
+  return cps.slice(0, cps.length - overlap(nb, cps)).join("");
+}
+
+/** Length, in code points, of the longest prefix of `a` that is also a suffix
+ *  of `b`.
+ *
+ *  KMP's failure function over `a + SEP + b`, which is O(len a + len b). The
+ *  version this replaced cut and joined a fresh string for every candidate
+ *  length, which is quadratic: measured at 5.9ms for a 1000-character run,
+ *  53.5ms for 4000 and 5624.9ms for 32000, a clean 4x per doubling. Nothing
+ *  reaches that today - the longest seam run in the corpus is 2 code points -
+ *  but the run is model output over user-supplied audio, and a long line of
+ *  repeated punctuation is Whisper's known failure mode on silence and music.
+ *
+ *  Linear rather than a length cap: a cap would stop dropping punctuation at
+ *  exactly the input that makes it worst, so the video would be burned with the
+ *  duplicated glyphs this function exists to prevent. Cost is the only thing
+ *  that changes here.
+ *
+ *  SEP is `null` rather than some rare character, so it cannot collide with
+ *  anything in either input - which is what bounds the answer to `a`. */
+function overlap(a: string[], b: string[]): number {
+  const s: Array<string | null> = [...a, null, ...b];
+  const fail = new Array<number>(s.length).fill(0);
+  for (let i = 1; i < s.length; i += 1) {
+    let k = fail[i - 1];
+    while (k > 0 && s[i] !== s[k]) k = fail[k - 1];
+    if (s[i] === s[k]) k += 1;
+    fail[i] = k;
+  }
+  return fail[s.length - 1];
 }
 
 /**
@@ -185,9 +256,11 @@ function dropCarriedPunctuation(
  * (8 of 133 measured spans do, the worst holding nine). Splitting it would need
  * a per-word timestamp that nothing here can honestly produce; the cost is a
  * cue that can exceed the chunker's character limit, and that is bounded by
- * what already ships - over all 1866 cues in the corpus the wordless fallback
- * path draws median 30 and up to 115 characters, and a restored entry tops out
- * at 54.
+ * what already ships. Re-measured 2026-08-05: over the 114 clips in the corpus
+ * the wordless fallback path draws 81 of the 3794 cues, at a median of 52 and a
+ * maximum of 106 characters, while the longest restored entry over every
+ * transcript in the database is 54. Two populations, named separately on
+ * purpose - the cue counts exist only where there are clips.
  */
 export function restoreDroppedWords(
   text: string,
@@ -229,9 +302,8 @@ export function restoreDroppedWords(
     // the helpers desyncing, which has now happened twice - and if it does,
     // "unresolved" makes it visible instead of passing for a healthy segment.
     if (!body) return { words, outcome: "unresolved", merged: false };
-    const { left, right, isWordBoundary } = divideSeam(
-      dropCarriedPunctuation(run, last.text, "leading")
-    );
+    const seam = dropCarriedPunctuation(run, last.text, "leading");
+    const { left, interior, right, isWordBoundary } = divideSeam(seam);
     // The seam decides whether there are two words here at all, and only then
     // does the gap decide whether the second can be timed on its own.
     // MIN_RESTORED_SEC answers "can this word have an entry of its own", which
@@ -245,8 +317,14 @@ export function restoreDroppedWords(
           // The seam's left half stays on the word it was written on - the
           // comma of "Nice, bro." belongs to "Nice" - and its right half opens
           // the restored span, which keeps the timing that is genuinely its own.
+          // Any token the source left standing between the two opens that span
+          // as well, one space ahead of it: "Nice" + "- bro.".
           { ...last, text: `${last.text}${left}` },
-          { text: `${right}${body}`, start: last.end, end: segEnd },
+          {
+            text: `${interior ? `${interior} ` : ""}${right}${body}`,
+            start: last.end,
+            end: segEnd,
+          },
         ],
         outcome: "tail",
         merged: false,
@@ -255,12 +333,11 @@ export function restoreDroppedWords(
     return {
       words: [
         ...words.slice(0, -1),
-        // Merged, so the two halves of the seam meet again and the source text
-        // is rebuilt exactly: comma, space and all.
-        {
-          ...last,
-          text: `${last.text}${left}${isWordBoundary ? " " : ""}${right}${body}`,
-        },
+        // Merged, so the whole seam run is written back between the two halves
+        // verbatim and the source text is rebuilt exactly: comma, space, dash
+        // and all. Copied rather than reassembled from `left` and `right` -
+        // reassembly is what deleted the dash of "Там - хорошо".
+        { ...last, text: `${last.text}${seam}${body}` },
       ],
       outcome: "tail",
       merged: true,
@@ -290,17 +367,20 @@ export function restoreDroppedWords(
     // The mirror of the tail branch, asking its two questions in the same order
     // for the same reasons - the seam first, the gap second. "Во-" is not a
     // word, however much head room there is.
-    const { left, right, isWordBoundary } = divideSeam(
-      dropCarriedPunctuation(run, first.text, "trailing")
-    );
+    const seam = dropCarriedPunctuation(run, first.text, "trailing");
+    const { left, interior, right, isWordBoundary } = divideSeam(seam);
     if (isWordBoundary && first.start - segStart >= MIN_RESTORED_SEC) {
       return {
         words: [
           // Mirror of the tail's division: the seam's left half closes the
           // restored span ("Естественно,") and its right half opens the timed
-          // word it was written against ("«" + "Наука").
+          // word it was written against ("«" + "Наука"), as does anything the
+          // source left standing between them ("Там" + "- хорошо").
           { text: `${body}${left}`, start: segStart, end: first.start },
-          { ...first, text: `${right}${first.text}` },
+          {
+            ...first,
+            text: `${interior ? `${interior} ` : ""}${right}${first.text}`,
+          },
           ...words.slice(1),
         ],
         outcome: "head",
@@ -310,11 +390,9 @@ export function restoreDroppedWords(
     return {
       words: [
         // Merged into the FIRST word rather than given a duration, the mirror
-        // of the tail branch. "Во-" + "первых" must not become "Во- первых".
-        {
-          ...first,
-          text: `${body}${left}${isWordBoundary ? " " : ""}${right}${first.text}`,
-        },
+        // of the tail branch, and the seam run is copied back verbatim for the
+        // same reason. "Во-" + "первых" must not become "Во- первых".
+        { ...first, text: `${body}${seam}${first.text}` },
         ...words.slice(1),
       ],
       outcome: "head",

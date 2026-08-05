@@ -1320,8 +1320,8 @@ immediately on bind-mounted source. A killswitch here would mean shipping the de
 Whisper transcribed but never gave a word timing was never drawn. It was in the transcript, in the analysis
 and in the audio, and absent from the picture.
 
-**Measured over every job in the database with clips and a transcript - 13 jobs, 1265 segments lying fully
-inside a clip window:**
+**Measured over every job in the database with clips and a transcript - 16 jobs, 114 clips, 1265 segments
+lying fully inside a clip window:**
 
 | | segments | first word lost | last word lost | other | loss |
 |---|---|---|---|---|---|
@@ -1342,9 +1342,10 @@ is missing at both ends and the repair declines to guess. Reproducible with
 found the defect reports the same number on a repaired engine as on a broken one. That mistake was made once
 during design and is why the acceptance script exists in the shape it does.
 
-### Four defects, all on one seam, none of them found by reasoning
+### Five defects, all on one seam, four of them found only by measurement
 
-Every one of these was found by measurement or mutation and none by reading the code. The seam is the joint
+The first four were found by measurement or mutation and none by reading the code; the fifth was found by
+reading it, in the final review, after the metric had declared the branch finished. The seam is the joint
 between `comparableText`, `splitAtComparable`, and the caller that spends a count produced by one inside the
 other.
 
@@ -1361,6 +1362,15 @@ other.
 4. **The span repeated punctuation the boundary word already carried.** Whisper attaches punctuation to word
    tokens - 2,023 of 75,378 - so `"жизнь»"` plus a span opening `"»"` drew `"жизнь»»"`. Zero occurrences
    today, 45 tokens with the enabling shape.
+5. **The seam run was rebuilt from its two ends, so anything between them was deleted.** `divideSeam` returned
+   the run's first and last non-space tokens and the callers reassembled the run from those, so a token
+   standing alone between two spaces vanished: `Там - хорошо` was burned as `Там хорошо`, `Nice - bro.` as
+   `Nice bro.`. That is the same class of defect this whole section exists to remove - a source character that
+   never reaches an unrepairable picture. Zero occurrences in the 1303 corpus restores, whose seam runs are
+   only `" "`, `", "`, `"-"`, `". "` and `"'"`, but a spaced dash is ordinary Russian and English typography
+   and 16 jobs is a thin sample. The run is now copied, not reconstructed: what stands before the first
+   whitespace goes to the word on the left, what stands after the last to the word on the right, and anything
+   between the two goes with the right-hand span, which is where the same before/after rule already puts it.
 
 **The merge is the common path, not the exception.** 698 of 743 tail gaps are exactly 0.000 and 45 are at
 least 0.08, with nothing between; on the head side 14 of 560 do land inside `(0, 0.08)`, so `MIN_RESTORED_SEC`
@@ -1373,6 +1383,26 @@ material to validate one. Existing clips are not backfilled - `Clip.subtitleTrac
 new renders benefit. The chunker is untouched: 56 of 285 cues on the audited set are single-word, and some of
 those were the residue of this defect while the rest come from `chunkWords` filling greedily to 3 words or 18
 characters. That is separate work with its own measurement.
+
+Three more, added 2026-08-05 after the whole-branch review, because the paragraph above reads as exhaustive
+and is not:
+
+- **The acceptance metric is punctuation-blind, so 135 to 2 is a claim about words and not about characters.**
+  It compares `comparableText`, which strips every character that is not a letter or a digit - exactly the
+  characters the seam rules move around. A change to those rules could delete a spaced dash from every burned
+  caption in the product and this number would not move. One such defect was in the branch and was found by
+  reading the code, not by the metric: `divideSeam` rebuilt the seam run from its first and last tokens and
+  dropped everything between, burning `Там - хорошо` as `Там хорошо`. The check that catches this class is a
+  whitespace-stripped comparison of the restored words against the segment's own text, and it now runs as the
+  `dropCarriedPunctuation` and seam tests rather than as part of the acceptance script.
+- **A merged restore is a multi-word timing entry, and 1212 of 1303 restores take that path.** `karaokeText`
+  highlights a whole entry at once, so on a merge the highlight covers the timed word and the restored span
+  together, and the web editor's word splitting cannot split inside one entry. Cosmetic today - the words are
+  drawn, which is what the repair is for - but load-bearing for anyone building word-level karaoke on top.
+- **The trim path does not re-derive cues.** `renderTrim` re-windows the stored `Clip.subtitleTrack` through
+  `sliceCues`, so a clip rendered before this change keeps its missing word even after the user trims it. The
+  defect stays reachable in production for as long as clips rendered before 2026-08-05 exist, and no amount of
+  editing in the UI repairs one.
 
 **Telemetry.** `renderManifest.subtitles` carries `segmentOccurrences`, `restoredHead`, `restoredTail`,
 `unresolved` and `merged`. `unresolved` growing is the signal that Whisper's output shape has changed.
