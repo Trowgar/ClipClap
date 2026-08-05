@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   comparableText,
   generateAss,
+  restoreDroppedWords,
   segmentsToCues,
   sliceCues,
   splitAtComparable,
@@ -283,5 +284,95 @@ describe("splitAtComparable", () => {
         expect([...comparableText(head)].length).toBe(Math.min(keep, total));
       }
     }
+  });
+});
+
+describe("restoreDroppedWords - tail", () => {
+  it("restores the last word Whisper never timed", () => {
+    // Verbatim from job cmsg4y7rw0001fqbf8dimdrb0; "affair" is absent from words[]
+    const words = [
+      { text: "We", start: 10.0, end: 10.2 },
+      { text: "think", start: 10.2, end: 10.5 },
+      { text: "Chandler", start: 10.5, end: 10.9 },
+      { text: "might", start: 10.9, end: 11.1 },
+      { text: "be", start: 11.1, end: 11.3 },
+      { text: "having", start: 11.3, end: 11.7 },
+      { text: "an", start: 11.7, end: 11.9 },
+    ];
+    const out = restoreDroppedWords(
+      "We think Chandler might be having an affair.",
+      words,
+      10.0,
+      12.6
+    );
+    expect(out.outcome).toBe("tail");
+    expect(out.words).toHaveLength(8);
+    expect(out.words[7]).toEqual({ text: "affair.", start: 11.9, end: 12.6 });
+  });
+
+  it("restores when the token counts happen to match", () => {
+    // "5.30" is two word entries, so a count test sees 6 against 6 and misses it
+    const words = [
+      { text: "It", start: 0, end: 0.2 },
+      { text: "was", start: 0.2, end: 0.4 },
+      { text: "5", start: 0.4, end: 0.6 },
+      { text: "30", start: 0.6, end: 0.9 },
+      { text: "in", start: 0.9, end: 1.0 },
+      { text: "the", start: 1.0, end: 1.2 },
+    ];
+    const out = restoreDroppedWords("It was 5.30 in the morning,", words, 0, 1.8);
+    expect(out.outcome).toBe("tail");
+    expect(out.words[6].text).toBe("morning,");
+  });
+
+  it("leaves a complete segment untouched", () => {
+    const words = [
+      { text: "Y", start: 0, end: 0.1 },
+      { text: "O", start: 0.1, end: 0.2 },
+      { text: "U", start: 0.2, end: 0.3 },
+      { text: "R", start: 0.3, end: 0.4 },
+      { text: "means", start: 0.4, end: 0.7 },
+      { text: "you're", start: 0.7, end: 1.0 },
+    ];
+    const out = restoreDroppedWords("Y-O-U-R means you're.", words, 0, 1.0);
+    expect(out.outcome).toBe("none");
+    expect(out.words).toEqual(words);
+  });
+
+  it("leaves a segment with no word timings untouched", () => {
+    const out = restoreDroppedWords("Anything at all", [], 0, 2);
+    expect(out.outcome).toBe("none");
+    expect(out.words).toEqual([]);
+  });
+
+  it("merges into the last word when the gap is too short to be a duration", () => {
+    const words = [
+      { text: "It", start: 0, end: 0.2 },
+      { text: "was", start: 0.2, end: 0.4 },
+      { text: "5", start: 0.4, end: 0.6 },
+      { text: "30", start: 0.6, end: 0.9 },
+      { text: "in", start: 0.9, end: 1.0 },
+      { text: "the", start: 1.0, end: 1.2 },
+    ];
+    // 0.05s of room left: too short to hand "morning," a duration of its own,
+    // so it rides along on the word before it rather than getting a made-up one.
+    const out = restoreDroppedWords("It was 5.30 in the morning,", words, 0, 1.25);
+    expect(out.outcome).toBe("tail");
+    expect(out.words).toHaveLength(6);
+    expect(out.words[5]).toEqual({ text: "the morning,", start: 1.0, end: 1.2 });
+  });
+
+  it("changes nothing when the mismatch is at neither end", () => {
+    // Whisper timed a word the text does not contain, so the drift is interior:
+    // no prefix and no suffix agrees, and there is no honest place to put it.
+    const words = [
+      { text: "We", start: 10.0, end: 10.2 },
+      { text: "think", start: 10.2, end: 10.5 },
+      { text: "xyz", start: 10.5, end: 10.9 },
+      { text: "affair.", start: 10.9, end: 11.4 },
+    ];
+    const out = restoreDroppedWords("We think an affair.", words, 10.0, 11.4);
+    expect(out.outcome).toBe("unresolved");
+    expect(out.words).toEqual(words);
   });
 });
