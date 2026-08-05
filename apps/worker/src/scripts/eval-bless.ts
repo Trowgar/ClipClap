@@ -177,6 +177,21 @@ export function diffShapes(before: EvalShape | null, after: EvalShape): string[]
     if (a !== b) lines.push(`  dropReason ${key}: ${a} -> ${b}`);
   }
 
+  // Same treatment for the non-fatal drift counter. It costs no clip, so it can
+  // move a long way without moving `count` - which is precisely why a diff that
+  // stayed silent about it would let a critic-prompt regression through.
+  const driftKeys = [
+    ...new Set([
+      ...Object.keys(before.outOfRange ?? {}),
+      ...Object.keys(after.outOfRange ?? {}),
+    ]),
+  ].sort();
+  for (const key of driftKeys) {
+    const a = before.outOfRange?.[key] ?? 0;
+    const b = after.outOfRange?.[key] ?? 0;
+    if (a !== b) lines.push(`  outOfRange ${key}: ${a} -> ${b}`);
+  }
+
   return lines;
 }
 

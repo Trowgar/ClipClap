@@ -205,6 +205,15 @@ export interface EvalShape {
   tier: string | null;
   clips: Array<{ range: string; score: number; title: string }>;
   dropReasons: Record<string, number>;
+  /**
+   * Copy the critic grounded outside its own range. Not a drop - the clip ships
+   * with regrounded copy - but recorded here anyway, because this is a direct
+   * reading of how well the critic prompt keeps its own bookkeeping, and the one
+   * time it moved sharply (ca8dfec, 2 -> 9) the snapshot diff is what showed it.
+   * Absent, not `{}`, when nothing drifted: a block that appears in every file
+   * is a block readers stop seeing.
+   */
+  outOfRange?: Record<string, number>;
   noClipsReason?: string;
 }
 
@@ -224,6 +233,8 @@ export function toShape(result: V2Result): EvalShape {
     })),
     dropReasons: (t.gateDropReasons as Record<string, number>) ?? {},
   };
+  const outOfRange = (t.evidenceOutOfRange as Record<string, number>) ?? {};
+  if (Object.keys(outOfRange).length > 0) shape.outOfRange = outOfRange;
   if (result.noClipsReason) shape.noClipsReason = result.noClipsReason;
   return shape;
 }

@@ -511,24 +511,151 @@ describe("analyzeHighlightsV2", () => {
       .toBe("already_repaired");
   });
 
-  it("drops far-outside evidence with a named gate reason", async () => {
-    const verdict = JSON.parse(criticResponse(0.9).choices[0].message.content);
-    verdict.results[0].title_evidence_nodes = [4]; // 6 nodes before start_node 10
-    const criticBadEvidence = {
-      choices: [{ message: { content: JSON.stringify(verdict) }, finish_reason: "stop" }],
+  /** The critic's verdict with one field of it edited - the shape every
+   *  evidence-drift case below is built from. */
+  const criticWith = (patch: Record<string, unknown>) => {
+    const parsed = JSON.parse(criticResponse(0.9).choices[0].message.content);
+    Object.assign(parsed.results[0], patch);
+    return {
+      choices: [{ message: { content: JSON.stringify(parsed) }, finish_reason: "stop" }],
       usage: { prompt_tokens: 200, completion_tokens: 80 },
     };
+  };
+
+  it("keeps a clip whose title cites far outside its range, and refills the title", async () => {
+    // 6 nodes before start_node 10 - way past any boundary slack, and formerly a
+    // dropped clip. engine-notes §4: a clip is never dropped for its copy.
+    const c = client(
+      scanResponse(),
+      criticWith({ title_evidence_nodes: [4] }),
+      finalizerRow({}),
+      repairWith("Что стоит за нумерацией предложений", "Он поясняет порядок.")
+    );
     const r = await analyzeHighlightsV2(transcript(), {
-      client: client(scanResponse(), criticBadEvidence),
+      client: c,
       cfg,
       transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    expect(r.highlights).toHaveLength(1);
+    expect(r.telemetry.evidenceWidened).toBe(0);
+    // reported, never fatal
+    expect(r.telemetry.gateDropReasons).toEqual({});
+    expect(r.telemetry.droppedVerdicts).toEqual([]);
+    expect(r.telemetry.evidenceOutOfRange).toEqual({ title_evidence_out_of_range: 1 });
+
+    // Only the field that drifted is voided; the description was cited inside the
+    // range and is still the critic's sentence.
+    expect(r.telemetry.copyRegrounded).toEqual([{ id: "c0", at: "snap", fields: ["title"] }]);
+    expect(r.highlights[0].description).toBe("Спикер называет номер предложения.");
+    // and the voided title is refilled - here by the one repair call the snippet
+    // title buys, and its citation now names a node the clip actually contains
+    expect(r.highlights[0].title).toBe("Что стоит за нумерацией предложений");
+    const h = r.highlights[0];
+    for (const i of h._titleEvidenceNodes!) {
+      expect(i).toBeGreaterThanOrEqual(h._startNode!);
+      expect(i).toBeLessThanOrEqual(h._endNode!);
+    }
+  });
+
+  it("voids only the description when only the description drifted", async () => {
+    const c = client(
+      scanResponse(),
+      criticWith({ description_evidence_nodes: [4] }),
+      finalizerRow({})
+    );
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: c,
+      cfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    expect(r.highlights).toHaveLength(1);
+    expect(r.telemetry.gateDropReasons).toEqual({});
+    expect(r.telemetry.evidenceOutOfRange).toEqual({ description_evidence_out_of_range: 1 });
+    expect(r.telemetry.copyRegrounded).toEqual([
+      { id: "c0", at: "snap", fields: ["description"] },
+    ]);
+    // the title never drifted, so it is untouched and costs no repair call
+    expect(r.highlights[0].title).toBe("Он назвал номер");
+    expect(r.telemetry.snippetTitlesFlagged).toBe(0);
+    expect(c.chat.completions.create).toHaveBeenCalledTimes(3);
+    // the description is now the clip's own speech, verbatim
+    expect(r.highlights[0].description).toContain("Это предложение номер 11.");
+  });
+
+  it("widens the range for a citation exactly 2 nodes out, and the copy survives", async () => {
+    // The slack boundary from below: widenRangeToEvidence pulls start_node 10
+    // back to 8, the clip now CONTAINS its own citation, and nothing is regrounded.
+    const c = client(scanResponse(), criticWith({ title_evidence_nodes: [8] }), finalizerRow({}));
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: c,
+      cfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    expect(r.telemetry.evidenceWidened).toBe(1);
+    expect(r.telemetry.evidenceOutOfRange).toEqual({});
+    expect(r.telemetry.gateDropReasons).toEqual({});
+    expect(r.telemetry.copyRegrounded).toEqual([]);
+    expect(r.highlights).toHaveLength(1);
+    expect(r.highlights[0]._startNode).toBe(8);
+    expect(r.highlights[0].title).toBe("Он назвал номер");
+    expect(r.highlights[0]._titleEvidenceNodes).toEqual([8]);
+  });
+
+  it("at exactly 3 nodes out the boundary stays put and the copy is replaced", async () => {
+    // The same boundary from above, and the whole difference between the two
+    // repairs: one node further and the range no longer moves, so the copy is
+    // what gives - with no repair answer available, the verbatim snippet ships.
+    const c = client(scanResponse(), criticWith({ title_evidence_nodes: [7] }), finalizerRow({}));
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: c,
+      cfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+
+    expect(r.telemetry.evidenceWidened).toBe(0);
+    expect(r.telemetry.evidenceOutOfRange).toEqual({ title_evidence_out_of_range: 1 });
+    expect(r.telemetry.gateDropReasons).toEqual({});
+    expect(r.highlights).toHaveLength(1);
+    expect(r.highlights[0]._startNode).toBe(10);
+    // grounded and correctly-languaged by construction: node 10, verbatim
+    expect(r.highlights[0].title).toBe("Это предложение номер 10.");
+    expect(r.telemetry.snippetTitlesKept).toBe(1);
+  });
+
+  it("still drops a verdict whose citation names no node in the graph", async () => {
+    const c = client(scanResponse(), criticWith({ title_evidence_nodes: [999] }));
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: c,
+      cfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
     });
     expect(r.highlights).toHaveLength(0);
-    expect(r.telemetry.evidenceWidened).toBe(0);
-    expect(r.telemetry.gateDropReasons).toEqual({ title_evidence_out_of_range: 1 });
+    expect(r.telemetry.evidenceDrops).toBe(1);
+    expect(r.telemetry.gateDropReasons).toEqual({ title_evidence_invalid: 1 });
+    expect(r.telemetry.evidenceOutOfRange).toEqual({});
     expect(r.telemetry.droppedVerdicts).toEqual([
-      { id: "c0", stage: "gate", reason: "title_evidence_out_of_range", score: 0.9 },
+      { id: "c0", stage: "gate", reason: "title_evidence_invalid", score: 0.9 },
     ]);
+  });
+
+  it("still drops a verdict the critic itself refuses to ground", async () => {
+    const c = client(scanResponse(), criticWith({ grounded: false }));
+    const r = await analyzeHighlightsV2(transcript(), {
+      client: c,
+      cfg,
+      transcriptPartial: false,
+      retryDelayMs: 1,
+    });
+    expect(r.highlights).toHaveLength(0);
+    expect(r.telemetry.gateDropReasons).toEqual({ critic_ungrounded: 1 });
   });
 
   it("throws AnalyzeTechnicalError when EVERY scanner window fails", async () => {
@@ -816,12 +943,12 @@ describe("analyzeHighlightsV2", () => {
   });
 
   it("throws when the one judged verdict dies at a gate and a candidate went unanswered", async () => {
-    // c0 is kept by the critic but its cited evidence sits far outside the clip,
-    // so our grounding bar drops it; c1 never came back at all -> zero clips
+    // c0 is kept by the critic but cites a node the graph does not have, so our
+    // grounding bar drops it; c1 never came back at all -> zero clips
     const run = analyzeHighlightsV2(transcript(), {
       client: client(
         twoCandidateScan(),
-        criticRows(verdictRow("c0", { title_evidence_nodes: [4] }))
+        criticRows(verdictRow("c0", { title_evidence_nodes: [999] }))
       ),
       cfg,
       transcriptPartial: false,
@@ -1265,14 +1392,15 @@ describe("analyzeHighlightsV2", () => {
   });
 
   it("does NOT throw when every judged clip is dropped by the evidence gate", async () => {
-    // far-outside evidence is a grounding failure our gate is DESIGNED to catch;
-    // every candidate still got a real verdict, so the emptiness is an answer
+    // a citation naming no node in the graph is a protocol failure our gate is
+    // DESIGNED to catch; every candidate still got a real verdict, so the
+    // emptiness is an answer about the video, not a technical error
     const r = await analyzeHighlightsV2(transcript(), {
       client: client(
         twoCandidateScan(),
         criticRows(
-          verdictRow("c0", { title_evidence_nodes: [4] }),
-          verdictRow("c1", { start_node: 25, payoff_node: 28, end_node: 30, hook_start_node: 26, hook_end_node: 28, title_evidence_nodes: [4], description_evidence_nodes: [28] })
+          verdictRow("c0", { title_evidence_nodes: [999] }),
+          verdictRow("c1", { start_node: 25, payoff_node: 28, end_node: 30, hook_start_node: 26, hook_end_node: 28, title_evidence_nodes: [999], description_evidence_nodes: [28] })
         )
       ),
       cfg,

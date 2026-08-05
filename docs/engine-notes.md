@@ -32,7 +32,7 @@ transcript (Whisper verbose_json, word + segment timings)
   -> mergeCandidates         overlap merge + span guard + split
   -> selectCriticCandidates  stratified: per-window quota, then global by interest, region-capped
   -> runCritic               gpt-5.6-luna, batches of 6, strict json_schema, returns NODE INDICES
-  -> evidenceGate            [code] title/description must cite nodes inside the range
+  -> evidenceGate            [code] protocol check on the critic's answer; drift is reported, not fatal (§3)
   -> snapNodes               [code] OWNS ALL BOUNDARIES - clean start, payoff containment, clean end
   -> selectAndOrder          [code] tier thresholds + surcharges + time-overlap NMS + soft cap
 ```
@@ -355,6 +355,56 @@ segment from Whisper, becomes an opaque NODE, and leaves no hole at all, so of t
 **On this evidence the stage should stay off until the scene rail is fixed.** It is net positive on podcasts
 and net negative on compilation reels. That is the first concrete job for a genre profile (programme item 6):
 one knob, two source types, opposite settings, with a measurement behind each. Rollout mechanics are in §8.
+
+### The evidence gate stopped dropping clips for their copy (2026-08-04)
+
+`evidenceGate` used to reject a whole verdict, pre-snap, whenever a title or description citation fell outside
+the critic's own `[start_node, end_node]` - reasons `title_evidence_out_of_range` and
+`description_evidence_out_of_range`. That contradicted §6's rule that a clip is never dropped for its copy, and
+it had done so since the gate was written.
+
+**What made it visible.** The `ca8dfec` critic/finalizer prompt change took the reason from 2 to 9 across the
+eval suite in one commit, 0 to 3 on sitcom-friends, and cost that fixture 3 of 12 clips. All three losses have
+one shape: the critic tightened its OWN range and reused the citations it had written for the wider one - c8
+moved start 443 -> 447 still citing 443, c6 moved end 276 -> 267 still citing 274, c15 started at 639 still
+citing 636. Gaps of 3, 4 and 7 nodes, just past the 2-node `EVIDENCE_BOUNDARY_SLACK_NODES` that
+`widenRangeToEvidence` uses to pull the boundary out instead.
+
+**The repair already existed, ten lines below.** `regroundCopy` asks the identical question against
+`finalStartNode`/`finalEndNode` - the range that actually ships, after snap and any finalizer trim - with the
+same slack, and answers it by voiding the offending FIELD's copy while keeping the clip. Every verdict that
+leaves the gate alive and survives snap runs through it (`index.ts`, the loop over `critic.verdicts`); one that
+does not survive snap was never going to ship. A citation far outside is not a separate case: it is stale
+there too, and the field is replaced with the clip's own speech, verbatim. So the pre-snap rejection was
+strictly redundant with a later check against a strictly better range.
+
+**What changed.** The range test stays in the gate and now returns `outOfRange` instead of a rejection;
+`index.ts` counts it into a new `evidenceOutOfRange` telemetry map, deliberately NOT into `gateDropReasons`,
+which must keep meaning "this clip is gone". `toShape` carries it into the eval snapshots as `outOfRange`,
+because the snapshot diff is how the 2 -> 9 jump was found and a counter that leaves the snapshot stops being
+an alarm. Everything else the gate rejects - `critic_ungrounded`, `not_self_contained`, `*_evidence_missing`,
+`*_evidence_invalid` - is a protocol failure with no repair and still costs the clip. The graph-membership
+check must stay AHEAD of the range test: a citation naming node 999 of a 500-node graph is both, and reporting
+it as drift would ship copy grounded in a node that does not exist.
+
+**Measured, with the two post-selection LLM stages held dark on both sides** (see the caveat below for why):
+only sitcom-friends moves, 9 -> 11. Three clips return - "Pottery Barn May Have a Serious Problem" (1068.6-
+1089.0), "The Kissing Secret Comes Out in the Worst Possible Way" (636.9-658.0) and "Their Breakup Argument
+Gets Remarkably Petty" (1568.8-1632.5) - and one goes, "A Breakup Gets Weirdly Educational" (1610.3-1632.5),
+which is a strict sub-range of the third and loses to it in NMS. Net +2. podcast-ecology and
+podcast-answer-arc[gpt51] recover a clip each into selection and ship the same twelve; creator-challenge is
+untouched. All three recovered clips keep their model-written TITLE (its citations were in range) and get a
+regrounded DESCRIPTION, which is raw transcript: *"Oh my God the design of our antique Wow Oh my God ours must
+be worth much more than one in 50 50"*. Grounded, right language, on topic, and dull - the snippet-title repair
+pass is title-only by design, so a regrounded description has nothing downstream to rewrite it. That is the
+price of the two clips, and it is worth naming as the next thing to improve rather than pretending it is fine.
+
+**A REPLAY CAVEAT worth knowing before the next engine change: adding a clip invalidates the fixture
+recordings.** The finalizer prompt renders the clip set, so one extra clip in `selection.selected` changes the
+request hash and the recorded answer no longer applies - same for end extension when it is on. Five of ten
+(fixture, variant) pairs went stale on this change and cannot be replayed or blessed without buying five
+finalizer answers and two extension answers. "Replay is free" holds for anything that only moves boundaries or
+copy; it does not hold for anything that changes WHICH clips reach the last two stages.
 
 ---
 
@@ -679,7 +729,8 @@ A rewritten title must cite evidence nodes inside the final range - and be re-ch
 AFTER any accepted trim, because a trim can move the evidence outside. When that re-check voids a title the
 replacement is a raw transcript node, so a boundary move can silently degrade copy that every gate already
 passed; whatever still carries the snippet flag at ship time gets one repair call, and a clip is never dropped
-for its copy (§4).
+for its copy (§4). That last clause became true of the WHOLE engine on 2026-08-04: `evidenceGate` had been
+contradicting it pre-snap since it was written, and no longer does (§3).
 
 **`NAME_TO_ISO` must cover everything Whisper can emit.** `analyze-v2/language.ts` maps Whisper's full
 English language name onto the ISO code stored in `Job.language`. A missing name is not cosmetic: the lookup

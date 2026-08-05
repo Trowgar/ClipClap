@@ -271,6 +271,14 @@ export async function analyzeHighlightsV2(
     outcome: "repaired" | "unusable" | "already_repaired";
   }> = [];
   const gateDropReasons: Record<string, number> = {};
+  /**
+   * Copy the critic grounded outside its own proposed range, by field. NOT a
+   * drop - `regroundCopy` repairs it below - and deliberately a SEPARATE counter
+   * from gateDropReasons, which means "this clip is gone" and must keep meaning
+   * exactly that. Kept because it is a direct measure of critic-prompt drift: the
+   * ca8dfec title rule took it from 2 to 9 across the eval suite in one commit.
+   */
+  const evidenceOutOfRange: Record<string, number> = {};
   const droppedVerdicts: Array<{ id: string; stage: string; reason: string; score: number }> = [];
 
   for (const verdict of critic.verdicts) {
@@ -278,7 +286,9 @@ export async function analyzeHighlightsV2(
 
     // Evidence just past the chosen boundary is a boundary problem, not a
     // grounding failure: widen the range to contain its own evidence (snap
-    // re-validates clean start, invariants and the 90s cap afterwards).
+    // re-validates clean start, invariants and the 90s cap afterwards). Evidence
+    // FURTHER out is a copy problem - the gate below reports it and regroundCopy
+    // replaces the field - so between them nothing here can cost a clip.
     if (widenRangeToEvidence(verdict, nodes.length - 1)) evidenceWidened += 1;
 
     const gate = evidenceGate(verdict, nodes);
@@ -288,6 +298,10 @@ export async function analyzeHighlightsV2(
       gateDropReasons[reason] = (gateDropReasons[reason] ?? 0) + 1;
       droppedVerdicts.push({ id: verdict.id, stage: "gate", reason, score: verdict.score });
       continue;
+    }
+    for (const label of gate.outOfRange ?? []) {
+      const key = `${label}_evidence_out_of_range`;
+      evidenceOutOfRange[key] = (evidenceOutOfRange[key] ?? 0) + 1;
     }
     const snapped = snapNodes(verdict, nodes, cfg);
     if (!snapped.ok) {
@@ -511,6 +525,7 @@ export async function analyzeHighlightsV2(
     evidenceDrops,
     evidenceWidened,
     gateDropReasons,
+    evidenceOutOfRange,
     droppedVerdicts,
     snapDrops,
     copyRepairs,
