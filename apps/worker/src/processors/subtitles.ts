@@ -123,9 +123,17 @@ export function restoreDroppedWords(
   const flatText = comparableText(text);
   const flatWords = comparableText(words.map((w) => w.text).join(""));
   if (flatText === flatWords) return { words, outcome: "none" };
+  // Code POINTS, not code units. splitAtComparable counts comparable
+  // characters as code points; String.length counts UTF-16 units and the two
+  // disagree on every astral letter - CJK Extension B, mathematical
+  // alphanumerics. Measured before the fix: a one-letter astral word made the
+  // split run one character too far and eat the next word's first letter,
+  // restoring "ord" for "word".
+  const textChars = [...flatText].length;
+  const wordChars = [...flatWords].length;
 
   if (flatText.startsWith(flatWords)) {
-    const missing = splitAtComparable(text, flatWords.length)[1].trim();
+    const missing = splitAtComparable(text, wordChars)[1].trim();
     if (!missing) return { words, outcome: "none" };
     const last = words[words.length - 1];
     if (segEnd - last.end >= MIN_RESTORED_SEC) {

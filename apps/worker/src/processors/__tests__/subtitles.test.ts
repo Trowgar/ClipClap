@@ -345,6 +345,14 @@ describe("restoreDroppedWords - tail", () => {
     expect(out.words).toEqual([]);
   });
 
+  it("counts comparable characters in code points, not UTF-16 units", () => {
+    // "𠮷" is one letter and two code units. Counting units ran the split one
+    // character too far and restored "ord" instead of "word".
+    const out = restoreDroppedWords("𠮷 word", [{ text: "𠮷", start: 0, end: 1 }], 0, 2);
+    expect(out.outcome).toBe("tail");
+    expect(out.words[1].text).toBe("word");
+  });
+
   it("merges into the last word when the gap is too short to be a duration", () => {
     const words = [
       { text: "It", start: 0, end: 0.2 },
