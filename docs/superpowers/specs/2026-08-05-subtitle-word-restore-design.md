@@ -107,12 +107,76 @@ under a character-stream comparison.
 To recover the display text, including its punctuation, walk `s.text` counting letters and digits and
 cut at the index where the count reaches `flatWords.length`. Never reconstruct it from tokens.
 
+### 3.1 The comparison function, defined exactly
+
+Both sides of every comparison go through one pure helper. It is specified here rather than left to
+the implementation because the two traps above are both normalisation failures, and a third would be
+found in production rather than in review.
+
+```ts
+/** Comparison form only. NEVER rendered, NEVER stored, NEVER shown to a user. */
+function comparableStream(value: string): string {
+  return value.normalize("NFC").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+}
+```
+
+Contract:
+
+- **NFC first**, so a composed and a decomposed `й` compare equal. Not NFKC: that folds compatibility
+  forms and would let two visibly different strings compare equal, which is the opposite of what this
+  test is for.
+- **Case-folded** with locale-independent `toLowerCase`.
+- **Unicode letters and digits only**, `\p{L}` and `\p{N}` with the `u` flag. Never `[a-z0-9]`, which
+  would erase Cyrillic entirely and make every Russian segment compare as empty.
+- **No token counting, no whitespace, no punctuation, no set comparison** anywhere in the decision.
+- **Its output is never displayed.** What reaches the viewer is always an exact substring of the
+  original `s.text`, punctuation and casing intact. The stream exists to find the cut index, nothing
+  more.
+
+This is what makes `5.30`, `Bing?`, `Y-O-U-R`, `you're`, `кое-что` and mixed ASCII/Cyrillic text all
+behave.
+
 ## 4. Where the restored text goes
 
 **Restore into the word list, then chunk.** The recovered text becomes one entry in `words[]` before
-`chunkWords` runs, so the chunker's own limits still hold and no cue grows past them. This also keeps
-cue boundaries untouched: the first cue's `start` is already `segStart` and the last cue's `end` is
-already `segEnd`, so prepending or appending inside the list moves neither.
+`chunkWords` runs.
+
+### 4.1 The restored span is ONE timing entry, and it may hold several words
+
+Measured over the 133 repairable drops in the corpus:
+
+| Lexical words in the restored span | Cases |
+|---|---|
+| 1 | 125 |
+| 2 | 6 |
+| 4 | 1 |
+| 9 | 1 |
+
+The worst is 36 characters: `"I'm not sure I'm going to be able to"`. So multi-word spans are not a
+hypothetical for a future ASR - they are in the data now, and a design that assumes one word is
+wrong today.
+
+**The span is still restored as a single timing entry, and it is not split.** Splitting it into
+lexical words would require inventing a timestamp per word inside the gap, which §7 forbids and which
+this repair has no information to do honestly. The cost is that one entry can exceed
+`MAX_CHUNK_CHARS`, and that cost is bounded by what the engine already ships:
+
+```
+existing wordless-fallback cues, same corpus: 76 cues
+  length min 0, p50 46, p90 94, max 103 chars
+  68 of 76 already exceed the 18-char limit
+```
+
+A 36-character restored span is **shorter than the median cue this engine draws today** on the
+fallback path. It is not a new class of output, and losing nine spoken words is plainly worse than
+drawing them on one line.
+
+Consequence, stated rather than hidden: `chunkWords`'s word-count limit applies to **timing entries**,
+not to lexical words inside an indivisible restored span, and its character limit is best-effort for
+such a span. Splitting the span properly is possible future work and needs a way to time the words
+inside it.
+
+### 4.2 Timing
 
 Timing for the restored entry, using **real segment boundaries and never an invented number**:
 
@@ -139,10 +203,13 @@ segment -> restoreDroppedWords(text, words, segStart, segEnd)   // new, pure
 
 ## 5. Component
 
-One pure function, exported for testing, in `subtitles.ts` beside `chunkWords`:
+Two pure functions, exported for testing, in `subtitles.ts` beside `chunkWords`:
 
 ```ts
 export type RestoreOutcome = "none" | "head" | "tail" | "unresolved";
+
+/** Comparison form only - see §3.1. Never rendered, never stored. */
+export function comparableStream(value: string): string;
 
 export function restoreDroppedWords(
   text: string,
@@ -162,8 +229,14 @@ afterwards. No filesystem, no clock, no ffmpeg - every branch of §3 and §4 is 
 `renderManifest` gains a `subtitles` block beside `reframe`:
 
 ```json
-"subtitles": { "segments": 130, "restoredTail": 13, "restoredHead": 1, "unresolved": 0 }
+"subtitles": { "segmentOccurrences": 130, "restoredTail": 13, "restoredHead": 1, "unresolved": 0 }
 ```
+
+**`segmentOccurrences`, not `segments`, and the distinction is measured.** The counter increments
+once per (clip, segment) pair, so a source segment falling inside two clips is counted twice. In the
+corpus behind §1.1 that happens to **6 occurrences out of 1265** - small, but a rate computed against
+"unique transcript segments" would be quietly wrong, and the name is what stops someone reading it
+that way a month from now.
 
 Counted per job, summed over its clips. Without it we cannot answer "is the repair still firing, and
 has `unresolved` started to grow" - and `unresolved` growing is the signal that Whisper's output
@@ -173,10 +246,16 @@ shape has changed.
 
 - A segment whose streams already agree produces **byte-identical** cues to today. This covers 89.3%
   of the corpus and is asserted, not assumed.
-- Cue `start` and `end` never move. Only the text and the word list inside a cue change.
+- For a **restored** segment, the outer window is unchanged - the first cue still starts at `segStart`
+  and the last still ends at `segEnd` - but the **internal** chunk boundaries may move, and the cue
+  count may change. This is not a defect and it cannot be avoided: `chunkWords` re-chunks the whole
+  list, so inserting an entry at the head of `[A,B,C,D,E]` turns `[A,B,C][D,E]` into `[H,A,B][C,D,E]`.
+  An earlier draft of this design claimed all boundaries were preserved; that was wrong, and paying
+  this price is what keeps the chunker's limits meaningful for the timed words.
 - The restored entry never overlaps a real word: it ends where the first real word starts, or starts
   where the last real word ends.
-- `chunkWords` limits still hold after restoration, because restoration happens first.
+- `chunkWords` limits hold for **timing entries**. A restored span is one indivisible entry that may
+  contain several lexical words and may exceed the character limit, bounded per §4.1.
 - No cue is ever produced with `end <= start` - `generateAss` already drops those, and the
   `MIN_RESTORED_SEC` branch exists so this path is never reached by a restored word.
 - The repair never invents a timestamp. It uses the segment's own boundaries or it merges.
@@ -196,10 +275,22 @@ carry real data rather than invented strings:
 | no room for a timing | last word ends at `segEnd` | merged into the neighbour, no zero-length word |
 | unresolved | loss at both ends | outcome `unresolved`, words untouched |
 | empty words | `words: []` | untouched; the caller's existing fallback renders `s.text` |
+| multi-word span | the measured 9-word case, `"I'm not sure I'm going to be able to"` | restored as **one** entry, text exact including the apostrophes |
+| Cyrillic | `"кое-что новое"` style input | not mangled; proves the regex is `\p{L}` and not `[a-z]` |
 
-**Integration, on `segmentsToCues`:** cue boundaries unchanged against a fixture; chunk limits still
-respected once a restored word is present; a segment straddling the window edge is not treated as a
-drop.
+**Unit, on `comparableStream`:** composed against decomposed `й` compare equal; a Cyrillic string
+does not reduce to empty; `"5.30"` and `"5" + "30"` agree; the returned value is never used as
+display text anywhere in the module (asserted by the callers' tests, which compare against exact
+substrings of the input).
+
+**Integration, on `segmentsToCues`:**
+
+- a segment with no loss produces byte-identical cues, including every internal boundary;
+- a **restored** segment keeps its outer window (`first.start === segStart`, `last.end === segEnd`)
+  while its internal boundaries and cue count are free to change - the test asserts the outer window
+  and the full concatenated text, deliberately **not** the internal split, because §7 permits it to
+  move;
+- a segment straddling the window edge is not treated as a drop.
 
 **Corpus verification, and it is the acceptance test.** Measure the **cues**, not the transcript.
 The repair runs when cues are built and never rewrites `transcriptJson`, so re-running the §1.1
@@ -243,6 +334,10 @@ the acceptance number proves the cue data, and only a rendered frame proves the 
 
 - Whether the restored word should get its own karaoke highlight in the merge branch. It does not
   today; the branch is rare and the alternative needs an invented duration.
+- **How to time the words inside a multi-word restored span**, which is what would let §4.1 split it
+  and bring it back under the chunker's character limit. 8 of 133 spans hold more than one word and
+  the worst holds nine. Needs a source of per-word timing that this repair does not have; forcing an
+  even split would be exactly the invented timestamp §7 forbids.
 - Whether the chunker should be changed at all, and if so toward longer or shorter cues. Separate
   work, per §2.
 - Whether `unresolved` deserves a repair. Two cases in 1265 is not enough to design against, and the
