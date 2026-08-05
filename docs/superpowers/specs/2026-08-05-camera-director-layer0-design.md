@@ -210,8 +210,8 @@ no xs / degenerate xs    -> read x
 | face lost mid-shot | hold last position; past a timeout, ease to the shot median |
 | several people talking | unchanged - total face area picks the group, this layer does not claim to know who speaks |
 | subject is not a person | out of scope; centre crop. The anchor interface is where saliency plugs in later. |
-| fewer than 2 samples in the path | emit `x` only, no `xs` |
-| keyframe count over cap | **emit `x` only.** Never truncate a trajectory - a truncated ramp parks the camera somewhere no rule chose. |
+| path yields fewer than 2 keyframes | emit `x` only, no `xs` |
+| controller proposes more than 200 keyframes | **omit `xs`, emit `x` only.** Never truncate a trajectory - a truncated ramp parks the camera somewhere no rule chose. |
 | global | `REFRAME_MOTION` off by default, the `REFRAME_STREAM` pattern |
 
 ---
@@ -276,7 +276,17 @@ subtitle burn. If two baseline renders of a real corpus item ever differ, the in
 3. Capture the detector's JSON output per item and commit it. Small, and it makes planner invariance testable
    without re-running YuNet.
 
-Skipping step 0 makes checks 1 and 2 both unfalsifiable afterwards.
+What each artifact buys, since they are not interchangeable:
+
+| artifact | required by |
+|---|---|
+| corpus videos | everything |
+| detector JSON | check 1 level 2, and **check 2's primary metric, which needs no render** |
+| baseline renders | check 1 level 3 (hash invariance), check 2's secondary check, and human review |
+
+So skipping the baseline renders does not blind check 2's primary - that one survives on the plan and the
+detector JSON alone. It does make hash invariance unfalsifiable, and unlike last time there is no way to
+re-derive a baseline afterwards, because the sources that produced the shipped clips are gone.
 
 ### 6.1 Corpus
 
@@ -310,19 +320,46 @@ Three levels, strongest last:
 
 Same source, same intervals, legacy against motion.
 
-**Primary metric - anchor-eligible framing failure.** Using the detector JSON, restrict to frames where the
-detector saw **the selected face group in the source** at that time. Among those, count frames where the face
-is absent from the delivered vertical crop, or cut by its edge:
+**Primary metric - anchor containment, measured geometrically.** Not "is there a face in the delivered
+frame". A detector run on the output cannot tell which face it found, so a clip that loses the chosen speaker
+A while a bystander B stays in shot would score as a success. The metric therefore projects the *selected*
+group through the plan and asks whether the plan held it:
 
 ```
-the face was in the source and was the chosen anchor
--> but it is missing or clipped in the final crop
--> the crop plan was wrong
+1. source JSON gives the selected group's bbox at time t
+2. the plan gives the crop window at time t:  [x(t), x(t) + cropW)
+3. visible fraction v(t) = overlap(bbox, window) / bbox width
+4. v = 1      contained
+   0 < v < 1  cut by an edge
+   v = 0      lost entirely
 ```
 
-This is close to a direct measurement of framing failure, and it excludes the cases that make the raw
-faceless rate ambiguous: genuine cutaways, faces not visible in the source, backs of heads, scene
-transitions. Overall faceless rate and edge-cut rate remain as **secondary health metrics**.
+Containment is tested in **source pixels**. The output scale is uniform and monotone, so it cannot change
+whether a box is inside the window, and testing before the scale avoids an arithmetic step that could only
+introduce error.
+
+**Anchor-eligible framing failure** is `v(t) < 1`. The distribution of `v` is reported alongside the rate, so
+that a softer threshold - if strict containment turns out to be harsher than the eye is - can later be
+justified from data instead of chosen now.
+
+Two consequences worth stating. This measures whether the planner kept **the anchor it chose**, which is
+exactly the question Layer 0 exists to answer. And it needs **no render at all** - only the plan and the
+detector JSON - so it runs on every corpus item for free, and rendering is reserved for the secondary check
+and for human eyes.
+
+**Secondary - YuNet on delivered frames.** Still worth running, as an external health check on the geometry:
+the detector can fail for reasons invisible to a bounding box, and where geometric failure and delivered
+detection failure disagree, the disagreement is itself the diagnostic. Overall faceless rate and edge-cut
+rate stay here, as health metrics rather than as the bar.
+
+**Time alignment**, defined so that a rounding accident cannot move the result. The primary metric is
+evaluated on **the source path's own sample times**, where the target bbox is known exactly and `x(t)` is
+analytic from the ramp formula - no interpolation enters it. Where a bbox is needed between samples - the
+secondary check samples the render at 2 fps and that grid is not *guaranteed* to align with the detector's -
+it is **linearly interpolated between the two neighbouring samples**. A time with no surrounding sample on
+both sides is **excluded from the denominator, not counted as a failure**: the source detector did not supply
+enough information to judge that frame, and scoring it as a loss would charge the planner for the detector's
+silence.
 
 **Pass bar.** Deliberately not phrased as reaching parity with the outside-hold rate: the remainder may be
 caused by real material rather than by the planner, and promising a number the material controls is how a
@@ -360,7 +397,10 @@ against the step-0 baseline; and zero ffmpeg failures, where any expression erro
 
 - `REFRAME_MOTION=off` uses legacy `x`, and the encode is byte-identical to the baseline
 - peak `|dx/dt|` never exceeds the configured speed cap
-- `keyframeCount <= 200`, otherwise legacy `x` fallback
+- **the emitted `xs` is either absent, or holds between 2 and 200 keyframes.** Phrased on the emitted plan and
+  not on the controller's intermediate result: a controller that legitimately builds 201 keyframes and a
+  fallback that legitimately withholds them is safe behaviour, and an invariant written on the intermediate
+  value would read as violated while nothing was wrong
 - filtergraph argv length stays below the measured safe ceiling
 - faceless shots remain a static centre crop, byte-identical
 - `split`, `stream` and `center` layouts are byte-identical
