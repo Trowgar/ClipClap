@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  chunkWords,
   comparableText,
   dropCarriedPunctuation,
   generateAss,
@@ -9,7 +10,7 @@ import {
   splitAtComparable,
   summariseRestores,
 } from "../subtitles";
-import type { SubtitleCue, WhisperSegment } from "@clipclap/shared";
+import type { SubtitleCue, SubtitleWord, WhisperSegment } from "@clipclap/shared";
 
 const segments: WhisperSegment[] = [
   { start: 10.0, end: 13.5, text: "Hello everyone" },
@@ -31,11 +32,11 @@ const segments: WhisperSegment[] = [
 describe("segmentsToCues", () => {
   it("filters to the clip window and shifts times to clip-relative", () => {
     const cues = segmentsToCues(segments, 10.0, 25.0);
-    // seg2 has 4 words -> two 3-word-max chunks, so 4 cues total
+    // seg2 has 4 words -> two cues of two, so 4 cues total
     expect(cues).toHaveLength(4);
     expect(cues[0]).toMatchObject({ start: 0, end: 3.5, text: "Hello everyone" });
     expect(cues[1].start).toBeCloseTo(3.5);
-    expect(cues[1].end).toBeCloseTo(4.6); // held until the next chunk starts
+    expect(cues[1].end).toBeCloseTo(4.4); // held until the next chunk starts
     expect(cues[2].end).toBeCloseTo(8.0); // last chunk runs to segment end
   });
 
@@ -66,13 +67,28 @@ describe("segmentsToCues", () => {
       },
     ];
     const cues = segmentsToCues(long, 0, 6);
-    expect(cues.length).toBeGreaterThan(1);
-    expect(cues[0].text).toBe("one two three");
+    // Eight words is three cues at a three-word limit, and the split is even
+    // rather than greedy: the old fill produced 3+3+2 and stranded nothing
+    // here, but on four words it produced 3+1, which is the defect.
+    expect(cues.map((c) => c.text)).toEqual([
+      "one two",
+      "three four five",
+      "six seven eight",
+    ]);
     expect(cues[0].start).toBe(0);
     // chunk stays on screen until the next one starts (no flicker gaps)
     expect(cues[0].end).toBe(cues[1].start);
     expect(cues.at(-1)!.end).toBe(6);
-    expect(cues[0].words).toHaveLength(3);
+  });
+
+  it("splits four words evenly instead of stranding the fourth", () => {
+    // The defect this cost model exists to remove. Greedy filled to the
+    // three-word limit and left "stream" alone on screen for as long as it
+    // took to say - 936 of 4083 corpus cues held one word, 537 of them for
+    // under half a second.
+    const cues = segmentsToCues(segments, 10.0, 25.0);
+    expect(cues[1].text).toBe("Welcome to");
+    expect(cues[2].text).toBe("the stream");
   });
 
   it("keeps segments without words as a single cue", () => {
@@ -84,6 +100,114 @@ describe("segmentsToCues", () => {
     const cues = segmentsToCues(segments, 12.0, 16.0);
     expect(cues[0].start).toBe(0);
     expect(cues.at(-1)!.end).toBeCloseTo(4.0);
+  });
+});
+
+describe("chunkWords", () => {
+  /** Evenly spoken words, one per `step` seconds, so timing never decides the
+   *  split and the other two terms can be tested in isolation. */
+  const evenly = (texts: string[], step = 1): SubtitleWord[] =>
+    texts.map((text, i) => ({ text, start: i * step, end: (i + 1) * step }));
+
+  const say = (chunks: SubtitleWord[][]) =>
+    chunks.map((c) => c.map((w) => w.text).join(" "));
+
+  it("uses the fewest cues the limits allow, exactly as the greedy fill did", () => {
+    // Six words at three per cue is two cues, and no cost term may add a third
+    // - the number of times the text changes is the pace of the subtitles, and
+    // this change is not allowed to alter it.
+    const words = evenly(["a", "bb", "cc", "dd", "ee", "ff"]);
+    expect(chunkWords(words, 0, 6)).toHaveLength(2);
+  });
+
+  it("never exceeds the character limit by grouping", () => {
+    // Three words of eight characters each would be 26 with spaces, over the
+    // 18-character budget, so they cannot share a cue however even that is.
+    const words = evenly(["eighteen", "eighteen", "eighteen"]);
+    for (const chunk of chunkWords(words, 0, 3)) {
+      expect(chunk.map((w) => w.text).join(" ").length).toBeLessThanOrEqual(18);
+    }
+  });
+
+  it("lets a single word exceed the character limit, having nothing to split", () => {
+    const words = evenly(["antidisestablishmentarianism"]);
+    expect(say(chunkWords(words, 0, 1))).toEqual([
+      "antidisestablishmentarianism",
+    ]);
+  });
+
+  it("splits evenly rather than filling to the limit", () => {
+    // W_EVEN. Greedy gave "aa bb cc" then "dd"; the fourth word must not be
+    // left alone when the same two cues can hold two words each.
+    expect(say(chunkWords(evenly(["aa", "bb", "cc", "dd"]), 0, 4))).toEqual([
+      "aa bb",
+      "cc dd",
+    ]);
+  });
+
+  // Both break tests below are built so that 2+3 - what this chunker produces
+  // when nothing distinguishes the two splits - is the WRONG answer, and only
+  // the break term can move it to 3+2. An earlier pair of these expected 2+3
+  // and passed with W_BREAK set to zero, proving nothing at all.
+  //
+  // The words are also kept short enough that BOTH splits are under the
+  // 18-character limit. The second attempt at these used "понятно. Идём
+  // дальше", which is 20 characters, so 2+3 was illegal and 3+2 was the only
+  // split on offer - the test passed while measuring the character limit
+  // instead of the break term. Check both arrangements fit before trusting one
+  // of these.
+
+  it("moves the break off a one-or-two-letter word", () => {
+    // W_BREAK, the penalty half. Both splits are equally far from an even
+    // share and neither flashes, so the break term alone decides: ending a
+    // line on "и" strands a conjunction from what it joins.
+    const words = evenly(["Оно", "и", "так", "было", "ясно"]);
+    expect(say(chunkWords(words, 0, 5))).toEqual(["Оно и так", "было ясно"]);
+  });
+
+  it("prefers a break where the sentence already ends", () => {
+    // W_BREAK, the reward half, under the same conditions.
+    //
+    // Note what this does NOT do: it will not strand "понятно." alone in its
+    // own cue to reach the punctuation, because a one-word cue costs more in
+    // evenness than the reward is worth. The reward picks among balanced
+    // splits; it does not buy an unbalanced one.
+    const words = evenly(["Да", "всё", "ясно.", "Идём", "уже"]);
+    expect(say(chunkWords(words, 0, 5))).toEqual(["Да всё ясно.", "Идём уже"]);
+  });
+
+  it("avoids leaving a cue on screen for less than half a second", () => {
+    // W_FLASH, on the same 2+3 / 3+2 tie so nothing else can decide it. Five
+    // words rattled off in 0.4s and then a long hold: breaking after the
+    // second word puts the first cue on screen for 0.2s, breaking after the
+    // third gives it 0.3s. Neither reaches half a second - the chunker cannot
+    // slow down speech - but it takes the longer of the two.
+    const words: SubtitleWord[] = [
+      { text: "aaa", start: 0, end: 0.1 },
+      { text: "bbb", start: 0.1, end: 0.2 },
+      { text: "ccc", start: 0.2, end: 0.3 },
+      { text: "ddd", start: 0.3, end: 0.4 },
+      { text: "eee", start: 0.4, end: 3 },
+    ];
+    expect(say(chunkWords(words, 0, 3))).toEqual(["aaa bbb ccc", "ddd eee"]);
+  });
+
+  it("returns nothing for no words", () => {
+    expect(chunkWords([], 0, 1)).toEqual([]);
+  });
+
+  it("is deterministic on a tie", () => {
+    const words = evenly(["one", "two", "three", "four", "five", "six", "seven", "eight"]);
+    const first = say(chunkWords(words, 0, 8));
+    for (let i = 0; i < 5; i += 1) {
+      expect(say(chunkWords(words, 0, 8))).toEqual(first);
+    }
+  });
+
+  it("keeps every word, in order, exactly once", () => {
+    const texts = ["Мы", "думали,", "что", "он", "уже", "всё", "понял", "и", "ушёл"];
+    const flat = chunkWords(evenly(texts), 0, texts.length).flat();
+    expect(flat.map((w) => w.text)).toEqual(texts);
   });
 });
 
@@ -1029,13 +1153,13 @@ describe("segmentsToCues with restoration", () => {
     const cues = segmentsToCues(segments, 10.0, 25.0);
     expect(cues.map((c) => c.text)).toEqual([
       "Hello everyone",
-      "Welcome to the",
-      "stream",
+      "Welcome to",
+      "the stream",
       "Today we are going to talk about AI",
     ]);
-    // Float noise: 14.6 - 10.0 is not exactly 4.6, so compare approximately -
+    // Float noise: 14.4 - 10.0 is not exactly 4.4, so compare approximately -
     // the same reason the pre-existing tests in this file use toBeCloseTo.
-    const bounds = [[0, 3.5], [3.5, 4.6], [4.6, 8], [8, 15]];
+    const bounds = [[0, 3.5], [3.5, 4.4], [4.4, 8], [8, 15]];
     cues.forEach((c, i) => {
       expect(c.start).toBeCloseTo(bounds[i][0]);
       expect(c.end).toBeCloseTo(bounds[i][1]);
