@@ -15,7 +15,7 @@
   },
   "variants": {
     "gpt51": {
-      "recordedAt": "2026-08-04T22:48:59.038Z",
+      "recordedAt": "2026-08-05T00:05:00.685Z",
       "engine": {
         "scanModel": "gpt-4o-mini",
         "criticModel": "gpt-5.1",

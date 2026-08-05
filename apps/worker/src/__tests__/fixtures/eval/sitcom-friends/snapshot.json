@@ -1,5 +1,5 @@
 {
-  "count": 9,
+  "count": 10,
   "tier": "strong",
   "clips": [
     {
@@ -10,22 +10,27 @@
     {
       "range": "175.1-189.1",
       "score": 0.86,
-      "title": "Why Were Chandler and a Blonde Together?"
+      "title": "Why Were Chandler and a Blonde Followed Home?"
     },
     {
-      "range": "5.6-18.6",
+      "range": "1568.8-1632.5",
+      "score": 0.86,
+      "title": "Their Breakup Argument Gets Remarkably Petty"
+    },
+    {
+      "range": "0.0-18.6",
       "score": 0.84,
       "title": "A Father Demands to Know What His Daughter Means to Him"
     },
     {
       "range": "2117.3-2167.2",
       "score": 0.76,
-      "title": "They Go Public—Then His Job Is on the Line"
+      "title": "They Publicly Defy the Rules—Then Reality Hits"
     },
     {
-      "range": "1610.3-1632.5",
-      "score": 0.73,
-      "title": "A Breakup Gets Weirdly Educational"
+      "range": "636.9-658.0",
+      "score": 0.72,
+      "title": "How Did Joey Find Out About Their Secret?"
     },
     {
       "range": "1138.3-1151.0",
@@ -35,20 +40,21 @@
     {
       "range": "2374.2-2426.4",
       "score": 0.7,
-      "title": "She Misses the Joke—and Makes Him Explain It"
+      "title": "He Has to Explain Why the Joke Was Funny"
     },
     {
-      "range": "1419.0-1433.3",
+      "range": "1413.3-1433.3",
       "score": 0.67,
       "title": "The Evidence in His Hotel Room Raises Questions"
     },
     {
       "range": "2202.0-2225.4",
       "score": 0.67,
-      "title": "Bing's Boss Has an Unforgettable Way to Name a Law Firm"
+      "title": "His Boss Unveils a Truly Terrible Law Firm Name"
     }
   ],
-  "dropReasons": {
+  "dropReasons": {},
+  "outOfRange": {
     "description_evidence_out_of_range": 3
   }
 }

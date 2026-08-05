@@ -15,7 +15,7 @@
   },
   "variants": {
     "end-extension": {
-      "recordedAt": "2026-08-04T22:46:36.960Z",
+      "recordedAt": "2026-08-05T00:04:19.948Z",
       "engine": {
         "scanModel": "gpt-4o-mini",
         "criticModel": "gpt-5.6-luna",

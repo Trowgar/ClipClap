@@ -387,24 +387,52 @@ an alarm. Everything else the gate rejects - `critic_ungrounded`, `not_self_cont
 check must stay AHEAD of the range test: a citation naming node 999 of a 500-node graph is both, and reporting
 it as drift would ship copy grounded in a node that does not exist.
 
-**Measured, with the two post-selection LLM stages held dark on both sides** (see the caveat below for why):
-only sitcom-friends moves, 9 -> 11. Three clips return - "Pottery Barn May Have a Serious Problem" (1068.6-
-1089.0), "The Kissing Secret Comes Out in the Worst Possible Way" (636.9-658.0) and "Their Breakup Argument
-Gets Remarkably Petty" (1568.8-1632.5) - and one goes, "A Breakup Gets Weirdly Educational" (1610.3-1632.5),
-which is a strict sub-range of the third and loses to it in NMS. Net +2. podcast-ecology and
-podcast-answer-arc[gpt51] recover a clip each into selection and ship the same twelve; creator-challenge is
-untouched. All three recovered clips keep their model-written TITLE (its citations were in range) and get a
-regrounded DESCRIPTION, which is raw transcript: *"Oh my God the design of our antique Wow Oh my God ours must
-be worth much more than one in 50 50"*. Grounded, right language, on topic, and dull - the snippet-title repair
-pass is title-only by design, so a regrounded description has nothing downstream to rewrite it. That is the
-price of the two clips, and it is worth naming as the next thing to improve rather than pretending it is fine.
+**Measured with every stage live, after topping up the five stale pairs. +3 clips across the suite, 105 ->
+108:**
+
+| fixture | base | gpt51 | end-extension |
+|---|---|---|---|
+| creator-challenge | 8 -> 8, identical | - | 8 -> 8, identical |
+| podcast-answer-arc | 12 -> 12, identical | 12 -> 12, one swap | 12 -> 12, identical |
+| podcast-ecology | 12 -> 12, one swap | 12 -> 12, identical | **11 -> 12** |
+| sitcom-friends | **9 -> 10** | - | **9 -> 10** |
+
+**THE FINALIZER VETOES ONE OF THE THREE RECOVERED SITCOM CLIPS, AND A DIFFERENT ONE ON EACH VARIANT.** All
+three reach it - 11 selected, 10 survive, on both variants - and:
+
+- base drops c8 "Pottery Barn" for `no_payoff`; c6 and c15 ship.
+- end-extension drops c15 for `broken_opening`; c8 and c6 ship, retitled "Pottery Barn Changes How They See
+  Their Antique" and "Joey's Version of the Kissing Story Keeps Changing".
+
+So each recovered clip ships somewhere, each veto is a content judgement about the moment rather than
+anything to do with copy, and the honest gain is **+1 per sitcom variant, not the +2 a finalizer-dark control
+predicted**. Record the live number: the finalizer holds the veto, and a clip it vetoes is not a recovery.
+c15's recovery is worth its own line - it does not add a clip on base, it REPLACES 1610.3-1632.5 with
+1568.8-1632.5, the same ending with the whole argument in front of it, and the score goes 0.73 -> 0.86.
+
+**THE RECOVERED DESCRIPTIONS ARE RAW TRANSCRIPT, and this is the next question rather than a defect in the
+fix.** Every recovered clip keeps its model-written TITLE - those citations were in range - and gets a
+regrounded DESCRIPTION out of `snippetFallbackCopy`: *"Oh my God the design of our antique Wow Oh my God ours
+must be worth much more than one in 50 50"*. Grounded, right language, on topic, and dull. Nothing downstream
+rewrites it: the snippet repair pass after the finalizer is deliberately TITLE-ONLY (§4), so a voided
+description is the last word. Before this change those clips were dropped, so nobody ever saw the description
+- the gap is newly VISIBLE, not newly created.
+
+**ONE THING THE OLD GATE CAUGHT THAT NOTHING CATCHES NOW.** `regroundCopy` measures against the SHIPPED range,
+so a citation 3 nodes before the critic's start that snap's clean-start walk-back pulls to within 2 of the
+shipped start is no longer regrounded at all. That is the intended reading - the range the viewer hears is the
+one that matters, and the walk-back moved the clip to CONTAIN the cited material - but it is a real
+behavioural difference from the old pre-snap test, not pure redundancy. It occurred on none of the nine drift
+cases in the suite; all nine were regrounded downstream.
 
 **A REPLAY CAVEAT worth knowing before the next engine change: adding a clip invalidates the fixture
 recordings.** The finalizer prompt renders the clip set, so one extra clip in `selection.selected` changes the
 request hash and the recorded answer no longer applies - same for end extension when it is on. Five of ten
-(fixture, variant) pairs went stale on this change and cannot be replayed or blessed without buying five
-finalizer answers and two extension answers. "Replay is free" holds for anything that only moves boundaries or
-copy; it does not hold for anything that changes WHICH clips reach the last two stages.
+(fixture, variant) pairs went stale on this change; topping them up cost 7 calls, 43.5k in / 9.6k out.
+"Replay is free" holds for anything that only moves boundaries or copy; it does not hold for anything that
+changes WHICH clips reach the last two stages. Budget a topup for those, and expect the fresh finalizer answer
+to re-title and re-trim the WHOLE set, not just the new clip - most of the lines in those four snapshot diffs
+are that, not the change under review.
 
 ---
 
