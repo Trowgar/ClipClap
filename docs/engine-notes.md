@@ -1063,6 +1063,105 @@ branch, leaving `DOMINANCE_LEAD`'s accept side with no coverage at all. The asse
 The guard fires below 6% of frame width, which is 115px on a 1920-wide source against the 15-30% a podcast
 actually shows, so the margin is wide - but it is an argument from geometry, not a measurement.
 
+### 7b. The framing geometry, measured (2026-08-05)
+
+Plan `docs/superpowers/plans/2026-08-05-reframe-geometry.md`, task 1. `broken framing` stood in 11 of 11
+editor verdicts on the 2026-08-04 audit, and the diagnosis on offer named two branches of one condition
+(`plan.ts:195`). One of the two reproduced, one did not, and the branch that actually does the damage was
+named in neither.
+
+**Method.** Two passes. The free one reads `Clip.cropPlan` for every rendered clip in the database that has
+one - 9 jobs, 76 clips, **369 distinct shots** across four source sizes - which is the shipped plan and needs
+no detector. The expensive one re-runs `detectShots` + `detectFaces` + `buildCropPlan` over the 12 clip ranges
+of the audited sitcom job `cmsei6r190001zppef93vft6s`, because the face boxes and `mouthActivity` exist only
+inside `computeCropPlan` and are persisted nowhere. **The replay reproduces all 12 shipped plans byte for
+byte** - layout, `x`, `top.x`, `bottom.x` and every shot boundary - so the second pass measures the engine
+that shipped rather than a re-derivation of it. All 12 cost **41 seconds** end to end, which is cheap enough
+that the next framing question should be measured the same way rather than argued.
+
+**Split tiles CANNOT be disjoint on any ordinary source, and this is arithmetic, not tuning.** `tileWidthFor`
+is `h*9/8` and each tile's `x` is clamped into `[0, W - tileW]`, so the widest separation two tiles can ever
+have is `W - tileW` and the narrowest overlap is `2*tileW - W`. As a fraction of a tile that floor is
+`2 - 8*(W/h)/9`, which reaches zero only at an aspect of **2.25:1**. Every source we have is narrower:
+
+| source | cropW | tileW | max tile separation | minimum possible overlap |
+|---|---|---|---|---|
+| 1280x720 | 406 | 810 | 470 | 340 px = **42.0%** |
+| 640x360 | 202 | 406 | 234 | 172 px = **42.4%** |
+| 640x352 | 198 | 396 | 244 | 152 px = **38.4%** |
+| 848x464 | 262 | 522 | 326 | 196 px = **37.5%** |
+
+So "split only when the tiles are genuinely separate" is not a threshold to derive - on 16:9 it is the
+instruction to never split. **55 of the 124 shipped splits are already sitting on that floor**, both tiles
+clamped hard to opposite edges, and all 54 splits of the 640x360 source measure exactly 42.4% because every
+one of them is clamped. A design that wants disjoint tiles has to make the tiles narrower than `h*9/8`, which
+means cropping them vertically as well, which is a different filtergraph.
+
+**Measured split overlap, `(tileW - |bottom.x - top.x|) / tileW`.** Over all 124 split shots in the database:
+min **37.5%**, p25 42.4%, **median 48.0%**, p75 53.5%, max **98.5%**, mean 49.4%. **124 of 124 exceed 25%**
+and **49 of 124 exceed 50%**. The worst case is a 848x464 clip with tiles at 118 and 126 - eight pixels apart
+out of 522, the same picture stacked on itself. Over the 19 splits of the audited sitcom set alone: min 39.4%,
+median **51.0%**, max 62.6%, 19 of 19 over 25%, 12 of 19 over 50%, in **8 of 12 clips**.
+
+The instance the diagnosis named reproduces. The sitcom's first clip splits at t=1.37 with tiles at `x = 0`
+and `x = 202`; `tileW` is 396, not the 392 that was estimated, so the overlap is **49.0%** against a claimed
+48%.
+
+**The "55% at the commonest firing" arithmetic was right in direction and wrong in detail, and the error is
+worth keeping.** It assumed tile centres land `FIT_MARGIN * cropW` apart at the gate. They do not: the gate
+tests the face bbox **span** (outer edge to outer edge) while the tiles are centred on face **centres**, so
+tile separation is the span minus one face width. Median anchorable face width here is 63px, so a shot
+tripping the gate exactly would put its tiles 115px apart - **71% overlap, worse than the estimate**, not
+better. The measured median is 48-51% because real firings clear the gate by a wide margin, not because the
+mechanism is milder than described.
+
+**The single branch does NOT point at furniture. This half of the diagnosis is disproved.** Of the 22 single
+shots, only **4 have two or more anchorable faces at all**. In those four the chosen anchor sits **0.005,
+0.047, 0.065 and 0.118 of `cropW`** from the nearest face centre - the worst is 23px on a 198px window - and
+in all four *every* anchorable face centre is inside the window, none of them even in its outer fifth. Across
+all 22 singles the median is 0.005 `cropW`. This is structural rather than lucky: the branch is only reached
+when the whole span fits inside `0.9 * cropW`, which bounds the midpoint at `0.45 * cropW` from either
+extreme, and measured single-branch spans run 0.25-0.69 `cropW`. **Task 3 as written is aimed at a defect
+that is not there.**
+
+**The crop that tracks the table is the CENTRE branch, and it is much bigger than the split.** 16 shots take
+`layout: "center"`. Only 4 of them are faceless or below the 6% min-face guard. **The other 12 have anchorable
+faces and are centred blind because the 3-plus-face `DOMINANCE_LEAD` test failed** - the top two do not lead
+the third by 1.5x, so the planner gives up and centres. That is **147.8 seconds of 333.5 (44% of shot time)
+spent on a blind centre crop over a shot with detected, anchorable faces**, in 9 of the 12 clips. The centre
+of that window sits a median of **0.27 `cropW`** from the nearest face centre and a maximum of **0.59**, and
+in **4 of the 12 the nearest face centre is more than half a crop width away, i.e. outside the window
+entirely**. The longest single instance is 16.3 seconds of a 28.8-second clip. The weak-coffee clip whose
+payoff frame the editor called a flower vase closes on 26.2 seconds of exactly this branch. Centre is
+supposed to be the degradation path; on a four-person sitcom it is the *modal* layout by screen time
+(47.2%, against 32.1% single and 20.7% split).
+
+**The middle case is not a case, it is the whole population.** Of the 35 shots with two or more anchorable
+faces, 4 fit inside the single gate and 31 do not. Of the 19 that reached the split branch, the chosen pair's
+centre separation runs 147-390px against a `tileW` of 396 and a maximum achievable tile separation of 244:
+**19 of 19 are in the band where the faces are too far apart for one window and too close for two tiles**, and
+124 of 124 are corpus-wide. 8 of the 19 are clamped on at least one edge, so their tiles are already as far
+apart as the frame permits. There is no separable population to carve off - whatever the middle case gets is
+what the split layout becomes.
+
+**`mouthActivity` is live, but `dominance` barely listens to it.** 126 anchorable-face observations: min
+0.0116, p25 0.0368, **median 0.0492**, p75 0.0659, max 0.2492, and **no zeros**. Within a shot the max/min
+ratio across faces has a median of **1.83** (range 1.02 to 6.04), so it does distinguish faces. The
+`Math.min(1, m * 10)` cap saturates for only 7 of 126 (5.6%), all of them above the 75th percentile, so the
+cap is not flattening the signal either. **What flattens it is the weight.** `0.2 * mouthTerm` spans
+0.023-0.200 while area and centrality carry 0.8 between them: **deleting the mouth term outright would change
+`dominance`'s argmax in only 3 of 35 multi-face shots**, and `dominance`'s argmax coincides with the
+`mouthActivity` argmax in **17 of 35**. Anchoring "on the dominant face, which already carries
+`mouthActivity`" therefore anchors on the largest, most central face and disagrees with the mouthiest one half
+the time. Using this signal to pick a speaker means using `mouthActivity` directly or reweighting, not reusing
+`dominance` as it stands.
+
+**And the signal has never been validated as speech.** It is the mean absolute difference between consecutive
+normalized mouth patches at a 2 fps sample rate. Head turns, laughter, gesture, a cut inside a shot and plain
+detector box jitter all produce it. That it varies between faces is measured; that the higher value is the
+person talking is **believed, not measured**, and nothing in this repository tests it. A fixture with
+per-shot "who is speaking" labels would settle it, and any anchor-on-the-speaker work should buy that first.
+
 ---
 
 ## 8. Operational facts
