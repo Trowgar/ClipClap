@@ -8,7 +8,7 @@ Rules for this file: every number here came from a measurement, not from reasoni
 reproduced, say how. When something is believed but unmeasured, mark it. Delete an entry when it stops being
 true - a stale note is worse than none, and this file has already caught two of its own.
 
-Last substantive update: 2026-08-04.
+Last substantive update: 2026-08-05.
 
 ---
 
@@ -434,7 +434,7 @@ changes WHICH clips reach the last two stages. Budget a topup for those, and exp
 to re-title and re-trim the WHOLE set, not just the new clip - most of the lines in those four snapshot diffs
 are that, not the change under review.
 
-### The mid-clause end defect: looking THROUGH an opaque node is inert (2026-08-05)
+### The mid-clause end defect: FIXED, and the obvious fix was inert (2026-08-05)
 
 `isCleanEnd` certifies a node as a clean end whenever the NEXT node is opaque, justified in its doc comment as
 "music follows". The justification is wrong - `hasWords=false` means Whisper's word timings were unreliable
@@ -471,30 +471,91 @@ opaque #842 `"нагрузки на него были на сжатие."` Opaqu
 2 of 609 word-bearing nodes carry a mark), so the opaque node is the one place the continuation is legible at
 all. The rule has to read it, not skip it.
 
-**The rule that does work, measured but NOT shipped:** when the next node is opaque, the end is clean unless
-that opaque node's own text starts lowercase (`!startsLowercase(nodes[index + 1].text)`). It kills all three
-offenders. Dark-stage replay, four fixtures, base:
-
-| fixture | clips before | clips after | new `no_clean_end` snap drops |
-|---|---|---|---|
-| podcast-ecology | 12 | 12 | +1 (c21 @0.86) |
-| podcast-answer-arc | 12 | 12 | +3 (c35 @0.72, c22 @0.78, c23 @0.84) |
-| sitcom-friends | 11 | 11 | 0 |
-| creator-challenge | 9 | 9 | 0 |
-
-**READ THAT TABLE CAREFULLY: the offenders are DROPPED, not repaired.** Snap's clean-end repair walks backward
-to the latest clean end at or after the payoff, then forward within `SENTENCE_SLACK_SEC` (3s). Behind ecology
-#576 there is no clean end at or after the payoff, and forward the next word-bearing node is #579 at 1962.08s,
-16.6s past - far outside the slack. So the clip dies as `no_clean_end` and the soft cap backfills a lower-ranked
-clip. The shipped COUNT is unchanged only because all four fixtures had surplus; a source without surplus would
-lose clips outright. 4 new drops across the suite is the number that decides whether this ships, and it is a
-product call, not an engineering one.
+**The rule that reads the opaque node** - clean unless that node's own text starts lowercase - kills all three
+offenders, but on its own it DROPS them rather than repairing them: 4 new `no_clean_end` snap drops (ecology c21
+@0.86; answer-arc c35 @0.72, c22 @0.78, c23 @0.84). Snap's repair walks backward to the latest clean end at or
+after the payoff, then forward; behind ecology #576 there is no clean end at or after the payoff, and the next
+WORD-BEARING node is #579 at 1962.08s, 16.6s past. That is the "a fragment or nothing" reading, and it is a
+false choice - see below.
 
 **The strictest variant measured** (also refuse when any node in the opaque RUN starts lowercase, then still
 look through) costs a fifth drop on ecology (c10 @0.84) and moves a second shipped clip; it buys nothing over
 the simple rule on these four sources.
 
-**Cost of this measurement: zero.** No topup was needed and none was bought. `isCleanEnd` has exactly two
+#### What shipped: end ON the opaque node
+
+The completion is not 16.6s away. It is the very NEXT node, the opaque one, and it carries Whisper's punctuated
+segment text ending in a full stop. Ending there is **not a new kind of clip**: 12 of the 44 clips the four
+fixtures ship already end on an opaque node, at `"segment"` confidence, and `speechNodes` / `regroundCopy` /
+`snippetFallbackCopy` have been skipping opaque nodes when building copy all along. This adds three members to
+an existing population of twelve.
+
+Three parts, and the third is not optional:
+
+1. `isCleanEnd` - opaque successor is clean unless its text starts lowercase.
+2. `snapNodes` - the forward clean-end repair may land on an opaque node **whose text closes a sentence**,
+   marking the clip `"segment"` confidence. The guard is load-bearing: it refuses 46 / 47 / 52 / 11 opaque nodes
+   per fixture, and without it the repair would end clips inside a laugh.
+3. `CLEAN_END_REACH_SEC = 5`, a NEW constant. The completing opaque node sits **4.22s** past two of the three
+   offenders, outside the old 3s.
+
+Isolated knob attribution, dark stage, so neither knob is credited with the other's work:
+
+| arm | new `no_clean_end` |
+|---|---|
+| rule only, 3s reach, no opaque tail | 4 |
+| rule only, 5s reach, no opaque tail | 4 (the reach alone rescues **none**) |
+| rule + opaque tail, 3s reach | 3 (rescues 1) |
+| rule + opaque tail, 5s reach | **0** |
+
+`SENTENCE_SLACK_SEC` stays at 3 and is now used only by the payoff-containment fallback. The reach was
+deliberately given its own constant: sharing one number means widening the repair's arm silently widens the
+payoff window too, which nothing measured. A test pins that separation.
+
+**Dark-stage result, four fixtures.** Counts identical (12 / 12 / 11 / 9), zero swaps, zero backfills, and
+`no_clean_end` goes **1 -> 0** - the fix also rescues a drop that predates it. Exactly three clips move, each
+EXTENDED to finish its sentence:
+
+```
+ecology     1905.71-1945.76 (40.0s) [569..576] -> 1905.71-1949.98 (44.3s) [569..577]
+answer-arc  1905.71-1945.76 (40.0s) [576..583] -> 1905.71-1949.98 (44.3s) [576..584]
+answer-arc  2956.44-2976.06 (19.6s) [837..841] -> 2956.44-2977.76 (21.3s) [837..842]
+```
+
+The audible end is `endSecFor`'s ordinary arithmetic and bleeds into nothing: 0.78s / 0.92s / 0.10s of clearance
+before the next node starts.
+
+**LIVE, the counts move and it is NOT this change.** Zero `no_clean_end` drops on every live pair; every count
+change is the finalizer's fresh roll vetoing clips, for `broken_opening` / `no_payoff` / `unanswered_title` /
+`teaser_montage` - all opening and content reasons, none about ends.
+
+| pair | snapshot -> live | finalizer vetoes | new `no_clean_end` |
+|---|---|---|---|
+| ecology base | 12 -> 12 | 2 | 0 |
+| ecology gpt51 | 12 -> 12 | - | 0 |
+| ecology end-extension | 12 -> **8** | **7** | 0 |
+| answer-arc base | 12 -> **11** | 4 | 0 |
+| answer-arc gpt51 | 12 -> 12 | - | 0 |
+| answer-arc end-extension | 12 -> 12 | 1 | 0 |
+| sitcom-friends, creator-challenge | unchanged, both variants | - | 0 |
+
+**ecology end-extension losing 4 clips to 7 finalizer vetoes is the outlier and deserves its own look.** It is a
+resampling artefact of this topup, not a boundary regression - the dark-stage control holds every count and the
+stage ships OFF - but 7 of 15 vetoed is far above this fixture's usual rate and nothing here explains it.
+
+Topup cost: **8 calls, $0.079** (luna 41,943 in / 8,357 out; gpt-5.1 15,845 in / 4,079 out). Far below the ~$0.60
+the previous two boundary changes cost, because only the finalizer call per pair moved.
+
+**THE GUARD'S WEAK POINT, sized rather than assumed.** `endsOnSentenceMark` trusts Whisper's punctuation on the
+opaque node. On the four fixtures that trust is well placed - the opaque nodes really are punctuated, and the
+guard's refusals are genuine unterminated clauses. But all four are sources Whisper handles well (two Russian
+podcast transcriptions of one episode, one sitcom, one creator vlog). On a noisy stream, a heavily accented
+speaker, or a language it punctuates worse, a spurious full stop would let a clip end inside a laugh. NOT
+MEASURED, because no fixture in the repo can measure it. The blast radius is bounded - it can only affect clips
+whose end node already failed the clean-end test, and the failure mode is a coarse end rather than a wrong one -
+but the first badly-punctuated source is where to look for it.
+
+**The dark-stage control, which is the instrument that made all of this cheap.** `isCleanEnd` has exactly two
 consumers, `snapNodes` and `applyExtension`, and neither `prompts.ts` marker path nor the scanner/critic
 prompts read it - so with the finalizer and end extension dark, a clean-end change moves no request hash at
 all. That control is what makes this comparison free, and it is reusable for any future boundary-only change.

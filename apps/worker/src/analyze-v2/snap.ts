@@ -1,9 +1,39 @@
 import type { AnalyzeConfig } from "./config";
-import { endsOnQuestionMark, isCleanEnd, isCleanStart } from "./sentence-graph";
+import {
+  endsOnQuestionMark,
+  endsOnSentenceMark,
+  isCleanEnd,
+  isCleanStart,
+} from "./sentence-graph";
 import type { CriticVerdict, SentenceNode, SnapResult } from "./types";
 
 const EPS = 0.05;
+/** Extra window the PAYOFF-CONTAINMENT fallback may borrow when no strong
+ *  boundary exists within payoffMaxTailSec. Untouched at 3s. */
 const SENTENCE_SLACK_SEC = 3;
+/**
+ * How far the clean-end repair may reach FORWARD to close a sentence the end
+ * node left open.
+ *
+ * 5, not 3, and the number came from the transcripts rather than from taste: the
+ * two `"...космические корабли,"` offenders are completed by an opaque node
+ * **4.22s** past their end node, so a 3s reach rescued 1 of the 4 clips this
+ * repair can save and 5s rescues 4 of 4. It is a CEILING on how much foreign
+ * material a repair may add, so it should be the smallest number that clears the
+ * measured cases, and 5 is a 0.78s margin over 4.22.
+ *
+ * DELIBERATELY ITS OWN CONSTANT rather than a second use of SENTENCE_SLACK_SEC,
+ * which it was on 2026-08-05. The two answer different questions - how far past
+ * the payoff a strong boundary may be hunted, versus how far past the end node a
+ * sentence may be closed - and sharing one number means widening this reach
+ * silently widens the payoff window too, which nothing measured.
+ *
+ * MEASURED ON FOUR SOURCES ONLY (two Russian podcast transcriptions of the same
+ * episode, one sitcom, one creator vlog). On its own - the old rule, this reach -
+ * it moves no shipped clip on any of them; it only extends the repair's arm.
+ * Anyone widening it again should say which source asked for it.
+ */
+const CLEAN_END_REACH_SEC = 5;
 const STRONG = 0.8;
 
 /**
@@ -128,9 +158,12 @@ export function snapNodes(
   //     потому,") is a mid-clause cut. Repair order: BACKWARD first - trimming
   //     the dangling fragment to the latest clean end at or after the payoff
   //     never adds foreign content ("...единорога." wins over "...потому,").
-  //     FORWARD (within SENTENCE_SLACK) only when no clean end exists between
-  //     the payoff and e - i.e. the payoff's own sentence is still open and
-  //     must be completed. Neither works -> drop, better lost than broken.
+  //     FORWARD (within CLEAN_END_REACH_SEC) only when no clean end exists
+  //     between the payoff and e - i.e. the payoff's own sentence is still open
+  //     and must be completed. The forward scan takes the NEAREST node that can
+  //     end the clip, word-bearing or opaque: everything in between plays either
+  //     way, so the nearer end adds the least. Neither works -> drop, better lost
+  //     than broken.
   if (e.hasWords && !isCleanEnd(nodes, e.index)) {
     let repaired: SentenceNode | null = null;
     for (let i = e.index - 1; i >= p.index; i--) {
@@ -141,9 +174,24 @@ export function snapNodes(
     }
     if (!repaired) {
       for (let i = e.index + 1; i < nodes.length; i++) {
-        if (nodes[i].end - e.end > SENTENCE_SLACK_SEC) break;
+        if (nodes[i].end - e.end > CLEAN_END_REACH_SEC) break;
         if (nodes[i].hasWords && isCleanEnd(nodes, i)) {
           repaired = nodes[i];
+          break;
+        }
+        // An OPAQUE node may close the sentence, and usually it is the node that
+        // does: the continuation the end node was cut off from is inside the gap,
+        // not past it. Ending here is not a new kind of clip - 12 of the 44 clips
+        // the four eval fixtures ship already end on an opaque node - and its
+        // segment edge is a real Whisper boundary, just coarser than a word edge,
+        // which is exactly what "segment" confidence records.
+        //
+        // Only when the text CLOSES a sentence. Without that guard this branch
+        // would end clips in the middle of a laugh, and the guard refuses 46-52
+        // opaque nodes per fixture, so it is doing the work its name claims.
+        if (!nodes[i].hasWords && endsOnSentenceMark(nodes[i].text)) {
+          repaired = nodes[i];
+          boundaryConfidence = "segment";
           break;
         }
       }
