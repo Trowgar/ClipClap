@@ -168,7 +168,21 @@ export function restoreDroppedWords(
     // "unresolved" makes it visible instead of passing for a healthy segment.
     if (!missing) return { words, outcome: "unresolved" };
     const last = words[words.length - 1];
-    if (segEnd - last.end >= MIN_RESTORED_SEC) {
+    // The separator the source text actually had at this seam: a space, or
+    // nothing at all. An unconditional space put one INSIDE a word wherever
+    // Whisper split a hyphenated or apostrophised token - "во" + "-первых."
+    // drew as "во -первых.", "y" + "'all." as "y 'all." - on 34 of 743
+    // measured tail drops. Reading the separator off the source also gets CJK
+    // right for free: no whitespace at the seam, so no space is invented.
+    const separator = seamSeparator(rawMissing, "leading");
+    // No whitespace at the seam means the span CONTINUES the timed word rather
+    // than following it, so it is not a word that can hold a timing of its own
+    // and MIN_RESTORED_SEC is the wrong question to ask - half of "во-первых"
+    // would get its own karaoke highlight, and whatever draws the two entries
+    // would put a space between them. The gap is consulted only once the seam
+    // says there really are two words here. 45 measured restores took their own
+    // entry off a seam like this before the order was fixed.
+    if (separator && segEnd - last.end >= MIN_RESTORED_SEC) {
       return {
         words: [...words, { text: missing, start: last.end, end: segEnd }],
         outcome: "tail",
@@ -177,14 +191,7 @@ export function restoreDroppedWords(
     return {
       words: [
         ...words.slice(0, -1),
-        // Rejoined with the separator the source text actually had at this
-        // seam, which is a space or nothing at all. An unconditional space put
-        // one INSIDE a word wherever Whisper split a hyphenated or
-        // apostrophised token - "во" + "-первых." drew as "во -первых.", "y" +
-        // "'all." as "y 'all." - on 34 of 743 measured tail drops. Reading the
-        // separator off the source also gets CJK right for free: there is no
-        // whitespace at the seam, so no space is invented.
-        { ...last, text: `${last.text}${seamSeparator(rawMissing, "leading")}${missing}` },
+        { ...last, text: `${last.text}${separator}${missing}` },
       ],
       outcome: "tail",
     };
@@ -210,7 +217,12 @@ export function restoreDroppedWords(
     // not pass for a healthy segment.
     if (!missing) return { words, outcome: "unresolved" };
     const first = words[0];
-    if (first.start - segStart >= MIN_RESTORED_SEC) {
+    // The mirror of the tail branch, and it asks its two questions in the same
+    // order for the same reasons: the seam decides whether this is a separate
+    // word at all, and only then does the gap decide whether it can be timed
+    // separately. "Во-" is not a word, however much head room there is.
+    const separator = seamSeparator(rawMissing, "trailing");
+    if (separator && first.start - segStart >= MIN_RESTORED_SEC) {
       return {
         words: [
           { text: missing, start: segStart, end: first.start },
@@ -222,10 +234,8 @@ export function restoreDroppedWords(
     return {
       words: [
         // Merged into the FIRST word rather than given a duration, the mirror
-        // of the tail branch - and rejoined with the source's own separator
-        // for the reason spelled out there. "Во-" + "первых" must not become
-        // "Во- первых".
-        { ...first, text: `${missing}${seamSeparator(rawMissing, "trailing")}${first.text}` },
+        // of the tail branch. "Во-" + "первых" must not become "Во- первых".
+        { ...first, text: `${missing}${separator}${first.text}` },
         ...words.slice(1),
       ],
       outcome: "head",

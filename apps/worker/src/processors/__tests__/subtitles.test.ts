@@ -444,6 +444,24 @@ describe("restoreDroppedWords - tail", () => {
     expect(out.words[1]).toEqual({ text: "во-первых.", start: 0.3, end: 0.6 });
   });
 
+  it("merges a span that continues the adjacent word, however much room there is", () => {
+    // "во-первых" is one word Whisper tokenised in two. A separate entry would
+    // put a space inside the word and give half of it its own karaoke
+    // highlight, so the gap is not the right question to ask here.
+    const out = restoreDroppedWords(
+      "Это во-первых.",
+      [
+        { text: "Это", start: 0, end: 0.4 },
+        { text: "во", start: 0.4, end: 0.7 },
+      ],
+      0,
+      2.0
+    );
+    expect(out.outcome).toBe("tail");
+    expect(out.words).toHaveLength(2);
+    expect(out.words[1]).toEqual({ text: "во-первых.", start: 0.4, end: 0.7 });
+  });
+
   it("rejoins an apostrophised word with no space at the seam", () => {
     // The English shape of the same defect: "y" is timed, "'all." is not.
     const out = restoreDroppedWords(
@@ -488,6 +506,15 @@ describe("restoreDroppedWords - tail", () => {
     // because it is written first, and this pins that precedence rather than
     // leaving it to the order of two if-statements. 136 punctuation-only word
     // entries exist in the corpus; no segment where every entry is one does.
+    //
+    // It merges rather than taking its own entry, and that follows from the
+    // seam rule rather than from the gap: with no timed comparable character
+    // there is nothing for the span to be separated FROM, so the seam reads as
+    // carrying no whitespace and the span is glued on. The whole text is drawn
+    // either way - which is what the repair is for - but it inherits the
+    // punctuation entry's timing instead of running to segEnd. Left as the
+    // rule produces it: nothing in the corpus reaches this, and a special case
+    // here could not be checked against anything real.
     const out = restoreDroppedWords(
       "Hello there.",
       [{ text: "-", start: 0, end: 0.5 }],
@@ -495,8 +522,8 @@ describe("restoreDroppedWords - tail", () => {
       2.0
     );
     expect(out.outcome).toBe("tail");
-    expect(out.words).toHaveLength(2);
-    expect(out.words[1]).toEqual({ text: "Hello there.", start: 0.5, end: 2.0 });
+    expect(out.words).toHaveLength(1);
+    expect(out.words[0]).toEqual({ text: "-Hello there.", start: 0, end: 0.5 });
   });
 
   it("changes nothing when the mismatch is at neither end", () => {
@@ -613,6 +640,19 @@ describe("restoreDroppedWords - head", () => {
       start: 967.22,
       end: 967.5,
     });
+  });
+
+  it("merges a head that continues the adjacent word, however much room there is", () => {
+    // The head mirror: 0.5s of head room, and the span is still glued on,
+    // because "Во-" is not a word that can hold a timing of its own.
+    const words = [
+      { text: "первых", start: 12.5, end: 12.9 },
+      { text: "это", start: 12.9, end: 13.1 },
+    ];
+    const out = restoreDroppedWords("Во-первых, это.", words, 12.0, 13.1);
+    expect(out.outcome).toBe("head");
+    expect(out.words).toHaveLength(2);
+    expect(out.words[0]).toEqual({ text: "Во-первых", start: 12.5, end: 12.9 });
   });
 
   it("rejoins a hyphenated head with no space at the seam", () => {
