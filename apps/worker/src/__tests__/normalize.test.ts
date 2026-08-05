@@ -5,11 +5,19 @@ import { UnsupportedInputError } from "../processors/errors";
 // normalizeSource shells out to ffprobe; only the probe leg matters here.
 const ffprobeOutput = vi.hoisted(() => ({ json: "" }));
 vi.mock("child_process", () => ({
+  // promisify(execFile) always passes the callback LAST, so adding an options
+  // object moves it from the 3rd argument to the 4th.
   execFile: (
     _cmd: string,
     _args: string[],
-    cb: (err: Error | null, res: { stdout: string; stderr: string }) => void
-  ) => cb(null, { stdout: ffprobeOutput.json, stderr: "" }),
+    ...rest: unknown[]
+  ) => {
+    const cb = rest.find((a) => typeof a === "function") as (
+      err: Error | null,
+      res: { stdout: string; stderr: string }
+    ) => void;
+    return cb(null, { stdout: ffprobeOutput.json, stderr: "" });
+  },
 }));
 
 const probeJson = (videoStart: string, audioStart: string, formatStart = "0.000000") =>

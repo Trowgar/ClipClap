@@ -2,6 +2,16 @@ import { execFile } from "child_process";
 import type { ChildProcess } from "child_process";
 import { isBotCheckFailure, proxyArgs, rotateWarpExit } from "./ytdlp-proxy";
 
+/** stdout+stderr cap for the probe children.
+ *
+ *  Node's default is 1 MiB per stream and it KILLS the child rather than
+ *  truncating. Both probes here are deliberately quiet - `--print` and
+ *  `-v error` emit a single line - so this is headroom, not a fix for an
+ *  observed failure. It is named because the identical default silently killed
+ *  a real user's job in the worker's render path on 2026-08-04, twice-fixed
+ *  locally and never generalised. */
+const PROBE_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+
 export function extractVideoUrl(text: string): string | null {
   const m = /https?:\/\/\S+/.exec(text);
   return m ? m[0] : null;
@@ -93,7 +103,10 @@ function probeOnce(
         "10",
         url,
       ],
-      { timeout: timeoutMs + 1000 },
+      // Quiet flags keep this well under any cap, but the cap is named anyway:
+      // the render path was killed by exactly this default after two earlier
+      // local fixes failed to generalise (apps/worker/src/child-buffer.ts).
+      { timeout: timeoutMs + 1000, maxBuffer: PROBE_MAX_BUFFER_BYTES },
       // stderr is READ now, where it used to be dropped: it carries the bot
       // check, and without it a refused exit is indistinguishable from a dead
       // link - so nothing could ever decide to rotate.
@@ -211,7 +224,7 @@ export function probeLocalFile(path: string): Promise<ProbeResult> {
         "default=noprint_wrappers=1:nokey=1",
         path,
       ],
-      { timeout: 15_000 },
+      { timeout: 15_000, maxBuffer: PROBE_MAX_BUFFER_BYTES },
       (err, stdout) => {
         if (err) {
           if (isMissingBinary(err)) {

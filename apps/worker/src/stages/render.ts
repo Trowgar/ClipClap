@@ -8,6 +8,7 @@ import {
 import type { Prisma } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { unlink } from "fs/promises";
+import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
 import { downloadVideo } from "../processors/download";
 import { cutClips, trimClipFile, type CutResult } from "../processors/cut";
 import { probeTimeline } from "../processors/normalize";
@@ -506,6 +507,6 @@ async function probeDuration(path: string): Promise<number> {
   const { stdout } = await promisify(execFile)("ffprobe", [
     "-v", "error", "-show_entries", "format=duration",
     "-of", "default=noprint_wrappers=1:nokey=1", path,
-  ]);
+  ], { maxBuffer: CHILD_MAX_BUFFER_BYTES });
   return Number(stdout.trim()) || 0;
 }

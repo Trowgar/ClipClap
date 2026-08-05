@@ -7,6 +7,8 @@ import { buildCropPlan } from "./plan";
 import { resolveCamRect } from "./cam-rect";
 import type { CropPlan } from "./types";
 
+import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
+
 const execFileAsync = promisify(execFile);
 
 export type ReframeFallbackReason =
@@ -41,7 +43,7 @@ async function probeDimensions(
       "-of", "csv=s=x:p=0",
       path,
     ],
-    { timeout: timeoutMs }
+    { timeout: timeoutMs, maxBuffer: CHILD_MAX_BUFFER_BYTES }
   );
   const [width, height] = stdout.trim().split("x").map(Number);
   if (!width || !height) throw new Error("probe_failed");

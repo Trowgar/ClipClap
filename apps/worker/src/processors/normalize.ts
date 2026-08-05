@@ -4,6 +4,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import { UnsupportedInputError } from "./errors";
+import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
 
 const execFileAsync = promisify(execFile);
 
@@ -74,7 +75,7 @@ export async function normalizeSource(localPath: string): Promise<NormalizeOutco
       "-c", "copy",
       "-avoid_negative_ts", "make_zero", "-muxpreload", "0", "-muxdelay", "0",
       "-movflags", "+faststart", remuxPath, "-y",
-    ]);
+    ], { maxBuffer: CHILD_MAX_BUFFER_BYTES });
     if (await verifyNormalized(remuxPath)) {
       return { path: remuxPath, action: "remux" };
     }
@@ -90,7 +91,7 @@ export async function normalizeSource(localPath: string): Promise<NormalizeOutco
     "-c:a", "aac", "-b:a", "160k", "-af", "aresample=async=1",
     "-avoid_negative_ts", "make_zero", "-movflags", "+faststart",
     reencodePath, "-y",
-  ]);
+  ], { maxBuffer: CHILD_MAX_BUFFER_BYTES });
   return { path: reencodePath, action: "reencode" };
 }
 
@@ -100,7 +101,7 @@ export async function probeTimeline(path: string): Promise<TimelineProbe> {
     "-show_entries", "format=start_time",
     "-show_entries", "stream=index,codec_type,start_time",
     "-of", "json", path,
-  ]);
+  ], { maxBuffer: CHILD_MAX_BUFFER_BYTES });
   return parseTimelineProbe(stdout);
 }
 
