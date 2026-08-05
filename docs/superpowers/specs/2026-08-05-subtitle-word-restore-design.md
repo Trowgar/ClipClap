@@ -220,6 +220,25 @@ that case the text is **merged into the adjacent real word** (`last.text + " " +
 with its neighbour and the karaoke highlight covers both. Correctness first, karaoke granularity
 second.
 
+**Measured after implementation, and it inverts what this section assumed.** Over the 743 real tail
+drops in the database:
+
+| | count | share |
+|---|---|---|
+| merged into the neighbour | 698 | **94%** |
+| given its own timing entry | 45 | 6% |
+
+**The gap is exactly 0.000 in 698 cases and at least 0.08 in the other 45. Nothing lands strictly
+between.** Whisper's last timed word either ends precisely on the segment boundary or leaves a large
+untimed span. So the merge is the ordinary path and the separate entry is the exception - the reverse
+of how this design described them - and `MIN_RESTORED_SEC` discriminates nothing on real data: every
+threshold in `(0, 0.08]` produces byte-identical output corpus-wide. The constant is a guard against
+a shape the corpus does not contain, which is worth knowing before anyone tunes it.
+
+The practical consequence is that **94% of restored words carry no word-level karaoke granularity of
+their own** - they highlight together with the word they were glued to. The text is drawn for the
+right duration either way, because the cue holding it runs to the segment end.
+
 **Order of operations, and it is load-bearing.** Reconciliation runs on the raw segment, against the
 whole of `s.text`, **before** the existing filter that clips words to the clip window. Reconciling
 after the filter would read every partially-overlapping segment as a drop and append text that the
@@ -272,6 +291,13 @@ that way a month from now.
 Counted per job, summed over its clips. Without it we cannot answer "is the repair still firing, and
 has `unresolved` started to grow" - and `unresolved` growing is the signal that Whisper's output
 shape has changed.
+
+**Open for Task 6, raised by the §4.2 measurement:** `outcome` returns `"tail"` whether the text got
+its own timing entry or was glued onto its neighbour, and those are 6% and 94% of real cases. A
+metric built on this enum would report that drops are being repaired without revealing that almost
+all of them lose word-level karaoke granularity. Either a fifth outcome or a `merged` boolean beside
+it closes that; deferred deliberately, because Task 6 owns telemetry and changing the enum earlier
+would churn the tests of Tasks 2 through 4 for a distinction nothing yet consumes.
 
 ## 7. Invariants
 
