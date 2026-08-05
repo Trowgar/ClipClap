@@ -22,13 +22,23 @@
  */
 import { getStageQueue, prisma } from "@clipclap/shared";
 import type { Prisma } from "@prisma/client";
-import { loadFixture, runFixture } from "../__tests__/helpers/eval-fixture";
+import {
+  BASE_VARIANT,
+  loadFixture,
+  parseVariantArgs,
+  runFixtureVariant,
+} from "../__tests__/helpers/eval-fixture";
 
 async function main() {
-  const [fixtureName, sourceJobId, ownerUserId] = process.argv.slice(2);
-  if (!fixtureName || !sourceJobId || !ownerUserId) {
+  // Same parse as eval-topup, eval-bless and eval-end-audit, for the reason
+  // documented there: every failure mode of a hand-rolled one is silent, and a
+  // run that quietly renders BASE under a variant's name would put the wrong
+  // clips in front of a human and call them the new engine.
+  const { variant, cases } = parseVariantArgs(process.argv.slice(2));
+  const [fixtureName, sourceJobId, ownerUserId] = cases;
+  if (!fixtureName || !sourceJobId || !ownerUserId || !variant) {
     console.error(
-      "usage: eval-render-set.ts <fixture> <sourceJobId> <ownerUserId>"
+      "usage: eval-render-set.ts [--variant NAME] <fixture> <sourceJobId> <ownerUserId>"
     );
     process.exit(1);
   }
@@ -58,9 +68,9 @@ async function main() {
   });
 
   const fixture = loadFixture(fixtureName);
-  const result = await runFixture(fixture);
+  const result = await runFixtureVariant(fixture, variant);
   if (result.highlights.length === 0) {
-    throw new Error(`fixture ${fixtureName} replayed to zero highlights`);
+    throw new Error(`fixture ${fixtureName}[${variant}] replayed to zero highlights`);
   }
 
   const job = await prisma.job.create({
@@ -68,7 +78,7 @@ async function main() {
       userId: owner.id,
       // Named so it is obvious in the dashboard and in any later cleanup that
       // this row is an instrument, not a customer's video.
-      originalFilename: `[eval:${fixtureName}] ${source.originalFilename ?? sourceJobId}`,
+      originalFilename: `[eval:${fixtureName}${variant === BASE_VARIANT ? "" : `@${variant}`}] ${source.originalFilename ?? sourceJobId}`,
       status: "ANALYZING",
       sourceArtifactKey: artifactKey,
       normalizedArtifactKey: artifactKey,
