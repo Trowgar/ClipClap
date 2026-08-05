@@ -393,14 +393,30 @@ export function buildCropPlan(
     // bystander; centring a 9:16 window on it yields a truncated inset plus
     // whatever overlay sits under it (spec §4.1).
     const anchorable = tracks.filter((t) => t.box.w >= minFaceWidth);
-    if (anchorable.length === 0) {
+    // WHOM the window follows comes from `selectGroupForShot` and nowhere else.
+    // Recording a group chosen by a copy of that logic would let the planner and
+    // the containment metric drift apart, which is the whole reason the function
+    // was extracted. The fits test below stays here: it decides the LAYOUT, not
+    // the anchor. Null exactly when `anchorable` is empty, so it also owns the
+    // min-face guard's verdict.
+    //
+    // It re-runs `survivingTracks` over tracks that have already been through
+    // it. Checked, not assumed: the second pass is a no-op. The track holding
+    // `maxSamples` always clears both clauses of its own filter (`>= 2` once
+    // `maxSamples >= 2`, and `>= 0.3 * itself`), so `maxSamples` is unchanged on
+    // the second pass and every survivor survives again; when nothing clears the
+    // first pass the second sees an empty list and returns one. The evidence is
+    // the suite: "ignores 1-sample noise tracks" and "drops a stray low-sample
+    // track" now run through both passes and still land on their original x.
+    const group = selectGroupForShot(tracks, minFaceWidth, cropW, sourceWidth);
+    if (!group) {
       return { start: shot.start, end: shot.end, layout: "center", x: centerX };
     }
     const minX = Math.min(...anchorable.map((t) => t.box.x));
     const maxX = Math.max(...anchorable.map((t) => t.box.x + t.box.w));
     if (maxX - minX <= FIT_MARGIN * cropW) {
       const x = evenClamp((minX + maxX) / 2 - cropW / 2, cropW, sourceWidth);
-      groupsByShot.set(i, anchorable);
+      groupsByShot.set(i, group);
       return { start: shot.start, end: shot.end, layout: "single", x };
     }
     const split = trySplit(anchorable, tileW, sourceWidth, sourceHeight);
@@ -409,9 +425,8 @@ export function buildCropPlan(
     // faces one window CAN hold rather than centring blind on the furniture
     // between them (engine-notes §7b: 44% of shot time, and in 4 of 12 clips
     // the nearest face was outside the centred window altogether).
-    // Called exactly once: the same group object decides `x` and, later, the
-    // trajectory. Two calls would be two chances to disagree.
-    const group = bestFaceGroup(anchorable, cropW, sourceWidth);
+    // Same `group` the fits branch above would have used: one selection per
+    // shot, decided in one place, driving both `x` and the trajectory.
     groupsByShot.set(i, group);
     return {
       start: shot.start,
@@ -532,6 +547,13 @@ export function attachTrajectories<T extends ShotLayout>(
     const xs = solveCamera(
       targets, span.x, cropW, sourceWidth, span.start, span.end, camera
     );
+    // Writing `x: xs[0].x` here would be inert TODAY - `solveCamera` seeds its
+    // first keyframe with the legacy x and `dropCollinear` always keeps it, so
+    // `xs[0].x === span.x` by construction, and mutation testing confirmed no
+    // test can tell the two apart. It stays out anyway, because that identity
+    // is a property of the SOLVER, not of this function: if the solver ever
+    // seeded from somewhere else, the assignment would start overwriting the
+    // legacy x and the rollback story would break with nothing to catch it.
     return (xs ? { ...span, xs } : span) as T & { xs?: Keyframe[] };
   });
 }

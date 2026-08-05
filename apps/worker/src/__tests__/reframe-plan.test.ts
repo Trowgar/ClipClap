@@ -1038,6 +1038,23 @@ describe("selectGroupForShot", () => {
     expect(selectGroupForShot([t(0, 100, 10)], 40, 406, 1280)).toBeNull();
   });
 
+  it("drops the tracks the per-shot noise floor drops", () => {
+    // survivingTracks runs FIRST, and both of its clauses matter. Each noise
+    // track here sits close enough to the dominant face to fit one window with
+    // it, so keeping either one would widen the group from [0] to two faces -
+    // the window would then frame a detector artefact as if it were a person.
+    const dominant = { ...t(0, 600), samples: 10 };
+    const oneSample = { ...t(1, 700), samples: 1 };
+    // 2 clears MIN_TRACK_SAMPLES but not 30% of the dominant track's 10.
+    const transient = { ...t(2, 800), samples: 2 };
+    expect(
+      selectGroupForShot([dominant, oneSample], 40, 406, 1280)!.map((g) => g.id)
+    ).toEqual([0]);
+    expect(
+      selectGroupForShot([dominant, transient], 40, 406, 1280)!.map((g) => g.id)
+    ).toEqual([0]);
+  });
+
   it("does not move when mouthActivity moves", () => {
     // engine-notes 7c's invariant, restated on the extracted function so it
     // cannot be lost now that the measurement script reuses this selection.
@@ -1154,12 +1171,91 @@ describe("attachTrajectories", () => {
     const shots = [{ start: 0, end: 5 }, { start: 5, end: 10 }];
     const merged = [{ start: 0, end: 5, layout: "single" as const, x: 0 }];
     const out = attachTrajectories(merged, shots, groups, 406, 1280, DEFAULT_CAMERA);
-    // Only shot 0 overlaps [0,5); shot 1's distant face must not appear at all.
-    const targets = buildTargetSamples(groups.get(0)!, 0, 5);
-    const maxCx = Math.max(...targets.map((s) => s.cx));
-    expect(maxCx).toBeLessThan(700);
-    if (out[0].xs) {
-      expect(Math.max(...out[0].xs.map((k) => k.x))).toBeLessThan(700);
-    }
+    // The bound is derived, not picked. Only shot 0 overlaps [0,5): its face
+    // runs cx 130..490, so the window can never ask for more than 490 - 203 =
+    // 287. Measured under the pooling mutant, shot 1's face at 1200 is carried
+    // BACKWARD into the bbox at times it was never on screen, the target runs
+    // cx 680..860 and the emitted trajectory reaches x = 500 - held down only
+    // by the follow-speed cap, which is why a threshold up at 700 let the
+    // mutant live. 300 sits between 287 and 500.
+    expect(out[0].xs).toBeDefined();
+    expect(Math.max(...out[0].xs!.map((k) => k.x))).toBeLessThanOrEqual(300);
+  });
+});
+
+describe("buildCropPlan with motion on", () => {
+  // The only place the flag is exercised end to end. Without it the wiring
+  // inside buildCropPlan - the order of merge and attach, and the v3 rule - is
+  // dead code in the whole suite, which is what mutation testing found.
+  const motionOpts = { ...DEFAULT_PLAN_OPTIONS, motion: true };
+  const pathOf = (from: number, count: number, x0: number, dx: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      t: from + i * 0.5,
+      x: x0 + i * dx,
+      y: 200,
+      w: 400,
+      h: 520,
+    }));
+
+  it("keeps the second detector shot's motion after the two shots merge", () => {
+    // Shot 0 holds still at centre 800 -> x 496. Shot 1's MEDIAN centre is 870
+    // -> x 566, and |566 - 496| = 70 <= 4% of 1920, so the two merge into one
+    // [0,20] span carrying shot 0's x. The subject moves only during shot 1.
+    // Attaching before the merge would hang the trajectory on shot 1's layout,
+    // which the merge then discards along with the rest of its geometry.
+    const plan = buildCropPlan(
+      [
+        { start: 0, end: 10 },
+        { start: 10, end: 20 },
+      ],
+      [
+        {
+          shotIndex: 0,
+          tracks: [track(600, 400, { path: pathOf(0, 20, 600, 0) })],
+          camRect: null,
+        },
+        {
+          shotIndex: 1,
+          tracks: [track(670, 400, { id: 1, path: pathOf(10, 21, 600, 7) })],
+          camRect: null,
+        },
+      ],
+      W,
+      H,
+      motionOpts
+    );
+    expect(plan!.shots).toHaveLength(1);
+    const span = plan!.shots[0];
+    if (span.layout !== "single") throw new Error(`expected single, got ${span.layout}`);
+    expect(span).toMatchObject({ start: 0, end: 20, x: 496 });
+    expect(span.xs).toBeDefined();
+    const late = span.xs!.filter((k) => k.t > 10);
+    expect(late.length).toBeGreaterThan(0);
+    expect(Math.max(...late.map((k) => k.x))).toBeGreaterThan(496);
+  });
+
+  it("reports v3 only when a trajectory is actually emitted", () => {
+    // Moving: centre travels 800 -> 1080, well past the deadzone.
+    const moving = buildCropPlan(
+      [{ start: 0, end: 20 }],
+      withTracks([track(600, 400, { path: pathOf(0, 41, 600, 7) })]),
+      W,
+      H,
+      motionOpts
+    );
+    expect(moving!.version).toBe(3);
+
+    // Still: motion is ON and the path is present, but the camera never moves,
+    // so the plan must stay byte-identical to the legacy one - v1, no xs.
+    const still = buildCropPlan(
+      oneShot,
+      withTracks([track(600, 400, { path: pathOf(0, 20, 600, 0) })]),
+      W,
+      H,
+      motionOpts
+    );
+    expect(still!.version).toBe(1);
+    expect(still!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 496 }]);
+    expect(still!.shots.every((s) => !("xs" in s))).toBe(true);
   });
 });
