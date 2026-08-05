@@ -104,8 +104,9 @@ split into letters, and a set comparison reports a phantom loss. **The first mea
 this design fell into the second trap and reported 12.3% instead of 10.7%.** Both traps disappear
 under a character-stream comparison.
 
-To recover the display text, including its punctuation, walk `s.text` counting letters and digits and
-cut at the index where the count reaches `flatWords.length`. Never reconstruct it from tokens.
+To recover the display text, including its punctuation, walk the NFC form of `s.text` counting letters
+and digits and cut at the index where the count reaches `flatWords.length` (see §3.2 for why the form
+matters). Never reconstruct it from tokens.
 
 ### 3.1 The comparison function, defined exactly
 
@@ -115,7 +116,7 @@ found in production rather than in review.
 
 ```ts
 /** Comparison form only. NEVER rendered, NEVER stored, NEVER shown to a user. */
-function comparableStream(value: string): string {
+function comparableText(value: string): string {
   return value.normalize("NFC").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 }
 ```
@@ -129,12 +130,36 @@ Contract:
 - **Unicode letters and digits only**, `\p{L}` and `\p{N}` with the `u` flag. Never `[a-z0-9]`, which
   would erase Cyrillic entirely and make every Russian segment compare as empty.
 - **No token counting, no whitespace, no punctuation, no set comparison** anywhere in the decision.
-- **Its output is never displayed.** What reaches the viewer is always an exact substring of the
-  original `s.text`, punctuation and casing intact. The stream exists to find the cut index, nothing
+- **Its output is never displayed.** What reaches the viewer is a substring of the NFC form of
+  `s.text`, punctuation and casing intact. The comparison form exists to find the cut index, nothing
   more.
+
+Not named `comparableStream`: in this worker "stream" already means a Node `Readable` and, separately,
+a gameplay source with a webcam inset (`REFRAME_STREAM`). It is neither.
 
 This is what makes `5.30`, `Bing?`, `Y-O-U-R`, `you're`, `кое-что` and mixed ASCII/Cyrillic text all
 behave.
+
+### 3.2 The cut must be taken in the same form the count was produced in
+
+The companion helper `splitAtComparable(text, keepComparable)` returns the two pieces of `text` around
+its `keepComparable`-th comparable character. **It slices the NFC form, not the raw input**, and this
+is not incidental: the caller spends a count produced by `comparableText`, which normalises. Walking
+the raw string instead means counting in one form and cutting in another, and the design cannot have
+it both ways - either the input is never decomposed, in which case the `normalize` in `comparableText`
+is dead code, or it can be, in which case an unnormalised split lands in the wrong place. Caught in
+review of the first implementation, where `splitAtComparable("й хорошо", 1)` returned
+`["и", "̆ хорошо"]`: the wrong letter in the head and a bare combining breve opening the tail.
+
+**A combining mark following the cut goes into the head, with the letter it belongs to.** Marks are
+not comparable characters, so the cut index lands between a base and its mark. On Devanagari and Thai
+this happens even in NFC: `splitAtComparable("कितна समय", 1)` would otherwise open the tail with an
+orphan vowel sign, which renders as a dotted circle, while the head loses the diacritic from its last
+letter. Both halves are wrong words.
+
+Slicing the NFC form means the restored text is canonically equivalent to the original rather than
+byte-identical to it. That is the correct trade: canonical equivalence guarantees identical glyphs,
+and the alternative is a cut in the wrong place.
 
 ## 4. Where the restored text goes
 
@@ -209,7 +234,7 @@ Two pure functions, exported for testing, in `subtitles.ts` beside `chunkWords`:
 export type RestoreOutcome = "none" | "head" | "tail" | "unresolved";
 
 /** Comparison form only - see §3.1. Never rendered, never stored. */
-export function comparableStream(value: string): string;
+export function comparableText(value: string): string;
 
 export function restoreDroppedWords(
   text: string,
@@ -278,7 +303,12 @@ carry real data rather than invented strings:
 | multi-word span | the measured 9-word case, `"I'm not sure I'm going to be able to"` | restored as **one** entry, text exact including the apostrophes |
 | Cyrillic | `"кое-что новое"` style input | not mangled; proves the regex is `\p{L}` and not `[a-z]` |
 
-**Unit, on `comparableStream`:** composed against decomposed `й` compare equal; a Cyrillic string
+**Unit, on `splitAtComparable`:** the cut is taken in NFC (`"й хорошо"` decomposed splits after the
+whole letter, not between it and its breve); a combining mark following the cut joins the head, not
+the tail (Devanagari, Thai); an astral character is never cut in half; `head + tail` reconstructs the
+NFC form for every input and count.
+
+**Unit, on `comparableText`:** composed against decomposed `й` compare equal; a Cyrillic string
 does not reduce to empty; `"5.30"` and `"5" + "30"` agree; the returned value is never used as
 display text anywhere in the module (asserted by the callers' tests, which compare against exact
 substrings of the input).

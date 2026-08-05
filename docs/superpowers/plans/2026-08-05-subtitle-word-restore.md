@@ -4,7 +4,7 @@
 
 **Goal:** Draw the word Whisper never timed. 10.7% of transcript segments lose a word that is spoken in the clip and absent from the burned caption; this restores it.
 
-**Architecture:** Two pure functions added to `apps/worker/src/processors/subtitles.ts`. `comparableStream` normalises a string for comparison only. `restoreDroppedWords` compares a segment's `text` against its `words[]` on that stream and puts the missing head or tail back as one timing entry, using the segment's own boundaries. `segmentsToCues` calls it before its existing window filter. A third helper counts outcomes for telemetry. No new module, no schema change, no feature flag.
+**Architecture:** Two pure functions added to `apps/worker/src/processors/subtitles.ts`. `comparableText` normalises a string for comparison only. `restoreDroppedWords` compares a segment's `text` against its `words[]` on that stream and puts the missing head or tail back as one timing entry, using the segment's own boundaries. `segmentsToCues` calls it before its existing window filter. A third helper counts outcomes for telemetry. No new module, no schema change, no feature flag.
 
 **Tech Stack:** TypeScript, vitest, Prisma (read-only, in the acceptance script), ffmpeg (untouched by this work).
 
@@ -39,7 +39,7 @@ Everything lives beside the code it belongs to. `subtitles.ts` is 255 lines and 
 
 ---
 
-### Task 1: `comparableStream` and the split helper
+### Task 1: `comparableText` and the split helper
 
 The comparison form. Every later task depends on it, and §3.1 of the spec exists because two different naive versions of this produced two different wrong measurements.
 
@@ -52,26 +52,30 @@ The comparison form. Every later task depends on it, and §3.1 of the spec exist
 Append to `apps/worker/src/processors/__tests__/subtitles.test.ts`:
 
 ```ts
-describe("comparableStream", () => {
+describe("comparableText", () => {
   it("keeps letters and digits, drops everything else, folds case", () => {
-    expect(comparableStream("It was 5.30 in the morning,")).toBe("itwas530inthemorning");
-    expect(comparableStream("Bing?")).toBe("bing");
-    expect(comparableStream("Y-O-U-R means you're.")).toBe("yourmeansyoure");
+    expect(comparableText("It was 5.30 in the morning,")).toBe("itwas530inthemorning");
+    expect(comparableText("Bing?")).toBe("bing");
+    expect(comparableText("Y-O-U-R means you're.")).toBe("yourmeansyoure");
   });
 
   it("does not erase Cyrillic", () => {
-    expect(comparableStream("Там хорошая компания подбирается.")).toBe(
+    expect(comparableText("Там хорошая компания подбирается.")).toBe(
       "тамхорошаякомпанияподбирается"
     );
   });
 
   it("treats composed and decomposed forms as equal", () => {
-    // "й" as one code point vs "и" + combining breve
-    expect(comparableStream("й")).toBe(comparableStream("й"));
+    // Escapes, not raw literals: any editor or formatter that NFC-normalises
+    // this source file would collapse a decomposed literal into a composed one
+    // and silently turn the assertion into f(x) === f(x), still green.
+    expect(comparableText("\u0438\u0306")).toBe("\u0439");
   });
 
   it("agrees when Whisper splits a number into two tokens", () => {
-    expect(comparableStream("5.30")).toBe(comparableStream(["5", "30"].join("")));
+    // Literal expectation rather than f(a) === f(b): the latter is satisfied
+    // by an implementation that returns "" for everything.
+    expect(comparableText("5.30")).toBe("530");
   });
 
   it("does not fold compatibility forms - NFC, not NFKC", () => {
@@ -79,7 +83,7 @@ describe("comparableStream", () => {
     // these compare equal; NFC leaves it alone (spec 3.1). Without this the
     // NFC-to-NFKC mutation survives every other test in the file - found by
     // mutation-testing the first implementation, not by reasoning.
-    expect(comparableStream("ﬁ")).not.toBe(comparableStream("fi"));
+    expect(comparableText("ﬁ")).not.toBe(comparableText("fi"));
   });
 });
 
@@ -108,7 +112,7 @@ And extend the import on line 2 of that file:
 
 ```ts
 import {
-  comparableStream,
+  comparableText,
   generateAss,
   segmentsToCues,
   sliceCues,
@@ -122,7 +126,7 @@ import {
 docker compose exec -T worker-render sh -c 'cd /app && npx vitest run apps/worker/src/processors/__tests__/subtitles.test.ts'
 ```
 
-Expected: FAIL, `comparableStream is not a function` (or a transform error naming the missing export).
+Expected: FAIL, `comparableText is not a function` (or a transform error naming the missing export).
 
 - [ ] **Step 3: Implement both helpers**
 
@@ -130,35 +134,58 @@ In `apps/worker/src/processors/subtitles.ts`, directly above `export function se
 
 ```ts
 // Comparison form ONLY. Never rendered, never stored, never shown to a user -
-// what reaches the viewer is always an exact substring of the segment's own
-// text. NFC and not NFKC: NFKC folds compatibility forms, which would let two
+// what reaches the viewer is always an exact substring of the NFC form of the
+// segment's own text. NFC and not NFKC: NFKC folds compatibility forms, which would let two
 // visibly different strings compare equal, the opposite of what this is for.
 // \p{L}\p{N} and not [a-z0-9]: the latter reduces every Russian segment to the
 // empty string and would report a total loss on the whole language.
-export function comparableStream(value: string): string {
+export function comparableText(value: string): string {
   return value.normalize("NFC").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
 }
 
 const COMPARABLE_CHAR = /[\p{L}\p{N}]/u;
+const COMBINING_MARK = /\p{M}/u;
 
-/** Splits `text` immediately after its `keep`-th comparable character, so the
- *  head carries exactly `keep` of them and the tail carries the rest with its
- *  original punctuation and spacing intact. Iterates code points, not code
- *  units, so a surrogate pair is never cut in half. */
-export function splitAtComparable(text: string, keep: number): [string, string] {
-  if (keep <= 0) return ["", text];
+/** Splits `text` immediately after its `keepComparable`-th comparable
+ *  character, so the head carries exactly that many of them and the tail
+ *  carries the rest with its original punctuation and spacing intact.
+ *  Iterates code points, not code units, so a surrogate pair is never cut in
+ *  half. */
+export function splitAtComparable(
+  text: string,
+  keepComparable: number
+): [string, string] {
+  // Slice from the NFC form, the same form comparableText counts, so a caller
+  // can spend a count produced there. Canonically equivalent, so the viewer
+  // sees identical glyphs.
+  const src = text.normalize("NFC");
+  if (keepComparable <= 0) return ["", src];
   let seen = 0;
   let idx = 0;
-  for (const ch of text) {
+  for (const ch of src) {
     idx += ch.length;
     if (COMPARABLE_CHAR.test(ch)) {
       seen += 1;
-      if (seen === keep) return [text.slice(0, idx), text.slice(idx)];
+      if (seen === keepComparable) {
+        // A combining mark belongs to the letter before it. Splitting between
+        // them orphans the mark into the tail and strips it from the head, so
+        // the last drawn word loses its diacritic. Code points here too, to
+        // match the loop above: src[idx] would be a lone surrogate for an
+        // astral mark, which \p{M} does not match.
+        while (idx < src.length) {
+          const next = String.fromCodePoint(src.codePointAt(idx)!);
+          if (!COMBINING_MARK.test(next)) break;
+          idx += next.length;
+        }
+        return [src.slice(0, idx), src.slice(idx)];
+      }
     }
   }
-  return [text, ""];
+  return [src, ""];
 }
 ```
+
+**Both the NFC slice and the combining-mark loop came out of code review, not out of the first draft.** The first version counted in the normalised form and cut in the raw one, which is either dead code or a wrong cut and cannot be both: `splitAtComparable("й хорошо", 1)` on decomposed input returned `["и", "̆ хорошо"]`, and Devanagari `"कитна समय"` orphaned its vowel sign even in NFC, because U+093F is category Mc and NFC never composes it. See spec §3.2.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -166,7 +193,7 @@ export function splitAtComparable(text: string, keep: number): [string, string] 
 docker compose exec -T worker-render sh -c 'cd /app && npx vitest run apps/worker/src/processors/__tests__/subtitles.test.ts'
 ```
 
-Expected: PASS, 20 tests (12 existing + 8 new).
+Expected: PASS, 29 tests (12 existing + 17 new) once the review fixes below are folded in. The first draft landed 20; code review added the NFC contract, the combining-mark rule, the rename, and six untested input shapes.
 
 **Then mutate the implementation and confirm each mutation is caught**, because a guard that no test can kill is the failure mode this repo has already shipped once. Flip `NFC` to `NFKC`, `\p{L}\p{N}` to `a-z0-9`, `seen === keep` to `seen === keep + 1`, and remove `.toLowerCase()`; each must turn at least one test red. Restore the correct implementation afterwards.
 
@@ -301,8 +328,8 @@ export function restoreDroppedWords(
   segEnd: number
 ): { words: SubtitleWord[]; outcome: RestoreOutcome } {
   if (words.length === 0) return { words, outcome: "none" };
-  const flatText = comparableStream(text);
-  const flatWords = comparableStream(words.map((w) => w.text).join(""));
+  const flatText = comparableText(text);
+  const flatWords = comparableText(words.map((w) => w.text).join(""));
   if (flatText === flatWords) return { words, outcome: "none" };
 
   if (flatText.startsWith(flatWords)) {
@@ -561,8 +588,8 @@ describe("segmentsToCues with restoration", () => {
 
   it("draws the whole sentence", () => {
     const cues = segmentsToCues(dropped, 10.0, 12.6);
-    const drawn = comparableStream(cues.map((c) => c.text).join(""));
-    expect(drawn).toBe(comparableStream(dropped[0].text));
+    const drawn = comparableText(cues.map((c) => c.text).join(""));
+    expect(drawn).toBe(comparableText(dropped[0].text));
   });
 
   it("keeps the outer window even though the inner split may move", () => {
@@ -670,7 +697,7 @@ Without a counter we cannot answer "is it still firing" or notice `unresolved` g
 - [ ] **Step 1: Write the failing test**
 
 Add `summariseRestores` to the import at the top of the test file - by now it reads
-`import { comparableStream, generateAss, restoreDroppedWords, segmentsToCues, sliceCues, splitAtComparable, summariseRestores } from "../subtitles";`
+`import { comparableText, generateAss, restoreDroppedWords, segmentsToCues, sliceCues, splitAtComparable, summariseRestores } from "../subtitles";`
 
 ```ts
 describe("summariseRestores", () => {
@@ -845,7 +872,7 @@ This is the task that proves the work. It measures **cues**, not the transcript 
  * Read-only: opens no video, writes nothing, touches no job.
  */
 import { prisma } from "@clipclap/shared";
-import { comparableStream, segmentsToCues } from "../processors/subtitles";
+import { comparableText, segmentsToCues } from "../processors/subtitles";
 import type { WhisperSegment } from "@clipclap/shared";
 
 async function main() {
@@ -887,8 +914,8 @@ async function main() {
         const mine = cues.filter(
           (c) => c.start >= segStart - 1e-6 && c.end <= segEnd + 1e-6
         );
-        const drawn = comparableStream(mine.map((c) => c.text).join(""));
-        if (drawn === comparableStream(s.text)) complete += 1;
+        const drawn = comparableText(mine.map((c) => c.text).join(""));
+        if (drawn === comparableText(s.text)) complete += 1;
         else {
           incomplete += 1;
           if (offenders.length < 20) {
