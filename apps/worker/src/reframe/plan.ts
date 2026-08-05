@@ -56,6 +56,137 @@ export function dominance(
   );
 }
 
+/** The window a set of faces asks for: centred on their bbox, clamped into
+ *  frame. Measured innocent - across 22 shipped single shots the anchor sits a
+ *  median of 0.005 cropW from the nearest face centre (engine-notes §7b). */
+function windowXFor(
+  group: FaceTrack[],
+  cropW: number,
+  sourceWidth: number
+): number {
+  const minX = Math.min(...group.map((t) => t.box.x));
+  const maxX = Math.max(...group.map((t) => t.box.x + t.box.w));
+  return evenClamp((minX + maxX) / 2 - cropW / 2, cropW, sourceWidth);
+}
+
+/** The faces one 9:16 window can hold WHOLE, chosen by how much face it would
+ *  then show.
+ *
+ *  This is the answer to "several faces, no window holds them all" - the case
+ *  that is 31 of the 35 multi-face shots measured in §7b, and that used to end
+ *  in a blind centre crop with the nearest face a median 0.27 cropW away and
+ *  outside the window entirely in 4 of 12 clips.
+ *
+ *  Total face area, deliberately: how much face a window contains is a
+ *  measurable property of the frame. Who is speaking is not - `mouthActivity`
+ *  is a 2fps mean absolute difference of a mouth patch that a head turn or a
+ *  jittering box produces as readily as speech, nothing here validates it as
+ *  speech, and `dominance` agrees with it in only 17 of 35 multi-face shots.
+ *  So this does not claim to find the speaker; it claims to point the window
+ *  where the faces are instead of where they are not. Anchoring on the speaker
+ *  needs a per-shot ground-truth fixture first.
+ *
+ *  Only maximal runs are scored: any sub-run of a fitting run has strictly
+ *  less area, so it can never win. Ties go to the group nearest the frame
+ *  centre and then to the leftmost - pinned in tests, because the failure mode
+ *  of an unstated tie-break is "whichever face the detector listed first". */
+export function bestFaceGroup(
+  anchorable: FaceTrack[],
+  cropW: number,
+  sourceWidth: number
+): FaceTrack[] {
+  const sorted = [...anchorable].sort(
+    (a, b) => a.box.x - b.box.x || a.box.w - b.box.w || a.id - b.id
+  );
+  const fit = FIT_MARGIN * cropW;
+  let best: FaceTrack[] = [];
+  let bestArea = -1;
+  let bestOffCentre = Infinity;
+  for (let i = 0; i < sorted.length; i++) {
+    const group: FaceTrack[] = [];
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let area = 0;
+    for (let j = i; j < sorted.length; j++) {
+      const box = sorted[j].box;
+      const nextMin = Math.min(minX, box.x);
+      const nextMax = Math.max(maxX, box.x + box.w);
+      if (nextMax - nextMin > fit) break;
+      minX = nextMin;
+      maxX = nextMax;
+      area += box.w * box.h;
+      group.push(sorted[j]);
+    }
+    if (group.length === 0) continue;
+    const offCentre = Math.abs((minX + maxX) / 2 - sourceWidth / 2);
+    if (area > bestArea || (area === bestArea && offCentre < bestOffCentre)) {
+      best = group;
+      bestArea = area;
+      bestOffCentre = offCentre;
+    }
+  }
+  // Every face is wider than the window itself - a close-up. Centre on the
+  // biggest one and accept the slice; there is no framing that avoids it.
+  if (best.length === 0 && anchorable.length > 0) {
+    best = [
+      [...anchorable].sort(
+        (a, b) => b.box.w * b.box.h - a.box.w * a.box.h || a.box.x - b.box.x
+      )[0],
+    ];
+  }
+  return best;
+}
+
+/** The stacked two-shot, or null when these faces cannot have one.
+ *
+ *  The gate is the tiles themselves, measured after the clamp: a tile is
+ *  `ih*9/8`, two of them need 2.25h of source, and every source this product
+ *  has seen is 16:9 or narrower. On 1280x720 the widest separation two tiles
+ *  can reach is 470px against a tile width of 810 - a 42% overlap FLOOR, and
+ *  the 124 splits already shipped measure a median of 48% and a maximum of
+ *  98.5% (engine-notes §7b). Every judge read that as a broken video before
+ *  reading it as a scene. `bottom.x - top.x >= tileW` is that constraint
+ *  stated exactly: it is satisfiable only when `2 * tileW <= sourceWidth`
+ *  (aspect 2.25:1 and wider), and it also subsumes the old `tileW <=
+ *  sourceWidth` encode guard, since tiles that far apart both fit in frame.
+ *
+ *  Making the tiles narrow enough to be disjoint on 16:9 means cropping each
+ *  tile vertically as well - a different filtergraph and a different project.
+ *  Not attempted here. */
+function trySplit(
+  anchorable: FaceTrack[],
+  tileW: number,
+  sourceWidth: number,
+  sourceHeight: number
+): { layout: "split"; top: { x: number }; bottom: { x: number } } | null {
+  let pair = anchorable;
+  if (anchorable.length > 2) {
+    const scored = [...anchorable].sort(
+      (a, b) =>
+        dominance(b, sourceWidth, sourceHeight) -
+        dominance(a, sourceWidth, sourceHeight)
+    );
+    const third = dominance(scored[2], sourceWidth, sourceHeight);
+    const clearLead =
+      dominance(scored[0], sourceWidth, sourceHeight) >= DOMINANCE_LEAD * third &&
+      dominance(scored[1], sourceWidth, sourceHeight) >= DOMINANCE_LEAD * third;
+    if (!clearLead) return null;
+    pair = [scored[0], scored[1]];
+  }
+  if (pair.length < 2) return null;
+  const [left, right] = [...pair].sort(
+    (a, b) => a.box.x + a.box.w / 2 - (b.box.x + b.box.w / 2)
+  );
+  const top = {
+    x: evenClamp(left.box.x + left.box.w / 2 - tileW / 2, tileW, sourceWidth),
+  };
+  const bottom = {
+    x: evenClamp(right.box.x + right.box.w / 2 - tileW / 2, tileW, sourceWidth),
+  };
+  if (bottom.x - top.x < tileW) return null;
+  return { layout: "split", top, bottom };
+}
+
 /** Tracks that clear the per-shot noise floor - the "surviving" tracks the
  *  classifier and the min-face guard must agree about. A stray low-sample
  *  track must not widen the fit bbox, become a split tile pointing at
@@ -94,9 +225,6 @@ export function buildCropPlan(
   const tileW = tileWidthFor(sourceHeight);
   // Already vertical or narrower: nothing to reframe, let the legacy path run.
   if (cropW >= sourceWidth) return null;
-  // Split tiles need ih*9/8 of width; on narrower-than-9:8 sources a split
-  // would emit crop w > iw and fail the encode (error -22) - center instead.
-  const splitPossible = tileW <= sourceWidth;
   const centerX = evenClamp((sourceWidth - cropW) / 2, cropW, sourceWidth);
   const byIndex = new Map(tracksByShot.map((s) => [s.shotIndex, s.tracks]));
 
@@ -196,38 +324,21 @@ export function buildCropPlan(
       const x = evenClamp((minX + maxX) / 2 - cropW / 2, cropW, sourceWidth);
       return { start: shot.start, end: shot.end, layout: "single", x };
     }
-    // Guard both split-producing paths (2-track and 3+ dominant-pair): a split
-    // needs tileW <= sourceWidth or the encode fails with error -22.
-    if (!splitPossible) {
-      return { start: shot.start, end: shot.end, layout: "center", x: centerX };
-    }
-    let pair = anchorable;
-    if (anchorable.length > 2) {
-      const scored = [...anchorable].sort(
-        (a, b) =>
-          dominance(b, sourceWidth, sourceHeight) -
-          dominance(a, sourceWidth, sourceHeight)
-      );
-      const third = dominance(scored[2], sourceWidth, sourceHeight);
-      const clearLead =
-        dominance(scored[0], sourceWidth, sourceHeight) >= DOMINANCE_LEAD * third &&
-        dominance(scored[1], sourceWidth, sourceHeight) >= DOMINANCE_LEAD * third;
-      if (!clearLead) {
-        return { start: shot.start, end: shot.end, layout: "center", x: centerX };
-      }
-      pair = [scored[0], scored[1]];
-    }
-    const [left, right] = [...pair].sort(
-      (a, b) => a.box.x + a.box.w / 2 - (b.box.x + b.box.w / 2)
-    );
+    const split = trySplit(anchorable, tileW, sourceWidth, sourceHeight);
+    if (split) return { start: shot.start, end: shot.end, ...split };
+    // No window holds every face and no split is available. Anchor on the
+    // faces one window CAN hold rather than centring blind on the furniture
+    // between them (engine-notes §7b: 44% of shot time, and in 4 of 12 clips
+    // the nearest face was outside the centred window altogether).
     return {
       start: shot.start,
       end: shot.end,
-      layout: "split",
-      top: { x: evenClamp(left.box.x + left.box.w / 2 - tileW / 2, tileW, sourceWidth) },
-      bottom: {
-        x: evenClamp(right.box.x + right.box.w / 2 - tileW / 2, tileW, sourceWidth),
-      },
+      layout: "single",
+      x: windowXFor(
+        bestFaceGroup(anchorable, cropW, sourceWidth),
+        cropW,
+        sourceWidth
+      ),
     };
   });
 

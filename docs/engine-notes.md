@@ -1162,6 +1162,90 @@ detector box jitter all produce it. That it varies between faces is measured; th
 person talking is **believed, not measured**, and nothing in this repository tests it. A fixture with
 per-shot "who is speaking" labels would settle it, and any anchor-on-the-speaker work should buy that first.
 
+### 7c. The split is gated on the tiles, and the blind centre is gone (2026-08-05)
+
+Same plan, tasks 2 and 3, built together because they turned out to be one change: refusing a split
+sends those shots into the branch task 3 fixes. `plan.ts`, two rules.
+
+**A split now requires its two tiles to be disjoint AFTER the clamp - `bottom.x - top.x >= tileW` -
+and nothing else.** That single test is the whole geometry: it is satisfiable only when
+`2 * tileW <= sourceWidth`, i.e. an aspect at or past 2.25:1, and it subsumes the old
+`tileW <= sourceWidth` encode guard, because tiles that far apart both fit in frame by construction.
+It was deliberately written as the exact constraint rather than as the aspect test it implies: the
+aspect test admits shots whose faces are close enough that the tiles still overlap on a wide source,
+which is the same defect on a different source. **Narrower tiles are still not attempted** - they
+need each tile cropped vertically as well, which is a different filtergraph.
+
+Watch the rounding: `tileWidthFor` rounds UP to even, so on a 1080-high source the floor is a width
+of 2432 and not the ideal 2430. At 720 high the arithmetic is exact and 1620x720 splits, 1618x720
+does not.
+
+**Every shot that cannot split, and every shot where `DOMINANCE_LEAD` fails, now anchors on the
+faces one window can hold whole instead of centring blind.** `bestFaceGroup` enumerates the maximal
+runs of faces whose bbox fits inside `0.9 * cropW` and takes the run with the most total face area,
+ties to the run nearest the frame centre and then to the leftmost. The window is then the existing
+single-crop rule (bbox midpoint, clamped), which §7b measured innocent.
+
+**Total face area, and not `dominance`, deliberately.** How much face a window contains is a
+measurable property of the frame. Who is speaking is not: §7b showed `mouthActivity` is a 2fps
+frame difference that a head turn produces as readily as speech, unvalidated anywhere in this
+repository, and that `dominance` agrees with it in 17 of 35 multi-face shots. So this anchor does
+not claim to find the speaker - it claims to point the window where the faces are instead of where
+they are not. **Anchoring on the speaker still needs a per-shot ground-truth fixture first**, and a
+test pins that the chosen window does not move when `mouthActivity` moves, so the choice cannot
+quietly acquire that dependency.
+
+Three properties fall out and are pinned by tests: the chosen group is never sliced (a run fitting
+in `0.9 * cropW` stays whole through the clamp), the answer does not depend on detector order, and
+a face WIDER than the window - which used to reach the split branch with a one-element pair and
+throw a TypeError, caught upstream as `scdet_failed` - now centres on that face.
+
+**Measured on the same 12-clip sitcom replay as §7b**, both plans built from one run of the
+detector, and the pre-change plan reproduces all 12 shipped plans exactly (float noise from the
+JSONB round trip aside):
+
+| | before | after |
+|---|---|---|
+| split shots | 18, overlap median 51.8% (39.4-62.6%), 18 of 18 over 25% | **0** |
+| centre over anchorable faces | 12 shots, **147.8s** | **0 shots, 0s** |
+| centre share of shot time | 47.2% | **2.8%** (9.4s, all genuinely faceless) |
+| worst window-centre to nearest face | 0.59 `cropW` | **0.37** |
+| clips with the nearest face outside the window | **4** | **0** |
+| face-bearing shots holding at least one WHOLE face | 30 of 34 non-split | **52 of 53** |
+
+Corpus-wide the 124 shipped splits measure min 37.5%, p25 42.4%, median 48.0%, p75 53.5%, max
+98.5%, 124 of 124 over 25% - §7b reproduced exactly. Under the new gate **none of them would be
+emitted**, because none of those sources reaches 2.25:1. The split layout is therefore live code
+with zero live sources; it stays because the constraint is a property of the source, not of the
+product, and an ultrawide source would use it correctly.
+
+**Pixels, since §7 says these decisions are checked that way.** Sheets are regenerable via
+`.eval-frames/geom/` (`measure.ts` replays the set, `sheets.ts` renders before/after strips).
+- The corpus-worst split, 848x464 with tiles 8px apart: the before frames are literally the same
+  man in the same pose stacked on himself, which is what "it looks like a player glitch" meant.
+  After, one clean portrait crop.
+- The sitcom's worst split (62.6%): both tiles show the same red-sweater two-shot, offset by a
+  hand's width. After, a close-up of the speaker.
+- The weak-coffee clip's closing 26.2s of blind centre: the before frame the editor called a flower
+  vase is exactly that - the vase dead centre, both speakers sliced by the borders. After, Chandler
+  is whole and centred and the vase is at the bottom edge.
+- The 16.3s blind centre in clip 1: before, the second man's face is cut in half by the left border
+  in 3 of 5 sampled frames with the furniture in the middle. After, the window holds both
+  conversation partners.
+- `cmsei811y` at 16.4s, one of the four out-of-window clips: before, half a head at the right edge
+  and a door in the middle; after, both faces whole and in frame.
+
+**Two things the sheets show that this change does NOT fix, and neither should be read as caused by
+it.** A 26-second "shot" is one median face box, so a speaker who walks during it leaves the window
+- visible in the last weak-coffee frame under both plans. And the dead opening frame is untouched
+by design (a back of a head is still a back of a head, better framed).
+
+**More adjacent shots merge now.** Merging needs the same layout, and almost everything is `single`
+after this, so consecutive shots whose anchors differ by under 4% of `iw` collapse into one window
+holding the FIRST shot's geometry. Plan-shot count barely moved (52 -> 51) but individual clips
+changed a lot: the weak-coffee clip went from 5 plan shots to 1. That is the documented intent of
+the merge pass ("the virtual camera stays put on soft scene cuts"), now reaching much further.
+
 ---
 
 ## 8. Operational facts
