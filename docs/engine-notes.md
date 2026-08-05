@@ -1526,6 +1526,43 @@ segment at a median of 52 and a maximum of 106 characters. Those segments have n
 
 ---
 
+## 8d. The opening frame: three hypotheses dead, one lead (measured 2026-08-05)
+
+The judge panel names the opening frame more than any other defect - 6 of 10 viewers said they would swipe
+on it alone. §8b says not to trust the panel's aggregate, but a frame is the one thing a six-frame strip CAN
+see, so the complaint was worth measuring. `apps/worker/src/scripts/eval-clip-openings.ts` measures it, over
+all 124 clips in the database.
+
+**Three of the four candidates do not exist.**
+
+| candidate | measured |
+|---|---|
+| the viewer sees no text at first | **0 of 124** - a caption is up within 0.3s on every clip |
+| the clip opens on silence | pause before the first word is **exactly 0.15s on all 124** - a hard pad, audio is immediate |
+| the clip opens on a dark frame | **0 of 124** - first-frame luma p10 is 50.9, p50 is 74.0, nothing near the 16 threshold |
+| the clip opens mid-sentence | 9 of 124 (7.3%) |
+
+This is the second time a first-frame theory has died on contact with the data. The black in-point spec
+(§ON HOLD) assumed a black opening and found 1 clip in 73; this found 0 in 124.
+
+**The one live signal is motion, and it points at the crop, not at the in-point.** Mean frame-to-frame
+difference over the first second: p10 0.69, p50 2.56. Three clips are essentially frozen (0.06, 0.07, 0.13).
+Looking at those three frames: the crop had parked on a curtain and a radio, and on a pair of knees. Nothing
+moved because **nothing was in the frame**. A still opening is a symptom of the framing defect, not a defect
+of its own - which makes motion a cheap detector for a problem that otherwise needs a human to look.
+
+**A trap in this measurement, hit and corrected.** The clips table spans five months of engine versions, and
+all three frozen openings are July renders - before commit `8841524`. The post-fix cohort has no frozen
+opening at all (minimum motion 0.65 against 0.06) and its quietest two openings are both a face filling the
+frame mid-speech. **But that cohort is ten distinct clips from ONE source**, so it is evidence the defect did
+not recur, not evidence it is gone. Always pass `--since`.
+
+**What this leaves.** Nothing measurable about the opening is broken that is not the crop. If the panel's
+first-frame complaint is real, it is a complaint about framing and belongs to the fixed-window / median-box
+work (§7b), not to a separate in-point project.
+
+---
+
 ## 9. Where the product actually stands
 
 Measured 2026-07-25: **95 registered users, 3 have ever run a job, 8 jobs total, 38 clips ever made.** 92 of
