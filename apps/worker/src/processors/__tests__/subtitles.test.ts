@@ -353,6 +353,17 @@ describe("restoreDroppedWords - tail", () => {
     expect(out.words[1].text).toBe("word");
   });
 
+  it("gives the restored text its own entry when the gap is exactly the floor", () => {
+    // 0.13 - 0.05 is bit-identical to MIN_RESTORED_SEC, so this pins the
+    // boundary as inclusive. Reachable only in the first tenth of a second of
+    // a source - every two-decimal pair that hits it exactly has the last word
+    // ending below 0.117 - but the boundary itself is a decision, not trivia.
+    const out = restoreDroppedWords("a bc", [{ text: "a", start: 0, end: 0.05 }], 0, 0.13);
+    expect(out.outcome).toBe("tail");
+    expect(out.words).toHaveLength(2);
+    expect(out.words[1]).toEqual({ text: "bc", start: 0.05, end: 0.13 });
+  });
+
   it("merges into the last word when the gap is too short to be a duration", () => {
     const words = [
       { text: "It", start: 0, end: 0.2 },
