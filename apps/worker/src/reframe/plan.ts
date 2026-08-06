@@ -558,6 +558,41 @@ export function attachTrajectories<T extends ShotLayout>(
   });
 }
 
+/** Re-windows a trajectory to `[start, end]`, expressed relative to the new
+ *  start. The boundary values are INTERPOLATED rather than copied from the
+ *  nearest keyframe: a slice landing mid-ramp would otherwise begin at a
+ *  position the camera did not occupy at that moment, and the trimmed clip
+ *  would open on a jump the original never had. */
+export function sliceKeyframes(
+  keys: Keyframe[],
+  start: number,
+  end: number
+): Keyframe[] {
+  const at = (t: number): number => {
+    if (t <= keys[0].t) return keys[0].x;
+    const last = keys[keys.length - 1];
+    if (t >= last.t) return last.x;
+    for (let i = 1; i < keys.length; i++) {
+      const a = keys[i - 1];
+      const b = keys[i];
+      if (t <= b.t) {
+        const span = b.t - a.t;
+        if (span <= 0) return b.x;
+        return a.x + ((b.x - a.x) * (t - a.t)) / span;
+      }
+    }
+    return last.x;
+  };
+  const inner = keys
+    .filter((k) => k.t > start && k.t < end)
+    .map((k) => ({ t: k.t - start, x: k.x }));
+  return [
+    { t: 0, x: at(start) },
+    ...inner,
+    { t: end - start, x: at(end) },
+  ];
+}
+
 /** Re-window a stored plan to a [start, end] sub-range of the same clip
  *  (mirror of sliceCues). Null when nothing overlaps or version is unknown. */
 export function sliceCropPlan(
@@ -567,7 +602,7 @@ export function sliceCropPlan(
 ): CropPlan | null {
   if (
     !plan ||
-    (plan.version !== 1 && plan.version !== 2) ||
+    (plan.version !== 1 && plan.version !== 2 && plan.version !== 3) ||
     !Array.isArray(plan.shots) ||
     !plan.source ||
     typeof plan.source.width !== "number" ||
@@ -578,11 +613,34 @@ export function sliceCropPlan(
   }
   const shots = plan.shots
     .filter((s) => s.end > start && s.start < end)
-    .map((s) => ({
-      ...s,
-      start: Math.max(0, s.start - start),
-      end: Math.min(end - start, s.end - start),
-    }));
+    .map((s) => {
+      const shifted = {
+        ...s,
+        start: Math.max(0, s.start - start),
+        end: Math.min(end - start, s.end - start),
+      };
+      // `xs` only ever exists on a `single` shot, and only on a v3 plan where
+      // the camera actually moved. Everything else - center, split, stream, and
+      // a still `single` - falls straight through with just its bounds shifted,
+      // and must NOT gain an `xs` key it never had: a plan is compared against
+      // its v1/v2 self to prove "flag off equals today", and an empty-but-
+      // present trajectory would break that comparison for no gain.
+      const xs = "xs" in s ? s.xs : undefined;
+      if (s.layout !== "single" || !xs || xs.length === 0) return shifted;
+      // Keyframe `t` shares the shot's CLIP-relative timebase (attachTrajectories
+      // hands solveCamera the span bounds, not zero), so the trajectory has to be
+      // re-windowed to the part of THIS shot the trim actually keeps, then moved
+      // into the new clip's timebase. For a shot that spans the whole trim those
+      // two steps collapse to "subtract start", but a shot clipped by the trim's
+      // leading edge would otherwise emit keyframes that run past its own end.
+      const from = Math.max(s.start, start);
+      const to = Math.min(s.end, end);
+      const rewound = sliceKeyframes(xs, from, to).map((k) => ({
+        t: k.t + shifted.start,
+        x: k.x,
+      }));
+      return { ...shifted, xs: rewound };
+    });
   if (shots.length === 0) return null;
   return { ...plan, shots };
 }

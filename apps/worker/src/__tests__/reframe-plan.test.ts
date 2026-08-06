@@ -599,9 +599,11 @@ describe("sliceCropPlan (trim re-render)", () => {
 
   it("returns null for an empty window or wrong version", () => {
     expect(sliceCropPlan(plan, 100, 120)).toBeNull();
-    // version 2 is now a supported plan version (see "v2 plan handling" below);
-    // 3 is genuinely unknown and must still be rejected.
-    expect(sliceCropPlan({ ...plan, version: 3 as unknown as 1 }, 0, 10)).toBeNull();
+    // 2 and 3 are now supported plan versions (see "v2 plan handling" and
+    // "sliceCropPlan with trajectories" below); 4 is genuinely unknown and must
+    // still be rejected. This probe has to move up with every version we learn
+    // to read - the assertion under test is "unknown is refused", not "3 is".
+    expect(sliceCropPlan({ ...plan, version: 4 as unknown as 1 }, 0, 10)).toBeNull();
   });
 
   it("returns null for a foreign/corrupt stored Json instead of throwing", () => {
@@ -686,7 +688,9 @@ describe("v2 plan handling", () => {
   });
 
   it("still rejects an unknown version", () => {
-    expect(sliceCropPlan({ ...v2, version: 3 as 2 }, 0, 10)).toBeNull();
+    // Was 3, which the trajectory work turned into a real version; 4 is the
+    // next unknown one.
+    expect(sliceCropPlan({ ...v2, version: 4 as unknown as 2 }, 0, 10)).toBeNull();
   });
 });
 
@@ -1257,5 +1261,111 @@ describe("buildCropPlan with motion on", () => {
     expect(still!.version).toBe(1);
     expect(still!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 496 }]);
     expect(still!.shots.every((s) => !("xs" in s))).toBe(true);
+  });
+});
+
+describe("sliceCropPlan with trajectories", () => {
+  const v3 = {
+    version: 3 as const,
+    engine: "faces" as const,
+    source: { width: 1280, height: 720 },
+    shots: [
+      {
+        start: 0,
+        end: 20,
+        layout: "single" as const,
+        x: 100,
+        xs: [
+          { t: 0, x: 100 },
+          { t: 10, x: 300 },
+          { t: 20, x: 500 },
+        ],
+      },
+    ],
+  };
+
+  it("accepts version 3", () => {
+    expect(sliceCropPlan(v3, 5, 15)).not.toBeNull();
+  });
+
+  it("shifts keyframe times by the same offset as the shot bounds", () => {
+    const out = sliceCropPlan(v3, 5, 15)!;
+    const shot = out.shots[0] as { xs?: Array<{ t: number; x: number }> };
+    expect(shot.xs!.map((k) => k.t)).toEqual([0, 5, 10]);
+  });
+
+  it("interpolates the boundary values rather than copying a neighbour", () => {
+    // A slice landing mid-ramp must begin where the camera actually was at
+    // that moment. Copying the nearest keyframe would open the trimmed clip
+    // on a jump the original never had.
+    const out = sliceCropPlan(v3, 5, 15)!;
+    const shot = out.shots[0] as { xs?: Array<{ t: number; x: number }> };
+    expect(shot.xs![0]).toEqual({ t: 0, x: 200 });
+    expect(shot.xs!.at(-1)).toEqual({ t: 10, x: 400 });
+  });
+
+  it("leaves a v2 plan exactly as before", () => {
+    const v2 = {
+      version: 2 as const,
+      engine: "faces" as const,
+      source: { width: 1280, height: 720 },
+      shots: [{ start: 0, end: 20, layout: "single" as const, x: 100 }],
+    };
+    expect(sliceCropPlan(v2, 5, 15)).toEqual({
+      ...v2,
+      shots: [{ start: 0, end: 10, layout: "single", x: 100 }],
+    });
+  });
+
+  it("keeps a partially clipped shot's keyframes inside its own new bounds", () => {
+    // The single-shot cases above all have the shot spanning the whole trim, so
+    // the shot's new start is 0 and "re-window the trajectory" collapses to
+    // "subtract the trim start". A shot that begins PART WAY into the trim is
+    // the case that separates the two: keyframe `t` shares the shot's
+    // clip-relative timebase, so the trajectory has to be re-windowed to the
+    // slice AND pushed out to where the shot now sits, or it would run from
+    // before the shot starts to before the shot ends.
+    const twoShots = {
+      version: 3 as const,
+      engine: "faces" as const,
+      source: { width: 1280, height: 720 },
+      shots: [
+        { start: 0, end: 10, layout: "center" as const, x: 400 },
+        {
+          start: 10,
+          end: 30,
+          layout: "single" as const,
+          x: 100,
+          xs: [
+            { t: 10, x: 100 },
+            { t: 20, x: 300 },
+            { t: 30, x: 500 },
+          ],
+        },
+      ],
+    };
+    const out = sliceCropPlan(twoShots, 5, 25)!;
+    const shot = out.shots[1] as {
+      start: number;
+      end: number;
+      xs?: Array<{ t: number; x: number }>;
+    };
+    expect([shot.start, shot.end]).toEqual([5, 20]);
+    expect(shot.xs).toEqual([
+      { t: 5, x: 100 },
+      { t: 15, x: 300 },
+      { t: 20, x: 400 }, // interpolated: 5s into the 20->30 ramp of 300->500
+    ]);
+  });
+
+  it("does not attach an xs key to a shot that never had one", () => {
+    const mixed = {
+      version: 3 as const,
+      engine: "faces" as const,
+      source: { width: 1280, height: 720 },
+      shots: [{ start: 0, end: 20, layout: "center" as const, x: 437 }],
+    };
+    const out = sliceCropPlan(mixed, 5, 15)!;
+    expect("xs" in out.shots[0]).toBe(false);
   });
 });
