@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  HeadObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createReadStream } from "fs";
@@ -62,6 +63,19 @@ export async function downloadFile(key: string): Promise<ReadableStream> {
 
   if (!response.Body) throw new Error(`File not found in R2: ${key}`);
   return response.Body.transformToWebStream();
+}
+
+/** Byte count of a stored object, or null when the store does not report one.
+ *
+ *  Exists so the delivery path can refuse an absurd file BEFORE reading it.
+ *  Note a presigned GET URL cannot be probed with HTTP HEAD - the signature
+ *  covers the method, so HEAD answers 403 - which is why this asks the S3 API
+ *  directly instead. */
+export async function getObjectSize(key: string): Promise<number | null> {
+  const head = await getS3Client().send(
+    new HeadObjectCommand({ Bucket: getBucket(), Key: key })
+  );
+  return typeof head.ContentLength === "number" ? head.ContentLength : null;
 }
 
 export async function deleteFile(key: string): Promise<void> {
