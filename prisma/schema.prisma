@@ -541,6 +541,21 @@ model Clip {
   retrims        Clip[]    @relation("ClipRetrim")
   expiresAt      DateTime?
   deletedAt      DateTime?
+  /// Telegram's id for this clip once it is in the user's chat. Non-null means
+  /// delivered, and a retry skips it - which is what stops a re-pickup from
+  /// repeating clips already sent.
+  ///
+  /// Correct on Clip rather than on a delivery item ONLY because a clip has one
+  /// destination: TelegramDelivery.jobId is @unique, the row is created not
+  /// upserted, and chatId is written once. Multi-chat delivery, forwarding, or
+  /// re-delivery after a chat id change all break that, and would force this
+  /// state onto a (deliveryId, clipId, chatId) row instead.
+  telegramFileId   String?
+  /// Set when this clip can never be delivered - oversized, corrupt, refused on
+  /// its own merits. Distinct from a null telegramFileId, which means "not sent
+  /// yet, try again": without the distinction the loop retries a broken file
+  /// for the whole attempt budget.
+  telegramSendError String?
   createdAt      DateTime  @default(now())
 
   @@index([jobId])

@@ -794,7 +794,25 @@ export async function deliverClips<C extends DeliverableClip>(
     }
 
     // Before a byte is read: an absurd file must not be downloaded at all.
-    const size = await getObjectSize(clip.storageKey);
+    //
+    // getObjectSize THROWS for a key that is gone (NotFound) and returns null
+    // only for "answered but reported no length" - two different things, and
+    // conflating them would treat a vanished clip as merely unmeasured and try
+    // to download it anyway. A gone object is permanent: nothing brings it back,
+    // so it must not burn the attempt budget either.
+    let size: number | null;
+    try {
+      size = await getObjectSize(clip.storageKey);
+    } catch (error) {
+      const reason = `clip is no longer in storage: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+      console.error(`[delivery] ${clip.id}: ${reason}`);
+      await deps.markUnsendable(clip.id, reason);
+      result.unsendable += 1;
+      continue;
+    }
+
     if (size !== null && size > maxBytes) {
       const reason = `clip is too large to send: ${size} bytes exceeds ${maxBytes}`;
       console.error(`[delivery] ${clip.id}: ${reason}`);

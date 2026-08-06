@@ -18,7 +18,6 @@ import {
   freeBudgetStatus,
   getOrCreateTelegramUser,
   getPlanLimits,
-  getPresignedDownloadUrl,
   getTributeCatalogEntry,
   getUsageForUser,
   isPermanentTelegramError,
@@ -43,6 +42,7 @@ import type {
 } from "@clipclap/shared";
 import type { JobStatus, User } from "@prisma/client";
 import type { TelegramClient } from "./telegram-client";
+import { deliverClips, rearmDeliveryForResend } from "./clip-delivery";
 import { extractVideoUrl, isYouTubeUrl, probeVideoUrl } from "./url-probe";
 import {
   LOCALES,
@@ -1270,7 +1270,6 @@ export async function deliverReadyTelegramJobs(
     // no other drain, so each such throw spends one of
     // MAX_TELEGRAM_DELIVERY_ATTEMPTS and the last one retires the row.
     let dict: Dict | null = null;
-    let clipsInChat = 0;
     try {
       const locale = await getUserLocale(delivery.userId);
       dict = t(locale);
@@ -1311,78 +1310,134 @@ export async function deliverReadyTelegramJobs(
         continue;
       }
 
-      // Sign everything BEFORE the chat sees a word. An R2 outage in the
-      // middle of the loop used to leave "Done. 3 clips are ready." standing
-      // in the chat with no clips behind it - and re-picking the row would
-      // repeat that line on every poll. Prepared first, the same outage costs
-      // nothing: nothing has been said, and the row is still deliverable.
-      const videos = [];
-      for (const clip of delivery.job.clips) {
-        videos.push({
-          url: await getPresignedDownloadUrl(clip.storageKey),
-          caption: buildClipCaption({
+      // One clip's failure costs only itself. The old loop signed every URL up
+      // front and then sent them with no per-clip catch, so a single refusal -
+      // a clip 557,490 bytes over Telegram's 20MB URL-fetch ceiling - threw and
+      // the ten deliverable clips behind it were never attempted.
+      // A const copy because the caption is built inside a closure now, and
+      // TypeScript will not carry the narrowing of the mutable `dict` (which
+      // the catch block needs to read as possibly null) across one.
+      const strings = dict;
+      const outcome = await deliverClips(
+        client,
+        delivery.chatId,
+        delivery.job.clips,
+        (clip) =>
+          buildClipCaption({
             title: clip.title,
             description: clip.description,
             lowQuality: clip.lowQuality,
-            lowQualityNote: dict.lowQualityNote,
+            lowQualityNote: strings.lowQualityNote,
           }),
-        });
+        {
+          markSent: async (clipId, fileId) => {
+            await prisma.clip.update({
+              where: { id: clipId },
+              // `?? "sent"` is deliberate: Telegram has confirmed the clip is in
+              // the chat even when it returns no id, and this column's job is
+              // "do not send this again". A null here would resend a clip the
+              // user already has.
+              data: { telegramFileId: fileId ?? "sent" },
+            });
+          },
+          markUnsendable: async (clipId, reason) => {
+            await prisma.clip.update({
+              where: { id: clipId },
+              data: { telegramSendError: reason },
+            });
+          },
+        }
+      );
+
+      // Still owed, so the row is NOT settled: the next poll re-picks it and
+      // sends only what is missing. This is what the telegramFileId column
+      // bought - a re-pickup can no longer repeat a clip already in the chat.
+      // `continue` also skips the summary and the board: while clips are still
+      // owed the user must not be told "Done", and the board must stay up.
+      if (outcome.pending > 0) {
+        const { terminal } = await markTelegramDeliveryAttemptFailed(
+          delivery.id,
+          `${outcome.pending} clip(s) not delivered yet`,
+          delivery.attempts
+        );
+        // Only the poll that spends the last attempt falls through, to say the
+        // honest partial below. Every earlier one leaves the row re-pickable.
+        if (!terminal) continue;
       }
 
-      for (const video of videos) {
-        await client.sendVideo(delivery.chatId, video.url, video.caption);
-        clipsInChat++;
-      }
+      // What is actually in the chat, across every pass: a clip delivered on an
+      // earlier poll came back from the query carrying a telegramFileId, and
+      // `delivered` is what this pass added. Neither alone is the answer - the
+      // first misses this pass, the second misses every earlier one.
+      const total = delivery.job.clips.length;
+      const inChat =
+        delivery.job.clips.filter((c) => c.telegramFileId).length +
+        outcome.delivered;
 
       // After the clips, not before: it is a summary of what has arrived, and
       // sending it first made it a promise this code could fail to keep - a
-      // standing "Done. 3 clips are ready." above an empty chat.
-      await client.sendMessage(
-        delivery.chatId,
-        dict.done(delivery.job.clips.length)
-      );
+      // standing "Done. 3 clips are ready." above an empty chat. The same
+      // reason it counts rather than assumes: we reach here with clips missing
+      // when the attempt budget ran out, or when storage refused a clip for
+      // good, and `done(total)` would be that broken promise all over again.
+      //
+      // Nothing at all in the chat is the case deliveryGivenUp was written for,
+      // and it is the copy that also warns the user not to pay for the video a
+      // second time - so it is used here rather than a "0 of 12".
+      //
+      // The partial - and only the partial - carries a button. Its copy ends by
+      // pointing at one, and these users are never told the web dashboard
+      // exists, so the button is the whole of their way back. "Done" has
+      // nothing to retry, and deliveryGivenUp already sends the user elsewhere.
+      if (inChat === total) {
+        await client.sendMessage(delivery.chatId, strings.done(total));
+      } else if (inChat > 0) {
+        await client.sendMessage(
+          delivery.chatId,
+          strings.donePartial(inChat, total),
+          {
+            replyMarkup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: strings.resendRemainingBtn,
+                    callback_data: `resend:${delivery.jobId}`,
+                  },
+                ],
+              ],
+            },
+          }
+        );
+      } else {
+        await client.sendMessage(
+          delivery.chatId,
+          strings.deliveryGivenUp(appUrl, total)
+        );
+      }
 
       // Now, and not a line earlier: the board is the user's only sign of life
       // until the clips land, so it comes down only once they have.
       await removeProgressBoard(client, delivery);
 
-      await settleDelivery(delivery.id, { kind: "DELIVERED" });
+      await settleDelivery(
+        delivery.id,
+        inChat < total
+          ? {
+              kind: "FAILED",
+              error: `${total - inChat} of ${total} clip(s) never reached the chat`,
+            }
+          : { kind: "DELIVERED" }
+      );
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Delivery failed";
 
-      if (clipsInChat > 0) {
-        // Videos are in the chat, so this row is terminal either way. But
-        // moving the summary after the clips left a failure mid-batch saying
-        // NOTHING at all: one bare video, a job the user was billed for in
-        // full, and no way to learn that two more clips existed. The summary
-        // does not go back before the clips - that is the promise-we-cannot-
-        // keep bug - it becomes an honest report of what actually landed.
-        const total = delivery.job.clips.length;
-        try {
-          await client.sendMessage(
-            delivery.chatId,
-            clipsInChat < total
-              ? dict!.donePartial(clipsInChat, total)
-              : // every clip arrived and only the summary itself failed; the
-                // user is owed the plain confirmation, not a "3 of 3"
-                dict!.done(total)
-          );
-        } catch (reportError) {
-          console.error(
-            `Telegram delivery ${delivery.id}: could not report the partial result:`,
-            reportError instanceof Error ? reportError.message : reportError
-          );
-        }
-        // Videos are in the chat and the row is terminal either way, so the board
-        // has nothing left to narrate here either.
-        await removeProgressBoard(client, delivery);
-        await settleDelivery(delivery.id, { kind: "FAILED", error: message });
-        continue;
-      }
-
-      // Nothing reached the chat, so nothing is owed and nothing can be
-      // duplicated.
+      // No "clips are already in the chat, so give up on the rest" branch any
+      // more. It used to declare the row terminal the moment one clip had
+      // landed, because re-picking the row would have repeated that clip -
+      // which is exactly how a user got 1 of 12. telegramFileId now carries
+      // that guard per clip, so a re-pickup sends only what is still owed and
+      // the row can fall through to the ordinary attempt budget below.
       if (isPermanentTelegramError(message)) {
         // A blocked bot, a deleted chat: no amount of waiting fixes this, and
         // every retry is a doomed API call charged against the bot's global
@@ -1615,6 +1670,20 @@ async function handleCallbackQuery(
   if (query.data.startsWith("sub:")) {
     const user = await resolveTelegramUser(query.from);
     await handleSubscribeCallback(client, query, dict, user);
+    return;
+  }
+
+  // The job id arrives from the client, so ownership is checked at the row -
+  // otherwise a guessed id would re-arm a stranger's delivery. A refusal is
+  // logged rather than answered: the press was already acknowledged above, and
+  // there is nothing honest to say to someone pressing another user's button.
+  if (query.data.startsWith("resend:")) {
+    const jobId = query.data.slice("resend:".length);
+    const user = await resolveTelegramUser(query.from);
+    const rearmed = await rearmDeliveryForResend(jobId, user.id);
+    if (!rearmed) {
+      console.warn(`[delivery] resend refused for job ${jobId}: not this user's`);
+    }
     return;
   }
 

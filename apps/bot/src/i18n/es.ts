@@ -70,13 +70,14 @@ const es: Dict = {
   done: (n) =>
     `Listo. ${n} ${pluralEs(n, "clip", "clips")} ${n === 1 ? "está listo" : "están listos"}.`,
   donePartial: (sent, total) =>
-    `Envié ${sent} de ${total} clips: algo falló antes de poder entregar el resto. Los ${total} están listos en tu panel.`,
+    `Envié ${sent} de ${total} ${pluralEs(total, "clip", "clips")}: el resto no salió. Toca aquí abajo y lo intento otra vez.`,
+  resendRemainingBtn: "Enviar el resto",
   deliveryGivenUp: (url, clips) => {
     if (clips === 0) {
-      return `No pude entregar el resultado de este video en este chat y dejé de intentarlo. Abre ${url}/dashboard para ver cómo terminó: no se perdió nada. No envíes este video otra vez antes de mirar ahí, porque procesarlo de nuevo gastaría tus minutos dos veces.`;
+      return `No pude entregar el resultado de este video en este chat y dejé de intentarlo. De mi lado no se perdió nada. No envíes este video otra vez hasta tener respuesta, porque procesarlo de nuevo gastaría tus minutos dos veces. Escribe a soporte desde el menú de ayuda y te cuento cómo terminó.`;
     }
     const lo = clips === 1 ? "lo" : "los";
-    return `${clips === 1 ? "Tu clip está listo" : `Los ${clips} clips están listos`}, pero no pude entregar${lo} en este chat y dejé de intentarlo. No se perdió nada: abre ${url}/dashboard para ver${lo} o descargar${lo}. No envíes este video otra vez, porque los clips ya existen y procesarlo de nuevo gastaría tus minutos dos veces.`;
+    return `${clips === 1 ? "Tu clip está listo" : `Los ${clips} clips están listos`}, pero no pude entregar${lo} en este chat y dejé de intentarlo. No se perdió nada: escribe a soporte desde el menú de ayuda y te ${lo} hago llegar. No envíes este video otra vez, porque los clips ya existen y procesarlo de nuevo gastaría tus minutos dos veces.`;
   },
   doneNoClips: (reason) =>
     reason === "NO_USABLE_SPEECH"
