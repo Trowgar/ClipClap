@@ -9,6 +9,23 @@ import type {
   TelegramUpdate,
 } from "./types";
 
+/** Telegram answered and refused.
+ *
+ *  The distinction this type carries is load-bearing for delivery: a parsed
+ *  refusal means the call did NOT take effect, so retrying cannot duplicate
+ *  anything. An error that is not this one means we never heard back, the send
+ *  may have landed, and a retry risks a duplicate. Nothing else can tell those
+ *  two apart after the fact. */
+export class TelegramApiError extends Error {
+  constructor(
+    message: string,
+    readonly method: string
+  ) {
+    super(message);
+    this.name = "TelegramApiError";
+  }
+}
+
 export class TelegramClient {
   private readonly apiBase: string;
   private readonly fileBase: string;
@@ -226,7 +243,10 @@ export class TelegramClient {
     const payload = (await response.json()) as TelegramApiResponse<T>;
 
     if (!response.ok || !payload.ok) {
-      throw new Error(payload.description || `Telegram API failed: ${method}`);
+      throw new TelegramApiError(
+        payload.description || `Telegram API failed: ${method}`,
+        method
+      );
     }
 
     return payload.result as T;
