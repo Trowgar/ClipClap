@@ -18,20 +18,29 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   presign: vi.fn(),
+  objectSize: vi.fn(),
+  downloadToFile: vi.fn(),
   userFindUnique: vi.fn(),
 }));
 
 vi.mock("../../../../packages/shared/src/lib/r2", () => ({
   getPresignedDownloadUrl: mocks.presign,
   getPresignedUploadUrl: vi.fn(),
+  getObjectSize: mocks.objectSize,
   uploadFile: vi.fn(),
   downloadFile: vi.fn(),
   deleteFile: vi.fn(),
 }));
 
+// The clip now travels as an uploaded file, so the poller's R2 dependency is
+// "measure it, then pull it to /tmp" rather than "sign a URL". The fake path
+// carries the storage key so a test can still say WHICH clip a send was for.
+vi.mock("../clip-file", () => ({ downloadToFile: mocks.downloadToFile }));
+
 vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
   prisma: {
     user: { findUnique: mocks.userFindUnique },
+    clip: { update: (args: ClipUpdateArgs) => store.updateClip(args) },
     telegramDelivery: {
       create: vi.fn(),
       findMany: (args: FindManyArgs) => store.findMany(args),
@@ -42,6 +51,7 @@ vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
 
 import { MAX_TELEGRAM_DELIVERY_ATTEMPTS } from "@clipclap/shared";
 import { deliverReadyTelegramJobs } from "../handlers";
+import { TelegramApiError } from "../telegram-client";
 import { t } from "../i18n";
 
 type DeliveryStatus = "PENDING" | "DELIVERED" | "FAILED" | "FAILURE_NOTIFIED";
@@ -55,6 +65,10 @@ interface FakeClip {
   lowQuality: boolean;
   score: number | null;
   startTime: number;
+  // Per-clip delivery state. A clip that is already in the chat carries a file
+  // id, which is what lets a re-picked row send only what is still owed.
+  telegramFileId: string | null;
+  telegramSendError: string | null;
 }
 
 interface FakeJob {
@@ -96,6 +110,10 @@ interface UpdateArgs {
     status?: DeliveryStatus;
     attempts?: NumberWrite;
   };
+}
+interface ClipUpdateArgs {
+  where: { id: string };
+  data: { telegramFileId?: string; telegramSendError?: string };
 }
 
 // Deliberately strict: anything the service asks for that this fake does not
@@ -214,12 +232,29 @@ function createStore(...seeds: (FakeJob | SeedRow)[]) {
       return Promise.resolve(
         matched.slice(0, args.take ?? matched.length).map(({ row, job }) => {
           if (!args.include?.job) return { ...row };
+          // Clips are COPIED, not aliased. Prisma hands back detached rows, so
+          // a clip.update during the pass must not retro-edit the object the
+          // poller is already holding - aliasing them would let the summary
+          // count the same delivery twice.
           const included = args.include.job.include?.clips
-            ? { ...job, clips: [...job.clips] }
+            ? { ...job, clips: job.clips.map((c) => ({ ...c })) }
             : { ...job, clips: undefined };
           return { ...row, job: included };
         })
       );
+    },
+    updateClip(args: ClipUpdateArgs) {
+      // Deliberately NOT gated on breakWrites: the pool failure those tests
+      // model is about the delivery row's status write, and letting it swallow
+      // the per-clip write too would hide whether the clip state is recorded.
+      for (const entry of entries) {
+        const found = entry.job.clips.find((c) => c.id === args.where.id);
+        if (found) {
+          Object.assign(found, args.data);
+          return Promise.resolve({ ...found });
+        }
+      }
+      throw new Error(`fake prisma: no clip ${args.where.id}`);
     },
     update(args: UpdateArgs) {
       writeCalls++;
@@ -248,7 +283,9 @@ let store: ReturnType<typeof createStore>;
 function makeClient() {
   return {
     sendMessage: vi.fn().mockResolvedValue(undefined),
-    sendVideo: vi.fn().mockResolvedValue(undefined),
+    // (chatId, filePath, caption) - the file path is `/tmp/<storageKey>` here,
+    // so `calls[i][1]` still names the clip the way the signed URL used to.
+    sendVideoUpload: vi.fn().mockResolvedValue(undefined),
     deleteMessage: vi.fn().mockResolvedValue(undefined),
   };
 }
@@ -261,6 +298,8 @@ const clip = (id: string): FakeClip => ({
   lowQuality: false,
   score: 1,
   startTime: 0,
+  telegramFileId: null,
+  telegramSendError: null,
 });
 
 const doneJob = (id: string, clips: FakeClip[]): FakeJob => ({
@@ -278,6 +317,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   mocks.userFindUnique.mockResolvedValue({ telegramLocale: "en" });
   mocks.presign.mockImplementation(async (key: string) => `https://r2/${key}`);
+  mocks.objectSize.mockResolvedValue(1_000_000);
+  mocks.downloadToFile.mockImplementation(async (key: string) => `/tmp/${key}`);
 });
 
 describe("deliverReadyTelegramJobs", () => {
@@ -315,14 +356,14 @@ describe("deliverReadyTelegramJobs", () => {
 
     await poll(client);
 
-    expect(client.sendVideo).toHaveBeenCalledTimes(2);
+    expect(client.sendVideoUpload).toHaveBeenCalledTimes(2);
     expect(client.sendMessage).toHaveBeenCalledTimes(2);
     expect(client.sendMessage).toHaveBeenLastCalledWith("500", t("en").done(2));
     expect(store.row.status).toBe("DELIVERED");
 
     // and it is terminal - no second copy of the clips on the next poll
     await poll(client);
-    expect(client.sendVideo).toHaveBeenCalledTimes(2);
+    expect(client.sendVideoUpload).toHaveBeenCalledTimes(2);
     expect(client.sendMessage).toHaveBeenCalledTimes(2);
   });
 
@@ -367,7 +408,7 @@ describe("deliverReadyTelegramJobs", () => {
       "500",
       t("en").processingFailed("UNSUPPORTED_INPUT")
     );
-    expect(client.sendVideo).not.toHaveBeenCalled();
+    expect(client.sendVideoUpload).not.toHaveBeenCalled();
     expect(store.row.status).toBe("FAILURE_NOTIFIED");
   });
 
@@ -382,12 +423,12 @@ describe("deliverReadyTelegramJobs", () => {
     await poll(client);
 
     expect(client.sendMessage).not.toHaveBeenCalled();
-    expect(client.sendVideo).not.toHaveBeenCalled();
+    expect(client.sendVideoUpload).not.toHaveBeenCalled();
     expect(store.row.status).toBe("PENDING");
 
     await poll(client);
 
-    expect(client.sendVideo).toHaveBeenCalledTimes(1);
+    expect(client.sendVideoUpload).toHaveBeenCalledTimes(1);
     expect(store.row.status).toBe("DELIVERED");
   });
 
@@ -415,48 +456,77 @@ describe("deliverReadyTelegramJobs", () => {
 
     await poll(client);
 
-    expect(client.sendVideo).toHaveBeenCalledTimes(1);
+    expect(client.sendVideoUpload).toHaveBeenCalledTimes(1);
     expect(store.row.status).toBe("DELIVERED");
   });
 
-  it("says nothing and stays re-pickable when the clip URLs cannot be signed", async () => {
-    // Every URL is signed BEFORE the chat sees a word, so an R2 outage costs
-    // nothing: no half-kept promise in the chat, no spam every 10 seconds, and
-    // the clips are still deliverable when R2 comes back.
+  it("says nothing and stays re-pickable when the clips cannot be fetched from R2", async () => {
+    // The clip is no longer handed to Telegram as a signed URL, it is pulled to
+    // a temp file and uploaded - so the R2 outage this covers now lands on the
+    // download. The guarantee is unchanged: no word in the chat, no summary to
+    // half-keep, and the clips are still deliverable when R2 comes back.
     store = createStore(doneJob("job1", [clip("c1"), clip("c2")]));
     const client = makeClient();
-    mocks.presign.mockRejectedValue(new Error("R2 down"));
+    mocks.downloadToFile.mockRejectedValue(new Error("R2 down"));
 
     await poll(client);
     await poll(client);
 
     expect(client.sendMessage).not.toHaveBeenCalled();
-    expect(client.sendVideo).not.toHaveBeenCalled();
+    expect(client.sendVideoUpload).not.toHaveBeenCalled();
     expect(store.row.status).toBe("PENDING");
 
-    mocks.presign.mockImplementation(async (key: string) => `https://r2/${key}`);
+    mocks.downloadToFile.mockImplementation(async (key: string) => `/tmp/${key}`);
     await poll(client);
 
-    expect(client.sendVideo).toHaveBeenCalledTimes(2);
+    expect(client.sendVideoUpload).toHaveBeenCalledTimes(2);
     expect(store.row.status).toBe("DELIVERED");
   });
 
-  it("does not re-run a delivery once a video is already in the chat", async () => {
-    // The one irreversible act. Re-picking here would put a second copy of the
-    // clips the user already has into the chat, so this - and only this - is
-    // terminal.
+  // THE MEASURED BUG. A user got 1 of 12: clip 2 was 20,557,490 bytes, over the
+  // 20 MB URL-fetch ceiling, its send threw, and the row was declared terminal
+  // on the spot - so clips 3-12, every one of them deliverable, were never
+  // attempted again. The old assertion here ("a video is in the chat, so the row
+  // is terminal") WAS that behaviour. It was written to stop a second copy of an
+  // already-sent clip, and telegramFileId now carries that guard per clip, so
+  // the row can be re-picked without the duplicate it was protecting against.
+  it("retries only the clips still owed, and never re-sends one already in the chat", async () => {
     store = createStore(doneJob("job1", [clip("c1"), clip("c2")]));
     const client = makeClient();
-    client.sendVideo
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValue(new Error("Bad Request: failed to get HTTP URL content"));
+    const sentTo = (key: string) =>
+      client.sendVideoUpload.mock.calls.filter((c) =>
+        String(c[1]).endsWith(key)
+      );
+    client.sendVideoUpload.mockImplementation(async (_chat, path: string) => {
+      if (path.endsWith("c2.mp4")) {
+        throw new TelegramApiError(
+          "Bad Request: failed to get HTTP URL content",
+          "sendVideo"
+        );
+      }
+      return "FID-c1";
+    });
 
     await poll(client);
+
+    // c1 landed, c2 did not - and the row is NOT closed over it
+    expect(store.row.status).toBe("PENDING");
+    expect(store.job.clips[0].telegramFileId).toBe("FID-c1");
+    expect(store.job.clips[1].telegramFileId).toBeNull();
+    expect(client.sendMessage).not.toHaveBeenCalled();
+
     await poll(client);
 
-    expect(client.sendVideo).toHaveBeenCalledTimes(2);
-    expect(store.row.status).toBe("FAILED");
-    expect(store.row.error).toContain("failed to get HTTP URL content");
+    // the retry touched c2 alone
+    expect(sentTo("c1.mp4")).toHaveLength(1);
+    expect(sentTo("c2.mp4")).toHaveLength(2);
+
+    client.sendVideoUpload.mockResolvedValue("FID-c2");
+    await poll(client);
+
+    expect(sentTo("c1.mp4")).toHaveLength(1);
+    expect(store.row.status).toBe("DELIVERED");
+    expect(client.sendMessage).toHaveBeenCalledWith("500", t("en").done(2));
   });
 });
 
@@ -468,7 +538,10 @@ describe("the pickup window drains", () => {
   // insist the clips still arrive.
   const WALL = 20;
 
-  function buildWall(failure: string) {
+  // The error OBJECT, not just its text: the send loop asks whether Telegram
+  // answered at all before it decides a chat is hopeless, and only a
+  // TelegramApiError says it did. A bare Error is the no-answer case.
+  function buildWall(failure: Error) {
     const seeds: SeedRow[] = [];
     for (let i = 0; i < WALL; i++) {
       seeds.push({
@@ -489,8 +562,8 @@ describe("the pickup window drains", () => {
     store = createStore(...seeds);
 
     const client = makeClient();
-    client.sendVideo.mockImplementation(async (chatId: string) => {
-      if (chatId.startsWith("stuck-chat-")) throw new Error(failure);
+    client.sendVideoUpload.mockImplementation(async (chatId: string) => {
+      if (chatId.startsWith("stuck-chat-")) throw failure;
     });
     return client;
   }
@@ -499,7 +572,7 @@ describe("the pickup window drains", () => {
     // A generic, transient-LOOKING fault (nothing in the string says it is
     // permanent) that in fact never heals. The only thing that can free the
     // window is a bounded attempt budget.
-    const client = buildWall("connection reset by peer");
+    const client = buildWall(new Error("connection reset by peer"));
 
     let pollsUntilDelivered = -1;
     for (let i = 1; i <= 60; i++) {
@@ -511,7 +584,7 @@ describe("the pickup window drains", () => {
     }
 
     expect(store.rowAt(WALL).status).toBe("DELIVERED");
-    expect(client.sendVideo).toHaveBeenCalledWith(
+    expect(client.sendVideoUpload).toHaveBeenCalledWith(
       "victim-chat",
       expect.anything(),
       expect.anything()
@@ -529,20 +602,22 @@ describe("the pickup window drains", () => {
   it("a blocked bot is retired at once instead of burning the attempt budget", async () => {
     // 403 will never heal, and every retry is a wasted Telegram call that
     // counts against the bot's global rate limit.
-    const client = buildWall("Forbidden: bot was blocked by the user");
+    const client = buildWall(
+      new TelegramApiError("Forbidden: bot was blocked by the user", "sendVideo")
+    );
 
     await poll(client);
 
     for (let i = 0; i < WALL; i++) {
       expect(store.rowAt(i).status).toBe("FAILED");
     }
-    expect(client.sendVideo).toHaveBeenCalledTimes(WALL);
+    expect(client.sendVideoUpload).toHaveBeenCalledTimes(WALL);
 
     await poll(client);
 
     expect(store.rowAt(WALL).status).toBe("DELIVERED");
     // no extra calls at the blocked chats
-    expect(client.sendVideo).toHaveBeenCalledTimes(WALL + 1);
+    expect(client.sendVideoUpload).toHaveBeenCalledTimes(WALL + 1);
   });
 
   it("a healed transient fault does not consume the budget of the next stage", async () => {
@@ -572,25 +647,36 @@ describe("the pickup window drains", () => {
 });
 
 describe("a partial delivery is admitted, not hidden", () => {
-  it("tells the user how many clips arrived when the send dies mid-batch", async () => {
-    // Before: the summary was sent only after ALL clips, so a failure on clip 2
-    // of 3 left one bare video in the chat, no message at all, and a job the
-    // user was billed for. They had no way to learn two more clips existed.
+  // The report is unchanged - "1 of 3" - but it is no longer the FIRST thing a
+  // mid-batch failure does. A refusal on clip 2 used to end the delivery on the
+  // spot; now it costs clip 2 alone, clip 3 is still attempted, and the row is
+  // only summarised as partial once its retries are spent.
+  it("tells the user how many clips arrived once the retries are exhausted", async () => {
     store = createStore(doneJob("job1", [clip("c1"), clip("c2"), clip("c3")]));
     const client = makeClient();
-    client.sendVideo
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValue(new Error("Bad Request: failed to get HTTP URL content"));
+    client.sendVideoUpload.mockImplementation(async (_chat, path: string) => {
+      if (path.endsWith("c1.mp4")) return "FID-c1";
+      throw new TelegramApiError(
+        "Bad Request: failed to get HTTP URL content",
+        "sendVideo"
+      );
+    });
 
     await poll(client);
 
-    expect(client.sendVideo).toHaveBeenCalledTimes(2);
+    // all three attempted, not one-then-stop; and nothing final is said yet
+    expect(client.sendVideoUpload).toHaveBeenCalledTimes(3);
+    expect(store.row.status).toBe("PENDING");
+    expect(client.sendMessage).not.toHaveBeenCalled();
+
+    for (let i = 1; i < MAX_TELEGRAM_DELIVERY_ATTEMPTS; i++) await poll(client);
+
+    expect(store.row.status).toBe("FAILED");
     expect(client.sendMessage).toHaveBeenCalledTimes(1);
     expect(client.sendMessage).toHaveBeenCalledWith(
       "500",
       t("en").donePartial(1, 3)
     );
-    expect(store.row.status).toBe("FAILED");
 
     // and it stays said exactly once
     await poll(client);
@@ -598,8 +684,12 @@ describe("a partial delivery is admitted, not hidden", () => {
   });
 
   it("still confirms the batch when only the summary send failed", async () => {
-    // All three clips are in the chat; only the trailing summary 429'd. The
-    // user is owed a confirmation, not a "1 of 3"-style half-truth.
+    // All three clips are in the chat; only the trailing summary 429'd. The row
+    // stays re-pickable and the next poll re-sends nothing but the summary -
+    // every clip carries a file id now, so the retry cannot duplicate them. The
+    // old code had to say the summary twice inside one pass because a re-pickup
+    // would have repeated the videos; it also retired the row to FAILED, which
+    // was never true here - nothing was lost but one message.
     store = createStore(doneJob("job1", [clip("c1"), clip("c2"), clip("c3")]));
     const client = makeClient();
     client.sendMessage
@@ -608,12 +698,18 @@ describe("a partial delivery is admitted, not hidden", () => {
 
     await poll(client);
 
-    expect(client.sendVideo).toHaveBeenCalledTimes(3);
+    expect(client.sendVideoUpload).toHaveBeenCalledTimes(3);
+    expect(store.row.status).toBe("PENDING");
+
+    await poll(client);
+
+    // no second copy of anything the user already has
+    expect(client.sendVideoUpload).toHaveBeenCalledTimes(3);
     // the retry landed - the confirmation is really in the chat, not merely
-    // attempted and lost
+    // attempted and lost. A confirmation, not a "1 of 3"-style half-truth.
     expect(client.sendMessage).toHaveBeenCalledTimes(2);
     expect(client.sendMessage).toHaveBeenLastCalledWith("500", t("en").done(3));
-    expect(store.row.status).toBe("FAILED");
+    expect(store.row.status).toBe("DELIVERED");
   });
 });
 
@@ -628,7 +724,7 @@ describe("a delivery that is given up on is not given up on in silence", () => {
   it("tells the user where their clips are when the attempt budget runs out", async () => {
     store = createStore(doneJob("job1", [clip("c1")]));
     const client = makeClient();
-    client.sendVideo.mockRejectedValue(new Error("connection reset by peer"));
+    client.sendVideoUpload.mockRejectedValue(new Error("connection reset by peer"));
 
     for (let i = 0; i <= MAX_TELEGRAM_DELIVERY_ATTEMPTS; i++) await poll(client);
 
@@ -642,17 +738,17 @@ describe("a delivery that is given up on is not given up on in silence", () => {
   it("says it exactly once, however long the poller keeps running", async () => {
     store = createStore(doneJob("job1", [clip("c1"), clip("c2")]));
     const client = makeClient();
-    client.sendVideo.mockRejectedValue(new Error("connection reset by peer"));
+    client.sendVideoUpload.mockRejectedValue(new Error("connection reset by peer"));
 
     for (let i = 0; i <= MAX_TELEGRAM_DELIVERY_ATTEMPTS; i++) await poll(client);
     expect(client.sendMessage).toHaveBeenCalledTimes(1);
-    const videoCallsAtRetirement = client.sendVideo.mock.calls.length;
+    const videoCallsAtRetirement = client.sendVideoUpload.mock.calls.length;
 
     // 30 more polls - five minutes of them
     for (let i = 0; i < 30; i++) await poll(client);
 
     expect(client.sendMessage).toHaveBeenCalledTimes(1);
-    expect(client.sendVideo.mock.calls.length).toBe(videoCallsAtRetirement);
+    expect(client.sendVideoUpload.mock.calls.length).toBe(videoCallsAtRetirement);
     expect(store.row.status).toBe("FAILED");
   });
 
@@ -665,7 +761,7 @@ describe("a delivery that is given up on is not given up on in silence", () => {
     // pool is down.
     store = createStore(doneJob("job1", [clip("c1")]));
     const client = makeClient();
-    client.sendVideo.mockRejectedValue(new Error("connection reset by peer"));
+    client.sendVideoUpload.mockRejectedValue(new Error("connection reset by peer"));
 
     for (let i = 0; i < MAX_TELEGRAM_DELIVERY_ATTEMPTS - 1; i++) await poll(client);
     expect(store.row.attempts).toBe(MAX_TELEGRAM_DELIVERY_ATTEMPTS - 1);
@@ -705,7 +801,7 @@ describe("a delivery that is given up on is not given up on in silence", () => {
     const dead = async (chatId: string) => {
       if (chatId === "chat-a") throw new Error("connection reset by peer");
     };
-    client.sendVideo.mockImplementation(dead);
+    client.sendVideoUpload.mockImplementation(dead);
     client.sendMessage.mockImplementation(dead);
 
     for (let i = 0; i <= MAX_TELEGRAM_DELIVERY_ATTEMPTS; i++) {
@@ -814,10 +910,14 @@ describe("a failing status write cannot abort the batch", () => {
       { job: doneJob("job2", [clip("b1")]), chatId: "chat-b" }
     );
     const client = makeClient();
-    client.sendVideo.mockImplementation(async (chatId: string, url: string) => {
-      if (chatId === "chat-a" && url.endsWith("a2.mp4")) {
-        throw new Error("Bad Request: failed to get HTTP URL content");
+    client.sendVideoUpload.mockImplementation(async (chatId: string, path: string) => {
+      if (chatId === "chat-a" && path.endsWith("a2.mp4")) {
+        throw new TelegramApiError(
+          "Bad Request: failed to get HTTP URL content",
+          "sendVideo"
+        );
       }
+      return "FID";
     });
     store.breakWrites(true);
 
@@ -825,27 +925,30 @@ describe("a failing status write cannot abort the batch", () => {
 
     // the row BEHIND the throwing one was reached on that very first poll
     const toB = () =>
-      client.sendVideo.mock.calls.filter((c) => c[0] === "chat-b");
+      client.sendVideoUpload.mock.calls.filter((c) => c[0] === "chat-b");
     expect(toB()).toHaveLength(1);
 
-    const afterFirstPoll = client.sendVideo.mock.calls.length;
+    const sent = (key: string) =>
+      client.sendVideoUpload.mock.calls.filter((c) =>
+        String(c[1]).endsWith(key)
+      );
 
     for (let i = 0; i < 3; i++) {
       await expect(poll(client)).resolves.toBeUndefined();
     }
 
-    // and nothing was ever sent again, though not one status write has landed:
-    // one copy of the clip that got through, not four
-    expect(client.sendVideo.mock.calls.length).toBe(afterFirstPoll);
-    const landedInA = client.sendVideo.mock.calls.filter(
-      (c) => c[0] === "chat-a" && String(c[1]).endsWith("a1.mp4")
-    );
-    expect(landedInA).toHaveLength(1);
+    // No duplicate, though not one delivery-row status write has landed: the
+    // guard that stops a re-send is the clip's own file id, written on the clip
+    // row, so it survives a pool that cannot record the delivery's status at
+    // all. a2 IS retried on every poll, and that is the fix - it never made it
+    // into the chat, so it is still owed.
+    expect(sent("a1.mp4")).toHaveLength(1);
     expect(toB()).toHaveLength(1);
-    expect(client.sendMessage).toHaveBeenCalledWith(
-      "chat-a",
-      t("en").donePartial(1, 2)
-    );
+    expect(sent("a2.mp4").length).toBeGreaterThan(1);
+    // and the row that finished says its summary once, not once per poll
+    expect(
+      client.sendMessage.mock.calls.filter((c) => c[0] === "chat-b")
+    ).toEqual([["chat-b", t("en").done(1)]]);
   });
 });
 
@@ -865,7 +968,7 @@ describe("the progress board is retired with the job", () => {
     });
     const client = makeClient();
     const order: string[] = [];
-    client.sendVideo.mockImplementation(async () => {
+    client.sendVideoUpload.mockImplementation(async () => {
       order.push("video");
     });
     client.deleteMessage.mockImplementation(async () => {
@@ -929,7 +1032,7 @@ describe("the progress board is retired with the job", () => {
     await poll(client);
 
     expect(client.deleteMessage).not.toHaveBeenCalled();
-    expect(client.sendVideo).toHaveBeenCalledTimes(1);
+    expect(client.sendVideoUpload).toHaveBeenCalledTimes(1);
   });
 
   // A board that will not delete is litter; a clip that never arrives is the
@@ -945,7 +1048,7 @@ describe("the progress board is retired with the job", () => {
 
     await expect(poll(client)).resolves.toBeUndefined();
 
-    expect(client.sendVideo).toHaveBeenCalledTimes(1);
+    expect(client.sendVideoUpload).toHaveBeenCalledTimes(1);
     expect(store.row.status).toBe("DELIVERED");
     expect(err).toHaveBeenCalled();
     err.mockRestore();
