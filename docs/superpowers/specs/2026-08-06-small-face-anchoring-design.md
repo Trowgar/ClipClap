@@ -61,7 +61,8 @@ cut at a round number of minutes.
 
 ## 2. What this is, and what it is not
 
-**Is:** a change to when the minimum-face guard applies. One condition, no new constant.
+**Is:** a change to when the minimum-face guard applies. Two conditions, both from information the planner
+already computes. No new constant.
 
 **Is not:**
 
@@ -86,13 +87,41 @@ The guard exists for exactly one case, and §7a states it: on a stream the webca
 gameplay, and centring a 9:16 window on it yields a truncated webcam plus a slice of chat overlay. That case
 is real and measured. What is not justified is applying the same rule to a source that has no webcam at all.
 
-**Proposed:**
+**Proposed - two conditions, both from information the planner already has:**
 
-> The minimum-face guard applies to a face **iff** a webcam rectangle was resolved for the clip **and that
-> face lies inside it**. Otherwise the face may anchor the window.
+> The minimum-face guard is relaxed for a face **only when** the clip classified `normal_face` **and** the
+> face does not lie inside a resolved webcam rectangle. In every other case the guard keeps its absolute
+> form.
 
-Everything downstream is unchanged: the faces that survive the guard go into the same `FIT_MARGIN` test, the
-same `trySplit`, the same `bestFaceGroup`, and the same `windowXFor`.
+Written as a predicate rather than as prose, because the negation is where this gets misread:
+
+```
+guardApplies(track) =
+      profile.class !== "normal_face"           // small_face / stream / faceless keep the absolute guard
+   || (camRect !== null && isInsideInset(track, camRect))
+```
+
+Everything downstream is unchanged: whatever survives goes into the same `FIT_MARGIN` test, the same
+`trySplit`, the same `bestFaceGroup`, and the same `windowXFor`.
+
+**The class condition is what makes this safe, and it is measured.** Classification runs per clip, not per
+source, over that clip's own tracks. Across the 47 real clips:
+
+| class | clips | blind-centre seconds |
+|---|---|---|
+| `normal_face` | 37 | **457** - the entire measured defect lives here |
+| `faceless` | 8 | 319 - no face at all, centring correct, nothing to relax |
+| `small_face` | 2 | 27 - **both are `stream_no_rect`**, including the Booster clip |
+
+So relaxing on `normal_face` alone reaches all 298 defective seconds, while both `small_face` clips - the
+stream-shaped ones, the exact case §7a protects - stay under the absolute guard. **The streamer's 3.1%
+webcam face cannot become an anchor**, and that is a property of the rule rather than something the
+acceptance run has to catch by eye.
+
+**The `camRect` condition is belt and braces and no measured case requires it.** It closes a hypothetical:
+a clip that classifies `normal_face` on a large facecam while also carrying a small inset. It is kept
+because the containment helper already exists and the condition costs nothing, and it is labelled here as
+unmeasured so nobody later mistakes it for load-bearing.
 
 ### 3.1 Why `camRect` and not a smaller threshold
 
@@ -118,15 +147,22 @@ the streamer's own webcam face, which is the defect §7a exists to prevent:
 `camRect` is already computed by the detector on every shot and is currently read only to decide the stream
 layout. This rule adds no signal and no constant.
 
-### 3.2 Source classification is deliberately left alone
+### 3.2 Two helpers, never one
 
-`buildCropPlan` uses the same `minFaceWidth` for a second, unrelated job: deciding whether the source is
-`normal_face` or `small_face`, which is what gates the stream layout. **That use is unchanged and keeps the
-absolute guard.**
+`minFaceWidth` currently serves two unrelated questions, and after this change they answer differently:
 
-The two questions are different - "is this source a stream" and "may this face anchor the window" - and
-merging them would break §7a. The implementation must keep them textually separate so a later reader cannot
-collapse them by accident.
+| question | rule | used by |
+|---|---|---|
+| is this clip stream-shaped? | `widestFace >= minFaceWidth`, **absolute, unchanged** | source classification, which gates the stream layout |
+| may this face anchor the window? | the conditional predicate above | the anchorable filter |
+
+**These must be two separately named functions in the code**, not one function with a parameter and not one
+expression reused in both places. The failure mode is concrete: a later reader sees `minFaceWidth` used
+twice, decides to "unify" it, and either the stream layout stops firing or the streamer's webcam becomes an
+anchor. Both are §7a's defect returning.
+
+Name them for the question each answers rather than for the threshold they share - something like
+`classifyByFaceSize` and `canAnchor` - so that unifying them reads as obviously wrong.
 
 ### 3.3 No new size floor, on purpose
 
@@ -168,13 +204,18 @@ clips. Baselines already exist from the Layer 0 work and `corpus-baseline.ts` re
 
 **Must improve:**
 
-- blind-centre time with real people visible: **298s -> near zero**, measured by the same replay that
-  produced the 298
+- blind-centre time with real people visible: **298s -> at most a few seconds**, measured by the same replay
+  that produced the 298. "Near zero" is not an acceptance criterion; **every second that remains must be
+  named and inspected individually**, and each one must turn out to be a genuine artefact - a one-frame
+  detection, a face at the very edge - rather than a case the rule failed to reach.
 - the window must actually move: the >40px displacement predicted on 292 of those 298 seconds
 
 **Must not change, byte for byte:**
 
-- `stream-cam` keeps its stream layout on all 60 seconds
+- **no stream clip anchors on the webcam.** `stream-cam` keeps its stream layout on all 60 seconds, and the
+  two `small_face` clips - both `stream_no_rect`, including Booster - keep their centre crop. This is the
+  §7a defect and the rule is supposed to make it unreachable; the test is there to prove the rule does what
+  section 3 claims, not to catch a case section 3 left open.
 - `vlog-travel` and every shot in the "no face at all" bucket stay centred
 - `lockedoff-1p` is unchanged
 - every shot that already had an anchorable face keeps its existing `x` - the guard's behaviour above 6% is
@@ -182,17 +223,18 @@ clips. Baselines already exist from the Layer 0 work and `corpus-baseline.ts` re
   96 are the regression guard
 - the 131 persisted `cropPlan` records still compile identically (`eval-camera-invariance.ts` level 1)
 
-**Must be looked at, not just counted.** Before/after frame strips for the clip in section 1 and for at
-least three others from bucket C. The number says the window moved; only the picture says it moved onto a
-person. §7c's sheets are the precedent.
+**Must be looked at, not just counted.** The number says the window moved; only the picture says it moved
+onto a person. Before/after frame strips are required for:
 
-**A specific thing to check rather than assume:** on shots with several small faces spread wider than one
-window - the arctic case, three figures across 53% of frame width - `bestFaceGroup` will pick a subset by
-total area. Confirm by eye that the subset it picks is a person and not, say, the largest of three equally
-distant strangers while the speaker is elsewhere. If that reads badly, it is an argument about
-`bestFaceGroup`, not about this rule, and belongs in its own change.
+- the clip in section 1, the wide two-shot that started this
+- **`vlog-arctic`**, the worst case for the rule: three figures spread across 53% of frame width, where
+  `bestFaceGroup` must pick a subset and the subset might be the wrong person
+- **the Booster clip**, the worst case against the rule: `stream_no_rect` with a 3.1% webcam face. Section 3
+  says the class condition makes it unreachable. Look anyway - a rule that is safe by argument and a rule
+  that is safe in the frame are different claims, and this project has confused them before.
+- at least two more from bucket C, chosen from different sources
 
----
+§7c's sheets under `.eval-frames/geom/` are the precedent for how these are produced.
 
 ## 6. Deferred, and why
 
@@ -224,7 +266,13 @@ is ANALYZE, not RENDER, and is the larger question. Recorded so it is not lost.
    `vlog-arctic`; the measurement says the window moves, and only the frame strips will say whether it moves
    somewhere worth looking. If it reads worse, the honest outcome is to scope the rule to shots with one or
    two faces and record why.
-2. **Whether `stream_no_rect` sources need the guard back.** If the Booster clip anchors on the webcam and
-   looks wrong, the fallback is to keep the guard when the source classified as `small_face` even without a
-   rect - which is information the planner already has. Not designed now, because the acceptance run decides
-   whether it is needed.
+2. **Whether `bestFaceGroup` picks the right subset when faces are spread too wide.** Not a question about
+   this rule, but this rule is what makes it reachable - before it, those shots centred and the question
+   never arose. If the arctic strips read badly the honest outcome is to scope the relaxation to shots with
+   one or two faces and record why, rather than to start tuning `bestFaceGroup` inside this change.
+
+**Closed during review, recorded because the answer was not obvious.** An earlier draft made the rule depend
+on `camRect` alone, which left a hole: on a clip with a rect but no stream geometry - `stream_no_fit`, or the
+stream flag off - a small face OUTSIDE the rect would have lost its guard, and on a stream that is a face in
+the game. The class condition closes it, and the measurement that settled it is that both `small_face` clips
+in the corpus are exactly the stream-shaped ones.
