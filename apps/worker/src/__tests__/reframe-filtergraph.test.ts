@@ -326,6 +326,43 @@ describe("planKeyframes", () => {
     expect(keys[0]).toEqual({ t: 0, x: 100 });
     expect(keys.at(-1)).toEqual({ t: 10, x: 500 });
   });
+
+  it("still emits a flat pair for a shot whose xs is empty next to one that has a trajectory", () => {
+    // The empty array is not a trajectory, it is the absence of one, so the
+    // shot falls back to its own `x`. Drop the `.length > 0` guard and this
+    // shot contributes NO keyframes at all: the ramp holds the previous shot's
+    // 500 straight across 10..15 and the window it asked for never happens.
+    // The `buildFiltergraph` empty-xs test cannot see this - there the only
+    // shot has xs: [], so hasTrajectory is false and planKeyframes is never
+    // entered. It has to be asserted here, on a MIXED plan.
+    const keys = planKeyframes(
+      {
+        version: 3,
+        engine: "faces",
+        source: { width: 1280, height: 720 },
+        shots: [
+          {
+            start: 0,
+            end: 10,
+            layout: "single",
+            x: 300,
+            xs: [
+              { t: 0, x: 300 },
+              { t: 10, x: 500 },
+            ],
+          },
+          { start: 10, end: 15, layout: "single", x: 120, xs: [] },
+        ],
+      },
+      437
+    );
+    expect(keys).toEqual([
+      { t: 0, x: 300 },
+      { t: 10, x: 500 },
+      { t: 10, x: 120 },
+      { t: 15, x: 120 },
+    ]);
+  });
 });
 
 describe("buildFiltergraph motion selection", () => {

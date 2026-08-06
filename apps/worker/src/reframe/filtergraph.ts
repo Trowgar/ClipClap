@@ -23,6 +23,29 @@ export function piecewiseX(segments: Array<{ end: number; x: number }>): string 
 const STEP_SEC = 0.001;
 
 /**
+ * `rampX`'s own formatter, three decimals, used for BOTH halves of a term -
+ * the offset `t-a.t` and the duration `dt`.
+ *
+ * It exists because `fmt` is two decimals, which rendered STEP_SEC as "0.00"
+ * and made the constant inert: an instantaneous step compiled to a literal
+ * `clip((t-4.50)/0.00,0,1)`. Measured on ffmpeg 8.0.1, that did NOT crash -
+ * av_expr's clip() maps -inf to 0, +inf to 1 and NaN to 0, so t below the step
+ * gave -inf -> 0, t above gave +inf -> 1, and t exactly on it gave 0/0 = NaN
+ * -> 0, i.e. a clean step that landed one frame late. Correct output resting
+ * entirely on undocumented clip(NaN) handling is not a guarantee, so the
+ * denominator is now genuinely non-zero.
+ *
+ * `fmt` is deliberately NOT changed. It formats the times inside `piecewiseX`,
+ * whose output must stay byte-identical to what ships today - 96 crop plans are
+ * already persisted in Postgres and must keep rendering the same frames. Only
+ * `rampX` output is new, so only `rampX` is free to be more precise.
+ *
+ * One formatter for both halves on purpose: fixing the denominator and leaving
+ * the numerator at two decimals is the obvious next mistake.
+ */
+const rfmt = (n: number) => n.toFixed(3);
+
+/**
  * x(t) as a FLAT SUM of clipped ramps: `x0 + d1*clip((t-t0)/dt0,0,1) + ...`.
  *
  * Nesting depth 1 regardless of how many keyframes there are, which is the
@@ -45,7 +68,7 @@ export function rampX(keys: Keyframe[]): string {
     if (delta === 0) continue;
     const dt = Math.max(b.t - a.t, STEP_SEC);
     terms.push(
-      `${delta >= 0 ? "+" : "-"}${Math.abs(delta)}*clip((t-${fmt(a.t)})/${fmt(dt)},0,1)`
+      `${delta >= 0 ? "+" : "-"}${Math.abs(delta)}*clip((t-${rfmt(a.t)})/${rfmt(dt)},0,1)`
     );
   }
   return terms.join("");
