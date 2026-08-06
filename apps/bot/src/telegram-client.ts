@@ -1,4 +1,4 @@
-import { createReadStream, createWriteStream } from "fs";
+import { createReadStream, createWriteStream, openAsBlob } from "fs";
 import { pipeline } from "stream/promises";
 import { Readable } from "stream";
 import type {
@@ -189,6 +189,56 @@ export class TelegramClient {
       supports_streaming: true,
       ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     });
+  }
+
+  /** Upload a file as multipart/form-data.
+   *
+   *  Separate from `request()` because that one is hard-wired to
+   *  `Content-Type: application/json`. The header is deliberately NOT set here:
+   *  fetch derives the multipart boundary from the FormData, and setting it by
+   *  hand produces a body Telegram cannot parse. */
+  private async requestMultipart<T>(
+    method: string,
+    form: FormData
+  ): Promise<T> {
+    const response = await fetch(`${this.apiBase}/${method}`, {
+      method: "POST",
+      body: form,
+    });
+    const payload = (await response.json()) as TelegramApiResponse<T>;
+
+    if (!response.ok || !payload.ok) {
+      throw new TelegramApiError(
+        payload.description || `Telegram API failed: ${method}`,
+        method
+      );
+    }
+
+    return payload.result as T;
+  }
+
+  /** Send a local video file and return the file_id Telegram assigned it.
+   *
+   *  `openAsBlob` rather than reading the file: it hands fetch a file-backed
+   *  Blob, so a 36 MB clip is streamed off disk instead of sitting in the
+   *  worker's heap. The size gate in the delivery loop is still the guard - this
+   *  just means the ordinary case costs no memory. */
+  async sendVideoUpload(
+    chatId: string | number,
+    filePath: string,
+    caption?: string
+  ): Promise<string | undefined> {
+    const form = new FormData();
+    form.set("chat_id", String(chatId));
+    if (caption) form.set("caption", caption);
+    form.set("supports_streaming", "true");
+    form.set("video", await openAsBlob(filePath), "clip.mp4");
+
+    const sent = await this.requestMultipart<{ video?: { file_id?: string } }>(
+      "sendVideo",
+      form
+    );
+    return sent.video?.file_id;
   }
 
   async copyMessage(
