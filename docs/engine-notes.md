@@ -1250,6 +1250,121 @@ the merge pass ("the virtual camera stays put on soft scene cuts"), now reaching
 
 ---
 
+### 7d. Camera Director Layer 0: the window can move, and it barely helps (measured 2026-08-06)
+
+Spec `docs/superpowers/specs/2026-08-05-camera-director-layer0-design.md`, plan
+`docs/superpowers/plans/2026-08-05-camera-director-layer0.md`. Branch `feat/camera-layer0`.
+**`REFRAME_MOTION` ships OFF and should stay off.** This section records a negative result.
+
+**What was built.** `FaceTrack.box` is a median, so the plan carried one `x` per shot and the camera could
+not move within one. The detector now also emits `path` - the per-sample boxes it was already computing and
+discarding. A pure `camera.ts` turns the anchored group's trajectory into keyframes with a deadzone, an eased
+follow and a speed cap; `plan.ts` attaches them as `xs` alongside the untouched legacy `x`; `filtergraph.ts`
+compiles them as a flat sum of clipped ramps. Anchor SELECTION is frozen - `bestFaceGroup` runs once per
+shot on the median boxes exactly as before.
+
+**Flag off changes nothing, proven at three levels.** 131 persisted plans compile byte-identically against a
+frozen copy of `main`'s compiler; 7 corpus plans replay identically from captured detector output; 7 full
+renders are byte-identical to their baselines. Full-file md5 is a usable invariant - 7 of 7 items produced
+identical mp4s across two independent encodes with no `-bitexact` flags, on real 1080p material with a real
+decode, which the earlier synthetic 5-second probe could not establish.
+
+**Flag on does not help, and the reason is structural.** Anchor containment - the visible fraction of the
+SELECTED group's bbox inside the crop window, in source pixels, at the detector's own sample times:
+
+| | legacy | motion |
+|---|---|---|
+| pooled samples | 402 | 402 |
+| containment failures | **1 (0.2%)** | **0** |
+| worst failure | v = 0.994, a 2.57px edge clip | - |
+| items improved | - | 1 of 5 contributing |
+| locked-off control | - | **emitted no trajectory at all** |
+
+**The static window almost never loses the anchor.** `x` is already centred on the selected group's median
+bbox and `cropW` is usually wider than that bbox, so containment only breaks when a face drifts far from its
+own median inside a shot. Motion fixed the single instance that existed and regressed nothing. That is the
+best it could have done, and it is not enough to ship for.
+
+**Where the badly-framed output actually comes from.** Running the detector over the delivered frames of the
+seven baselines and attributing each faceless frame to the layout that produced it:
+
+| layout | frames | faceless | share of all faceless |
+|---|---|---|---|
+| **`center`** | 232 | **185 (79.7%)** | **82%** |
+| `single` | 488 | 41 (8.4%) | 18% |
+| `stream` | 120 | 0 | 0% |
+
+**82% of faceless delivered frames come from shots with no anchor at all.** Deduct `vlog-travel`, a soup bowl
+with genuinely no face in the source, and the centre path is still 112 frames with 65 faceless. Where an
+anchor exists the window holds it. **The framing problem is not that the camera cannot follow the subject; it
+is that for 28% of screen time the planner accepts no subject and centres blind.** That is §3.4 of the spec -
+faceless and small-face anchoring - scoped out because its thresholds would have rested on videos we did not
+have. We have them now and they say it is the layer that matters.
+
+**Lowering the min-face guard is the obvious fix and it is wrong.** Shot time on a blind centre crop against
+`faceSmallFrac`, replayed from captured detector output:
+
+| item | 0.06 (ships) | 0.05 | 0.04 | 0.03 |
+|---|---|---|---|---|
+| `stream-cam` | 60s **stream** | 60s stream | **stream lost**, 54s anchor + 6s blind | 60s anchor |
+| `vlog-arctic` | 45s blind | 45s blind | 40s blind | **26s blind** |
+| `sitcom-multi` | 8s blind | **0s** | 0s | 0s |
+
+At 0.04 the webcam inset stops being recognised and the planner anchors on the streamer's tiny webcam face -
+exactly the defect §7a exists to prevent. The arctic vlog needs 0.03 before it improves. **One global
+threshold cannot serve both**, because a webcam inset and three people fifty metres away present the same
+face size.
+
+**The discriminator already exists and is already computed.** `camRect`:
+
+| item | camRect | small faces | spread across frame |
+|---|---|---|---|
+| `stream-cam` | **13 of 13 shots** | 23, **all inside the rect** | 0.12 |
+| `vlog-arctic` | none | 11 | 0.53 |
+| `sitcom-multi` | none | 8 | 0.61 |
+| `podcast-2p` | none | 6 | 0.57 |
+
+So the rule the next layer wants is not a size threshold: **a webcam inset with its faces inside it keeps the
+stream layout; with no inset, small faces may anchor as a group.** That needs no new signal and no new
+constant. `0.05` is separately a free win - it clears the sitcom's 8s of blind centre and leaves the stream
+untouched - but it does nothing for the arctic case and is not the fix.
+
+**Motion safety, on the 3 of 7 items that emitted a trajectory at all.** No hard invariant violated, and the
+checks were proven able to fail by poisoning a plan with 201 keyframes, a 9990050 px/s step, a fractional `x`
+and a repeated `t` - all four fired. Two things to watch if this is ever enabled:
+
+- **The speed cap is saturated, not respected with margin.** Both podcasts peak at exactly 100.0% of the cap
+  and the sitcom at 97%. Every real move on this corpus is speed-limited, so the eased-follow behaviour the
+  design describes is not what runs - the cap is shaping every ramp on its own.
+- **`sitcom-multi` trips the provisional reversal alert at 18.2/min against a guideline of 4**, on a 198px
+  crop, while sitting 0.3pp under the motion-share alert. It is the one item where the motion could plausibly
+  read as busy.
+
+Coverage is thin and should not be oversold: 5 trajectory spans of 21 single spans, 36 seconds of trajectory
+in total. The filtergraph-length invariant is a guard against a future this corpus does not contain - the
+longest real graph is 585 characters against a 65536 budget.
+
+**Measured facts about the expression, worth not rediscovering.** Nested `if()` parses at 98 terms and fails
+at 99 - the origin of `MAX_PLAN_SHOTS`. A flat sum of clipped ramps has nesting depth 1 and is not subject to
+it. The real ceiling is the kernel's `MAX_ARG_STRLEN` of 131072 characters, because the graph is one argv
+element: 125781 passes, 132181 raises `OSError`. Encode cost is 1.04x at 10 ramp terms and 1.10x at 100.
+ffmpeg accepts a fractional crop `x`, rounding to the nearest integer then down to the nearest even pixel,
+and clamps out-of-range values.
+
+**The corpus.** Seven 90-second fixtures in `apps/worker/.corpus/`, cut on 2026-08-06 from the owner's own
+jobs and listed with provenance in `apps/worker/assets/reframe/corpus.json`. Gitignored, outside R2 and
+outside the Job table. `lockedoff-1p` is one frame held for 90 seconds, so any camera movement on it is
+unambiguously a defect - a stronger control than real locked-off footage, where a still subject still drifts.
+
+**A wrong claim this work made and then had to retract.** The spec asserted "there is no corpus at all - every
+source video has been swept". That came from querying `Job.sourceKey`, a legacy column that is null on every
+row. The live columns are `sourceArtifactKey` and `normalizedArtifactKey`, 17 jobs carry them, and every
+source was still in R2 including the sitcom §7b and §7c rest on. `sourceSweptAt` does not mean the source was
+deleted either. Reading a null column as absence of the thing, rather than absence of that column's use, is
+cheap to repeat.
+
+---
+
 ## 8. Operational facts
 
 - Prod IS this host. Plain `docker compose up -d` (dev target) is production mode. **Do not use
