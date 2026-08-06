@@ -5,6 +5,7 @@ import {
   buildTargetSamples,
   cropWidthFor,
   evenClamp,
+  isInsideInset,
   planLayoutCounts,
   selectGroupForShot,
   sliceCropPlan,
@@ -1373,5 +1374,35 @@ describe("sliceCropPlan with trajectories", () => {
     };
     const out = sliceCropPlan(mixed, 5, 15)!;
     expect("xs" in out.shots[0]).toBe(false);
+  });
+});
+
+describe("isInsideInset", () => {
+  const rect = { x: 100, y: 50, w: 200, h: 150, score: 5 };
+  const face = (x: number, y: number, w = 40, h = 40) => ({
+    id: 0, box: { x, y, w, h }, score: 0.9, samples: 5, mouthActivity: 0.05,
+  });
+
+  it("accepts a face wholly inside", () => {
+    expect(isInsideInset(face(150, 80), rect)).toBe(true);
+  });
+
+  it("rejects a face wholly outside", () => {
+    expect(isInsideInset(face(900, 80), rect)).toBe(false);
+  });
+
+  it("rejects a face that only half overlaps", () => {
+    expect(isInsideInset(face(280, 80), rect)).toBe(false);
+  });
+
+  it("tolerates 2px of slop on every edge, because both boxes are medians", () => {
+    // exactly 2px outside on the left and top, and 2px past the right and bottom
+    expect(isInsideInset({ ...face(98, 48), box: { x: 98, y: 48, w: 204, h: 154 } }, rect))
+      .toBe(true);
+  });
+
+  it("rejects 3px of slop", () => {
+    expect(isInsideInset({ ...face(97, 47), box: { x: 97, y: 47, w: 206, h: 156 } }, rect))
+      .toBe(false);
   });
 });

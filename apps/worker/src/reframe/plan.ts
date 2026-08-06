@@ -199,17 +199,27 @@ function survivingTracks(shotTracks: FaceTrack[]): FaceTrack[] {
   );
 }
 
-/** The face this shot shows inside the resolved inset, if any. Tolerant by a
- *  pixel on each edge: the rect is a median of per-shot detections and the
- *  track box is a median of per-sample boxes, so exact containment is luck. */
-function faceInInset(tracks: FaceTrack[], rect: CamRect): FaceTrack | undefined {
-  return tracks.find(
-    (t) =>
-      t.box.x >= rect.x - 2 &&
-      t.box.x + t.box.w <= rect.x + rect.w + 2 &&
-      t.box.y >= rect.y - 2 &&
-      t.box.y + t.box.h <= rect.y + rect.h + 2
+/** Is this face inside the resolved inset?
+ *
+ *  Tolerant by 2px on each edge: the rect is a median of per-shot detections and
+ *  the track box is a median of per-sample boxes, so exact containment is luck.
+ *
+ *  Exported because two different questions need it - "does this shot show the
+ *  streamer" and "may this face anchor the window" - and a second copy of the
+ *  tolerance would drift from this one. The tolerance is the part that was
+ *  reasoned about; the comparison is not. */
+export function isInsideInset(track: FaceTrack, rect: CamRect): boolean {
+  return (
+    track.box.x >= rect.x - 2 &&
+    track.box.x + track.box.w <= rect.x + rect.w + 2 &&
+    track.box.y >= rect.y - 2 &&
+    track.box.y + track.box.h <= rect.y + rect.h + 2
   );
+}
+
+/** The face this shot shows inside the resolved inset, if any. */
+function faceInInset(tracks: FaceTrack[], rect: CamRect): FaceTrack | undefined {
+  return tracks.find((t) => isInsideInset(t, rect));
 }
 
 /**
