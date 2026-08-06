@@ -101,8 +101,46 @@ guardApplies(track) =
    || (camRect !== null && isInsideInset(track, camRect))
 ```
 
-Everything downstream is unchanged: whatever survives goes into the same `FIT_MARGIN` test, the same
-`trySplit`, the same `bestFaceGroup`, and the same `windowXFor`.
+**The relaxation is a FALLBACK, not a filter change.** Corrected during implementation, where the first
+formulation broke a pre-existing test:
+
+```
+anchorableTracks(tracks, policy):
+    surviving = survivingTracks(tracks)
+    strict    = surviving.filter(t => t.box.w >= policy.minFaceWidth)
+    if (strict.length > 0) return strict              // unchanged, always
+    return surviving.filter(t => canAnchor(t, ...))   // only when nothing cleared the guard
+```
+
+An earlier draft of this section said "everything downstream is unchanged: whatever survives goes into the
+same `FIT_MARGIN` test, the same `trySplit`, the same `bestFaceGroup`". **That was the defect, not a
+reassurance.** `anchorable` answers three questions, and §3.2 only separated one of them:
+
+1. which face may anchor the window
+2. do the faces fit in one window - the single-versus-split decision, via the `minX`/`maxX` bbox
+3. which faces are candidates for split tiles, via `trySplit`'s `DOMINANCE_LEAD` test
+
+Relaxing the filter outright re-admits sub-guard specks into (2) and (3). Measured on the existing fixture:
+a 30px speck at the exact frame centre scores `dominance` 0.3968, of which 0.2934 is its near-perfect
+centrality of 0.978, and `1.5 x 0.3968 = 0.595` exceeds the 0.4855 of both real 300px faces - so
+`clearLead` fails, the split is refused, and one of the two people is dropped from frame. That is verbatim
+the failure the guard was preventing, and a pre-existing test documents it.
+
+It has a 16:9 form too, so this is not confined to the dead split path: beside a single 300px face at
+200-500, a 30px speck at 680-710 widens the bbox to 200-710 and drags the window from `x=46` to `x=152`,
+off the only person in the shot.
+
+**The fallback disposes of both.** The measured defect is exactly "no face cleared the guard, so the planner
+centred blind" - every one of the 298 seconds is a shot whose strict set is empty. A shot that already had
+an anchorable face is not in the defect set and has no business changing, so §5's requirement that such
+shots keep their `x` is satisfied **by construction** rather than by test. A speck can only enter when both
+real faces are already absent.
+
+**One definition, two callers.** `anchorableTracks` is exported and used by both `buildCropPlan` and
+`selectGroupForShot`. Two filters that must agree are a defect waiting to happen: during implementation the
+mutation that reverted only one of them produced `x: NaN`, because `selectGroupForShot` returned a group
+while `anchorable` was empty and `Math.min(...[])` is `Infinity`. That would have reached the ffmpeg
+expression. With one definition it is unreachable rather than untested.
 
 **The class condition is what makes this safe, and it is measured.** Classification runs per clip, not per
 source, over that clip's own tracks. Across the 47 real clips:

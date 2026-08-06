@@ -7,6 +7,7 @@ import type {
   Shot,
   ShotLayout,
   ShotTracks,
+  SourceClass,
   SourceProfile,
   StreamGeometry,
 } from "./types";
@@ -199,16 +200,134 @@ function survivingTracks(shotTracks: FaceTrack[]): FaceTrack[] {
   );
 }
 
-/** The face this shot shows inside the resolved inset, if any. Tolerant by a
- *  pixel on each edge: the rect is a median of per-shot detections and the
- *  track box is a median of per-sample boxes, so exact containment is luck. */
+/** Is this face inside the resolved inset?
+ *
+ *  Tolerant by 2px on each edge: the rect is a median of per-shot detections and
+ *  the track box is a median of per-sample boxes, so exact containment is luck.
+ *
+ *  Exported because two different questions need it - "does this shot show the
+ *  streamer" and "may this face anchor the window" - and a second copy of the
+ *  tolerance would drift from this one. The tolerance is the part that was
+ *  reasoned about; the comparison is not. */
+export function isInsideInset(track: FaceTrack, rect: CamRect): boolean {
+  return (
+    track.box.x >= rect.x - 2 &&
+    track.box.x + track.box.w <= rect.x + rect.w + 2 &&
+    track.box.y >= rect.y - 2 &&
+    track.box.y + track.box.h <= rect.y + rect.h + 2
+  );
+}
+
+/** The face this shot shows inside the resolved inset, if any. */
 function faceInInset(tracks: FaceTrack[], rect: CamRect): FaceTrack | undefined {
-  return tracks.find(
-    (t) =>
-      t.box.x >= rect.x - 2 &&
-      t.box.x + t.box.w <= rect.x + rect.w + 2 &&
-      t.box.y >= rect.y - 2 &&
-      t.box.y + t.box.h <= rect.y + rect.h + 2
+  return tracks.find((t) => isInsideInset(t, rect));
+}
+
+/**
+ * Question one: is this clip stream-shaped?
+ *
+ * The ABSOLUTE guard, unchanged, and the thing that decides `normal_face`
+ * versus `small_face` and therefore whether the stream layout is even
+ * considered.
+ *
+ * Deliberately a different function from `canAnchor` even though both read
+ * `minFaceWidth`. They answer different questions and now answer them
+ * differently; merging them back breaks the stream layout in one direction and
+ * makes a streamer's webcam an anchor in the other, which is engine-notes 7a's
+ * defect from either side.
+ */
+export function hasNormalSizedFace(
+  widestFace: number,
+  minFaceWidth: number
+): boolean {
+  return widestFace >= minFaceWidth;
+}
+
+/**
+ * Question two: may this face anchor the crop window?
+ *
+ * The guard exists for one case - a streamer's webcam inset, where centring a
+ * 9:16 window on a small face yields a truncated webcam plus a slice of chat
+ * overlay (7a, measured). Applied to every source it also refuses the two men
+ * at opposite ends of a podcast table, at 5.2% and 5.5% of frame width, and
+ * centres on the table between them. Measured at 298 seconds of 1679 delivered.
+ *
+ * So the guard is relaxed only where the case it protects cannot arise:
+ *   - the clip must classify `normal_face`. Classification runs per clip, and
+ *     both `small_face` clips in the corpus are the stream-shaped ones,
+ *     including the Booster CS2 source. This condition is what makes the webcam
+ *     unreachable as an anchor, by construction rather than by inspection.
+ *   - the face must not sit inside a resolved inset. Belt and braces: no
+ *     measured case needs it, it costs nothing because the predicate already
+ *     exists, and it closes a clip that classifies `normal_face` on a large
+ *     facecam while carrying a small inset as well.
+ *
+ * No new constant. `minFaceWidth` is unchanged at 6% of frame width.
+ */
+export function canAnchor(
+  track: FaceTrack,
+  minFaceWidth: number,
+  sourceClass: SourceClass,
+  camRect: CamRect | null
+): boolean {
+  if (track.box.w >= minFaceWidth) return true;
+  if (sourceClass !== "normal_face") return false;
+  if (camRect && isInsideInset(track, camRect)) return false;
+  return true;
+}
+
+/** What governs whether a face may anchor. Passed as one object so a caller
+ *  cannot supply the threshold and forget the class - the combination is the
+ *  rule, not the number. */
+export interface AnchorPolicy {
+  minFaceWidth: number;
+  sourceClass: SourceClass;
+  camRect: CamRect | null;
+}
+
+/**
+ * The faces this shot's window may be pointed at. THE one answer - both
+ * `buildCropPlan` and `selectGroupForShot` read it from here.
+ *
+ * Strict first, relaxed only as a fallback. The guard applies exactly as it
+ * always has whenever ANY face clears it; `canAnchor` is consulted only for a
+ * shot where nothing did.
+ *
+ * That ordering is the rule, not an optimisation, and it is what confines the
+ * change to the defect:
+ *   - The measured defect IS the empty strict set. All 298 defective seconds of
+ *     1679 are shots where no face cleared the guard, `anchorable` came back
+ *     empty and the planner centred blind - on the table between two men at
+ *     5.2% and 5.5% of frame width. A shot that already had an anchorable face
+ *     was never in the defect set and has no business moving, so here it cannot:
+ *     "every shot that already had an anchorable face keeps its existing x"
+ *     holds by construction, not by test.
+ *   - This set is not only the anchor. It also feeds `trySplit` and the
+ *     fits-in-one-window bbox. Relaxing it unconditionally let a 30px speck at
+ *     0.94% of frame width into `trySplit`'s DOMINANCE_LEAD check beside two
+ *     real 300px faces, where its near-perfect centrality (0.978) lifted third
+ *     place to 0.3968 against 0.4855 for each real face - 1.5 * 0.3968 > 0.4855,
+ *     no clear lead, and a legitimate split collapsed to a single shot showing
+ *     one of the two people. Behind the fallback the speck is reachable only
+ *     when both real faces are already absent, so it can never be in that
+ *     comparison, and a persistent background bystander can never widen the
+ *     bbox while a real speaker is over 6%.
+ *
+ * One function and not two filters, because the two used to be written out
+ * separately and had to agree: when they disagreed, `selectGroupForShot`
+ * returned a group while the caller's set was empty, `Math.min(...[])` gave
+ * `Infinity`, and the plan carried `x: NaN` into the filtergraph. Sharing the
+ * answer makes that unreachable rather than merely untested.
+ */
+export function anchorableTracks(
+  tracks: FaceTrack[],
+  policy: AnchorPolicy
+): FaceTrack[] {
+  const surviving = survivingTracks(tracks);
+  const strict = surviving.filter((t) => t.box.w >= policy.minFaceWidth);
+  if (strict.length > 0) return strict;
+  return surviving.filter((t) =>
+    canAnchor(t, policy.minFaceWidth, policy.sourceClass, policy.camRect)
   );
 }
 
@@ -224,16 +343,19 @@ function faceInInset(tracks: FaceTrack[], rect: CamRect): FaceTrack | undefined 
  * Knows nothing about the split layout. `buildCropPlan` tries a split between
  * the two branches below, and a shot that splits is not a `single` shot, so
  * nothing downstream asks this about it.
+ *
+ * The min-face guard is no longer absolute here: `anchorableTracks` relaxes it
+ * for a shot where no face cleared it at all, which is why the policy and not
+ * the bare threshold is what this takes. The set itself comes from there and is
+ * not re-derived, for the same reason this function exists at all.
  */
 export function selectGroupForShot(
   tracks: FaceTrack[],
-  minFaceWidth: number,
+  policy: AnchorPolicy,
   cropW: number,
   sourceWidth: number
 ): FaceTrack[] | null {
-  const anchorable = survivingTracks(tracks).filter(
-    (t) => t.box.w >= minFaceWidth
-  );
+  const anchorable = anchorableTracks(tracks, policy);
   if (anchorable.length === 0) return null;
   const minX = Math.min(...anchorable.map((t) => t.box.x));
   const maxX = Math.max(...anchorable.map((t) => t.box.x + t.box.w));
@@ -316,7 +438,7 @@ export function buildCropPlan(
 
   if (allTracks.length === 0) {
     profile = { class: "faceless", faceFrac };
-  } else if (widestFace >= minFaceWidth) {
+  } else if (hasNormalSizedFace(widestFace, minFaceWidth)) {
     // Anything at or above the floor keeps the existing single/split rules.
     profile = { class: "normal_face", faceFrac };
   } else if (!camRect) {
@@ -359,6 +481,14 @@ export function buildCropPlan(
     }
   }
 
+  // The anchor rule. `profile` is settled before this point, which is what lets
+  // the rule read the class. Built once so the two reads below cannot disagree.
+  const anchorPolicy: AnchorPolicy = {
+    minFaceWidth,
+    sourceClass: profile.class,
+    camRect,
+  };
+
   // The group each shot's `single` window was anchored on, recorded as the
   // layouts are built so the trajectory layer below cannot re-run selection and
   // silently follow someone else.
@@ -391,8 +521,11 @@ export function buildCropPlan(
     // Measured 3.4% of frame width on a 1280x720 stream VOD, against 15-30%
     // for podcasts and facecams. A face this small is a webcam inset or a
     // bystander; centring a 9:16 window on it yields a truncated inset plus
-    // whatever overlay sits under it (spec §4.1).
-    const anchorable = tracks.filter((t) => t.box.w >= minFaceWidth);
+    // whatever overlay sits under it (spec §4.1). Scoped by `anchorableTracks`
+    // to the shots where that can actually be what a small face means, and read
+    // from there rather than filtered here so that this set and the one
+    // `selectGroupForShot` works on are the same set - see there.
+    const anchorable = anchorableTracks(tracks, anchorPolicy);
     // WHOM the window follows comes from `selectGroupForShot` and nowhere else.
     // Recording a group chosen by a copy of that logic would let the planner and
     // the containment metric drift apart, which is the whole reason the function
@@ -408,7 +541,7 @@ export function buildCropPlan(
     // first pass the second sees an empty list and returns one. The evidence is
     // the suite: "ignores 1-sample noise tracks" and "drops a stray low-sample
     // track" now run through both passes and still land on their original x.
-    const group = selectGroupForShot(tracks, minFaceWidth, cropW, sourceWidth);
+    const group = selectGroupForShot(tracks, anchorPolicy, cropW, sourceWidth);
     if (!group) {
       return { start: shot.start, end: shot.end, layout: "center", x: centerX };
     }

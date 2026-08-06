@@ -3,8 +3,11 @@ import {
   attachTrajectories,
   buildCropPlan,
   buildTargetSamples,
+  canAnchor,
   cropWidthFor,
   evenClamp,
+  hasNormalSizedFace,
+  isInsideInset,
   planLayoutCounts,
   selectGroupForShot,
   sliceCropPlan,
@@ -438,8 +441,51 @@ describe("anchoring when no window holds every face", () => {
   });
 
   it("still degrades to centre for the shots that have nothing to anchor on", () => {
-    // Per shot, not per clip: shot 1 is an establishing wide with only a
-    // sub-floor face, and must keep the centre crop while shot 0 anchors.
+    // Per shot, not per clip: shot 1 is an establishing wide with no face at
+    // all, and must keep the centre crop while shot 0 anchors.
+    //
+    // Shot 1 used to carry a 40px face and still centre, because the min-face
+    // guard refused every face below 6% on every source. That is the defect the
+    // anchor policy removes: on a `normal_face` clip a sub-guard face is now an
+    // anchor, and that case has moved to its own test below. What is under test
+    // HERE is only that the degrade is decided per shot and not per clip.
+    const plan = buildCropPlan(
+      [
+        { start: 0, end: 10 },
+        { start: 10, end: 20 },
+      ],
+      [
+        {
+          shotIndex: 0,
+          tracks: [track(200, 260), track(1200, 200, { id: 1 }), track(1500, 200, { id: 2 })],
+          camRect: null,
+        },
+        { shotIndex: 1, tracks: [], camRect: null },
+      ],
+      W,
+      H
+    );
+    expect(plan!.shots).toEqual([
+      { start: 0, end: 10, layout: "single", x: 1146 },
+      { start: 10, end: 20, layout: "center", x: 656 },
+    ]);
+  });
+
+  it("anchors a sub-guard face on a normal_face clip instead of centring on furniture", () => {
+    // The measured defect, at the level that ships it: 298 seconds of 1679
+    // delivered framed on nothing while a person was on screen. Shot 0 puts the
+    // clip in `normal_face`; shot 1's only face is 40px - 2.1% of a 1920 frame,
+    // below the 115.2px guard - and used to be refused outright, leaving that
+    // shot centred at 656 on whatever sat between the people.
+    //
+    // Face 900..940, centre 920, so the window lands at 920 - 304 = 616.
+    //
+    // ASSERT THE EXACT x, not `layout === "single"`. Mutation testing: reverting
+    // `buildCropPlan`'s set to the strict filter while `selectGroupForShot` keeps
+    // the relaxed one does not restore the old behaviour, it emits `x: NaN` -
+    // the group is non-empty so the layout is still `single`, but the caller's
+    // own set is empty and `Math.min(...[])` is `Infinity`. A layout assertion
+    // passes on a plan that would put NaN in the filtergraph.
     const plan = buildCropPlan(
       [
         { start: 0, end: 10 },
@@ -458,7 +504,7 @@ describe("anchoring when no window holds every face", () => {
     );
     expect(plan!.shots).toEqual([
       { start: 0, end: 10, layout: "single", x: 1146 },
-      { start: 10, end: 20, layout: "center", x: 656 },
+      { start: 10, end: 20, layout: "single", x: 616 },
     ]);
   });
 });
@@ -719,6 +765,29 @@ describe("min-face guard", () => {
     expect(plan!.shots).toEqual([
       { start: 0, end: 30, layout: "split", top: { x: 0 }, bottom: { x: 1984 } },
     ]);
+  });
+
+  it("keeps a speck invisible while a face above the guard exists", () => {
+    // The fallback boundary, and the load-bearing half of the anchor policy:
+    // the relaxed set is reached ONLY when the strict set is empty, so a shot
+    // that already had an anchorable face is bit-for-bit what it was.
+    //
+    // 300px face at 200..500 anchors at (200 + 500) / 2 - 304 = 46. The 30px
+    // speck at 680..710 is 1.6% of the frame, below the 115.2px guard, and near
+    // enough to fit the same 608 window: admitted, it would widen the bbox to
+    // 200..710 and drag the window to 152, off the only real person in frame.
+    // Both calls must give 46.
+    const withoutSpeck = buildCropPlan(oneShot, withTracks([track(200, 300)]), W, H);
+    const withSpeck = buildCropPlan(
+      oneShot,
+      withTracks([track(200, 300), track(680, 30, { id: 1 })]),
+      W,
+      H
+    );
+    expect(withoutSpeck!.shots).toEqual([
+      { start: 0, end: 30, layout: "single", x: 46 },
+    ]);
+    expect(withSpeck!.shots).toEqual(withoutSpeck!.shots);
   });
 
   it("treats the floor as exclusive, and places it to within a pixel", () => {
@@ -1029,23 +1098,38 @@ describe("stream layout", () => {
   });
 });
 
+// Written before the anchor policy existed, when the second argument was the
+// bare `minFaceWidth` number and the guard applied to every source. They are
+// unchanged in substance: `normal_face` with no resolved rect is the case the
+// relaxation cannot alter for a face at or above the guard, so this policy
+// reproduces exactly what each of these was testing.
 describe("selectGroupForShot", () => {
+  const policy = {
+    minFaceWidth: 40,
+    sourceClass: "normal_face" as const,
+    camRect: null,
+  };
   const t = (id: number, x: number, w = 60) => ({
     id, box: { x, y: 0, w, h: 60 }, score: 0.9, samples: 10, mouthActivity: 0.05,
   });
 
   it("returns every anchorable face when they all fit one window", () => {
-    const group = selectGroupForShot([t(0, 100), t(1, 200)], 40, 406, 1280);
+    const group = selectGroupForShot([t(0, 100), t(1, 200)], policy, 406, 1280);
     expect(group!.map((g) => g.id).sort()).toEqual([0, 1]);
   });
 
   it("falls back to bestFaceGroup when they do not fit", () => {
-    const group = selectGroupForShot([t(0, 0), t(1, 600), t(2, 660)], 40, 406, 1280);
+    const group = selectGroupForShot([t(0, 0), t(1, 600), t(2, 660)], policy, 406, 1280);
     expect(group!.map((g) => g.id).sort()).toEqual([1, 2]);
   });
 
   it("returns null when no face clears the min-face guard", () => {
-    expect(selectGroupForShot([t(0, 100, 10)], 40, 406, 1280)).toBeNull();
+    // A `small_face` clip, because on a `normal_face` clip with no inset the
+    // relaxed rule now lets a 10px face anchor - which is the point of the
+    // change, and is pinned in "selectGroupForShot under the anchor policy".
+    expect(
+      selectGroupForShot([t(0, 100, 10)], { ...policy, sourceClass: "small_face" }, 406, 1280)
+    ).toBeNull();
   });
 
   it("drops the tracks the per-shot noise floor drops", () => {
@@ -1058,10 +1142,10 @@ describe("selectGroupForShot", () => {
     // 2 clears MIN_TRACK_SAMPLES but not 30% of the dominant track's 10.
     const transient = { ...t(2, 800), samples: 2 };
     expect(
-      selectGroupForShot([dominant, oneSample], 40, 406, 1280)!.map((g) => g.id)
+      selectGroupForShot([dominant, oneSample], policy, 406, 1280)!.map((g) => g.id)
     ).toEqual([0]);
     expect(
-      selectGroupForShot([dominant, transient], 40, 406, 1280)!.map((g) => g.id)
+      selectGroupForShot([dominant, transient], policy, 406, 1280)!.map((g) => g.id)
     ).toEqual([0]);
   });
 
@@ -1070,8 +1154,8 @@ describe("selectGroupForShot", () => {
     // cannot be lost now that the measurement script reuses this selection.
     const quiet = [t(0, 0), t(1, 600), t(2, 660)];
     const loud = quiet.map((x, i) => ({ ...x, mouthActivity: i === 0 ? 0.9 : 0.01 }));
-    expect(selectGroupForShot(loud, 40, 406, 1280)!.map((g) => g.id)).toEqual(
-      selectGroupForShot(quiet, 40, 406, 1280)!.map((g) => g.id)
+    expect(selectGroupForShot(loud, policy, 406, 1280)!.map((g) => g.id)).toEqual(
+      selectGroupForShot(quiet, policy, 406, 1280)!.map((g) => g.id)
     );
   });
 });
@@ -1373,5 +1457,107 @@ describe("sliceCropPlan with trajectories", () => {
     };
     const out = sliceCropPlan(mixed, 5, 15)!;
     expect("xs" in out.shots[0]).toBe(false);
+  });
+});
+
+describe("isInsideInset", () => {
+  const rect = { x: 100, y: 50, w: 200, h: 150, score: 5 };
+  const face = (x: number, y: number, w = 40, h = 40) => ({
+    id: 0, box: { x, y, w, h }, score: 0.9, samples: 5, mouthActivity: 0.05,
+  });
+
+  it("accepts a face wholly inside", () => {
+    expect(isInsideInset(face(150, 80), rect)).toBe(true);
+  });
+
+  it("rejects a face wholly outside", () => {
+    expect(isInsideInset(face(900, 80), rect)).toBe(false);
+  });
+
+  it("rejects a face that only half overlaps", () => {
+    expect(isInsideInset(face(280, 80), rect)).toBe(false);
+  });
+
+  it("tolerates 2px of slop on every edge, because both boxes are medians", () => {
+    // exactly 2px outside on the left and top, and 2px past the right and bottom
+    expect(isInsideInset({ ...face(98, 48), box: { x: 98, y: 48, w: 204, h: 154 } }, rect))
+      .toBe(true);
+  });
+
+  it("rejects 3px of slop", () => {
+    expect(isInsideInset({ ...face(97, 47), box: { x: 97, y: 47, w: 206, h: 156 } }, rect))
+      .toBe(false);
+  });
+});
+
+describe("hasNormalSizedFace", () => {
+  it("is true at and above the guard", () => {
+    expect(hasNormalSizedFace(115, 115)).toBe(true);
+    expect(hasNormalSizedFace(300, 115)).toBe(true);
+  });
+  it("is false below it", () => {
+    expect(hasNormalSizedFace(114, 115)).toBe(false);
+    expect(hasNormalSizedFace(0, 115)).toBe(false);
+  });
+});
+
+describe("canAnchor", () => {
+  const rect = { x: 0, y: 0, w: 300, h: 200, score: 5 };
+  const face = (x: number, w: number) => ({
+    id: 0, box: { x, y: 10, w, h: w }, score: 0.9, samples: 9, mouthActivity: 0.05,
+  });
+  const GUARD = 115;
+
+  it("accepts any face at or above the guard, whatever the class", () => {
+    for (const cls of ["normal_face", "small_face", "stream", "faceless"] as const) {
+      expect(canAnchor(face(500, 200), GUARD, cls, null)).toBe(true);
+    }
+  });
+
+  it("accepts a small face on a normal_face clip with no inset", () => {
+    // The measured defect: two men at 5.2% and 5.5% of a 1920 frame, both
+    // refused, so the window centred on the table between them.
+    expect(canAnchor(face(435, 101), GUARD, "normal_face", null)).toBe(true);
+  });
+
+  it("refuses a small face on a small_face clip", () => {
+    // Stream-shaped. Both small_face clips in the corpus are stream_no_rect,
+    // including the Booster CS2 source, and this is what stops the streamer's
+    // 3.1% webcam face becoming an anchor.
+    expect(canAnchor(face(435, 60), GUARD, "small_face", null)).toBe(false);
+  });
+
+  it("refuses a small face on a stream clip", () => {
+    expect(canAnchor(face(435, 60), GUARD, "stream", null)).toBe(false);
+  });
+
+  it("refuses a small face that sits inside the inset, even on normal_face", () => {
+    expect(canAnchor(face(20, 60), GUARD, "normal_face", rect)).toBe(false);
+  });
+
+  it("accepts a small face outside the inset on a normal_face clip", () => {
+    expect(canAnchor(face(900, 60), GUARD, "normal_face", rect)).toBe(true);
+  });
+});
+
+describe("selectGroupForShot under the anchor policy", () => {
+  const t = (id: number, x: number, w = 60) => ({
+    id, box: { x, y: 0, w, h: 60 }, score: 0.9, samples: 10, mouthActivity: 0.05,
+  });
+  const strict = { minFaceWidth: 115, sourceClass: "small_face" as const, camRect: null };
+  const relaxed = { minFaceWidth: 115, sourceClass: "normal_face" as const, camRect: null };
+
+  it("returns null on a stream-shaped clip whose faces are all small", () => {
+    expect(selectGroupForShot([t(0, 435, 101), t(1, 1481, 106)], strict, 608, 1920)).toBeNull();
+  });
+
+  it("anchors on those same faces when the clip is normal_face", () => {
+    const group = selectGroupForShot([t(0, 435, 101), t(1, 1481, 106)], relaxed, 608, 1920);
+    expect(group).not.toBeNull();
+    expect(group!.length).toBeGreaterThan(0);
+  });
+
+  it("still returns null when there are no tracks at all", () => {
+    expect(selectGroupForShot([], relaxed, 608, 1920)).toBeNull();
   });
 });
