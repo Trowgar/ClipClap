@@ -2,6 +2,8 @@ import type {
   CamRect,
   CropPlan,
   FaceTrack,
+  Keyframe,
+  PathSample,
   Shot,
   ShotLayout,
   ShotTracks,
@@ -9,6 +11,12 @@ import type {
   StreamGeometry,
 } from "./types";
 import { DEFAULT_PLAN_OPTIONS, type PlanOptions } from "./options";
+import {
+  DEFAULT_CAMERA,
+  solveCamera,
+  type CameraConfig,
+  type TargetSample,
+} from "./camera";
 import type { CamRectResolution } from "./cam-rect";
 import {
   freeBand,
@@ -16,6 +24,11 @@ import {
   streamCamX,
   streamContentX,
 } from "./stream-geometry";
+// These three moved to `geometry.ts` so that `camera.ts` can use them without
+// importing this module, which will import `camera.ts` back. Re-exported here
+// so that every existing importer of `plan.ts` keeps working unchanged.
+import { cropWidthFor, evenClamp, tileWidthFor } from "./geometry";
+export { cropWidthFor, evenClamp, tileWidthFor };
 
 // Layout constants - tuned via fixtures, deliberately NOT env knobs (spec §7).
 const FIT_MARGIN = 0.9; // face bbox must fit in 90% of the crop window
@@ -27,19 +40,6 @@ const MAX_PLAN_SHOTS = 90; // ffmpeg av_expr nesting fails at ~100 segments; hea
 const W_AREA = 0.5;
 const W_CENTER = 0.3;
 const W_MOUTH = 0.2;
-
-export function cropWidthFor(sourceHeight: number): number {
-  return 2 * Math.round((sourceHeight * 9) / 16 / 2);
-}
-
-export function tileWidthFor(sourceHeight: number): number {
-  return 2 * Math.round((sourceHeight * 9) / 8 / 2);
-}
-
-export function evenClamp(x: number, cropW: number, sourceWidth: number): number {
-  const clamped = Math.min(Math.max(0, x), sourceWidth - cropW);
-  return 2 * Math.round(clamped / 2);
-}
 
 export function dominance(
   t: FaceTrack,
@@ -212,6 +212,80 @@ function faceInInset(tracks: FaceTrack[], rect: CamRect): FaceTrack | undefined 
   );
 }
 
+/**
+ * The face group a shot's window is anchored on, or null when the shot has no
+ * anchorable face at all.
+ *
+ * Extracted so that `buildCropPlan` and the containment metric cannot disagree
+ * about which faces the window was pointed at. Runs on the MEDIAN boxes and is
+ * called exactly once per shot: this layer changes how the window moves, never
+ * whom it follows.
+ *
+ * Knows nothing about the split layout. `buildCropPlan` tries a split between
+ * the two branches below, and a shot that splits is not a `single` shot, so
+ * nothing downstream asks this about it.
+ */
+export function selectGroupForShot(
+  tracks: FaceTrack[],
+  minFaceWidth: number,
+  cropW: number,
+  sourceWidth: number
+): FaceTrack[] | null {
+  const anchorable = survivingTracks(tracks).filter(
+    (t) => t.box.w >= minFaceWidth
+  );
+  if (anchorable.length === 0) return null;
+  const minX = Math.min(...anchorable.map((t) => t.box.x));
+  const maxX = Math.max(...anchorable.map((t) => t.box.x + t.box.w));
+  if (maxX - minX <= FIT_MARGIN * cropW) return anchorable;
+  return bestFaceGroup(anchorable, cropW, sourceWidth);
+}
+
+/**
+ * Where the anchored group's centre sits at each detector sample inside
+ * `[spanStart, spanEnd]`.
+ *
+ * Every member contributes at every sample time. When a member has no
+ * detection at some time its last known box is carried forward - its first
+ * known box, before it appears at all. Dropping the member instead would
+ * shrink the bounding box and move the target with no change of selection,
+ * which is the confound the frozen-anchor rule exists to prevent, arriving
+ * through the back door.
+ */
+export function buildTargetSamples(
+  group: FaceTrack[],
+  spanStart: number,
+  spanEnd: number
+): TargetSample[] {
+  const withPath = group.filter((t) => t.path && t.path.length > 0);
+  if (withPath.length === 0) return [];
+  const times = [...new Set(withPath.flatMap((t) => t.path!.map((p) => p.t)))]
+    .filter((t) => t >= spanStart && t <= spanEnd)
+    .sort((a, b) => a - b);
+
+  return times.map((t) => {
+    let minX = Infinity;
+    let maxX = -Infinity;
+    for (const track of withPath) {
+      const box = boxAt(track.path!, t);
+      minX = Math.min(minX, box.x);
+      maxX = Math.max(maxX, box.x + box.w);
+    }
+    return { t, cx: (minX + maxX) / 2 };
+  });
+}
+
+/** The track's box at time `t`: the exact sample if there is one, otherwise the
+ *  most recent earlier sample, otherwise the earliest sample. */
+function boxAt(path: PathSample[], t: number): PathSample {
+  let chosen = path[0];
+  for (const p of path) {
+    if (p.t > t) break;
+    chosen = p;
+  }
+  return chosen;
+}
+
 export function buildCropPlan(
   shots: Shot[],
   tracksByShot: ShotTracks[],
@@ -285,6 +359,10 @@ export function buildCropPlan(
     }
   }
 
+  // The group each shot's `single` window was anchored on, recorded as the
+  // layouts are built so the trajectory layer below cannot re-run selection and
+  // silently follow someone else.
+  const groupsByShot = new Map<number, FaceTrack[]>();
   const layouts = shots.map((shot, i): ShotLayout => {
     // Keep only tracks that clear the noise floor AND are seen often enough
     // relative to the dominant track.
@@ -315,13 +393,30 @@ export function buildCropPlan(
     // bystander; centring a 9:16 window on it yields a truncated inset plus
     // whatever overlay sits under it (spec §4.1).
     const anchorable = tracks.filter((t) => t.box.w >= minFaceWidth);
-    if (anchorable.length === 0) {
+    // WHOM the window follows comes from `selectGroupForShot` and nowhere else.
+    // Recording a group chosen by a copy of that logic would let the planner and
+    // the containment metric drift apart, which is the whole reason the function
+    // was extracted. The fits test below stays here: it decides the LAYOUT, not
+    // the anchor. Null exactly when `anchorable` is empty, so it also owns the
+    // min-face guard's verdict.
+    //
+    // It re-runs `survivingTracks` over tracks that have already been through
+    // it. Checked, not assumed: the second pass is a no-op. The track holding
+    // `maxSamples` always clears both clauses of its own filter (`>= 2` once
+    // `maxSamples >= 2`, and `>= 0.3 * itself`), so `maxSamples` is unchanged on
+    // the second pass and every survivor survives again; when nothing clears the
+    // first pass the second sees an empty list and returns one. The evidence is
+    // the suite: "ignores 1-sample noise tracks" and "drops a stray low-sample
+    // track" now run through both passes and still land on their original x.
+    const group = selectGroupForShot(tracks, minFaceWidth, cropW, sourceWidth);
+    if (!group) {
       return { start: shot.start, end: shot.end, layout: "center", x: centerX };
     }
     const minX = Math.min(...anchorable.map((t) => t.box.x));
     const maxX = Math.max(...anchorable.map((t) => t.box.x + t.box.w));
     if (maxX - minX <= FIT_MARGIN * cropW) {
       const x = evenClamp((minX + maxX) / 2 - cropW / 2, cropW, sourceWidth);
+      groupsByShot.set(i, group);
       return { start: shot.start, end: shot.end, layout: "single", x };
     }
     const split = trySplit(anchorable, tileW, sourceWidth, sourceHeight);
@@ -330,19 +425,23 @@ export function buildCropPlan(
     // faces one window CAN hold rather than centring blind on the furniture
     // between them (engine-notes §7b: 44% of shot time, and in 4 of 12 clips
     // the nearest face was outside the centred window altogether).
+    // Same `group` the fits branch above would have used: one selection per
+    // shot, decided in one place, driving both `x` and the trajectory.
+    groupsByShot.set(i, group);
     return {
       start: shot.start,
       end: shot.end,
       layout: "single",
-      x: windowXFor(
-        bestFaceGroup(anchorable, cropW, sourceWidth),
-        cropW,
-        sourceWidth
-      ),
+      x: windowXFor(group, cropW, sourceWidth),
     };
   });
 
-  const merged = mergeAdjacentLayouts(layouts, sourceWidth);
+  // Merge decides on `x` alone and is byte-identical to v2, so no motion
+  // consideration can change WHICH shots merge.
+  const mergedByX = mergeAdjacentLayouts(layouts, sourceWidth);
+  const merged = opts.motion
+    ? attachTrajectories(mergedByX, shots, groupsByShot, cropW, sourceWidth, opts.camera)
+    : mergedByX;
   // piecewiseX nests one if() per shot; ffmpeg's av_expr parser fails at 100
   // nested segments ("Missing ')' or too many args"). Bail so the orchestrator
   // falls back to a plain centered crop rather than emitting a broken graph.
@@ -351,7 +450,13 @@ export function buildCropPlan(
     // v2 exists to carry stream geometry; a v2 plan without it would be a
     // representable-but-invalid state every consumer would have to defend
     // against.
-    version: streamGeom ? 2 : 1,
+    // v3 iff a trajectory is actually present. A motion-enabled run that
+    // produced no movement stays v2/v1 and is byte-identical to legacy.
+    version: merged.some((s) => s.layout === "single" && s.xs)
+      ? 3
+      : streamGeom
+        ? 2
+        : 1,
     engine: "faces",
     source: { width: sourceWidth, height: sourceHeight },
     profile,
@@ -394,6 +499,100 @@ export function mergeAdjacentLayouts(
   return merged;
 }
 
+/**
+ * Attaches a trajectory to every `single` span that earns one, AFTER merging.
+ *
+ * Order matters. `mergeAdjacentLayouts` keeps the FIRST shot's geometry, so a
+ * trajectory computed per detector shot and then merged would have every
+ * trajectory but the first discarded - re-freezing the camera over exactly the
+ * merged spans that are longest. Concatenating separately-solved trajectories
+ * is also wrong: they meet at a seam with a discontinuity that does not exist
+ * today. So the solver runs ONCE per merged span.
+ *
+ * `x` is never touched.
+ */
+export function attachTrajectories<T extends ShotLayout>(
+  merged: T[],
+  shots: Shot[],
+  groupsByShot: Map<number, FaceTrack[]>,
+  cropW: number,
+  sourceWidth: number,
+  camera: CameraConfig = DEFAULT_CAMERA
+): (T & { xs?: Keyframe[] })[] {
+  // Generic in the element type only so that a caller holding a narrower type
+  // than the full `ShotLayout` union - a test with a `single` literal, say -
+  // gets that type back with `xs` on it, instead of a union whose other arms
+  // have no `x` to read. Runtime behaviour is exactly the non-generic version.
+  return merged.map((span) => {
+    if (span.layout !== "single") return span as T & { xs?: Keyframe[] };
+    // Each DETECTOR shot overlapping this merged span contributes samples from
+    // its OWN selected group, over its own time range clipped to the span.
+    //
+    // Not a union of every group: carry-forward would then place a face from an
+    // unrelated shot into the bounding box at a time it was never on screen,
+    // moving the target with no change of selection.
+    const targets: TargetSample[] = [];
+    for (const [i, shot] of shots.entries()) {
+      if (!(shot.end > span.start && shot.start < span.end)) continue;
+      const group = groupsByShot.get(i);
+      if (!group) continue;
+      targets.push(
+        ...buildTargetSamples(
+          group,
+          Math.max(shot.start, span.start),
+          Math.min(shot.end, span.end)
+        )
+      );
+    }
+    const xs = solveCamera(
+      targets, span.x, cropW, sourceWidth, span.start, span.end, camera
+    );
+    // Writing `x: xs[0].x` here would be inert TODAY - `solveCamera` seeds its
+    // first keyframe with the legacy x and `dropCollinear` always keeps it, so
+    // `xs[0].x === span.x` by construction, and mutation testing confirmed no
+    // test can tell the two apart. It stays out anyway, because that identity
+    // is a property of the SOLVER, not of this function: if the solver ever
+    // seeded from somewhere else, the assignment would start overwriting the
+    // legacy x and the rollback story would break with nothing to catch it.
+    return (xs ? { ...span, xs } : span) as T & { xs?: Keyframe[] };
+  });
+}
+
+/** Re-windows a trajectory to `[start, end]`, expressed relative to the new
+ *  start. The boundary values are INTERPOLATED rather than copied from the
+ *  nearest keyframe: a slice landing mid-ramp would otherwise begin at a
+ *  position the camera did not occupy at that moment, and the trimmed clip
+ *  would open on a jump the original never had. */
+export function sliceKeyframes(
+  keys: Keyframe[],
+  start: number,
+  end: number
+): Keyframe[] {
+  const at = (t: number): number => {
+    if (t <= keys[0].t) return keys[0].x;
+    const last = keys[keys.length - 1];
+    if (t >= last.t) return last.x;
+    for (let i = 1; i < keys.length; i++) {
+      const a = keys[i - 1];
+      const b = keys[i];
+      if (t <= b.t) {
+        const span = b.t - a.t;
+        if (span <= 0) return b.x;
+        return a.x + ((b.x - a.x) * (t - a.t)) / span;
+      }
+    }
+    return last.x;
+  };
+  const inner = keys
+    .filter((k) => k.t > start && k.t < end)
+    .map((k) => ({ t: k.t - start, x: k.x }));
+  return [
+    { t: 0, x: at(start) },
+    ...inner,
+    { t: end - start, x: at(end) },
+  ];
+}
+
 /** Re-window a stored plan to a [start, end] sub-range of the same clip
  *  (mirror of sliceCues). Null when nothing overlaps or version is unknown. */
 export function sliceCropPlan(
@@ -403,7 +602,7 @@ export function sliceCropPlan(
 ): CropPlan | null {
   if (
     !plan ||
-    (plan.version !== 1 && plan.version !== 2) ||
+    (plan.version !== 1 && plan.version !== 2 && plan.version !== 3) ||
     !Array.isArray(plan.shots) ||
     !plan.source ||
     typeof plan.source.width !== "number" ||
@@ -414,11 +613,34 @@ export function sliceCropPlan(
   }
   const shots = plan.shots
     .filter((s) => s.end > start && s.start < end)
-    .map((s) => ({
-      ...s,
-      start: Math.max(0, s.start - start),
-      end: Math.min(end - start, s.end - start),
-    }));
+    .map((s) => {
+      const shifted = {
+        ...s,
+        start: Math.max(0, s.start - start),
+        end: Math.min(end - start, s.end - start),
+      };
+      // `xs` only ever exists on a `single` shot, and only on a v3 plan where
+      // the camera actually moved. Everything else - center, split, stream, and
+      // a still `single` - falls straight through with just its bounds shifted,
+      // and must NOT gain an `xs` key it never had: a plan is compared against
+      // its v1/v2 self to prove "flag off equals today", and an empty-but-
+      // present trajectory would break that comparison for no gain.
+      const xs = "xs" in s ? s.xs : undefined;
+      if (s.layout !== "single" || !xs || xs.length === 0) return shifted;
+      // Keyframe `t` shares the shot's CLIP-relative timebase (attachTrajectories
+      // hands solveCamera the span bounds, not zero), so the trajectory has to be
+      // re-windowed to the part of THIS shot the trim actually keeps, then moved
+      // into the new clip's timebase. For a shot that spans the whole trim those
+      // two steps collapse to "subtract start", but a shot clipped by the trim's
+      // leading edge would otherwise emit keyframes that run past its own end.
+      const from = Math.max(s.start, start);
+      const to = Math.min(s.end, end);
+      const rewound = sliceKeyframes(xs, from, to).map((k) => ({
+        t: k.t + shifted.start,
+        x: k.x,
+      }));
+      return { ...shifted, xs: rewound };
+    });
   if (shots.length === 0) return null;
   return { ...plan, shots };
 }

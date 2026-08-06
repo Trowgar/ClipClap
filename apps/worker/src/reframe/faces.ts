@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import type { ReframeConfig } from "./config";
-import type { CamRect, FaceTrack, Shot, ShotTracks } from "./types";
+import type { CamRect, FaceTrack, PathSample, Shot, ShotTracks } from "./types";
 
 import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
 const execFileAsync = promisify(execFile);
@@ -55,12 +55,30 @@ export function parseDetectorOutput(raw: string, shotCount: number): ShotTracks[
       ) {
         throw new Error("detector_invalid_json");
       }
+      // An ABSENT path is fine - an older sidecar must not break a newer
+      // worker, the same rule camRect follows below. A PRESENT one is
+      // validated as strictly as the track itself, because a NaN reaching the
+      // camera solver would produce a crop expression ffmpeg accepts and
+      // renders as garbage.
+      let path: PathSample[] | undefined;
+      const rawPath = (t as { path?: unknown }).path;
+      if (rawPath != null) {
+        if (!Array.isArray(rawPath)) throw new Error("detector_invalid_json");
+        path = rawPath.map((p) => {
+          const s = p as Record<string, unknown>;
+          if (!num(s.t) || !num(s.x) || !num(s.y) || !num(s.w) || !num(s.h)) {
+            throw new Error("detector_invalid_json");
+          }
+          return { t: s.t, x: s.x, y: s.y, w: s.w, h: s.h };
+        });
+      }
       return {
         id: tr.id,
         box: { x: tr.box.x, y: tr.box.y, w: tr.box.w, h: tr.box.h },
         score: tr.score,
         samples: tr.samples,
         mouthActivity: tr.mouthActivity,
+        ...(path ? { path } : {}),
       };
     });
     // An ABSENT camRect is null, not a violation: an older sidecar must not

@@ -58,7 +58,7 @@ export async function downloadVideo(
  *  Retried only when the exit actually MOVED: `rotated` is false on a cooldown
  *  hit or an unreachable control server, and re-downloading through the same
  *  refused address would burn minutes to reproduce the same error. */
-async function runYtDlpWithRotation(
+export async function runYtDlpWithRotation(
   args: string[],
   // The concrete shape the caller passes, NOT `Parameters<typeof
   // execFileAsync>[2]`: the wide type includes the buffer-encoding overloads,

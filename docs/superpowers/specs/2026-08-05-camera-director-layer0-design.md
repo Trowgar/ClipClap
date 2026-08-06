@@ -72,14 +72,40 @@ Two further limits, stated because they are easy to forget: the 20 clips are **1
 source**, and "no face detected" is not the same as "framing failure" - which is why 6.3 introduces a
 narrower primary metric.
 
-### 2.5 There is no corpus at all
+### 2.5 The corpus, and a wrong claim this section used to make
 
-**All 21 jobs have `sourceKey = null`.** Every source video has been swept, including the sitcom that §7b and
-§7c rest on - swept on 2026-08-05, after those measurements ran. The CS2 VOD went on 08-03. So the 12-clip
-replay that reproduced all shipped plans byte for byte **cannot be re-run**, and `eval-reframe.ts` has nothing
-to point at.
+**Corrected 2026-08-06.** This section previously read "There is no corpus at all - all 21 jobs have
+`sourceKey = null`, every source video has been swept, including the sitcom that §7b and §7c rest on."
+**That was wrong, and it was wrong because the query was wrong.** `sourceKey` is a legacy column that is null
+on every row. The live columns are `sourceArtifactKey` and `normalizedArtifactKey`, and **17 jobs carry
+them**. `sourceSweptAt` does not mean "the source was deleted" either - the sweep's redundant-copy rule only
+removes a second copy when the two keys differ, which is exactly the trick `eval-render-set.ts` documents
+when it sets them equal on purpose.
 
-This is the reason section 6 begins with building a corpus rather than with a test.
+Every source checked on 2026-08-06 was still present in R2, the sitcom included. The error is recorded rather
+than quietly edited out because it produced a confident, load-bearing claim in a committed spec, and because
+the correction pattern - a null column read as absence of the thing rather than absence of that column's use
+- is a cheap mistake to repeat.
+
+**What the corpus actually is.** Seven 90-second fixtures in `apps/worker/.corpus/`, cut from the owner's own
+jobs on 2026-08-06 rather than from guessed public videos. The directory is gitignored and sits outside R2
+and outside the Job table, so the retention sweep cannot reach it; `apps/worker/assets/reframe/corpus.json`
+carries the provenance so an item can be rebuilt if its file is lost.
+
+| item | material | what it exercises |
+|---|---|---|
+| `podcast-2p` | close two-person interview, dark studio, 1080p25 | the core case |
+| `podcast-2p-b` | second interview, different studio | guards against tuning to one set |
+| `lockedoff-1p` | one frame of `podcast-2p` held for 90s | **the false-positive control** |
+| `stream-cam` | real CS2 with a two-person webcam inset, 1080p60 | the stream layout, on real material |
+| `vlog-arctic` | wide landscape, three distant figures | faceless guard and the small-face path |
+| `vlog-travel` | object close-up, no face | pure faceless guard |
+| `sitcom-multi` | the 640x352 set §7b and §7c measured | continuity with the existing record |
+
+**The control is synthetic on purpose.** A single frame held for 90 seconds means the subject is literally
+motionless, so any camera movement at all is unambiguously a defect. Real locked-off footage is weaker
+evidence: a still-looking subject still drifts a few pixels, and then the question becomes how much drift is
+acceptable rather than whether there should be any.
 
 ---
 

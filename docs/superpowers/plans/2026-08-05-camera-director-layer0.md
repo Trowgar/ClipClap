@@ -129,22 +129,26 @@ Create `apps/worker/src/scripts/corpus-fetch.ts`:
  * system is a corpus that disappears. `.corpus/` is outside R2, outside the
  * Job table and in .gitignore.
  *
- * yt-dlp goes through the WARP proxy (see CLAUDE.md); YTDLP_PROXY is honoured
- * exactly as the download processor honours it.
+ * Nine sequential YouTube fetches on one WARP exit is the highest-probability
+ * bot-check scenario in this project, and rotation is what made YouTube work at
+ * all - so this uses the SAME proxy args and the SAME rotate-and-retry wrapper
+ * the download processor uses, rather than re-reading the env inline.
  */
-import { execFile } from "child_process";
+import { createRequire } from "module";
 import { mkdir, readFile, stat } from "fs/promises";
 import { join } from "path";
-import { promisify } from "util";
+import { proxyArgs } from "@clipclap/shared";
 import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
+import { runYtDlpWithRotation } from "../processors/download";
 import { reframeAssetsDir } from "../reframe/faces";
 
-const execFileAsync = promisify(execFile);
-
-interface CorpusItem {
+export interface CorpusItem {
   id: string;
+  /** Empty until a human fills it in; such items are skipped, not failed. */
   url: string;
+  /** Start offset, `HH:MM:SS` or plain seconds. */
   in: string;
+  /** Duration in seconds. NOT an end time - see sectionArg. */
   len: number;
   tests: string;
 }
@@ -154,57 +158,140 @@ export interface CorpusManifest {
   items: CorpusItem[];
 }
 
-export async function loadManifest(): Promise<CorpusManifest> {
-  const raw = await readFile(join(reframeAssetsDir(), "corpus.json"), "utf-8");
-  return JSON.parse(raw) as CorpusManifest;
+/** Seconds from `HH:MM:SS`, `MM:SS` or a plain number. */
+export function toSeconds(value: string): number {
+  const parts = value.split(":").map(Number);
+  if (parts.some((n) => !Number.isFinite(n))) {
+    throw new Error(`corpus: unparseable time ${JSON.stringify(value)}`);
+  }
+  return parts.reduce((acc, n) => acc * 60 + n, 0);
 }
 
-/** Absolute path a materialised item lands at. Callers use this rather than
- *  rebuilding the join, so the layout is defined in exactly one place. */
+/**
+ * yt-dlp's `--download-sections` value.
+ *
+ * The second component is an ABSOLUTE END, not a duration, so `len` has to be
+ * added to `in` rather than pasted after the hyphen. `*00:00:00-+90` - the
+ * obvious-looking form - is rejected outright by yt-dlp 2026.07.04 with
+ * "invalid --download-sections time range", an argv parse error that fails
+ * every item identically before any network work. Seconds on both sides,
+ * because the timestamp form has to be reassembled and there is nothing to gain
+ * from it.
+ */
+export function sectionArg(item: CorpusItem): string {
+  const start = toSeconds(item.in);
+  return `*${start}-${start + item.len}`;
+}
+
+export async function loadManifest(): Promise<CorpusManifest> {
+  const raw = await readFile(join(reframeAssetsDir(), "corpus.json"), "utf-8");
+  const parsed = JSON.parse(raw) as Partial<CorpusManifest>;
+  // Structural check rather than a bare cast, the house style for a parsed
+  // external contract (see parseDetectorOutput). A malformed manifest would
+  // otherwise hand consumers an undefined `items` and surface as a TypeError
+  // far from the cause.
+  if (typeof parsed.outDir !== "string" || !Array.isArray(parsed.items)) {
+    throw new Error("corpus: manifest must have outDir and items");
+  }
+  for (const item of parsed.items) {
+    if (
+      typeof item?.id !== "string" ||
+      typeof item?.url !== "string" ||
+      typeof item?.in !== "string" ||
+      typeof item?.len !== "number"
+    ) {
+      throw new Error(`corpus: malformed item ${JSON.stringify(item?.id)}`);
+    }
+  }
+  return parsed as CorpusManifest;
+}
+
+/** Where a materialised item lands. Resolved from `__dirname` rather than a
+ *  hardcoded `/app/...`, so it is correct under tsx and under the dist layout,
+ *  and matches how the manifest itself is located. */
+export function corpusDir(manifest: CorpusManifest): string {
+  return join(__dirname, "..", "..", manifest.outDir);
+}
+
 export function corpusPath(manifest: CorpusManifest, id: string): string {
-  return join("/app/apps/worker", manifest.outDir, `${id}.mp4`);
+  return join(corpusDir(manifest), `${id}.mp4`);
 }
 
 async function main() {
   const manifest = await loadManifest();
-  const dir = join("/app/apps/worker", manifest.outDir);
+  const dir = corpusDir(manifest);
   await mkdir(dir, { recursive: true });
+
+  let fetched = 0;
+  let failed = 0;
+  let skipped = 0;
 
   for (const item of manifest.items) {
     const out = join(dir, `${item.id}.mp4`);
     if (!item.url) {
       console.warn(`skip ${item.id}: no url in the manifest (${item.tests})`);
+      skipped += 1;
       continue;
     }
+    // Existence, not integrity: a download truncated by a full disk stays a
+    // permanent cache hit. Acceptable because every comparison this corpus
+    // feeds is our own render against our own baseline from the SAME file, so
+    // a short fixture yields less material rather than a wrong answer.
     const existing = await stat(out).catch(() => null);
     if (existing && existing.size > 0) {
       console.log(`have ${item.id} (${(existing.size / 1e6).toFixed(1)} MB)`);
+      fetched += 1;
       continue;
     }
-    const args = [
-      "-f", "bv*[height<=1080]+ba/b[height<=1080]",
-      "--download-sections", `*${item.in}-+${item.len}`,
-      "--force-keyframes-at-cuts",
-      "--merge-output-format", "mp4",
-      "-o", out,
-      item.url,
-    ];
-    if (process.env.YTDLP_PROXY) args.unshift("--proxy", process.env.YTDLP_PROXY);
     console.log(`fetch ${item.id} ...`);
     try {
-      await execFileAsync("yt-dlp", args, { maxBuffer: CHILD_MAX_BUFFER_BYTES });
+      await runYtDlpWithRotation(
+        [
+          ...proxyArgs(),
+          "-f", "bv*[height<=1080]+ba/b[height<=1080]",
+          "--download-sections", sectionArg(item),
+          "--force-keyframes-at-cuts",
+          "--merge-output-format", "mp4",
+          "-o", out,
+          item.url,
+        ],
+        { maxBuffer: CHILD_MAX_BUFFER_BYTES }
+      );
       const got = await stat(out);
       console.log(`  ok ${item.id} (${(got.size / 1e6).toFixed(1)} MB)`);
+      fetched += 1;
     } catch (error) {
-      console.error(`  FAILED ${item.id}: ${(error as Error).message.slice(0, 200)}`);
+      // stderr, not message. Node builds message as "Command failed: " plus the
+      // whole command line, which is 239 chars without the proxy and 266 with
+      // it BEFORE stderr begins - so any truncation of `message` is guaranteed
+      // to cut exactly the reason and keep only the arguments.
+      const stderr = (error as { stderr?: string })?.stderr ?? "";
+      const reason = stderr.trim() || (error as Error).message;
+      console.error(`  FAILED ${item.id}: ${reason.slice(-400)}`);
+      failed += 1;
     }
   }
+
+  console.log(
+    `\n${fetched} available, ${failed} failed, ${skipped} awaiting a url in the manifest`
+  );
+  // A non-zero exit when something with a url did not materialise: without it
+  // the documented command "succeeds" against an empty .corpus/ and no caller
+  // can tell a ready corpus from total failure.
+  if (failed > 0) process.exitCode = 1;
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+// Only when run directly. `loadManifest`, `corpusPath` and `sectionArg` are
+// imported by the baseline and measurement scripts, and an unguarded main()
+// would spawn nine downloads as an import side effect. Same guard as
+// eval-bless.ts, typeof-checked for the same reason: tsx loads this as CJS
+// while vitest transforms it to ESM.
+if (typeof require !== "undefined" && typeof module !== "undefined" && require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}
 ```
 
 - [ ] **Step 4: Typecheck**
@@ -1252,10 +1339,8 @@ Add to `apps/worker/src/reframe/plan.ts`, above `buildCropPlan`:
 export function buildTargetSamples(
   group: FaceTrack[],
   spanStart: number,
-  spanEnd: number,
-  sourceWidth: number
+  spanEnd: number
 ): TargetSample[] {
-  void sourceWidth;
   const withPath = group.filter((t) => t.path && t.path.length > 0);
   if (withPath.length === 0) return [];
   const times = [
@@ -1320,39 +1405,49 @@ Add to `plan.ts`, below `mergeAdjacentLayouts`:
  * `x` is never touched.
  */
 export function attachTrajectories(
-  shots: ShotLayout[],
+  merged: ShotLayout[],
+  shots: Shot[],
   groupsByShot: Map<number, FaceTrack[]>,
   cropW: number,
   sourceWidth: number,
   camera: CameraConfig = DEFAULT_CAMERA
 ): ShotLayout[] {
-  const allGroups = [...groupsByShot.values()].flat();
-  if (allGroups.length === 0) return shots;
-  return shots.map((shot) => {
-    if (shot.layout !== "single") return shot;
-    const targets = buildTargetSamples(
-      allGroups,
-      shot.start,
-      shot.end,
-      sourceWidth
-    );
+  return merged.map((span) => {
+    if (span.layout !== "single") return span;
+    // Each DETECTOR shot overlapping this merged span contributes samples from
+    // its OWN selected group, over its own time range clipped to the span.
+    //
+    // Not a union of every group: carry-forward would then place a face from an
+    // unrelated shot into the bounding box at a time it was never on screen,
+    // moving the target with no change of selection - the confound spec 4.3
+    // exists to prevent, arriving through the back door.
+    const targets: TargetSample[] = [];
+    for (const [i, shot] of shots.entries()) {
+      if (!(shot.end > span.start && shot.start < span.end)) continue;
+      const group = groupsByShot.get(i);
+      if (!group) continue;
+      targets.push(
+        ...buildTargetSamples(
+          group,
+          Math.max(shot.start, span.start),
+          Math.min(shot.end, span.end)
+        )
+      );
+    }
     const xs = solveCamera(
       targets,
-      shot.x,
+      span.x,
       cropW,
       sourceWidth,
-      shot.start,
-      shot.end,
+      span.start,
+      span.end,
       camera
     );
-    return xs ? { ...shot, xs } : shot;
+    return xs ? { ...span, xs } : span;
   });
 }
 ```
 
-Note: `allGroups` unions the members of every shot's group. `buildTargetSamples` then filters to the span,
-so a member whose path lies entirely outside the span contributes only its carried-forward box, which is what
-"the union of the target samples of every detector shot inside it" means in practice.
 
 - [ ] **Step 5: Extract the selection, then capture it in `buildCropPlan`**
 
@@ -1498,7 +1593,7 @@ with:
   // consideration can change WHICH shots merge (spec §4.5).
   const mergedByX = mergeAdjacentLayouts(layouts, sourceWidth);
   const merged = opts.motion
-    ? attachTrajectories(mergedByX, groupsByShot, cropW, sourceWidth, opts.camera)
+    ? attachTrajectories(mergedByX, shots, groupsByShot, cropW, sourceWidth, opts.camera)
     : mergedByX;
 ```
 
@@ -1551,7 +1646,7 @@ Run:
 docker compose exec -T worker-render sh -c 'cd /app && npx vitest run apps/worker/src/__tests__/'
 ```
 Expected: PASS. **Every pre-existing assertion in `reframe-plan.test.ts` must still hold with its original
-expected values** - the nine layout assertions carrying `x` of 496, 656, 596, 236 and 96 are the guard that
+expected values** - the nine layout assertions carrying `x` of 496, 656, 596, 386 and 96 are the guard that
 `x` did not move.
 
 Two specific pre-existing tests to confirm by name rather than trust the count:
@@ -2127,7 +2222,7 @@ git commit -m "feat(reframe): REFRAME_MOTION, off by default"
 **Files:**
 - Create: `apps/worker/src/scripts/eval-camera-invariance.ts`
 
-**Context:** Spec §6.2. Level 1 needs no video and guards the 96 persisted plans. Level 2 uses the detector
+**Context:** Spec §6.2. Level 1 needs no video and guards the persisted plans - **84 of them, measured**: 129 clip rows, 96 carry a `cropPlan`, 84 of those are not soft-deleted. The other 12 can never be recompiled. Level 2 uses the detector
 JSON captured in Task 2. Level 3 compares against the baseline renders under the hash policy Task 2
 established.
 
@@ -2142,7 +2237,7 @@ Create `apps/worker/src/scripts/eval-camera-invariance.ts`:
  *   docker compose exec -T worker-render sh -c \
  *     "cd /app/apps/worker && npx tsx src/scripts/eval-camera-invariance.ts"
  *
- * Level 1 runs against the 96 crop plans already in the database and needs no
+ * Level 1 runs against the 84 live crop plans already in the database and needs no
  * video at all, which is what makes it the check that can run every time.
  * Level 2 replays the detector JSON captured by corpus-baseline.ts. Level 3
  * compares full renders.

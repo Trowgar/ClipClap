@@ -47,3 +47,6 @@ __pycache__/
 
 # Frame strips extracted for clip audits - regenerable, not source
 apps/worker/.eval-frames*/
+
+# Reframe corpus - materialised from assets/reframe/corpus.json, never committed
+.corpus/

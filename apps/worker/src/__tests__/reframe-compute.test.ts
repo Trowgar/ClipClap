@@ -35,6 +35,7 @@ vi.mock("child_process", () => ({
 
 import { computeCropPlan } from "../reframe";
 import type { ReframeConfig } from "../reframe/config";
+import { DEFAULT_CAMERA } from "../reframe/camera";
 
 const cfg: ReframeConfig = {
   engine: "faces",
@@ -47,6 +48,8 @@ const cfg: ReframeConfig = {
   camShare: 0.4,
   faceSmallFrac: 0.06,
   faceLargeFrac: 0.1,
+  motion: false,
+  camera: DEFAULT_CAMERA,
   pipMaxFrac: 0.5,
   pipEdgeMin: 4.0,
 };

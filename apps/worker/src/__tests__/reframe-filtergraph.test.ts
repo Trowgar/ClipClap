@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildFiltergraph, piecewiseX } from "../reframe/filtergraph";
+import {
+  buildFiltergraph,
+  piecewiseX,
+  planKeyframes,
+  rampX,
+} from "../reframe/filtergraph";
 import type { CropPlan } from "../reframe/types";
 
 const base = (shots: CropPlan["shots"]): CropPlan => ({
@@ -240,5 +245,196 @@ describe("stream filtergraph", () => {
       kind: "vf",
       graph: "crop=w=406:h=ih:x='302':y=0,scale=1080:1920",
     });
+  });
+});
+
+describe("rampX", () => {
+  it("is a flat sum, never nested, so av_expr depth stays at 1", () => {
+    const expr = rampX([
+      { t: 0, x: 100 },
+      { t: 1, x: 200 },
+      { t: 2, x: 150 },
+    ]);
+    expect(expr).not.toContain("if(");
+    expect(expr.startsWith("100")).toBe(true);
+  });
+
+  it("emits no term for a flat run", () => {
+    expect(
+      rampX([
+        { t: 0, x: 100 },
+        { t: 1, x: 100 },
+        { t: 2, x: 100 },
+      ])
+    ).toBe("100");
+  });
+
+  it("expresses an instantaneous step without dividing by zero", () => {
+    // Exact output on purpose. This string is not an implementation detail, it
+    // is the contract with ffmpeg's expression parser, so if the emitted form
+    // ever changes someone should have to look at it and re-measure against
+    // real ffmpeg rather than have a loose toContain wave it through.
+    //
+    // This assertion replaced three not.toContain guards - "/0)", "/0.00)",
+    // "NaN", "Infinity" - that were unfalsifiable from the day they were
+    // written. They were shaped as a "/0" followed immediately by a CLOSING
+    // PAREN, but rampX always emits ",0,1)" after the denominator, so no input
+    // could ever produce the substring they looked for. They read as coverage
+    // in a test whose name promises exactly the property they did not check.
+    // Mutation testing found the test, not the code: deleting STEP_SEC from
+    // the denominator left the whole suite green. The three-decimal formatter
+    // did not weaken them; they never worked.
+    //
+    // 0.001 is small enough, measured rather than assumed. At 200fps - five
+    // times this step window - the transition on a luma-encoded source read
+    // x=499.9 at t=4.495 and t=4.500, then x=200.0 at t=4.505, with no
+    // intermediate value at any frame. That is what "sub-frame at any frame
+    // rate this product encodes" rests on.
+    expect(
+      rampX([
+        { t: 1, x: 100 },
+        { t: 1, x: 400 },
+      ])
+    ).toBe("100+300*clip((t-1.000)/0.001,0,1)");
+  });
+
+  it("throws on an empty trajectory rather than emitting an empty expression", () => {
+    expect(() => rampX([])).toThrow("rampX: empty");
+  });
+});
+
+describe("planKeyframes", () => {
+  it("uses the centre for split and stream shots, whose tiles cover the frame", () => {
+    const keys = planKeyframes(
+      {
+        version: 2,
+        engine: "faces",
+        source: { width: 1280, height: 720 },
+        shots: [
+          { start: 0, end: 5, layout: "split", top: { x: 0 }, bottom: { x: 800 } },
+        ],
+      },
+      437
+    );
+    expect(keys.every((k) => k.x === 437)).toBe(true);
+  });
+
+  it("carries a trajectory through and a plain single as a flat pair", () => {
+    const keys = planKeyframes(
+      {
+        version: 3,
+        engine: "faces",
+        source: { width: 1280, height: 720 },
+        shots: [
+          { start: 0, end: 5, layout: "single", x: 100 },
+          {
+            start: 5,
+            end: 10,
+            layout: "single",
+            x: 300,
+            xs: [
+              { t: 5, x: 300 },
+              { t: 10, x: 500 },
+            ],
+          },
+        ],
+      },
+      437
+    );
+    expect(keys[0]).toEqual({ t: 0, x: 100 });
+    expect(keys.at(-1)).toEqual({ t: 10, x: 500 });
+  });
+
+  it("still emits a flat pair for a shot whose xs is empty next to one that has a trajectory", () => {
+    // The empty array is not a trajectory, it is the absence of one, so the
+    // shot falls back to its own `x`. Drop the `.length > 0` guard and this
+    // shot contributes NO keyframes at all: the ramp holds the previous shot's
+    // 500 straight across 10..15 and the window it asked for never happens.
+    // The `buildFiltergraph` empty-xs test cannot see this - there the only
+    // shot has xs: [], so hasTrajectory is false and planKeyframes is never
+    // entered. It has to be asserted here, on a MIXED plan.
+    const keys = planKeyframes(
+      {
+        version: 3,
+        engine: "faces",
+        source: { width: 1280, height: 720 },
+        shots: [
+          {
+            start: 0,
+            end: 10,
+            layout: "single",
+            x: 300,
+            xs: [
+              { t: 0, x: 300 },
+              { t: 10, x: 500 },
+            ],
+          },
+          { start: 10, end: 15, layout: "single", x: 120, xs: [] },
+        ],
+      },
+      437
+    );
+    expect(keys).toEqual([
+      { t: 0, x: 300 },
+      { t: 10, x: 500 },
+      { t: 10, x: 120 },
+      { t: 15, x: 120 },
+    ]);
+  });
+});
+
+describe("buildFiltergraph motion selection", () => {
+  const planWithXs = {
+    version: 3 as const,
+    engine: "faces" as const,
+    source: { width: 1280, height: 720 },
+    shots: [
+      {
+        start: 0,
+        end: 10,
+        layout: "single" as const,
+        x: 100,
+        xs: [
+          { t: 0, x: 100 },
+          { t: 10, x: 500 },
+        ],
+      },
+    ],
+  };
+  const planWithout = {
+    version: 1 as const,
+    engine: "faces" as const,
+    source: { width: 1280, height: 720 },
+    shots: [{ start: 0, end: 10, layout: "single" as const, x: 100 }],
+  };
+
+  it("uses the nested piecewise form when no shot has a trajectory", () => {
+    const spec = buildFiltergraph(planWithout);
+    expect(spec.graph).toContain("x='100'");
+    expect(spec.graph).not.toContain("clip(");
+  });
+
+  it("uses the ramp form when a shot has a trajectory", () => {
+    const spec = buildFiltergraph(planWithXs);
+    expect(spec.graph).toContain("clip(");
+    expect(spec.graph).not.toContain("if(lt(t,");
+  });
+
+  it("a plan with xs stripped compiles byte-identically to the legacy plan", () => {
+    // The rollback invariant: a consumer that ignores xs must render v2 output,
+    // and 96 crop plans already persisted must keep rendering identically.
+    const stripped = {
+      ...planWithXs,
+      shots: planWithXs.shots.map(({ xs, ...rest }) => rest),
+    };
+    expect(buildFiltergraph(stripped).graph).toBe(buildFiltergraph(planWithout).graph);
+  });
+
+  it("ignores an empty xs array and stays on the legacy form", () => {
+    const empty = {
+      ...planWithXs,
+      shots: [{ ...planWithXs.shots[0], xs: [] }],
+    };
+    expect(buildFiltergraph(empty).graph).toBe(buildFiltergraph(planWithout).graph);
   });
 });

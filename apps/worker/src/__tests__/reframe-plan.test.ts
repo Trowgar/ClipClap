@@ -1,12 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  attachTrajectories,
   buildCropPlan,
+  buildTargetSamples,
   cropWidthFor,
   evenClamp,
   planLayoutCounts,
+  selectGroupForShot,
   sliceCropPlan,
   tileWidthFor,
 } from "../reframe/plan";
+// DEFAULT_CAMERA lives in camera.ts and plan.ts does not re-export it, so this
+// is a second import statement by necessity, not by preference.
+import { DEFAULT_CAMERA } from "../reframe/camera";
 import type {
   CamRect,
   CropPlan,
@@ -593,9 +599,11 @@ describe("sliceCropPlan (trim re-render)", () => {
 
   it("returns null for an empty window or wrong version", () => {
     expect(sliceCropPlan(plan, 100, 120)).toBeNull();
-    // version 2 is now a supported plan version (see "v2 plan handling" below);
-    // 3 is genuinely unknown and must still be rejected.
-    expect(sliceCropPlan({ ...plan, version: 3 as unknown as 1 }, 0, 10)).toBeNull();
+    // 2 and 3 are now supported plan versions (see "v2 plan handling" and
+    // "sliceCropPlan with trajectories" below); 4 is genuinely unknown and must
+    // still be rejected. This probe has to move up with every version we learn
+    // to read - the assertion under test is "unknown is refused", not "3 is".
+    expect(sliceCropPlan({ ...plan, version: 4 as unknown as 1 }, 0, 10)).toBeNull();
   });
 
   it("returns null for a foreign/corrupt stored Json instead of throwing", () => {
@@ -680,7 +688,9 @@ describe("v2 plan handling", () => {
   });
 
   it("still rejects an unknown version", () => {
-    expect(sliceCropPlan({ ...v2, version: 3 as 2 }, 0, 10)).toBeNull();
+    // Was 3, which the trajectory work turned into a real version; 4 is the
+    // next unknown one.
+    expect(sliceCropPlan({ ...v2, version: 4 as unknown as 2 }, 0, 10)).toBeNull();
   });
 });
 
@@ -749,6 +759,12 @@ describe("stream layout", () => {
     faceLargeFrac: 0.1,
     stream: true,
     camShare: 0.4,
+    // Every assertion in this block predates the motion layer and describes the
+    // static window, so motion stays off here on purpose. Named rather than
+    // omitted because PlanOptions no longer lets it be omitted - which is the
+    // whole point of it being required.
+    motion: false,
+    camera: DEFAULT_CAMERA,
   };
   // Face measured on the fixture: 43x56 at (179,110), 3.4% of frame width.
   const insetFace: FaceTrack = {
@@ -1010,5 +1026,352 @@ describe("stream layout", () => {
     expect(podcast?.shots).toEqual([
       { start: 0, end: 30, layout: "single", x: 1256 },
     ]);
+  });
+});
+
+describe("selectGroupForShot", () => {
+  const t = (id: number, x: number, w = 60) => ({
+    id, box: { x, y: 0, w, h: 60 }, score: 0.9, samples: 10, mouthActivity: 0.05,
+  });
+
+  it("returns every anchorable face when they all fit one window", () => {
+    const group = selectGroupForShot([t(0, 100), t(1, 200)], 40, 406, 1280);
+    expect(group!.map((g) => g.id).sort()).toEqual([0, 1]);
+  });
+
+  it("falls back to bestFaceGroup when they do not fit", () => {
+    const group = selectGroupForShot([t(0, 0), t(1, 600), t(2, 660)], 40, 406, 1280);
+    expect(group!.map((g) => g.id).sort()).toEqual([1, 2]);
+  });
+
+  it("returns null when no face clears the min-face guard", () => {
+    expect(selectGroupForShot([t(0, 100, 10)], 40, 406, 1280)).toBeNull();
+  });
+
+  it("drops the tracks the per-shot noise floor drops", () => {
+    // survivingTracks runs FIRST, and both of its clauses matter. Each noise
+    // track here sits close enough to the dominant face to fit one window with
+    // it, so keeping either one would widen the group from [0] to two faces -
+    // the window would then frame a detector artefact as if it were a person.
+    const dominant = { ...t(0, 600), samples: 10 };
+    const oneSample = { ...t(1, 700), samples: 1 };
+    // 2 clears MIN_TRACK_SAMPLES but not 30% of the dominant track's 10.
+    const transient = { ...t(2, 800), samples: 2 };
+    expect(
+      selectGroupForShot([dominant, oneSample], 40, 406, 1280)!.map((g) => g.id)
+    ).toEqual([0]);
+    expect(
+      selectGroupForShot([dominant, transient], 40, 406, 1280)!.map((g) => g.id)
+    ).toEqual([0]);
+  });
+
+  it("does not move when mouthActivity moves", () => {
+    // engine-notes 7c's invariant, restated on the extracted function so it
+    // cannot be lost now that the measurement script reuses this selection.
+    const quiet = [t(0, 0), t(1, 600), t(2, 660)];
+    const loud = quiet.map((x, i) => ({ ...x, mouthActivity: i === 0 ? 0.9 : 0.01 }));
+    expect(selectGroupForShot(loud, 40, 406, 1280)!.map((g) => g.id)).toEqual(
+      selectGroupForShot(quiet, 40, 406, 1280)!.map((g) => g.id)
+    );
+  });
+});
+
+describe("buildTargetSamples", () => {
+  const trackWithPath = (id: number, xs: number[]) => ({
+    id,
+    box: { x: xs[0], y: 0, w: 100, h: 100 },
+    score: 0.9,
+    samples: xs.length,
+    mouthActivity: 0.05,
+    path: xs.map((x, i) => ({ t: i * 0.5, x, y: 0, w: 100, h: 100 })),
+  });
+
+  it("takes the midpoint of the group bounding box at each sample time", () => {
+    const samples = buildTargetSamples(
+      [trackWithPath(0, [100, 120]), trackWithPath(1, [300, 320])], 0, 1
+    );
+    expect(samples[0]).toEqual({ t: 0, cx: 250 });
+    expect(samples[1]).toEqual({ t: 0.5, cx: 270 });
+  });
+
+  it("carries a missing member forward rather than dropping it", () => {
+    // Dropping an absent member shrinks the bbox and moves the target with no
+    // change of selection - the confound the frozen-anchor rule forbids.
+    const a = trackWithPath(0, [100, 120, 140]);
+    const b = trackWithPath(1, [300]);
+    const samples = buildTargetSamples([a, b], 0, 2);
+    expect(samples[1]).toEqual({ t: 0.5, cx: 260 });
+  });
+
+  it("returns nothing when no member has a path", () => {
+    const noPath = {
+      id: 0, box: { x: 10, y: 0, w: 100, h: 100 },
+      score: 0.9, samples: 3, mouthActivity: 0,
+    };
+    expect(buildTargetSamples([noPath], 0, 2)).toEqual([]);
+  });
+
+  it("ignores samples outside the span", () => {
+    const samples = buildTargetSamples([trackWithPath(0, [100, 120, 140])], 0.4, 0.6);
+    expect(samples.map((s) => s.t)).toEqual([0.5]);
+  });
+});
+
+describe("attachTrajectories", () => {
+  const track = (id: number, xs: number[], step = 0.5, from = 0) => ({
+    id,
+    box: { x: xs[0], y: 0, w: 60, h: 60 },
+    score: 0.9,
+    samples: xs.length,
+    mouthActivity: 0.05,
+    path: xs.map((x, i) => ({ t: from + i * step, x, y: 0, w: 60, h: 60 })),
+  });
+  const moving = (n: number, from = 0, x0 = 100, dx = 40) =>
+    track(0, Array.from({ length: n }, (_, i) => x0 + i * dx), 0.5, from);
+
+  it("leaves center, split and stream layouts untouched", () => {
+    const merged = [
+      { start: 0, end: 5, layout: "center" as const, x: 100 },
+      { start: 5, end: 10, layout: "split" as const, top: { x: 0 }, bottom: { x: 500 } },
+    ];
+    const shots = [{ start: 0, end: 5 }, { start: 5, end: 10 }];
+    expect(attachTrajectories(merged, shots, new Map(), 406, 1280, DEFAULT_CAMERA))
+      .toEqual(merged);
+  });
+
+  it("leaves x untouched when it adds a trajectory", () => {
+    // The whole rollback story rests on this.
+    const groups = new Map([[0, [moving(20)]]]);
+    const merged = [{ start: 0, end: 10, layout: "single" as const, x: 437 }];
+    const out = attachTrajectories(merged, [{ start: 0, end: 10 }], groups, 406, 1280, DEFAULT_CAMERA);
+    expect(out[0].x).toBe(437);
+  });
+
+  it("omits xs entirely when the camera does not move", () => {
+    const groups = new Map([[0, [track(0, Array.from({ length: 20 }, () => 640))]]]);
+    const merged = [{ start: 0, end: 10, layout: "single" as const, x: 437 }];
+    const out = attachTrajectories(merged, [{ start: 0, end: 10 }], groups, 406, 1280, DEFAULT_CAMERA);
+    expect("xs" in out[0]).toBe(false);
+  });
+
+  it("uses every detector shot inside a merged span, not only the first", () => {
+    // This is the defect the order-of-operations rule exists to prevent: the
+    // merge keeps the FIRST shot's geometry, so a trajectory built per shot and
+    // then merged would lose the second half entirely.
+    const groups = new Map([
+      [0, [track(0, [300, 300, 300, 300, 300, 300, 300, 300, 300, 300])]],
+      [1, [track(1, Array.from({ length: 10 }, (_, i) => 300 + i * 60), 0.5, 5)]],
+    ]);
+    const shots = [{ start: 0, end: 5 }, { start: 5, end: 10 }];
+    const merged = [{ start: 0, end: 10, layout: "single" as const, x: 100 }];
+    const out = attachTrajectories(merged, shots, groups, 406, 1280, DEFAULT_CAMERA);
+    expect(out[0].xs).toBeDefined();
+    // Movement must occur in the SECOND half, which only shot 1 supplies.
+    const late = out[0].xs!.filter((k) => k.t > 5);
+    expect(late.length).toBeGreaterThan(0);
+  });
+
+  it("does not let a face from another shot widen the target", () => {
+    // Carry-forward is per detector shot. Pooling all groups would place shot
+    // 1's face into shot 0's bounding box at a time it was never on screen.
+    const groups = new Map([
+      [0, [track(0, Array.from({ length: 10 }, (_, i) => 100 + i * 40))]],
+      [1, [track(1, Array.from({ length: 10 }, () => 1200), 0.5, 5)]],
+    ]);
+    const shots = [{ start: 0, end: 5 }, { start: 5, end: 10 }];
+    const merged = [{ start: 0, end: 5, layout: "single" as const, x: 0 }];
+    const out = attachTrajectories(merged, shots, groups, 406, 1280, DEFAULT_CAMERA);
+    // The bound is derived, not picked. Only shot 0 overlaps [0,5): its face
+    // runs cx 130..490, so the window can never ask for more than 490 - 203 =
+    // 287. Measured under the pooling mutant, shot 1's face at 1200 is carried
+    // BACKWARD into the bbox at times it was never on screen, the target runs
+    // cx 680..860 and the emitted trajectory reaches x = 500 - held down only
+    // by the follow-speed cap, which is why a threshold up at 700 let the
+    // mutant live. 300 sits between 287 and 500.
+    expect(out[0].xs).toBeDefined();
+    expect(Math.max(...out[0].xs!.map((k) => k.x))).toBeLessThanOrEqual(300);
+  });
+});
+
+describe("buildCropPlan with motion on", () => {
+  // The only place the flag is exercised end to end. Without it the wiring
+  // inside buildCropPlan - the order of merge and attach, and the v3 rule - is
+  // dead code in the whole suite, which is what mutation testing found.
+  const motionOpts = { ...DEFAULT_PLAN_OPTIONS, motion: true };
+  const pathOf = (from: number, count: number, x0: number, dx: number) =>
+    Array.from({ length: count }, (_, i) => ({
+      t: from + i * 0.5,
+      x: x0 + i * dx,
+      y: 200,
+      w: 400,
+      h: 520,
+    }));
+
+  it("keeps the second detector shot's motion after the two shots merge", () => {
+    // Shot 0 holds still at centre 800 -> x 496. Shot 1's MEDIAN centre is 870
+    // -> x 566, and |566 - 496| = 70 <= 4% of 1920, so the two merge into one
+    // [0,20] span carrying shot 0's x. The subject moves only during shot 1.
+    // Attaching before the merge would hang the trajectory on shot 1's layout,
+    // which the merge then discards along with the rest of its geometry.
+    const plan = buildCropPlan(
+      [
+        { start: 0, end: 10 },
+        { start: 10, end: 20 },
+      ],
+      [
+        {
+          shotIndex: 0,
+          tracks: [track(600, 400, { path: pathOf(0, 20, 600, 0) })],
+          camRect: null,
+        },
+        {
+          shotIndex: 1,
+          tracks: [track(670, 400, { id: 1, path: pathOf(10, 21, 600, 7) })],
+          camRect: null,
+        },
+      ],
+      W,
+      H,
+      motionOpts
+    );
+    expect(plan!.shots).toHaveLength(1);
+    const span = plan!.shots[0];
+    if (span.layout !== "single") throw new Error(`expected single, got ${span.layout}`);
+    expect(span).toMatchObject({ start: 0, end: 20, x: 496 });
+    expect(span.xs).toBeDefined();
+    const late = span.xs!.filter((k) => k.t > 10);
+    expect(late.length).toBeGreaterThan(0);
+    expect(Math.max(...late.map((k) => k.x))).toBeGreaterThan(496);
+  });
+
+  it("reports v3 only when a trajectory is actually emitted", () => {
+    // Moving: centre travels 800 -> 1080, well past the deadzone.
+    const moving = buildCropPlan(
+      [{ start: 0, end: 20 }],
+      withTracks([track(600, 400, { path: pathOf(0, 41, 600, 7) })]),
+      W,
+      H,
+      motionOpts
+    );
+    expect(moving!.version).toBe(3);
+
+    // Still: motion is ON and the path is present, but the camera never moves,
+    // so the plan must stay byte-identical to the legacy one - v1, no xs.
+    const still = buildCropPlan(
+      oneShot,
+      withTracks([track(600, 400, { path: pathOf(0, 20, 600, 0) })]),
+      W,
+      H,
+      motionOpts
+    );
+    expect(still!.version).toBe(1);
+    expect(still!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 496 }]);
+    expect(still!.shots.every((s) => !("xs" in s))).toBe(true);
+  });
+});
+
+describe("sliceCropPlan with trajectories", () => {
+  const v3 = {
+    version: 3 as const,
+    engine: "faces" as const,
+    source: { width: 1280, height: 720 },
+    shots: [
+      {
+        start: 0,
+        end: 20,
+        layout: "single" as const,
+        x: 100,
+        xs: [
+          { t: 0, x: 100 },
+          { t: 10, x: 300 },
+          { t: 20, x: 500 },
+        ],
+      },
+    ],
+  };
+
+  it("accepts version 3", () => {
+    expect(sliceCropPlan(v3, 5, 15)).not.toBeNull();
+  });
+
+  it("shifts keyframe times by the same offset as the shot bounds", () => {
+    const out = sliceCropPlan(v3, 5, 15)!;
+    const shot = out.shots[0] as { xs?: Array<{ t: number; x: number }> };
+    expect(shot.xs!.map((k) => k.t)).toEqual([0, 5, 10]);
+  });
+
+  it("interpolates the boundary values rather than copying a neighbour", () => {
+    // A slice landing mid-ramp must begin where the camera actually was at
+    // that moment. Copying the nearest keyframe would open the trimmed clip
+    // on a jump the original never had.
+    const out = sliceCropPlan(v3, 5, 15)!;
+    const shot = out.shots[0] as { xs?: Array<{ t: number; x: number }> };
+    expect(shot.xs![0]).toEqual({ t: 0, x: 200 });
+    expect(shot.xs!.at(-1)).toEqual({ t: 10, x: 400 });
+  });
+
+  it("leaves a v2 plan exactly as before", () => {
+    const v2 = {
+      version: 2 as const,
+      engine: "faces" as const,
+      source: { width: 1280, height: 720 },
+      shots: [{ start: 0, end: 20, layout: "single" as const, x: 100 }],
+    };
+    expect(sliceCropPlan(v2, 5, 15)).toEqual({
+      ...v2,
+      shots: [{ start: 0, end: 10, layout: "single", x: 100 }],
+    });
+  });
+
+  it("keeps a partially clipped shot's keyframes inside its own new bounds", () => {
+    // The single-shot cases above all have the shot spanning the whole trim, so
+    // the shot's new start is 0 and "re-window the trajectory" collapses to
+    // "subtract the trim start". A shot that begins PART WAY into the trim is
+    // the case that separates the two: keyframe `t` shares the shot's
+    // clip-relative timebase, so the trajectory has to be re-windowed to the
+    // slice AND pushed out to where the shot now sits, or it would run from
+    // before the shot starts to before the shot ends.
+    const twoShots = {
+      version: 3 as const,
+      engine: "faces" as const,
+      source: { width: 1280, height: 720 },
+      shots: [
+        { start: 0, end: 10, layout: "center" as const, x: 400 },
+        {
+          start: 10,
+          end: 30,
+          layout: "single" as const,
+          x: 100,
+          xs: [
+            { t: 10, x: 100 },
+            { t: 20, x: 300 },
+            { t: 30, x: 500 },
+          ],
+        },
+      ],
+    };
+    const out = sliceCropPlan(twoShots, 5, 25)!;
+    const shot = out.shots[1] as {
+      start: number;
+      end: number;
+      xs?: Array<{ t: number; x: number }>;
+    };
+    expect([shot.start, shot.end]).toEqual([5, 20]);
+    expect(shot.xs).toEqual([
+      { t: 5, x: 100 },
+      { t: 15, x: 300 },
+      { t: 20, x: 400 }, // interpolated: 5s into the 20->30 ramp of 300->500
+    ]);
+  });
+
+  it("does not attach an xs key to a shot that never had one", () => {
+    const mixed = {
+      version: 3 as const,
+      engine: "faces" as const,
+      source: { width: 1280, height: 720 },
+      shots: [{ start: 0, end: 20, layout: "center" as const, x: 437 }],
+    };
+    const out = sliceCropPlan(mixed, 5, 15)!;
+    expect("xs" in out.shots[0]).toBe(false);
   });
 });

@@ -3,13 +3,36 @@ export interface Shot {
   end: number;
 }
 
+export interface FaceBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** One detector sample of one track. `t` is clip-relative seconds. */
+export interface PathSample extends FaceBox {
+  t: number;
+}
+
 export interface FaceTrack {
   id: number;
   /** Median box across the track's samples, SOURCE pixels. */
-  box: { x: number; y: number; w: number; h: number };
+  box: FaceBox;
   score: number; // mean detection confidence
   samples: number; // detections associated into this track
   mouthActivity: number; // mean abs mouth-region diff between samples, 0..1
+  /** Per-sample boxes, SOURCE pixels, sorted by t. Absent from older sidecar
+   *  builds, which is not a contract violation. */
+  path?: PathSample[];
+}
+
+/** A point on the crop window's trajectory. `t` is clip-relative seconds, `x`
+ *  is the window's LEFT edge in source pixels - the same quantity as the
+ *  legacy `ShotLayout.single.x`. */
+export interface Keyframe {
+  t: number;
+  x: number;
 }
 
 export interface ShotTracks {
@@ -21,7 +44,17 @@ export interface ShotTracks {
 
 export type ShotLayout =
   | { start: number; end: number; layout: "center"; x: number }
-  | { start: number; end: number; layout: "single"; x: number }
+  | {
+      start: number;
+      end: number;
+      layout: "single";
+      /** LEGACY median x. Unchanged from v2, and never the first value of `xs`
+       *  - a consumer that ignores `xs` must render exactly what v2 rendered,
+       *  which is what makes "flag off equals today" falsifiable. */
+      x: number;
+      /** Trajectory, present only when the camera actually moves. */
+      xs?: Keyframe[];
+    }
   | {
       start: number;
       end: number;
@@ -38,7 +71,7 @@ export type ShotLayout =
     };
 
 export interface CropPlan {
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   engine: "faces";
   source: { width: number; height: number };
   profile?: SourceProfile;
