@@ -1389,6 +1389,126 @@ cheap to repeat.
 
 ---
 
+### 7e. The min-face guard now applies where it was needed (fixed 2026-08-06)
+
+Spec `docs/superpowers/specs/2026-08-06-small-face-anchoring-design.md`, plan
+`docs/superpowers/plans/2026-08-06-small-face-anchoring.md`. **Shipped, no flag.**
+
+**The defect.** The 6%-of-frame-width minimum-face guard exists for one case, stated in §7a: a streamer's
+webcam is a small inset over gameplay, and centring a 9:16 window on it yields a truncated webcam plus a
+slice of chat overlay. It was applied to every face on every source. On a podcast filmed as a wide two-shot,
+two men sit at opposite ends of a long table at **5.2% and 5.5%** of frame width, detected in 9 of 9 samples.
+Both refused, `anchorable` empty, so the planner centred blind at x=656 - **the empty table between them.**
+The first 4.4 seconds of a 23-second delivered clip were furniture. The owner spotted it in his own clip.
+
+Measured over all 47 clips of the five real jobs: **298 seconds of 1679 delivered (17.7%)** framed on nothing
+while people were visible in the source, with widest faces at 4.2%, 4.7%, 5.1%, 5.5% and 5.8% - all just
+short of 6%.
+
+**The rule.** The threshold is unchanged. What changed is when it applies, and it is a **fallback, not a
+filter change**:
+
+```
+anchorableTracks(tracks, policy):
+    surviving = survivingTracks(tracks)
+    strict    = surviving.filter(t => t.box.w >= minFaceWidth)
+    if (strict.length > 0) return strict              // unchanged, always
+    return surviving.filter(canAnchor)                // only when nothing cleared the guard
+
+canAnchor(t) = t.box.w >= minFaceWidth
+            || (sourceClass === "normal_face" && !(camRect && isInsideInset(t, camRect)))
+```
+
+**Why a plain filter change is wrong, and this is the expensive part.** The spec first said "everything
+downstream is unchanged: whatever survives goes into the same `FIT_MARGIN` test, the same `trySplit`". That
+was written as a reassurance and was the defect. **`anchorable` answers three questions** - which face
+anchors, whether the faces fit one window, and which faces are split-tile candidates - and the design had
+separated only the first.
+
+Relaxing outright re-admits sub-guard specks into the other two. Measured on the existing fixture: a 30px
+speck at the exact frame centre scores `dominance` 0.3968, of which 0.2934 is its near-perfect centrality of
+0.978, and `1.5 x 0.3968 = 0.595` exceeds the 0.4855 of both real 300px faces - so `clearLead` fails, the
+split is refused, and one of the two people is dropped from frame. A pre-existing test documents exactly
+that, and the implementer refused to update it rather than let a test assert the defect as correct.
+
+It has a live 16:9 form too, not confined to the dead split path: beside a single 300px face at 200-500, a
+30px speck at 680-710 widens the bbox to 200-710 and drags the window from x=46 to x=152, off the only
+person in the shot.
+
+The fallback disposes of both, because the measured defect is exactly "no face cleared the guard". A shot
+that already had an anchor is not in the defect set and cannot change - the acceptance rule "shots with an
+existing anchor keep their x" holds by construction rather than by test.
+
+**Two names for two questions, and one definition for one set.** `hasNormalSizedFace` answers "is this clip
+stream-shaped" with the absolute guard and gates the stream layout; `canAnchor` answers "may this face
+anchor the window". Merging them back breaks the stream layout in one direction and makes a webcam an anchor
+in the other - §7a's defect from either side. Separately, `anchorableTracks` is the single definition used by
+both `buildCropPlan` and `selectGroupForShot`: during mutation testing, reverting only one of them produced
+`x: NaN`, because `selectGroupForShot` returned a group while `anchorable` was empty and `Math.min(...[])` is
+`Infinity`. That would have reached the ffmpeg expression.
+
+**Result.**
+
+| | before | after |
+|---|---|---|
+| blind centre with people visible | **298s** | **27s** |
+| as a share of delivered clip time | 17.7% | **1.6%** |
+| remaining spans | - | 2, both `small_face` / `stream_no_rect` |
+
+**The 27-second remainder is the guard working, not a miss.** One is the Booster CS2 webcam at 3.1% with 18
+samples - a persistent, well-scored, genuinely small face, and anchoring it is precisely §7a's defect. The
+other is an arctic figure at 4.2% detected in 3 of ~32 frames, declined because the clip classifies
+`small_face`. Neither is a case the relaxed rule failed to reach.
+
+**Confirmed in pictures, because a number and a frame can disagree.**
+- **The two-shot**: before, an empty black table with a glass, a mic and a disembodied hand at the edge;
+  after, the host in frame whole. Checked at four separate instants across the shot. The other four shots in
+  that clip kept their exact `x` (918, 408, 880, 406).
+- **`vlog-arctic`**: the picks are on people and read as sensible. The strongest is 45.68-53.22s, where the
+  old crop held the middle figure whole plus amputated slivers of two others, and the new one holds **two
+  whole people** with nobody chopped.
+- **The Booster clip**: the before and after strips are **byte-identical files**. The class condition makes
+  the relaxation unreachable there, and that is now verified at the pixel rather than argued.
+- **`sitcom-multi`**: two spans moved by 42px and 4px, no new truncated face, no new empty frame.
+
+**Why three earlier measurements missed this.** §8d concluded "the opening frame is not broken" - it measured
+luma, caption presence and the pause before the first word, and **never checked whether a face was in the
+opening frame**. §7d concluded framing was fine from seven fixtures cut at round offsets, which all landed on
+close-ups, so **the corpus contained no wide two-shot** - the exact case that fails. §7d then attributed 82%
+of faceless delivered frames to the centre layout and found 96.8% of them correct, on that same
+unrepresentative corpus. The corpus was the error, not the method: clips chosen by ANALYZE land on different
+material than fixtures cut at a round number of minutes.
+
+**Two caveats on the evidence, stated rather than buried.** The committed frame strips sample six evenly
+spaced instants, which under-samples the change - only 1 of 6 tiles differs on `vlog-arctic` though four
+spans moved, and the arctic judgement above rests on ad-hoc per-span renders. And **324 seconds of the "no
+face at all" bucket had raw detections that the noise floor dropped**; that is where the next version of this
+defect would hide, and `survivingTracks` was deliberately not touched here.
+
+**A trap in the invariance harness, found while accepting this.** `eval-camera-invariance.ts` reports three
+levels and closes with "flag off changes nothing is evidenced at every level, up to and including pixels".
+That sentence was written for the motion flag and **overclaims after a planner change**. Its level 3
+re-renders the CAPTURED plan from `<id>.plan.json`, not a freshly computed one, so it exercises the
+filtergraph compiler and is entirely insensitive to anything `buildCropPlan` does. On this change it reported
+0 render differences while the planner had genuinely changed two of the seven fixtures.
+
+The levels that did respond: level 1 (123 persisted plans) 0 differences, correctly - stored plans are read
+back rather than recomputed. Level 2 (replay from captured detector output) **2 of 7 differ, and they are
+exactly `vlog-arctic` and `sitcom-multi`**, the two fixtures whose plans this change is supposed to move.
+The other five, including `stream-cam` and `vlog-travel`, are unchanged - which is the spec's must-not-change
+list, satisfied.
+
+Read level 3's green as "the compiler is unchanged", never as "the output is unchanged", until the script is
+taught to re-plan.
+
+**Deferred:** the webcam-inset detector failed outright on the Booster source (`stream_no_rect`, faceFrac
+3.1%), so the stream layout never fired and that clip is 11 seconds of centre crop on a frozen match-pause
+screen. That is a defect in `find_cam_rect`, whose thresholds §7a says rest on one video, and it needs the
+Booster source as a second fixture. Not bundled here, because a change that both moved the guard and retuned
+the detector could not be attributed.
+
+---
+
 ## 8. Operational facts
 
 - Prod IS this host. Plain `docker compose up -d` (dev target) is production mode. **Do not use
