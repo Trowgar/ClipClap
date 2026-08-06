@@ -673,9 +673,19 @@ describe("a partial delivery is admitted, not hidden", () => {
 
     expect(store.row.status).toBe("FAILED");
     expect(client.sendMessage).toHaveBeenCalledTimes(1);
+    // The copy ends by pointing at a button, so the button has to be on this
+    // message: these users are never told the dashboard exists, and the row is
+    // FAILED by now, so nothing else would ever re-arm it.
     expect(client.sendMessage).toHaveBeenCalledWith(
       "500",
-      t("en").donePartial(1, 3)
+      t("en").donePartial(1, 3),
+      {
+        replyMarkup: {
+          inline_keyboard: [
+            [{ text: t("en").resendRemainingBtn, callback_data: "resend:job1" }],
+          ],
+        },
+      }
     );
 
     // and it stays said exactly once

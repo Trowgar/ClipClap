@@ -42,7 +42,7 @@ import type {
 } from "@clipclap/shared";
 import type { JobStatus, User } from "@prisma/client";
 import type { TelegramClient } from "./telegram-client";
-import { deliverClips } from "./clip-delivery";
+import { deliverClips, rearmDeliveryForResend } from "./clip-delivery";
 import { extractVideoUrl, isYouTubeUrl, probeVideoUrl } from "./url-probe";
 import {
   LOCALES,
@@ -1384,14 +1384,36 @@ export async function deliverReadyTelegramJobs(
       // Nothing at all in the chat is the case deliveryGivenUp was written for,
       // and it is the copy that also warns the user not to pay for the video a
       // second time - so it is used here rather than a "0 of 12".
-      await client.sendMessage(
-        delivery.chatId,
-        inChat === total
-          ? dict.done(total)
-          : inChat > 0
-            ? dict.donePartial(inChat, total)
-            : dict.deliveryGivenUp(appUrl, total)
-      );
+      //
+      // The partial - and only the partial - carries a button. Its copy ends by
+      // pointing at one, and these users are never told the web dashboard
+      // exists, so the button is the whole of their way back. "Done" has
+      // nothing to retry, and deliveryGivenUp already sends the user elsewhere.
+      if (inChat === total) {
+        await client.sendMessage(delivery.chatId, strings.done(total));
+      } else if (inChat > 0) {
+        await client.sendMessage(
+          delivery.chatId,
+          strings.donePartial(inChat, total),
+          {
+            replyMarkup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: strings.resendRemainingBtn,
+                    callback_data: `resend:${delivery.jobId}`,
+                  },
+                ],
+              ],
+            },
+          }
+        );
+      } else {
+        await client.sendMessage(
+          delivery.chatId,
+          strings.deliveryGivenUp(appUrl, total)
+        );
+      }
 
       // Now, and not a line earlier: the board is the user's only sign of life
       // until the clips land, so it comes down only once they have.
@@ -1648,6 +1670,20 @@ async function handleCallbackQuery(
   if (query.data.startsWith("sub:")) {
     const user = await resolveTelegramUser(query.from);
     await handleSubscribeCallback(client, query, dict, user);
+    return;
+  }
+
+  // The job id arrives from the client, so ownership is checked at the row -
+  // otherwise a guessed id would re-arm a stranger's delivery. A refusal is
+  // logged rather than answered: the press was already acknowledged above, and
+  // there is nothing honest to say to someone pressing another user's button.
+  if (query.data.startsWith("resend:")) {
+    const jobId = query.data.slice("resend:".length);
+    const user = await resolveTelegramUser(query.from);
+    const rearmed = await rearmDeliveryForResend(jobId, user.id);
+    if (!rearmed) {
+      console.warn(`[delivery] resend refused for job ${jobId}: not this user's`);
+    }
     return;
   }
 

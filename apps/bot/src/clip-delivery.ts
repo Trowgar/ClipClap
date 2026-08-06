@@ -1,5 +1,5 @@
 import { unlink } from "fs/promises";
-import { getObjectSize, isPermanentTelegramError } from "@clipclap/shared";
+import { getObjectSize, isPermanentTelegramError, prisma } from "@clipclap/shared";
 import { TelegramApiError } from "./telegram-client";
 import { downloadToFile } from "./clip-file";
 
@@ -160,4 +160,26 @@ export async function deliverClips<C extends DeliverableClip>(
   }
 
   return result;
+}
+
+/** Put a settled delivery back in the poller's queue.
+ *
+ *  The button adds no second delivery path: everything after this is the
+ *  ordinary loop, which skips clips that already carry a telegramFileId. The
+ *  ownership check is not decoration - callback data comes from the user. */
+export async function rearmDeliveryForResend(
+  jobId: string,
+  userId: string
+): Promise<boolean> {
+  const row = await prisma.telegramDelivery.findFirst({
+    where: { jobId, userId },
+    select: { id: true },
+  });
+  if (!row) return false;
+
+  await prisma.telegramDelivery.update({
+    where: { id: row.id },
+    data: { status: "PENDING", attempts: 0, error: null },
+  });
+  return true;
 }

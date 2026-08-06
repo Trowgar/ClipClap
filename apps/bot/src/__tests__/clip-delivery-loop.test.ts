@@ -5,9 +5,14 @@ const downloadToFileMock = vi.hoisted(() => vi.fn());
 const markSentMock = vi.hoisted(() => vi.fn());
 const markUnsendableMock = vi.hoisted(() => vi.fn());
 
+// prisma is listed even though this file never touches it: a factory mock must
+// name every export the module under test imports, and clip-delivery.ts now
+// imports prisma for the resend re-arm. Omitting it fails the whole module with
+// `No "prisma" export is defined on the mock`.
 vi.mock("@clipclap/shared", () => ({
   getObjectSize: getObjectSizeMock,
   isPermanentTelegramError: (m: string) => m.includes("blocked"),
+  prisma: { telegramDelivery: { findFirst: vi.fn(), update: vi.fn() } },
 }));
 
 vi.mock("../clip-file", () => ({ downloadToFile: downloadToFileMock }));
