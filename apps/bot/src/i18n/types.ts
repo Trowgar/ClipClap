@@ -91,6 +91,8 @@ export interface Dict {
   processingFailed: (code: JobErrorCode | null) => string;
   done: (n: number) => string;
   donePartial: (sent: number, total: number) => string;
+  /** Label of the inline button attached to a partial delivery summary. */
+  resendRemainingBtn: string;
   /** The delivery row has spent its attempt budget and has just been retired,
    *  so this is the LAST thing this job will ever say in the chat - see
    *  deliverReadyTelegramJobs. `clips` is what actually exists (0 on the

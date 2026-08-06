@@ -71,12 +71,13 @@ const pt: Dict = {
   done: (n) =>
     `Pronto. ${n} ${pluralPt(n, "clipe", "clipes")} ${n === 1 ? "está pronto" : "estão prontos"}.`,
   donePartial: (sent, total) =>
-    `Enviei ${sent} de ${total} clipes: algo falhou antes de entregar o resto. Todos os ${total} estão prontos no seu painel.`,
+    `Enviei ${sent} de ${total} ${pluralPt(total, "clipe", "clipes")}: o resto não saiu. Toca aqui embaixo que eu tento de novo.`,
+  resendRemainingBtn: "Enviar o resto",
   deliveryGivenUp: (url, clips) => {
     if (clips === 0) {
-      return `Não consegui entregar o resultado deste vídeo neste chat e parei de tentar. Abra ${url}/dashboard para ver como terminou: nada foi perdido. Não mande este vídeo de novo antes de olhar lá, porque processar outra vez gastaria seus minutos em dobro.`;
+      return `Não consegui entregar o resultado deste vídeo neste chat e parei de tentar. Do meu lado nada foi perdido. Não mande este vídeo de novo antes de ter uma resposta, porque processar outra vez gastaria seus minutos em dobro. Fale com o suporte pelo menu de ajuda que eu conto como terminou.`;
     }
-    return `${clips === 1 ? "Seu clipe está pronto" : `Os ${clips} clipes estão prontos`}, mas não consegui entregar neste chat e parei de tentar. Nada foi perdido: abra ${url}/dashboard para assistir ou baixar. Não mande este vídeo de novo, porque os clipes já existem e processar outra vez gastaria seus minutos em dobro.`;
+    return `${clips === 1 ? "Seu clipe está pronto" : `Os ${clips} clipes estão prontos`}, mas não consegui entregar neste chat e parei de tentar. Nada foi perdido: fale com o suporte pelo menu de ajuda que eu faço chegar até você. Não mande este vídeo de novo, porque os clipes já existem e processar outra vez gastaria seus minutos em dobro.`;
   },
   doneNoClips: (reason) =>
     reason === "NO_USABLE_SPEECH"

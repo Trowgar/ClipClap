@@ -116,13 +116,14 @@ const en: Dict = {
   processingFailed: (code) => (code && enFailure[code]) || enFailureGeneric,
   done: (n) => `Done. ${n} clip${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} ready.`,
   donePartial: (sent, total) =>
-    `Sent ${sent} of ${total} clips - something went wrong before the rest could be delivered. All ${total} are ready in your dashboard.`,
+    `Sent ${sent} of ${total} clip${total === 1 ? "" : "s"} - the rest did not go through. Tap below and I will try again.`,
+  resendRemainingBtn: "Send the rest",
   deliveryGivenUp: (url, clips) => {
     if (clips === 0) {
-      return `I could not deliver the result of this video to this chat and have stopped trying. Open ${url}/dashboard to see how it ended - nothing is lost. Don't send this video again before you have looked there: processing it a second time would use your minutes twice.`;
+      return `I could not deliver the result of this video to this chat and have stopped trying. Nothing is lost on my side. Don't send this video again before you have heard back: processing it a second time would use your minutes twice. Write to support from the Help menu and I'll tell you how it ended.`;
     }
     const them = clips === 1 ? "it" : "them";
-    return `${clips === 1 ? "Your clip is" : `All ${clips} clips are`} ready, but I could not send ${them} to this chat and have stopped trying. Nothing is lost - open ${url}/dashboard to watch or download ${them}. Don't send this video again: the clips already exist, and processing it a second time would use your minutes twice.`;
+    return `${clips === 1 ? "Your clip is" : `All ${clips} clips are`} ready, but I could not send ${them} to this chat and have stopped trying. Nothing is lost - write to support from the Help menu and I'll get ${them} to you. Don't send this video again: the clips already exist, and processing it a second time would use your minutes twice.`;
   },
   doneNoClips: (reason) =>
     reason === "NO_USABLE_SPEECH"

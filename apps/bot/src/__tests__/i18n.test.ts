@@ -693,34 +693,51 @@ describe("bot i18n", () => {
     }
   });
 
-  it("sends a given-up delivery to the dashboard instead of asking for a re-upload", () => {
+  it("sends a given-up delivery to support instead of asking for a re-upload", () => {
     // The row is terminal when this is sent, so a promised retry would be a
     // lie, and "send it again" would bill a second job for clips that already
     // exist - see delivery.test.ts "a delivery that is given up on is not given
-    // up on in silence".
+    // up on in silence". The web dashboard is deliberately not shown to bot
+    // users, so the way out is support, never a URL.
     const en = t("en").deliveryGivenUp("https://clipclap.io", 3);
     expect(en).toContain("3 clips");
-    expect(en).toContain("https://clipclap.io/dashboard");
+    expect(en).not.toMatch(/dashboard/i);
+    expect(en).toMatch(/support/i);
     expect(en).not.toMatch(/try again|keep trying|retrying/i);
     expect(en).toContain("Don't send this video again");
 
     const ru = t("ru").deliveryGivenUp("https://clipclap.io", 3);
     expect(ru).toContain("3 клипа");
-    expect(ru).toContain("https://clipclap.io/dashboard");
+    expect(ru).not.toMatch(/dashboard|кабинет/i);
+    expect(ru).toMatch(/поддержку/i);
     expect(ru).not.toMatch(/пробую ещё раз|попробую снова|повторю/i);
     expect(ru).toContain("Не присылай это видео заново");
   });
 
   it("claims no clips when the given-up delivery never produced any", () => {
     // The failure-notice path retires with an empty clip list; promising clips
-    // there would send the user looking for something that is not in the
-    // dashboard either.
+    // there would send the user looking for something that does not exist. The
+    // double-billing warning is the one thing this branch may not lose.
     for (const locale of ["en", "ru"] as const) {
       const text = t(locale).deliveryGivenUp("https://clipclap.io", 0);
-      expect(text).toContain("https://clipclap.io/dashboard");
+      expect(text).not.toMatch(/dashboard|кабинет/i);
+      expect(text).toMatch(/twice|второй раз/i);
       expect(text).not.toMatch(/clips? (are|is) ready/i);
       expect(text).not.toMatch(/клипы? готов/i);
     }
+  });
+
+  it("keeps the partial summary off the dashboard and on the button", () => {
+    // donePartial is followed by an inline "send the rest" button, so the copy
+    // must point at that button - a bot user is never shown the web app.
+    for (const locale of ["en", "ru", "uk", "es", "pt", "id"] as const) {
+      const dict = t(locale);
+      expect(dict.donePartial(1, 3)).not.toMatch(
+        /dashboard|кабинет|кабінет|panel|painel/i
+      );
+      expect(dict.resendRemainingBtn.length).toBeGreaterThan(0);
+    }
+    expect(t("en").donePartial(1, 1)).toContain("1 of 1 clip -");
   });
 
   it("never leaks raw engine prose - the copy cannot even receive it", () => {
