@@ -30,6 +30,21 @@ function uploadMaxBytes(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_UPLOAD_MAX_BYTES;
 }
 
+/** Is this storage failure the object genuinely not being there?
+ *
+ *  Only that is permanent. Marking a clip unsendable is irreversible - it is
+ *  never retried - so a transient 5xx, a credential blip or a network wobble
+ *  must NOT reach that path: it would cost the user a clip they paid minutes
+ *  for, with no retry and no way back. The ordinary retry budget is bounded
+ *  anyway, so letting a wobble through costs at most a couple of minutes.
+ *
+ *  AWS SDK v3 signals a missing key as name "NotFound" with a 404; matching on
+ *  the message text would be fooled by any error that happens to mention it. */
+function isObjectGone(error: unknown): boolean {
+  const e = error as { name?: string; $metadata?: { httpStatusCode?: number } };
+  return e?.name === "NotFound" || e?.$metadata?.httpStatusCode === 404;
+}
+
 export interface DeliverableClip {
   id: string;
   storageKey: string;
@@ -85,13 +100,21 @@ export async function deliverClips<C extends DeliverableClip>(
     // conflating them would treat a vanished clip as merely unmeasured and try
     // to download it anyway. A gone object is permanent: nothing brings it back,
     // so it must not burn the attempt budget either.
+    //
+    // But only a GONE object is permanent - see isObjectGone. Any other throw
+    // from the probe (5xx, credentials, network) leaves the clip untouched so
+    // the next poll picks it up again.
     let size: number | null;
     try {
       size = await getObjectSize(clip.storageKey);
     } catch (error) {
-      const reason = `clip is no longer in storage: ${
-        error instanceof Error ? error.message : String(error)
-      }`;
+      const detail = error instanceof Error ? error.message : String(error);
+      if (!isObjectGone(error)) {
+        console.warn(`[delivery] ${clip.id}: transient storage probe failure:`, detail);
+        result.pending += 1;
+        continue;
+      }
+      const reason = `clip is no longer in storage: ${detail}`;
       console.error(`[delivery] ${clip.id}: ${reason}`);
       await deps.markUnsendable(clip.id, reason);
       result.unsendable += 1;

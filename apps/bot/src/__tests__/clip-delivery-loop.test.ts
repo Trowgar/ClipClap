@@ -92,7 +92,11 @@ describe("deliverClips", () => {
 
   // getObjectSize throws for a swept object. That must cost one clip, not the pass.
   it("treats a clip missing from storage as permanently unsendable", async () => {
-    getObjectSizeMock.mockRejectedValueOnce(new Error("NotFound"));
+    const gone = Object.assign(new Error("NotFound"), {
+      name: "NotFound",
+      $metadata: { httpStatusCode: 404 },
+    });
+    getObjectSizeMock.mockRejectedValueOnce(gone);
     const h = harness(async (id) => `FID-${id}`);
 
     const result = await deliverClips(h.client as never, "chat-1", [clip("gone"), clip("ok")], (c) => c.title, h.deps as never);
@@ -101,6 +105,32 @@ describe("deliverClips", () => {
     expect(markUnsendableMock).toHaveBeenCalledWith("gone", expect.stringContaining("storage"));
     expect(result.unsendable).toBe(1);
     expect(result.delivered).toBe(1);
+  });
+
+  // A storage probe that fails for a reason OTHER than "not there" must not
+  // bury the clip. markUnsendable is permanent - one R2 5xx would cost the user
+  // a clip they paid minutes for, with no retry and no way back.
+  it("retries a clip when the storage probe fails transiently", async () => {
+    const transient = Object.assign(new Error("InternalError"), {
+      name: "InternalError",
+      $metadata: { httpStatusCode: 500 },
+    });
+    getObjectSizeMock.mockRejectedValueOnce(transient);
+    const h = harness(async (id) => `FID-${id}`);
+
+    const result = await deliverClips(
+      h.client as never,
+      "chat-1",
+      [clip("wobble"), clip("ok")],
+      (c) => c.title,
+      h.deps as never
+    );
+
+    expect(markUnsendableMock).not.toHaveBeenCalled();
+    expect(result.unsendable).toBe(0);
+    expect(result.pending).toBe(1);
+    expect(result.delivered).toBe(1);
+    expect(h.sent).toEqual(["ok"]);
   });
 
   it("stops the whole batch when the chat itself is gone", async () => {
