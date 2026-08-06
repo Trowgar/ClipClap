@@ -1285,21 +1285,44 @@ bbox and `cropW` is usually wider than that bbox, so containment only breaks whe
 own median inside a shot. Motion fixed the single instance that existed and regressed nothing. That is the
 best it could have done, and it is not enough to ship for.
 
-**Where the badly-framed output actually comes from.** Running the detector over the delivered frames of the
-seven baselines and attributing each faceless frame to the layout that produced it:
+**Where the badly-framed output comes from - and a claim in this section that had to be retracted the same
+day.** Running the detector over the delivered frames of the seven baselines and attributing each faceless
+frame to the layout that produced it:
 
 | layout | frames | faceless | share of all faceless |
 |---|---|---|---|
-| **`center`** | 232 | **185 (79.7%)** | **82%** |
-| `single` | 488 | 41 (8.4%) | 18% |
-| `stream` | 120 | 0 | 0% |
+| `center` | 232 | 79.7% | 82% |
+| `single` | 488 | 8.4% | 18% |
+| `stream` | 120 | 0% | 0% |
 
-**82% of faceless delivered frames come from shots with no anchor at all.** Deduct `vlog-travel`, a soup bowl
-with genuinely no face in the source, and the centre path is still 112 frames with 65 faceless. Where an
-anchor exists the window holds it. **The framing problem is not that the camera cannot follow the subject; it
-is that for 28% of screen time the planner accepts no subject and centres blind.** That is §3.4 of the spec -
-faceless and small-face anchoring - scoped out because its thresholds would have rested on videos we did not
-have. We have them now and they say it is the layer that matters.
+**This section first concluded from that table that the centre path was the real defect. That conclusion was
+wrong.** It attributed frames to a layout without asking whether there was a face available to frame. Asking
+that question, for every centre-layout frame with no face in the OUTPUT, whether a face existed in the
+SOURCE at that time:
+
+| | frames | share of the faceless |
+|---|---|---|
+| no face in the source either - centring is CORRECT | **179** | **96.8%** |
+| a face was in the source - the addressable defect | **6** | 3.2% |
+
+**Six frames of 840.** 2.6% of centre-layout frames. `vlog-arctic` is wide landscape with people genuinely
+out of frame; `vlog-travel` is a soup bowl. The centre crop is doing the right thing on material that has no
+face to hold.
+
+Worse for the "lower the guard" idea: replaying the shots where every face is under the guard, the small
+faces are **already inside the centre window** in 5 of 6 shots. Anchoring on them moves the window but gains
+containment exactly once.
+
+**So all three framing measurements agree: framing is not the defect.** The window goes where the people are
+(containment 401/402), holds them, and centres blind only where centring is correct (96.8%). The owner still
+posts 2 clips in 8, so the other six fail for reasons that are not in the picture - which points at §5b's
+own words, "either uninteresting, or the beginning or end is unclear", and at the fact recorded there that
+the uninteresting half has no measuring mechanism at all.
+
+**This is the fourth aggregate in two sessions that looked convincing and did not survive the question "was
+the thing even there".** The black in-point (1 clip in 73), the opening frame (three of four causes at zero),
+Layer 0's containment (1 in 402), and this. The pattern is worth naming: attributing a symptom to a component
+is not the same as showing the component could have prevented it.
 
 **Lowering the min-face guard is the obvious fix and it is wrong.** Shot time on a blind centre crop against
 `faceSmallFrac`, replayed from captured detector output:
@@ -1324,9 +1347,10 @@ face size.
 | `sitcom-multi` | none | 8 | 0.61 |
 | `podcast-2p` | none | 6 | 0.57 |
 
-So the rule the next layer wants is not a size threshold: **a webcam inset with its faces inside it keeps the
-stream layout; with no inset, small faces may anchor as a group.** That needs no new signal and no new
-constant. `0.05` is separately a free win - it clears the sitcom's 8s of blind centre and leaves the stream
+So IF small-face anchoring is ever built, the rule is not a size threshold: a webcam inset with its faces
+inside it keeps the stream layout; with no inset, small faces may anchor as a group. That needs no new signal
+and no new constant. **But the measurement above says it would be worth about six frames in 840, so it is
+recorded as the right shape for a layer that is not currently worth building.** `0.05` is separately a free win - it clears the sitcom's 8s of blind centre and leaves the stream
 untouched - but it does nothing for the arctic case and is not the fix.
 
 **Motion safety, on the 3 of 7 items that emitted a trajectory at all.** No hard invariant violated, and the
