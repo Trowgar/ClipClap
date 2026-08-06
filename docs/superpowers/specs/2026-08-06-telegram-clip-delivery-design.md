@@ -108,6 +108,18 @@ across clips within a row. If a future change wants parallel delivery, the buffe
 first. A temp file, if used, is removed in `finally`, matching how `assPath` and clip cuts are already
 handled in the render stage.
 
+**One upload at a time is not a size bound, and `CLIP_MAX_SEC` is not one either.** 90 seconds caps duration;
+the encoder is CRF-based (libx264, CRF 23), so bytes per second are set by the content and nothing caps them.
+"36 MB is the largest observed" is a fact about history, not a limit - a bitrate, codec, resolution or
+source-quality change moves it silently, and a delivery worker that OOMs is a worse failure than the one this
+spec repairs.
+
+So the bound is explicit: **`TELEGRAM_UPLOAD_MAX_BYTES`, checked against R2's `content-length` BEFORE any
+bytes are read.** Over it, the clip is a clip-level permanent failure (section 6) - reported, not retried,
+and never buffered. The value is a deployment knob rather than a law of nature; it needs to be comfortably
+above real clips and comfortably below what the bot container can hold. It is the one number in this design
+that should be revisited if clip encoding changes.
+
 ---
 
 ## 5. Per-clip state
@@ -127,9 +139,48 @@ The delivery loop becomes:
    existing `markTelegramDeliveryAttemptFailed` path applies and the next poll retries **only the missing
    ones**.
 
-**Duplicates become structurally impossible**, which is the point. Today's code makes a partially delivered
-row terminal (`clipsInChat > 0`) precisely because a re-pickup would repeat clips already in the chat. That
-branch is deleted as part of this work - it exists only to guard a hazard this design removes.
+### The guarantee, stated honestly: at-least-once, not exactly-once
+
+An earlier draft of this section claimed duplicates become "structurally impossible". That is wrong and the
+claim is withdrawn. The send and the write cannot be atomic: Telegram offers no idempotency key, so there is
+always a window where
+
+```
+Telegram accepted the upload and put the clip in the chat
+  -> the process dies, or Postgres is briefly unreachable
+  -> telegramFileId was never written
+  -> the next poll sees an unmarked clip and sends it again
+```
+
+A timeout is the same hazard from the other side: the request may have reached Telegram and delivered the
+clip while the client never saw the `file_id`.
+
+What `telegramFileId` actually buys is this, and it is still most of the value: **duplicates are eliminated
+for every ordinary retry, i.e. every case where the previous attempt's outcome was recorded.** Today that
+number is zero, because a partially delivered row is simply abandoned. Crash and timeout windows remain, and
+are handled by policy in section 6 rather than pretended away.
+
+Today's `clipsInChat > 0` branch - which makes a partially delivered row terminal - is deleted as part of
+this work. It exists to guard a hazard that the marker reduces from "certain on every retry" to "possible
+across a crash boundary", and the cost of keeping it is the defect this spec exists to fix.
+
+### Why the marker belongs on `Clip`, proven rather than assumed
+
+A per-clip marker is only correct if a clip has exactly one delivery destination. That was checked against
+the schema, not assumed:
+
+- `TelegramDelivery.jobId` is **`@unique`** (prisma/schema.prisma:482) - at most one delivery row per job.
+- The row is created with `prisma.telegramDelivery.create`, never upserted, and `chatId` is written once at
+  creation and updated nowhere.
+- A `Clip` belongs to exactly one `Job`.
+
+So clip -> job -> one delivery row -> one chat is closed, and `telegramFileId` cannot mean "sent somewhere,
+once". A separate `TelegramDeliveryClip` table would carry the same information with an extra join.
+
+**The invariant this rests on, written down so breaking it is a decision rather than an accident:** a clip is
+delivered to exactly one chat, by one bot token. If the product ever grows multi-chat delivery, forwarding to
+a second recipient, or re-delivery after a chat id change, this column silently starts meaning the wrong
+thing, and the state must move to a delivery-item row keyed by `(deliveryId, clipId, chatId)`.
 
 **The summary is sent only when the row settles.** Without that, every poll that retried a missing clip would
 drop another "Готово" into the chat. While retries are in flight the progress board stays up; that is what it
@@ -139,12 +190,28 @@ is for.
 
 ## 6. Which failures retry
 
-Inside the per-clip catch:
+"Not a chat error, therefore retry twelve times" is too coarse. Four cases, and they behave differently:
 
-- An error **about the chat** - bot blocked, chat deleted, i.e. the existing `isPermanentTelegramError` - is
-  not about this clip. Rethrow it. The row-level handler retires the delivery immediately, as it does today.
-  Retrying is futile and each attempt is charged against the bot's global rate limit.
-- Any other error: log it, leave the clip unmarked, continue.
+| Case | Example | Behaviour |
+|---|---|---|
+| **Chat-level permanent** | bot blocked, chat deleted | Rethrow. The row-level handler retires the delivery at once, as today. Retrying is futile and each attempt is charged against the bot's global rate limit. |
+| **Clip-level permanent** | corrupt media, unsupported container, over `TELEGRAM_UPLOAD_MAX_BYTES` | Do not retry this clip. Mark it failed, keep sending the others, and count it in the final summary. Twelve doomed uploads of the same broken file help nobody. |
+| **Transient** | 429, R2 5xx, Postgres pool timeout | Leave the clip unmarked and continue. The next poll retries only it, inside the existing budget. |
+| **Ambiguous** | timeout or connection reset after the request was sent | Retry, log distinctly, accept a possible duplicate. See below. |
+
+**Distinguishing them is mechanical, not a guess.** If a Telegram error response was parsed, Telegram saw the
+request and rejected it, so the clip is definitely not in the chat and retrying is safe. If no response was
+ever received - timeout, socket error - the send may have landed. That is the ambiguous case, and the client
+knows which of the two happened by whether it got a payload.
+
+**Policy for the ambiguous case: retry, and accept the duplicate risk.** A duplicated clip is an annoyance;
+a silently missing clip is content the user paid minutes for and never receives. Given that, the failure
+direction is chosen deliberately toward duplication. Ambiguous sends get their own log line so the rate is
+observable rather than assumed - if it turns out to be common, the trade can be revisited with numbers.
+
+A clip-level permanent failure needs its own marker so the loop does not retry it and the summary can count
+it. `telegramFileId` alone cannot express "tried and impossible" - a nullable `telegramSendError String?`
+alongside it is enough, and keeps the two states distinguishable without a second table.
 
 The existing budget is unchanged: 12 attempts at a 10s poll, about two minutes, sized against 429 backoff,
 Postgres failover and R2 5xx bursts. It was never the problem - the problem was that a partial delivery could
@@ -188,6 +255,31 @@ separate change and is deliberately out of scope here.
 
 ---
 
+## 8a. Rollout: what happens to deliveries that predate the column
+
+Every existing clip has `telegramFileId = NULL`, including clips that are already sitting in someone's chat.
+"Skip clips that carry a file id" therefore says nothing useful about them, and re-sending such a row would
+duplicate whatever landed before the migration.
+
+**Measured, so the policy can be exact instead of defensive.** The whole table is 16 `DELIVERED`,
+1 `FAILURE_NOTIFIED` and **2 `FAILED`** rows. Both failures are this same defect - `cmshc1olm000le3zk8f2etco2`
+from today and `cmrv9t0x5000y9pvweq9c8j78` from 2026-07-21, which means this bug has been live since at least
+July and was simply never diagnosed.
+
+**The rows cannot resurrect themselves.** `getPendingTelegramDeliveries` selects only `PENDING` (with the job
+`DONE`/`FAILED`) and `FAILURE_NOTIFIED` (with the job `DONE`). `FAILED` appears in neither, so no poll will
+ever pick these two up. Nothing needs to be done to make the rollout safe.
+
+The policy is therefore one rule: **the resend button is only ever attached to summaries sent by the new
+code.** Legacy `FAILED` rows stay terminal and carry no button, so no user action can re-arm them.
+
+Re-arming one by hand remains possible and is the only path to a duplicate. For the two rows above we know
+the risk exactly - `cmshc1olm000le3zk8f2etco2` has one clip already in its chat, so a manual resend duplicates
+one clip and recovers eleven. That is a judgement call for whoever runs it, not something the code should
+decide silently; the count is recorded here so the call can be made with the number in hand.
+
+---
+
 ## 9. Testing
 
 Bot tests run in the `bot` container and mock HTTP, so everything below is testable except a real upload.
@@ -196,8 +288,14 @@ Bot tests run in the `bot` container and mock HTTP, so everything below is testa
   reverting the call to a URL send must fail the test.
 - **Partial failure - today's exact case:** of 12 clips the second throws; the other 11 are still sent, they
   carry a `file_id`, and the failed one does not.
-- **No duplicates:** a second pass over the same row sends only the clip lacking a `file_id` and re-sends
-  nothing.
+- **No duplicates on an ordinary retry:** a second pass over the same row sends only the clip lacking a
+  `file_id` and re-sends nothing. This is the guarantee section 5 actually claims - the crash window is not
+  testable here and is not claimed.
+- **Error classification:** a parsed Telegram rejection, a network timeout, an over-cap clip and a blocked
+  bot each take their own branch from section 6, and the over-cap clip is refused *before* its bytes are
+  read.
+- **Clip-level permanent failure:** a clip marked with `telegramSendError` is not retried on the next pass
+  and is counted in the summary.
 - **Chat-level error:** a blocked bot propagates out of the loop and retires the row at once, rather than
   attempting eleven more doomed sends.
 - **Summary once:** while the row is unsettled, no "Готово" is sent.
