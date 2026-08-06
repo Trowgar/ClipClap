@@ -1,5 +1,7 @@
-import { isPermanentTelegramError } from "@clipclap/shared";
+import { unlink } from "fs/promises";
+import { getObjectSize, isPermanentTelegramError } from "@clipclap/shared";
 import { TelegramApiError } from "./telegram-client";
+import { downloadToFile } from "./clip-file";
 
 /** What a failed send means for what happens next.
  *
@@ -19,4 +21,120 @@ export type SendFailureKind = "chat-permanent" | "transient" | "ambiguous";
 export function classifySendFailure(error: unknown): SendFailureKind {
   if (!(error instanceof TelegramApiError)) return "ambiguous";
   return isPermanentTelegramError(error.message) ? "chat-permanent" : "transient";
+}
+
+const DEFAULT_UPLOAD_MAX_BYTES = 262_144_000;
+
+function uploadMaxBytes(): number {
+  const raw = Number(process.env.TELEGRAM_UPLOAD_MAX_BYTES);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_UPLOAD_MAX_BYTES;
+}
+
+export interface DeliverableClip {
+  id: string;
+  storageKey: string;
+  telegramFileId: string | null;
+  telegramSendError: string | null;
+}
+
+export interface ClipDeliveryDeps {
+  markSent(clipId: string, fileId: string | undefined): Promise<void>;
+  markUnsendable(clipId: string, reason: string): Promise<void>;
+}
+
+export interface ClipDeliveryResult {
+  /** Clips that reached the chat during THIS pass. */
+  delivered: number;
+  /** Still owed: no file id, no permanent verdict. The row stays re-pickable. */
+  pending: number;
+  /** Refused for good. Counted in the summary, never retried. */
+  unsendable: number;
+}
+
+/** Send every clip that is not already in the chat, one at a time.
+ *
+ *  ONE CLIP'S FAILURE COSTS ONLY ITSELF. That is the defect this exists to fix:
+ *  the previous loop had no per-clip catch, so the first refusal threw and every
+ *  later clip - all deliverable - was never attempted.
+ *
+ *  SEQUENTIAL ON PURPOSE. Do not map this into Promise.all. Uploads are
+ *  file-backed rather than buffered, but concurrency here would also multiply
+ *  temp files and Telegram rate pressure, and the poller already serialises
+ *  rows. */
+export async function deliverClips<C extends DeliverableClip>(
+  client: { sendVideoUpload(chatId: string | number, filePath: string, caption?: string): Promise<string | undefined> },
+  chatId: string,
+  clips: readonly C[],
+  captionFor: (clip: C) => string,
+  deps: ClipDeliveryDeps
+): Promise<ClipDeliveryResult> {
+  const result: ClipDeliveryResult = { delivered: 0, pending: 0, unsendable: 0 };
+  const maxBytes = uploadMaxBytes();
+
+  for (const clip of clips) {
+    if (clip.telegramFileId) continue;
+    if (clip.telegramSendError) {
+      result.unsendable += 1;
+      continue;
+    }
+
+    // Before a byte is read: an absurd file must not be downloaded at all.
+    //
+    // getObjectSize THROWS for a key that is gone (NotFound) and returns null
+    // only for "answered but reported no length" - two different things, and
+    // conflating them would treat a vanished clip as merely unmeasured and try
+    // to download it anyway. A gone object is permanent: nothing brings it back,
+    // so it must not burn the attempt budget either.
+    let size: number | null;
+    try {
+      size = await getObjectSize(clip.storageKey);
+    } catch (error) {
+      const reason = `clip is no longer in storage: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+      console.error(`[delivery] ${clip.id}: ${reason}`);
+      await deps.markUnsendable(clip.id, reason);
+      result.unsendable += 1;
+      continue;
+    }
+
+    if (size !== null && size > maxBytes) {
+      const reason = `clip is too large to send: ${size} bytes exceeds ${maxBytes}`;
+      console.error(`[delivery] ${clip.id}: ${reason}`);
+      await deps.markUnsendable(clip.id, reason);
+      result.unsendable += 1;
+      continue;
+    }
+
+    let path: string | undefined;
+    try {
+      path = await downloadToFile(clip.storageKey);
+      const fileId = await client.sendVideoUpload(chatId, path, captionFor(clip));
+      await deps.markSent(clip.id, fileId);
+      result.delivered += 1;
+    } catch (error) {
+      const kind = classifySendFailure(error);
+      if (kind === "chat-permanent") throw error;
+
+      if (kind === "ambiguous") {
+        // Logged distinctly because retrying this one can duplicate: the send
+        // may have landed and we never heard. The rate needs to be observable
+        // rather than assumed.
+        console.warn(
+          `[delivery] ${clip.id}: no response from Telegram, retrying may duplicate:`,
+          error instanceof Error ? error.message : error
+        );
+      } else {
+        console.warn(
+          `[delivery] ${clip.id}: transient send failure:`,
+          error instanceof Error ? error.message : error
+        );
+      }
+      result.pending += 1;
+    } finally {
+      if (path) await unlink(path).catch(() => undefined);
+    }
+  }
+
+  return result;
 }
