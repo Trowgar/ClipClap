@@ -759,6 +759,12 @@ describe("stream layout", () => {
     faceLargeFrac: 0.1,
     stream: true,
     camShare: 0.4,
+    // Every assertion in this block predates the motion layer and describes the
+    // static window, so motion stays off here on purpose. Named rather than
+    // omitted because PlanOptions no longer lets it be omitted - which is the
+    // whole point of it being required.
+    motion: false,
+    camera: DEFAULT_CAMERA,
   };
   // Face measured on the fixture: 43x56 at (179,110), 3.4% of frame width.
   const insetFace: FaceTrack = {

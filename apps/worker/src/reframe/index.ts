@@ -106,6 +106,8 @@ export async function computeCropPlan(
         faceLargeFrac: cfg.faceLargeFrac,
         stream: cfg.stream,
         camShare: cfg.camShare,
+        motion: cfg.motion,
+        camera: cfg.camera,
       },
       cam
     );

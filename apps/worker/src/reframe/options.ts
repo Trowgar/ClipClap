@@ -18,16 +18,18 @@ export interface PlanOptions {
   /** Emit crop-window trajectories at all. Off means every plan is byte-
    *  identical to the static-window one that ships today.
    *
-   *  Optional, unlike every field above it, and deliberately: the callers that
-   *  hand-build a PlanOptions literal (`reframe/index.ts`, the config seam
-   *  test) predate this field, and absent must mean exactly what `false` means.
-   *  Making it required would force those call sites to write `motion: false`
-   *  to say what omitting it already says. */
-  motion?: boolean;
+   *  Required, and that is the point. `false` and "I forgot" are the same
+   *  runtime behaviour, so an optional field would let a future caller that
+   *  hand-builds a PlanOptions literal disable this feature by omission, in
+   *  silence, with every test still green - the one failure mode this layer
+   *  cannot detect from the inside. Required, the compiler catches it instead.
+   *  Callers that want today's behaviour say `motion: false` out loud, or
+   *  spread DEFAULT_PLAN_OPTIONS. */
+  motion: boolean;
   /** How the window moves once motion is on. Never decides whom it follows.
-   *  Absent falls back to DEFAULT_CAMERA, which is what `motion: false` renders
-   *  moot anyway. */
-  camera?: CameraConfig;
+   *  Required for the same reason as `motion`: a caller that means DEFAULT_CAMERA
+   *  should name it, since a wrong-but-plausible camera is invisible in a plan. */
+  camera: CameraConfig;
 }
 
 export const DEFAULT_PLAN_OPTIONS: Readonly<PlanOptions> = Object.freeze({

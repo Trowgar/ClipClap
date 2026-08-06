@@ -3,6 +3,7 @@ import { loadReframeConfig } from "../reframe/config";
 import { resolveCamRect } from "../reframe/cam-rect";
 import { buildCropPlan } from "../reframe/plan";
 import { DEFAULT_PLAN_OPTIONS } from "../reframe/options";
+import { DEFAULT_CAMERA } from "../reframe/camera";
 import type { FaceTrack, Shot, ShotTracks } from "../reframe/types";
 
 describe("loadReframeConfig", () => {
@@ -22,6 +23,8 @@ describe("loadReframeConfig", () => {
       faceLargeFrac: DEFAULT_PLAN_OPTIONS.faceLargeFrac,
       pipMaxFrac: 0.5,
       pipEdgeMin: 4.0,
+      motion: false,
+      camera: DEFAULT_CAMERA,
     });
   });
 
@@ -113,6 +116,8 @@ describe("REFRAME_STREAM gates the stream layout end to end", () => {
       faceLargeFrac: cfg.faceLargeFrac,
       stream: cfg.stream,
       camShare: cfg.camShare,
+      motion: cfg.motion,
+      camera: cfg.camera,
     };
     return buildCropPlan(shots, tracksByShot, SW, SH, opts, cam);
   }
@@ -131,5 +136,57 @@ describe("REFRAME_STREAM gates the stream layout end to end", () => {
     expect(plan?.stream).toBeDefined();
     expect(plan?.version).toBe(2);
     expect(plan?.profile?.class).toBe("stream");
+  });
+});
+
+describe("REFRAME_MOTION", () => {
+  it("is off by default", () => {
+    expect(loadReframeConfig({}).motion).toBe(false);
+  });
+
+  it("requires the exact literal 'on'", () => {
+    // Same rule as REFRAME_STREAM: a killswitch that can be flipped by
+    // accident is not one.
+    expect(loadReframeConfig({ REFRAME_MOTION: "on" }).motion).toBe(true);
+    expect(loadReframeConfig({ REFRAME_MOTION: "true" }).motion).toBe(false);
+    expect(loadReframeConfig({ REFRAME_MOTION: "1" }).motion).toBe(false);
+    expect(loadReframeConfig({ REFRAME_MOTION: "ON" }).motion).toBe(false);
+    expect(loadReframeConfig({ REFRAME_MOTION: " on" }).motion).toBe(false);
+  });
+
+  it("carries camera knobs at the documented defaults", () => {
+    const cfg = loadReframeConfig({});
+    expect(cfg.camera).toEqual({
+      deadzoneFrac: 0.12,
+      settleFrac: 0.04,
+      maxSpeedFrac: 0.25,
+      maxKeyframes: 200,
+    });
+  });
+
+  it("lets each knob be overridden", () => {
+    const cfg = loadReframeConfig({
+      REFRAME_CAM_DEADZONE: "0.2",
+      REFRAME_CAM_SETTLE: "0.05",
+      REFRAME_CAM_MAX_SPEED: "0.5",
+      REFRAME_CAM_MAX_KEYFRAMES: "50",
+    });
+    expect(cfg.camera).toEqual({
+      deadzoneFrac: 0.2,
+      settleFrac: 0.05,
+      maxSpeedFrac: 0.5,
+      maxKeyframes: 50,
+    });
+  });
+
+  it("falls back to the default for a knob that is not a positive number", () => {
+    const cfg = loadReframeConfig({
+      REFRAME_CAM_DEADZONE: "banana",
+      REFRAME_CAM_SETTLE: "0",
+      REFRAME_CAM_MAX_SPEED: "-1",
+    });
+    expect(cfg.camera.deadzoneFrac).toBe(0.12);
+    expect(cfg.camera.settleFrac).toBe(0.04);
+    expect(cfg.camera.maxSpeedFrac).toBe(0.25);
   });
 });

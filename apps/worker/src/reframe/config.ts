@@ -1,4 +1,5 @@
 import { DEFAULT_PLAN_OPTIONS } from "./options";
+import { DEFAULT_CAMERA, type CameraConfig } from "./camera";
 
 export interface ReframeConfig {
   engine: "off" | "faces";
@@ -14,6 +15,10 @@ export interface ReframeConfig {
   faceLargeFrac: number;
   pipMaxFrac: number;
   pipEdgeMin: number;
+  /** Crop-trajectory killswitch. Planning runs regardless; this decides whether
+   *  a trajectory is emitted at all. */
+  motion: boolean;
+  camera: CameraConfig;
 }
 
 function positive(v: string | undefined, fallback: number): number {
@@ -46,5 +51,14 @@ export function loadReframeConfig(
     ),
     pipMaxFrac: positive(env.REFRAME_PIP_MAX_FRAC, 0.5),
     pipEdgeMin: positive(env.REFRAME_PIP_EDGE_MIN, 4.0),
+    // Exact literal, the REFRAME_STREAM rule: a killswitch that can be flipped
+    // by accident is not one.
+    motion: env.REFRAME_MOTION === "on",
+    camera: {
+      deadzoneFrac: positive(env.REFRAME_CAM_DEADZONE, DEFAULT_CAMERA.deadzoneFrac),
+      settleFrac: positive(env.REFRAME_CAM_SETTLE, DEFAULT_CAMERA.settleFrac),
+      maxSpeedFrac: positive(env.REFRAME_CAM_MAX_SPEED, DEFAULT_CAMERA.maxSpeedFrac),
+      maxKeyframes: positive(env.REFRAME_CAM_MAX_KEYFRAMES, DEFAULT_CAMERA.maxKeyframes),
+    },
   };
 }
