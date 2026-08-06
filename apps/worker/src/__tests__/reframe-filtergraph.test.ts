@@ -270,14 +270,32 @@ describe("rampX", () => {
   });
 
   it("expresses an instantaneous step without dividing by zero", () => {
-    const expr = rampX([
-      { t: 1, x: 100 },
-      { t: 1, x: 400 },
-    ]);
-    expect(expr).not.toContain("/0)");
-    expect(expr).not.toContain("/0.00)");
-    expect(expr).not.toContain("NaN");
-    expect(expr).not.toContain("Infinity");
+    // Exact output on purpose. This string is not an implementation detail, it
+    // is the contract with ffmpeg's expression parser, so if the emitted form
+    // ever changes someone should have to look at it and re-measure against
+    // real ffmpeg rather than have a loose toContain wave it through.
+    //
+    // This assertion replaced three not.toContain guards - "/0)", "/0.00)",
+    // "NaN", "Infinity" - that were unfalsifiable from the day they were
+    // written. They were shaped as a "/0" followed immediately by a CLOSING
+    // PAREN, but rampX always emits ",0,1)" after the denominator, so no input
+    // could ever produce the substring they looked for. They read as coverage
+    // in a test whose name promises exactly the property they did not check.
+    // Mutation testing found the test, not the code: deleting STEP_SEC from
+    // the denominator left the whole suite green. The three-decimal formatter
+    // did not weaken them; they never worked.
+    //
+    // 0.001 is small enough, measured rather than assumed. At 200fps - five
+    // times this step window - the transition on a luma-encoded source read
+    // x=499.9 at t=4.495 and t=4.500, then x=200.0 at t=4.505, with no
+    // intermediate value at any frame. That is what "sub-frame at any frame
+    // rate this product encodes" rests on.
+    expect(
+      rampX([
+        { t: 1, x: 100 },
+        { t: 1, x: 400 },
+      ])
+    ).toBe("100+300*clip((t-1.000)/0.001,0,1)");
   });
 
   it("throws on an empty trajectory rather than emitting an empty expression", () => {
