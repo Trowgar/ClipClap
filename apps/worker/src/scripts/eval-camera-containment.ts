@@ -63,6 +63,7 @@ import {
   buildTargetSamples,
   cropWidthFor,
   selectGroupForShot,
+  type AnchorPolicy,
 } from "../reframe/plan";
 import type {
   CropPlan,
@@ -376,6 +377,30 @@ async function measure(
 
   const cropW = cropWidthFor(height);
   const minFaceWidth = opts.faceSmallFrac * width;
+  // Whether a face may anchor is no longer the threshold alone: it also depends
+  // on the clip's class and on the resolved inset. The planner reads both off
+  // the profile it just computed, so this reads them off the same plan rather
+  // than re-deriving them - otherwise the metric would score groups the planner
+  // never pointed at, which is exactly what this file's header forbids.
+  //
+  // `buildCropPlan` always sets `profile`, but the field is optional on the
+  // stored type. Refuse to score rather than guess a class, in the same spirit
+  // as the config-drift refusal above: a guessed class is a silently different
+  // question.
+  if (!legacy.profile) {
+    return {
+      result: emptyResult(
+        id,
+        "plan carries no profile - cannot reproduce the anchor rule, refusing to score"
+      ),
+      detail,
+    };
+  }
+  const anchorPolicy: AnchorPolicy = {
+    minFaceWidth,
+    sourceClass: legacy.profile.class,
+    camRect: cam?.rect ?? null,
+  };
   const byIndex = new Map(cap.tracks.map((s) => [s.shotIndex, s.tracks]));
   const excluded = new Map<string, number>();
   const samples: Sample[] = [];
@@ -392,7 +417,7 @@ async function measure(
   for (const [i, shot] of cap.shots.entries()) {
     const group = selectGroupForShot(
       byIndex.get(i) ?? [],
-      minFaceWidth,
+      anchorPolicy,
       cropW,
       width
     );
