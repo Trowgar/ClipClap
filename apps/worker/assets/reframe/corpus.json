@@ -1,23 +1,55 @@
 {
   "outDir": ".corpus",
+  "note": "Materialised 2026-08-06 from the owner's own jobs, not from guessed public videos. The mp4s live in .corpus/ which is gitignored and outside R2 and the Job table, so the retention sweep cannot reach them. The url/in/len fields are the provenance and let corpus-fetch.ts rebuild an item if its file is lost. Offsets are into the NORMALIZED artifact the worker downloaded; if a re-fetch from the original URL lands on different content, that is why. sitcom-multi has no url - it was an upload - and can only be recovered from R2 while that job's artifact survives.",
   "items": [
-    { "id": "podcast-2p",   "url": "", "in": "00:00:00", "len": 90,
-      "tests": "two people seated, shifting and leaning - the core case" },
-    { "id": "sitcom-multi", "url": "", "in": "00:00:00", "len": 90,
-      "tests": "multi-camera scripted comedy - closest to our only real user material" },
-    { "id": "lockedoff-1p", "url": "", "in": "00:00:00", "len": 90,
-      "tests": "single talking head, camera locked off - MUST NOT MOVE, the false-positive control" },
-    { "id": "vlog-mixed",   "url": "", "in": "00:00:00", "len": 120,
-      "tests": "talking head, then street, then a phone screen - mixed material at shot level" },
-    { "id": "stream-cam",   "url": "", "in": "00:00:00", "len": 90,
-      "tests": "gameplay with a webcam inset - stream layout regression" },
-    { "id": "gameplay",     "url": "", "in": "00:00:00", "len": 90,
-      "tests": "no faces - byte-identical regression guard" },
-    { "id": "sports",       "url": "", "in": "00:00:00", "len": 90,
-      "tests": "no anchorable faces - byte-identical regression guard" },
-    { "id": "screencast",   "url": "", "in": "00:00:00", "len": 90,
-      "tests": "screen recording - byte-identical regression guard" },
-    { "id": "animation",    "url": "", "in": "00:00:00", "len": 90,
-      "tests": "stylised faces YuNet is expected to miss - byte-identical regression guard" }
+    {
+      "id": "podcast-2p",
+      "url": "https://www.youtube.com/watch?v=7YLLXkHrrUM",
+      "in": "00:25:00",
+      "len": 90,
+      "tests": "close two-person interview, dark studio - the core case. 1920x1080 25fps"
+    },
+    {
+      "id": "podcast-2p-b",
+      "url": "https://www.youtube.com/watch?v=PEmI1q4VmMs",
+      "in": "00:20:00",
+      "len": 90,
+      "tests": "second interview, different studio and framing - guards against tuning to one set. 1920x1080 25fps"
+    },
+    {
+      "id": "lockedoff-1p",
+      "url": "",
+      "in": "00:00:00",
+      "len": 90,
+      "tests": "THE FALSE-POSITIVE CONTROL. A single frame of podcast-2p held for 90s, so the subject is literally motionless. Any camera movement here is unambiguously wrong - stronger evidence than real locked-off footage, where a still-looking subject still drifts a few pixels. Rebuild: ffmpeg -loop 1 -i <frame> -t 90. 1920x1080 25fps"
+    },
+    {
+      "id": "stream-cam",
+      "url": "https://youtu.be/qchuoZZXy7k",
+      "in": "00:30:00",
+      "len": 90,
+      "tests": "real CS2 gameplay with a two-person webcam inset top-left - the stream layout regression, on actual material rather than the deleted fixture 7a rests on. 1920x1080 60fps"
+    },
+    {
+      "id": "vlog-arctic",
+      "url": "https://www.youtube.com/watch?v=GpQSUjNsNm0",
+      "in": "00:15:00",
+      "len": 90,
+      "tests": "wide landscape, three figures far enough away to sit under the min-face guard - faceless regression guard AND the small-face path. 1920x1080 30fps"
+    },
+    {
+      "id": "vlog-travel",
+      "url": "https://www.youtube.com/watch?v=L4DvjdbjY4Q",
+      "in": "00:13:20",
+      "len": 90,
+      "tests": "object close-up with no face at all - the pure faceless guard. Must stay byte-identical. 1920x1080 30fps"
+    },
+    {
+      "id": "sitcom-multi",
+      "url": "",
+      "in": "00:10:00",
+      "len": 90,
+      "tests": "multi-camera scripted comedy, the set engine-notes 7b and 7c were measured on. Upload, so recoverable only from R2. 640x352 30fps"
+    }
   ]
 }
