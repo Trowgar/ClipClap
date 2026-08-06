@@ -1646,7 +1646,7 @@ Run:
 docker compose exec -T worker-render sh -c 'cd /app && npx vitest run apps/worker/src/__tests__/'
 ```
 Expected: PASS. **Every pre-existing assertion in `reframe-plan.test.ts` must still hold with its original
-expected values** - the nine layout assertions carrying `x` of 496, 656, 596, 236 and 96 are the guard that
+expected values** - the nine layout assertions carrying `x` of 496, 656, 596, 386 and 96 are the guard that
 `x` did not move.
 
 Two specific pre-existing tests to confirm by name rather than trust the count:
@@ -2222,7 +2222,7 @@ git commit -m "feat(reframe): REFRAME_MOTION, off by default"
 **Files:**
 - Create: `apps/worker/src/scripts/eval-camera-invariance.ts`
 
-**Context:** Spec §6.2. Level 1 needs no video and guards the 96 persisted plans. Level 2 uses the detector
+**Context:** Spec §6.2. Level 1 needs no video and guards the persisted plans - **84 of them, measured**: 129 clip rows, 96 carry a `cropPlan`, 84 of those are not soft-deleted. The other 12 can never be recompiled. Level 2 uses the detector
 JSON captured in Task 2. Level 3 compares against the baseline renders under the hash policy Task 2
 established.
 
@@ -2237,7 +2237,7 @@ Create `apps/worker/src/scripts/eval-camera-invariance.ts`:
  *   docker compose exec -T worker-render sh -c \
  *     "cd /app/apps/worker && npx tsx src/scripts/eval-camera-invariance.ts"
  *
- * Level 1 runs against the 96 crop plans already in the database and needs no
+ * Level 1 runs against the 84 live crop plans already in the database and needs no
  * video at all, which is what makes it the check that can run every time.
  * Level 2 replays the detector JSON captured by corpus-baseline.ts. Level 3
  * compares full renders.
