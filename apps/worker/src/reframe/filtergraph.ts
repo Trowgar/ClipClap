@@ -1,4 +1,4 @@
-import type { CropPlan, FilterSpec, ShotLayout } from "./types";
+import type { CropPlan, FilterSpec, Keyframe, ShotLayout } from "./types";
 import { cropWidthFor, evenClamp, tileWidthFor } from "./plan";
 
 type SplitLayout = Extract<ShotLayout, { layout: "split" }>;
@@ -15,6 +15,61 @@ export function piecewiseX(segments: Array<{ end: number; x: number }>): string 
     expr = `if(lt(t,${fmt(segments[i].end)}),${segments[i].x},${expr})`;
   }
   return expr;
+}
+
+/** A step takes this long. Sub-frame at any frame rate this product encodes, so
+ *  it is a step in every rendered frame, while giving the ramp a non-zero
+ *  denominator. */
+const STEP_SEC = 0.001;
+
+/**
+ * x(t) as a FLAT SUM of clipped ramps: `x0 + d1*clip((t-t0)/dt0,0,1) + ...`.
+ *
+ * Nesting depth 1 regardless of how many keyframes there are, which is the
+ * whole reason this exists. `piecewiseX` nests one `if()` per segment and
+ * ffmpeg's av_expr parser fails at 99 of them - measured, and the origin of
+ * MAX_PLAN_SHOTS. Measured limits for this form: 3000 terms parse and cost
+ * 1.16x encode time, and the real ceiling is the kernel's MAX_ARG_STRLEN of
+ * 131072 characters, because the graph is passed as one argv element. Hence the
+ * 200-keyframe cap in camera.ts, which lands at about 6 KB.
+ *
+ * A flat run costs nothing: equal consecutive x values emit no term.
+ */
+export function rampX(keys: Keyframe[]): string {
+  if (keys.length === 0) throw new Error("rampX: empty");
+  const terms: string[] = [String(keys[0].x)];
+  for (let i = 1; i < keys.length; i++) {
+    const a = keys[i - 1];
+    const b = keys[i];
+    const delta = b.x - a.x;
+    if (delta === 0) continue;
+    const dt = Math.max(b.t - a.t, STEP_SEC);
+    terms.push(
+      `${delta >= 0 ? "+" : "-"}${Math.abs(delta)}*clip((t-${fmt(a.t)})/${fmt(dt)},0,1)`
+    );
+  }
+  return terms.join("");
+}
+
+/**
+ * The whole clip's window trajectory, in order.
+ *
+ * Split and stream shots contribute the centre: the tiles cover the frame while
+ * they are enabled, so the base crop under them is never visible - the same
+ * reasoning `buildFiltergraph` already applies to `baseX`.
+ */
+export function planKeyframes(plan: CropPlan, centerX: number): Keyframe[] {
+  const keys: Keyframe[] = [];
+  for (const shot of plan.shots) {
+    if (shot.layout === "single" && shot.xs && shot.xs.length > 0) {
+      keys.push(...shot.xs);
+      continue;
+    }
+    const x =
+      shot.layout === "split" || shot.layout === "stream" ? centerX : shot.x;
+    keys.push({ t: shot.start, x }, { t: shot.end, x });
+  }
+  return keys;
 }
 
 /**
@@ -40,12 +95,22 @@ export function buildFiltergraph(plan: CropPlan, assSnippet?: string): FilterSpe
 
   // Tiled layouts cover the whole frame while they are enabled, so the base
   // crop under them is never visible - centre it and keep the expression total.
-  const baseX = piecewiseX(
-    plan.shots.map((s) => ({
-      end: s.end,
-      x: s.layout === "split" || s.layout === "stream" ? centerX : s.x,
-    }))
+  // The ramp form is used ONLY when a trajectory is actually present. A plan
+  // without one compiles through the piecewise form it always used, so a clip
+  // where the camera never moves is byte-identical to legacy whatever the flag
+  // says - which is what makes the rollback story testable rather than
+  // promised.
+  const hasTrajectory = plan.shots.some(
+    (s) => s.layout === "single" && s.xs && s.xs.length > 0
   );
+  const baseX = hasTrajectory
+    ? rampX(planKeyframes(plan, centerX))
+    : piecewiseX(
+        plan.shots.map((s) => ({
+          end: s.end,
+          x: s.layout === "split" || s.layout === "stream" ? centerX : s.x,
+        }))
+      );
   const baseChain = `crop=w=${cropW}:h=ih:x='${baseX}':y=0,scale=1080:1920`;
 
   // Must stay BELOW baseChain: the branch reads it, and `const` is not hoisted
