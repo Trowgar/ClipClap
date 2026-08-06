@@ -67,12 +67,13 @@ const id: Dict = {
   processingFailed: (code) => (code && idFailure[code]) || idFailureGeneric,
   done: (n) => `Selesai. ${n} klip sudah siap.`,
   donePartial: (sent, total) =>
-    `Terkirim ${sent} dari ${total} klip: ada yang gagal sebelum sisanya bisa dikirim. Semua ${total} klip sudah siap di dashboard-mu.`,
+    `Terkirim ${sent} dari ${total} klip: sisanya tidak lolos. Tekan tombol di bawah, nanti aku coba lagi.`,
+  resendRemainingBtn: "Kirim sisanya",
   deliveryGivenUp: (url, clips) => {
     if (clips === 0) {
-      return `Aku tidak bisa mengirim hasil video ini ke chat ini dan berhenti mencoba. Buka ${url}/dashboard untuk melihat bagaimana akhirnya: tidak ada yang hilang. Jangan kirim video ini lagi sebelum kamu mengeceknya di sana, karena memprosesnya sekali lagi akan memakai menitmu dua kali.`;
+      return `Aku tidak bisa mengirim hasil video ini ke chat ini dan berhenti mencoba. Dari sisiku tidak ada yang hilang. Jangan kirim video ini lagi sebelum kamu dapat kabar, karena memprosesnya sekali lagi akan memakai menitmu dua kali. Hubungi dukungan lewat menu bantuan, nanti aku ceritakan bagaimana akhirnya.`;
     }
-    return `${clips === 1 ? "Klipmu sudah siap" : `Semua ${clips} klipmu sudah siap`}, tapi aku tidak bisa mengirimnya ke chat ini dan berhenti mencoba. Tidak ada yang hilang: buka ${url}/dashboard untuk menonton atau mengunduhnya. Jangan kirim video ini lagi, karena klipnya sudah ada dan memprosesnya sekali lagi akan memakai menitmu dua kali.`;
+    return `${clips === 1 ? "Klipmu sudah siap" : `Semua ${clips} klipmu sudah siap`}, tapi aku tidak bisa mengirimnya ke chat ini dan berhenti mencoba. Tidak ada yang hilang: hubungi dukungan lewat menu bantuan, nanti aku kirimkan ke kamu. Jangan kirim video ini lagi, karena klipnya sudah ada dan memprosesnya sekali lagi akan memakai menitmu dua kali.`;
   },
   doneNoClips: (reason) =>
     reason === "NO_USABLE_SPEECH"
