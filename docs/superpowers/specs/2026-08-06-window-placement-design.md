@@ -1,0 +1,211 @@
+# Window placement: stop the crop edge cutting people in half
+
+**Status:** design, approved to write 2026-08-06. No implementation yet.
+
+**One sentence.** The crop window is centred on the faces it anchors and never asked what its edges do to the
+faces it did not anchor, so a second person standing just outside the group is sliced vertically down the
+middle.
+
+---
+
+## 1. The defect
+
+The owner spotted it in a delivered clip: the host who is listening appears cut in half at the frame edge.
+
+Clip `cmsi4gftv0005akgyb62kp2mb`, 1920x1080, first shot:
+
+```
+id0  x=614..864   w=250 (13.0%)  samples=12
+id1  x=986..1217  w=231 (12.0%)  samples=7
+bbox 614..1217, span 603     FIT_MARGIN allows 547     cropW = 608
+```
+
+Both faces clear the min-face guard. Their span is 603 pixels and the window is 608 wide, so **one window
+holds both whole** - but `FIT_MARGIN = 0.9` reserves 10% for breathing room, the pair is rejected, and
+`bestFaceGroup` picks the larger face alone. The window lands at x=434, covering 434..1042, and id1 at
+986..1217 is left with only its left sliver inside. A person, bisected by the edge.
+
+Nothing in the planner asks what the window does to a face it did not choose.
+
+### 1.1 Scale
+
+Re-planned over all clips of the real jobs from 2026-08-06, 53 clips:
+
+| | |
+|---|---|
+| time on an anchored (`single`) crop | 1250s |
+| **a detected face is bisected by the window edge** | **225s (18.0%)** |
+| clips affected | **13 of 53 (25%)** |
+| longest single span | 68.4s |
+
+A face is counted as bisected when 15% to 85% of its width shows. Faces wider than the window itself are
+excluded - they can never be whole, centring on them is correct, and §7c already handles them; that is 25s.
+
+---
+
+## 2. What this is not, and the measurement that killed each
+
+Both alternatives below were designed, and one was verified to render, before being measured. They are
+recorded so that nobody proposes them again from first principles.
+
+### 2.1 No split with narrow tiles - measured at 0 seconds
+
+Two people too far apart for one window is exactly what a stacked split is for. §7b says the tiles cannot be
+made disjoint on 16:9 and that narrowing them "means cropping them vertically as well, which is a different
+filtergraph and a different project". **That conclusion is wrong on the arithmetic and was verified wrong in
+pixels.** An output tile is 1080x960, aspect 9:8; taking 960x853 from the source has the same aspect and two
+of them fill 1920 exactly. Rendered: `crop=960:853` twice, scaled to 1080x960, stacked, giving 1080x1920 at
+SAR 1:1, with the two tiles showing source regions centred near x=481 and x=1422 - genuinely different parts
+of the frame, not the same one twice.
+
+So it is buildable. It is also **not needed: 0 seconds of the 225 require it.** Every bisected span can be
+resolved by moving one window. Building it would be a project with no measured benefit.
+
+### 2.2 No anchor switching - contraindicated by the data that exists
+
+Of the 225 seconds, 140 (62%) have a clean position that keeps the **largest** face whole. The other 84
+(38%) have a clean position only if a *different*, smaller face becomes the anchor.
+
+That 84 seconds is **two shots**, both crowded scenes:
+
+| shot | faces | alternative anchor area / largest | least-bad slice if the largest is kept |
+|---|---|---|---|
+| "Когда экспертное «возможно»" @9.5s | 7 | 0.85 | 0.31 |
+| "Что тело может сделать" @0.0s | 6 | **0.08** | 0.62 |
+
+Switching is fine in the first and absurd in the second - an alternative face one twelfth the area means
+abandoning the subject for a bystander in order to spare a third party. **A rule justified by one case and
+contradicted by the other is a rule built on n=2**, which is the error this project has paid for repeatedly.
+So the anchor is never switched. The two crowded shots get the least-bad slice instead.
+
+---
+
+## 3. The rule
+
+> Among all window positions where the anchored group is entirely inside the window, choose the position at
+> which the worst-cut face is least cut. Break ties toward the position the planner chooses today.
+
+Written as a scoring function, because the prose form hides that "nobody is cut" is not a separate case:
+
+```
+visible(face, x)  = overlap(face, [x, x+cropW]) / face.width        in [0, 1]
+severity(face, x) = 1 - |2 * visible(face, x) - 1|                  in [0, 1]
+
+choose x minimising   ( max severity over faces outside the group ,  |x - todaysX| )
+                      lexicographically, over even x where every group member is whole
+```
+
+**`severity` is exactly zero when a face is wholly inside or wholly outside**, and peaks at 1 when exactly
+half of it shows. So "no face is bisected" is not a condition with a threshold in it - it is the case where
+the minimum happens to be zero. **No new constant is introduced anywhere in this design.**
+
+**The tie-break is the current expression.** `todaysX` is what the planner computes now - the group bbox
+midpoint, clamped - so when no face outside the group is cut at any position, the winning position is
+today's and the output is byte-identical. That makes "unchanged where there was no defect" a property of the
+rule rather than a claim to be tested.
+
+**The candidate range is small and contiguous.** Every group member is whole exactly when
+`x ∈ [max(groupRight) - cropW, min(groupLeft)]`, intersected with `[0, sourceWidth - cropW]`. On a 1920-wide
+source that is at most 438 even positions, and usually far fewer. If the range is empty - the group is wider
+than the window - the rule does not apply and today's clamp stands.
+
+### 3.1 The limitation, stated because it is a limitation and not a detail
+
+**"The largest face" is not "the speaker".** This rule optimises the composition around the largest detected
+face, on the assumption that it is the principal subject of the shot. That is an assumption, not knowledge.
+
+§7b measured why: `mouthActivity` is a 2 fps mean absolute difference of a normalised mouth patch that a head
+turn, laughter or detector jitter produces as readily as speech, it has never been validated as speech
+anywhere in this repository, and `dominance` agrees with its argmax in only 17 of 35 multi-face shots. §7c
+therefore chose total face area deliberately and added a test pinning that the chosen window does not move
+when `mouthActivity` moves. **That test stays, and this rule does not weaken it.**
+
+For two people at a table the assumption is nearly always right - the larger face is the one nearer the
+camera, and the shot is framed on them. For a scene with six people it is a guess, and that is precisely
+where the residual of this change sits. Anchoring on the actual speaker needs a per-shot ground-truth
+fixture first, which §7b says must be bought before that work starts.
+
+---
+
+## 4. Where the change lands
+
+One file. `apps/worker/src/reframe/plan.ts`.
+
+Today two places emit a `single` layout and each computes `x` its own way:
+
+| line | branch | current expression |
+|---|---|---|
+| 551 | the whole anchorable set fits within `FIT_MARGIN` | `evenClamp((minX + maxX) / 2 - cropW / 2, ...)` over `anchorable` |
+| 568 | no window holds everyone, `bestFaceGroup` picked a subset | `windowXFor(group, cropW, sourceWidth)` |
+
+Both become one call to a new exported function:
+
+```ts
+export function placeWindow(
+  group: FaceTrack[],      // must end up whole - the anchor
+  others: FaceTrack[],     // every other surviving face the window could cut
+  cropW: number,
+  sourceWidth: number
+): number
+```
+
+`windowXFor` becomes its tie-break input rather than its replacement: `placeWindow` computes `todaysX` by
+calling it, so there is exactly one definition of "where the window goes when nothing is at stake".
+
+**The two branches already agree, which is what makes one tie-break definition legitimate.** Line 551 takes
+the midpoint over `anchorable` and `windowXFor` takes it over `group`; when the span fits inside
+`FIT_MARGIN`, `selectGroupForShot` returns `anchorable` unchanged, so the two expressions evaluate to the
+same number. Verified by reading both, not assumed - if it were not so, one branch would silently change
+its `x` the moment it started routing through `windowXFor`.
+
+**`others` must be the surviving tracks minus the group, not minus the anchorable set.** A face below the
+min-face guard still reads as a person when the edge cuts it in half, and the guard's job is deciding what
+may *anchor* the window, not what may be *sliced* by it. This is the same conflation §7e had to unpick when
+`anchorable` turned out to answer three questions; the fix there was to separate them, and this keeps them
+separate.
+
+`buildCropPlan` already has the surviving tracks in scope at both call sites, so nothing new is threaded
+through.
+
+---
+
+## 5. Acceptance, proposed
+
+**Deliberately left for a second conversation.** What follows is a proposal, not a settled bar.
+
+**Should improve**, measured by re-planning the 53 real clips from their own detector runs:
+
+- bisected time falls from **225s** toward **84s** - the two crowded shots are expected to remain, and any
+  fall below 84s means the rule found something the analysis did not predict, which is worth understanding
+  before celebrating
+- the 140s in the resolvable bucket goes to **zero**, itemised span by span rather than summarised
+
+**Must not change:**
+
+- every shot where no face outside the group is cut at any position keeps its exact `x` - by construction,
+  per §3, so this is a check that the construction holds rather than a hope
+- `stream`, `center` and `split` layouts are untouched
+- the nine layout assertions in `reframe-plan.test.ts` carrying `x` of 496, 656, 596, 386 and 96
+- §7c's test that the window does not move when `mouthActivity` moves
+- the persisted `cropPlan` records still compile identically
+
+**Must be looked at.** The window will move on roughly 18% of anchored time, median 36px of 608, p90 92px,
+maximum 140px. The maximum is 23% of the window width - a visible shift away from centring the subject, and
+whether that reads as better framing or as an off-centre subject is not a question a number answers. Frame
+strips are required for the owner's clip, for the largest shift in the corpus, and for both crowded shots.
+
+**What would count as a regression**, and this is the part most worth agreeing before implementation: a
+shot where nobody was cut before and nobody is cut after, but the subject is now visibly less well centred
+because the rule moved the window to spare a face at the edge that the viewer would not have noticed.
+The measurement cannot see this. Only the strips can.
+
+---
+
+## 6. Deferred
+
+- **The webcam-inset detector fails on a real stream.** The Booster CS2 source resolves no `camRect`
+  (`stream_no_rect`, faceFrac 3.1%), so the stream layout never fires. §7a's thresholds rest on one video;
+  that source is now available as a second fixture.
+- **The clip in-point.** Twelve viewer verdicts on real clips returned 0 POST, 5 FIX, 7 SKIP, and 8 of 12
+  named the opening as the problem. Roughly half of that was framing and is now fixed. The other half is
+  that the clip begins on setup rather than on the hook, which is ANALYZE and is the larger question.
