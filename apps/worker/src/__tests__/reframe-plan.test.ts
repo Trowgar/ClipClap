@@ -1702,6 +1702,14 @@ describe("placeWindow", () => {
     const group = [f(0, 600, 200), f(1, 900, 200)];
     const others = [f(2, 1150, 200)];
     const x = placeWindow(group, others, CROP, W);
+    // Exact, and that exactness is stage 4. The group is whole on [492, 600];
+    // the outsider at 1150..1350 is wholly out for x <= 542 and unreachable
+    // whole (it would need x >= 742), so every x in [492, 542] scores an
+    // identical (worst 0, seen 0) and only distance from today's 546 separates
+    // them. Proximity gives 542; drop it and the first-wins scan gives 492.
+    // The wholeness assertions below are true of BOTH, so they cannot tell the
+    // two apart - this line is the only thing that pins stage 4 anywhere.
+    expect(x).toBe(542);
     for (const g of group) {
       expect(g.box.x).toBeGreaterThanOrEqual(x);
       expect(g.box.x + g.box.w).toBeLessThanOrEqual(x + CROP);
@@ -1770,5 +1778,38 @@ describe("buildCropPlan window placement", () => {
     expect(shot.layout).toBe("single");
     expect(shot.x).toBeLessThanOrEqual(614);
     expect(shot.x + 608).toBeGreaterThanOrEqual(1217);
+  });
+
+  it("spares an outsider on the FIT branch too, not only the group branch", () => {
+    // This test exists because the FIT branch was otherwise unpinned, and for
+    // an accidental reason worth knowing before you add cases here. The owner's
+    // clip spans 603px, past the 547.2px fit margin, so it routes through the
+    // GROUP branch - and every other fixture that reaches FIT has no outsider
+    // at all. Reverting FIT's `others` to `[]` therefore changed nothing any
+    // test could see, while reverting GROUP's died immediately. Which branch
+    // got covered was decided by which defect was reported first, not by the
+    // code. So: one face at 800..1000 (span 200, comfortably inside the margin,
+    // hence FIT) and one outsider.
+    //
+    // The outsider is a 40px speck, and it has to be. On the FIT branch
+    // `others` is EXACTLY the tracks that failed the min-face guard, because
+    // `anchorableTracks` returns the strict set whenever that set is non-empty,
+    // so everything above the guard is in `anchorable` and `anchorable` IS the
+    // group here. A speck straddling the window edge is the only outsider this
+    // branch can ever have - and a person too small to anchor a window is still
+    // a person when the edge halves them, which is the whole of stage 3.
+    //
+    // Arithmetic: today's x is (800 + 1000) / 2 - 304 = 596, so the window is
+    // 596..1204 and the speck at 1180..1220 is 24 of its 40px visible - 60%,
+    // severity 0.8. Stage 1 does not fire. The speck fits whole from x = 612
+    // (612 + 608 = 1220), which is where this lands. With `others` emptied it
+    // stays at 596 and the speck stays halved.
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([track(800, 200), track(1180, 40, { id: 1 })]),
+      W,
+      H
+    );
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 612 }]);
   });
 });
