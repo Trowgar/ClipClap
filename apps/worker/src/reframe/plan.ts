@@ -86,7 +86,7 @@ export function bisectionSeverity(visible: number): number {
 /** The window a set of faces asks for: centred on their bbox, clamped into
  *  frame. Measured innocent - across 22 shipped single shots the anchor sits a
  *  median of 0.005 cropW from the nearest face centre (engine-notes §7b). */
-function windowXFor(
+export function windowXFor(
   group: FaceTrack[],
   cropW: number,
   sourceWidth: number
@@ -94,6 +94,133 @@ function windowXFor(
   const minX = Math.min(...group.map((t) => t.box.x));
   const maxX = Math.max(...group.map((t) => t.box.x + t.box.w));
   return evenClamp((minX + maxX) / 2 - cropW / 2, cropW, sourceWidth);
+}
+
+/**
+ * Where the crop window goes, given the faces it must hold and the faces it
+ * must not cut in half.
+ *
+ * The window used to be centred on its anchor group and nothing asked what its
+ * edges did to anyone else, so a second person just outside the group was
+ * sliced down the middle - measured at 225s of 1250s anchored time, in 13 of 53
+ * real clips, worst span 68s. The owner's case: two faces spanning 603px in a
+ * 608px window, rejected by FIT_MARGIN, the larger anchored alone and the other
+ * left half in frame.
+ *
+ * Four stages, in order, over the positions that keep every group member whole:
+ *
+ *   1. If today's window already cuts nobody, KEEP IT. No search runs.
+ *   2. Otherwise minimise the worst-cut outsider.
+ *   3. Among equally-uncut positions, show the most face - prefer taking a
+ *      person in to pushing them out of frame.
+ *   4. Among those, sit nearest to the position the planner already computes.
+ *
+ * Stage 1 is the scope of this change stated as code. What was measured and
+ * complained about is the 225 seconds where a face IS bisected; a shot where
+ * nobody is cut was never in that set and has no business moving. An earlier
+ * version had no stage 1 and leaned on stage 4 to produce that outcome as a
+ * side effect. It does not. Two fixtures caught it:
+ *
+ *   - "keeps a speck invisible while a face above the guard exists" moved from
+ *     x=46 to x=102. A 30px speck at 680..710 - 1.6% of the frame, well under
+ *     the min-face guard - is wholly OUTSIDE today's window and can be framed
+ *     whole from x=102, so stage 3 walked the window toward it and off the only
+ *     real person in the shot. That is engine-notes 7a's defect arriving
+ *     through a side door.
+ *   - "rejects a group that fills the window with no margin" moved from x=302
+ *     to x=100, abandoning the central face the planner had deliberately
+ *     anchored on in order to frame a face at the other end that was already
+ *     safely out of shot.
+ *
+ * In both, today's window cut nobody. Stage 1 refuses them both by construction
+ * rather than by arithmetic that happens to land right, and it is not a new
+ * threshold: `=== 0` is `bisectionSeverity`'s own zero, the same zero this
+ * design already rests on.
+ *
+ * Stage 3 is the editorial preference the severity score cannot express. Wholly
+ * inside and wholly outside are BOTH exactly 0 - that is what makes the zero
+ * threshold-free, and it is also why the score alone cannot choose between
+ * framing the listening host and deleting him. On the owner's clip 65 of the
+ * 180 candidate positions score 0, in two disjoint bands: evict at [256, 378]
+ * and include at [610, 614]. Stage 4 alone picks eviction, 58px from today's
+ * 436 against 174px. Stage 3 is what makes it include, and "he should be whole,
+ * not gone" is what the complaint actually said.
+ *
+ * When nobody can be spared - a crowded shot where some face straddles an edge
+ * wherever the window goes - stage 2 returns the least-bad position rather than
+ * giving up.
+ *
+ * `others` must be every surviving face not in the group, INCLUDING those below
+ * the min-face guard. The guard decides what may ANCHOR a window; it says
+ * nothing about who may be SLICED by one, and a small face still reads as a
+ * person when the edge cuts it in half.
+ *
+ * No cap on how far the window may move, deliberately. That decision waits on
+ * frame strips, and a number chosen before them would be chosen from nothing.
+ */
+export function placeWindow(
+  group: FaceTrack[],
+  others: FaceTrack[],
+  cropW: number,
+  sourceWidth: number
+): number {
+  const todaysX = windowXFor(group, cropW, sourceWidth);
+  // `group.length === 0` is load-bearing: an empty group makes `groupLeft`
+  // Infinity and `groupRight` -Infinity, which is a WIDE candidate range rather
+  // than an empty one, so the search below would return a real-looking x for a
+  // window anchored on nobody. `others.length === 0` is, since stage 1 arrived,
+  // redundant - no outsiders means nothing is cut means stage 1 returns this
+  // same value. Kept because it states the intent at the top where a reader
+  // looks for it, and because it saves a pass over the range.
+  if (group.length === 0 || others.length === 0) return todaysX;
+
+  // Every group member is whole exactly on this contiguous range.
+  const groupLeft = Math.min(...group.map((t) => t.box.x));
+  const groupRight = Math.max(...group.map((t) => t.box.x + t.box.w));
+  const lo = Math.max(0, Math.ceil((groupRight - cropW) / 2) * 2);
+  const hi = Math.min(sourceWidth - cropW, Math.floor(groupLeft / 2) * 2);
+  // Empty range: the group is wider than the window - a close-up. 7c already
+  // centres on it and accepts the slice; there is no better position to find.
+  if (lo > hi) return todaysX;
+
+  // Stage 1. Nobody is cut where the window already is, so this shot is not the
+  // defect and does not move. See the header: without this, stage 3 walks the
+  // window toward any outsider it could frame whole, including a 30px speck.
+  let todaysWorst = 0;
+  for (const other of others) {
+    const s = bisectionSeverity(faceVisibility(other, todaysX, cropW));
+    if (s > todaysWorst) todaysWorst = s;
+  }
+  if (todaysWorst === 0) return todaysX;
+
+  let bestX = todaysX;
+  let bestWorst = Infinity;
+  let bestSeen = -Infinity;
+  for (let x = lo; x <= hi; x += 2) {
+    let worst = 0;
+    let seen = 0;
+    for (const other of others) {
+      const visible = faceVisibility(other, x, cropW);
+      seen += visible;
+      const s = bisectionSeverity(visible);
+      if (s > worst) worst = s;
+    }
+    // Stages 2, 3, 4 as one lexicographic comparison: worst cut ascending,
+    // then total face shown descending, then distance from today's x ascending.
+    const better = worst < bestWorst - 1e-9;
+    const sameWorst = Math.abs(worst - bestWorst) <= 1e-9;
+    const moreSeen = sameWorst && seen > bestSeen + 1e-9;
+    const tied =
+      sameWorst &&
+      Math.abs(seen - bestSeen) <= 1e-9 &&
+      Math.abs(x - todaysX) < Math.abs(bestX - todaysX);
+    if (better || moreSeen || tied) {
+      bestWorst = worst;
+      bestSeen = seen;
+      bestX = x;
+    }
+  }
+  return bestX;
 }
 
 /** The faces one 9:16 window can hold WHOLE, chosen by how much face it would
@@ -571,10 +698,23 @@ export function buildCropPlan(
     if (!group) {
       return { start: shot.start, end: shot.end, layout: "center", x: centerX };
     }
+    // Everyone the window must not bisect: every surviving face this shot has
+    // that the window is not anchored on. Derived from `tracks`, which is
+    // already `survivingTracks(...)` - `faceVisibility` divides by box width and
+    // a zero-width detector box would put a NaN into the search, where it
+    // compares false against everything and silently distorts the winner.
+    // Deliberately NOT filtered by the min-face guard: that guard decides who
+    // may anchor, not who may be sliced. Identity, not id: `group` is a filtered
+    // subset of these same objects, never a copy.
+    const others = tracks.filter((t) => !group.includes(t));
     const minX = Math.min(...anchorable.map((t) => t.box.x));
     const maxX = Math.max(...anchorable.map((t) => t.box.x + t.box.w));
     if (maxX - minX <= FIT_MARGIN * cropW) {
-      const x = evenClamp((minX + maxX) / 2 - cropW / 2, cropW, sourceWidth);
+      // `selectGroupForShot` returns `anchorable` unchanged on this branch, so
+      // the old `evenClamp((minX + maxX) / 2 - cropW / 2, ...)` over
+      // `anchorable` is exactly `placeWindow`'s tie-break over `group`. One
+      // definition of where a window goes, not two that have to agree.
+      const x = placeWindow(group, others, cropW, sourceWidth);
       groupsByShot.set(i, group);
       return { start: shot.start, end: shot.end, layout: "single", x };
     }
@@ -591,7 +731,7 @@ export function buildCropPlan(
       start: shot.start,
       end: shot.end,
       layout: "single",
-      x: windowXFor(group, cropW, sourceWidth),
+      x: placeWindow(group, others, cropW, sourceWidth),
     };
   });
 
