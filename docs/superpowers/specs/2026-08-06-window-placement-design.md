@@ -169,35 +169,50 @@ through.
 
 ---
 
-## 5. Acceptance, proposed
+## 5. Acceptance
 
-**Deliberately left for a second conversation.** What follows is a proposal, not a settled bar.
+Settled 2026-08-06. Measured by re-planning the 53 real clips from their own captured detector runs.
 
-**Should improve**, measured by re-planning the 53 real clips from their own detector runs:
+**Must improve:**
 
-- bisected time falls from **225s** toward **84s** - the two crowded shots are expected to remain, and any
-  fall below 84s means the rule found something the analysis did not predict, which is worth understanding
-  before celebrating
-- the 140s in the resolvable bucket goes to **zero**, itemised span by span rather than summarised
+- bisected time falls from **225s toward 84s**. The two crowded shots of §2.2 are expected to remain.
+- the 140s resolvable bucket goes to **zero**, and every remaining span is **printed individually** with its
+  clip, duration and face widths. "Near zero" is not an acceptance criterion; a remainder that turns out to
+  be a detection artefact is a pass and a remainder the rule failed to reach is not, and only the listing
+  separates them.
+- a fall **below** 84s is not a cause for celebration. It means the rule found something the analysis did
+  not predict, and it must be understood before the change is trusted.
 
 **Must not change:**
 
-- every shot where no face outside the group is cut at any position keeps its exact `x` - by construction,
-  per §3, so this is a check that the construction holds rather than a hope
-- `stream`, `center` and `split` layouts are untouched
+- every shot where no face outside the group is cut at any position keeps its exact `x`. This holds **by
+  construction** per §3 - the tie-break is today's expression - so the test confirms the construction rather
+  than hoping for the outcome.
+- `stream`, `center` and `split` layouts
 - the nine layout assertions in `reframe-plan.test.ts` carrying `x` of 496, 656, 596, 386 and 96
 - §7c's test that the window does not move when `mouthActivity` moves
 - the persisted `cropPlan` records still compile identically
 
-**Must be looked at.** The window will move on roughly 18% of anchored time, median 36px of 608, p90 92px,
-maximum 140px. The maximum is 23% of the window width - a visible shift away from centring the subject, and
-whether that reads as better framing or as an off-centre subject is not a question a number answers. Frame
-strips are required for the owner's clip, for the largest shift in the corpus, and for both crowded shots.
+### 5.1 The silent regression, and how it is decided
 
-**What would count as a regression**, and this is the part most worth agreeing before implementation: a
-shot where nobody was cut before and nobody is cut after, but the subject is now visibly less well centred
-because the rule moved the window to spare a face at the edge that the viewer would not have noticed.
-The measurement cannot see this. Only the strips can.
+The window will move on roughly 18% of anchored time: median 36px of 608, p90 92px, **maximum 140px**, which
+is 23% of the window width.
+
+There is a regression no measurement in this document can see. A shot where nobody was cut before and nobody
+is cut after, but the subject has been pushed toward the edge to spare a face the viewer would never have
+noticed. The bisection count improves and the framing gets worse.
+
+**This is decided by looking, not by a number, and the order is fixed:**
+
+1. **Implement the rule with no cap on the shift.** None. Not a soft one.
+2. **Render before/after strips for the worst shifts** - the 140px maximum and several of the largest after
+   it - plus the owner's clip and both crowded shots.
+3. **Then, and only then**, decide whether a cap is needed and what it would be.
+
+**A maximum-shift threshold must not be introduced now.** It would be a number chosen from nothing, and this
+project has spent two sessions paying for exactly that: `MIN_RESTORED_SEC` tuned against a distribution with
+a gap in it, and the min-face guard whose misapplication §7e had to unpick. If the strips show the problem,
+the case that shows it also supplies the number. If they do not, no cap is needed and none is added.
 
 ---
 
