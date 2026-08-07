@@ -1,17 +1,21 @@
 import { describe, expect, it } from "vitest";
 import {
   attachTrajectories,
+  bisectionSeverity,
   buildCropPlan,
   buildTargetSamples,
   canAnchor,
   cropWidthFor,
   evenClamp,
+  faceVisibility,
   hasNormalSizedFace,
   isInsideInset,
+  placeWindow,
   planLayoutCounts,
   selectGroupForShot,
   sliceCropPlan,
   tileWidthFor,
+  windowXFor,
 } from "../reframe/plan";
 // DEFAULT_CAMERA lives in camera.ts and plan.ts does not re-export it, so this
 // is a second import statement by necessity, not by preference.
@@ -1559,5 +1563,253 @@ describe("selectGroupForShot under the anchor policy", () => {
 
   it("still returns null when there are no tracks at all", () => {
     expect(selectGroupForShot([], relaxed, 608, 1920)).toBeNull();
+  });
+});
+
+describe("faceVisibility", () => {
+  const face = (x: number, w: number) => ({
+    id: 0, box: { x, y: 0, w, h: 100 }, score: 0.9, samples: 5, mouthActivity: 0.05,
+  });
+
+  it("is 1 when the face is wholly inside", () => {
+    expect(faceVisibility(face(700, 100), 600, 608)).toBe(1);
+  });
+
+  it("is 0 when the face is wholly outside", () => {
+    expect(faceVisibility(face(1500, 100), 0, 608)).toBe(0);
+    expect(faceVisibility(face(0, 100), 700, 608)).toBe(0);
+  });
+
+  it("is the overlapping fraction when the face straddles an edge", () => {
+    // window 600..1208, face 1158..1258 -> 50 of 100 px inside
+    expect(faceVisibility(face(1158, 100), 600, 608)).toBeCloseTo(0.5, 6);
+    // window 600..1208, face 550..650 -> 50 of 100 px inside
+    expect(faceVisibility(face(550, 100), 600, 608)).toBeCloseTo(0.5, 6);
+  });
+
+  it("is 0 for a face touching the edge with zero width of overlap", () => {
+    expect(faceVisibility(face(1208, 100), 600, 608)).toBe(0);
+  });
+});
+
+describe("bisectionSeverity", () => {
+  it("is exactly zero for a face wholly inside or wholly outside", () => {
+    // This is what removes the need for a threshold anywhere in this design:
+    // "nobody is cut" is severity 0, not a band someone has to choose.
+    expect(bisectionSeverity(0)).toBe(0);
+    expect(bisectionSeverity(1)).toBe(0);
+  });
+
+  it("peaks at exactly half showing", () => {
+    expect(bisectionSeverity(0.5)).toBe(1);
+  });
+
+  it("is symmetric about a half", () => {
+    expect(bisectionSeverity(0.2)).toBeCloseTo(bisectionSeverity(0.8), 9);
+  });
+
+  it("rises monotonically toward a half from either side", () => {
+    expect(bisectionSeverity(0.1)).toBeLessThan(bisectionSeverity(0.3));
+    expect(bisectionSeverity(0.9)).toBeLessThan(bisectionSeverity(0.7));
+  });
+
+  it("treats a barely-clipped face as barely cut", () => {
+    // 99% showing is a hair off the edge, not a bisected person.
+    expect(bisectionSeverity(0.99)).toBeCloseTo(0.02, 6);
+  });
+});
+
+describe("placeWindow", () => {
+  const CROP = 608;
+  const W = 1920;
+  const f = (id: number, x: number, w: number) => ({
+    id, box: { x, y: 0, w, h: w }, score: 0.9, samples: 9, mouthActivity: 0.05,
+  });
+
+  it("returns today's position when there is nothing to avoid", () => {
+    // No other faces at all: the tie-break is the only term, so the answer is
+    // exactly what the planner computes now. This is the invariant that makes
+    // "unchanged where there was no defect" a property rather than a hope.
+    const group = [f(0, 700, 200)];
+    expect(placeWindow(group, [], CROP, W)).toBe(
+      evenClamp(700 + 100 - CROP / 2, CROP, W)
+    );
+  });
+
+  it("returns today's position when the other face is already whole", () => {
+    const group = [f(0, 700, 200)];
+    const others = [f(1, 750, 100)];
+    expect(placeWindow(group, others, CROP, W)).toBe(
+      placeWindow(group, [], CROP, W)
+    );
+  });
+
+  it("does not move when today's window already cuts nobody, even where framing more face is possible", () => {
+    // Stage 1, pinned directly. Shaped after the min-face-guard fixture that
+    // caught its absence: a 300px face at 200..500 anchors at x=46, and a 30px
+    // speck at 680..710 sits wholly OUTSIDE that window - severity 0, so this
+    // shot is not the defect. The speck could be framed whole from x=102
+    // (102 + 608 = 710), and the total-visible term would walk the window there
+    // if it ran, off the only real person in the shot. It must not run.
+    const group = [f(0, 200, 300)];
+    const others = [f(1, 680, 30)];
+    expect(bisectionSeverity(faceVisibility(others[0], 46, CROP))).toBe(0);
+    expect(faceVisibility(others[0], 102, CROP)).toBe(1);
+    expect(placeWindow(group, others, CROP, W)).toBe(windowXFor(group, CROP, W));
+  });
+
+  it("prefers a position that shows a whole face to one that evicts it", () => {
+    // Stage 3, and the reason it exists. Wholly inside and wholly outside are
+    // BOTH exactly severity 0 - that zero is what keeps this design free of a
+    // threshold, and it is also why the severity score alone cannot choose
+    // between framing the listening host and deleting him.
+    //
+    // Measured on the owner's clip: group 614..864, other 986..1217, cropW 608,
+    // today's x 436. The candidate range is [256, 614] and 65 of its 180
+    // positions score exactly 0, in two disjoint bands - EVICT [256, 378],
+    // where the other face is wholly out, and INCLUDE [610, 614], where it is
+    // wholly in. Proximity alone picks eviction: |378 - 436| = 58 against
+    // |610 - 436| = 174. That 58-against-174 is the whole reason for stage 3.
+    const group = [f(0, 614, 250)];
+    const others = [f(1, 986, 231)];
+    const x = placeWindow(group, others, CROP, W);
+    expect(faceVisibility(others[0], x, CROP)).toBe(1);
+    // The evicting alternative was legal AND nearer, so nothing but stage 3
+    // could have rejected it.
+    expect(bisectionSeverity(faceVisibility(others[0], 378, CROP))).toBe(0);
+    expect(Math.abs(378 - 436)).toBeLessThan(Math.abs(x - 436));
+  });
+
+  it("shifts to take in a neighbour that fits, rather than slicing it", () => {
+    // The measured defect: two faces spanning 603px in a 608px window.
+    const group = [f(0, 614, 250)];
+    const others = [f(1, 986, 231)];
+    const x = placeWindow(group, others, CROP, W);
+    expect(x).toBeLessThanOrEqual(614);
+    expect(x + CROP).toBeGreaterThanOrEqual(1217);
+  });
+
+  it("shifts to push a neighbour fully out when it cannot fit", () => {
+    const group = [f(0, 200, 200)];
+    const others = [f(1, 760, 300)];
+    const x = placeWindow(group, others, CROP, W);
+    expect(bisectionSeverity(faceVisibility(others[0], x, CROP))).toBe(0);
+    expect(x).toBeLessThanOrEqual(200);
+    expect(x + CROP).toBeGreaterThanOrEqual(400);
+  });
+
+  it("keeps every group member whole even when that costs a cleaner score", () => {
+    const group = [f(0, 600, 200), f(1, 900, 200)];
+    const others = [f(2, 1150, 200)];
+    const x = placeWindow(group, others, CROP, W);
+    // Exact, and that exactness is stage 4. The group is whole on [492, 600];
+    // the outsider at 1150..1350 is wholly out for x <= 542 and unreachable
+    // whole (it would need x >= 742), so every x in [492, 542] scores an
+    // identical (worst 0, seen 0) and only distance from today's 546 separates
+    // them. Proximity gives 542; drop it and the first-wins scan gives 492.
+    // The wholeness assertions below are true of BOTH, so they cannot tell the
+    // two apart - this line is the only thing that pins stage 4 anywhere.
+    expect(x).toBe(542);
+    for (const g of group) {
+      expect(g.box.x).toBeGreaterThanOrEqual(x);
+      expect(g.box.x + g.box.w).toBeLessThanOrEqual(x + CROP);
+    }
+  });
+
+  it("takes the least-bad slice when no position spares everyone", () => {
+    const group = [f(0, 800, 200)];
+    const others = [f(1, 300, 200), f(2, 600, 120), f(3, 1100, 120), f(4, 1400, 200)];
+    const x = placeWindow(group, others, CROP, W);
+    const worst = Math.max(
+      ...others.map((o) => bisectionSeverity(faceVisibility(o, x, CROP)))
+    );
+    for (let c = 0; c <= W - CROP; c += 2) {
+      if (!(group[0].box.x >= c && group[0].box.x + group[0].box.w <= c + CROP)) continue;
+      const alt = Math.max(
+        ...others.map((o) => bisectionSeverity(faceVisibility(o, c, CROP)))
+      );
+      expect(worst).toBeLessThanOrEqual(alt + 1e-9);
+    }
+  });
+
+  it("falls back to today's position when the group is wider than the window", () => {
+    // A close-up. No window holds it whole, so there is no candidate range and
+    // the existing clamp stands - which is what 7c already does for this case.
+    const group = [f(0, 400, 900)];
+    const others = [f(1, 1500, 100)];
+    expect(placeWindow(group, others, CROP, W)).toBe(
+      placeWindow(group, [], CROP, W)
+    );
+  });
+
+  it("always returns an even x inside the frame", () => {
+    const group = [f(0, 1700, 200)];
+    const others = [f(1, 0, 100)];
+    const x = placeWindow(group, others, CROP, W);
+    expect(x % 2).toBe(0);
+    expect(x).toBeGreaterThanOrEqual(0);
+    expect(x).toBeLessThanOrEqual(W - CROP);
+  });
+
+  it("is deterministic", () => {
+    const group = [f(0, 614, 250)];
+    const others = [f(1, 986, 231), f(2, 300, 90)];
+    const first = placeWindow(group, others, CROP, W);
+    for (let i = 0; i < 5; i += 1) {
+      expect(placeWindow(group, others, CROP, W)).toBe(first);
+    }
+  });
+});
+
+describe("buildCropPlan window placement", () => {
+  it("stops the second face being sliced in the measured defect", () => {
+    // The owner's clip, reproduced.
+    const shots = [{ start: 0, end: 10 }];
+    const tracks = [{
+      shotIndex: 0,
+      camRect: null,
+      tracks: [
+        { id: 0, box: { x: 614, y: 300, w: 250, h: 250 }, score: 0.9, samples: 12, mouthActivity: 0.05 },
+        { id: 1, box: { x: 986, y: 300, w: 231, h: 231 }, score: 0.93, samples: 7, mouthActivity: 0.05 },
+      ],
+    }];
+    const plan = buildCropPlan(shots, tracks, 1920, 1080, DEFAULT_PLAN_OPTIONS, null);
+    const shot = plan!.shots[0] as { layout: string; x: number };
+    expect(shot.layout).toBe("single");
+    expect(shot.x).toBeLessThanOrEqual(614);
+    expect(shot.x + 608).toBeGreaterThanOrEqual(1217);
+  });
+
+  it("spares an outsider on the FIT branch too, not only the group branch", () => {
+    // This test exists because the FIT branch was otherwise unpinned, and for
+    // an accidental reason worth knowing before you add cases here. The owner's
+    // clip spans 603px, past the 547.2px fit margin, so it routes through the
+    // GROUP branch - and every other fixture that reaches FIT has no outsider
+    // at all. Reverting FIT's `others` to `[]` therefore changed nothing any
+    // test could see, while reverting GROUP's died immediately. Which branch
+    // got covered was decided by which defect was reported first, not by the
+    // code. So: one face at 800..1000 (span 200, comfortably inside the margin,
+    // hence FIT) and one outsider.
+    //
+    // The outsider is a 40px speck, and it has to be. On the FIT branch
+    // `others` is EXACTLY the tracks that failed the min-face guard, because
+    // `anchorableTracks` returns the strict set whenever that set is non-empty,
+    // so everything above the guard is in `anchorable` and `anchorable` IS the
+    // group here. A speck straddling the window edge is the only outsider this
+    // branch can ever have - and a person too small to anchor a window is still
+    // a person when the edge halves them, which is the whole of stage 3.
+    //
+    // Arithmetic: today's x is (800 + 1000) / 2 - 304 = 596, so the window is
+    // 596..1204 and the speck at 1180..1220 is 24 of its 40px visible - 60%,
+    // severity 0.8. Stage 1 does not fire. The speck fits whole from x = 612
+    // (612 + 608 = 1220), which is where this lands. With `others` emptied it
+    // stays at 596 and the speck stays halved.
+    const plan = buildCropPlan(
+      oneShot,
+      withTracks([track(800, 200), track(1180, 40, { id: 1 })]),
+      W,
+      H
+    );
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 612 }]);
   });
 });
