@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   attachTrajectories,
+  bisectionSeverity,
   buildCropPlan,
   buildTargetSamples,
   canAnchor,
   cropWidthFor,
   evenClamp,
+  faceVisibility,
   hasNormalSizedFace,
   isInsideInset,
   planLayoutCounts,
@@ -1559,5 +1561,58 @@ describe("selectGroupForShot under the anchor policy", () => {
 
   it("still returns null when there are no tracks at all", () => {
     expect(selectGroupForShot([], relaxed, 608, 1920)).toBeNull();
+  });
+});
+
+describe("faceVisibility", () => {
+  const face = (x: number, w: number) => ({
+    id: 0, box: { x, y: 0, w, h: 100 }, score: 0.9, samples: 5, mouthActivity: 0.05,
+  });
+
+  it("is 1 when the face is wholly inside", () => {
+    expect(faceVisibility(face(700, 100), 600, 608)).toBe(1);
+  });
+
+  it("is 0 when the face is wholly outside", () => {
+    expect(faceVisibility(face(1500, 100), 0, 608)).toBe(0);
+    expect(faceVisibility(face(0, 100), 700, 608)).toBe(0);
+  });
+
+  it("is the overlapping fraction when the face straddles an edge", () => {
+    // window 600..1208, face 1158..1258 -> 50 of 100 px inside
+    expect(faceVisibility(face(1158, 100), 600, 608)).toBeCloseTo(0.5, 6);
+    // window 600..1208, face 550..650 -> 50 of 100 px inside
+    expect(faceVisibility(face(550, 100), 600, 608)).toBeCloseTo(0.5, 6);
+  });
+
+  it("is 0 for a face touching the edge with zero width of overlap", () => {
+    expect(faceVisibility(face(1208, 100), 600, 608)).toBe(0);
+  });
+});
+
+describe("bisectionSeverity", () => {
+  it("is exactly zero for a face wholly inside or wholly outside", () => {
+    // This is what removes the need for a threshold anywhere in this design:
+    // "nobody is cut" is severity 0, not a band someone has to choose.
+    expect(bisectionSeverity(0)).toBe(0);
+    expect(bisectionSeverity(1)).toBe(0);
+  });
+
+  it("peaks at exactly half showing", () => {
+    expect(bisectionSeverity(0.5)).toBe(1);
+  });
+
+  it("is symmetric about a half", () => {
+    expect(bisectionSeverity(0.2)).toBeCloseTo(bisectionSeverity(0.8), 9);
+  });
+
+  it("rises monotonically toward a half from either side", () => {
+    expect(bisectionSeverity(0.1)).toBeLessThan(bisectionSeverity(0.3));
+    expect(bisectionSeverity(0.9)).toBeLessThan(bisectionSeverity(0.7));
+  });
+
+  it("treats a barely-clipped face as barely cut", () => {
+    // 99% showing is a hair off the edge, not a bisected person.
+    expect(bisectionSeverity(0.99)).toBeCloseTo(0.02, 6);
   });
 });

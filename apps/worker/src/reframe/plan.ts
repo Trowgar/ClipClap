@@ -57,6 +57,32 @@ export function dominance(
   );
 }
 
+/** How much of this face the window at `x` shows, as a fraction of its width. */
+export function faceVisibility(
+  track: FaceTrack,
+  x: number,
+  cropW: number
+): number {
+  const left = Math.max(track.box.x, x);
+  const right = Math.min(track.box.x + track.box.w, x + cropW);
+  return Math.max(0, right - left) / track.box.w;
+}
+
+/**
+ * How badly a window cuts a face, from its visible fraction.
+ *
+ * Exactly 0 when the face is wholly inside or wholly outside, 1 when exactly
+ * half of it shows. That zero is what lets this whole design avoid inventing a
+ * threshold: "no face is bisected" is not a band somebody had to choose, it is
+ * the case where the minimum of this function happens to be zero.
+ *
+ * A face 99% inside scores 0.02 - a hair off the edge, correctly, rather than
+ * being lumped in with a person split down the middle.
+ */
+export function bisectionSeverity(visible: number): number {
+  return 1 - Math.abs(2 * visible - 1);
+}
+
 /** The window a set of faces asks for: centred on their bbox, clamped into
  *  frame. Measured innocent - across 22 shipped single shots the anchor sits a
  *  median of 0.005 cropW from the nearest face centre (engine-notes §7b). */
