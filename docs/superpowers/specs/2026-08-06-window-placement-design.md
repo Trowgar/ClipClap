@@ -85,29 +85,47 @@ So the anchor is never switched. The two crowded shots get the least-bad slice i
 > Among all window positions where the anchored group is entirely inside the window, choose the position at
 > which the worst-cut face is least cut. Break ties toward the position the planner chooses today.
 
-Written as a scoring function, because the prose form hides that "nobody is cut" is not a separate case:
+**Corrected during implementation.** The rule as first written had a hole in the objective, not in the code,
+and it would have made the reported defect worse.
+
+`bisectionSeverity` is zero both when a face is wholly inside and when it is wholly outside - that symmetry
+is what removes the need for a threshold, and it is also blind to the difference between **framing** the
+second person and **evicting** them. On the owner's own clip the two zero-severity bands are `[256, 378]`,
+which pushes the listening host out of frame, and `[610, 614]`, which takes him in whole. Today's x is 436,
+so the proximity tie-break picks eviction at 58px against 174px. **The rule would have removed the man the
+owner complained was cut in half.**
+
+The objective was missing an editorial preference: *showing a person is better than dropping them*. So the
+rule is four stages, in order:
 
 ```
 visible(face, x)  = overlap(face, [x, x+cropW]) / face.width        in [0, 1]
 severity(face, x) = 1 - |2 * visible(face, x) - 1|                  in [0, 1]
 
-choose x minimising   ( max severity over faces outside the group ,  |x - todaysX| )
-                      lexicographically, over even x where every group member is whole
+1. if no face outside the group is cut at todaysX          -> return todaysX
+2. else, among even x where every group member is whole,
+   minimise   max severity over faces outside the group
+3. break ties by  maximising total visible fraction        (show, do not evict)
+4. break remaining ties by  |x - todaysX|
 ```
 
-**`severity` is exactly zero when a face is wholly inside or wholly outside**, and peaks at 1 when exactly
-half of it shows. So "no face is bisected" is not a condition with a threshold in it - it is the case where
-the minimum happens to be zero. **No new constant is introduced anywhere in this design.**
+**Stage 1 is not an optimisation.** Without it, stage 3 applies everywhere and drags the window toward any
+distant face it could frame whole. Measured on two existing fixtures: `keeps a speck invisible while a face
+above the guard exists` moved 46 -> 102, chasing a 30px speck - which is §7a's defect returning through the
+side door and which that test's own comment predicts - and `rejects a group that fills the window with no
+margin` moved 302 -> 100, abandoning the central face it was deliberately anchored on.
 
-**The tie-break is the current expression.** `todaysX` is what the planner computes now - the group bbox
-midpoint, clamped - so when no face outside the group is cut at any position, the winning position is
-today's and the output is byte-identical. That makes "unchanged where there was no defect" a property of the
-rule rather than a claim to be tested.
+The scope of this change is the 225 seconds where a face **is** bisected. A shot where nothing is cut is not
+in that scope and has no business moving. Stage 1 states that; the earlier draft relied on the tie-break to
+produce it as a side effect, and the fixture damage above is what a side effect is worth.
+
+**Still no threshold.** Stage 1's test is `severity === 0`, which is `bisectionSeverity`'s own zero - the same
+zero the design already rested on. Stage 3 is a term, not a cut-off. No constant is introduced anywhere.
 
 **The candidate range is small and contiguous.** Every group member is whole exactly when
 `x ∈ [max(groupRight) - cropW, min(groupLeft)]`, intersected with `[0, sourceWidth - cropW]`. On a 1920-wide
-source that is at most 438 even positions, and usually far fewer. If the range is empty - the group is wider
-than the window - the rule does not apply and today's clamp stands.
+source that is at most 438 even positions. If the range is empty - the group is wider than the window - the
+rule does not apply and today's clamp stands.
 
 ### 3.1 The limitation, stated because it is a limitation and not a detail
 
