@@ -69,10 +69,20 @@
  * - The two halves are the SAME decoded frame, cropped at two x positions, so
  *   any difference between them is the placement rule and nothing else. No
  *   subtitles, no camera motion (`motion: false`), no filtergraph.
- * - The frame is taken at the midpoint of the DETECTOR shot, which is where the
- *   median boxes the placement was computed from are most likely to be
- *   representative. A shot whose faces move a lot is not summarised by one
- *   frame, and the printed time range is there so a reader can go look at more.
+ * - FOUR frames per case, not one. The first draft took a single frame at the
+ *   shot midpoint and it was the wrong instrument: `placeWindow` scores MEDIAN
+ *   boxes over the whole shot, and a face present in 7 of 12 samples has a
+ *   median box that describes no particular instant. Two of the six largest
+ *   shifts rendered a midpoint at which the outsider driving the move was
+ *   simply not on screen, so the picture showed a window sliding across empty
+ *   background for no visible reason - which reads as a regression and is
+ *   actually a frame chosen at a moment the decision was not about. The frames
+ *   are therefore the shot midpoint plus up to three SAMPLE TIMES of the
+ *   outsider the rule was reacting to: the moments that motivated the move are
+ *   the moments that can judge it.
+ * - Every track's median box, sample count and time coverage is printed beside
+ *   its case, so a reader can tell a face that is there throughout from a face
+ *   that appears for a second and drags a median with it.
  * - The ranking is over detector shots, not over plan spans. A shot may be
  *   merged away by `mergeAdjacentLayouts`, or may not be a `single` at all -
  *   the layout the plan actually gave it is printed beside every case, and a
@@ -93,8 +103,10 @@ import { DEFAULT_CAMERA } from "../reframe/camera";
 import { loadReframeConfig } from "../reframe/config";
 import { detectFaces } from "../reframe/faces";
 import {
+  bisectionSeverity,
   buildCropPlan,
   cropWidthFor,
+  faceVisibility,
   placeWindow,
   selectGroupForShot,
   windowXFor,
@@ -115,6 +127,11 @@ const SINCE = new Date("2026-08-06T00:00:00Z");
  *  regression - a subject shoved to the edge shows up as a big move, not a
  *  small one. */
 const TOP_N = 6;
+
+/** Frames rendered per case: the shot midpoint plus up to three sample times of
+ *  the outsider the rule reacted to. One frame per case was measurably not
+ *  enough - see the header. */
+const FRAMES_PER_CASE = 4;
 
 /** See the header: used only when a plan carries no profile, counted, printed,
  *  and forbidden the moment this script produces a number. */
@@ -161,9 +178,11 @@ interface ShiftCase {
   /** The job artifact, re-presigned at render time: collecting every clip in
    *  the corpus takes longer than a presigned URL lives. */
   artifactKey: string;
-  /** Absolute source time of the frame to grab - the clip's own offset plus the
-   *  shot midpoint, since detector shots are clip-relative. */
-  frameAt: number;
+  /** The frames to grab. `at` is absolute source time - the clip's own offset
+   *  plus a clip-relative shot time - and `why` says what that instant is, so a
+   *  reader knows whether they are looking at the shot's middle or at a moment
+   *  the outsider was actually detected. */
+  frames: { at: number; why: string }[];
   shotIndex: number;
   /** Clip-relative, as the plan and the detector report them. */
   shotStart: number;
@@ -182,6 +201,64 @@ interface ShiftCase {
   /** True when this shot's own geometry was merged away - the span covering it
    *  starts before it does, so it renders at an earlier shot's x. */
   merged: boolean;
+  /** One line per track: median box, samples, time coverage, and what the old
+   *  and new windows do to it. A face that is present throughout and a face
+   *  that flickers for a second both produce a median box; only this tells them
+   *  apart, and the difference decides whether a shift was worth making. */
+  diag: string[];
+}
+
+/**
+ * One line describing what a window does to a track, printed beside every
+ * rendered case.
+ *
+ * `path` is absent from older sidecar builds, which the type marks optional; a
+ * track without it prints its median box and no coverage rather than failing.
+ */
+function trackLine(
+  role: string,
+  t: FaceTrack,
+  oldX: number,
+  newX: number,
+  cropW: number
+): string {
+  const cover = t.path?.length
+    ? `t ${t.path[0].t.toFixed(1)}-${t.path[t.path.length - 1].t.toFixed(1)}s`
+    : "t (no path)";
+  const vis = (x: number) => `${(faceVisibility(t, x, cropW) * 100).toFixed(0)}%`;
+  return (
+    `${role.padEnd(6)} id${String(t.id).padEnd(3)} ` +
+    `x=${t.box.x.toFixed(0)}..${(t.box.x + t.box.w).toFixed(0)} w=${t.box.w.toFixed(0)}  ` +
+    `${String(t.samples).padStart(3)} samples ${cover}  ` +
+    `visible ${vis(oldX).padStart(4)} -> ${vis(newX).padStart(4)}`
+  );
+}
+
+/**
+ * The frames worth looking at for one case.
+ *
+ * The shot midpoint always, because it is the shot's most representative single
+ * instant. Then up to three sample times of `worst` - the outsider whose
+ * bisection the rule was reacting to - spread across its own path, because the
+ * midpoint can easily fall at a moment that face is not on screen, and a
+ * picture taken then shows a window moving for no visible reason.
+ */
+function framesFor(
+  shotStart: number,
+  shotEnd: number,
+  worst: FaceTrack | null
+): { t: number; why: string }[] {
+  const mid = (shotStart + shotEnd) / 2;
+  const frames = [{ t: mid, why: "shot midpoint" }];
+  const path = worst?.path?.filter((s) => s.t >= shotStart && s.t <= shotEnd) ?? [];
+  const wanted = FRAMES_PER_CASE - frames.length;
+  for (let k = 0; k < wanted && path.length > 0; k += 1) {
+    // Spread over the path rather than taking the first three, which on a
+    // 12-sample track would all land inside the same half-second.
+    const s = path[Math.floor(((k + 0.5) * path.length) / wanted)];
+    frames.push({ t: s.t, why: `id${worst!.id} detected at x=${s.x.toFixed(0)}` });
+  }
+  return frames;
 }
 
 /**
@@ -222,7 +299,12 @@ async function probe(
  * derives SAR from the crop aspect, and a non-square SAR reaching `hstack`
  * would stack differently-shaped pixels.
  */
-async function renderPair(c: ShiftCase, url: string, outPng: string): Promise<void> {
+async function renderPair(
+  c: ShiftCase,
+  at: number,
+  url: string,
+  outPng: string
+): Promise<void> {
   const fit =
     `scale=${TILE_W}:${TILE_H}:force_original_aspect_ratio=decrease,` +
     `pad=${TILE_W}:${TILE_H}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
@@ -237,7 +319,7 @@ async function renderPair(c: ShiftCase, url: string, outPng: string): Promise<vo
     "ffmpeg",
     [
       "-nostdin", "-v", "error",
-      "-ss", c.frameAt.toFixed(3),
+      "-ss", at.toFixed(3),
       "-i", url,
       "-filter_complex", graph,
       "-map", "[pair]",
@@ -359,11 +441,32 @@ async function main() {
           const mid = (shot.start + shot.end) / 2;
           const span = plan.shots.find((s) => s.end > mid && s.start <= mid);
           clipsWithShift.add(clip.id);
+          // The outsider the rule was reacting to: the one the OLD window cut
+          // worst. It is what stage 2 minimised, so it is the face whose frames
+          // decide whether the move was worth making.
+          const worst = others.reduce<FaceTrack | null>(
+            (acc, t) =>
+              acc === null ||
+              bisectionSeverity(faceVisibility(t, oldX, cropW)) >
+                bisectionSeverity(faceVisibility(acc, oldX, cropW))
+                ? t
+                : acc,
+            null
+          );
           cases.push({
             clipId: clip.id,
             title: clip.title ?? "(untitled)",
             artifactKey,
-            frameAt: clip.startTime + mid,
+            frames: framesFor(shot.start, shot.end, worst).map((f) => ({
+              at: clip.startTime + f.t,
+              why: f.why,
+            })),
+            diag: [
+              ...group.map((t) => trackLine("ANCHOR", t, oldX, newX, cropW)),
+              ...others.map((t) =>
+                trackLine(t === worst ? "worst" : "other", t, oldX, newX, cropW)
+              ),
+            ],
             shotIndex: i,
             shotStart: shot.start,
             shotEnd: shot.end,
@@ -414,18 +517,22 @@ async function main() {
   console.log(`\n=== rendering the top ${TOP_N}`);
   for (const [rank, c] of cases.slice(0, TOP_N).entries()) {
     const name = `${String(rank + 1).padStart(2, "0")}-${c.clipId.slice(0, 8)}-shot${c.shotIndex}`;
-    const outPng = join(outDir, `${name}-pair.png`);
-    console.log(`\n  [${rank + 1}] ${name}-pair.png`);
+    console.log(`\n  [${rank + 1}] ${name}`);
     console.log(`      shift       : ${c.shift}px   old x=${c.oldX}  new x=${c.newX}  (cropW ${c.cropW} of ${c.sourceWidth})`);
     console.log(`      clip        : ${c.clipId}  ${c.title}`);
-    console.log(`      shot        : #${c.shotIndex}  ${c.shotStart.toFixed(2)}-${c.shotEnd.toFixed(2)}s (clip-relative), frame at ${c.frameAt.toFixed(2)}s of source`);
+    console.log(`      shot        : #${c.shotIndex}  ${c.shotStart.toFixed(2)}-${c.shotEnd.toFixed(2)}s (clip-relative)`);
     console.log(`      plan span   : ${c.layout}${c.merged ? " (this shot's geometry was merged away)" : ""}`);
-    console.log(`      faces       : ${c.groupSize} anchored, ${c.others} outsiders`);
+    for (const line of c.diag) console.log(`      ${line}`);
     try {
-      // Re-presigned: collecting the corpus takes longer than a URL lives.
+      // Re-presigned once per case: collecting the corpus takes longer than a
+      // URL lives, and one case is four frames off the same URL.
       const url = await getPresignedDownloadUrl(c.artifactKey, 7200);
-      await renderPair(c, url, outPng);
-      console.log(`      wrote       : ${outPng}   LEFT = old window, RIGHT = new window`);
+      for (const [fi, f] of c.frames.entries()) {
+        const outPng = join(outDir, `${name}-f${fi + 1}.png`);
+        await renderPair(c, f.at, url, outPng);
+        console.log(`      f${fi + 1} ${f.at.toFixed(2)}s  ${f.why.padEnd(30)} ${outPng}`);
+      }
+      console.log(`      LEFT = old window, RIGHT = new window`);
     } catch (error) {
       console.log(`      ! FAILED: ${(error as Error).message.slice(0, 200)}`);
     }
