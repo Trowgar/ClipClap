@@ -1,6 +1,8 @@
 # Window placement: stop the crop edge cutting people in half
 
-**Status:** design, approved to write 2026-08-06. No implementation yet.
+**Status:** SHIPPED 2026-08-07, no flag. Result and the two corrections the implementation forced are in
+`docs/engine-notes.md` §7f - including the shortfall against §5's prediction and the decision not to cap the
+shift.
 
 **One sentence.** The crop window is centred on the faces it anchors and never asked what its edges do to the
 faces it did not anchor, so a second person standing just outside the group is sliced vertically down the

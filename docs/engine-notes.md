@@ -1509,6 +1509,125 @@ the detector could not be attributed.
 
 ---
 
+### 7f. The crop edge stopped cutting people in half (fixed 2026-08-07)
+
+Spec `docs/superpowers/specs/2026-08-06-window-placement-design.md`, plan
+`docs/superpowers/plans/2026-08-06-window-placement.md`. **Shipped, no flag.**
+
+**The defect.** The window was centred on the faces it anchored and nothing asked what its edges did to the
+faces it did not. Clip `cmsi4gftv0005akgyb62kp2mb`: `id0` at 614..864 and `id1` at 986..1217 span 603px, the
+window is 608 wide, so **one position holds both whole** - but `FIT_MARGIN = 0.9` reserves 10% for breathing
+room, the pair is rejected, `bestFaceGroup` takes the larger face alone, and the window lands at x=434.
+`id1` keeps 24% of its width. A man, sliced vertically down the face. The owner spotted it in his own clip.
+
+**The rule.** Four stages, no new constant:
+
+```
+visible(f, x)  = overlap(f, [x, x+cropW]) / f.width               in [0, 1]
+severity(f, x) = 1 - |2 * visible(f, x) - 1|                      in [0, 1]
+
+1. if no face outside the group is cut at todaysX      -> return todaysX
+2. else among even x where every group member is whole, minimise max severity
+3. break ties by maximising total visible fraction     (show, do not evict)
+4. break remaining ties by |x - todaysX|
+```
+
+`todaysX` is `windowXFor`, called - so there is one definition of where the window goes when nothing is at
+stake, and the two `single` branches that each computed `x` their own way now both route through
+`placeWindow`.
+
+**Stage 1 is not an optimisation and stage 3 is not decoration.** Both were added after the rule as first
+specified was implemented and measured wrong.
+
+- Without stage 1, stage 3 applies everywhere and drags the window toward any distant face it could frame
+  whole: two existing fixtures moved 46 -> 102 (chasing a 30px speck, §7a's defect through the side door) and
+  302 -> 100 (abandoning the face it was deliberately anchored on).
+- Without stage 3, **the rule evicts the man the owner complained about.** `severity` is zero both wholly-in
+  and wholly-out - that symmetry is what removes the need for a threshold, and it is blind to the difference
+  between framing a person and deleting them. On this clip the two zero-severity bands are [256, 378], which
+  pushes him out of frame, and [610, 614], which takes him in whole; today's x is 436, so proximity alone
+  picks eviction at 58px against 174px. Found by an implementer who executed the spec literally and noticed
+  its own tests contradicted it.
+
+**"The largest face" is not "the speaker".** Recorded in the spec as a limitation, repeated here: the rule
+optimises around the largest detected face on the assumption that it is the subject. §7b measured why the
+alternative is not available - `mouthActivity` has never been validated as speech and agrees with `dominance`
+in 17 of 35 multi-face shots - and §7c's test that the window does not move when `mouthActivity` moves still
+passes. For two people at a table the assumption is nearly always right. For six people it is a guess, and
+that is where the residual sits.
+
+**Result, and the number is smaller than predicted.** Re-planned over all 54 clips of the 8 real jobs:
+
+| noise floor for counting a cut face | old x | today's x |
+|---|---|---|
+| LAX (`samples >= 2`) - reproduces the 225s baseline | **221s** | **177s** |
+| STRICT (`survivingTracks`) | 81s | 37s |
+
+Same rule, same **44 seconds** removed either way. The prediction was 225 -> 84, and **the prediction was
+wrong because I measured the wrong set**: my coverage scripts filtered `samples >= 2` while `placeWindow`
+takes `others` from `survivingTracks`, which also drops anything under `0.3 x max`. I scored 140s of faces
+the rule never receives. Reporting only STRICT would have read 81 -> 37 and looked like a triumph; printing
+both is what makes the shortfall visible at all.
+
+Of the 177s remaining: **140.4s is cut only by sub-floor faces** the objective never sees, **20.5s is
+merge-blind** (`mergeAdjacentLayouts` keeps the first shot's x and the cut face lives in a later shot the rule
+was never asked about), and 16.1s is the crowded shot the analysis predicted would remain, behaving as
+predicted. An anchored face cut by its own window: **0s**, as the search range requires.
+
+**No cap on the shift, decided by looking.** §5.1 predicted a regression no number here can see - a subject
+shoved toward the edge to spare a face nobody would notice - and fixed the order: implement uncapped, render
+the worst shifts, then decide. Nine shots moved across 201 anchored shots, min 22px, median 48px, max 176px.
+The six largest, at the moments the decision was about:
+
+| shift | what the frames show |
+|---|---|
+| 176px | a man sliced vertically by the edge -> whole and well composed. **The reported defect.** |
+| 156px | a man's face over the right edge -> whole |
+| 68px | a face cut at the edge -> 74% visible, better and still imperfect |
+| 58px | a 17% face-sliver evicted; the anchor 58px off-centre. Marginal both ways |
+| 48px, 48px | indistinguishable by eye |
+
+**No case where a well-framed subject was pushed to the edge. No cap is added, and none is needed** - the
+number for one would have had to come from nothing, which is what §7d and the `MIN_RESTORED_SEC` tuning
+already cost this project.
+
+**The finding the pictures produced, which no metric asked for.** In **all six** of the largest shifts the
+anchor track and the outsider it moved for are **never on screen at the same time**:
+
+```
+[1] ANCHOR t 0.0-5.5s   outsider t 6.0-9.0s      [4] ANCHOR t 4.0-5.5s   outsider t 1.5-3.5s
+[2] ANCHOR t 15.5-16.0s outsider t 14.5-17.0s    [5] ANCHOR t 2.5-9.0s   outsider t 0.0-2.0s
+[3] ANCHOR t 7.5-15.5s  outsider t 3.5-7.0s      [6] ANCHOR t 25.0-25.5s outsider t 26.0-26.5s
+```
+
+These are camera cuts `scdet` did not report. One detector shot contains two framings, `placeWindow` scores
+median boxes over the whole thing, and the window it picks is a compromise between two angles that never
+coexist. On clip 1 that compromise is clearly right - the man goes from bisected to whole and the woman in
+the other half merely goes off-centre - but it is a compromise the rule does not know it is making. **The
+residual here is shot segmentation, not placement.** Layer 0 is not automatically the answer: it follows the
+anchor group's targets, and in every case above the outsider is not in the group.
+
+**The instrument had to be fixed before it could be believed.** The first version of `eval-shift-sheets.ts`
+took one frame at the shot midpoint. Because of the disjointness above, two of the six midpoints fell at
+instants where the outsider was not on screen at all, so the picture showed a window sliding across empty
+background for no reason - which reads as a regression and is a frame taken at a moment the decision was not
+about. It now renders four frames per case, chosen from the outsider's own sample times, and prints every
+track's median box, sample count and time coverage beside it. A single frame cannot judge a decision made
+from a median.
+
+**Two measurement traps caught inside this change.**
+- My first coverage run returned "100% of the defect is closed by repositioning". The clean-position loop had
+  **no requirement that any face remain in the window**, so "evict everyone" counted as clean. This is the
+  same shape as the four aggregates in §7d: a number that cannot come out badly.
+- Mutation 6 survived because the owner's clip spans 603px past the 547.2px `FIT_MARGIN`, so the only
+  integration test routed through the GROUP branch and the FIT branch was covered **only by accident**. A
+  dedicated FIT-branch test now pins it.
+
+**Deferred, each with its own measurement waiting:** the 140.4s of sub-floor faces (changing `survivingTracks`
+is §7e's explicitly untouched knob), the 20.5s of merge-blindness, and the missed cuts above.
+
+---
+
 ## 8. Operational facts
 
 - Prod IS this host. Plain `docker compose up -d` (dev target) is production mode. **Do not use
