@@ -8,7 +8,7 @@ Rules for this file: every number here came from a measurement, not from reasoni
 reproduced, say how. When something is believed but unmeasured, mark it. Delete an entry when it stops being
 true - a stale note is worse than none, and this file has already caught two of its own.
 
-Last substantive update: 2026-08-05.
+Last substantive update: 2026-08-10.
 
 ---
 
@@ -717,6 +717,19 @@ asset, not history: deleting them deletes the only control this engine has for a
   boundaries in it and therefore the only one on which the scene rail (§3) does anything at all.
 - `creator-challenge` (recorded 2026-08-03, also a real outside upload) - English, unscripted group banter,
   and the second source with hard cuts (max node-to-node hole 9.98s, 6 at or above `sceneGapSec`).
+- `podcast-nuclear` (job `cmsnmcbec005ouhfj30l0w4qm`, recorded 2026-08-10) - 48 minutes, Russian,
+  single-expert lecture with scripted off-camera questions. The first fixture with a LABELED defect
+  set: `labels.json` beside it carries the owner's clip-by-clip verdict on the production run plus a
+  3-scout blind consensus, keyed by source TIME RANGES - because **the re-record shipped 8 clips
+  where production shipped 12 from the same transcript the same day, mostly different moments**
+  (scanner temperature 0.4 plus judge sampling; clip ids do not survive a re-run, match by overlap).
+  The labels record: three entry defects and three exit defects the owner named
+  (spec `2026-08-10-clip-arc-audit-design.md` §0), one positive control the engine hit exactly
+  (1113.8-1131.2, 3/3 scout agreement), one contested label (the водка exit - owner says cut off,
+  scouts 2:1 say verdict line), three 3/3-consensus moments NEITHER run shipped (the strongest,
+  "Чернобыль грязнее Хиросимы" at 1041-1071, was ranked #1 by two scouts), and all three scouts'
+  independent ceiling: this episode holds 8-9 postable moments, not 12. Production also shipped ~5
+  moments no scout chose - the "either uninteresting" half of §5b, now with a number.
 
 Two of the four are still the same episode, so a Russian, conversational, uncut source remains
 over-represented, and §6a still wants a fifth of a different shape again. But the corpus is no longer
