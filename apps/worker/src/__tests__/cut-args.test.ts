@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { buildCutArgs } from "../processors/cut";
 
 const OUT = "/tmp/out.mp4";
-const LEGACY_CROP = "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920";
+// `,setsar=1` since 2026-08-08: ih*9/16 is 607.5 on a 1080-tall source, so the
+// scale to 1080x1920 tags a non-square SAR unless it is overridden. Spec
+// `2026-08-08-output-geometry-design.md`, measurement in engine-notes §7h.
+const LEGACY_CROP =
+  "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920,setsar=1";
 
 describe("buildCutArgs", () => {
   it("keeps the legacy center crop when no FilterSpec is given", () => {

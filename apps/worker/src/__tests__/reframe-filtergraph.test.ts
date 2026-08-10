@@ -35,7 +35,7 @@ describe("buildFiltergraph", () => {
     expect(buildFiltergraph(base([{ start: 0, end: 30, layout: "single", x: 496 }])))
       .toEqual({
         kind: "vf",
-        graph: "crop=w=608:h=ih:x='496':y=0,scale=1080:1920",
+        graph: "crop=w=608:h=ih:x='496':y=0,scale=1080:1920,setsar=1",
       });
   });
 
@@ -45,7 +45,7 @@ describe("buildFiltergraph", () => {
       "ass=filename=/tmp/x.ass"
     );
     expect(spec.graph).toBe(
-      "crop=w=608:h=ih:x='656':y=0,scale=1080:1920,ass=filename=/tmp/x.ass"
+      "crop=w=608:h=ih:x='656':y=0,scale=1080:1920,setsar=1,ass=filename=/tmp/x.ass"
     );
   });
 
@@ -58,7 +58,8 @@ describe("buildFiltergraph", () => {
     );
     expect(spec).toEqual({
       kind: "vf",
-      graph: "crop=w=608:h=ih:x='if(lt(t,12.40),496,656)':y=0,scale=1080:1920",
+      graph:
+        "crop=w=608:h=ih:x='if(lt(t,12.40),496,656)':y=0,scale=1080:1920,setsar=1",
     });
   });
 
@@ -74,9 +75,9 @@ describe("buildFiltergraph", () => {
     expect(spec.graph).toBe(
       [
         "[0:v]split=3[b0][t0][m0]",
-        "[b0]crop=w=608:h=ih:x='if(lt(t,12.40),496,if(lt(t,31.00),656,656))':y=0,scale=1080:1920[base]",
-        "[t0]crop=w=1216:h=ih:x='if(lt(t,12.40),0,if(lt(t,31.00),0,0))':y=0,scale=1080:960[top]",
-        "[m0]crop=w=1216:h=ih:x='if(lt(t,12.40),704,if(lt(t,31.00),704,704))':y=0,scale=1080:960[bottom]",
+        "[b0]crop=w=608:h=ih:x='if(lt(t,12.40),496,if(lt(t,31.00),656,656))':y=0,scale=1080:1920,setsar=1[base]",
+        "[t0]crop=w=1216:h=ih:x='if(lt(t,12.40),0,if(lt(t,31.00),0,0))':y=0,scale=1080:960,setsar=1[top]",
+        "[m0]crop=w=1216:h=ih:x='if(lt(t,12.40),704,if(lt(t,31.00),704,704))':y=0,scale=1080:960,setsar=1[bottom]",
         "[base][top]overlay=x=0:y=0:enable='gte(t,12.40)*lt(t,31.00)'[o1]",
         "[o1][bottom]overlay=x=0:y=960:enable='gte(t,12.40)*lt(t,31.00)'[vout]",
       ].join(";")
@@ -139,7 +140,7 @@ describe("stream filtergraph", () => {
     expect(buildFiltergraph(streamPlan()).graph).toBe(
       [
         "[0:v]split=3[b0][c0][m0]",
-        "[b0]crop=w=406:h=ih:x='if(lt(t,10.00),438,302)':y=0,scale=1080:1920[base]",
+        "[b0]crop=w=406:h=ih:x='if(lt(t,10.00),438,302)':y=0,scale=1080:1920,setsar=1[base]",
         "[c0]crop=w=336:h=240:x='if(lt(t,10.00),32,32)':y=0,scale=1080:770,setsar=1[cam]",
         "[m0]crop=w=676:h=ih:x='if(lt(t,10.00),428,428)':y=0,scale=1080:1150,setsar=1[cont]",
         "[base][cam]overlay=x=0:y=0:enable='gte(t,0.00)*lt(t,10.00)'[o1]",
@@ -162,9 +163,14 @@ describe("stream filtergraph", () => {
 
   it("emits tile heights that sum to the full 1920 output", () => {
     const graph = buildFiltergraph(streamPlan()).graph;
-    const heights = [...graph.matchAll(/scale=1080:(\d+),setsar=1/g)].map((m) =>
-      Number(m[1])
-    );
+    // Matched on the TILE labels, not on `scale=1080:N,setsar=1` alone. Since
+    // 2026-08-08 the base chain carries setsar too, so the looser pattern finds
+    // three scales and the sum below stops being about the tiles at all - it
+    // was 770 + 1150 and would become 1920 + 770. The labels are what make this
+    // assertion mean what its name says.
+    const heights = [
+      ...graph.matchAll(/scale=1080:(\d+),setsar=1\[(?:cam|cont)\]/g),
+    ].map((m) => Number(m[1]));
     expect(heights).toHaveLength(2);
     expect(heights[0] + heights[1]).toBe(1920);
   });
@@ -205,7 +211,8 @@ describe("stream filtergraph", () => {
     // crop is the fallback, and it must not throw on the way there.
     expect(buildFiltergraph(plan)).toEqual({
       kind: "vf",
-      graph: "crop=w=406:h=ih:x='if(lt(t,10.00),438,302)':y=0,scale=1080:1920",
+      graph:
+        "crop=w=406:h=ih:x='if(lt(t,10.00),438,302)':y=0,scale=1080:1920,setsar=1",
     });
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
@@ -243,7 +250,7 @@ describe("stream filtergraph", () => {
     plan.shots = [{ start: 0, end: 20, layout: "center", x: 302 }];
     expect(buildFiltergraph(plan)).toEqual({
       kind: "vf",
-      graph: "crop=w=406:h=ih:x='302':y=0,scale=1080:1920",
+      graph: "crop=w=406:h=ih:x='302':y=0,scale=1080:1920,setsar=1",
     });
   });
 });

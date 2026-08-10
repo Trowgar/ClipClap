@@ -107,5 +107,10 @@ export async function trimClipFile(
  * verbatim as the REFRAME_ENGINE=off behavior and the failure fallback.
  */
 function buildCropFilter(): string {
-  return "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920";
+  // setsar=1: ih*9/16 is 607.5 on a 1080-tall source and cannot be integral, so
+  // `scale` to exactly 1080x1920 would otherwise tag the output SAR 1216:1215
+  // and give it a 76:135 display aspect. This path renders real clips whenever
+  // detection fails or REFRAME_ENGINE is off, so it needs the same guarantee as
+  // the reframe graphs (engine-notes §7h).
+  return "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920,setsar=1";
 }
