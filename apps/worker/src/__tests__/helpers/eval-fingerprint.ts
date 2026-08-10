@@ -104,6 +104,30 @@ import { finalizerMaxOutputTokens } from "../../analyze-v2/finalize";
  *                                arc-audit.ts marks both constants PROVISIONAL,
  *                                pending the M5 ladder measurement, i.e. they
  *                                are expected to move.
+ *   startExtensionEnabled        whether extendClipStarts (task 3) ran at all.
+ *                                Unlike every other *Enabled key above, this
+ *                                stage makes NO REQUEST OF ITS OWN in either
+ *                                state - it is pure application of a pointer
+ *                                arc-audit already asked for and gated - so
+ *                                the "off makes no request" argument does not
+ *                                apply to IT directly. It is here anyway for
+ *                                the reason finalizerEnabled is: responses.json
+ *                                is one shared pool across every variant of a
+ *                                fixture, and turning this stage off during
+ *                                replay does not go MISSING, it goes UNUSED -
+ *                                the finalizer would silently be asked about
+ *                                the narrower, un-widened clip set instead of
+ *                                the wider one a "start-extension" recording
+ *                                describes, and if the base run's own
+ *                                (narrower) finalizer answer for that same
+ *                                clip id happens to already be sitting in the
+ *                                same responses.json - which it does, every
+ *                                time, because base is recorded first - the
+ *                                replay finds a "valid" answer and stays green
+ *                                while silently describing a different engine.
+ *                                No *MaxOutputTokens pair exists for it, for
+ *                                the same reason: nothing here is a token
+ *                                budget for a call this stage never makes.
  *
  * startExtensionWindowSec is NOT here, unlike endExtensionWindowSec - the
  * asymmetry is deliberate. It bounds a GATE inside arc-audit.ts (whether a
@@ -176,6 +200,11 @@ export interface EngineFingerprint {
   arcAuditMaxOutputTokensBase: number;
   /** Marginal cap per extra clip in one arc-audit batch call. */
   arcAuditMaxOutputTokensPerClip: number;
+  /** Whether extendClipStarts (task 3) ran at all. Unlike every other
+   *  *Enabled key above, this stage makes no request in either state - see
+   *  the doc comment above for why it is still in here (the shared-
+   *  responses.json false-match risk, finalizerEnabled's own argument). */
+  startExtensionEnabled: boolean;
 }
 
 export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
@@ -203,6 +232,7 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     arcAuditBatchSize: cfg.arcAuditBatchSize,
     arcAuditMaxOutputTokensBase: arcAuditBase,
     arcAuditMaxOutputTokensPerClip: arcAuditMaxOutputTokens(1) - arcAuditBase,
+    startExtensionEnabled: cfg.startExtensionEnabled,
   };
 }
 

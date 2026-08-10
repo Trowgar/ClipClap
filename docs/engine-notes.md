@@ -608,6 +608,52 @@ exact clips is contaminated and must not be quoted as quality. And the token bud
 visible JSON of 215-851 chars and zero truncations, so it clears with headroom, but the
 reasoning-vs-JSON ladder of §3 has not been run for this prompt.
 
+### Start extension: the audit's entry pointers applied, ships dark (2026-08-10)
+
+Spec task 3. `extendClipStarts` (`analyze-v2/start-extension.ts`) is DETERMINISTIC - no model
+call of its own; it applies arcAudit's already-gated `entry.fixStartNode` pointers behind eight
+gates (direction, graph, window incl. the backward scene rail and the teaser region, clean start,
+gain, `maxSec`, NMS collision) and converts nodes to seconds through `startSecFor`, which was
+extracted INTO snap.ts exactly as `endSecFor` was and for the same reason - the inline expression
+existed twice inside snapNodes already and was about to be hand-copied into a third file.
+`START_EXTENSION=on` (not in live `.env`), separate from `ARC_AUDIT` so detection and repair roll
+out independently; no-ops without the audit. Variant `start-extension` recorded on all five
+fixtures.
+
+**First corpus pass (replay `runFixtureVariant(f, "start-extension")`, telemetry per fixture):**
+
+| fixture | eligible | applied | refused | secondsGained |
+|---|---|---|---|---|
+| podcast-nuclear | 1 | 0 | 1 `nms_collision` | 0 |
+| podcast-ecology | 3 | 2 | 1 `nms_collision` | 21.0 |
+| podcast-answer-arc | 2 | 2 | 0 | 11.4 |
+| sitcom-friends / creator-challenge | 0 | - | - | - |
+
+Two widenings visibly survive to the shipped set: ecology's молоко clip starts 13.9s earlier
+(1970.2 -> 1956.3) and answer-arc's доиндустриальное clip 4.6s earlier (1752.2 -> 1747.6) - both
+entry-context restorations of exactly the labeled defect class. English fixtures produce zero
+eligible pointers (their flags are standalone/borrowed_answer without in-window fixes).
+
+**THE FINDING: both refusals are `nms_collision` against a clip the finalizer then drops.** On
+`podcast-nuclear` the audit's one pointer (777.0 back toward the scouts' 733) collides with the
+selection's OTHER copy of the same moment (714.5-781.5) - a near-duplicate pair selection's own
+30% NMS admitted at 18% overlap, of which the finalizer keeps exactly one. Dedup runs AFTER
+widening, so the doomed twin blocks the living clip's repair. The gate is conservative-correct
+(the anaphora lesson says never ship the collision) and the loss is visible in `refusedBy`; do
+not soften it until the refusal histogram says `nms_collision` is the modal reason across more
+sources, and if it is, the measured shape is "allow when the partner already overlapped the clip
+pre-widening" - the pair is then the same-moment family the finalizer's duplicate rule exists
+for. One instance is not enough to build that.
+
+**The M4 instrument's limit, hit exactly as §3 predicted.** A widening changes the finalizer's
+prompt, so the start-extension variant runs a FRESH finalizer roll: ecology re-rolled 12 -> 9
+with five drops, two new clips and every title rewritten, answer-arc 11 -> 12 - churn of the same
+size engine-notes already recorded for ecology's rolls (12 -> 8 once, "resampling artefact"), an
+order larger than the four boundary moves under test. Shipped-set counts CANNOT attribute a
+2-4-clip repair through one finalizer sample; the attributable evidence is the applied widenings
+that ship and the per-gate refusal histogram. **Finalizer sampling variance is currently the
+largest single instability in the engine - larger than anything the arc audit measured.**
+
 ---
 
 ## 4. Approaches that were tried and failed

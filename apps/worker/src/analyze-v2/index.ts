@@ -16,6 +16,7 @@ import {
 import { dominantScript, isoToLanguageName, scriptMismatch } from "./language";
 import { selectAndOrder } from "./select";
 import { runArcAudit, type ArcAuditTelemetry } from "./arc-audit";
+import { extendClipStarts, type StartExtensionTelemetry } from "./start-extension";
 import { extendClipEnds } from "./end-extension";
 import { finalizeClips } from "./finalize";
 import { detectTeaserRegion, isInTeaserRegion } from "./teaser";
@@ -380,6 +381,23 @@ export async function analyzeHighlightsV2(
     arcAuditTelemetry = audit.telemetry;
   }
 
+  // START EXTENSION (spec 2026-08-10 task 3) - widen-only, backward-only,
+  // fed EXCLUSIVELY by arcAudit's gated entry.fixStartNode pointers. No model
+  // call of its own: arc-audit already asked and gated once, so this is
+  // deterministic application. ORDER: widen-start -> widen-end -> finalizer
+  // trims last - the finalizer keeps the last word on every boundary either
+  // extension stage touches, same load-bearing order as end-extension alone.
+  // BOTH flags, explicitly, mirroring the guard inside extendClipStarts
+  // itself (defence in depth) - the dependency on arcAuditEnabled has to be
+  // visible here, not merely implied by arcFlags happening to be empty.
+  let startExtensionTelemetry: StartExtensionTelemetry | undefined;
+  let afterStartExtension = selection.selected;
+  if (cfg.arcAuditEnabled && cfg.startExtensionEnabled) {
+    const started = extendClipStarts(selection.selected, arcFlags, nodes, cfg);
+    afterStartExtension = started.clips;
+    startExtensionTelemetry = started.telemetry;
+  }
+
   // Ends move FORWARD here and nowhere else, and only for clips that will ship.
   // Before the finalizer on purpose: the finalizer is the stage that trims, and
   // it must get the last word on a boundary. Widening cannot invalidate copy -
@@ -389,7 +407,7 @@ export async function analyzeHighlightsV2(
   const extension = await extendClipEnds(
     client,
     usage,
-    selection.selected,
+    afterStartExtension,
     nodes,
     cfg,
     { retryDelayMs: options.retryDelayMs }
@@ -568,6 +586,11 @@ export async function analyzeHighlightsV2(
     // undefined exactly when cfg.arcAuditEnabled was false, so this spread
     // adds nothing at all to the object in that case (spec 2026-08-10 task 2).
     ...(arcAuditTelemetry ? { arcAudit: arcAuditTelemetry } : {}),
+    // Same not-a-key promise as arcAudit above: startExtensionTelemetry is
+    // undefined exactly when the combined gate just above did not call
+    // extendClipStarts, so this spread adds nothing at all to the object on a
+    // dark run (spec 2026-08-10 task 3).
+    ...(startExtensionTelemetry ? { startExtension: startExtensionTelemetry } : {}),
     // THE WHOLE OBJECT, never a hand-picked subset of its counters. `skipped` is
     // the only field that separates "the stage never ran" from "it ran and
     // declined every clip" - both are zeros everywhere else - and `refusedBy` is

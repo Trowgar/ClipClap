@@ -62,3 +62,33 @@ export function sceneEndAfter(
   }
   return nodes.length - 1;
 }
+
+/**
+ * The backward twin of sceneEndAfter, built for start-extension.ts (spec
+ * 2026-08-10 task 3): the earliest node a clip's START may be widened onto
+ * without crossing a silent hole into the PREVIOUS scene. Same rail, same
+ * measurement (sceneGapSec's derivation lives above and is not repeated here),
+ * mirrored in the other time direction.
+ *
+ * The two invariants sceneEndAfter documents both mirror exactly. The result
+ * is always at or BEFORE fromIdx, so it is safe to use directly as a floor and
+ * can never widen a clip past its own start into nothing. And it EQUALS
+ * fromIdx when the very PREVIOUS node is already across a cut: an empty
+ * widening window, which is the correct answer for a clip that already opens
+ * at a cut, not an error. fromIdx must itself be a valid node index - as with
+ * sceneEndAfter, there is no correct floor to return for an invalid one.
+ *
+ * Podcasts have no cuts (§ sceneEndAfter's own measurement), so this returns 0
+ * there and the guard is inert - same correct-not-limited behaviour as the
+ * forward version.
+ */
+export function sceneStartBefore(
+  nodes: SentenceNode[],
+  fromIdx: number,
+  cfg: AnalyzeConfig
+): number {
+  for (let i = fromIdx - 1; i >= 0; i--) {
+    if (nodes[i + 1].start - nodes[i].end >= cfg.sceneGapSec) return i + 1;
+  }
+  return 0;
+}

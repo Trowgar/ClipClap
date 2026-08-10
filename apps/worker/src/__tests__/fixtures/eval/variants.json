@@ -8,5 +8,9 @@
   },
   "arc-audit": {
     "arcAuditEnabled": true
+  },
+  "start-extension": {
+    "arcAuditEnabled": true,
+    "startExtensionEnabled": true
   }
 }

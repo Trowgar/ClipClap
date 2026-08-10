@@ -78,6 +78,24 @@ export function endSecFor(
   );
 }
 
+/** The start-side twin of endSecFor, and exported for the same reason: the
+ *  stage that moves a start backward (start-extension.ts) must place a node at
+ *  exactly the second snap would, or the two disagree about where one node
+ *  starts. The lead-in only ever moves within silence - capped by the previous
+ *  node's own end (nested word timings can make prev.end run past this node's
+ *  start; worst case the clip starts exactly at s.start with no lead-in) and
+ *  never earlier than leadInSec before the onset. Until 2026-08-10 this
+ *  expression lived inline in snapNodes TWICE (main start + compression
+ *  candidate) and was about to be hand-copied into a third file. */
+export function startSecFor(
+  nodes: SentenceNode[],
+  s: SentenceNode,
+  cfg: AnalyzeConfig
+): number {
+  const prev = s.index > 0 ? nodes[s.index - 1] : null;
+  return Math.max(Math.min(prev ? prev.end : 0, s.start), s.start - cfg.leadInSec);
+}
+
 export function snapNodes(
   verdict: CriticVerdict,
   nodes: SentenceNode[],
@@ -204,10 +222,7 @@ export function snapNodes(
   //    silence). The end side - the next-node bleed cap and the nested-word
   //    clamp - is endSecFor above, shared with the stage that moves an end
   //    forward so the two can never place the same node differently.
-  const prevS = s.index > 0 ? nodes[s.index - 1] : null;
-  // Nested prev.end must never push the start past the sentence onset; worst
-  // case we start exactly at s.start with no lead-in.
-  let startSec = Math.max(Math.min(prevS ? prevS.end : 0, s.start), s.start - cfg.leadInSec);
+  let startSec = startSecFor(nodes, s, cfg);
   let endSec = endSecFor(nodes, e, cfg);
   endSec = Math.max(endSec, p.end); // payoff containment outranks the bleed cap - a nested long payoff word extends the clip
 
@@ -248,9 +263,7 @@ export function snapNodes(
       // isCleanStart already requires hasWords - an opaque node has no reliable
       // onset to cut at - so there is no separate word-bearing test here.
       if (!isCleanStart(nodes, i)) continue;
-      const prev = cand.index > 0 ? nodes[cand.index - 1] : null;
-      // same onset clamp as the main start: nested prev.end must not poison the candidate
-      const candidateStart = Math.max(Math.min(prev ? prev.end : 0, cand.start), cand.start - cfg.leadInSec);
+      const candidateStart = startSecFor(nodes, cand, cfg);
       if (endSec - candidateStart <= cfg.maxSec) {
         s = cand;
         startSec = candidateStart;

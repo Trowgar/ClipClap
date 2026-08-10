@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   BASE_VARIANT,
+  FIXTURES_DIR,
   VARIANT_OVERRIDE_KEYS,
   loadFixture,
   loadVariantDefs,
@@ -126,6 +127,7 @@ describe("variant definitions", () => {
       criticModelFallback: "c",
       endExtensionEnabled: true,
       arcAuditEnabled: true,
+      startExtensionEnabled: true,
     };
     // Driven off VARIANT_OVERRIDE_KEYS rather than a literal, because the way
     // this test rots is that a knob is admitted to the list and nobody adds it
@@ -177,6 +179,29 @@ describe("variant definitions", () => {
     expect({ ...live, arcAuditEnabled: false }).toEqual(dark);
     expect(() => assertFingerprintMatches("recorded-live", live, dark)).toThrow(
       /arcAuditEnabled/
+    );
+  });
+
+  /** The start-extension mirror of the two tests above. This stage makes no
+   *  request of its own (start-extension.ts is pure and synchronous), so the
+   *  fingerprint key exists for the shared-responses.json false-match reason
+   *  documented in eval-fingerprint.ts, not the "off makes no request"
+   *  argument the other two keys use - but the mechanism this test proves is
+   *  identical: until the "start-extension" variant declaration existed, no
+   *  config this harness could build ever differed on the key. The variant
+   *  moves BOTH `arcAuditEnabled` and `startExtensionEnabled` together, since
+   *  the stage no-ops without a detector feeding it - the same "a variant may
+   *  move more than one whitelisted key" precedent gpt51 already set. */
+  it("makes the start-extension fingerprint key able to fire, which it could not before", () => {
+    const dark = computeFingerprint(variantConfig(BASE_VARIANT));
+    const live = computeFingerprint(variantConfig("start-extension"));
+    expect(dark.startExtensionEnabled).toBe(false);
+    expect(live.startExtensionEnabled).toBe(true);
+    expect(dark.arcAuditEnabled).toBe(false);
+    expect(live.arcAuditEnabled).toBe(true);
+    expect({ ...live, startExtensionEnabled: false, arcAuditEnabled: false }).toEqual(dark);
+    expect(() => assertFingerprintMatches("recorded-live", live, dark)).toThrow(
+      /startExtensionEnabled|arcAuditEnabled/
     );
   });
 });
@@ -275,12 +300,31 @@ describe("unrecorded variant announcement", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("stays silent for the fixtures that ARE fully recorded", () => {
-    // the other half of the contract, and the half that only became testable
-    // once every declared variant was recorded: no announcement for a pair that
-    // exists
+  it("announces exactly the (variant, fixture) pairs that lack a recording on disk", () => {
+    // The other half of the contract: no announcement for a pair that exists.
+    // A previous version of this test hardcoded which variant was unrecorded
+    // ("start-extension is the one...") and went red the moment the operator
+    // recorded it - it asserted the repository's transient state, not the
+    // mechanism. The expectation is now derived from the same disk state the
+    // announcer reads: for each declared variant, a fixture is missing when
+    // its snapshot.<variant>.json does not exist. Whatever that set is, the
+    // announcement must name exactly it - including announcing nothing when
+    // everything is recorded, which is the steady state after every topup.
+    const fixtures = ["podcast-ecology", "podcast-answer-arc"];
+    const missingByVariant = new Map<string, string[]>();
+    for (const variant of Object.keys(loadVariantDefs())) {
+      const missing = fixtures.filter(
+        (f) => !existsSync(join(FIXTURES_DIR, f, snapshotFileName(variant)))
+      );
+      if (missing.length > 0) missingByVariant.set(variant, missing);
+    }
     const warnings: string[] = [];
-    warnUnrecordedVariants(["podcast-ecology", "podcast-answer-arc"], (m) => warnings.push(m));
-    expect(warnings).toEqual([]);
+    warnUnrecordedVariants(fixtures, (m) => warnings.push(m));
+    expect(warnings).toHaveLength(missingByVariant.size);
+    for (const [variant, missing] of missingByVariant) {
+      const line = warnings.find((w) => w.includes(`variant "${variant}" is declared`));
+      expect(line).toBeDefined();
+      for (const f of missing) expect(line).toContain(f);
+    }
   });
 });

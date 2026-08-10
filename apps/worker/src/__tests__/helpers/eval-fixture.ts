@@ -59,6 +59,15 @@ export const BASE_VARIANT = "base";
  * eval-variants.test.ts, "makes the arc-audit fingerprint key able to fire").
  * `startExtensionWindowSec` and `arcAuditBatchSize` are deliberately NOT here -
  * the same tuning-door refusal as `endExtensionWindowSec` above.
+ *
+ * `startExtensionEnabled` (task 3), same door for the same reason:
+ * extendClipStarts makes no request of its own, so without a variant that can
+ * set it, no config this harness builds could ever differ on the key and the
+ * fingerprint entry it needs (eval-fingerprint.ts) could never fire either.
+ * The "start-extension" variant sets it ALONGSIDE `arcAuditEnabled` - the
+ * stage no-ops without a detector to feed it - which is also why a variant is
+ * allowed to move more than one whitelisted key at once (gpt51 already does,
+ * for `criticModel` and `finalizerModel` together).
  */
 export type VariantOverrides = Partial<
   Pick<
@@ -68,6 +77,7 @@ export type VariantOverrides = Partial<
     | "criticModelFallback"
     | "endExtensionEnabled"
     | "arcAuditEnabled"
+    | "startExtensionEnabled"
   >
 >;
 
@@ -78,6 +88,7 @@ export const VARIANT_OVERRIDE_KEYS = [
   "criticModelFallback",
   "endExtensionEnabled",
   "arcAuditEnabled",
+  "startExtensionEnabled",
 ] as const satisfies ReadonlyArray<keyof VariantOverrides>;
 
 /**

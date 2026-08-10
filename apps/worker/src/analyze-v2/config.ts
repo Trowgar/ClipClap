@@ -69,6 +69,16 @@ export interface AnalyzeConfig {
    *  and many rules, so this stage asks three questions about a handful of
    *  clips at a time. */
   arcAuditBatchSize: number;
+  /** Master switch for the start-extension stage (spec 2026-08-10 task 3) - the
+   *  widen-only, backward-only mover fed EXCLUSIVELY by arcAudit's gated
+   *  `entry.fixStartNode` pointers. SEPARATE from arcAuditEnabled on purpose:
+   *  detection can ship (flags and telemetry only) without repair, so the two
+   *  flags are independent doors and the stage no-ops unless BOTH are on - see
+   *  start-extension.ts's own top-of-function guard, which checks both rather
+   *  than trusting an empty flags map to make the dependency true by accident.
+   *  Off until measured, the same discipline as endExtensionEnabled and
+   *  arcAuditEnabled. */
+  startExtensionEnabled: boolean;
   /** How far BACKWARD (in seconds, converted through node START times) a
    *  gated `entry.fix_start_node` pointer may reach - the mirror of
    *  endExtensionWindowSec, which already bounds the FORWARD `exit.fix_end_node`
@@ -160,6 +170,10 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     // truthy env value.
     arcAuditEnabled: env.ARC_AUDIT === "on",
     arcAuditBatchSize: num(env, "ARC_AUDIT_BATCH_SIZE", 4),
+    // Exact literal "on", same discipline as ARC_AUDIT/END_EXTENSION/REFRAME_
+    // STREAM: a stage that moves a shipped boundary must not arm itself off a
+    // stray truthy env value.
+    startExtensionEnabled: env.START_EXTENSION === "on",
     startExtensionWindowSec: num(env, "START_EXTENSION_WINDOW_SEC", 20),
     teaserWindowSec: num(env, "TEASER_WINDOW_SEC", 120),
     teaserMinHits: num(env, "TEASER_MIN_HITS", 3),

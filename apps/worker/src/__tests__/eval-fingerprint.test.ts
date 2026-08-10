@@ -37,6 +37,7 @@ describe("computeFingerprint", () => {
       arcAuditBatchSize: baseCfg.arcAuditBatchSize,
       arcAuditMaxOutputTokensBase: arcAuditMaxOutputTokens(0),
       arcAuditMaxOutputTokensPerClip: arcAuditMaxOutputTokens(1) - arcAuditMaxOutputTokens(0),
+      startExtensionEnabled: baseCfg.startExtensionEnabled,
     });
   });
 
@@ -52,6 +53,13 @@ describe("computeFingerprint", () => {
     // stage entirely, so a live replay against one of them is a different
     // engine and the fingerprint has to say so.
     expect(computeFingerprint(baseCfg).arcAuditEnabled).toBe(false);
+  });
+
+  it("records the start-extension stage as DARK on the default config", () => {
+    // Same argument again, even though this stage makes no request of its own
+    // - see eval-fingerprint.ts's doc comment for why the key is here anyway
+    // (the shared-responses.json false-match risk).
+    expect(computeFingerprint(baseCfg).startExtensionEnabled).toBe(false);
   });
 });
 
@@ -148,6 +156,21 @@ describe("assertFingerprintMatches", () => {
     const changed = computeFingerprint({ ...baseCfg, arcAuditEnabled: true });
     expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
       /arcAuditEnabled/
+    );
+  });
+
+  it("fails when the start-extension stage was switched on, even though it makes no request itself", () => {
+    // The case that motivates this key even though the stage never touches the
+    // network: a fixture recorded with the narrower, un-widened clip set would
+    // replay against the WIDER prompt this stage produces downstream without
+    // ever failing "unrecorded request" - responses.json is a shared pool
+    // across every variant of a fixture, so the base run's own answer for the
+    // narrow set is sitting right there. This is the false MATCH the whole
+    // fingerprint file exists to kill, arriving through the one stage that
+    // cannot be caught by watching the request hash at all.
+    const changed = computeFingerprint({ ...baseCfg, startExtensionEnabled: true });
+    expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
+      /startExtensionEnabled/
     );
   });
 
