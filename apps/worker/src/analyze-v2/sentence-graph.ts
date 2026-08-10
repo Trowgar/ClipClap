@@ -91,7 +91,7 @@ export function endsOnSentenceMark(text: string): boolean {
  * almost all of these. Anything keying on token position has to see through
  * them or it decides differently on two runs of the same audio.
  */
-const PARTICLE: ReadonlySet<string> = new Set([
+export const PARTICLE: ReadonlySet<string> = new Set([
   "а", "ага", "ах", "вот", "да", "же", "и", "значит", "короче", "кстати",
   "ладно", "мм", "но", "ну", "нет", "ой", "окей", "слушай", "так", "там", "угу", "эм",
   "and", "but", "hey", "no", "oh", "ok", "okay", "so", "uh", "um", "well", "yeah", "yes",
@@ -99,7 +99,7 @@ const PARTICLE: ReadonlySet<string> = new Set([
 
 /** Interrogative pronouns and adverbs. Russian first (the measured language),
  *  then the English wh-words. Deliberately broad: see orphansQuestion. */
-const INTERROGATIVE: ReadonlySet<string> = new Set([
+export const INTERROGATIVE: ReadonlySet<string> = new Set([
   "кто", "кого", "кому", "кем", "что", "чего", "чему", "чем", "чей", "чья", "чьё", "чье", "чьи",
   "какой", "какая", "какое", "какие", "какого", "какую", "каким", "каких", "какими", "каком",
   "каков", "какова", "каково", "каковы", "где", "куда", "откуда", "докуда", "когда",

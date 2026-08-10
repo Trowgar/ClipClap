@@ -13,7 +13,7 @@
       "exitDefect": null,
       "provenance": "owner",
       "scoutConsensus": { "start": 1466, "end": 1571, "agreement": "3/3, start exact to the second" },
-      "note": "Title is the girl's story, opening is the boy's ('Он ехал на велосипеде'). All three scouts open the arc 61.5s earlier, on the host's question 'Что произошло с людьми, которые пережили взрыв в Хиросиме и Нагасаки?'. The production end matches consensus. The critic itself cited node 738 in _descriptionEvidenceNodes while shipping _startNode 740."
+      "note": "Title is the girl's story, opening is the boy's ('Он ехал на велосипеде'). All three scouts open the arc 61.5s earlier, on the host's question 'Что произошло с людьми, которые пережили взрыв в Хиросиме и Нагасаки?'. The production end matches consensus. The critic itself cited node 738 in _descriptionEvidenceNodes while shipping _startNode 740. STRUCTURAL FACT: the consensus arc 1466-1571 is 105s, ABOVE maxSec 90 - the engine cannot ship it whole and must cut somewhere; production cut the entry (started 1527.5), the fixture re-record cut the exit (1466.7-1483.4, 16.7s, before either story completes). Same moment, broken in opposite directions by two runs of the same engine."
     },
     {
       "range": [2488.1, 2504.7],
