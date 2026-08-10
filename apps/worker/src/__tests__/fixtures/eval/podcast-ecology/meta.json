@@ -102,6 +102,32 @@
         "arcAuditMaxOutputTokensPerClip": 800,
         "startExtensionEnabled": true
       }
+    },
+    "arc-exit-hints": {
+      "recordedAt": "2026-08-10T22:33:00.987Z",
+      "engine": {
+        "scanModel": "gpt-4o-mini",
+        "criticModel": "gpt-5.6-luna",
+        "criticModelFallback": "gpt-5-mini",
+        "reasoningEffort": "low",
+        "criticBatchSize": 6,
+        "criticMaxOutputTokensBase": 1200,
+        "criticMaxOutputTokensPerCandidate": 800,
+        "finalizerEnabled": true,
+        "finalizerModel": "gpt-5.6-luna",
+        "finalizerMaxOutputTokensBase": 2000,
+        "finalizerMaxOutputTokensPerClip": 700,
+        "endExtensionEnabled": false,
+        "endExtensionWindowSec": 25,
+        "endExtensionMaxOutputTokensBase": 600,
+        "endExtensionMaxOutputTokensPerClip": 250,
+        "arcAuditEnabled": true,
+        "arcAuditBatchSize": 4,
+        "arcAuditMaxOutputTokensBase": 1200,
+        "arcAuditMaxOutputTokensPerClip": 800,
+        "startExtensionEnabled": false,
+        "endExtensionHintsEnabled": true
+      }
     }
   }
 }

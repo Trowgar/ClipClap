@@ -7,6 +7,8 @@ import { endsOnQuestionMark, isCleanEnd } from "./sentence-graph";
 import { sceneEndAfter } from "./scene-gaps";
 import { endSecFor } from "./snap";
 import type {
+  ArcExitDefect,
+  ArcFlags,
   ExtensionWindow,
   LlmUsage,
   SentenceNode,
@@ -302,7 +304,12 @@ export function extensionMaxOutputTokens(clipCount: number): number {
  *
  * `offered` counts clips with somewhere to go - a non-empty window - not clips
  * shipped: a set where offered is far below the shipped count means the scene
- * rail, the clock or maxSec is binding, not the model.
+ * rail, the clock or maxSec is binding, not the model. Task 4 adds one more way
+ * IN: a clip arcAudit gave a gated exit hint is offered even with an empty
+ * self-motivated window, on the argument that the hint's own gate (gateExitFix)
+ * already bounds it by the clock and the model should still see the note - the
+ * scene rail and maxSec remain the gates that decide whether anything it
+ * proposes is actually accepted.
  *
  * `proposed` counts the model's extend:true rows. `applied` and `refused` split
  * those by what the gates said, and the gap between proposed and applied+refused
@@ -323,6 +330,26 @@ export function extensionMaxOutputTokens(clipCount: number): number {
  * `secondsGained` is the only number that says whether the stage did anything a
  * viewer would notice; applied alone cannot distinguish twelve 0.4s nudges from
  * one 13s rescue of a payoff.
+ *
+ * `hinted`/`hintFollowed`/`hintOverridden` (spec 2026-08-10 task 4) are ABSENT,
+ * never zero, whenever no clip in this run carried an arc-audit exit hint - the
+ * same "absent means nothing happened" rule `skipped` documents above, chosen
+ * here for a second reason: every telemetry object built before this task
+ * existed is asserted against with an exact `toEqual` somewhere in this file's
+ * own suite, and a counter that is always present (even at 0) would break every
+ * one of them the moment it was added, for a feature those tests know nothing
+ * about. `hinted` counts clips added to (or already in) the offered set because
+ * arcAudit flagged their exit - set once, right after the offered set is built,
+ * so it is present even when the call itself times out, refuses or throws
+ * (mirroring `offered`, which survives the same paths). `hintFollowed` counts
+ * APPLIED extensions whose accepted end_node equals the hint's node exactly;
+ * `hintOverridden` counts APPLIED extensions on a hinted clip that landed on a
+ * different legal node instead - the model read the note and chose its own
+ * answer, which is legal and exactly the honest-miss case this task exists to
+ * give a second chance. Both are always present together with `hinted` (0 is a
+ * real answer once there was a hinted population to ask about) and both are
+ * counted only from APPLIED rows - a hinted clip whose proposal a gate refused
+ * lands in `refused`/`refusedBy` like any other, never in either of these.
  */
 export interface ExtensionTelemetry {
   offered: number;
@@ -339,6 +366,9 @@ export interface ExtensionTelemetry {
    *  "unreadable", "exception", or the failing call's kind
    *  ("error"/"refusal"/"truncated"). */
   skipped?: string;
+  hinted?: number;
+  hintFollowed?: number;
+  hintOverridden?: number;
 }
 
 export interface ExtensionResult {
@@ -436,38 +466,100 @@ function readProposals(rows: unknown[]): {
  * rather than a gate. A clip that fails the check is skipped rather than fatal:
  * one stale end node must not cost every other clip in the job its extension,
  * which is exactly what the outer catch alone would do.
+ *
+ * `arcFlags` (spec 2026-08-10 task 4) is the SAME map index.ts already builds
+ * for start-extension - empty whenever arcAudit did not run, which is every
+ * call site in this file's OWN suite and every fixture recorded before this
+ * task. Two INDEPENDENT switches decide what it does to the offered set,
+ * mirroring the self-motivated/hint-driven separation the spec requires:
+ *
+ *   - `cfg.endExtensionEnabled` (unchanged, pre-existing): the SELF-MOTIVATED
+ *     path - every clip with a non-empty window is offered, cold, exactly as
+ *     it has been since 2026-08-04. Net negative on compilation reels
+ *     (engine-notes §3), ships OFF.
+ *   - `cfg.endExtensionHintsEnabled` (new): the HINT-DRIVEN path - a clip is
+ *     ALSO offered when arcAudit flagged its exit `ok: false` with a gated
+ *     `fixEndNode`, whether or not its own window is non-empty, and that clip's
+ *     prompt block carries the AUDIT NOTE line (buildExtensionUser's `hint`
+ *     parameter). Gated on `cfg.arcAuditEnabled` here too, not merely on
+ *     `arcFlags` happening to be empty - the same doubling start-extension.ts
+ *     uses for its own dependency on the audit, so the dependency is visible
+ *     in code rather than implied by an upstream side effect.
+ *
+ * Both off: identical to every build before this task, byte for byte - no
+ * clip is ever added to `offered` by either path, so the recorded end-extension
+ * variant keeps replaying against this file unmodified. Both on: the union;
+ * only the clips arcAudit flagged carry the note, every other offered clip's
+ * block renders exactly as it always has. ALL GATES BELOW ARE UNCHANGED - a
+ * hinted proposal that fails `opaque_end` or `no_clean_end` is refused like any
+ * other; the hint only ever widens what is ASKED, never what is ACCEPTED.
  */
 export async function extendClipEnds(
   client: OpenAI,
   usage: LlmUsage,
   clips: SnappedClip[],
+  arcFlags: Map<string, ArcFlags>,
   nodes: SentenceNode[],
   cfg: AnalyzeConfig,
   options: { retryDelayMs?: number } = {}
 ): Promise<ExtensionResult> {
   const telemetry = emptyExtensionTelemetry();
-  if (!cfg.endExtensionEnabled) {
+  if (!cfg.endExtensionEnabled && !cfg.endExtensionHintsEnabled) {
     return { clips, telemetry: { ...telemetry, skipped: "disabled" } };
   }
 
   try {
-    const offered: Array<{ clip: SnappedClip; window: ExtensionWindow }> = [];
+    const offered: Array<{
+      clip: SnappedClip;
+      window: ExtensionWindow;
+      hint?: { defect?: ArcExitDefect; fixEndNode: number };
+    }> = [];
     for (const clip of clips) {
       const end = clip.finalEndNode;
       if (!Number.isInteger(end) || end < 0 || end > nodes.length - 1) continue;
       const window = extensionWindow(clip, nodes, cfg);
-      // An empty window is not a question worth asking: every answer to it is
-      // the current end, which applyExtension refuses as a no-op anyway.
-      if (window.lastNode > end) offered.push({ clip, window });
+
+      // The hint-driven half of the offered set (spec 2026-08-10 task 4).
+      // `cfg.arcAuditEnabled` is checked HERE, not inferred from `arcFlags`
+      // being empty - the same defence-in-depth doubling every gated stage in
+      // this engine uses for its own upstream dependency.
+      const flags = cfg.arcAuditEnabled ? arcFlags.get(clip.verdict.id) : undefined;
+      const hint =
+        cfg.endExtensionHintsEnabled &&
+        flags &&
+        !flags.exit.ok &&
+        flags.exit.fixEndNode !== undefined
+          ? { defect: flags.exit.defect, fixEndNode: flags.exit.fixEndNode }
+          : undefined;
+
+      // An empty window is not a question worth asking ON ITS OWN - every
+      // answer to it is the current end, which applyExtension refuses as a
+      // no-op anyway - UNLESS a hint says otherwise: arcAudit's own gate
+      // (gateExitFix) only bounds the pointer by endExtensionWindowSec, never
+      // by the scene rail or maxSec that also shape this stage's window, so a
+      // gated hint can legally exist for a clip whose self-motivated window is
+      // empty. Offering it anyway lets the model see the note; the gates below
+      // still refuse whatever they would have refused before this task.
+      const selfOffers = cfg.endExtensionEnabled && window.lastNode > end;
+      if (!selfOffers && !hint) continue;
+
+      offered.push({ clip, window, hint });
     }
     telemetry.offered = offered.length;
+    // Set once, right here, so it survives every early return below the same
+    // way `offered` does - a call that times out, refuses or truncates still
+    // truthfully describes what was ASKED. Absent (never 0) when nothing in
+    // this run was hinted - see ExtensionTelemetry's doc comment for why that
+    // keeps every telemetry-equality test written before this task green.
+    const hintedCount = offered.filter((o) => o.hint !== undefined).length;
+    if (hintedCount > 0) telemetry.hinted = hintedCount;
     if (offered.length === 0) {
       telemetry.skipped = "no_window";
       return { clips, telemetry };
     }
 
     const user = offered
-      .map((o) => buildExtensionUser(o.clip, nodes, o.window))
+      .map((o) => buildExtensionUser(o.clip, nodes, o.window, o.hint))
       .join("\n\n---\n\n");
     const call = (model: string) =>
       callJsonSchema<{ results?: unknown }>(client, usage, {
@@ -515,6 +607,16 @@ export async function extendClipEnds(
     telemetry.contradicted = contradicted;
 
     const offeredIds = new Set(offered.map((o) => o.clip.verdict.id));
+    // Hint pointers by clip id, for the follow/override split below - built
+    // from the same `offered` array `hintedCount` already read, never
+    // recomputed against `arcFlags` a second time.
+    const hintNodeById = new Map<string, number>();
+    for (const o of offered) {
+      if (o.hint) hintNodeById.set(o.clip.verdict.id, o.hint.fixEndNode);
+    }
+    let hintFollowed = 0;
+    let hintOverridden = 0;
+
     const out = clips.map((clip) => {
       const proposed = proposals.get(clip.verdict.id);
       if (proposed === undefined) return clip;
@@ -536,8 +638,23 @@ export async function extendClipEnds(
       // strictly larger endSec (applyExtension's seconds gate), so this can
       // only ever add.
       telemetry.secondsGained += attempt.clip.endSec - clip.endSec;
+      // hintFollowed/hintOverridden (task 4): only APPLIED rows on a HINTED
+      // clip land here - a hinted clip whose proposal a gate refused is
+      // already counted in `refused`/`refusedBy` above and must not also be
+      // double-counted here.
+      const hintNode = hintNodeById.get(clip.verdict.id);
+      if (hintNode !== undefined) {
+        if (attempt.clip.finalEndNode === hintNode) hintFollowed += 1;
+        else hintOverridden += 1;
+      }
       return attempt.clip;
     });
+
+    // Present only alongside `hinted` - see ExtensionTelemetry's doc comment.
+    if (telemetry.hinted !== undefined) {
+      telemetry.hintFollowed = hintFollowed;
+      telemetry.hintOverridden = hintOverridden;
+    }
 
     return { clips: out, telemetry };
   } catch (error) {
@@ -547,8 +664,8 @@ export async function extendClipEnds(
     //
     // Counters are RESET rather than carried out, as finalizeClips does here:
     // nothing was applied, so an `applied` accumulated before a throw would
-    // describe a set that never shipped. `offered` and the fallback flag survive
-    // because they describe what was ASKED, which is still true.
+    // describe a set that never shipped. `offered`, `hinted` and the fallback
+    // flag survive because they describe what was ASKED, which is still true.
     console.warn(
       `[analyze-v2] end-extension threw, shipping the set unchanged: ${
         error instanceof Error ? error.message : String(error)
@@ -561,6 +678,7 @@ export async function extendClipEnds(
         offered: telemetry.offered,
         fallbackModelUsed: telemetry.fallbackModelUsed,
         skipped: "exception",
+        ...(telemetry.hinted !== undefined ? { hinted: telemetry.hinted } : {}),
       },
     };
   }

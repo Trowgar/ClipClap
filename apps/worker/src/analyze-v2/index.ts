@@ -404,10 +404,19 @@ export async function analyzeHighlightsV2(
   // evidence already inside the range stays inside a larger one - so this needs
   // no regroundCopy re-run, which is exactly why it is safe here and would not
   // be if it could shorten.
+  //
+  // `arcFlags` (spec 2026-08-10 task 4) is the SAME map start-extension read
+  // above - possibly empty, possibly populated by arcAudit above. Whether it
+  // does anything to this stage's offered set is decided entirely inside
+  // end-extension.ts by cfg.endExtensionHintsEnabled (independent of
+  // cfg.endExtensionEnabled, the pre-existing self-motivated switch), so no
+  // extra gate is needed at this call site - unlike start-extension, this
+  // stage's OWN top-of-function guard already covers "neither switch is on".
   const extension = await extendClipEnds(
     client,
     usage,
     afterStartExtension,
+    arcFlags,
     nodes,
     cfg,
     { retryDelayMs: options.retryDelayMs }

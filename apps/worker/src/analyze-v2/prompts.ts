@@ -1,5 +1,6 @@
 import { isCleanStart } from "./sentence-graph";
 import type {
+  ArcExitDefect,
   ExtensionWindow,
   MergedCandidate,
   SentenceNode,
@@ -490,11 +491,33 @@ Output ONLY the JSON object described by the schema.`;
  * clip.finalEndNode must be a real index into `nodes`. extendClipEnds checks
  * that before a clip is ever offered - it is the last place in this stage where
  * a valid end node is still a caller's obligation rather than a gate.
+ *
+ * `hint` (spec 2026-08-10 task 4) is arcAudit's gated `exit.fixEndNode` pointer
+ * for THIS clip, already checked once by arc-audit.ts's own gateExitFix and
+ * again by end-extension.ts before it reaches here - this function trusts its
+ * caller completely and renders whatever it is given. UNDEFINED for the vast
+ * majority of clips (self-motivated offers, or a hinted clip nobody flagged),
+ * and that is the property this whole parameter exists to protect: when `hint`
+ * is undefined the rendered block is BYTE-IDENTICAL to the pre-task-4 render -
+ * no branch below fires, nothing is appended - which is what keeps every
+ * recorded end-extension fixture (base, gpt51, end-extension, arc-audit,
+ * start-extension) replayable without a re-record. Only a clip arc-audit named
+ * broken AND end-extension's own hints switch is on ever sees the extra line.
+ *
+ * The note is FACTUAL AND UNBOSSY on purpose - it reports a finding ("a per-clip
+ * audit... judged"), not an instruction ("extend to #N"). EXTENSION_SYSTEM is
+ * untouched by this task: the model is never told the note exists or how much
+ * weight to give it, so it is free to read the pointer, disagree, and answer
+ * `extend: false` exactly as it would for any other clip - the honest-miss case
+ * this task exists to answer (engine-notes §3, "the model looked at a legal
+ * answer and preferred its own") is a model choosing badly with a hint in view,
+ * not one that was never shown the option at all.
  */
 export function buildExtensionUser(
   clip: SnappedClip,
   nodes: SentenceNode[],
-  window: ExtensionWindow
+  window: ExtensionWindow,
+  hint?: { defect?: ArcExitDefect; fixEndNode: number }
 ): string {
   const { lastNode } = window;
   // Opaque nodes are skipped in the clip's own text - their transcript is
@@ -508,11 +531,20 @@ export function buildExtensionUser(
   const lines = [
     `CLIP ${clip.verdict.id} - currently ends at node #${clip.finalEndNode}`,
     `WHAT IT CONTAINS: ${own}`,
+  ];
+  if (hint) {
+    lines.push(
+      `AUDIT NOTE: a per-clip audit of the finished cut judged this clip's final ` +
+        `thought incomplete (${hint.defect ?? "unspecified"}); the line that completes ` +
+        `it may be #${hint.fixEndNode}.`
+    );
+  }
+  lines.push(
     "",
     "CANDIDATE ENDINGS - the LAST line to include. Everything between the " +
       "current end and your choice plays too. Keep the current end by choosing it:",
-    `  #${clip.finalEndNode} <current end> ${nodes[clip.finalEndNode].text.trim()}`,
-  ];
+    `  #${clip.finalEndNode} <current end> ${nodes[clip.finalEndNode].text.trim()}`
+  );
   for (let i = clip.finalEndNode + 1; i <= lastNode; i++) {
     lines.push(`  #${i} ${nodes[i].text.trim()}`);
   }

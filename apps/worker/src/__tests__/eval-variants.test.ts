@@ -128,6 +128,7 @@ describe("variant definitions", () => {
       endExtensionEnabled: true,
       arcAuditEnabled: true,
       startExtensionEnabled: true,
+      endExtensionHintsEnabled: true,
     };
     // Driven off VARIANT_OVERRIDE_KEYS rather than a literal, because the way
     // this test rots is that a knob is admitted to the list and nobody adds it
@@ -202,6 +203,29 @@ describe("variant definitions", () => {
     expect({ ...live, startExtensionEnabled: false, arcAuditEnabled: false }).toEqual(dark);
     expect(() => assertFingerprintMatches("recorded-live", live, dark)).toThrow(
       /startExtensionEnabled|arcAuditEnabled/
+    );
+  });
+
+  /** The arc-exit-hints mirror of the three tests above (task 4). Same
+   *  mechanism, and the same reason `endExtensionHintsEnabled` is a SEPARATE
+   *  variant from "end-extension" rather than a third override on it: the
+   *  self-motivated and hint-driven halves of end-extension are the thing
+   *  under test being independently switchable, so a variant proving the
+   *  fingerprint key fires has to set ONLY the hint switch (alongside
+   *  arcAuditEnabled, its own dependency) and leave endExtensionEnabled dark. */
+  it("makes the arc-exit-hints fingerprint key able to fire, which it could not before", () => {
+    const dark = computeFingerprint(variantConfig(BASE_VARIANT));
+    const live = computeFingerprint(variantConfig("arc-exit-hints"));
+    expect(dark.endExtensionHintsEnabled).toBe(false);
+    expect(live.endExtensionHintsEnabled).toBe(true);
+    expect(dark.arcAuditEnabled).toBe(false);
+    expect(live.arcAuditEnabled).toBe(true);
+    // The self-motivated switch stays OFF on this variant - the separability
+    // this task exists to prove, stated as a config fact rather than a comment.
+    expect(live.endExtensionEnabled).toBe(false);
+    expect({ ...live, endExtensionHintsEnabled: false, arcAuditEnabled: false }).toEqual(dark);
+    expect(() => assertFingerprintMatches("recorded-live", live, dark)).toThrow(
+      /endExtensionHintsEnabled|arcAuditEnabled/
     );
   });
 });

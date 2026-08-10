@@ -9,8 +9,9 @@ import { EXTENSION_SYSTEM, buildExtensionUser } from "../analyze-v2/prompts";
 import { END_EXTENSION_SCHEMA } from "../analyze-v2/schemas";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { newUsage } from "../analyze-v2/llm";
+import type { AnalyzeConfig } from "../analyze-v2/config";
 import type { ExtensionAttempt } from "../analyze-v2/end-extension";
-import type { CriticVerdict, SentenceNode, SnappedClip } from "../analyze-v2/types";
+import type { ArcFlags, CriticVerdict, SentenceNode, SnappedClip } from "../analyze-v2/types";
 
 // ---------------------------------------------------------------------------
 // THE CONTRACT THIS FILE EXISTS TO HOLD
@@ -602,6 +603,23 @@ describe("the end-extension knobs", () => {
       loadAnalyzeConfig({ END_EXTENSION_WINDOW_SEC: "40" }).endExtensionWindowSec,
     ).toBe(40);
   });
+
+  // The hint-driven switch (task 4) - independent of END_EXTENSION and its own
+  // exact-literal discipline, for the same reason: it also arms a path that
+  // renders a model-visible pointer into a real user's job.
+  it("arms the hint-driven path only on the exact literal on, independent of END_EXTENSION", () => {
+    expect(loadAnalyzeConfig({ END_EXTENSION_HINTS: "on" }).endExtensionHintsEnabled).toBe(true);
+    expect(loadAnalyzeConfig({ END_EXTENSION_HINTS: "true" }).endExtensionHintsEnabled).toBe(
+      false
+    );
+    expect(loadAnalyzeConfig({ END_EXTENSION_HINTS: "1" }).endExtensionHintsEnabled).toBe(false);
+    expect(loadAnalyzeConfig({}).endExtensionHintsEnabled).toBe(false);
+    // Setting one does not arm the other - the separability the spec requires.
+    const hintsOnly = loadAnalyzeConfig({ END_EXTENSION_HINTS: "on" });
+    expect(hintsOnly.endExtensionEnabled).toBe(false);
+    const selfOnly = loadAnalyzeConfig({ END_EXTENSION: "on" });
+    expect(selfOnly.endExtensionHintsEnabled).toBe(false);
+  });
 });
 
 describe("END_EXTENSION_SCHEMA", () => {
@@ -802,6 +820,62 @@ describe("buildExtensionUser", () => {
     const contains = buildExtensionUser(c, n, windowFor(c, n)).split("\n")[1];
     expect(contains).toBe("WHAT IT CONTAINS: line 3. line 5. line 6.");
   });
+
+  // ---------------------------------------------------------------------------
+  // AUDIT NOTE (spec 2026-08-10 task 4). Two properties, both pinned literally
+  // rather than by substring: the exact wording a hinted clip gets, and the
+  // exact BYTE-IDENTITY an unhinted clip keeps - the property that lets every
+  // fixture recorded before this task keep replaying without a re-record.
+  // ---------------------------------------------------------------------------
+
+  it("renders the AUDIT NOTE for a hinted clip with the defect and node pinned", () => {
+    const n = nodes(40);
+    const c = clip(n);
+    const window = windowFor(c, n);
+    const user = buildExtensionUser(c, n, window, { defect: "mid_thought", fixEndNode: 9 });
+    const lines = user.split("\n");
+    // exact position: right after WHAT IT CONTAINS, before the blank line that
+    // introduces CANDIDATE ENDINGS - "one labeled line after its WHAT IT
+    // CONTAINS block" (spec).
+    expect(lines[1]).toMatch(/^WHAT IT CONTAINS:/);
+    expect(lines[2]).toBe(
+      "AUDIT NOTE: a per-clip audit of the finished cut judged this clip's final " +
+        "thought incomplete (mid_thought); the line that completes it may be #9."
+    );
+    expect(lines[3]).toBe("");
+    expect(lines[4]).toBe("CANDIDATE ENDINGS - the LAST line to include. Everything between the " +
+      "current end and your choice plays too. Keep the current end by choosing it:");
+  });
+
+  // A gated hint can in principle carry no defect (arc-audit.ts's readExit
+  // permits `defect: null` independently of `fixEndNode` - see arc-audit.ts's
+  // row-parsing comment). The note must still render something readable rather
+  // than "(undefined)" or "(null)".
+  it("falls back to a readable placeholder when a hinted clip carries no defect", () => {
+    const n = nodes(40);
+    const c = clip(n);
+    const user = buildExtensionUser(c, n, windowFor(c, n), { fixEndNode: 9 });
+    expect(user).toContain("incomplete (unspecified); the line that completes it may be #9.");
+  });
+
+  // THE PROPERTY THIS PARAMETER EXISTS TO PROTECT. `hint` defaults to
+  // undefined, so a 3-argument call - exactly how every line of this file
+  // before task 4 called it, and exactly how a fixture recorded before task 4
+  // exists - must produce the SAME string as an explicit `hint: undefined`,
+  // and neither may ever mention the audit. Asserted by full string equality,
+  // not a substring check, so an accidental whitespace or ordering change
+  // anywhere in the block is caught here even if no other test happens to
+  // read that exact byte.
+  it("renders byte-identical to the pre-task-4 block when no hint is given", () => {
+    const n = nodes(40);
+    const c = clip(n);
+    const window = windowFor(c, n);
+    const legacy = buildExtensionUser(c, n, window);
+    const explicit = buildExtensionUser(c, n, window, undefined);
+    expect(explicit).toBe(legacy);
+    expect(legacy).not.toContain("AUDIT NOTE");
+    expect(legacy.split("\n")[2]).toBe("");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -866,13 +940,19 @@ const row = (id: string, endNode: number, over: Record<string, unknown> = {}) =>
   ...over,
 });
 
+// `arcFlags` defaults to an empty map - the mechanical update task 4's signature
+// change forces on every call site in this file that does not care about hints
+// (spec 2026-08-10 task 4: "an empty-map argument"). Every existing test below
+// calls `run` with its original arity and gets the pre-task-4 behavior back
+// unchanged; only the new arc-audit-hints tests pass a populated map.
 const run = (
   client: any,
   clips: SnappedClip[],
   graph: SentenceNode[],
   config = armed,
-  usage = newUsage()
-) => extendClipEnds(client, usage, clips, graph, config, { retryDelayMs: 1 });
+  usage = newUsage(),
+  arcFlags: Map<string, ArcFlags> = new Map()
+) => extendClipEnds(client, usage, clips, arcFlags, graph, config, { retryDelayMs: 1 });
 
 /** Silences the failure logging llm.ts and this stage emit on purpose, so a
  *  suite that exercises every outage path stays readable. */
@@ -1581,5 +1661,188 @@ describe("extendClipEnds - the fallback model", () => {
     expect(Date.now() - started).toBeLessThan(1000);
     spies.error.mockRestore();
     spies.warn.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ARC-AUDIT HINTS (spec 2026-08-10 task 4). The self-motivated path above
+// (every test up to this point) is asserted with an EMPTY arcFlags map - the
+// mechanical, signature-forced update - and every one of it stays green
+// unmodified. This block is the new surface: separability of the two
+// switches, the offered-set semantics of all four combinations, and the
+// hintFollowed/hintOverridden split. All existing gates are exercised
+// unchanged by these tests - a hinted proposal goes through applyExtension
+// exactly like any other, which is the property "refused like any other" is
+// asserted against directly below.
+// ---------------------------------------------------------------------------
+describe("extendClipEnds - arc-audit hints (task 4)", () => {
+  const exitFlag = (fixEndNode: number, defect: ArcFlags["exit"]["defect"] = "mid_thought"): ArcFlags => ({
+    entry: { ok: true },
+    exit: { ok: false, defect, fixEndNode },
+    standalone: { ok: true },
+  });
+
+  const hintsOnly = loadAnalyzeConfig({
+    SCENE_GAP_SEC: "8",
+    END_EXTENSION_WINDOW_SEC: "25",
+    ARC_AUDIT: "on",
+    END_EXTENSION_HINTS: "on",
+  });
+  const bothOn = loadAnalyzeConfig({
+    SCENE_GAP_SEC: "8",
+    END_EXTENSION_WINDOW_SEC: "25",
+    ARC_AUDIT: "on",
+    END_EXTENSION: "on",
+    END_EXTENSION_HINTS: "on",
+  });
+
+  /** The CLIP ids a rendered user prompt actually offers, in order - read the
+   *  same way a model would, off the same "CLIP <id>" header every other test
+   *  in this file asserts with `.toContain`. */
+  const offeredIdsOf = (user: string): string[] =>
+    [...user.matchAll(/^CLIP (\S+)/gm)].map((m) => m[1]);
+
+  // THE FOUR SWITCH COMBINATIONS, on one fixture built so each combination
+  // predicts a DIFFERENT offered set: "a" has a self window and no hint, "b"
+  // has both, "c" ends exactly at a scene cut (nodes(40, 30) - the same
+  // "atCut" shape the pre-task-4 suite already uses) so its self-motivated
+  // window is EMPTY and the only way it can be offered is a hint.
+  describe("offered-set semantics", () => {
+    const n = nodes(40, 30);
+    const a = snappedClip(n, 2, 5, "a");
+    const b = snappedClip(n, 10, 13, "b");
+    const c = snappedClip(n, 26, 29, "c");
+    const clips = [a, b, c];
+    const arcFlags = new Map<string, ArcFlags>([
+      ["b", exitFlag(15)],
+      ["c", exitFlag(32, "setup_no_payoff")],
+    ]);
+
+    const offered = async (config: AnalyzeConfig) => {
+      const client = seqClient([() => ok([])]);
+      const r = await run(client, clips, n, config, newUsage(), arcFlags);
+      if (client.chat.completions.create.mock.calls.length === 0) {
+        return { ids: [] as string[], skipped: r.telemetry.skipped };
+      }
+      return { ids: offeredIdsOf(userOf(client)), skipped: r.telemetry.skipped };
+    };
+
+    it("neither switch: the stage does not even ask", async () => {
+      const r = await offered(cfg);
+      expect(r.ids).toEqual([]);
+      expect(r.skipped).toBe("disabled");
+    });
+
+    it("self only: every clip WITH a window, hinted or not - today's behavior, unchanged", async () => {
+      expect((await offered(armed)).ids).toEqual(["a", "b"]);
+    });
+
+    it("hints only: ONLY the hinted clips, including one whose self window is empty", async () => {
+      expect((await offered(hintsOnly)).ids).toEqual(["b", "c"]);
+    });
+
+    it("both on: the union", async () => {
+      expect((await offered(bothOn)).ids).toEqual(["a", "b", "c"]);
+    });
+  });
+
+  it("no-ops on the hint side when ARC_AUDIT is off, even with a populated arcFlags map - the dependency is checked in code, not inferred from an empty map", async () => {
+    // c0's own window is empty (the same nodes(20, 6) shape "is empty when the
+    // clip already ends at the scene boundary" already relies on), so the
+    // clip can ONLY be offered via a hint - and arcAuditEnabled is deliberately
+    // absent from this config, simulating a caller that (by bug or by stale
+    // state) still hands this stage a non-empty arcFlags map.
+    const n = nodes(20, 6);
+    const c = clip(n);
+    const arcFlags = new Map<string, ArcFlags>([["c0", exitFlag(10)]]);
+    const config = loadAnalyzeConfig({
+      SCENE_GAP_SEC: "8",
+      END_EXTENSION_WINDOW_SEC: "25",
+      END_EXTENSION_HINTS: "on", // ARC_AUDIT deliberately not set
+    });
+    const client = seqClient([() => ok([])]);
+    const r = await run(client, [c], n, config, newUsage(), arcFlags);
+    expect(client.chat.completions.create).not.toHaveBeenCalled();
+    expect(r.telemetry.skipped).toBe("no_window");
+    expect(r.telemetry.hinted).toBeUndefined();
+  });
+
+  it("a hinted clip's prompt block carries the AUDIT NOTE; an unhinted clip in the SAME batch does not", async () => {
+    const n = nodes(60);
+    const a = snappedClip(n, 2, 5, "a");
+    const b = snappedClip(n, 20, 23, "b");
+    const arcFlags = new Map<string, ArcFlags>([["a", exitFlag(8, "transition_out")]]);
+    const client = seqClient([() => ok([])]);
+    await run(client, [a, b], n, bothOn, newUsage(), arcFlags);
+    const user = userOf(client);
+    const blocks = user.split("\n\n---\n\n");
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toContain("CLIP a");
+    expect(blocks[0]).toContain(
+      "AUDIT NOTE: a per-clip audit of the finished cut judged this clip's final " +
+        "thought incomplete (transition_out); the line that completes it may be #8."
+    );
+    expect(blocks[1]).toContain("CLIP b");
+    expect(blocks[1]).not.toContain("AUDIT NOTE");
+  });
+
+  it("counts hintFollowed when the model's node matches the hint, hintOverridden when it legally picks another", async () => {
+    const n = nodes(60);
+    const a = snappedClip(n, 2, 5, "a"); // hinted at 8, model proposes 8 - followed
+    const b = snappedClip(n, 20, 23, "b"); // hinted at 26, model proposes 27 - overridden
+    const c = snappedClip(n, 38, 41, "c"); // not hinted at all - ordinary self extension
+    const arcFlags = new Map<string, ArcFlags>([
+      ["a", exitFlag(8)],
+      ["b", exitFlag(26, "setup_no_payoff")],
+    ]);
+    const client = seqClient([() => ok([row("a", 8), row("b", 27), row("c", 44)])]);
+    const r = await run(client, [a, b, c], n, bothOn, newUsage(), arcFlags);
+
+    expect(r.telemetry.applied).toBe(3);
+    expect(r.telemetry.hinted).toBe(2);
+    expect(r.telemetry.hintFollowed).toBe(1);
+    expect(r.telemetry.hintOverridden).toBe(1);
+    expect(r.clips.find((x) => x.verdict.id === "a")!.finalEndNode).toBe(8);
+    expect(r.clips.find((x) => x.verdict.id === "b")!.finalEndNode).toBe(27);
+  });
+
+  it("refuses a hinted proposal exactly like any other - gates unchanged - and does not count it as followed or overridden", async () => {
+    const n = nodes(40);
+    const a = clip(n); // window's lastNode is 17 under `cfg`-equivalent settings
+    const arcFlags = new Map<string, ArcFlags>([["c0", exitFlag(30)]]);
+    const config = loadAnalyzeConfig({
+      SCENE_GAP_SEC: "8",
+      END_EXTENSION_WINDOW_SEC: "25",
+      ARC_AUDIT: "on",
+      END_EXTENSION_HINTS: "on",
+    });
+    // The model proposes exactly the hinted node, which is past the 25s window
+    // - refused by the SAME gate an unhinted proposal would hit.
+    const client = seqClient([() => ok([row("c0", 30)])]);
+    const r = await run(client, [a], n, config, newUsage(), arcFlags);
+
+    expect(r.telemetry.hinted).toBe(1);
+    expect(r.telemetry.applied).toBe(0);
+    expect(r.telemetry.refused).toBe(1);
+    expect(r.telemetry.refusedBy).toEqual({ outside_window: 1 });
+    // Present at 0, not absent - see ExtensionTelemetry's doc comment: once
+    // there is a hinted population, 0 is a real answer about it.
+    expect(r.telemetry.hintFollowed).toBe(0);
+    expect(r.telemetry.hintOverridden).toBe(0);
+  });
+
+  // The whole point of the "absent, never zero" rule: every telemetry-equality
+  // test in this file written before task 4 must keep matching byte for byte.
+  it("keeps hinted/hintFollowed/hintOverridden entirely absent when nothing in the run was hinted", async () => {
+    const n = nodes(60);
+    const a = snappedClip(n, 2, 5, "a");
+    const client = seqClient([() => ok([row("a", 8)])]);
+    // an empty arcFlags map - exactly what index.ts passes when arcAudit never
+    // ran, and exactly what `run`'s own default supplies
+    const r = await run(client, [a], n);
+    expect(r.telemetry.applied).toBe(1);
+    expect("hinted" in r.telemetry).toBe(false);
+    expect("hintFollowed" in r.telemetry).toBe(false);
+    expect("hintOverridden" in r.telemetry).toBe(false);
   });
 });

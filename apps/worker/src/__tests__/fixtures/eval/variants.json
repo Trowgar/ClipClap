@@ -12,5 +12,9 @@
   "start-extension": {
     "arcAuditEnabled": true,
     "startExtensionEnabled": true
+  },
+  "arc-exit-hints": {
+    "arcAuditEnabled": true,
+    "endExtensionHintsEnabled": true
   }
 }

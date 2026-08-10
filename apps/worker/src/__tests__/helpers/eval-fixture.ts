@@ -68,6 +68,16 @@ export const BASE_VARIANT = "base";
  * stage no-ops without a detector to feed it - which is also why a variant is
  * allowed to move more than one whitelisted key at once (gpt51 already does,
  * for `criticModel` and `finalizerModel` together).
+ *
+ * `endExtensionHintsEnabled` (task 4), same door, same reason as
+ * `endExtensionEnabled` originally: without it, no config this harness builds
+ * could ever set the hint-driven half of end-extension, so no fixture could
+ * ever be recorded or replayed with it live. The "arc-exit-hints" variant sets
+ * it ALONGSIDE `arcAuditEnabled` (the stage no-ops on the hint side without a
+ * detector to feed it, start-extension's own precedent) and deliberately
+ * WITHOUT `endExtensionEnabled` - the two end-extension switches are the thing
+ * under test being separable, so a variant that turned both on at once would
+ * prove nothing about whether the hint-driven path stands on its own.
  */
 export type VariantOverrides = Partial<
   Pick<
@@ -78,6 +88,7 @@ export type VariantOverrides = Partial<
     | "endExtensionEnabled"
     | "arcAuditEnabled"
     | "startExtensionEnabled"
+    | "endExtensionHintsEnabled"
   >
 >;
 
@@ -89,6 +100,7 @@ export const VARIANT_OVERRIDE_KEYS = [
   "endExtensionEnabled",
   "arcAuditEnabled",
   "startExtensionEnabled",
+  "endExtensionHintsEnabled",
 ] as const satisfies ReadonlyArray<keyof VariantOverrides>;
 
 /**

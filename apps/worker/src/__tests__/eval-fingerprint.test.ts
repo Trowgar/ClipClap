@@ -38,6 +38,7 @@ describe("computeFingerprint", () => {
       arcAuditMaxOutputTokensBase: arcAuditMaxOutputTokens(0),
       arcAuditMaxOutputTokensPerClip: arcAuditMaxOutputTokens(1) - arcAuditMaxOutputTokens(0),
       startExtensionEnabled: baseCfg.startExtensionEnabled,
+      endExtensionHintsEnabled: baseCfg.endExtensionHintsEnabled,
     });
   });
 
@@ -60,6 +61,12 @@ describe("computeFingerprint", () => {
     // - see eval-fingerprint.ts's doc comment for why the key is here anyway
     // (the shared-responses.json false-match risk).
     expect(computeFingerprint(baseCfg).startExtensionEnabled).toBe(false);
+  });
+
+  it("records the end-extension hint switch as DARK on the default config", () => {
+    // Every fixture in the repo predates task 4 entirely, same argument as
+    // endExtensionEnabled and arcAuditEnabled above.
+    expect(computeFingerprint(baseCfg).endExtensionHintsEnabled).toBe(false);
   });
 });
 
@@ -171,6 +178,17 @@ describe("assertFingerprintMatches", () => {
     const changed = computeFingerprint({ ...baseCfg, startExtensionEnabled: true });
     expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
       /startExtensionEnabled/
+    );
+  });
+
+  it("fails when the end-extension hint switch was turned on, which every fixture predates", () => {
+    // Same shape as endExtensionEnabled and arcAuditEnabled: task 4 ships dark,
+    // so a live replay against a dark recording could add hinted clips to the
+    // offered set and the snapshot would move with nothing saying whether the
+    // hints worked or the recording simply predates them.
+    const changed = computeFingerprint({ ...baseCfg, endExtensionHintsEnabled: true });
+    expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
+      /endExtensionHintsEnabled/
     );
   });
 

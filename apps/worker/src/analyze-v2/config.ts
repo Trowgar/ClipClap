@@ -86,6 +86,21 @@ export interface AnalyzeConfig {
    *  (spec 2026-08-10 §2c: "measured in task 3"). Deliberately NOT a variant
    *  key - a tuning door, the same refusal as endExtensionWindowSec. */
   startExtensionWindowSec: number;
+  /** Master switch for the HINT-DRIVEN half of end-extension (spec 2026-08-10
+   *  task 4) - separate from `endExtensionEnabled`, which is the SELF-MOTIVATED
+   *  path (every clip with a window offered cold, no audit involved) and stays
+   *  net negative on compilation reels (engine-notes §3). This flag instead adds
+   *  clips to the offered set because arcAudit's gated `exit.fixEndNode` named a
+   *  completing line, and renders that pointer as a labeled note in the clip's
+   *  prompt block - the model still decides and may still answer `extend: false`.
+   *  Independently switchable from `endExtensionEnabled` on purpose: the
+   *  compilation-reel harm was measured on the SELF-MOTIVATED path, and the
+   *  audit-hinted path is the thing being tested as its separable replacement,
+   *  so one must be able to ship without the other. No-ops without
+   *  `arcAuditEnabled` too (end-extension.ts checks both, the same doubling
+   *  start-extension.ts uses for its own dependency on the audit). Off until
+   *  measured, the same discipline as every other stage switch in this file. */
+  endExtensionHintsEnabled: boolean;
   /** How far into a video an intro trailer montage may reach. Bounds the region
    *  scan in analyze-v2/teaser.ts; 0 switches montage detection off entirely,
    *  which is the kill switch. (spec 2026-07-24 §4.1) */
@@ -175,6 +190,10 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     // stray truthy env value.
     startExtensionEnabled: env.START_EXTENSION === "on",
     startExtensionWindowSec: num(env, "START_EXTENSION_WINDOW_SEC", 20),
+    // Exact literal "on", same discipline as every other stage switch in this
+    // file: a stray truthy env value must not arm a stage that renders an
+    // arc-audit pointer into a prompt a real user's job will read.
+    endExtensionHintsEnabled: env.END_EXTENSION_HINTS === "on",
     teaserWindowSec: num(env, "TEASER_WINDOW_SEC", 120),
     teaserMinHits: num(env, "TEASER_MIN_HITS", 3),
     finalizerEnabled: env.ANALYZE_FINALIZER !== "off",

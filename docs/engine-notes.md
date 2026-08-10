@@ -654,6 +654,76 @@ order larger than the four boundary moves under test. Shipped-set counts CANNOT 
 that ship and the per-gate refusal histogram. **Finalizer sampling variance is currently the
 largest single instability in the engine - larger than anything the arc audit measured.**
 
+### End-extension hints: the audit's exit pointers wired in as a second, separable offer path (2026-08-10)
+
+Spec task 4. `extendClipEnds` (`analyze-v2/end-extension.ts`) now offers a clip for two
+INDEPENDENT reasons instead of one. The reason it existed before this task -
+`cfg.endExtensionEnabled`, every clip with a non-empty window offered cold - is UNCHANGED and
+stays the net-negative-on-compilation-reels stage described above; nothing about its gates,
+telemetry shape or batching moved. A new switch, `cfg.endExtensionHintsEnabled`
+(`END_EXTENSION_HINTS=on`, not in live `.env`, default off), independently adds a clip to the
+offered set when arcAudit flagged its exit `ok: false` with a gated `fixEndNode` - the same
+pointer `extendClipStarts` consumes on the entry side, this time handed to the EXISTING
+extension stage as a hint rather than driving a new one. The hinted clip's prompt block carries
+one extra line (`buildExtensionUser`'s `AUDIT NOTE: ... judged this clip's final thought
+incomplete (<defect>); the line that completes it may be #<node>.`) - factual, not an
+instruction; the model still answers `extend: false` freely, which is the measured answer to the
+honest-miss case above (2148.0: "the model looked at a legal answer and preferred its own"). No
+gate changed: a hinted proposal that fails `opaque_end` or `no_clean_end` is refused exactly like
+a self-motivated one. `extendClipEnds` gained one parameter, `arcFlags: Map<string, ArcFlags>` -
+the same map `extendClipStarts` already reads - and is gated on `cfg.arcAuditEnabled` a second
+time at the point it looks up a hint, the same defence-in-depth doubling every audit-fed stage in
+this engine uses, so a stray populated map cannot arm the hint path if the audit itself is dark.
+
+**Separability was the whole point, and it is now a config fact, not an argument.** The two
+switches move independently: `END_EXTENSION=on` alone reproduces today's self-motivated stage
+byte for byte (hints add nothing without their own switch); `END_EXTENSION_HINTS=on` alone offers
+ONLY arcAudit-flagged clips, including ones whose self-motivated window is empty (arcAudit's own
+gate bounds a pointer by the clock only, never by the scene rail, so a hint can legally exist
+where the self-motivated path would never have asked); both on is the union, with only the
+flagged clips carrying the note. This is what lets a future measurement ask "does the audit-hinted
+path avoid the compilation-reel harm the self-motivated path caused" without re-litigating whether
+the self-motivated path itself changed - it did not, and the eval fingerprint
+(`endExtensionHintsEnabled`, mirroring `arcAuditEnabled`'s own entry) makes a live-hints replay
+against a dark recording fail loudly rather than silently.
+
+Telemetry gained three fields on the EXISTING `endExtension` block - `hinted`, `hintFollowed`
+(applied extensions whose accepted node equals the hint), `hintOverridden` (applied on a different
+legal node) - present only once at least one clip in the run was actually hinted, ABSENT (never
+zero) otherwise. That is not the shape every other counter in this engine uses (`offered`,
+`applied` etc. are always-present zeros) - it is deliberate here because every telemetry object
+this stage ever returned before this task is asserted with an exact `toEqual` somewhere in its own
+suite, and an always-present counter would have forced touching tests this task's own rules say
+must stay unmodified. Two mutation-tested guards confirmed load-bearing by hand (/tmp copy,
+neuter, red, restore, md5-verify): the `if (hint)` conditional in `buildExtensionUser` (removed,
+and the unhinted-render-byte-identity test went red, proving unhinted rendering really does depend
+on the guard) and the `cfg.arcAuditEnabled ? arcFlags.get(...) : undefined` defence-in-depth check
+in the offered-set loop (removed, and the "hints on but ARC_AUDIT off no-ops" test went red).
+
+**Ships dark; variant `arc-exit-hints` recorded the same day** (the implementing agent was
+forbidden to spend; the operator ran the topup - 9 new responses across the five fixtures - and
+blessed the snapshots). First corpus pass, replay
+(`runFixtureVariant(f, "arc-exit-hints")`, hints-only - the self-motivated path stays off):
+
+| fixture | hinted | applied | refusedBy | followed/overridden | secondsGained | clips |
+|---|---|---|---|---|---|---|
+| podcast-nuclear | 2 | 0 | `no_clean_end` 1, `opaque_end` 1 | - | 0 | 8 |
+| podcast-ecology | 1 | 1 | - | 1/0 | 19.3 | 12 |
+| podcast-answer-arc | 4 | 4 | - | 2/2 | 44.3 | 12 |
+| sitcom-friends | 1 | 1 | - | 0/1 | 24.1 | 11 |
+| creator-challenge | 0 | - | - | - | 0 | 8 |
+
+Three facts worth the table. **The sitcom question this path exists for is answered on its first
+sample:** the one hinted extension is the 0.0-18.6 clip reaching ~42.7s - the case the 2026-08-04
+self-motivated measurement called "a real improvement" - while the 1165.4 scene-staple harm case
+carries no audit hint and is untouched; the hinted path extended exactly the good case and could
+not reproduce the bad one. **`hintOverridden` is real behavior, not an edge case** - 3 of 6
+applied extensions landed on a different legal node than the hint, i.e. the model reads the note
+and still exercises judgement, which is precisely the honest-miss remedy the task wanted (a
+prompt, not a command). **Both nuclear refusals are the §3 word-timing root cause again** - the
+completing nodes are opaque, so `opaque_end`/`no_clean_end` refuse them however good the hint;
+the lever remains Whisper word-timing coverage, now visible from a third direction.
+
 ---
 
 ## 4. Approaches that were tried and failed

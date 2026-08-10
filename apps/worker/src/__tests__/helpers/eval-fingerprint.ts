@@ -128,6 +128,33 @@ import { finalizerMaxOutputTokens } from "../../analyze-v2/finalize";
  *                                No *MaxOutputTokens pair exists for it, for
  *                                the same reason: nothing here is a token
  *                                budget for a call this stage never makes.
+ *   endExtensionHintsEnabled     whether the HINT-DRIVEN half of end-extension
+ *                                (task 4) may add a clip to the offered set.
+ *                                Narrower than endExtensionEnabled's own
+ *                                argument: whenever a hint actually renders
+ *                                (buildExtensionUser's AUDIT NOTE line), the
+ *                                user prompt for that clip differs from any
+ *                                un-hinted recording, and the request hash
+ *                                already fails loudly on its own - no key is
+ *                                needed for THAT case. It is here for the
+ *                                narrower boundary case start-extension's own
+ *                                key exists for: turning this switch on can
+ *                                take the stage from "neither switch is on,
+ *                                skip immediately, no request at all" to
+ *                                "a request now happens" purely via clips whose
+ *                                hint happens to add nothing new to compare
+ *                                against (e.g. a clip already in the
+ *                                self-motivated offered set, or one whose
+ *                                hinted render coincides with an answer
+ *                                already sitting in the shared responses.json
+ *                                pool) - the same false-MATCH shape
+ *                                finalizerEnabled and startExtensionEnabled
+ *                                both exist to close. No *MaxOutputTokens pair
+ *                                exists for it: this key does not change the
+ *                                CALL'S shape, only which clips are IN it, and
+ *                                extensionMaxOutputTokens already prices off
+ *                                the offered count returned by the stage
+ *                                itself.
  *
  * startExtensionWindowSec is NOT here, unlike endExtensionWindowSec - the
  * asymmetry is deliberate. It bounds a GATE inside arc-audit.ts (whether a
@@ -205,6 +232,11 @@ export interface EngineFingerprint {
    *  the doc comment above for why it is still in here (the shared-
    *  responses.json false-match risk, finalizerEnabled's own argument). */
   startExtensionEnabled: boolean;
+  /** Whether the HINT-DRIVEN half of end-extension (task 4) may add clips to
+   *  the offered set - independent of endExtensionEnabled, the pre-existing
+   *  self-motivated switch. See the doc comment above for the narrower false-
+   *  match boundary this key closes. */
+  endExtensionHintsEnabled: boolean;
 }
 
 export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
@@ -233,6 +265,7 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     arcAuditMaxOutputTokensBase: arcAuditBase,
     arcAuditMaxOutputTokensPerClip: arcAuditMaxOutputTokens(1) - arcAuditBase,
     startExtensionEnabled: cfg.startExtensionEnabled,
+    endExtensionHintsEnabled: cfg.endExtensionHintsEnabled,
   };
 }
 
