@@ -1723,10 +1723,10 @@ done properly.
 
 ---
 
-### 7h. Every clip ships with non-square pixels (measured 2026-08-08, unfixed)
+### 7h. Every clip shipped with non-square pixels (measured and fixed 2026-08-08)
 
-**Measured, recorded, not yet fixed.** The guard is `eval-clip-geometry.ts` and it is committed RED. The fix
-is a separate change so that this measurement can falsify it.
+**Measured, recorded, then fixed - in that order.** The guard `eval-clip-geometry.ts` was committed RED
+first so the fix had something to falsify it. Everything below the result table is the fix and its aftermath.
 
 **The finding.**
 
