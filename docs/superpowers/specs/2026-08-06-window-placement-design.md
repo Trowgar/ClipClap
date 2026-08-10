@@ -240,7 +240,10 @@ the case that shows it also supplies the number. If they do not, no cap is neede
 
 - **The webcam-inset detector fails on a real stream.** The Booster CS2 source resolves no `camRect`
   (`stream_no_rect`, faceFrac 3.1%), so the stream layout never fires. §7a's thresholds rest on one video;
-  that source is now available as a second fixture.
+  that source is now available as a second fixture. **Measured 2026-08-08 (engine-notes §7g): lifting the
+  size gate and building the edge map per shot does NOT fix it** - the best rectangle around that webcam
+  scores 1.35 against a threshold of 4.0. Whatever this needs, it is not a relaxation of the existing
+  thresholds.
 - **The clip in-point.** Twelve viewer verdicts on real clips returned 0 POST, 5 FIX, 7 SKIP, and 8 of 12
   named the opening as the problem. Roughly half of that was framing and is now fixed. The other half is
   that the clip begins on setup rather than on the hook, which is ANALYZE and is the larger question.

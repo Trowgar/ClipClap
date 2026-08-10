@@ -1628,6 +1628,101 @@ is §7e's explicitly untouched knob), the 20.5s of merge-blindness, and the miss
 
 ---
 
+### 7g. The crop follows a portrait inside a graphic insert, and no cheap signal finds it (measured 2026-08-08)
+
+**Nothing shipped. This is a negative result and an accepted limitation**, recorded so the next person does
+not spend the same three days rediscovering it. Owner's decision, 2026-08-08: keep the current anchor rule,
+add no further unreliable signal.
+
+**The defect.** Clip `cmshgsrvr00091445kr748jsv` opens on a rounded-corner graphic insert holding a **still
+portrait**, while the host talks on the left. Face widths: portrait **351px**, live host **241px**. The
+planner anchors on face area, so the window goes to the card and the clip opens on 7.7 seconds of a
+photograph. The persisted plan says it plainly - `0.00-7.67 single x=1164`, and the card sits at ~1170..1800.
+This is §7f §3.1's "the largest face is not the speaker" in its concrete, expensive form: it lands on the
+opening, which is the part viewers already named as the weak point (§7e, §7f).
+
+The owner reports the same thing in other clips. It is a mechanism, not one bad frame.
+
+**Two face-level signals were proposed and both died on the motivating shot.** The idea was that a photograph
+is motionless where a person is not:
+
+| | live host | portrait in the card |
+|---|---|---|
+| box displacement across the shot | 3.2px (1.3% of width) | **13.9px (4.0%)** |
+| `mouthActivity` | 0.044 | 0.016 |
+
+**The card moves MORE than the person** - it is slowly zoomed, the Ken Burns effect, and the detector box
+rides it. `mouthActivity` is lower but of the same order, with nothing between them to put a threshold in.
+Worse, `mouthActivity` is `0.0` both for a still image and for a track that never yielded two mouth patches,
+so the signal cannot distinguish "did not move" from "was not measured". A rule built on either would also
+have collided with §7c's pinned test that the window does not move when `mouthActivity` moves.
+
+**So the rectangle was measured instead of the face** - whether a graphic insert is present is a property of
+the frame, not of how still someone holds their head. `probe_insert_rect.py` calls the shipped
+`median_edge_map` and `find_cam_rect` (production sidecar untouched) under each relaxation on the table:
+the size gate off, and a per-shot edge map instead of the clip-wide one. Driven by
+`eval-insert-rect.ts` over 62 clips, 315 detector shots, 220 with surviving tracks.
+
+```
+searching AT the shipped threshold of 4.0
+  clip-wide edge map : no rectangle anywhere in the corpus
+  per-shot edge map  : 2 shots of 315, scoring 4.28 and 4.87
+  of those, on an ANCHOR face: 0        -> not one clip would change
+```
+
+**Both halves of the feature class fail, and they fail for unrelated reasons.**
+
+- **False positives.** The strongest anchor-face candidates in the corpus are all furniture. 3.52: an empty
+  wall in the corner of a wide two-shot. 2.56: a **glazed display cabinet** behind a lecture room. 2.11: a
+  tiled wall boundary in a morgue. A rectangle with strong borders is a cabinet, a window or a doorway as
+  readily as an insert, and lowering the threshold to catch cards admits all of them.
+- **Misses are structural, not thresholds.** The Chikatilo card is proposed **at no score at all**, because
+  two geometric rules reject it before border strength is consulted: `pip_max_frac = 0.5` caps an inset at
+  half the frame on each axis and the card is ~660px tall against a 540px ceiling, and `rect_area >= 4 *
+  face_area` demands 674k px² where the card has 422k. Both encode "a small webcam in a corner". A face wider
+  than roughly 336px on a 1920 source can never sit inside a detectable rectangle, whatever the threshold.
+
+So the two failure modes are disjoint: no threshold move fixes both, and each relaxation that would reach the
+cards also admits the cabinets.
+
+**The gate means today's detector never even looks.** `find_cam_rect` runs only when the DOMINANT track is
+already narrower than `faceSmallFrac * sourceWidth` (6%, 115px at 1920). On the motivating shot the dominant
+track is 241px. Reporting "the detector found nothing" there would have been true and useless.
+
+**Booster CS2 is neither better nor worse.** Production still returns no `camRect` on any of its three clips
+(`stream_no_rect`, §7f's deferred item, unchanged - nothing was modified). With the gate lifted and a
+per-shot map it is still not found: the best rectangle scores 1.35. **So lifting the gate does not fix the
+stream case either**, which was the second motivation for touching `find_cam_rect` at all.
+
+**A trap in the probe, found before it produced a conclusion.** `find_cam_rect` returns the **largest**
+rectangle clearing its threshold, not the strongest. A probe run at a low floor therefore does not merely
+reveal weaker results - it **changes which rectangle wins**. On the Booster stream at a floor of 1.0 the
+winner was a box whose right edge had run off the webcam into the game HUD, reporting 1.35, while the
+webcam's own tighter and stronger rectangle was never reported because a bigger one had beaten it on area.
+The first pass of this measurement drew its conclusion from exactly those numbers. Acceptance is now searched
+AT the threshold, as a separate call. **The correction did not change the verdict - which is a fact only
+because it was made.**
+
+**The limitation, stated rather than fixed.** The crop can follow a graphic insert when the portrait inside it
+is larger than the live face beside it. That is a property of choosing the anchor by face area, it is not a
+bug in the placement rule, and it has no cheap detector. It stands until one of the two follow-ups below is
+done properly.
+
+**Deferred, each needing its own corpus and spec before any code:**
+
+1. **An insert detector.** Not `find_cam_rect` relaxed. The evidence above says that detector answers a
+   different question, and a general one needs a labelled corpus of inserts - portrait cards, split screens,
+   lower thirds, full-frame B-roll - with their roles, before a threshold means anything.
+2. **Active-speaker selection.** The right answer to "who should be on screen", and §7b already measured why
+   it cannot be improvised: `mouthActivity` is not validated as speech and agrees with `dominance` in 17 of
+   35 multi-face shots. Buy the ground truth first.
+3. **A face-detector post-filter.** Found while looking at the frames and unrelated to inserts: in a vlog
+   clip the anchor is a **605px "face" that is a window frame**, beating the real 300px face on area. YuNet
+   false positives on windows, posts and doorways win the anchor by being big. This one is cheap to measure
+   and does not need a speech model.
+
+---
+
 ## 8. Operational facts
 
 - Prod IS this host. Plain `docker compose up -d` (dev target) is production mode. **Do not use
