@@ -2160,3 +2160,61 @@ hard-deletes the Job rows that ARE the trial's ledger, so one account can reset 
 exploitation occurred (0 signups, 0 jobs in the window). Re-enabling needs those three holes closed AND the
 owner's explicit approval of the commercial terms - it changes what customers are charged, which is not a
 decision to infer from a brief reply.
+
+---
+
+## 10. RENDER state and the open queue (handoff, 2026-08-08)
+
+Written at the end of a session so the next person starts from the state rather than from the chat.
+
+### Closed, with the guard that keeps it closed
+
+| area | state | the check |
+|---|---|---|
+| output geometry | 1080x1920, SAR 1:1, DAR 9:16 on all five filter paths (§7h) | `output-geometry.test.ts` in the suite; `eval-clip-geometry.ts` end to end |
+| crop edge bisecting a face | 221s -> 177s, 0s of an anchored face cut by its own window (§7f) | `eval-bisection.ts` |
+| min-face guard misapplied | blind centre 298s -> 27s (§7e) | `eval-blind-centre.ts` |
+| subtitles dropping words / single-word cues | fixed (§8a, §8c) | `eval-subtitle-coverage.ts`, `eval-subtitle-cues.ts` |
+| camera Layer 0 | shipped OFF, negative result (§7d) | `eval-camera-invariance.ts` |
+
+**One guard is red on purpose and must stay red until it isn't:** `eval-clip-geometry.ts`'s delivered-clip
+half. The 62 clips in R2 were rendered before the SAR fix. Re-rendering them is the only thing that turns it
+green; narrowing its query would only hide the fact.
+
+**`eval-camera-invariance.ts` level 1 is also red by design** - see §7h for how to read its 276, and do not
+"fix" it by editing the frozen compiler.
+
+### Known limitations, accepted rather than open
+
+These are properties of choosing the anchor by face area. They are recorded so they are not rediscovered as
+bugs:
+
+- **The largest face is not the speaker** (§7f §3.1). For two people at a table the assumption is nearly
+  always right; for a crowd it is a guess.
+- **The crop can follow a portrait inside a graphic insert** when that portrait is larger than the live face
+  beside it (§7g). Three candidate signals were each measured dead - a still card moves MORE than a person,
+  `mouthActivity` has no gap and conflates "still" with "not measured", and `find_cam_rect` finds furniture
+  while missing the cards on geometry. Do not re-propose them without reading §7g first.
+
+### Open, largest first, each blocked on the same rule
+
+**Rule: corpus first, code second.** Every remaining item needs a labelled corpus before a threshold means
+anything. This is not caution for its own sake - §7d, §7g and the `MIN_RESTORED_SEC` tuning are three
+recorded cases of a number chosen from nothing.
+
+1. **The clip in-point (ANALYZE).** The largest by expected value. Twelve viewer verdicts returned 0 POST,
+   5 FIX, 7 SKIP, and 8 of 12 named the opening. Roughly half of that was framing and is fixed; the other
+   half is that clips begin on setup rather than on the hook. Needs hook-labelled clips.
+2. **Merge-blindness and the missed cuts.** 20.5s where `mergeAdjacentLayouts` keeps the first shot's x and
+   the cut face lives in a later shot; and the finding from §7f that `scdet` misses camera cuts, so one
+   detector shot can hold two framings and the window is a compromise between angles that never coexist.
+3. **Sub-floor faces.** 140.4s of edge-cut time from faces below `survivingTracks`' noise floor, which
+   `placeWindow` never receives. §7e deliberately did not touch that floor; moving it changes the anchor, the
+   split and this at once, so it needs its own measurement.
+4. **A face-detector post-filter.** The cheapest of these and the only one needing no new modality: a 605px
+   "face" that is a window frame currently wins an anchor by area (§7g).
+5. **Inset detector / active-speaker selection.** Both need their own corpus and their own spec. §7b already
+   measured why active-speaker cannot be improvised from `mouthActivity`.
+6. **`find_cam_rect` on a second source.** The Booster CS2 stream resolves no `camRect`, and §7g measured
+   that lifting the size gate and building a per-shot edge map does NOT fix it - the best rectangle scores
+   1.35 against a threshold of 4.0. Whatever this needs, it is not relaxed thresholds.
