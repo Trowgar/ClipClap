@@ -134,7 +134,15 @@ export function buildFiltergraph(plan: CropPlan, assSnippet?: string): FilterSpe
           x: s.layout === "split" || s.layout === "stream" ? centerX : s.x,
         }))
       );
-  const baseChain = `crop=w=${cropW}:h=ih:x='${baseX}':y=0,scale=1080:1920`;
+  // setsar=1 is not decoration and it is not only for the tiled layouts. A 9:16
+  // slice of a 1080-tall frame is 607.5px, `cropWidthFor` rounds it to an even
+  // 608, and `scale` PRESERVES display aspect rather than stretching - so
+  // scaling 608x1080 to exactly 1080x1920 leaves ffmpeg to absorb the 0.08% by
+  // tagging the output SAR 1216:1215. All 62 delivered clips carried that tag
+  // (engine-notes §7h). This base chain is also what tags the FINAL file under
+  // both composite layouts, so the tiles declaring square pixels was never
+  // enough on its own.
+  const baseChain = `crop=w=${cropW}:h=ih:x='${baseX}':y=0,scale=1080:1920,setsar=1`;
 
   // Must stay BELOW baseChain: the branch reads it, and `const` is not hoisted
   // in a usable state - declared beside `splits` this would throw
@@ -218,8 +226,11 @@ export function buildFiltergraph(plan: CropPlan, assSnippet?: string): FilterSpe
   const chains = [
     `[0:v]split=3[b0][t0][m0]`,
     `[b0]${baseChain}[base]`,
-    `[t0]crop=w=${tileW}:h=ih:x='${piecewiseX(topSegs)}':y=0,scale=1080:960[top]`,
-    `[m0]crop=w=${tileW}:h=ih:x='${piecewiseX(botSegs)}':y=0,scale=1080:960[bottom]`,
+    // setsar=1 for the same reason as the base and the stream tiles:
+    // crop=1216 scaled to 1080x960 is the identical 1216:1215 fraction, and
+    // overlay inputs must agree on pixel aspect before they meet.
+    `[t0]crop=w=${tileW}:h=ih:x='${piecewiseX(topSegs)}':y=0,scale=1080:960,setsar=1[top]`,
+    `[m0]crop=w=${tileW}:h=ih:x='${piecewiseX(botSegs)}':y=0,scale=1080:960,setsar=1[bottom]`,
     `[base][top]overlay=x=0:y=0:enable='${enable}'[o1]`,
     assSnippet
       ? `[o1][bottom]overlay=x=0:y=960:enable='${enable}'[o2]`
