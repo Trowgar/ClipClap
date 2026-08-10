@@ -1723,6 +1723,63 @@ done properly.
 
 ---
 
+### 7h. Every clip ships with non-square pixels (measured 2026-08-08, unfixed)
+
+**Measured, recorded, not yet fixed.** The guard is `eval-clip-geometry.ts` and it is committed RED. The fix
+is a separate change so that this measurement can falsify it.
+
+**The finding.**
+
+```
+target                    1080x1920   SAR 1:1        DAR 9:16    (0.562500)
+every path, every clip    1080x1920   SAR 1216:1215  DAR 76:135  (0.562963)
+```
+
+| population | result |
+|---|---|
+| delivered clips read from R2, no re-encode | **62 of 62 wrong**, one single distinct value |
+| legacy centre crop (`cut.ts` fallback) | wrong |
+| reframe `center` / `single` / `split` / `stream` | wrong, all four |
+
+**The cause is arithmetic and it is in one place.** A 9:16 slice of a 1080-tall frame is 607.5px wide.
+`cropWidthFor` rounds it to an even **608**, and the crop is then scaled to exactly 1080x1920. `scale`
+**preserves display aspect** - it does not stretch to fill - so it absorbs 608/1080 against 1080/1920 by
+tagging the output `SAR = 1216:1215`. The same fraction appears in the split tiles: `crop=1216` scaled to
+1080x960 is the identical ratio.
+
+**Why it survived this long: it is invisible.** 0.08% is 0.9px across the whole frame. Nobody can see it, and
+the owner who reported "this looks like it is not 9:16" was in fact looking at something else entirely - a
+graphic insert the crop had followed (§7g). The two got investigated together and only one of them was what
+he saw. **The stretch complaint was not this. This is a real defect that the complaint happened to uncover.**
+
+**Why it still matters.** The tag is what every downstream platform reads. A player honouring SAR renders the
+raster as 1080.9x1920; a re-encoder normalising to square pixels resamples the entire frame to do it. It is
+also simply not the format the product claims to emit.
+
+**`setsar` is already in the codebase, on the wrong lines.** The stream branch carries `setsar=1` after the
+cam and content scales, with a comment explaining that without it the stacked frame is assembled from three
+different pixel aspects and that ffmpeg 8.x segfaulted during design. **The base chain under those tiles has
+no `setsar`, and the base is what tags the output** - so the stream path composites square-pixel tiles onto a
+non-square base and ships the base's tag. The split tiles have no `setsar` at all.
+
+**The stream tiles are a separate, deliberate, bounded case.** `stream-geometry.ts` cover-crops the webcam to
+the tile aspect and re-derives both tile heights with `evenRound` so they sum to 1920 exactly. That rounding
+makes each tile's crop aspect differ from its output aspect by up to one even pixel, which `setsar=1` there
+converts into a genuine sub-percent stretch rather than a mixed-SAR frame. That is the intended trade and it
+is not what this section is about.
+
+**What the corpus could not have told us.** The 62 delivered clips are `center`, `single` and `center+single`
+only - **no split and no stream clip exists in it**. Those two branches are covered here only because the
+guard also compiles each layout through the real `buildFiltergraph` and renders one lavfi frame through it.
+An unexercised path is not a passing path.
+
+**Fix direction, not yet applied:** `setsar=1` after every `scale` that produces output pixels. It changes no
+pixel data - it corrects the tag, and the 0.08% is absorbed as a horizontal squeeze nobody can perceive. The
+alternatives are worse: 1081 wide is illegal for yuv420p, and cropping 606 instead of 608 moves the error
+four times further in the same direction.
+
+---
+
 ## 8. Operational facts
 
 - Prod IS this host. Plain `docker compose up -d` (dev target) is production mode. **Do not use
