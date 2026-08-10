@@ -1773,10 +1773,59 @@ only - **no split and no stream clip exists in it**. Those two branches are cove
 guard also compiles each layout through the real `buildFiltergraph` and renders one lavfi frame through it.
 An unexercised path is not a passing path.
 
-**Fix direction, not yet applied:** `setsar=1` after every `scale` that produces output pixels. It changes no
-pixel data - it corrects the tag, and the 0.08% is absorbed as a horizontal squeeze nobody can perceive. The
-alternatives are worse: 1081 wide is illegal for yuv420p, and cropping 606 instead of 608 moves the error
-four times further in the same direction.
+**FIXED and merged 2026-08-08.** `setsar=1` after every `scale` that produces output pixels: the base chain,
+both split tiles, the legacy centre crop. The stream tiles already had it. All five paths now probe
+`1080x1920 SAR 1:1 DAR 9:16`. No pixel data changed; `cropWidthFor`, the planner and every crop `x` are
+untouched. The alternatives were worse: 1081 wide is illegal for yuv420p, and cropping 606 instead of 608
+moves the error four times further in the same direction.
+
+**It depended on the source height, which is why one fixture was always right.** The error exists whenever
+`cropWidthFor(H)` is not exactly `H * 9/16`. For `H = 352` it is - 198 exactly - so `sitcom-multi` (640x352)
+shipped square pixels from the start and was the one baseline of seven that did not change. For 1080 and for
+2160 it is not, and every real source in the corpus is 1080.
+
+**The invariant test enumerates rather than pins.** It walks the `scale=` occurrences of each compiled graph
+and requires `,setsar=1` after each, on all four layouts plus the legacy filter, so a `scale` added to a
+future layout is caught by a test written today. Mutation-tested before being trusted: removing the base
+`setsar` fails 6 of 8, each tile 7 of 8, the legacy crop 1 of 8. It also carries a vacuity check - an
+assertion over an empty list of matches passes, and this file has shipped two tests that were green for that
+kind of reason (`feedback_test_matches_default`).
+
+Nine pinned graph strings were updated, none deleted. One of them needed thought rather than a rewrite: the
+stream test asserting the tile heights sum to 1920 found them with `scale=1080:(\d+),setsar=1`, which after
+this change also matches the base and would have summed 1920 + 770. It is now anchored to the `[cam]` and
+`[cont]` labels.
+
+#### What happened to `eval-camera-invariance.ts`, and how to read it now
+
+**Level 1 is FAILED, permanently, and that is the design.** It compares the live compiler against a frozen
+transcription of the pre-change one, and that file's own rule says the copy stays frozen precisely so an
+intended change shows up as a diff. It reports **276 differences over 138 stored plans** - and the reporting
+now classifies them, so this is a measurement rather than a claim: **276 of 276 are explained exactly by
+inserting `,setsar=1` after each scale.** Zero are anything else. Read a non-zero "explained" count that is
+LOWER than the total as a second, unexplained change hiding inside this one.
+
+**Level 3 is green again because the baselines were regenerated**, not because the renders came back. The
+md5s moved for the SAR tag and for nothing else: the planner is unchanged and level 2 says so.
+
+**Level 2 was also re-baselined, by the same script, and its green means something different now.**
+`corpus-baseline.ts` writes `<id>.plan.json` as well as the two renders, so re-running it reset the captured
+detector output. Level 2's two standing differences - `vlog-arctic` and `sitcom-multi`, the fixtures §7e's
+small-face change moved - are now absorbed into the captures. **They were not fixed; the question was
+re-asked.** Level 2 from here means "the planner is unchanged since 2026-08-08", not "since the camera
+branch".
+
+**The summary line is now conditional.** It used to close with "flag off changes nothing is evidenced at
+every level, up to and including pixels" whatever the levels said, which §7e had already flagged as an
+overclaim - and after this change it would have printed that sentence directly beneath the word FAILED. It
+now refuses to make the claim while any level is red.
+
+Determinism still holds: 7 of 7 fixtures hashed identically across two consecutive encodes with no
+`-bitexact` flags.
+
+**Still red on purpose:** `eval-clip-geometry.ts`'s delivered-clip half. It reads the 62 files already in R2,
+which were rendered before this change and cannot become correct without being re-rendered. The synthetic
+half went green immediately.
 
 ---
 

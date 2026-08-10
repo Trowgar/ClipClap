@@ -258,6 +258,8 @@ async function level1(): Promise<{ checked: number; bad: number }> {
 
   let ramps = 0;
   let drifted = 0;
+  /** Of `drifted`, how many are explained entirely by the setsar insertion. */
+  let driftedSetsarOnly = 0;
   let threw = 0;
   const shown: string[] = [];
   const note = (line: string) => {
@@ -326,6 +328,21 @@ async function level1(): Promise<{ checked: number; bad: number }> {
       }
       if (a.spec!.kind !== b.spec!.kind || a.spec!.graph !== b.spec!.graph) {
         drifted += 1;
+        // Classify the difference, because only 20 lines are ever printed and
+        // "276 differences" with seven examples is a claim, not a measurement.
+        // A difference explained entirely by inserting `,setsar=1` after each
+        // scale is the 2026-08-08 geometry change (engine-notes §7h) showing
+        // itself exactly as this file's freeze rule intends; anything else is a
+        // second, unexplained change hiding inside that count. The tally below
+        // is what separates them, and it covers every row rather than the
+        // sample.
+        const explained =
+          a.spec!.kind === b.spec!.kind &&
+          b.spec!.graph.replace(
+            /scale=1080:(\d+)(?!,setsar)/g,
+            "scale=1080:$1,setsar=1"
+          ) === a.spec!.graph;
+        if (explained) driftedSetsarOnly += 1;
         note(`  ! ${clip.id} (${label}): compiled graph differs from the legacy compiler`);
         note(`      legacy: ${b.spec!.graph.slice(0, 160)}`);
         note(`      live  : ${a.spec!.graph.slice(0, 160)}`);
@@ -337,6 +354,14 @@ async function level1(): Promise<{ checked: number; bad: number }> {
   console.log(`   stored plans compiled         : ${clips.length}`);
   console.log(`   selected the ramp form        : ${ramps}  (must be 0)`);
   console.log(`   differ from the legacy compiler: ${drifted}  (must be 0)`);
+  if (drifted > 0) {
+    console.log(
+      `     of those, explained by ,setsar=1 : ${driftedSetsarOnly}` +
+        (driftedSetsarOnly === drifted
+          ? "  (ALL of them - the 2026-08-08 geometry change, engine-notes 7h)"
+          : `  <- ${drifted - driftedSetsarOnly} are NOT, and those are unexplained`)
+    );
+  }
   if (threw > 0) {
     console.log(`   rejected identically by both  : ${threw}  (not a difference)`);
   }
@@ -502,14 +527,22 @@ async function main() {
     `   level 3  ${verdict(baselines > 0, level3Bad, baselines > 0 ? `${level3Ran} renders compared, ${level3Bad} differences` : "no baseline renders")}`
   );
   const ranCount = 1 + (captures > 0 ? 1 : 0) + (baselines > 0 ? 1 : 0);
+  const anyFailed = one.bad + level2Bad + level3Bad > 0;
   console.log("");
+  // The claim is CONDITIONAL on the levels having passed, not merely on their
+  // having run. §7e recorded this sentence as an overclaim once already; after
+  // the 2026-08-08 geometry change it would have printed "evidenced at every
+  // level, up to and including pixels" directly beneath the word FAILED, which
+  // is how a reader ends up quoting a green summary from a red run.
   console.log(
-    `${ranCount} of 3 levels actually ran. "flag off changes nothing" is evidenced ` +
-      (ranCount === 3
-        ? "at every level, up to and including pixels."
-        : ranCount === 1
-          ? "for the compiled graph of already-stored plans ONLY. The planner and the rendered pixels are unmeasured."
-          : "in part; the levels marked SKIPPED above measured nothing.")
+    anyFailed
+      ? `${ranCount} of 3 levels actually ran, and at least one FAILED above - nothing here is evidence of invariance until that is explained.`
+      : `${ranCount} of 3 levels actually ran. "flag off changes nothing" is evidenced ` +
+          (ranCount === 3
+            ? "at every level, up to and including pixels."
+            : ranCount === 1
+              ? "for the compiled graph of already-stored plans ONLY. The planner and the rendered pixels are unmeasured."
+              : "in part; the levels marked SKIPPED above measured nothing.")
   );
 
   await prisma.$disconnect();
