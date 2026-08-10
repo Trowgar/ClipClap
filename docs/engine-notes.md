@@ -985,7 +985,10 @@ ffmpeg filtergraph, single encode pass with the subtitle burn.
 
 Spec `docs/superpowers/specs/2026-08-02-stream-reframe-design.md`, plan `.../plans/2026-08-02-stream-reframe.md`.
 Defaults **off**, but **`REFRAME_STREAM=on` is LIVE in prod since 2026-08-03** (in `.env`, which is not in
-git; a backup of the previous file is at `.env.bak-pre-stream`). Rollback is `REFRAME_STREAM=off` followed by
+git). A copy of the pre-flag file sat beside it as `.env.bak-pre-stream` until 2026-08-08 and was deleted:
+it was a strict subset of the live `.env` - same keys, same values, only missing the two added since - so it
+could not serve a rollback that is a one-line flag change anyway, while being a second copy of live secrets
+in the repo root that `.gitignore` did not cover. Rollback is `REFRAME_STREAM=off` followed by
 `docker compose up -d worker-render` - `compose restart` does NOT re-read `env_file` - and then
 `npx prisma generate --schema=/app/prisma/schema.prisma` inside the recreated container. The min-face guard
 below is unconditional and unaffected by the flag.
@@ -1653,6 +1656,14 @@ is motionless where a person is not:
 
 **The card moves MORE than the person** - it is slowly zoomed, the Ken Burns effect, and the detector box
 rides it. `mouthActivity` is lower but of the same order, with nothing between them to put a threshold in.
+
+**Scope of that pair of numbers, stated because it is narrower than the conclusion it supports: it is ONE
+shot.** `eval-insert-anchor.ts` exists to put the same two quantities over the whole corpus as distributions,
+and it has been run - its ranked frames are under `.corpus/insert-anchor/` - but its stdout was never
+captured into these notes, so no corpus-wide number from it is part of the evidence here. The signals were
+abandoned on the strength of the motivating shot plus the rectangle measurement below. If anyone wants to
+reopen the motion idea, running that script and reading its distribution is the first thing to do, and it may
+disagree with the single shot.
 Worse, `mouthActivity` is `0.0` both for a still image and for a track that never yielded two mouth patches,
 so the signal cannot distinguish "did not move" from "was not measured". A rule built on either would also
 have collided with §7c's pinned test that the window does not move when `mouthActivity` moves.

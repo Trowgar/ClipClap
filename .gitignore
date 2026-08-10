@@ -2,8 +2,11 @@
 node_modules/
 
 # Environment
-.env
-.env.local
+# Every .env* EXCEPT the committed template. The two exact patterns that used to
+# be here left a hand-made backup like `.env.bak-pre-stream` unignored, so a
+# `git add -A` at the repo root would have staged live secrets.
+.env*
+!.env.example
 
 # Build
 dist/
