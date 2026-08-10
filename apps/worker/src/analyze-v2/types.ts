@@ -163,6 +163,41 @@ export type NoClipsReasonValue =
   | "NO_VIABLE_MOMENTS"
   | "PARTIAL_TRANSCRIPT";
 
+/** Closed defect vocabulary for a broken ENTRY, verbatim from the arc-audit
+ *  design (spec 2026-08-10 §2a). Mirrored in ARC_AUDIT_SCHEMA's enum. */
+export type ArcEntryDefect =
+  | "dangling_reference"
+  | "mid_story"
+  | "borrowed_answer"
+  | "meta_opening";
+
+/** Closed defect vocabulary for a broken EXIT, verbatim from the arc-audit
+ *  design (spec 2026-08-10 §2a). Mirrored in ARC_AUDIT_SCHEMA's enum. */
+export type ArcExitDefect =
+  | "mid_thought"
+  | "setup_no_payoff"
+  | "transition_out"
+  | "refuted_after";
+
+/**
+ * One clip's arc-audit verdict (spec 2026-08-10 §2a/§2b), published as
+ * `V2Highlight._arcFlags` and returned from `runArcAudit` keyed by clip id.
+ *
+ * `defect`/`fixStartNode`/`fixEndNode`/`missing` are absent, never `null`, when
+ * there is nothing to report - the same "absent means nothing happened" rule
+ * `ExtensionTelemetry.skipped` documents, so a JSON diff shows exactly the
+ * fields a defect actually touched. `fixStartNode`/`fixEndNode` are the
+ * GATED pointer only: a pointer the structural gates in arc-audit.ts refused
+ * never reaches here, even though `ok` still reports the defect - the flag
+ * survives a failed gate, only the pointer is dropped (arc-audit.ts,
+ * `ArcAuditTelemetry.gatedOut`).
+ */
+export interface ArcFlags {
+  entry: { ok: boolean; defect?: ArcEntryDefect; fixStartNode?: number };
+  exit: { ok: boolean; defect?: ArcExitDefect; fixEndNode?: number };
+  standalone: { ok: boolean; missing?: string };
+}
+
 /** Diagnostic fields persisted inside Job.highlights (v2 shape). */
 export type V2Highlight = Highlight & {
   _startNode?: number;
@@ -171,6 +206,10 @@ export type V2Highlight = Highlight & {
   _descriptionEvidenceNodes?: number[];
   _grounded?: boolean;
   _boundaryConfidence?: "word" | "segment";
+  /** Absent unless arcAuditEnabled and the clip was actually audited - see
+   *  ArcFlags. Dark-stage control: this key must not exist when the stage is
+   *  off (spec 2026-08-10, task 2). */
+  _arcFlags?: ArcFlags;
 };
 
 export interface V2Result {

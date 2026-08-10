@@ -524,3 +524,164 @@ export function buildExtensionUser(
   }
   return lines.join("\n");
 }
+
+/**
+ * ARC AUDIT (spec 2026-08-10 "Clip arc audit: entries, exits and
+ * self-containment", §2/§2a) - a per-clip DETECTOR, not a judge with veto
+ * power. It exists because neither of the engine's two existing viewpoints can
+ * ask this question: the critic (criticCandidateBlock, above) sees a padded
+ * window and can therefore never separate "the viewer would understand this"
+ * from "I understand this because I can see the context"; the finalizer
+ * (finalizerUserPrompt, above) sees the clip's own range only and can never
+ * say where a missing piece of it lives. This prompt shows BOTH at once, each
+ * clearly labeled, which is the one thing neither of those two prompts can do.
+ *
+ * Every clip block renders three sections, in this order:
+ *   THE VIEWER SEES   - finalizer-style: exactly [finalStartNode, finalEndNode],
+ *                        one line per node, ¶ marks a clean start, no seconds
+ *                        range (a single timestamp, like finalizerUserPrompt -
+ *                        the viewer does not experience a node's duration).
+ *   CONTEXT BEFORE     - critic-style: up to CONTEXT_BEFORE nodes before the
+ *                        clip's own start, with a [start-end] seconds range on
+ *                        each line, so entry.fix_start_node lands on a real
+ *                        node when it fires.
+ *   CONTEXT AFTER      - the mirror, up to CONTEXT_AFTER nodes after the
+ *                        clip's own end, for exit.fix_end_node.
+ * The clip's OWN range and the padding are drawn from finalStartNode/
+ * finalEndNode, never verdict.startNode/verdict.endNode - the critic's raw
+ * proposal, which snap may already have moved (SnappedClip's own doc comment:
+ * "everything that asks 'is this node inside the clip' must ask these").
+ */
+export const ARC_AUDIT_SYSTEM = `You audit finished short-form clips for three specific defects a cold viewer would
+notice. For each clip you are shown exactly what THE VIEWER SEES - the clip's own
+speech, nothing more - and then two blocks of surrounding transcript the viewer
+NEVER sees: CONTEXT BEFORE and CONTEXT AFTER. Use the context ONLY to judge
+whether the clip stands alone and to locate where a missing piece of it lives -
+never to decide a broken clip is fine because YOU can see the missing piece. The
+viewer cannot.
+
+Judge three things about each clip, independently. Most clips are fine on all
+three; do not invent a defect just to have something to say.
+
+1. ENTRY - does the FIRST line of THE VIEWER SEES open the clip on its own
+   terms - a question, a thesis, a scene - or is it a CONTINUATION of something
+   the viewer never saw? Grammar is not the test: a grammatically complete
+   sentence can still be a continuation. Look for:
+   - dangling_reference: an unresolved pronoun or deixis with no antecedent
+     inside the clip - "Это миллиарды..." with no "это" named anywhere in what
+     the viewer sees.
+   - mid_story: the clip opens in the middle of someone else's story or
+     example - a second character's account picked up after the first
+     character's setup, which sits in CONTEXT BEFORE.
+   - borrowed_answer: the opening answers, rebuts or concedes a question the
+     viewer never heard asked - "Вообще-то думать это энергозатратно" answering
+     an unseen "А какие претензии?".
+   - meta_opening: the first line manages the conversation instead of starting
+     it - "Вот просто резюмируем.", "Okay, so, to recap." - before a word of
+     the actual point.
+   If the entry is broken AND the true opening line lives in CONTEXT BEFORE - a
+   ¶ line that states the point on its own terms - set fix_start_node to that
+   line's index. If no such line exists in what you were shown, or the entry is
+   fine, set it null.
+
+2. EXIT - read the LAST line of THE VIEWER SEES as the point where the video
+   STOPS; nothing after it exists for the viewer. Does the thought complete -
+   the answer delivered, the punchline landed, the claim supported? A
+   grammatically complete sentence can still be broken:
+   - mid_thought: the sentence itself is left open, mid-clause or mid-list.
+   - setup_no_payoff: the sentence is complete but is a SETUP nothing in the
+     clip pays off - one more item in a list, a claim asserted with no support
+     inside the clip.
+   - transition_out: the speaker is visibly ABOUT to make the actual point and
+     the clip cuts before they do - "Поэтому давайте водку мы сразу отложим" is
+     a transition into the real answer, not the answer itself.
+   - refuted_after: the clip ends on a conclusion that CONTEXT AFTER
+     immediately contradicts or walks back - the clip ships the wrong side of
+     an argument that keeps going.
+   If the exit is broken AND the completing line lives in CONTEXT AFTER, set
+   fix_end_node to that line's index - the node where the thought actually
+   finishes. If no such line exists in what you were shown, or the exit is
+   fine, set it null.
+
+3. STANDALONE - would a stranger who has never seen the source know what is
+   being discussed, using ONLY what THE VIEWER SEES? If something essential is
+   missing - who "he" is, what claim is being argued against, what a number
+   refers to - name it in one short phrase (missing). If the clip is
+   understandable on its own, ok is true and missing is null. A clip can fail
+   entry or exit and still pass standalone, and the reverse: judge the three
+   independently.
+
+Address every node ONLY by the index numbers printed before it (#<n>). NEVER
+invent an index you were not shown, and NEVER output a timestamp or a second as
+an index. fix_start_node and fix_end_node may point OUTSIDE the clip's own
+#start..#end range - that is the entire reason CONTEXT BEFORE/AFTER exist - but
+must be an index actually printed in this clip's own blocks. Use null whenever
+you are unsure: a missed defect costs less than a wrong pointer.
+
+For each clip, in this order: id; entry (ok, defect, fix_start_node); exit (ok,
+defect, fix_end_node); standalone (ok, missing). Include EVERY clip id you were
+shown.
+Output ONLY the JSON object described by the schema.`;
+
+/** Backward reach for CONTEXT BEFORE / forward reach for CONTEXT AFTER, shared
+ *  with the critic's own padding (CONTEXT_BEFORE/CONTEXT_AFTER above) rather
+ *  than duplicated: it is the same "enough to judge self-containment and find
+ *  a missing setup or payoff" window, over the same node graph. */
+function arcAuditContextBlock(
+  nodes: SentenceNode[],
+  from: number,
+  to: number
+): string[] {
+  if (from > to) return [];
+  const lines: string[] = [];
+  for (let i = from; i <= to; i++) {
+    const n = nodes[i];
+    const marker = isCleanStart(nodes, i) ? "¶ " : "  ";
+    lines.push(`${marker}#${n.index} [${n.start.toFixed(1)}s-${n.end.toFixed(1)}s] ${n.text}`);
+  }
+  return lines;
+}
+
+/** One clip's full arc-audit block: header, THE VIEWER SEES, CONTEXT BEFORE,
+ *  CONTEXT AFTER. Exported on its own (not only as part of the batch joiner)
+ *  so a snapshot test can pin one clip's rendering without parsing a batch. */
+export function arcAuditClipBlock(clip: SnappedClip, nodes: SentenceNode[]): string {
+  const startNode = clip.finalStartNode;
+  const endNode = clip.finalEndNode;
+  const lines: string[] = [
+    `CLIP ${clip.verdict.id} | ${Math.round(clip.endSec - clip.startSec)}s | ` +
+      `nodes #${startNode}..#${endNode}`,
+    "THE VIEWER SEES (exactly this, nothing more):",
+  ];
+  for (let i = startNode; i <= endNode; i++) {
+    const n = nodes[i];
+    const marker = isCleanStart(nodes, i) ? "¶ " : "  ";
+    lines.push(`${marker}#${n.index} [${n.start.toFixed(1)}s] ${n.text}`);
+  }
+
+  lines.push(
+    "",
+    "CONTEXT BEFORE (the viewer NEVER sees this; use it ONLY to judge whether the " +
+      "clip stands alone and to locate where a missing piece lives):"
+  );
+  const before = arcAuditContextBlock(
+    nodes,
+    Math.max(0, startNode - CONTEXT_BEFORE),
+    startNode - 1
+  );
+  lines.push(...(before.length > 0 ? before : ["  (clip starts at the beginning of the transcript)"]));
+
+  lines.push("", "CONTEXT AFTER (same rule):");
+  const after = arcAuditContextBlock(
+    nodes,
+    endNode + 1,
+    Math.min(nodes.length - 1, endNode + CONTEXT_AFTER)
+  );
+  lines.push(...(after.length > 0 ? after : ["  (clip ends at the end of the transcript)"]));
+
+  return lines.join("\n");
+}
+
+export function arcAuditUserPrompt(clips: SnappedClip[], nodes: SentenceNode[]): string {
+  return clips.map((c) => arcAuditClipBlock(c, nodes)).join("\n\n---\n\n");
+}

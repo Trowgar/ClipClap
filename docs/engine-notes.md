@@ -562,6 +562,52 @@ consumers, `snapNodes` and `applyExtension`, and neither `prompts.ts` marker pat
 prompts read it - so with the finalizer and end extension dark, a clean-end change moves no request hash at
 all. That control is what makes this comparison free, and it is reusable for any future boundary-only change.
 
+### The arc audit: a per-clip detector, shipped dark (2026-08-10)
+
+Spec `docs/superpowers/specs/2026-08-10-clip-arc-audit-design.md`, task 2. `runArcAudit`
+(`analyze-v2/arc-audit.ts`) runs between `selectAndOrder` and `extendClipEnds` when `ARC_AUDIT=on`
+(not in the live `.env` - the stage ships DARK), judges each selected clip on three axes - entry,
+exit, standalone - and publishes flags (`_arcFlags` on the highlight, `arcAudit` in telemetry)
+plus code-gated fix pointers that may lie OUTSIDE the clip. It moves no boundary. Its prompt is
+the one place in the engine where both views exist at once: the clip exactly as the viewer hears
+it AND labeled context blocks the viewer never sees. Variant `arc-audit` is recorded on all five
+fixtures; replay is free.
+
+**Stability, measured on `podcast-nuclear` (M3): 8 live samples per clip** (one 3-run and one
+5-run session of `eval-arc-stability.ts`, plus the recorded variant answer as a 9th where cited).
+Per-axis over the 8 shipped clips, an axis counting stable at 0/8 or 8/8:
+
+- **19 of 24 axes stable, and every decisive one of them.** The truncated hibakusya clip
+  (1466.7-1483.4) holds `exit=mid_thought` **8/8**; the dangling opening at 777.0-802.1 holds
+  its entry flag **8/8** (and standalone 8/8); the positive control (1113.8-1132.3) is clean
+  **8/8 on all three axes**; four further clips are clean 8/8 across the board.
+- The five unstable axes are all borderline material: the owner-labeled weak opening "Очень
+  много" (2484.0) is flagged only ~2/5 - **single-sample under-detection of the softer
+  dangling-opening class is the real weakness**; "Плутоний... могу снова разочаровать" (222.3)
+  flickers 3/8; the 777.0 clip's exit sits 6/8; the hibakusya standalone note 4/8. The ninth
+  audited clip (714.5-781.5) is unstable on two axes and is the clip the finalizer drops anyway.
+- **Defect CLASS churns even where the axis is rock stable** - 777.0's entry came back
+  dangling_reference x4, mid_story x2, borrowed_answer x2 across 8 flagged samples. Consumers
+  must key on the axis, never the class; the class is telemetry.
+- The per-clip AND-of-three-axes metric reads 44-56% "all-agree" and LOOKS like the judge panel's
+  instability (§8b). It is not: the panel flipped verdicts on byte-identical input with no
+  pattern; here every flip sits on a genuinely arguable axis while both owner-grade defects and
+  the control are pinned. Both numbers are printed by the script so neither can masquerade.
+
+**Corpus flag rates (replay, `eval-arc-audit.ts --variant arc-audit <fixture>`):** ru podcasts
+flag on entry heavily - ecology 10 of 12 clips flagged somewhere, answer-arc 8 of 11, against
+sitcom 5 of 10 and creator 4 of 8 (mostly standalone). The ru rate is plausibly REAL - the
+format's clips open on answers to questions the host reads off-camera, which the critic forgives
+from inside its padded window - but it means task 3 must expect the entry-repair path to be
+offered MOST of a Russian set, and the M4 shipped-set measurement is what keeps that honest.
+
+**Two caveats on any number above.** The audit prompt teaches its defect classes with verbatim
+corpus examples ("Вообще-то думать..." IS a shipped clip of two fixtures), so detection on those
+exact clips is contaminated and must not be quoted as quality. And the token budget
+(1200 + 800/clip, critic-shaped) is PROVISIONAL: ~39 live calls at batch 1-4 all completed with
+visible JSON of 215-851 chars and zero truncations, so it clears with headroom, but the
+reasoning-vs-JSON ladder of §3 has not been run for this prompt.
+
 ---
 
 ## 4. Approaches that were tried and failed

@@ -158,6 +158,85 @@ export const REPAIR_SCHEMA = {
  *  answer is then a contradiction rather than an instruction, and the code
  *  resolves every contradiction by doing nothing (extendClipEnds reads `extend`
  *  first, and applyExtension refuses the echo as a no-op regardless). */
+/**
+ * ARC AUDIT (spec 2026-08-10 §2a) - one row per clip, three independent
+ * verdicts. Nested objects, unlike every other schema in this file: strict
+ * mode applies recursively, so `entry`/`exit`/`standalone` each carry their
+ * own `additionalProperties: false` and `required` covering every property
+ * they declare, exactly like the top level.
+ *
+ * Field order inside each axis puts `ok` first and the pointer last, mirroring
+ * END_EXTENSION_SCHEMA's "decide, then justify, then commit to an index"
+ * shape: `defect` names WHY before `fix_*_node` commits to WHERE.
+ *
+ * `fix_start_node`/`fix_end_node` may name an index OUTSIDE the clip's own
+ * range - that is the entire point of showing CONTEXT BEFORE/AFTER - so
+ * nothing here bounds them to [start_node, end_node] the way the critic's
+ * evidence arrays are bounded. arc-audit.ts's structural gates do that work
+ * after the call, never the schema.
+ */
+export const ARC_AUDIT_SCHEMA = {
+  name: "arc_audit",
+  strict: true,
+  schema: {
+    type: "object",
+    additionalProperties: false,
+    required: ["results"],
+    properties: {
+      results: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "entry", "exit", "standalone"],
+          properties: {
+            id: { type: "string" },
+            entry: {
+              type: "object",
+              additionalProperties: false,
+              required: ["ok", "defect", "fix_start_node"],
+              properties: {
+                ok: { type: "boolean" },
+                defect: {
+                  type: ["string", "null"],
+                  enum: [
+                    "dangling_reference", "mid_story", "borrowed_answer", "meta_opening", null,
+                  ],
+                },
+                fix_start_node: { type: ["integer", "null"] },
+              },
+            },
+            exit: {
+              type: "object",
+              additionalProperties: false,
+              required: ["ok", "defect", "fix_end_node"],
+              properties: {
+                ok: { type: "boolean" },
+                defect: {
+                  type: ["string", "null"],
+                  enum: [
+                    "mid_thought", "setup_no_payoff", "transition_out", "refuted_after", null,
+                  ],
+                },
+                fix_end_node: { type: ["integer", "null"] },
+              },
+            },
+            standalone: {
+              type: "object",
+              additionalProperties: false,
+              required: ["ok", "missing"],
+              properties: {
+                ok: { type: "boolean" },
+                missing: { type: ["string", "null"] },
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+} as const;
+
 export const END_EXTENSION_SCHEMA = {
   name: "end_extension",
   strict: true,

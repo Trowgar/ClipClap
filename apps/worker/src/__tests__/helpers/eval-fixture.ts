@@ -51,11 +51,23 @@ export const BASE_VARIANT = "base";
  * the variant exists to answer is whether ends move toward the scout consensus
  * at the window the stage was documented with, and an answer obtained by moving
  * the window is not an answer to it.
+ *
+ * `arcAuditEnabled`, added 2026-08-10 for the same reason `endExtensionEnabled`
+ * was: without a door into it, no config this harness can build would ever
+ * differ on the key, so the fingerprint check built to catch a live stage
+ * replaying against a dark recording could never fire (see
+ * eval-variants.test.ts, "makes the arc-audit fingerprint key able to fire").
+ * `startExtensionWindowSec` and `arcAuditBatchSize` are deliberately NOT here -
+ * the same tuning-door refusal as `endExtensionWindowSec` above.
  */
 export type VariantOverrides = Partial<
   Pick<
     AnalyzeConfig,
-    "criticModel" | "finalizerModel" | "criticModelFallback" | "endExtensionEnabled"
+    | "criticModel"
+    | "finalizerModel"
+    | "criticModelFallback"
+    | "endExtensionEnabled"
+    | "arcAuditEnabled"
   >
 >;
 
@@ -65,6 +77,7 @@ export const VARIANT_OVERRIDE_KEYS = [
   "finalizerModel",
   "criticModelFallback",
   "endExtensionEnabled",
+  "arcAuditEnabled",
 ] as const satisfies ReadonlyArray<keyof VariantOverrides>;
 
 /**

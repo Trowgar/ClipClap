@@ -1,77 +1,142 @@
 {
-  "_readme": "Ground-truth labels for source cmsnmcbec005ouhfj30l0w4qm (48-min ru nuclear podcast, recorded as fixture podcast-nuclear on 2026-08-10). Keyed by SOURCE TIME RANGES, never clip ids: the shipped set differs run to run (production shipped 12 clips on 2026-08-10; the fixture re-record shipped 8 from the same transcript the same day), so evaluations must match clips to labels by time overlap. provenance per label: 'owner' = named by the owner looking at production clips; 'scout-consensus' = >=2 of 3 blind clip-scout agreement (protocol of docs/superpowers/specs/2026-08-04-clip-quality-programme-design.md §3.2), run 2026-08-10 on the segment-level transcript, timestamps accurate to a few seconds; 'fable-read' = read from stored subtitleTrack cues by the architect session, not owner-confirmed.",
+  "_readme": "Ground-truth labels for source cmsnmcbec005ouhfj30l0w4qm (48-min ru nuclear podcast, recorded as fixture podcast-nuclear on 2026-08-10). Keyed by SOURCE TIME RANGES, never clip ids. 'range' is the best estimate of the MOMENT's true extent (scout consensus where one exists, production boundaries otherwise); 'productionRange' preserves what production actually shipped when the two differ: the shipped set differs run to run (production shipped 12 clips on 2026-08-10; the fixture re-record shipped 8 from the same transcript the same day), so evaluations must match clips to labels by time overlap. provenance per label: 'owner' = named by the owner looking at production clips; 'scout-consensus' = >=2 of 3 blind clip-scout agreement (protocol of docs/superpowers/specs/2026-08-04-clip-quality-programme-design.md §3.2), run 2026-08-10 on the segment-level transcript, timestamps accurate to a few seconds; 'fable-read' = read from stored subtitleTrack cues by the architect session, not owner-confirmed.",
   "sourceJobId": "cmsnmcbec005ouhfj30l0w4qm",
   "productionClipCount": 12,
   "fixtureClipCount": 8,
   "moments": [
     {
-      "range": [1527.5, 1571.0],
+      "range": [
+        1466,
+        1571
+      ],
       "productionTitle": "Что увидела мать после возвращения дочери?",
       "productionScore": 0.9,
       "ownerVerdict": "skip",
       "entryDefect": "mid_story",
       "exitDefect": null,
       "provenance": "owner",
-      "scoutConsensus": { "start": 1466, "end": 1571, "agreement": "3/3, start exact to the second" },
-      "note": "Title is the girl's story, opening is the boy's ('Он ехал на велосипеде'). All three scouts open the arc 61.5s earlier, on the host's question 'Что произошло с людьми, которые пережили взрыв в Хиросиме и Нагасаки?'. The production end matches consensus. The critic itself cited node 738 in _descriptionEvidenceNodes while shipping _startNode 740. STRUCTURAL FACT: the consensus arc 1466-1571 is 105s, ABOVE maxSec 90 - the engine cannot ship it whole and must cut somewhere; production cut the entry (started 1527.5), the fixture re-record cut the exit (1466.7-1483.4, 16.7s, before either story completes). Same moment, broken in opposite directions by two runs of the same engine."
+      "scoutConsensus": {
+        "start": 1466,
+        "end": 1571,
+        "agreement": "3/3, start exact to the second"
+      },
+      "note": "Title is the girl's story, opening is the boy's ('Он ехал на велосипеде'). All three scouts open the arc 61.5s earlier, on the host's question 'Что произошло с людьми, которые пережили взрыв в Хиросиме и Нагасаки?'. The production end matches consensus. The critic itself cited node 738 in _descriptionEvidenceNodes while shipping _startNode 740. STRUCTURAL FACT: the consensus arc 1466-1571 is 105s, ABOVE maxSec 90 - the engine cannot ship it whole and must cut somewhere; production cut the entry (started 1527.5), the fixture re-record cut the exit (1466.7-1483.4, 16.7s, before either story completes). Same moment, broken in opposite directions by two runs of the same engine.",
+      "productionRange": [
+        1527.5,
+        1571.0
+      ]
     },
     {
-      "range": [2488.1, 2504.7],
+      "range": [
+        2436,
+        2504.7
+      ],
       "productionTitle": "Миллиарды погибнут не там, где упадёт бомба",
       "productionScore": 0.84,
       "ownerVerdict": "skip",
       "entryDefect": "dangling_reference",
       "exitDefect": null,
       "provenance": "owner",
-      "scoutConsensus": { "start": 2436, "end": 2502, "agreement": "2/3" },
-      "note": "Opens 'Это миллиарды...' - antecedent outside. Two scouts take the full 66s arc from 'принцип предосторожности'; the production clip is its last 16s. Production end matches consensus end."
+      "scoutConsensus": {
+        "start": 2436,
+        "end": 2502,
+        "agreement": "2/3"
+      },
+      "note": "Opens 'Это миллиарды...' - antecedent outside. Two scouts take the full 66s arc from 'принцип предосторожности'; the production clip is its last 16s. Production end matches consensus end.",
+      "productionRange": [
+        2488.1,
+        2504.7
+      ]
     },
     {
-      "range": [2727.8, 2777.2],
+      "range": [
+        2727.8,
+        2803
+      ],
       "productionTitle": "Что на самом деле происходит с человеком после облучения",
       "productionScore": 0.78,
       "ownerVerdict": "skip",
       "entryDefect": "dangling_reference",
       "exitDefect": "setup_no_payoff",
       "provenance": "owner (entry), scout-consensus (exit)",
-      "scoutConsensus": { "start": null, "end": 2803, "agreement": "2/3 on the end; starts split (2725 / 2749)" },
-      "note": "Opens 'И можно ли ее избежать' - the first half of the question ('что такое лучевая болезнь') is outside. Two scouts end 26s later on 'он уже труп живой... автомат он все еще держит' (2803); production ends 2777."
+      "scoutConsensus": {
+        "start": null,
+        "end": 2803,
+        "agreement": "2/3 on the end; starts split (2725 / 2749)"
+      },
+      "note": "Opens 'И можно ли ее избежать' - the first half of the question ('что такое лучевая болезнь') is outside. Two scouts end 26s later on 'он уже труп живой... автомат он все еще держит' (2803); production ends 2777.",
+      "productionRange": [
+        2727.8,
+        2777.2
+      ]
     },
     {
-      "range": [1970.8, 1995.9],
+      "range": [
+        1970.8,
+        1995.9
+      ],
       "productionTitle": "Правда ли, что водка спасает от радиации?",
       "productionScore": 0.81,
       "ownerVerdict": "skip",
       "entryDefect": null,
       "exitDefect": "transition_out",
       "provenance": "owner",
-      "scoutConsensus": { "start": 1970, "end": 1995, "agreement": "3/3 start; 2/3 END ON THE PRODUCTION LINE, 1/3 extends to 2004 ('полный консенсус, что алкоголь не помогает')" },
+      "scoutConsensus": {
+        "start": 1970,
+        "end": 1995,
+        "agreement": "3/3 start; 2/3 END ON THE PRODUCTION LINE, 1/3 extends to 2004 ('полный консенсус, что алкоголь не помогает')"
+      },
       "note": "DISAGREEMENT RECORDED: the owner reads 'Поэтому давайте водку мы сразу отложим' as a cut-off transition; two of three scouts read it as the verdict line and end there. Do not treat this exit label as settled ground truth."
     },
     {
-      "range": [7.4, 18.3],
+      "range": [
+        733,
+        814
+      ],
       "productionTitle": "Почему ядерное оружие до сих пор не запретили?",
       "productionScore": 0.78,
       "ownerVerdict": "skip",
       "entryDefect": null,
       "exitDefect": "mid_thought",
       "provenance": "owner",
-      "scoutConsensus": { "start": 733, "end": 800, "agreement": "loose 3/3 on the moment (starts 730/739/770, ends 787/811/814); none picks the intro copy" },
-      "note": "Cut from the intro region (7.4s); every scout and the fixture re-record (777.0-802.1) place the complete moment at ~12:10-13:30. The production clip is the teaser-region copy of it."
+      "scoutConsensus": {
+        "start": 733,
+        "end": 800,
+        "agreement": "loose 3/3 on the moment (starts 730/739/770, ends 787/811/814); none picks the intro copy"
+      },
+      "note": "Cut from the intro region (7.4s); every scout and the fixture re-record (777.0-802.1) place the complete moment at ~12:10-13:30. The production clip is the teaser-region copy of it.",
+      "productionRange": [
+        7.4,
+        18.3
+      ]
     },
     {
-      "range": [1619.1, 1627.4],
+      "range": [
+        1619,
+        1693
+      ],
       "productionTitle": "Самая честная стратегия на случай ядерной атаки",
       "productionScore": 0.76,
       "ownerVerdict": null,
       "entryDefect": null,
       "exitDefect": "setup_no_payoff",
       "provenance": "scout-consensus",
-      "scoutConsensus": { "start": 1619, "end": 1693, "agreement": "3/3, start exact to the second, ends 1693/1693/1696" },
-      "note": "Production shipped 8.2s - the opening aphorism only. All three scouts take the 74s arc ending 'Если противник захотел вас убить вместе с вашим городом, он вас убьет. И да, может быть один из десяти тысяч выживет.' An earlier draft of this file called the 8s clip fine; the consensus falsified that."
+      "scoutConsensus": {
+        "start": 1619,
+        "end": 1693,
+        "agreement": "3/3, start exact to the second, ends 1693/1693/1696"
+      },
+      "note": "Production shipped 8.2s - the opening aphorism only. All three scouts take the 74s arc ending 'Если противник захотел вас убить вместе с вашим городом, он вас убьет. И да, может быть один из десяти тысяч выживет.' An earlier draft of this file called the 8s clip fine; the consensus falsified that.",
+      "productionRange": [
+        1619.1,
+        1627.4
+      ]
     },
     {
-      "range": [2148.7, 2233.4],
+      "range": [
+        2148.7,
+        2233.4
+      ],
       "productionTitle": "Что такое ядерная зима и как она возникает",
       "productionScore": 0.72,
       "ownerVerdict": null,
@@ -82,45 +147,72 @@
       "note": "Opens 'И проверять это на практике', ends '...чтобы корректно быть'. NO scout picked this moment at all."
     },
     {
-      "range": [2617.0, 2683.8],
+      "range": [
+        2612,
+        2683.8
+      ],
       "productionTitle": "Как понять, можно ли есть продукты после радиации",
       "productionScore": 0.69,
       "ownerVerdict": null,
       "entryDefect": null,
       "exitDefect": "mid_thought",
       "provenance": "fable-read",
-      "scoutConsensus": { "start": 2612, "end": 2632, "agreement": "3/3 exact - but as a 20s micro-clip ending on 'Белорусского сыра без стронция не бывает', ranked weakest (11-12) by all three" },
-      "note": "Production runs 50s past the consensus punchline into the dosimetry-services tail and ends mid-enumeration ('или нет Вот сейчас...')."
+      "scoutConsensus": {
+        "start": 2612,
+        "end": 2632,
+        "agreement": "3/3 exact - but as a 20s micro-clip ending on 'Белорусского сыра без стронция не бывает', ranked weakest (11-12) by all three"
+      },
+      "note": "Production runs 50s past the consensus punchline into the dosimetry-services tail and ends mid-enumeration ('или нет Вот сейчас...').",
+      "productionRange": [
+        2617.0,
+        2683.8
+      ]
     },
     {
-      "range": [1113.8, 1131.2],
+      "range": [
+        1113.8,
+        1131.2
+      ],
       "productionTitle": "Где человек почти ничего не успеет почувствовать?",
       "productionScore": 0.84,
       "ownerVerdict": null,
       "entryDefect": null,
       "exitDefect": null,
       "provenance": "scout-consensus",
-      "scoutConsensus": { "start": 1113, "end": 1131, "agreement": "3/3 start exact; 2/3 end at ~1131" },
+      "scoutConsensus": {
+        "start": 1113,
+        "end": 1131,
+        "agreement": "3/3 start exact; 2/3 end at ~1131"
+      },
       "note": "POSITIVE CONTROL: production boundaries match the consensus almost exactly, and the fixture re-record ships it too (1113.8-1132.3). The engine can hit; an audit that flags this clip is over-firing."
     }
   ],
   "missedMoments": [
     {
-      "range": [1041, 1071],
+      "range": [
+        1041,
+        1071
+      ],
       "agreement": "3/3 (starts 1041/1041/1029, ends 1075/1071/1072); ranked #1 by two of three scouts",
       "hook": "В Чернобыле произошло намного большее загрязнение, чем при бомбардировке Хиросимы-Нагасаки",
       "payoff": "в Хиросиме люди живут прямо там, куда бомбу бросали, а в Припяти что-то не живут",
       "note": "Not shipped by production OR the fixture re-record. The strongest recall miss."
     },
     {
-      "range": [1188, 1254],
+      "range": [
+        1188,
+        1254
+      ],
       "agreement": "3/3, start exact to the second",
       "hook": "кобальтовая бомба",
       "payoff": "Люди в способах убийств извращаются очень сильно.",
       "note": "Not shipped by either run."
     },
     {
-      "range": [1886, 1936],
+      "range": [
+        1886,
+        1936
+      ],
       "agreement": "3/3, start exact to the second (ends 1944/1936/1946)",
       "hook": "Нёнокса: город Северодвинск два часа сидел в облаке радиоактивных газов",
       "payoff": "сигналы гражданской обороны не сработали",

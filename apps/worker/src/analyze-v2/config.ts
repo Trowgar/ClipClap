@@ -58,6 +58,24 @@ export interface AnalyzeConfig {
    *  clip, and a 55s reach on one model call is more trust than this stage has
    *  earned. Re-measure with eval-end-audit.ts before moving it. */
   endExtensionWindowSec: number;
+  /** Master switch for the arc-audit stage (spec 2026-08-10) - the per-clip
+   *  ENTRY/EXIT/STANDALONE detector that runs after selectAndOrder and before
+   *  extendClipEnds. Off until measured, the same discipline as
+   *  endExtensionEnabled: this task ships it as flags and telemetry only, with
+   *  ZERO boundary moves, so a dark run must be indistinguishable from today. */
+  arcAuditEnabled: boolean;
+  /** Clips per arc-audit call. Small on purpose - the design's whole argument
+   *  is that the finalizer's failure mode is thin attention across many clips
+   *  and many rules, so this stage asks three questions about a handful of
+   *  clips at a time. */
+  arcAuditBatchSize: number;
+  /** How far BACKWARD (in seconds, converted through node START times) a
+   *  gated `entry.fix_start_node` pointer may reach - the mirror of
+   *  endExtensionWindowSec, which already bounds the FORWARD `exit.fix_end_node`
+   *  pointer this stage also emits. 20 is a starting value, not a measurement
+   *  (spec 2026-08-10 §2c: "measured in task 3"). Deliberately NOT a variant
+   *  key - a tuning door, the same refusal as endExtensionWindowSec. */
+  startExtensionWindowSec: number;
   /** How far into a video an intro trailer montage may reach. Bounds the region
    *  scan in analyze-v2/teaser.ts; 0 switches montage detection off entirely,
    *  which is the kill switch. (spec 2026-07-24 §4.1) */
@@ -137,6 +155,12 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     // moves boundaries must not be switched on by a stray truthy value.
     endExtensionEnabled: env.END_EXTENSION === "on",
     endExtensionWindowSec: num(env, "END_EXTENSION_WINDOW_SEC", 25),
+    // Exact literal "on", same discipline as END_EXTENSION/REFRAME_STREAM: a
+    // stage whose flags this task publishes must not arm itself off a stray
+    // truthy env value.
+    arcAuditEnabled: env.ARC_AUDIT === "on",
+    arcAuditBatchSize: num(env, "ARC_AUDIT_BATCH_SIZE", 4),
+    startExtensionWindowSec: num(env, "START_EXTENSION_WINDOW_SEC", 20),
     teaserWindowSec: num(env, "TEASER_WINDOW_SEC", 120),
     teaserMinHits: num(env, "TEASER_MIN_HITS", 3),
     finalizerEnabled: env.ANALYZE_FINALIZER !== "off",

@@ -6,6 +6,7 @@ import {
   type EngineFingerprint,
 } from "./helpers/eval-fingerprint";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
+import { arcAuditMaxOutputTokens } from "../analyze-v2/arc-audit";
 import { criticMaxOutputTokens } from "../analyze-v2/critic";
 import { extensionMaxOutputTokens } from "../analyze-v2/end-extension";
 import { finalizerMaxOutputTokens } from "../analyze-v2/finalize";
@@ -32,6 +33,10 @@ describe("computeFingerprint", () => {
       endExtensionMaxOutputTokensBase: extensionMaxOutputTokens(0),
       endExtensionMaxOutputTokensPerClip:
         extensionMaxOutputTokens(1) - extensionMaxOutputTokens(0),
+      arcAuditEnabled: baseCfg.arcAuditEnabled,
+      arcAuditBatchSize: baseCfg.arcAuditBatchSize,
+      arcAuditMaxOutputTokensBase: arcAuditMaxOutputTokens(0),
+      arcAuditMaxOutputTokensPerClip: arcAuditMaxOutputTokens(1) - arcAuditMaxOutputTokens(0),
     });
   });
 
@@ -40,6 +45,13 @@ describe("computeFingerprint", () => {
     // key worth having: the recordings assert "no clip was extended", so a
     // replay under a live stage is a different engine and has to say so.
     expect(computeFingerprint(baseCfg).endExtensionEnabled).toBe(false);
+  });
+
+  it("records the arc-audit stage as DARK on the default config", () => {
+    // Same argument, same shape: every fixture in the repo predates this
+    // stage entirely, so a live replay against one of them is a different
+    // engine and the fingerprint has to say so.
+    expect(computeFingerprint(baseCfg).arcAuditEnabled).toBe(false);
   });
 });
 
@@ -128,6 +140,17 @@ describe("assertFingerprintMatches", () => {
     );
   });
 
+  it("fails when the arc-audit stage was switched on, which every fixture predates", () => {
+    // The same shape as endExtensionEnabled above: the stage ships dark, so a
+    // live replay against a dark recording produces flags and telemetry that
+    // simply were not measured against - the recorded responses.json has no
+    // arc_audit request in it at all.
+    const changed = computeFingerprint({ ...baseCfg, arcAuditEnabled: true });
+    expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
+      /arcAuditEnabled/
+    );
+  });
+
   it("fails when the extension output budget changed", () => {
     // end-extension.ts marks both constants ESTIMATED, NOT MEASURED and asks for
     // a re-measure from the first real run. Replay serves a recorded answer in
@@ -187,6 +210,11 @@ describe("assertFingerprintMatches", () => {
       // is a measured property of the SOURCE, not a choice about what the model
       // may do, and moving it is a re-measurement argued from transcripts
       sceneGapSec: 9,
+      // startExtensionWindowSec bounds a GATE inside arc-audit.ts, not what the
+      // arc-audit model is shown or asked - the mirror-image reasoning of why
+      // endExtensionWindowSec IS in the fingerprint (that one bounds what the
+      // model may choose from).
+      startExtensionWindowSec: 999,
     });
     const warn = vi.fn();
     expect(() => assertFingerprintMatches("case", { ...current }, changed, warn)).not.toThrow();

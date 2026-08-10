@@ -125,6 +125,7 @@ describe("variant definitions", () => {
       finalizerModel: "b",
       criticModelFallback: "c",
       endExtensionEnabled: true,
+      arcAuditEnabled: true,
     };
     // Driven off VARIANT_OVERRIDE_KEYS rather than a literal, because the way
     // this test rots is that a knob is admitted to the list and nobody adds it
@@ -159,6 +160,23 @@ describe("variant definitions", () => {
     // a recording that positively describes a different engine.
     expect(() => assertFingerprintMatches("recorded-live", live, dark)).toThrow(
       /endExtensionEnabled/
+    );
+  });
+
+  /** The arc-audit mirror of the test above, for the same reason: the
+   *  fingerprint key was added on the argument that a disabled stage makes no
+   *  request, so nothing in the request hash can notice it - and until the
+   *  "arc-audit" variant declaration existed, no config this harness could
+   *  build ever differed on the key, so the check it was bought for could not
+   *  fire either. */
+  it("makes the arc-audit fingerprint key able to fire, which it could not before", () => {
+    const dark = computeFingerprint(variantConfig(BASE_VARIANT));
+    const live = computeFingerprint(variantConfig("arc-audit"));
+    expect(dark.arcAuditEnabled).toBe(false);
+    expect(live.arcAuditEnabled).toBe(true);
+    expect({ ...live, arcAuditEnabled: false }).toEqual(dark);
+    expect(() => assertFingerprintMatches("recorded-live", live, dark)).toThrow(
+      /arcAuditEnabled/
     );
   });
 });

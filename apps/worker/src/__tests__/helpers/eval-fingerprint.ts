@@ -1,4 +1,5 @@
 import type { AnalyzeConfig } from "../../analyze-v2/config";
+import { arcAuditMaxOutputTokens } from "../../analyze-v2/arc-audit";
 import { criticMaxOutputTokens } from "../../analyze-v2/critic";
 import { extensionMaxOutputTokens } from "../../analyze-v2/end-extension";
 import { finalizerMaxOutputTokens } from "../../analyze-v2/finalize";
@@ -85,6 +86,33 @@ import { finalizerMaxOutputTokens } from "../../analyze-v2/finalize";
  *                                constants ESTIMATED, NOT MEASURED and asks for
  *                                a re-measure from the first real run, i.e. they
  *                                are expected to move.
+ *   arcAuditEnabled              finalizerEnabled's/endExtensionEnabled's
+ *                                argument, verbatim: off makes NO request, so
+ *                                the hash cannot notice it. Every fixture in
+ *                                the repo was recorded with it off, same as
+ *                                endExtensionEnabled, for the same reason.
+ *   arcAuditBatchSize            decides how clips are grouped into arc-audit
+ *                                prompts, so it changes both the prompt text
+ *                                (already in the request hash) and the token
+ *                                demand of every call - named here for the
+ *                                same clarity reason criticBatchSize is.
+ *   arcAuditMaxOutputTokens*     the critic-budget bug a third time, and this
+ *                                stage has NO retry of any kind (not even the
+ *                                critic's own omission retry - spec 2026-08-10
+ *                                task 2) - a starved cap costs a whole batch of
+ *                                clips as `unaudited` with no second chance.
+ *                                arc-audit.ts marks both constants PROVISIONAL,
+ *                                pending the M5 ladder measurement, i.e. they
+ *                                are expected to move.
+ *
+ * startExtensionWindowSec is NOT here, unlike endExtensionWindowSec - the
+ * asymmetry is deliberate. It bounds a GATE inside arc-audit.ts (whether a
+ * `fix_start_node` pointer is close enough to keep), never what the arc-audit
+ * MODEL is shown or asked: the prompt's CONTEXT BEFORE/AFTER padding is the
+ * fixed CONTEXT_BEFORE/CONTEXT_AFTER window the critic already uses, not this
+ * knob. So moving it changes what the code does with an answer already on
+ * disk - the scoring/gating carve-out below - not what was asked, so no
+ * request goes stale and no re-record is owed.
  *
  * finalizerHeadroom is deliberately NOT here: it changes how many clips reach
  * the prompt, so it changes the prompt text and the requestKey already fails
@@ -139,12 +167,22 @@ export interface EngineFingerprint {
   endExtensionMaxOutputTokensBase: number;
   /** Marginal cap per extra clip in the single extension call. */
   endExtensionMaxOutputTokensPerClip: number;
+  /** Whether the ARC-AUDIT LLM pass ran at all. Off makes no request, so the
+   *  request hash cannot notice it - the same argument as endExtensionEnabled. */
+  arcAuditEnabled: boolean;
+  /** Clips per arc-audit batch call - changes prompt text and token demand. */
+  arcAuditBatchSize: number;
+  /** arcAuditMaxOutputTokens(0) - the flat part of the arc-audit budget. */
+  arcAuditMaxOutputTokensBase: number;
+  /** Marginal cap per extra clip in one arc-audit batch call. */
+  arcAuditMaxOutputTokensPerClip: number;
 }
 
 export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
   const base = criticMaxOutputTokens(0);
   const finalizerBase = finalizerMaxOutputTokens(0);
   const extensionBase = extensionMaxOutputTokens(0);
+  const arcAuditBase = arcAuditMaxOutputTokens(0);
   return {
     scanModel: cfg.scanModel,
     criticModel: cfg.criticModel,
@@ -161,6 +199,10 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     endExtensionWindowSec: cfg.endExtensionWindowSec,
     endExtensionMaxOutputTokensBase: extensionBase,
     endExtensionMaxOutputTokensPerClip: extensionMaxOutputTokens(1) - extensionBase,
+    arcAuditEnabled: cfg.arcAuditEnabled,
+    arcAuditBatchSize: cfg.arcAuditBatchSize,
+    arcAuditMaxOutputTokensBase: arcAuditBase,
+    arcAuditMaxOutputTokensPerClip: arcAuditMaxOutputTokens(1) - arcAuditBase,
   };
 }
 

@@ -15,11 +15,13 @@ import {
 } from "./gates";
 import { dominantScript, isoToLanguageName, scriptMismatch } from "./language";
 import { selectAndOrder } from "./select";
+import { runArcAudit, type ArcAuditTelemetry } from "./arc-audit";
 import { extendClipEnds } from "./end-extension";
 import { finalizeClips } from "./finalize";
 import { detectTeaserRegion, isInTeaserRegion } from "./teaser";
 import { newUsage } from "./llm";
 import type {
+  ArcFlags,
   MergedCandidate,
   SnappedClip,
   V2Highlight,
@@ -357,6 +359,27 @@ export async function analyzeHighlightsV2(
   // user's clip count. The headroom absorbs them without a second LLM round
   // (spec §3, §9: backfilling from fresh candidates was rejected for that cost).
   const selection = selectAndOrder(eligible, cfg, cfg.softCap + cfg.finalizerHeadroom);
+
+  // ARC AUDIT (spec 2026-08-10, task 2) - runs after selection, before the
+  // extension that moves ends and the finalizer that trims starts, so it
+  // judges the set exactly as those two stages will receive it. PURE
+  // DETECTOR in this task: flags and telemetry only, ZERO boundary moves - see
+  // arc-audit.ts. Gated on cfg.arcAuditEnabled here AND inside runArcAudit
+  // itself (defence in depth, the same doubling extendClipEnds uses), so a
+  // dark run never spends a call and never adds a key: not `arcAudit` in
+  // telemetry, not `_arcFlags` on a highlight (below). The dark-stage control
+  // in the eval suite depends on that being literally true, not merely
+  // zeroed.
+  let arcFlags: Map<string, ArcFlags> = new Map();
+  let arcAuditTelemetry: ArcAuditTelemetry | undefined;
+  if (cfg.arcAuditEnabled) {
+    const audit = await runArcAudit(client, usage, selection.selected, nodes, cfg, {
+      retryDelayMs: options.retryDelayMs,
+    });
+    arcFlags = audit.flags;
+    arcAuditTelemetry = audit.telemetry;
+  }
+
   // Ends move FORWARD here and nowhere else, and only for clips that will ship.
   // Before the finalizer on purpose: the finalizer is the stage that trims, and
   // it must get the last word on a boundary. Widening cannot invalidate copy -
@@ -513,7 +536,7 @@ export async function analyzeHighlightsV2(
     (r) => r.outcome === "repaired"
   ).length;
 
-  const highlights = shipped.map(toHighlight);
+  const highlights = shipped.map((clip) => toHighlight(clip, arcFlags));
 
   const telemetry = {
     ...scannerTelemetry,
@@ -540,6 +563,11 @@ export async function analyzeHighlightsV2(
     snippetTitleRepairs,
     tier: selection.tier,
     droppedByNms: selection.droppedByNms,
+    // Absent, never a zeroed placeholder, while the stage is dark - the same
+    // "not a key" promise `_arcFlags` keeps below. arcAuditTelemetry is
+    // undefined exactly when cfg.arcAuditEnabled was false, so this spread
+    // adds nothing at all to the object in that case (spec 2026-08-10 task 2).
+    ...(arcAuditTelemetry ? { arcAudit: arcAuditTelemetry } : {}),
     // THE WHOLE OBJECT, never a hand-picked subset of its counters. `skipped` is
     // the only field that separates "the stage never ran" from "it ran and
     // declined every clip" - both are zeros everywhere else - and `refusedBy` is
@@ -718,8 +746,16 @@ function unheardAudioError(
   );
 }
 
-function toHighlight(clip: SnappedClip): V2Highlight {
+/** `arcFlags` is keyed by clip id and absent whenever the stage did not audit
+ *  this clip - disabled, or a batch this clip fell into stayed unaudited - so
+ *  `_arcFlags` on the returned highlight is present if and only if a real
+ *  verdict exists for it (Map#get returning undefined never adds the key,
+ *  since the spread below is conditional). That is what keeps a dark run
+ *  byte-identical to today: an empty map here means the key never appears on
+ *  any highlight. */
+function toHighlight(clip: SnappedClip, arcFlags: Map<string, ArcFlags>): V2Highlight {
   const v = clip.verdict;
+  const flags = arcFlags.get(v.id);
   return {
     start: clip.startSec,
     end: clip.endSec,
@@ -742,6 +778,7 @@ function toHighlight(clip: SnappedClip): V2Highlight {
     _descriptionEvidenceNodes: v.descriptionEvidenceNodes,
     _grounded: v.grounded,
     _boundaryConfidence: clip.boundaryConfidence,
+    ...(flags ? { _arcFlags: flags } : {}),
   };
 }
 
