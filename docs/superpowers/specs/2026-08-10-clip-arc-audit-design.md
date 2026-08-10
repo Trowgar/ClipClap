@@ -180,6 +180,31 @@ New variant key: `arcAuditEnabled` - follow the `endExtensionEnabled` precedent 
 `startExtensionWindowSec` is deliberately NOT a variant key (tuning door - same refusal as
 `endExtensionWindowSec`).
 
+### 2e. The long-clip exception (owner decision 2026-08-10, Task 5 - AFTER tasks 2-4)
+
+The hibakusya arc measured the constraint: the 3/3 scout-consensus moment is 105s against
+`maxSec` 90, so the engine MUST cut it, and two runs cut it in opposite directions (labels.json).
+The owner's decision: **a clip over 90s is an allowed format for strong moments, not a bug** -
+under two conditions, both his words: it must be an EXPLICIT finalizer decision (never an
+accidental maxSec overflow), and only on material where arcAudit judges entry, exit and
+self-containment all ok.
+
+Mechanism sketch (design to be finalized in its own plan, measurement first):
+- `LONG_CLIPS=on` (default off) + `LONG_CLIP_MAX_SEC` (candidate default 150, MEASURE first:
+  count critic verdicts whose raw range exceeds maxSec across all five fixtures' recordings -
+  that count is the population this feature affects; one known case is thin evidence).
+- snap: when the flag is on and a verdict fits `longClipMaxSec`, DEFER the over-length
+  compression - validate boundaries at the long cap, mark the clip `overLength`. Compression
+  becomes conditional policy in `index.ts` (run the exact same compression code) instead of
+  unconditional mechanism: it fires when arcAudit flags any axis on the wide clip.
+- extensions: their `too_long` gates read the long cap ONLY when the audit's other axes are
+  clean, so a widening can cross 90 only on audit-blessed material.
+- finalizer: an over-length clip is announced in its prompt block ("LENGTH EXCEPTION: this clip
+  runs Ns, over the 90s standard - ship it long only if every second earns its place"), and the
+  code gate refuses to ship any over-length clip whose `_arcFlags` are not fully ok - so the
+  finalizer can only ratify a long clip that arcAudit blessed, which is exactly the owner's two
+  conditions in code.
+
 ### 2d. What this does to the fixtures (budget it, do not discover it)
 
 An audit that widens a boundary changes the finalizer's prompt, so recorded finalizer answers go
@@ -224,6 +249,12 @@ the baseline every later change is judged against. The onset counters are TELEME
   clip like the panel, that is a kill result for the design).
 - The `водка` exit label is contested ground truth (owner says cut-off, scouts 2:1 say verdict
   line - recorded in labels.json) and must not be a pass/fail case on either side.
+- Instrument: stability CANNOT be measured through the replay harness - `responses.json` keys by
+  sha256(model, system, user), so an identical prompt replays one recorded answer forever. It
+  needs a dedicated script (`eval-arc-stability.ts`) that replays the pipeline up to selection,
+  then calls the LIVE API N times (default 3) on the audit prompts WITHOUT writing recordings,
+  and prints per-clip flag agreement across runs and against labels. It must refuse to run
+  without an explicit `--live` flag, because it spends money on every invocation.
 - Flag agreement vs scout-consensus starts/ends on the two old podcast fixtures.
 - `clip-viewer`/`clip-editor` are explicitly NOT acceptance instruments (engine-notes §8b:
   byte-identical clips moved one verdict step; any future use requires that control run).
@@ -316,9 +347,14 @@ Acceptance per M4; additionally re-measure the compilation-reel harm that keeps 
 off (engine-notes §3) - if `sitcom-friends` still degrades, the audit-hinted path must be
 separable from the self-motivated path so one can ship without the other.
 
+**Task 5 (after 2-4, own plan): the long-clip exception** per §2e. Blocked on Task 2 shipping
+(its gate is `_arcFlags`) and on the population count (§2e). Not started until the owner sees
+tasks 2-4 measured.
+
 **Explicitly out of scope** (do not let an implementing agent drift into these): arc stacking and
 drag (no mechanism, separate programme item), any change to critic prompts or scan windows (own
 re-record budgets), retention of the finalizer's 9 rules (unchanged), genre profiles, RENDER.
+The long-clip exception (§2e) is Task 5 scope only - tasks 2-4 treat `maxSec` exactly as today.
 
 ---
 
