@@ -94,6 +94,64 @@ describe("buildScanWindows", () => {
     expect(buildScanWindows([], cfg)).toEqual([]);
   });
 
+  // -------------------------------------------------------------------------
+  // scanWindowBudget (spec 2026-08-11 "Scan recall remedy")
+  // -------------------------------------------------------------------------
+
+  it("counts every node's span toward the budget under 'source', yielding MORE windows than the 'speech' default on the same mixed graph", () => {
+    // 40 nodes of 5s each, odd nodes opaque: wall clock 200s, speechSec-total
+    // 100s (20 word-bearing nodes), sourceSec-total 200s (all 40 nodes) - the
+    // same "half the material is opaque" shape engine-notes §3 measured.
+    // `cfg` above carries no SCAN_WINDOW_BUDGET override, so it IS the
+    // default - the mechanism under test has to overcome that default, not
+    // merely reproduce it, to turn this test green.
+    expect(cfg.scanWindowBudget).toBe("speech");
+    const nodes = makeNodes(40, 5).map((n) => ({
+      ...n,
+      hasWords: n.index % 2 === 0,
+    }));
+    const sourceCfg = { ...cfg, scanWindowBudget: "source" as const };
+
+    const speechWindows = buildScanWindows(nodes, cfg);
+    const sourceWindows = buildScanWindows(nodes, sourceCfg);
+
+    expect(sourceWindows.length).toBeGreaterThan(speechWindows.length);
+    // exact counts for this fixture, pinned as a regression lock on the
+    // accumulator switch itself (hand-derived: speech reaches its 60s budget
+    // only every ~24 nodes here since half contribute nothing; source reaches
+    // it every 12 nodes since every node contributes its full 5s)
+    expect(speechWindows.length).toBe(2);
+    expect(sourceWindows.length).toBe(5);
+
+    // both budgets still cover every node, opaque included - the windowing
+    // guarantee buildScanWindows makes regardless of what counts toward the
+    // budget that decides window BOUNDARIES
+    for (const windows of [speechWindows, sourceWindows]) {
+      const covered = new Set<number>();
+      for (const w of windows) {
+        for (let i = w.startNode; i <= w.endNode; i++) covered.add(i);
+      }
+      expect(covered.size).toBe(40);
+      expect(windows[windows.length - 1].endNode).toBe(39);
+    }
+  });
+
+  it("produces IDENTICAL layouts under both budgets when a graph has zero opaque nodes (speechSec == sourceSec)", () => {
+    // The boundary case the two budgets provably coincide on: with every node
+    // word-bearing, "count word-bearing spans only" and "count every span"
+    // are the same function, so nodeBudgetSpan cannot tell the two apart and
+    // the window layout - and therefore every downstream scanner request key
+    // - is byte-identical. This is also why scanWindowBudget earns its own
+    // eval-fingerprint key rather than relying on the request hash: on a
+    // source shaped like THIS one, a fixture recorded under one budget would
+    // replay green under the other by coincidence.
+    const nodes = makeNodes(40, 5); // hasWords: true for all, from makeNodes' default
+    const speechWindows = buildScanWindows(nodes, cfg);
+    const sourceWindows = buildScanWindows(nodes, { ...cfg, scanWindowBudget: "source" as const });
+    expect(sourceWindows).toEqual(speechWindows);
+    expect(speechWindows.length).toBeGreaterThan(1); // a non-trivial case, not a single-window fluke
+  });
+
   it("terminates when a single node exceeds the window budget and covers the rest", () => {
     // node 0 alone is 120s (> 60s budget); five 5s nodes follow
     const nodes: SentenceNode[] = [

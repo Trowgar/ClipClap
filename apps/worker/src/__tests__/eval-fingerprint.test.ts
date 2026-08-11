@@ -41,7 +41,14 @@ describe("computeFingerprint", () => {
       endExtensionHintsEnabled: baseCfg.endExtensionHintsEnabled,
       longClipsEnabled: baseCfg.longClipsEnabled,
       longClipMaxSec: baseCfg.longClipMaxSec,
+      scanWindowBudget: baseCfg.scanWindowBudget,
     });
+  });
+
+  it("records the scan window budget as 'speech' on the default config", () => {
+    // Every fixture in the repo was recorded under "speech" - it is the
+    // knob's own default and the byte-identical path windows.ts guarantees.
+    expect(computeFingerprint(baseCfg).scanWindowBudget).toBe("speech");
   });
 
   it("records the extension stage as DARK on the default config", () => {
@@ -224,6 +231,17 @@ describe("assertFingerprintMatches", () => {
     };
     expect(() => assertFingerprintMatches("case", base, current, vi.fn())).toThrow(
       /endExtensionMaxOutputTokensBase/
+    );
+  });
+
+  it("fails when the scan window budget changed, which can COINCIDE with an unchanged request hash", () => {
+    // The one windowing knob in this file (see eval-fingerprint.ts's doc
+    // comment): on a source with zero opaque nodes the two budgets produce
+    // byte-identical window layouts, so the request hash has nothing to fail
+    // on and only this key can catch the mismatch.
+    const changed = computeFingerprint({ ...baseCfg, scanWindowBudget: "source" });
+    expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
+      /scanWindowBudget/
     );
   });
 

@@ -80,4 +80,21 @@ describe("loadAnalyzeConfig", () => {
       "shadow",
     );
   });
+
+  it("defaults the scan window budget to 'speech' and switches on the exact literal 'source' only", () => {
+    // spec 2026-08-11 "Scan recall remedy": today's behavior (word-bearing
+    // spans only) stays the default, and only an exact "source" moves it -
+    // the same discipline as every other stage switch in this file (a stray
+    // truthy value must not silently double the scanner's candidate pool).
+    expect(loadAnalyzeConfig({}).scanWindowBudget).toBe("speech");
+    expect(loadAnalyzeConfig({ SCAN_WINDOW_BUDGET: "source" }).scanWindowBudget).toBe(
+      "source",
+    );
+    expect(loadAnalyzeConfig({ SCAN_WINDOW_BUDGET: "garbage" }).scanWindowBudget).toBe(
+      "speech",
+    );
+    expect(loadAnalyzeConfig({ SCAN_WINDOW_BUDGET: "SOURCE" }).scanWindowBudget).toBe(
+      "speech",
+    );
+  });
 });

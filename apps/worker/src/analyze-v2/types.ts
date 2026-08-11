@@ -17,6 +17,10 @@ export interface ScanWindow {
   index: number;
   startNode: number;
   endNode: number; // inclusive
+  /** The accumulated budget value that closed this window - word-bearing
+   *  seconds only under `cfg.scanWindowBudget === "speech"` (the field's
+   *  name and meaning before that knob existed), every node's seconds under
+   *  `"source"`. See windows.ts's `nodeBudgetSpan`. */
   speechSec: number;
 }
 

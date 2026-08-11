@@ -741,13 +741,43 @@ shipped 4   scan_miss 4   snap_drop 2   nms_drop 1   critic_rejected 1
 **All three 3/3 scout-consensus missed moments die at SCAN** - nearest raw candidate 36-56s
 away, so the scanner proposed NOTHING in those regions: §6a's `buildScanWindows` speechSec
 mis-budgeting is a measured kill stage now, not a suspicion (4 windows on a 48-minute source, 44
-raw candidates). The two snap kills carry critic scores 0.80-0.82 and die on `no_clean_end` -
+raw candidates). **CORRECTED THE SAME DAY by the scan probe (below): two of the three
+scan-misses are not the window budget's fault** - #1 recovers under today's windows on
+resampling, #2 recovers under neither budget - so read this histogram together with the probe
+verdict, not alone. The two snap kills carry critic scores 0.80-0.82 and die on `no_clean_end` -
 the word-timing root cause, fourth sighting. **The critic killed one moment in twelve; the judge
 is nearly innocent, the funnel is not.** Precision side: the shipped-but-unwanted clips show
 ordinary interest (0.4-0.7) and scores (0.69-0.78) - quota filler at an episode ceiling of 8-9
 postable moments, no dedicated remedy needed beyond recall. Remedy design (window budget from
 `sourceSec`, staged one-fixture-first because it invalidates EVERY recording):
 `2026-08-11-scan-recall-remedy.md`.
+
+### The scan probe: the window budget is a quarter of the story, the scan lottery is the rest (measured 2026-08-11)
+
+`SCAN_WINDOW_BUDGET` shipped as a knob, default `speech` - the harness and every recording are
+untouched, and `eval-scan-probe.ts` measures the alternative live (gpt-4o-mini, ~$0.006 per full
+scan pass). Two runs per budget plus one discarded earlier pair on `podcast-nuclear`:
+
+- Windows 4 -> **5**, not the spec's 7-8: this fixture's opaque share is ~16% against the ~40%
+  of the two §3-measured podcasts - the prediction was extrapolated from the wrong source. Node
+  coverage was 100% under BOTH budgets all along; the real defect is per-window candidate QUOTA
+  density, and on this source the density gain is +25% (raw candidates 48/48 -> 54/60).
+- **The autopsy's scan_miss verdicts decompose on resampling.** Miss #1 (the scouts' #1-ranked
+  Чернобыль/Хиросима): SCANNED in all four probe runs INCLUDING both speech controls - the
+  recorded miss was temperature-0.4 sampling, not windows. Miss #2 (кобальтовая бомба): NOT
+  SCANNED in 6 of 6 samples under either budget - a scanner-prompt taste gap, the falsification
+  clause of the remedy spec firing exactly as written. Miss #3 (Нёнокса): speech 0/2, source 2/3
+  - the one place the budget plausibly helps.
+- **So the funnel has a THIRD lottery**: scanner sampling, alongside the critic's (§5's
+  transcription-jitter A/B) and the finalizer's (the largest, above). One scan sample misses
+  moments another finds; a fixture's recorded scan is one draw of that lottery, and any recall
+  claim measured from a single scan sample inherits it.
+- Decisions recorded in the remedy spec's Phase A verdict: era re-record shelved (not justified);
+  `SCAN_WINDOW_BUDGET=source` is env-flippable in prod where high-opaque sources get the full
+  effect (harness stays env-blind on `speech`, the `ANALYZE_ENGINE` precedent); the next remedy
+  candidate is a 2x scan union per window (mergeCandidates already dedupes) whose acceptance
+  this same probe can measure - on today's data it covers misses #1 and #3 but nothing short of
+  scanner-prompt work covers #2.
 
 **Ships dark; variant `arc-exit-hints` recorded the same day** (the implementing agent was
 forbidden to spend; the operator ran the topup - 9 new responses across the five fixtures - and

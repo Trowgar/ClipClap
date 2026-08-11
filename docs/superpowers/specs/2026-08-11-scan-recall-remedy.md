@@ -65,6 +65,36 @@ constant. Mechanism in `buildScanWindows`, nothing else moves in the same commit
    and the positive control (1113.8-1131.2) still ships.
 5. The K/cap counters published and read by a human before any second change.
 
+## Phase A verdict (2026-08-11, probe run - and the spec is PARTIALLY FALSIFIED)
+
+The knob shipped dark (`SCAN_WINDOW_BUDGET`, default `speech` - nothing invalidated) and
+`eval-scan-probe.ts` ran live, 2 runs per budget plus one earlier discarded pair
+(gpt-4o-mini, ~$0.03 total; full output in the session scratchpad, summary here):
+
+- Window count on `podcast-nuclear`: 4 -> **5**, not the predicted 7-8. This fixture's
+  opaque fraction is ~16% against the ~40% of the fixtures §3 measured - the 7-8 was an
+  extrapolation from the wrong source. Node coverage was already 100% under both budgets; the
+  defect was always per-window QUOTA density, and the density gain here is +25%.
+- Missed moment #1 (Чернобыль/Хиросима): SCANNED in ALL FOUR runs INCLUDING both speech
+  controls - the recorded miss was **scanner sampling variance**, not windows.
+- Missed moment #2 (кобальтовая бомба): NOT SCANNED in 6 of 6 samples across both budgets -
+  a scanner-prompt taste gap, exactly the falsification clause this spec carried.
+- Missed moment #3 (Нёнокса): speech 0/2, source 2/3 - weak evidence for the budget.
+- Raw candidates: 48/48 speech vs 54/60 source.
+
+**Decisions that follow:** (1) the full-corpus re-record / era flip is NOT justified by this
+evidence - shelved; (2) the budget knob is directionally right and free to run in prod via env
+(`SCAN_WINDOW_BUDGET=source`), where high-opaque sources get the full effect - the harness stays
+on `speech` by design (env-blind, same precedent as `ANALYZE_ENGINE` itself); (3) the measured
+lever this probe surfaced is the SCAN LOTTERY - one temperature-0.4 sample misses what another
+finds. The remedy candidate for it: run the scanner N=2 times per window and union the
+candidates into `mergeCandidates` (which already dedupes overlaps) - doubles a gpt-4o-mini cost
+(cents), attacks the variance directly, and its acceptance can be measured with THIS probe
+(union coverage across runs: on today's data a 2x source union covers misses #1 and #3 and
+moment #8's flicker; nothing covers #2 short of scanner-prompt work). That is its own spec once
+the owner wants it; (4) кобальтовая-class taste gaps go to a future scanner-prompt project,
+with this probe as its instrument.
+
 ## Out of scope
 
 The scanner prompt itself, `regionMaxCandidates`, `criticMaxCandidates` retuning (measured

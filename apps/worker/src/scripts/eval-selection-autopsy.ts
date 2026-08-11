@@ -55,9 +55,12 @@
  *
  * MATCHING A CANDIDATE/VERDICT/CLIP TO A LABELED MOMENT: time overlap >= 30%
  * of the SHORTER range (spec's convention, distinct from the IoU
- * `arc-audit-labels.ts` uses for its own labeled-clip matching).
+ * `arc-audit-labels.ts` uses for its own labeled-clip matching). The reader
+ * (`moments[]`+`missedMoments[]`) and the matcher itself now live in
+ * `arc-audit-labels.ts` (moved there 2026-08-11, spec "Scan recall remedy",
+ * so eval-scan-probe.ts does not need a second copy) - this file is their
+ * second user, not their original owner.
  */
-import { existsSync, readFileSync } from "fs";
 import { join } from "path";
 import {
   BASE_VARIANT,
@@ -69,7 +72,7 @@ import {
 } from "../__tests__/helpers/eval-fixture";
 import { criticBudget } from "../analyze-v2/candidates";
 import { nmsCollides } from "../analyze-v2/select";
-import { labelRange, type LabelEntry } from "./arc-audit-labels";
+import { covers, loadMoments } from "./arc-audit-labels";
 import { runFrontHalf, type FrontHalfResult } from "./replay-front-half";
 import type { AnalyzeConfig } from "../analyze-v2/config";
 import type {
@@ -91,73 +94,6 @@ function extractLabelsFlag(argv: string[]): { labelsPath: string | undefined; re
   const value = argv[idx + 1];
   if (!value || value.startsWith("-")) throw new Error("--labels requires a path argument");
   return { labelsPath: value, rest: [...argv.slice(0, idx), ...argv.slice(idx + 2)] };
-}
-
-// ---------------------------------------------------------------------------
-// labels: moments[] AND missedMoments[] - loadLabels (arc-audit-labels.ts)
-// only ever returns the first matching top-level array key, so it cannot
-// surface both at once. `labelRange` is reused unmodified for parsing one
-// entry's range.
-// ---------------------------------------------------------------------------
-
-interface RawLabelEntry extends LabelEntry {
-  hook?: string;
-  payoff?: string;
-  agreement?: string;
-  note?: string;
-}
-
-interface LabeledMoment {
-  kind: "moment" | "missed";
-  ordinal: number;
-  range: [number, number];
-  title: string;
-  entry: RawLabelEntry;
-}
-
-function loadMoments(path: string): LabeledMoment[] {
-  if (!existsSync(path)) return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(path, "utf-8"));
-  } catch (error) {
-    console.warn(`[eval-selection-autopsy] ${path} did not parse as JSON: ${(error as Error).message}`);
-    return [];
-  }
-  const obj = (parsed ?? {}) as Record<string, unknown>;
-  const out: LabeledMoment[] = [];
-  const moments = Array.isArray(obj.moments) ? (obj.moments as RawLabelEntry[]) : [];
-  moments.forEach((m, i) => {
-    const range = labelRange(m);
-    if (!range) return;
-    out.push({ kind: "moment", ordinal: i + 1, range, title: m.productionTitle ?? `moment ${i + 1}`, entry: m });
-  });
-  const missed = Array.isArray(obj.missedMoments) ? (obj.missedMoments as RawLabelEntry[]) : [];
-  missed.forEach((m, i) => {
-    const range = labelRange(m);
-    if (!range) return;
-    out.push({ kind: "missed", ordinal: i + 1, range, title: m.hook ?? `missed moment ${i + 1}`, entry: m });
-  });
-  return out;
-}
-
-// ---------------------------------------------------------------------------
-// time-overlap matching: >= 30% of the SHORTER range (spec's own convention,
-// not arc-audit-labels.ts's IoU).
-// ---------------------------------------------------------------------------
-
-const MATCH_FRAC = 0.3;
-
-function overlapFrac(aStart: number, aEnd: number, bStart: number, bEnd: number): number {
-  const interStart = Math.max(aStart, bStart);
-  const interEnd = Math.min(aEnd, bEnd);
-  const inter = Math.max(0, interEnd - interStart);
-  const shorter = Math.min(aEnd - aStart, bEnd - bStart);
-  return shorter > 0 ? inter / shorter : 0;
-}
-
-function covers(momentStart: number, momentEnd: number, otherStart: number, otherEnd: number): boolean {
-  return overlapFrac(momentStart, momentEnd, otherStart, otherEnd) >= MATCH_FRAC;
 }
 
 function candSec(nodes: SentenceNode[], c: { startNode: number; endNode: number }): [number, number] {

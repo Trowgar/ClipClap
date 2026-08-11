@@ -22,6 +22,26 @@ export interface AnalyzeConfig {
   maxSec: number;
   scanWindowSec: number;
   scanOverlapSec: number;
+  /** Which node spans buildScanWindows may count toward the per-window budget
+   *  (spec 2026-08-11 "Scan recall remedy", engine-notes §6a/§3). "speech" -
+   *  the default, and BYTE-IDENTICAL to every behavior this repo had before
+   *  this knob existed, proven by the eval-snapshot suite rather than merely
+   *  asserted - counts word-bearing node spans only, same as today. "source"
+   *  counts EVERY node's span, opaque included - the same definition
+   *  candidates.ts's `sourceSeconds()` already uses for the critic budget.
+   *  §3 measured `speechSec` at roughly half of `sourceSec` on real material
+   *  (opaque nodes - material the scanner and critic both still read - are
+   *  ~36% of a 52-minute episode), so a `scanWindowSec` of 600 "speech"
+   *  seconds was actually rendering ~1130s of transcript per window, halving
+   *  both window count and the scanner's own per-window candidate ceiling.
+   *  Exact-literal "source" switches; anything else (unset, "speech", a typo)
+   *  is "speech" - the same discipline as every other stage switch in this
+   *  file, because this one silently doubles the scanner's candidate pool and
+   *  critic spend if it fires by accident (spec's own "what it costs"
+   *  section). NOT in VariantOverrides - it changes what the scanner is
+   *  asked, which the variant whitelist's own doc comment forbids; its
+   *  measurement path is `eval-scan-probe.ts`, not a variant. */
+  scanWindowBudget: "speech" | "source";
   criticBatchSize: number;
   criticMaxCandidates: number;
   perWindowMinCandidates: number;
@@ -179,6 +199,10 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     maxSec: num(env, "CLIP_MAX_SEC", 90),
     scanWindowSec: num(env, "SCAN_WINDOW_SEC", 600),
     scanOverlapSec: num(env, "SCAN_OVERLAP_SEC", 90),
+    // Exact literal "source", same discipline as every other stage switch in
+    // this file: a stray truthy env value must not silently double the
+    // scanner's candidate pool and critic spend.
+    scanWindowBudget: env.SCAN_WINDOW_BUDGET === "source" ? "source" : "speech",
     criticBatchSize: num(env, "CRITIC_BATCH_SIZE", 6),
     criticMaxCandidates: num(env, "CRITIC_MAX_CANDIDATES", 40),
     perWindowMinCandidates: num(env, "PER_WINDOW_MIN_CANDIDATES", 2),

@@ -185,6 +185,34 @@ import { finalizerMaxOutputTokens } from "../../analyze-v2/finalize";
  *                                was added to close. No *MaxOutputTokens pair
  *                                exists for it: no call's shape depends on it.
  *
+ *   scanWindowBudget              which node spans buildScanWindows may count
+ *                                toward the window/overlap budget: word-bearing
+ *                                nodes only ("speech", today's default) or
+ *                                every node including opaque ("source") - spec
+ *                                2026-08-11 "Scan recall remedy". This is the
+ *                                ONE windowing knob that earns a key despite
+ *                                the "windowing knobs are out" rule below, for
+ *                                the same reason endExtensionWindowSec and
+ *                                longClipMaxSec do: it can produce a FALSE
+ *                                MATCH instead of a loud stale-request
+ *                                failure. The two budgets are mathematically
+ *                                IDENTICAL whenever a source has zero opaque
+ *                                nodes (sourceSec == speechSec exactly then -
+ *                                see scan-windows.test.ts's own boundary
+ *                                case): on such a source the window layout,
+ *                                and therefore every scanner request key, is
+ *                                byte-identical under both settings, so the
+ *                                request hash has nothing to fail on and a
+ *                                fixture recorded under one budget would
+ *                                replay green under the other by coincidence
+ *                                rather than by proof. Any source WITH opaque
+ *                                nodes (every real fixture in this repo)
+ *                                already changes every downstream request key
+ *                                on its own and needs no key here for THAT
+ *                                case - named anyway, for the same clarity
+ *                                reason criticBatchSize is despite being
+ *                                mostly redundant with the hash there too.
+ *
  * startExtensionWindowSec is NOT here, unlike endExtensionWindowSec - the
  * asymmetry is deliberate. It bounds a GATE inside arc-audit.ts (whether a
  * `fix_start_node` pointer is close enough to keep), never what the arc-audit
@@ -215,7 +243,9 @@ import { finalizerMaxOutputTokens } from "../../analyze-v2/finalize";
  *   - Windowing/candidate caps (scanWindowSec, criticMaxCandidates, ...). They
  *     do change prompt text, but that already changes the requestKey, so a
  *     stale fixture fails loudly on its own. Adding them buys nothing and adds
- *     re-record pressure.
+ *     re-record pressure. `scanWindowBudget` is the one exception, in the list
+ *     above rather than here, because it can COINCIDE with the request key
+ *     unchanged instead of always moving it - see its own entry for why.
  *   - CRITIC_CONCURRENCY / maxConcurrency: scheduling only. Same requests, same
  *     caps, same answers - replay does not even observe it.
  */
@@ -273,6 +303,12 @@ export interface EngineFingerprint {
   /** Ceiling for a blessed over-length clip, seconds. See the doc comment
    *  above for the silent-match risk this key exists to close. */
   longClipMaxSec: number;
+  /** Which node spans buildScanWindows may count toward the window/overlap
+   *  budget - "speech" (word-bearing only, today's default) or "source"
+   *  (every node, opaque included). See the doc comment above for why this
+   *  windowing knob gets a key despite the general rule against them: the
+   *  two coincide byte-for-byte on a source with zero opaque nodes. */
+  scanWindowBudget: "speech" | "source";
 }
 
 export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
@@ -304,6 +340,7 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     endExtensionHintsEnabled: cfg.endExtensionHintsEnabled,
     longClipsEnabled: cfg.longClipsEnabled,
     longClipMaxSec: cfg.longClipMaxSec,
+    scanWindowBudget: cfg.scanWindowBudget,
   };
 }
 
