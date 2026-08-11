@@ -32,6 +32,16 @@ export interface ScanCandidate {
   type: string;
   thread?: string;
   windowIndex: number;
+  /** Which of `cfg.scanPasses` identical-prompt calls over this window
+   *  produced this candidate (0-indexed) - spec 2026-08-11 "Scan recall
+   *  remedy", Phase B. Absent from candidates minted outside `runScanner`
+   *  (e.g. index.ts's tiny-transcript path) and always 0 at the default
+   *  `scanPasses` of 1, so nothing that predates this field or ignores it
+   *  changes behavior. `mergeCandidates` never reads it - it rides along
+   *  `{...c}` spreads unexamined, same as `thread` - and it exists for
+   *  `scripts/eval-scan-probe.ts`'s per-pass breakdown and the union-order
+   *  tests, not for production selection logic. */
+  passIndex?: number;
 }
 
 export interface MergedCandidate extends ScanCandidate {

@@ -97,4 +97,23 @@ describe("loadAnalyzeConfig", () => {
       "speech",
     );
   });
+
+  it("defaults scanPasses to 1 and accepts a positive integer override", () => {
+    // spec 2026-08-11 "Scan recall remedy", Phase B: default 1 is today's
+    // behavior byte for byte - the whole harness relies on every fixture
+    // exercising this default.
+    expect(loadAnalyzeConfig({}).scanPasses).toBe(1);
+    expect(loadAnalyzeConfig({ SCAN_PASSES: "2" }).scanPasses).toBe(2);
+    expect(loadAnalyzeConfig({ SCAN_PASSES: "5" }).scanPasses).toBe(5);
+  });
+
+  it("falls back scanPasses to 1 on garbage, zero, negative and fractional values", () => {
+    expect(loadAnalyzeConfig({ SCAN_PASSES: "garbage" }).scanPasses).toBe(1);
+    expect(loadAnalyzeConfig({ SCAN_PASSES: "0" }).scanPasses).toBe(1);
+    expect(loadAnalyzeConfig({ SCAN_PASSES: "-1" }).scanPasses).toBe(1);
+    expect(loadAnalyzeConfig({ SCAN_PASSES: "-3" }).scanPasses).toBe(1);
+    expect(loadAnalyzeConfig({ SCAN_PASSES: "1.5" }).scanPasses).toBe(1);
+    expect(loadAnalyzeConfig({ SCAN_PASSES: "" }).scanPasses).toBe(1);
+    expect(loadAnalyzeConfig({ SCAN_PASSES: "  " }).scanPasses).toBe(1);
+  });
 });

@@ -42,6 +42,7 @@ describe("computeFingerprint", () => {
       longClipsEnabled: baseCfg.longClipsEnabled,
       longClipMaxSec: baseCfg.longClipMaxSec,
       scanWindowBudget: baseCfg.scanWindowBudget,
+      scanPasses: baseCfg.scanPasses,
     });
   });
 
@@ -49,6 +50,13 @@ describe("computeFingerprint", () => {
     // Every fixture in the repo was recorded under "speech" - it is the
     // knob's own default and the byte-identical path windows.ts guarantees.
     expect(computeFingerprint(baseCfg).scanWindowBudget).toBe("speech");
+  });
+
+  it("records scanPasses as 1 on the default config", () => {
+    // spec 2026-08-11 "Scan recall remedy", Phase B: every fixture in the
+    // repo was recorded at passes=1 (the only recordable value - see this
+    // knob's own doc comment for why passes>1 cannot be recorded at all).
+    expect(computeFingerprint(baseCfg).scanPasses).toBe(1);
   });
 
   it("records the extension stage as DARK on the default config", () => {
@@ -242,6 +250,19 @@ describe("assertFingerprintMatches", () => {
     const changed = computeFingerprint({ ...baseCfg, scanWindowBudget: "source" });
     expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
       /scanWindowBudget/
+    );
+  });
+
+  it("fails when scanPasses changed, which the request hash CANNOT catch by construction", () => {
+    // Sharper than scanWindowBudget's case above: that one coincides with an
+    // unchanged hash only on sources with zero opaque nodes. scanPasses>1
+    // sends the exact same request every pass on every source - the hash
+    // never moves, ever - so this key is the ONLY thing that can tell a
+    // fixture "recorded" at passes>1 (a lie by construction, per this knob's
+    // own doc comment) apart from one recorded honestly at passes=1.
+    const changed = computeFingerprint({ ...baseCfg, scanPasses: 2 });
+    expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
+      /scanPasses/
     );
   });
 

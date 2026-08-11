@@ -779,6 +779,21 @@ scan pass). Two runs per budget plus one discarded earlier pair on `podcast-nucl
   this same probe can measure - on today's data it covers misses #1 and #3 but nothing short of
   scanner-prompt work covers #2.
 
+**Phase B, the 2x scan union - built, accepted, LIVE (2026-08-11).** `SCAN_PASSES` (default 1,
+byte-identical, all recordings valid) runs the scanner N times per window with IDENTICAL
+prompts - diversity is the sampling temperature - and flattens candidates in (window, pass)
+order. Multi-pass is deliberately unrecordable (identical prompts share one replay key, a
+recording silently degenerates the union to one pass), so `scanPasses` sits in the fingerprint
+and the measurement instrument is the probe's `--passes`. A window counts as failed only when
+EVERY pass fails, preserving the total-outage invariant. Acceptance at source/passes=2/runs=2:
+**union coverage 12/12 labeled moments in both runs** against Phase A's best single pass of
+10/12; misses #1/#3 stable. The honesty control (miss #2, expected uncovered) was covered in 3
+of 4 passes - not claimed per the pre-registered rule, but it re-classified the Phase A verdict:
+under `source` its nearest candidates sat 3.2s away both times, a threshold near-miss rather
+than a scanner taste gap. `SCAN_WINDOW_BUDGET=source` and `SCAN_PASSES=2` are both in the live
+`.env` since 2026-08-11; the probe does not promise end-to-end shipping - the downstream
+lotteries (critic, gates, NMS, finalizer) are unchanged and the real uploads are the judge.
+
 **Ships dark; variant `arc-exit-hints` recorded the same day** (the implementing agent was
 forbidden to spend; the operator ran the topup - 9 new responses across the five fixtures - and
 blessed the snapshots). First corpus pass, replay

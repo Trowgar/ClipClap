@@ -213,6 +213,38 @@ import { finalizerMaxOutputTokens } from "../../analyze-v2/finalize";
  *                                reason criticBatchSize is despite being
  *                                mostly redundant with the hash there too.
  *
+ *   scanPasses                     how many times `runScanner` asks the SAME
+ *                                window the SAME prompt (spec 2026-08-11
+ *                                "Scan recall remedy", Phase B). This is the
+ *                                sharpest case in the whole file for why a
+ *                                fingerprint key exists independent of the
+ *                                request hash: the hash is
+ *                                sha256(model, system, user), and two passes
+ *                                at passes>1 send that EXACT SAME request, so
+ *                                they share ONE key. A fixture "recorded" at
+ *                                passes>1 does not capture two draws - it
+ *                                captures one answer that replay then serves
+ *                                to BOTH passes, and the union of a sample
+ *                                with itself is silently just that sample.
+ *                                That is a lie by construction, not a
+ *                                degraded measurement, and the whole point of
+ *                                Phase B (union N independent draws to fight
+ *                                scanner sampling variance) becomes
+ *                                unmeasurable while looking like it replayed
+ *                                fine. Unlike scanWindowBudget, this knob
+ *                                does NOT coincide with the request key on
+ *                                some sources and diverge on others - it
+ *                                ALWAYS coincides, on every source, the
+ *                                moment passes>1, which is why it cannot be
+ *                                left out on the "windowing knobs are covered
+ *                                by their own request key" theory the general
+ *                                rule below relies on. Multi-pass is
+ *                                deliberately not recordable and not a
+ *                                variant (see config.ts's own comment on this
+ *                                knob for the record foot-gun in full); this
+ *                                key exists so a fixture cannot silently
+ *                                drift onto a config claiming otherwise.
+ *
  * startExtensionWindowSec is NOT here, unlike endExtensionWindowSec - the
  * asymmetry is deliberate. It bounds a GATE inside arc-audit.ts (whether a
  * `fix_start_node` pointer is close enough to keep), never what the arc-audit
@@ -309,6 +341,13 @@ export interface EngineFingerprint {
    *  windowing knob gets a key despite the general rule against them: the
    *  two coincide byte-for-byte on a source with zero opaque nodes. */
   scanWindowBudget: "speech" | "source";
+  /** How many identical-prompt passes `runScanner` makes per window (spec
+   *  2026-08-11 "Scan recall remedy", Phase B). See the doc comment above for
+   *  why this earns a key despite being a "windowing knob is covered by its
+   *  own request key" case in every other instance: at passes>1 the request
+   *  key does NOT change (identical prompt), so a stale recording would
+   *  replay green while silently proving nothing about the union. */
+  scanPasses: number;
 }
 
 export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
@@ -341,6 +380,7 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     longClipsEnabled: cfg.longClipsEnabled,
     longClipMaxSec: cfg.longClipMaxSec,
     scanWindowBudget: cfg.scanWindowBudget,
+    scanPasses: cfg.scanPasses,
   };
 }
 

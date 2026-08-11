@@ -42,6 +42,37 @@ export interface AnalyzeConfig {
    *  asked, which the variant whitelist's own doc comment forbids; its
    *  measurement path is `eval-scan-probe.ts`, not a variant. */
   scanWindowBudget: "speech" | "source";
+  /** How many times `runScanner` asks the SAME window the SAME prompt (spec
+   *  2026-08-11 "Scan recall remedy", Phase B - "the 2x scan union"). Default
+   *  1, today's behavior byte for byte: the Phase A probe measured a THIRD
+   *  lottery alongside the critic's and finalizer's - one temperature-0.4
+   *  scanner sample misses a moment another sample finds - and this is the
+   *  remedy: union N independent draws per window before `mergeCandidates`
+   *  (which already dedupes overlaps), diversity coming from sampling at a
+   *  fixed temperature, not from varying the prompt.
+   *
+   *  RECORD FOOT-GUN, read before ever setting this above 1 anywhere near a
+   *  fixture: the replay client keys a recording by sha256(model, system,
+   *  user) only. Two passes at passes>1 send the IDENTICAL request, so they
+   *  share ONE key - a recording captures one answer and REPLAYS it to both
+   *  passes, and the union of two copies of the same answer is just that one
+   *  answer wearing a union's clothes. A fixture "recorded" at passes>1 is a
+   *  lie by construction: it would replay green while proving nothing about
+   *  what a second real sample would have found. That is why `scanPasses`
+   *  lives in the eval-fingerprint (`EngineFingerprint.scanPasses`) rather
+   *  than trusting the request hash to notice - the hash CANNOT notice this
+   *  one, the same silent-match shape `scanWindowBudget`'s own fingerprint
+   *  entry documents. It is measured live only, via
+   *  `scripts/eval-scan-probe.ts --passes N` (no recording, no replay,
+   *  real API calls the operator runs and pays for).
+   *
+   *  NOT in VariantOverrides, for the same reason `scanWindowBudget` is not:
+   *  it changes what the scanner is asked (how many times), which the variant
+   *  whitelist's own doc comment forbids. Garbage, zero or negative all fall
+   *  back to 1 - the same discipline as every numeric knob in this file,
+   *  sharpened here because a value below 1 would silently skip scanning
+   *  windows outright rather than merely mis-tuning a rate. */
+  scanPasses: number;
   criticBatchSize: number;
   criticMaxCandidates: number;
   perWindowMinCandidates: number;
@@ -178,6 +209,16 @@ function num(env: Env, key: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+/** Like `num`, but rejects anything that is not a positive integer - garbage,
+ *  zero, negative and fractional values all fall back rather than parsing
+ *  through to a knob that expects a count of API calls. */
+function positiveInt(env: Env, key: string, fallback: number): number {
+  const raw = env[key];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
   const engine = env.ANALYZE_ENGINE;
   return {
@@ -203,6 +244,7 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     // this file: a stray truthy env value must not silently double the
     // scanner's candidate pool and critic spend.
     scanWindowBudget: env.SCAN_WINDOW_BUDGET === "source" ? "source" : "speech",
+    scanPasses: positiveInt(env, "SCAN_PASSES", 1),
     criticBatchSize: num(env, "CRITIC_BATCH_SIZE", 6),
     criticMaxCandidates: num(env, "CRITIC_MAX_CANDIDATES", 40),
     perWindowMinCandidates: num(env, "PER_WINDOW_MIN_CANDIDATES", 2),

@@ -95,6 +95,49 @@ moment #8's flicker; nothing covers #2 short of scanner-prompt work). That is it
 the owner wants it; (4) кобальтовая-class taste gaps go to a future scanner-prompt project,
 with this probe as its instrument.
 
+## Phase B: the 2x scan union (owner go 2026-08-11)
+
+The remedy for the measured scan lottery: run the scanner **N passes per window** (config
+`scanPasses`, env `SCAN_PASSES`, integer, default **1** - today's behavior byte for byte) and
+union all passes' candidates before `mergeCandidates`, which already merges overlapping
+proposals. Determinism discipline: candidates flatten in (window, pass) order - the same
+per-window-array rule that fixed the scanner-order nondeterminism (§3) extends to passes.
+
+**Multi-pass is deliberately NOT recordable and NOT a variant.** The replay client keys
+requests by sha256(model, system, user); two identical passes share one key, so a recording
+would store one answer and replay it twice - the union silently degenerates to single-pass.
+Therefore: the harness default stays 1 (env-blind, all recordings valid), `scanPasses` goes
+into the FINGERPRINT (a fixture claiming to be recorded at passes>1 must fail loudly - it is a
+lie by construction), the config comment documents the foot-gun, and the measurement instrument
+is `eval-scan-probe.ts` extended with `--passes N` (per-pass candidate lists + UNION coverage
+verdicts per labeled moment).
+
+Cost: scanner input x N at gpt-4o-mini prices (~$0.006/pass on a 48-min source - noise); the
+real cost is the candidate pool growing toward `criticBudget`'s K - on a 48-minute source K=40
+can start binding. PUBLISH the counters (`criticBudgetK`, `criticUnjudgedPool`), do not retune
+K or the cap in the same change.
+
+Acceptance, via the probe on `podcast-nuclear` (budget source, passes 2, 2 independent runs):
+- The 2-pass UNION covers misses #1 and #3 in BOTH runs (on Phase A data each was covered by
+  at least one single pass; the union must make that stable).
+- Miss #2 stays uncovered - the honesty control; if it suddenly appears, that is luck, not the
+  mechanism, and must not be claimed.
+- Union coverage over all 12 labeled moments >= the best single pass in every run.
+
+**Phase B verdict (2026-08-11, run at source/passes=2/runs=2, ~$0.03): PASS - and the control
+misbehaved instructively.** Union coverage **12/12 labeled moments in BOTH runs** (best Phase A
+single pass: 10/12); misses #1 and #3 union-covered in both runs; raw candidates 120/118 per
+2-pass run. The control, miss #2, was covered in 3 of 4 passes - per the pre-registered rule it
+is NOT claimed for the mechanism, but the Phase A data re-read explains it: under `speech` its
+nearest candidate was 56s away, under `source` it was **3.2s away in both runs** - a borderline
+overlap-threshold near-miss, not a taste gap. The "scanner-prompt taste gap" classification was
+partially wrong; the source budget had already moved the scanner onto that moment, and extra
+sampling tips it over the threshold. Both knobs went live in prod the same day
+(`SCAN_WINDOW_BUDGET=source`, `SCAN_PASSES=2`); the harness stays on speech/1 by env-blind
+design. What union coverage does NOT promise: a scanned moment must still survive the critic,
+gates, snap, NMS and the finalizer - the funnel's downstream lotteries are unchanged, and the
+end-to-end effect is measured by the next real uploads, not by this probe.
+
 ## Out of scope
 
 The scanner prompt itself, `regionMaxCandidates`, `criticMaxCandidates` retuning (measured

@@ -1,10 +1,31 @@
 /**
  * Scan window budget probe (spec 2026-08-11 "Scan recall remedy: window
- * budget from sourceSec", Phase A). Two independent halves.
+ * budget from sourceSec"). Two independent halves.
  *
  *   docker compose exec worker-analyze sh -c \
  *     "cd /app/apps/worker && npx tsx src/scripts/eval-scan-probe.ts \
- *        [--live] [--runs N] [--budget source|speech|both] <fixture>"
+ *        [--live] [--runs N] [--passes N] [--budget source|speech|both] <fixture>"
+ *
+ * PHASE B (`--passes N`, default 1 - the 2x scan union)
+ * -----------------------------------------------------------------
+ * `--passes N` sets `cfg.scanPasses = N` before each RUN, so a single RUN now
+ * asks every window the SAME prompt N times (`runScanner`'s own mechanism -
+ * see scanner.ts and config.ts's `scanPasses` doc comment for why identical
+ * prompts are the point) and returns the UNION of all N passes' raw
+ * candidates, in (window, pass) order. `--runs` and `--passes` are
+ * orthogonal: `--runs 2 --passes 2` performs two INDEPENDENT unions (two
+ * separate temperature-0.4 draws of "2 passes each"), which is what the
+ * Phase B acceptance asks for on `podcast-nuclear` - the union must be stable
+ * across independent runs, not just within one.
+ *
+ * At `--passes 1` (the default) the live-half output is UNCHANGED from
+ * before this flag existed - one raw-candidate list per run, one SCANNED/NOT
+ * SCANNED line per labeled moment - so prior probe output stays comparable
+ * byte for byte. At `--passes N > 1` each run instead prints N tagged
+ * per-pass raw-candidate lists, then per labeled moment: a SCANNED/NOT
+ * SCANNED line for EACH pass individually, plus a UNION verdict
+ * (SCANNED-by-union, naming which pass(es) covered it, or NOT SCANNED) -
+ * the falsifiable measurement the Phase B acceptance reads.
  *
  * DETERMINISTIC HALF (no flag needed, free, always runs)
  * -----------------------------------------------------------------
@@ -82,6 +103,7 @@ const BUDGETS: Budget[] = ["speech", "source"];
 interface Flags {
   live: boolean;
   runs: number;
+  passes: number;
   budget: Budget | "both";
   fixtureName: string | undefined;
 }
@@ -89,6 +111,7 @@ interface Flags {
 function extractFlags(argv: string[]): Flags {
   let live = false;
   let runs = 1;
+  let passes = 1;
   let budget: Budget | "both" = "speech";
   let fixtureName: string | undefined;
   for (let i = 0; i < argv.length; i++) {
@@ -102,6 +125,13 @@ function extractFlags(argv: string[]): Flags {
       const n = v ? Number.parseInt(v, 10) : Number.NaN;
       if (!Number.isFinite(n) || n < 1) throw new Error("--runs requires a positive integer");
       runs = n;
+      continue;
+    }
+    if (a === "--passes") {
+      const v = argv[++i];
+      const n = v ? Number.parseInt(v, 10) : Number.NaN;
+      if (!Number.isFinite(n) || n < 1) throw new Error("--passes requires a positive integer");
+      passes = n;
       continue;
     }
     if (a === "--budget") {
@@ -120,7 +150,7 @@ function extractFlags(argv: string[]): Flags {
     }
     fixtureName = a;
   }
-  return { live, runs, budget, fixtureName };
+  return { live, runs, passes, budget, fixtureName };
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +252,22 @@ function nearestCandidate(
   return nearest ? { candidate: nearest, distanceSec: nearestDist } : null;
 }
 
+/** True SCANNED/NOT-SCANNED convention shared by the single-pass line, every
+ *  per-pass line and the union line: `arc-audit-labels.ts`'s `covers` (>=30%
+ *  overlap of the shorter range) applied to whichever candidate list the
+ *  caller hands in. */
+function coveringCandidates(
+  nodes: SentenceNode[],
+  candidates: ScanCandidate[],
+  momentStart: number,
+  momentEnd: number
+): ScanCandidate[] {
+  return candidates.filter((c) => {
+    const [s, e] = candSec(nodes, c);
+    return covers(momentStart, momentEnd, s, e);
+  });
+}
+
 async function runLivePass(
   client: OpenAI,
   nodes: SentenceNode[],
@@ -229,38 +275,83 @@ async function runLivePass(
   budget: Budget,
   runIndex: number,
   runs: number,
+  passes: number,
   moments: LabeledMoment[]
 ): Promise<void> {
-  const liveCfg: AnalyzeConfig = { ...cfg, scanWindowBudget: budget };
+  const liveCfg: AnalyzeConfig = { ...cfg, scanWindowBudget: budget, scanPasses: passes };
   const windows: ScanWindow[] = buildScanWindows(nodes, liveCfg);
   const usage = newUsage();
+  // runScanner performs `passes` identical-prompt calls per window itself
+  // (scanner.ts) and returns their UNION, flattened in (window, pass) order -
+  // this call IS the mechanism under measurement, not a re-implementation of it.
   const result = await runScanner(client, usage, nodes, liveCfg);
 
   console.log(
-    `\n--- budget=${budget}  run ${runIndex + 1}/${runs}  windows=${windows.length}  ` +
-      `raw candidates=${result.candidates.length}  windowsFailed=${result.telemetry.windowsFailed} ---`
+    `\n--- budget=${budget}  run ${runIndex + 1}/${runs}${passes > 1 ? `  passes=${passes}` : ""}  ` +
+      `windows=${windows.length}  raw candidates=${result.candidates.length}  ` +
+      `windowsFailed=${result.telemetry.windowsFailed} ---`
   );
-  for (const c of result.candidates) printCandidate(nodes, c);
+
+  // At passes=1 this is byte-for-byte the pre-Phase-B output shape, so prior
+  // probe runs stay comparable without re-reading a legend.
+  if (passes === 1) {
+    for (const c of result.candidates) printCandidate(nodes, c);
+  } else {
+    for (let p = 0; p < passes; p++) {
+      const passCandidates = result.candidates.filter((c) => c.passIndex === p);
+      console.log(`  -- pass ${p + 1}/${passes}: ${passCandidates.length} raw candidate(s) --`);
+      for (const c of passCandidates) printCandidate(nodes, c);
+    }
+  }
 
   if (moments.length === 0) return;
   console.log(`  coverage verdicts (${moments.length} labeled moment(s)):`);
   for (const moment of moments) {
     const [mStart, mEnd] = moment.range;
-    const hits = result.candidates.filter((c) => {
-      const [s, e] = candSec(nodes, c);
-      return covers(mStart, mEnd, s, e);
-    });
-    if (hits.length > 0) {
+    const label = `[${moment.kind === "moment" ? "moment" : "MISSED"} #${moment.ordinal}] "${moment.title}" ${fmtRange(mStart, mEnd)}`;
+
+    if (passes === 1) {
+      const hits = coveringCandidates(nodes, result.candidates, mStart, mEnd);
+      if (hits.length > 0) {
+        console.log(`    ${label}: SCANNED (${hits.length} covering candidate(s))`);
+        for (const c of hits) printCandidate(nodes, c);
+      } else {
+        const nearest = nearestCandidate(nodes, result.candidates, mStart, mEnd);
+        console.log(
+          `    ${label}: NOT SCANNED` +
+            (nearest
+              ? ` - nearest candidate ${nearest.distanceSec.toFixed(1)}s away`
+              : " - the scanner returned zero candidates entirely")
+        );
+        if (nearest) printCandidate(nodes, nearest.candidate);
+      }
+      continue;
+    }
+
+    // passes > 1: per-pass verdicts (does resampling alone recover the
+    // moment?) followed by the UNION verdict (does the mechanism the spec
+    // proposes recover it?) - the two questions Phase B's acceptance asks.
+    console.log(`    ${label}:`);
+    const coveringPasses: number[] = [];
+    for (let p = 0; p < passes; p++) {
+      const passCandidates = result.candidates.filter((c) => c.passIndex === p);
+      const hits = coveringCandidates(nodes, passCandidates, mStart, mEnd);
+      if (hits.length > 0) coveringPasses.push(p);
       console.log(
-        `    [${moment.kind === "moment" ? "moment" : "MISSED"} #${moment.ordinal}] "${moment.title}" ` +
-          `${fmtRange(mStart, mEnd)}: SCANNED (${hits.length} covering candidate(s))`
+        `      pass ${p + 1}/${passes}: ` +
+          (hits.length > 0 ? `SCANNED (${hits.length} covering candidate(s))` : "NOT SCANNED")
       );
-      for (const c of hits) printCandidate(nodes, c);
+    }
+    const unionHits = coveringCandidates(nodes, result.candidates, mStart, mEnd);
+    if (unionHits.length > 0) {
+      console.log(
+        `      UNION: SCANNED-by-union (covering pass ${coveringPasses.map((p) => p + 1).join(", ")})`
+      );
+      for (const c of unionHits) printCandidate(nodes, c);
     } else {
       const nearest = nearestCandidate(nodes, result.candidates, mStart, mEnd);
       console.log(
-        `    [${moment.kind === "moment" ? "moment" : "MISSED"} #${moment.ordinal}] "${moment.title}" ` +
-          `${fmtRange(mStart, mEnd)}: NOT SCANNED` +
+        `      UNION: NOT SCANNED` +
           (nearest
             ? ` - nearest candidate ${nearest.distanceSec.toFixed(1)}s away`
             : " - the scanner returned zero candidates entirely")
@@ -275,7 +366,8 @@ async function runLiveHalf(
   nodes: SentenceNode[],
   cfg: AnalyzeConfig,
   budgetFlag: Budget | "both",
-  runs: number
+  runs: number,
+  passes: number
 ): Promise<void> {
   if (!process.env.OPENAI_API_KEY) {
     console.error("[eval-scan-probe] OPENAI_API_KEY is not set - refusing to make a live call.");
@@ -284,7 +376,8 @@ async function runLiveHalf(
   const labelsPath = join(FIXTURES_DIR, fixture.name, "labels.json");
   const moments = loadMoments(labelsPath);
   console.log(
-    `\n=== ${fixture.name}: LIVE scan (real API calls, model=${cfg.scanModel}) ===` +
+    `\n=== ${fixture.name}: LIVE scan (real API calls, model=${cfg.scanModel}` +
+      `${passes > 1 ? `, scanPasses=${passes}` : ""}) ===` +
       (moments.length > 0
         ? `  labels: ${moments.length} (${labelsPath})`
         : `  no labels.json found at ${labelsPath} - printing raw candidates only`)
@@ -294,7 +387,7 @@ async function runLiveHalf(
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   for (const budget of budgets) {
     for (let i = 0; i < runs; i++) {
-      await runLivePass(client, nodes, cfg, budget, i, runs, moments);
+      await runLivePass(client, nodes, cfg, budget, i, runs, passes, moments);
     }
   }
 }
@@ -304,10 +397,10 @@ async function runLiveHalf(
 // ---------------------------------------------------------------------------
 
 async function main() {
-  const { live, runs, budget, fixtureName } = extractFlags(process.argv.slice(2));
+  const { live, runs, passes, budget, fixtureName } = extractFlags(process.argv.slice(2));
   if (!fixtureName) {
     console.error(
-      "usage: eval-scan-probe.ts [--live] [--runs N] [--budget source|speech|both] <fixture>"
+      "usage: eval-scan-probe.ts [--live] [--runs N] [--passes N] [--budget source|speech|both] <fixture>"
     );
     process.exit(1);
   }
@@ -321,12 +414,13 @@ async function main() {
   if (!live) {
     console.log(
       "[eval-scan-probe] deterministic half only (no --live). Re-run with --live to also call the " +
-        `real scanner (model=${cfg.scanModel}) under budget=${budget} - this spends real API money.`
+        `real scanner (model=${cfg.scanModel}) under budget=${budget}` +
+        `${passes > 1 ? ` passes=${passes}` : ""} - this spends real API money.`
     );
     return;
   }
 
-  await runLiveHalf(fixture, nodes, cfg, budget, runs);
+  await runLiveHalf(fixture, nodes, cfg, budget, runs, passes);
 }
 
 main().catch((error) => {
