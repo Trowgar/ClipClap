@@ -1,0 +1,60 @@
+{
+  "count": 10,
+  "tier": "strong",
+  "clips": [
+    {
+      "range": "1165.4-1186.0",
+      "score": 0.91,
+      "title": "Joey Finds a Loophole in One Simple Rule"
+    },
+    {
+      "range": "175.1-189.1",
+      "score": 0.86,
+      "title": "Why Did Phoebe and Rachel Follow Chandler?"
+    },
+    {
+      "range": "1568.8-1632.5",
+      "score": 0.86,
+      "title": "Their Breakup Argument Gets Remarkably Petty"
+    },
+    {
+      "range": "0.0-18.6",
+      "score": 0.84,
+      "title": "Her Father Won't Let That Insult Slide"
+    },
+    {
+      "range": "2131.7-2167.2",
+      "score": 0.76,
+      "title": "Their Public Relationship Gets an Immediate Reality Check"
+    },
+    {
+      "range": "636.9-658.0",
+      "score": 0.72,
+      "title": "Joey's Story Doesn't Match What Really Happened"
+    },
+    {
+      "range": "1138.3-1151.0",
+      "score": 0.72,
+      "title": "His Friends Remember the Last Bachelor Party Differently"
+    },
+    {
+      "range": "2374.2-2426.4",
+      "score": 0.7,
+      "title": "When a Joke Needs Its Own Explanation"
+    },
+    {
+      "range": "1415.5-1433.3",
+      "score": 0.67,
+      "title": "The Evidence in His Hotel Room Raises Questions"
+    },
+    {
+      "range": "2202.0-2225.4",
+      "score": 0.67,
+      "title": "The New Law Firm Has an Absurd Name"
+    }
+  ],
+  "dropReasons": {},
+  "outOfRange": {
+    "description_evidence_out_of_range": 3
+  }
+}

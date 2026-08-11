@@ -357,6 +357,29 @@ separable from the self-motivated path so one can ship without the other.
 (its gate is `_arcFlags`) and on the population count (§2e). Not started until the owner sees
 tasks 2-4 measured.
 
+**Task 6 (2026-08-11, after the first real-job verdict): the informed finalizer.**
+Motivation, measured: on the first real upload through the live contour (job
+`cmsoma3w5007wuhfjrj8r7dih`) the audit's shipped flags scored **2 of 2 against the owner's own
+complaint list** - both flagged-and-unrepairable openings ("Ну вот например...", "И там тоже...")
+were exactly his "небольшие недочёты", with the standalone note wording his complaint verbatim
+("что означает «там» и с чем сравнивается «тоже»"). Both shipped because their repair pointers
+were unreachable (61s-back antecedent vs a 20s window; not_clean_start) and the audit has no drop
+verb by design. The finalizer dropped THREE other clips as `broken_opening` the same run - the
+verb exists and fires; it merely lacked the audit's information on these two (its rule 5 is the
+measured coin-flip of §5a).
+
+The change: render each clip's STANDING flags (post-repair `_arcFlags` with `ok:false` on any
+axis) into that clip's finalizer prompt block as one AUDIT NOTE line - same rendering discipline
+as the LENGTH EXCEPTION line and Task 4's extension hints: factual, unbossy, byte-identical
+rendering for unflagged clips. `ARC_AUDIT_FINALIZER_NOTES=on` (default off), variant
+`arc-finalizer-notes` = `{ arcAuditEnabled, arcFinalizerNotesEnabled }`. NO new drop authority
+anywhere - the finalizer's existing verbs and gates are untouched; this is information, not
+mechanism, which is also why §5's ">=90% over two more jobs" bar for DOWNRANK authority does not
+apply here (that bar gates a new verb; this feeds the existing one). Acceptance on the
+`podcast-nuclear` replay via labels (never via counts - the finalizer resample caveat): the
+all-three-axes-flagged clip (777.0-802.1) should move toward drop; the positive control
+(1113.8-1132.3, unflagged) must survive; read the bless diff by hand.
+
 **Explicitly out of scope** (do not let an implementing agent drift into these): arc stacking and
 drag (no mechanism, separate programme item), any change to critic prompts or scan windows (own
 re-record budgets), retention of the finalizer's 9 rules (unchanged), genre profiles, RENDER.

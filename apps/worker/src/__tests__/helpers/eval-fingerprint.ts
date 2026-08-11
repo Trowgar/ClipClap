@@ -185,6 +185,32 @@ import { finalizerMaxOutputTokens } from "../../analyze-v2/finalize";
  *                                was added to close. No *MaxOutputTokens pair
  *                                exists for it: no call's shape depends on it.
  *
+ *   arcFinalizerNotesEnabled       whether a flagged clip's finalizer block may
+ *                                carry an AUDIT NOTE line (spec 2026-08-10 task
+ *                                6) - endExtensionHintsEnabled's own narrower
+ *                                argument, verbatim: whenever a note actually
+ *                                renders, the finalizer's user prompt differs
+ *                                from any note-less recording and the request
+ *                                hash already fails loudly on its own, no key
+ *                                needed for THAT case. It is here for the same
+ *                                narrower boundary this key's siblings all
+ *                                close: turning the switch on can take a run
+ *                                from "no clip on this fixture is flagged (or
+ *                                arcAuditEnabled is off), so the prompt never
+ *                                differs, no request at all changes" to "a
+ *                                request now differs" purely via which clips
+ *                                happen to carry `ok:false` flags - the same
+ *                                false-MATCH shape finalizerEnabled,
+ *                                startExtensionEnabled and
+ *                                endExtensionHintsEnabled all exist to close.
+ *                                No-ops without `arcAuditEnabled` too, the same
+ *                                doubling every audit consumer in this engine
+ *                                uses. No *MaxOutputTokens pair exists for it:
+ *                                this key does not change the finalizer call's
+ *                                token budget (finalizerMaxOutputTokens prices
+ *                                off clip COUNT only), only whether a line is
+ *                                present inside clips already being sent.
+ *
  *   scanWindowBudget              which node spans buildScanWindows may count
  *                                toward the window/overlap budget: word-bearing
  *                                nodes only ("speech", today's default) or
@@ -335,6 +361,11 @@ export interface EngineFingerprint {
   /** Ceiling for a blessed over-length clip, seconds. See the doc comment
    *  above for the silent-match risk this key exists to close. */
   longClipMaxSec: number;
+  /** Whether a flagged clip's finalizer block may carry an AUDIT NOTE line
+   *  (task 6). See the doc comment above for the narrower false-match
+   *  boundary this key closes - the same shape endExtensionHintsEnabled's
+   *  own key exists for. */
+  arcFinalizerNotesEnabled: boolean;
   /** Which node spans buildScanWindows may count toward the window/overlap
    *  budget - "speech" (word-bearing only, today's default) or "source"
    *  (every node, opaque included). See the doc comment above for why this
@@ -379,6 +410,7 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     endExtensionHintsEnabled: cfg.endExtensionHintsEnabled,
     longClipsEnabled: cfg.longClipsEnabled,
     longClipMaxSec: cfg.longClipMaxSec,
+    arcFinalizerNotesEnabled: cfg.arcFinalizerNotesEnabled,
     scanWindowBudget: cfg.scanWindowBudget,
     scanPasses: cfg.scanPasses,
   };

@@ -130,6 +130,7 @@ describe("variant definitions", () => {
       startExtensionEnabled: true,
       endExtensionHintsEnabled: true,
       longClipsEnabled: true,
+      arcFinalizerNotesEnabled: true,
     };
     // Driven off VARIANT_OVERRIDE_KEYS rather than a literal, because the way
     // this test rots is that a knob is admitted to the list and nobody adds it
@@ -245,6 +246,26 @@ describe("variant definitions", () => {
     expect({ ...live, longClipsEnabled: false, arcAuditEnabled: false }).toEqual(dark);
     expect(() => assertFingerprintMatches("recorded-live", live, dark)).toThrow(
       /longClipsEnabled|arcAuditEnabled/
+    );
+  });
+
+  /** The arc-finalizer-notes mirror of the five tests above (task 6). Same
+   *  mechanism: until the "arc-finalizer-notes" variant declaration existed,
+   *  no config this harness could build ever differed on
+   *  `arcFinalizerNotesEnabled`. Moves BOTH `arcAuditEnabled` and
+   *  `arcFinalizerNotesEnabled` together, every *Enabled variant's own
+   *  precedent - a note can never render without a detector to flag the clip
+   *  it renders for. */
+  it("makes the arc-finalizer-notes fingerprint key able to fire, which it could not before", () => {
+    const dark = computeFingerprint(variantConfig(BASE_VARIANT));
+    const live = computeFingerprint(variantConfig("arc-finalizer-notes"));
+    expect(dark.arcFinalizerNotesEnabled).toBe(false);
+    expect(live.arcFinalizerNotesEnabled).toBe(true);
+    expect(dark.arcAuditEnabled).toBe(false);
+    expect(live.arcAuditEnabled).toBe(true);
+    expect({ ...live, arcFinalizerNotesEnabled: false, arcAuditEnabled: false }).toEqual(dark);
+    expect(() => assertFingerprintMatches("recorded-live", live, dark)).toThrow(
+      /arcFinalizerNotesEnabled|arcAuditEnabled/
     );
   });
 });

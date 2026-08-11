@@ -168,6 +168,17 @@ export interface AnalyzeConfig {
    *  variant key (tuning door, same refusal as endExtensionWindowSec /
    *  startExtensionWindowSec). */
   longClipMaxSec: number;
+  /** Master switch for rendering a clip's STANDING `_arcFlags` into the
+   *  finalizer's own prompt block as an AUDIT NOTE line (spec 2026-08-10 task
+   *  6) - information for the finalizer's EXISTING rules (chiefly rule 5/6,
+   *  `broken_opening`, and rule 9), never a new drop authority: the rules,
+   *  verbs and gates stay untouched. Off until measured, the same discipline
+   *  as every other stage switch in this file. No-ops without
+   *  `arcAuditEnabled` too - the same defence-in-depth doubling
+   *  endExtensionHintsEnabled/startExtensionEnabled already use for their own
+   *  dependency on the audit, checked again where `finalizerUserPrompt` looks
+   *  up a clip's flags rather than trusted from an empty map alone. */
+  arcFinalizerNotesEnabled: boolean;
   /** How far into a video an intro trailer montage may reach. Bounds the region
    *  scan in analyze-v2/teaser.ts; 0 switches montage detection off entirely,
    *  which is the kill switch. (spec 2026-07-24 §4.1) */
@@ -281,6 +292,10 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     // accident.
     longClipsEnabled: env.LONG_CLIPS === "on",
     longClipMaxSec: num(env, "LONG_CLIP_MAX_SEC", 150),
+    // Exact literal "on", same discipline as every other stage switch in this
+    // file: a stray truthy env value must not render an arc-audit finding
+    // into the finalizer's prompt for a real user's job.
+    arcFinalizerNotesEnabled: env.ARC_AUDIT_FINALIZER_NOTES === "on",
     teaserWindowSec: num(env, "TEASER_WINDOW_SEC", 120),
     teaserMinHits: num(env, "TEASER_MIN_HITS", 3),
     finalizerEnabled: env.ANALYZE_FINALIZER !== "off",

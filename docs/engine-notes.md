@@ -794,6 +794,31 @@ than a scanner taste gap. `SCAN_WINDOW_BUDGET=source` and `SCAN_PASSES=2` are bo
 `.env` since 2026-08-11; the probe does not promise end-to-end shipping - the downstream
 lotteries (critic, gates, NMS, finalizer) are unchanged and the real uploads are the judge.
 
+### The informed finalizer: standing audit flags rendered into the judge's prompt (2026-08-11)
+
+Task 6, driven by the first real-job verdict: on `cmsoma3w5007wuhfjrj8r7dih` the audit's shipped
+flags scored **2 of 2 against the owner's own complaint list** (both flagged-unrepairable
+openings were exactly his "небольшие недочёты"; the standalone note worded one verbatim), while
+the finalizer - which dropped THREE other clips as `broken_opening` the same run - kept both,
+blind to the flags. `ARC_AUDIT_FINALIZER_NOTES=on` renders each clip's standing `_arcFlags` as
+one AUDIT NOTE line in its finalizer block, ending "Weigh this against your own reading - the
+audit sees the same text you do and can be wrong." NO new drop authority - information for the
+existing verbs. Unflagged clips render byte-identically (every recording stays valid).
+
+**Measured on the recorded variant (`arc-finalizer-notes`, all five fixtures, one finalizer
+sample each - the resample caveat applies to every count):** the pre-registered acceptance
+split. The positive control (1113.8-1132.3, unflagged) ships untouched - PASS. The
+all-three-axes clip (777.0-802.1) was expected to move toward drop and DID NOT - the judge read
+the note and kept it, which the note's own closing sentence invites. But the informed judge
+acted on flagged clips everywhere else: nuclear DROPPED the truncated hibakusya arc
+(1466.7-1483.4, the exit=mid_thought 8/8 clip - the labels' worst boundary defect, gone) and
+trimmed the "Очень много" dangling opening (2484.0 -> 2488.1); answer-arc dropped the
+borrowed_answer clip (1752.2) and went 11 -> 9; ecology trimmed three flagged starts. Notes
+rendered per fixture: nuclear 4, ecology 12, answer-arc 11, sitcom 6, creator 5 -
+`telemetry.auditNotes`. Read this as advice the judge usually takes and sometimes overrules,
+never as a switch; per-move attribution through one fresh roll is impossible by the
+finalizer-variance finding above, and the honest claim is directional, not per-clip.
+
 **Ships dark; variant `arc-exit-hints` recorded the same day** (the implementing agent was
 forbidden to spend; the operator ran the topup - 9 new responses across the five fixtures - and
 blessed the snapshots). First corpus pass, replay

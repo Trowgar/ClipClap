@@ -41,6 +41,7 @@ describe("computeFingerprint", () => {
       endExtensionHintsEnabled: baseCfg.endExtensionHintsEnabled,
       longClipsEnabled: baseCfg.longClipsEnabled,
       longClipMaxSec: baseCfg.longClipMaxSec,
+      arcFinalizerNotesEnabled: baseCfg.arcFinalizerNotesEnabled,
       scanWindowBudget: baseCfg.scanWindowBudget,
       scanPasses: baseCfg.scanPasses,
     });
@@ -90,6 +91,12 @@ describe("computeFingerprint", () => {
     // Every fixture in the repo predates task 5 entirely, same argument as
     // endExtensionEnabled/arcAuditEnabled/endExtensionHintsEnabled above.
     expect(computeFingerprint(baseCfg).longClipsEnabled).toBe(false);
+  });
+
+  it("records the arc-finalizer-notes switch as DARK on the default config", () => {
+    // Every fixture in the repo predates task 6 entirely, same argument as
+    // every *Enabled key above.
+    expect(computeFingerprint(baseCfg).arcFinalizerNotesEnabled).toBe(false);
   });
 });
 
@@ -212,6 +219,18 @@ describe("assertFingerprintMatches", () => {
     const changed = computeFingerprint({ ...baseCfg, endExtensionHintsEnabled: true });
     expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
       /endExtensionHintsEnabled/
+    );
+  });
+
+  it("fails when the arc-finalizer-notes switch was turned on, which every fixture predates", () => {
+    // Same shape as endExtensionHintsEnabled: task 6 ships dark, so a live
+    // replay against a dark recording could render an AUDIT NOTE line into
+    // the finalizer's prompt for a flagged clip and the snapshot would move
+    // with nothing saying whether the note worked or the recording simply
+    // predates it.
+    const changed = computeFingerprint({ ...baseCfg, arcFinalizerNotesEnabled: true });
+    expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
+      /arcFinalizerNotesEnabled/
     );
   });
 

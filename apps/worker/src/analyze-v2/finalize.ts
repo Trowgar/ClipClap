@@ -9,7 +9,7 @@ import {
 } from "./dedup";
 import { scriptMismatch } from "./language";
 import { callJsonSchema, logModelFallback } from "./llm";
-import { finalizerSystemPrompt, finalizerUserPrompt } from "./prompts";
+import { finalizerSystemPrompt, finalizerUserPrompt, resolveArcAuditNote } from "./prompts";
 import { FINALIZER_SCHEMA } from "./schemas";
 import { nmsCollides } from "./select";
 import { carriesOnlyFiller, isCleanStart, looksLikeQuestion } from "./sentence-graph";
@@ -114,6 +114,17 @@ export interface FinalizeTelemetry {
    *  with an exact `toEqual` predates this task. */
   longClipsCompressed?: number;
   longClipsDropped?: number;
+  /** Count of clips whose finalizer block carried an AUDIT NOTE line this run
+   *  (spec 2026-08-10 task 6) - i.e. `resolveArcAuditNote` returned flags for
+   *  them, which requires BOTH `cfg.arcFinalizerNotesEnabled` and
+   *  `cfg.arcAuditEnabled` on and a clip with `ok: false` on some axis.
+   *  Absent (never zero) whenever the feature is dark or nothing was flagged
+   *  this run - the same "absent means nothing happened" rule
+   *  `longClipsCompressed`/`longClipsDropped` and end-extension's own
+   *  `hinted` keep, and for the same reason: every `FinalizeTelemetry` object
+   *  this file's own suite asserts with an exact `toEqual` predates this
+   *  task. */
+  auditNotes?: number;
 }
 
 export interface FinalizeResult {
@@ -512,14 +523,20 @@ export interface FinalizeOptions {
  * openings a montage produces. Each pass caps its own drops at floor(n/2), so
  * the composition still cannot empty the set.
  *
- * `arcFlags` (spec 2026-08-10 task 5) feeds ONLY the defence-in-depth gate
- * below - a check on a clip's `overLength` mark, never an input to the LLM
- * call or to `applyFinalizerEntries`. A TRAILING parameter with a default of
- * an empty map, deliberately, so every call site that predates task 5
- * (including this file's own suite) keeps working unmodified: an empty map
- * makes `isFullyOk` false for everything, but the gate is a no-op regardless
- * unless some clip actually carries `overLength: true`, which none of those
- * callers' clips do.
+ * `arcFlags` (spec 2026-08-10 task 5, reused by task 6) feeds TWO things: the
+ * defence-in-depth gate below - a check on a clip's `overLength` mark - and,
+ * since task 6, the finalizer's OWN prompt, where a flagged clip's block
+ * gains an AUDIT NOTE line (`finalizerUserPrompt`'s `arcFlags`/`cfg`
+ * parameters, resolved through `resolveArcAuditNote`). Still never an input
+ * to `applyFinalizerEntries` - the note is information for the model to
+ * weigh, not a code-level input to how its answer is applied. A TRAILING
+ * parameter with a default of an empty map, deliberately, so every call site
+ * that predates task 5 (including this file's own suite) keeps working
+ * unmodified: an empty map makes `isFullyOk` false for everything and
+ * `resolveArcAuditNote` return `undefined` for everyone, so both consumers
+ * are a no-op regardless unless a clip actually carries `overLength: true`
+ * or `cfg.arcFinalizerNotesEnabled`/`cfg.arcAuditEnabled` are both on, none
+ * of which any pre-task-5/6 caller's clips or config do.
  */
 export async function finalizeClips(
   client: OpenAI,
@@ -558,6 +575,16 @@ export async function finalizeClips(
     .map((c) => ({ id: c.id, duplicateOf: c.duplicateOf }));
   const survivors = clips.filter((c) => !hookDropped.has(c.verdict.id));
 
+  // Which surviving clips' finalizer block will carry an AUDIT NOTE line this
+  // run (spec 2026-08-10 task 6) - computed once, shared by the prompt (below)
+  // and the telemetry count, so the two can never disagree. resolveArcAuditNote
+  // itself does the cfg.arcFinalizerNotesEnabled/cfg.arcAuditEnabled
+  // defence-in-depth doubling; a dark run or an empty arcFlags map both make
+  // this 0, which is why it never appears on any pre-task-6 call site.
+  const auditNoteCount = survivors.filter(
+    (c) => resolveArcAuditNote(c.verdict.id, arcFlags, cfg) !== undefined
+  ).length;
+
   const skip = (reason: string): FinalizeResult => ({
     clips: survivors,
     telemetry: { ...emptyFinalizeTelemetry(), hookDedupDrops, finalizerSkipped: reason },
@@ -571,7 +598,7 @@ export async function finalizeClips(
       callJsonSchema<{ clips?: unknown }>(client, usage, {
         model,
         system: finalizerSystemPrompt(languageIso, languageName),
-        user: finalizerUserPrompt(survivors, nodes),
+        user: finalizerUserPrompt(survivors, nodes, arcFlags, cfg),
         schema: FINALIZER_SCHEMA as unknown as {
           name: string;
           strict: boolean;
@@ -609,7 +636,14 @@ export async function finalizeClips(
     const applied = applyFinalizerEntries(survivors, entries, nodes, cfg);
 
     if (!cfg.longClipsEnabled) {
-      return { clips: applied.clips, telemetry: { ...applied.telemetry, hookDedupDrops } };
+      return {
+        clips: applied.clips,
+        telemetry: {
+          ...applied.telemetry,
+          hookDedupDrops,
+          ...(auditNoteCount > 0 ? { auditNotes: auditNoteCount } : {}),
+        },
+      };
     }
 
     // LONG-CLIP DEFENCE IN DEPTH (spec 2026-08-10 task 5). The policy in
@@ -653,6 +687,7 @@ export async function finalizeClips(
       telemetry: {
         ...applied.telemetry,
         hookDedupDrops,
+        ...(auditNoteCount > 0 ? { auditNotes: auditNoteCount } : {}),
         ...(longClipsCompressed !== undefined ? { longClipsCompressed } : {}),
         ...(longClipsDropped !== undefined ? { longClipsDropped } : {}),
       },

@@ -1,6 +1,8 @@
+import type { AnalyzeConfig } from "./config";
 import { isCleanStart } from "./sentence-graph";
 import type {
   ArcExitDefect,
+  ArcFlags,
   ExtensionWindow,
   MergedCandidate,
   SentenceNode,
@@ -367,6 +369,93 @@ export function finalizerSystemPrompt(
     .replaceAll("{{LANGUAGE_ISO}}", languageIso);
 }
 
+/** The two config knobs `resolveArcAuditNote` reads - a narrow Pick rather
+ *  than the full `AnalyzeConfig`, so a caller that already has the two
+ *  booleans (a test, a future stage) need not fabricate an entire config. */
+type ArcNoteCfg = Pick<AnalyzeConfig, "arcFinalizerNotesEnabled" | "arcAuditEnabled">;
+
+/**
+ * Resolves the `ArcFlags` a clip's finalizer block should render an AUDIT
+ * NOTE for (spec 2026-08-10 task 6) - `undefined` when no note should render,
+ * which is every clip on every run until BOTH `cfg.arcFinalizerNotesEnabled`
+ * and `cfg.arcAuditEnabled` are on. The doubling is checked HERE, at the point
+ * of the `arcFlags.get()` lookup, not inferred from the map happening to be
+ * empty - the same defence-in-depth every audit consumer in this engine uses
+ * for its own dependency on arcAudit (end-extension.ts's hint lookup,
+ * start-extension.ts's own top-of-function guard): a stray populated
+ * `arcFlags` map must not arm the note path on its own.
+ *
+ * A clip fully OK on all three axes never gets a note even when flags exist
+ * for it (task 6: "STANDING `_arcFlags` ... has `ok: false` on ANY axis").
+ *
+ * ONE function, shared by `finalizerUserPrompt` (renders the note) and
+ * `finalize.ts` (counts it into telemetry) - so the two can never disagree
+ * about which clips carried a note this run.
+ */
+export function resolveArcAuditNote(
+  clipId: string,
+  arcFlags: Map<string, ArcFlags>,
+  cfg: ArcNoteCfg
+): ArcFlags | undefined {
+  if (!cfg.arcFinalizerNotesEnabled || !cfg.arcAuditEnabled) return undefined;
+  const flags = arcFlags.get(clipId);
+  if (!flags) return undefined;
+  return !flags.entry.ok || !flags.exit.ok || !flags.standalone.ok ? flags : undefined;
+}
+
+/** Oxford-less "a, b, and c" - `entry`/`exit` are only ever the "flagged X and
+ *  Y" pair, and the outer call composeAuditNote makes never exceeds two parts
+ *  either, so a 3+ branch exists for completeness rather than a case this
+ *  file's own callers can currently produce. */
+function joinWithAnd(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+/**
+ * Composes the AUDIT NOTE line's text from a clip's STANDING `_arcFlags`
+ * (spec 2026-08-10 task 6) - the same rendering discipline as the LENGTH
+ * EXCEPTION line and task 4's `buildExtensionUser` hint: factual and unbossy,
+ * never an instruction, and it never touches the finalizer's rules, verbs or
+ * gates - it is information those rules (chiefly rule 5/6, `broken_opening`,
+ * and rule 9) may weigh.
+ *
+ * Composes from the axes actually flagged, per the spec's own mapping: entry
+ * -> "the OPENING (<defect>)", exit -> "the ENDING (<defect>)", standalone ->
+ * "not self-contained (<missing>)". `entry`/`exit` share the "flagged" verb;
+ * `standalone` gets its own "judged the clip ..." clause - matching the
+ * spec's worked example verbatim (a clip flagged on entry and standalone):
+ * "flagged the OPENING (mid_story) and judged the clip not self-contained
+ * (...)" A defect/missing the model left unset (schema-legal even with
+ * `ok: false`) falls back to "unspecified" - the same fallback
+ * `buildExtensionUser`'s own hint line uses for an absent `defect`.
+ *
+ * Only ever called with a flagged `ArcFlags` (resolveArcAuditNote already
+ * filtered a fully-OK one to `undefined`), so `joinWithAnd` here always has
+ * at least one part.
+ */
+function composeAuditNote(flags: ArcFlags): string {
+  const axisClauses: string[] = [];
+  if (!flags.entry.ok) {
+    axisClauses.push(`the OPENING (${flags.entry.defect ?? "unspecified"})`);
+  }
+  if (!flags.exit.ok) {
+    axisClauses.push(`the ENDING (${flags.exit.defect ?? "unspecified"})`);
+  }
+  const parts: string[] = [];
+  if (axisClauses.length > 0) parts.push(`flagged ${joinWithAnd(axisClauses)}`);
+  if (!flags.standalone.ok) {
+    parts.push(
+      `judged the clip not self-contained (${flags.standalone.missing ?? "unspecified"})`
+    );
+  }
+  return (
+    `AUDIT NOTE: a per-clip audit of this finished cut ${joinWithAnd(parts)}. ` +
+    `Weigh this against your own reading - the audit sees the same text you do and can be wrong.`
+  );
+}
+
 /**
  * One block per clip: full speech, node indices, ¶ start markers.
  *
@@ -385,10 +474,19 @@ export function finalizerSystemPrompt(
  * hint line on buildExtensionUser, and for the same reason: every recorded
  * finalizer fixture predates this task, and none of them may go stale over a
  * feature that never touched them.
+ *
+ * A clip whose STANDING `_arcFlags` carry `ok: false` on any axis (spec
+ * 2026-08-10 task 6) gains one further line, right after the LENGTH EXCEPTION
+ * line's position - see `resolveArcAuditNote`/`composeAuditNote` above. Absent
+ * `arcFlags`/`cfg` (both default to the dark reading) or a clip nothing
+ * flagged renders BYTE-IDENTICALLY to before this task, same discipline as
+ * `overLength` above.
  */
 export function finalizerUserPrompt(
   clips: SnappedClip[],
-  nodes: SentenceNode[]
+  nodes: SentenceNode[],
+  arcFlags: Map<string, ArcFlags> = new Map(),
+  cfg: ArcNoteCfg = { arcFinalizerNotesEnabled: false, arcAuditEnabled: false }
 ): string {
   return clips
     .map((c) => {
@@ -402,6 +500,8 @@ export function finalizerUserPrompt(
             `90s standard - ship it long only if every second earns its place.`
         );
       }
+      const noteFlags = resolveArcAuditNote(v.id, arcFlags, cfg);
+      if (noteFlags) lines.push(composeAuditNote(noteFlags));
       lines.push(
         `title: ${v.title}`,
         `description: ${v.description}`,

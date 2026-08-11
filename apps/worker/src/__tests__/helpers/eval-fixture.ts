@@ -89,6 +89,15 @@ export const BASE_VARIANT = "base";
  * exercise the unconditional-compression fallback, not the policy this task
  * is actually about. `longClipMaxSec` is NOT here - a tuning door, the same
  * refusal as `startExtensionWindowSec`/`endExtensionWindowSec`.
+ *
+ * `arcFinalizerNotesEnabled` (task 6), the same door for the same reason as
+ * every *Enabled key above: without it, no config this harness builds could
+ * ever differ on the key, so an "arc-finalizer-notes" recording could never
+ * exist and the fingerprint entry built to catch a live note-rendering run
+ * replaying against a dark recording could never fire. The
+ * "arc-finalizer-notes" variant sets it ALONGSIDE `arcAuditEnabled`, every
+ * *Enabled variant's own precedent - a note can never render without a
+ * detector to flag the clip it renders for.
  */
 export type VariantOverrides = Partial<
   Pick<
@@ -101,6 +110,7 @@ export type VariantOverrides = Partial<
     | "startExtensionEnabled"
     | "endExtensionHintsEnabled"
     | "longClipsEnabled"
+    | "arcFinalizerNotesEnabled"
   >
 >;
 
@@ -114,6 +124,7 @@ export const VARIANT_OVERRIDE_KEYS = [
   "startExtensionEnabled",
   "endExtensionHintsEnabled",
   "longClipsEnabled",
+  "arcFinalizerNotesEnabled",
 ] as const satisfies ReadonlyArray<keyof VariantOverrides>;
 
 /**

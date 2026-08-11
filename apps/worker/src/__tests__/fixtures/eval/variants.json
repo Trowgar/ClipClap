@@ -20,5 +20,9 @@
   "long-clips": {
     "arcAuditEnabled": true,
     "longClipsEnabled": true
+  },
+  "arc-finalizer-notes": {
+    "arcAuditEnabled": true,
+    "arcFinalizerNotesEnabled": true
   }
 }

@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { loadAnalyzeConfig } from "../analyze-v2/config";
 import {
   finalizerSystemPrompt,
   finalizerUserPrompt,
 } from "../analyze-v2/prompts";
 import { FINALIZER_SCHEMA } from "../analyze-v2/schemas";
-import type { CriticVerdict, SentenceNode, SnappedClip } from "../analyze-v2/types";
+import type {
+  ArcFlags,
+  CriticVerdict,
+  SentenceNode,
+  SnappedClip,
+} from "../analyze-v2/types";
 
 function node(i: number, text: string, over: Partial<SentenceNode> = {}): SentenceNode {
   return {
@@ -236,6 +242,167 @@ describe("finalizerUserPrompt", () => {
     expect(finalizerUserPrompt([explicitlyDark], nodes)).toBe(
       finalizerUserPrompt([absent], nodes)
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// AUDIT NOTE (spec 2026-08-10 task 6) - a clip whose STANDING `_arcFlags`
+// carry `ok: false` on any axis gains one line, right after the LENGTH
+// EXCEPTION line's position; a clip nothing flagged, or a dark run, renders
+// BYTE-IDENTICALLY to before this task - the same discipline task 5's LENGTH
+// EXCEPTION line and task 4's buildExtensionUser hint both used.
+// ---------------------------------------------------------------------------
+
+describe("finalizerUserPrompt - AUDIT NOTE (spec 2026-08-10 task 6)", () => {
+  const liveCfg = loadAnalyzeConfig({ ARC_AUDIT: "on", ARC_AUDIT_FINALIZER_NOTES: "on" });
+
+  const entryOnly: ArcFlags = {
+    entry: { ok: false, defect: "mid_story" },
+    exit: { ok: true },
+    standalone: { ok: true },
+  };
+  const exitOnly: ArcFlags = {
+    entry: { ok: true },
+    exit: { ok: false, defect: "mid_thought" },
+    standalone: { ok: true },
+  };
+  const allThree: ArcFlags = {
+    entry: { ok: false, defect: "dangling_reference" },
+    exit: { ok: false, defect: "setup_no_payoff" },
+    standalone: { ok: false, missing: "кто такой Иван" },
+  };
+  // The spec's own worked example (§4, task 6): entry + standalone, no exit.
+  const entryAndStandalone: ArcFlags = {
+    entry: { ok: false, defect: "mid_story" },
+    exit: { ok: true },
+    standalone: { ok: false, missing: "что означает «там»..." },
+  };
+  const fullyOk: ArcFlags = {
+    entry: { ok: true },
+    exit: { ok: true },
+    standalone: { ok: true },
+  };
+
+  const WEIGH =
+    "Weigh this against your own reading - the audit sees the same text you do and can be wrong.";
+
+  it("renders an entry-only note", () => {
+    const arcFlags = new Map([["c1", entryOnly]]);
+    const user = finalizerUserPrompt([clip("c1", 0, 2)], nodes, arcFlags, liveCfg);
+    expect(user).toContain(
+      `AUDIT NOTE: a per-clip audit of this finished cut flagged the OPENING (mid_story). ${WEIGH}`
+    );
+  });
+
+  it("renders an exit-only note", () => {
+    const arcFlags = new Map([["c1", exitOnly]]);
+    const user = finalizerUserPrompt([clip("c1", 0, 2)], nodes, arcFlags, liveCfg);
+    expect(user).toContain(
+      `AUDIT NOTE: a per-clip audit of this finished cut flagged the ENDING (mid_thought). ${WEIGH}`
+    );
+  });
+
+  it("renders an all-three note", () => {
+    const arcFlags = new Map([["c1", allThree]]);
+    const user = finalizerUserPrompt([clip("c1", 0, 2)], nodes, arcFlags, liveCfg);
+    expect(user).toContain(
+      "AUDIT NOTE: a per-clip audit of this finished cut flagged the OPENING " +
+        "(dangling_reference) and the ENDING (setup_no_payoff) and judged the clip " +
+        `not self-contained (кто такой Иван). ${WEIGH}`
+    );
+  });
+
+  it("matches the spec's own worked example verbatim (entry + standalone)", () => {
+    const arcFlags = new Map([["c1", entryAndStandalone]]);
+    const user = finalizerUserPrompt([clip("c1", 0, 2)], nodes, arcFlags, liveCfg);
+    expect(user).toContain(
+      "AUDIT NOTE: a per-clip audit of this finished cut flagged the OPENING (mid_story) " +
+        `and judged the clip not self-contained (что означает «там»...). ${WEIGH}`
+    );
+  });
+
+  it("renders the note right after the header when the clip is not overLength", () => {
+    const arcFlags = new Map([["c1", entryOnly]]);
+    const user = finalizerUserPrompt([clip("c1", 0, 2)], nodes, arcFlags, liveCfg);
+    const lines = user.split("\n");
+    expect(lines[0]).toBe(
+      `CLIP c1 | score 0.80 | ${Math.round(nodes[2].end - nodes[0].start)}s | payoff #2`
+    );
+    expect(lines[1]).toContain("AUDIT NOTE:");
+    expect(lines[2]).toBe("title: Заголовок c1");
+  });
+
+  it("renders the note after the LENGTH EXCEPTION line, not before it", () => {
+    const wide: SnappedClip = { ...clip("c1", 0, 2), overLength: true };
+    const arcFlags = new Map([["c1", entryOnly]]);
+    const user = finalizerUserPrompt([wide], nodes, arcFlags, liveCfg);
+    const lines = user.split("\n");
+    expect(lines[1]).toContain("LENGTH EXCEPTION");
+    expect(lines[2]).toContain("AUDIT NOTE:");
+    expect(lines[3]).toBe("title: Заголовок c1");
+  });
+
+  it("renders a fully-ok clip's block byte-identically to the dark render, even with flags present", () => {
+    const arcFlags = new Map([["c1", fullyOk]]);
+    const flagged = finalizerUserPrompt([clip("c1", 0, 2)], nodes, arcFlags, liveCfg);
+    const dark = finalizerUserPrompt([clip("c1", 0, 2)], nodes);
+    expect(flagged).toBe(dark);
+    expect(flagged).not.toContain("AUDIT NOTE");
+  });
+
+  it("renders byte-identically to the feature-dark render when arcFlags/cfg are simply omitted", () => {
+    // The discipline every prior prompt addition used (LENGTH EXCEPTION, the
+    // extension hint): assert equality against a render with the feature dark,
+    // not merely "no AUDIT NOTE string appears".
+    const clips = [clip("c1", 0, 2), clip("c7", 3, 5)];
+    expect(finalizerUserPrompt(clips, nodes)).toBe(
+      finalizerUserPrompt(
+        clips,
+        nodes,
+        new Map(),
+        { arcFinalizerNotesEnabled: false, arcAuditEnabled: false }
+      )
+    );
+  });
+
+  // --- gating: BOTH switches must be on, checked at the point of lookup -----
+
+  it("renders nothing when arcFinalizerNotesEnabled is on but arcAuditEnabled is off", () => {
+    const auditDarkCfg = loadAnalyzeConfig({ ARC_AUDIT_FINALIZER_NOTES: "on" });
+    expect(auditDarkCfg.arcAuditEnabled).toBe(false);
+    const arcFlags = new Map([["c1", entryOnly]]); // flags present anyway
+    const user = finalizerUserPrompt([clip("c1", 0, 2)], nodes, arcFlags, auditDarkCfg);
+    expect(user).toBe(finalizerUserPrompt([clip("c1", 0, 2)], nodes));
+    expect(user).not.toContain("AUDIT NOTE");
+  });
+
+  it("renders nothing when arcAuditEnabled is on but arcFinalizerNotesEnabled is off (the feature's own default)", () => {
+    const notesDarkCfg = loadAnalyzeConfig({ ARC_AUDIT: "on" });
+    expect(notesDarkCfg.arcFinalizerNotesEnabled).toBe(false);
+    const arcFlags = new Map([["c1", entryOnly]]); // flags present anyway
+    const user = finalizerUserPrompt([clip("c1", 0, 2)], nodes, arcFlags, notesDarkCfg);
+    expect(user).toBe(finalizerUserPrompt([clip("c1", 0, 2)], nodes));
+    expect(user).not.toContain("AUDIT NOTE");
+  });
+
+  it("renders nothing for a clip missing from the flags map even with the feature fully live", () => {
+    const user = finalizerUserPrompt([clip("c1", 0, 2)], nodes, new Map(), liveCfg);
+    expect(user).not.toContain("AUDIT NOTE");
+  });
+});
+
+describe("arcFinalizerNotesEnabled config knob", () => {
+  it("arms only on the exact literal 'on', the same discipline as ARC_AUDIT", () => {
+    expect(loadAnalyzeConfig({ ARC_AUDIT_FINALIZER_NOTES: "on" }).arcFinalizerNotesEnabled).toBe(
+      true
+    );
+    expect(loadAnalyzeConfig({ ARC_AUDIT_FINALIZER_NOTES: "true" }).arcFinalizerNotesEnabled).toBe(
+      false
+    );
+    expect(loadAnalyzeConfig({ ARC_AUDIT_FINALIZER_NOTES: "1" }).arcFinalizerNotesEnabled).toBe(
+      false
+    );
+    expect(loadAnalyzeConfig({}).arcFinalizerNotesEnabled).toBe(false);
   });
 });
 
