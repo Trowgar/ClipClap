@@ -29,15 +29,18 @@
  * arc-audit prompts themselves are sent to the real API, N independent times
  * per clip set.
  *
- * This duplicates the front half of analyzeHighlightsV2's pipeline rather
- * than importing a helper from index.ts, on purpose: the alternative (an
- * exported "run through selection" entry point) reshapes the orchestrator
- * this task was told not to alter beyond wiring the new stage in, for a
- * benefit only this script needs. The same tradeoff teaser-sensitivity.ts and
- * eval-arc-audit.ts already make (rebuilding buildSentenceGraph externally
- * rather than threading a helper through index.ts). Two simplifications this
- * duplication deliberately makes, because arc-audit's prompt never reads
- * title/description text and never cares about them:
+ * The front half of analyzeHighlightsV2's pipeline (scanner -> merge -> teaser
+ * -> critic-candidate selection -> critic -> evidence gate -> snap -> select)
+ * is replayed via `replay-front-half.ts`'s `runFrontHalf`, not via a helper
+ * threaded through index.ts, on purpose: the alternative (an exported "run
+ * through selection" entry point) reshapes the orchestrator this task was
+ * told not to alter beyond wiring the new stage in, for a benefit only this
+ * script (and, since 2026-08-11, eval-selection-autopsy.ts) needs. The same
+ * tradeoff teaser-sensitivity.ts and eval-arc-audit.ts already make
+ * (rebuilding buildSentenceGraph externally rather than threading a helper
+ * through index.ts). Three simplifications `runFrontHalf` deliberately makes,
+ * because arc-audit's prompt never reads title/description text and never
+ * cares about them:
  *   - `widenRangeToEvidence` (index.ts's own pre-snap evidence widening, up to
  *     EVIDENCE_BOUNDARY_SLACK_NODES=2 nodes) is skipped. It can shift a
  *     boundary by at most 2 nodes, which does not change whether arc-audit's
@@ -79,20 +82,12 @@ import {
   variantConfig,
   type Fixture,
 } from "../__tests__/helpers/eval-fixture";
-import { createReplayClient } from "../__tests__/helpers/replay-client";
-import { buildSentenceGraph } from "../analyze-v2/sentence-graph";
-import { runScanner } from "../analyze-v2/scanner";
-import { mergeCandidates, selectCriticCandidates } from "../analyze-v2/candidates";
-import { runCritic } from "../analyze-v2/critic";
-import { evidenceGate } from "../analyze-v2/gates";
-import { snapNodes } from "../analyze-v2/snap";
-import { selectAndOrder } from "../analyze-v2/select";
-import { detectTeaserRegion, isInTeaserRegion } from "../analyze-v2/teaser";
-import { newUsage } from "../analyze-v2/llm";
 import { runArcAudit } from "../analyze-v2/arc-audit";
+import { newUsage } from "../analyze-v2/llm";
 import type { AnalyzeConfig } from "../analyze-v2/config";
 import type { ArcFlags, SentenceNode, SnappedClip } from "../analyze-v2/types";
 import { bestLabelMatch, loadLabels, type LabelEntry } from "./arc-audit-labels";
+import { runFrontHalf } from "./replay-front-half";
 import { join } from "path";
 
 // ---------------------------------------------------------------------------
@@ -155,46 +150,8 @@ async function buildSelectedSet(
   fixture: Fixture,
   cfg: AnalyzeConfig
 ): Promise<{ nodes: SentenceNode[]; selected: SnappedClip[] }> {
-  const nodes = buildSentenceGraph(fixture.transcript.segments, cfg);
-  const replay = createReplayClient(fixture.responses);
-  const usage = newUsage();
-
-  const scan = await runScanner(replay, usage, nodes, cfg, {
-    retryDelayMs: 1,
-  });
-  const merged = mergeCandidates(scan.candidates, nodes, cfg);
-  const region = detectTeaserRegion(nodes, cfg);
-  const withoutTeasers = merged.filter(
-    (c) => !isInTeaserRegion(region, nodes[c.startNode].start)
-  );
-  const candidates = selectCriticCandidates(withoutTeasers, nodes, cfg);
-
-  const languageIso = fixture.transcript.language ?? "en";
-  const critic = await runCritic(replay, usage, nodes, candidates, languageIso, cfg, {
-    retryDelayMs: 1,
-  });
-
-  const eligible: SnappedClip[] = [];
-  for (const verdict of critic.verdicts) {
-    if (!verdict.keep) continue;
-    const gate = evidenceGate(verdict, nodes);
-    if (!gate.ok) continue;
-    const snapped = snapNodes(verdict, nodes, cfg);
-    if (!snapped.ok) continue;
-    eligible.push(snapped.clip);
-  }
-
-  if (replay.missing.length > 0) {
-    const unique = [...new Set(replay.missing)];
-    throw new Error(
-      `fixture "${fixture.name}" is missing ${unique.length} recorded scanner/critic ` +
-        `response(s) needed to reconstruct the selected set [${unique.join(", ")}] - ` +
-        `re-record it or check whether a prompt changed.`
-    );
-  }
-
-  const selection = selectAndOrder(eligible, cfg, cfg.softCap + cfg.finalizerHeadroom);
-  return { nodes, selected: selection.selected };
+  const front = await runFrontHalf(fixture, cfg);
+  return { nodes: front.nodes, selected: front.selection.selected };
 }
 
 // ---------------------------------------------------------------------------
