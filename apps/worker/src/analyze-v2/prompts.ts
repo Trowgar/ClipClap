@@ -386,7 +386,16 @@ type ArcNoteCfg = Pick<AnalyzeConfig, "arcFinalizerNotesEnabled" | "arcAuditEnab
  * `arcFlags` map must not arm the note path on its own.
  *
  * A clip fully OK on all three axes never gets a note even when flags exist
- * for it (task 6: "STANDING `_arcFlags` ... has `ok: false` on ANY axis").
+ * for it (task 6: "STANDING `_arcFlags` ... has `ok: false` on ANY axis") -
+ * and, since the `repaired` follow-up (2026-08-11), neither does a clip whose
+ * ONLY not-ok axes are all `repaired: true`. "STANDING" is the load-bearing
+ * word task 6 already used: `entry`/`exit` count against this only when they
+ * are `ok: false` AND NOT repaired - a widen-only repair applying after the
+ * audit ran means the boundary that earned the flag no longer exists, so the
+ * note would accuse the shipped clip of a defect it does not have (the exact
+ * defect this follow-up exists to fix - see start-extension.ts's/
+ * end-extension.ts's own repaired-marking comments). `standalone` has no
+ * `repaired` field (nothing repairs it) and is read exactly as before.
  *
  * ONE function, shared by `finalizerUserPrompt` (renders the note) and
  * `finalize.ts` (counts it into telemetry) - so the two can never disagree
@@ -400,7 +409,9 @@ export function resolveArcAuditNote(
   if (!cfg.arcFinalizerNotesEnabled || !cfg.arcAuditEnabled) return undefined;
   const flags = arcFlags.get(clipId);
   if (!flags) return undefined;
-  return !flags.entry.ok || !flags.exit.ok || !flags.standalone.ok ? flags : undefined;
+  const entryStanding = !flags.entry.ok && !flags.entry.repaired;
+  const exitStanding = !flags.exit.ok && !flags.exit.repaired;
+  return entryStanding || exitStanding || !flags.standalone.ok ? flags : undefined;
 }
 
 /** Oxford-less "a, b, and c" - `entry`/`exit` are only ever the "flagged X and
@@ -431,16 +442,28 @@ function joinWithAnd(items: string[]): string {
  * `ok: false`) falls back to "unspecified" - the same fallback
  * `buildExtensionUser`'s own hint line uses for an absent `defect`.
  *
- * Only ever called with a flagged `ArcFlags` (resolveArcAuditNote already
- * filtered a fully-OK one to `undefined`), so `joinWithAnd` here always has
- * at least one part.
+ * REPAIRED AXES ARE SKIPPED (follow-up, 2026-08-11): `entry`/`exit` each gain
+ * a `!repaired` guard alongside their `!ok` check, so a widen-only repair
+ * that already fixed the boundary drops that axis's clause even though `ok`
+ * still reads `false` on the underlying flag - the same "repaired axes render
+ * nothing" rule `resolveArcAuditNote` enforces at the call-site level. This
+ * function is the one place that rule has to be RIGHT rather than merely
+ * gated, because `resolveArcAuditNote` only decides WHETHER to call this at
+ * all (byte-identical no-note when every standing axis is clean); an
+ * entry-flagged, exit-repaired clip still calls this function (entry is
+ * standing), and only this guard keeps the exit clause out of that clip's
+ * one-axis note.
+ *
+ * Only ever called with a flagged `ArcFlags` whose STANDING axes are
+ * non-empty (resolveArcAuditNote already filtered a fully-clean-or-repaired
+ * one to `undefined`), so `joinWithAnd` here always has at least one part.
  */
 function composeAuditNote(flags: ArcFlags): string {
   const axisClauses: string[] = [];
-  if (!flags.entry.ok) {
+  if (!flags.entry.ok && !flags.entry.repaired) {
     axisClauses.push(`the OPENING (${flags.entry.defect ?? "unspecified"})`);
   }
-  if (!flags.exit.ok) {
+  if (!flags.exit.ok && !flags.exit.repaired) {
     axisClauses.push(`the ENDING (${flags.exit.defect ?? "unspecified"})`);
   }
   const parts: string[] = [];

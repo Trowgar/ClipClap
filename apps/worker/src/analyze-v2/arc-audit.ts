@@ -129,6 +129,17 @@ export interface ArcAuditResult {
  * gate, end-extension.ts's fitsMaxSec/extensionWindow. Detection logic is
  * untouched - this reads a verdict already computed by runArcAudit, above; it
  * does not judge anything itself.
+ *
+ * DELIBERATELY UNCHANGED by the `repaired` follow-up (2026-08-11): this
+ * reads `ok` only, never `repaired`, on every axis. A repaired axis was still
+ * NOT CLEAN AT AUDIT TIME - the detector flagged something real about the
+ * clip's THEN-current boundary, and a later widen fixing that boundary is a
+ * different fact from the audit having found nothing wrong in the first
+ * place. The long-clip gate this feeds stays conservative on purpose: it
+ * blesses only material the audit never had a complaint about, not material
+ * a complaint was later patched on. So `entry.repaired`/`exit.repaired` can
+ * both be `true` and `isFullyOk` still returns `false` for that clip, same as
+ * before this follow-up existed.
  */
 export function isFullyOk(flags: ArcFlags | undefined): boolean {
   return !!flags && flags.entry.ok && flags.exit.ok && flags.standalone.ok;

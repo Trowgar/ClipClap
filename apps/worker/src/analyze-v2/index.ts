@@ -924,7 +924,14 @@ function unheardAudioError(
  *  verdict exists for it (Map#get returning undefined never adds the key,
  *  since the spread below is conditional). That is what keeps a dark run
  *  byte-identical to today: an empty map here means the key never appears on
- *  any highlight. */
+ *  any highlight.
+ *
+ *  This lookup runs AFTER extendClipStarts/extendClipEnds, against the SAME
+ *  map instance both of them may have `.set()` a repaired entry into
+ *  (follow-up, 2026-08-11) - so `_arcFlags.entry.repaired`/`.exit.repaired`
+ *  reach the shipped highlight with no extra plumbing here: this function
+ *  never needed to know a repair happened, only to read the map late enough
+ *  to see it. */
 function toHighlight(clip: SnappedClip, arcFlags: Map<string, ArcFlags>): V2Highlight {
   const v = clip.verdict;
   const flags = arcFlags.get(v.id);

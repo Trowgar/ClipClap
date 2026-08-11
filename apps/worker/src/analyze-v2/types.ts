@@ -214,10 +214,24 @@ export type ArcExitDefect =
  * never reaches here, even though `ok` still reports the defect - the flag
  * survives a failed gate, only the pointer is dropped (arc-audit.ts,
  * `ArcAuditTelemetry.gatedOut`).
+ *
+ * `repaired` (follow-up, 2026-08-11, real job cmsoqmy47008fuhfjosaxi86s): set
+ * to `true` on an axis exactly where a widen-only repair for that axis
+ * APPLIED - `entry.repaired` by `extendClipStarts`'s success path,
+ * `exit.repaired` by `extendClipEnds`'s. It is NOT a second verdict and does
+ * NOT overwrite `ok` - `ok` stays the detector's record of what it saw at
+ * audit time, `repaired` says the boundary has since moved so that record is
+ * stale. Absent, never `false`, exactly like every other optional field here.
+ * `standalone` has no `repaired` field: the audit has no drop or repair verb
+ * for it (§2b), so nothing can ever apply one. Consumers: `isFullyOk`
+ * (arc-audit.ts) deliberately does NOT read this - a repaired axis still
+ * blesses nothing, see that function's own comment - and
+ * `resolveArcAuditNote`/`composeAuditNote` (prompts.ts) DO read it, so a
+ * clip's finalizer AUDIT NOTE only ever names axes still standing.
  */
 export interface ArcFlags {
-  entry: { ok: boolean; defect?: ArcEntryDefect; fixStartNode?: number };
-  exit: { ok: boolean; defect?: ArcExitDefect; fixEndNode?: number };
+  entry: { ok: boolean; defect?: ArcEntryDefect; fixStartNode?: number; repaired?: true };
+  exit: { ok: boolean; defect?: ArcExitDefect; fixEndNode?: number; repaired?: true };
   standalone: { ok: boolean; missing?: string };
 }
 

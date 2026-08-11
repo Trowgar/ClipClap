@@ -519,6 +519,17 @@ function readProposals(rows: unknown[]): {
  * block renders exactly as it always has. ALL GATES BELOW ARE UNCHANGED - a
  * hinted proposal that fails `opaque_end` or `no_clean_end` is refused like any
  * other; the hint only ever widens what is ASKED, never what is ACCEPTED.
+ *
+ * ONE SIDE EFFECT on `arcFlags` (follow-up, 2026-08-11): an applied extension
+ * on a clip whose exit was flagged `ok: false` replaces that clip's map entry
+ * with a copy carrying `exit.repaired = true` - see the marking site inside
+ * the `clips.map` below for the exact rule (fires on both hintFollowed and
+ * hintOverridden applies, and on a flagged clip's self-motivated apply too).
+ * `arcFlags` is the SAME map instance index.ts threads through every stage
+ * after arcAudit, so this mark is what makes `_arcFlags` on the eventually
+ * shipped highlight (index.ts's `toHighlight`) and the finalizer's AUDIT NOTE
+ * (`resolveArcAuditNote`) both stop describing a defect this stage already
+ * fixed. `clips` themselves are never mutated by this - only the flags map.
  */
 export async function extendClipEnds(
   client: OpenAI,
@@ -662,8 +673,11 @@ export async function extendClipEnds(
       // 5): a proposal can name a clip id that was never offered at all (a
       // hallucinated or foreign id, the same case `not_offered` already
       // handles), and this clip's own arc-audit flags - not membership in
-      // `offered` - are what blessed-ness is actually about.
-      const blessed = isFullyOk(cfg.arcAuditEnabled ? arcFlags.get(clip.verdict.id) : undefined);
+      // `offered` - are what blessed-ness is actually about. Read once and
+      // reused below for the repaired-marking side effect (follow-up,
+      // 2026-08-11), so the two can never disagree about this clip's flags.
+      const flags = cfg.arcAuditEnabled ? arcFlags.get(clip.verdict.id) : undefined;
+      const blessed = isFullyOk(flags);
       const attempt = applyExtension(clip, nodes, proposed, cfg, blessed);
       if (!attempt.ok) {
         countRefusal(
@@ -685,6 +699,22 @@ export async function extendClipEnds(
       if (hintNode !== undefined) {
         if (attempt.clip.finalEndNode === hintNode) hintFollowed += 1;
         else hintOverridden += 1;
+      }
+      // REPAIRED (follow-up, 2026-08-11, job cmsoqmy47008fuhfjosaxi86s): ANY
+      // applied extension on a clip whose audited exit was flagged `ok:
+      // false` retires that flag's standing, whether the model FOLLOWED the
+      // hint node exactly, OVERRODE it with a different legal one, or the
+      // clip had no gated `fixEndNode` at all and only reached here through
+      // the self-motivated path - in every one of those cases the end moved
+      // forward, so the exit the audit judged no longer exists. `flags.ok`
+      // is left untouched, same discipline as start-extension.ts's own mark:
+      // it stays the detector's record, `repaired` says a widen has since
+      // moved the boundary. A clip with no flags at all (never audited, or
+      // its exit was already `ok: true`) gets no map entry touched - marking
+      // an axis that was never flagged would misreport a repair that never
+      // needed to happen.
+      if (flags && !flags.exit.ok) {
+        arcFlags.set(clip.verdict.id, { ...flags, exit: { ...flags.exit, repaired: true } });
       }
       return attempt.clip;
     });

@@ -655,4 +655,34 @@ describe("isFullyOk", () => {
       })
     ).toBe(false);
   });
+
+  // THE `repaired` FOLLOW-UP (2026-08-11): a widen-only repair applying after
+  // the audit ran does NOT retroactively bless the clip. `ok` is the
+  // detector's record of what it saw at audit time; `repaired` says a later
+  // stage moved the boundary the flag pointed at. Those are different facts,
+  // and the long-clip gate this feeds stays conservative - "not clean at
+  // audit time" is enough to keep a clip off the wide ceiling, a patched
+  // defect notwithstanding. Pinned here so a future edit that reads
+  // `repaired` as an alternate route to `true` goes red immediately.
+  it("does NOT bless a clip whose entry is repaired - repaired is not a second route to ok:true", () => {
+    expect(
+      isFullyOk({ ...allOk, entry: { ok: false, defect: "dangling_reference", repaired: true } })
+    ).toBe(false);
+  });
+
+  it("does NOT bless a clip whose exit is repaired", () => {
+    expect(
+      isFullyOk({ ...allOk, exit: { ok: false, defect: "mid_thought", repaired: true } })
+    ).toBe(false);
+  });
+
+  it("does NOT bless a clip whose entry AND exit are both repaired", () => {
+    expect(
+      isFullyOk({
+        entry: { ok: false, defect: "meta_opening", repaired: true },
+        exit: { ok: false, defect: "transition_out", repaired: true },
+        standalone: { ok: true },
+      })
+    ).toBe(false);
+  });
 });

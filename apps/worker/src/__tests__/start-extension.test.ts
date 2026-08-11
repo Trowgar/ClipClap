@@ -575,6 +575,61 @@ describe("extendClipStarts - eligibility and application", () => {
 });
 
 // ---------------------------------------------------------------------------
+// THE `repaired` FOLLOW-UP (2026-08-11, real job cmsoqmy47008fuhfjosaxi86s).
+//
+// Before this fix, nothing ever cleared a STANDING flag once its repair
+// APPLIED - a clip whose entry this stage successfully widened still carried
+// `entry.ok: false`, so the finalizer's AUDIT NOTE and `_arcFlags` on the
+// shipped highlight both kept accusing the clip of an opening defect it no
+// longer had. `entry.ok` stays untouched (the detector's own record); only
+// `entry.repaired` is added, and only on an APPLIED widen.
+// ---------------------------------------------------------------------------
+
+describe("extendClipStarts - marks entry.repaired on an applied widen (2026-08-11 follow-up)", () => {
+  it("sets entry.repaired = true in the flags map when the widen applies", () => {
+    const n = nodes(60);
+    const a = clip(n, "a", 15, 18);
+    const flags = flagsFor([["a", pointerFlag(10)]]);
+    const r = extendClipStarts([a], flags, n, live);
+
+    expect(r.telemetry.applied).toBe(1);
+    const after = flags.get("a")!;
+    expect(after.entry.repaired).toBe(true);
+    // `ok` is the detector's own record and must not be rewritten - only
+    // `repaired` is added alongside it.
+    expect(after.entry.ok).toBe(false);
+    expect(after.entry.defect).toBe("dangling_reference");
+    expect(after.entry.fixStartNode).toBe(10);
+  });
+
+  it("does NOT set entry.repaired when the gates refuse the widen", () => {
+    const n = nodes(60);
+    const a = clip(n, "a", 20, 23); // t=40
+    const flags = flagsFor([["a", pointerFlag(0)]]); // 40s back - past the 20s window
+    const r = extendClipStarts([a], flags, n, live);
+
+    expect(r.telemetry.applied).toBe(0);
+    expect(r.telemetry.refusedBy).toEqual({ outside_window: 1 });
+    const after = flags.get("a")!;
+    expect(after.entry.repaired).toBeUndefined();
+    expect(after.entry.ok).toBe(false);
+  });
+
+  it("does not touch other clips' flags, repaired or otherwise", () => {
+    const n = nodes(60);
+    const a = clip(n, "a", 15, 18);
+    const untouched = okFlag();
+    const flags = flagsFor([
+      ["a", pointerFlag(10)],
+      ["b", untouched],
+    ]);
+    extendClipStarts([a, clip(n, "b", 25, 28)], flags, n, live);
+    expect(flags.get("b")).toBe(untouched); // same object, never replaced
+    expect(flags.get("b")!.entry.repaired).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The teaser region, wired for real: detectTeaserRegion runs INSIDE
 // extendClipStarts (it takes no injectable region, unlike applyStartExtension
 // above), so this is the one place proving that wiring rather than the

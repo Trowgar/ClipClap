@@ -1886,4 +1886,112 @@ describe("extendClipEnds - arc-audit hints (task 4)", () => {
     expect("hintFollowed" in r.telemetry).toBe(false);
     expect("hintOverridden" in r.telemetry).toBe(false);
   });
+
+  // -------------------------------------------------------------------------
+  // THE `repaired` FOLLOW-UP (2026-08-11, real job cmsoqmy47008fuhfjosaxi86s).
+  //
+  // Before this fix, nothing ever cleared a STANDING flag once its repair
+  // APPLIED: a clip whose exit this stage successfully widened still carried
+  // `exit.ok: false`, so the finalizer's AUDIT NOTE and `_arcFlags` on the
+  // shipped highlight both kept accusing the clip of an ending defect it no
+  // longer had. The rule: ANY applied extension on a clip carrying an
+  // `exit.ok: false` flag marks `exit.repaired = true` - whether the model
+  // followed the hint node exactly, overrode it with a different legal one,
+  // or the clip reached here through the self-motivated path with no gated
+  // pointer at all. `exit.ok` itself is never rewritten.
+  // -------------------------------------------------------------------------
+  describe("marks exit.repaired on an applied extension (2026-08-11 follow-up)", () => {
+    it("sets exit.repaired on BOTH the hintFollowed and the hintOverridden clip", async () => {
+      const n = nodes(60);
+      const a = snappedClip(n, 2, 5, "a"); // hinted at 8, model proposes 8 - followed
+      const b = snappedClip(n, 20, 23, "b"); // hinted at 26, model proposes 27 - overridden
+      const arcFlags = new Map<string, ArcFlags>([
+        ["a", exitFlag(8)],
+        ["b", exitFlag(26, "setup_no_payoff")],
+      ]);
+      const client = seqClient([() => ok([row("a", 8), row("b", 27)])]);
+      const r = await run(client, [a, b], n, bothOn, newUsage(), arcFlags);
+
+      expect(r.telemetry.applied).toBe(2);
+      expect(r.telemetry.hintFollowed).toBe(1);
+      expect(r.telemetry.hintOverridden).toBe(1);
+
+      const flagsA = arcFlags.get("a")!;
+      expect(flagsA.exit.repaired).toBe(true);
+      expect(flagsA.exit.ok).toBe(false); // the detector's own record is untouched
+      expect(flagsA.exit.defect).toBe("mid_thought");
+      expect(flagsA.exit.fixEndNode).toBe(8);
+
+      const flagsB = arcFlags.get("b")!;
+      expect(flagsB.exit.repaired).toBe(true);
+      expect(flagsB.exit.ok).toBe(false);
+      expect(flagsB.exit.defect).toBe("setup_no_payoff");
+    });
+
+    it("sets exit.repaired on a flagged clip's applied extension even with NO gated hint pointer (self-motivated path)", async () => {
+      // c carries an exit flag with NO fixEndNode (a gate refused the pointer,
+      // or the model never offered one) - not eligible for the hint-driven
+      // offered path at all, so it can only be applied here through the
+      // self-motivated window. The rule still fires: the end moved forward, so
+      // the audited exit no longer exists, regardless of how the clip reached
+      // the offered set.
+      const n = nodes(60);
+      const c = snappedClip(n, 38, 41, "c");
+      const arcFlags = new Map<string, ArcFlags>([
+        ["c", { entry: { ok: true }, exit: { ok: false, defect: "mid_thought" }, standalone: { ok: true } }],
+      ]);
+      const client = seqClient([() => ok([row("c", 44)])]);
+      const r = await run(client, [c], n, bothOn, newUsage(), arcFlags);
+
+      expect(r.telemetry.applied).toBe(1);
+      // no gated fixEndNode on this clip's flag, so it was never in `hinted`
+      expect(r.telemetry.hinted ?? 0).toBe(0);
+      const flagsC = arcFlags.get("c")!;
+      expect(flagsC.exit.repaired).toBe(true);
+      expect(flagsC.exit.ok).toBe(false);
+    });
+
+    it("sets NOTHING on a non-flagged clip's applied self-motivated extension", async () => {
+      const n = nodes(60);
+      const c = snappedClip(n, 38, 41, "c"); // never audited - no entry in arcFlags at all
+      const arcFlags = new Map<string, ArcFlags>();
+      const client = seqClient([() => ok([row("c", 44)])]);
+      const r = await run(client, [c], n, bothOn, newUsage(), arcFlags);
+
+      expect(r.telemetry.applied).toBe(1);
+      expect(arcFlags.has("c")).toBe(false); // no entry was ever created
+    });
+
+    it("does not mark repaired when the applied extension belongs to a clip whose exit was already ok:true", async () => {
+      const n = nodes(60);
+      const c = snappedClip(n, 38, 41, "c");
+      const arcFlags = new Map<string, ArcFlags>([
+        ["c", { entry: { ok: true }, exit: { ok: true }, standalone: { ok: true } }],
+      ]);
+      const client = seqClient([() => ok([row("c", 44)])]);
+      const r = await run(client, [c], n, bothOn, newUsage(), arcFlags);
+
+      expect(r.telemetry.applied).toBe(1);
+      expect(arcFlags.get("c")!.exit.repaired).toBeUndefined();
+    });
+
+    it("does not mark repaired when a hinted proposal is refused by a gate", async () => {
+      const n = nodes(40);
+      const a = clip(n);
+      const arcFlags = new Map<string, ArcFlags>([["c0", exitFlag(30)]]); // past the window
+      const config = loadAnalyzeConfig({
+        SCENE_GAP_SEC: "8",
+        END_EXTENSION_WINDOW_SEC: "25",
+        ARC_AUDIT: "on",
+        END_EXTENSION_HINTS: "on",
+      });
+      const client = seqClient([() => ok([row("c0", 30)])]);
+      const r = await run(client, [a], n, config, newUsage(), arcFlags);
+
+      expect(r.telemetry.applied).toBe(0);
+      expect(r.telemetry.refused).toBe(1);
+      expect(arcFlags.get("c0")!.exit.repaired).toBeUndefined();
+      expect(arcFlags.get("c0")!.exit.ok).toBe(false);
+    });
+  });
 });

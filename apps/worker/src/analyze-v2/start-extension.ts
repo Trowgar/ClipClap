@@ -310,6 +310,18 @@ function countRefusal(t: StartExtensionTelemetry, reason: StartExtensionRefuseRe
  * iterate to a stable assignment: the whole point of this gate is to REFUSE a
  * collision immediately rather than hunt for one, mirroring select.ts's own
  * greedy (not globally-optimal) NMS keep loop.
+ *
+ * ONE SIDE EFFECT, deliberately: on an applied widen this ALSO replaces the
+ * clip's entry in `arcFlags` with a copy carrying `entry.repaired = true`
+ * (follow-up, 2026-08-11). `clips` are still never mutated - "returns a new
+ * clip and leaves the caller's copy alone" - but the flags map is the shared
+ * mutable channel every later stage in index.ts reads through (end-extension,
+ * finalize, toHighlight all take the SAME map by reference), and that is the
+ * whole point: the mark has to reach `_arcFlags` on the shipped highlight
+ * without a new return field threading through every caller between here and
+ * there. `flags` itself (read via `arcFlags.get` above) is never mutated in
+ * place - a NEW object replaces the map entry - so a caller holding an older
+ * reference to the same `ArcFlags` object never observes it change under it.
  */
 export function extendClipStarts(
   clips: SnappedClip[],
@@ -355,6 +367,20 @@ export function extendClipStarts(
     // startSec (the no_gain gate), so this can only ever add.
     telemetry.secondsGained += clip.startSec - attempt.clip.startSec;
     out[i] = attempt.clip;
+
+    // REPAIRED (follow-up, 2026-08-11, job cmsoqmy47008fuhfjosaxi86s): the
+    // widen this loop just applied is the repair arc-audit's own entry flag
+    // pointed at, so the STANDING defect no longer describes the shipped
+    // clip - only the historical verdict does. `flags.entry.ok` is NOT
+    // touched: `ok` stays the detector's record of what it saw at audit
+    // time (see ArcFlags's own doc comment in types.ts and isFullyOk's
+    // "deliberately unchanged" note). A NEW ArcFlags object replaces the map
+    // entry rather than mutating `flags` in place - the same
+    // never-mutate-in-place discipline this file's own clips follow (`out[i]
+    // = attempt.clip`, never a mutated `clip`) - so nothing else holding the
+    // old `flags` reference (there is nothing else in this loop, but the
+    // discipline is the point) observes a surprise mutation.
+    arcFlags.set(clip.verdict.id, { ...flags, entry: { ...flags.entry, repaired: true } });
   }
 
   return { clips: out, telemetry };

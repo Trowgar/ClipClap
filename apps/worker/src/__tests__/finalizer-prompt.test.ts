@@ -389,6 +389,106 @@ describe("finalizerUserPrompt - AUDIT NOTE (spec 2026-08-10 task 6)", () => {
     const user = finalizerUserPrompt([clip("c1", 0, 2)], nodes, new Map(), liveCfg);
     expect(user).not.toContain("AUDIT NOTE");
   });
+
+  // ---------------------------------------------------------------------------
+  // THE `repaired` FOLLOW-UP (2026-08-11, real job cmsoqmy47008fuhfjosaxi86s).
+  //
+  // Before this fix, nothing ever cleared a STANDING flag once its repair
+  // APPLIED: a clip whose exit extendClipEnds successfully widened still
+  // carried `exit.ok: false`, so the informed finalizer read a stale accusation
+  // about a defect the shipped clip no longer has. These tests pin the fix at
+  // the prompt layer - `ok` is untouched (the detector's record), `repaired`
+  // is what keeps a fixed axis out of the note.
+  // ---------------------------------------------------------------------------
+
+  describe("the repaired follow-up (2026-08-11)", () => {
+    const entryOnlyRepaired: ArcFlags = {
+      entry: { ok: false, defect: "mid_story", repaired: true },
+      exit: { ok: true },
+      standalone: { ok: true },
+    };
+    const exitOnlyRepaired: ArcFlags = {
+      entry: { ok: true },
+      exit: { ok: false, defect: "mid_thought", repaired: true },
+      standalone: { ok: true },
+    };
+    const entryStandingExitRepaired: ArcFlags = {
+      entry: { ok: false, defect: "dangling_reference" },
+      exit: { ok: false, defect: "setup_no_payoff", repaired: true },
+      standalone: { ok: true },
+    };
+    const entryRepairedExitStanding: ArcFlags = {
+      entry: { ok: false, defect: "dangling_reference", repaired: true },
+      exit: { ok: false, defect: "setup_no_payoff" },
+      standalone: { ok: true },
+    };
+    const allRepaired: ArcFlags = {
+      entry: { ok: false, defect: "mid_story", repaired: true },
+      exit: { ok: false, defect: "mid_thought", repaired: true },
+      standalone: { ok: true },
+    };
+
+    it("renders NO note when the only flagged axis (entry) is repaired", () => {
+      const arcFlags = new Map([["c1", entryOnlyRepaired]]);
+      const flagged = finalizerUserPrompt([clip("c1", 0, 2)], nodes, arcFlags, liveCfg);
+      const dark = finalizerUserPrompt([clip("c1", 0, 2)], nodes);
+      expect(flagged).toBe(dark);
+      expect(flagged).not.toContain("AUDIT NOTE");
+    });
+
+    it("renders NO note when the only flagged axis (exit) is repaired", () => {
+      const arcFlags = new Map([["c1", exitOnlyRepaired]]);
+      const flagged = finalizerUserPrompt([clip("c1", 0, 2)], nodes, arcFlags, liveCfg);
+      const dark = finalizerUserPrompt([clip("c1", 0, 2)], nodes);
+      expect(flagged).toBe(dark);
+      expect(flagged).not.toContain("AUDIT NOTE");
+    });
+
+    it("renders an ENTRY-ONLY note when entry is standing and exit is repaired", () => {
+      const arcFlags = new Map([["c1", entryStandingExitRepaired]]);
+      const user = finalizerUserPrompt([clip("c1", 0, 2)], nodes, arcFlags, liveCfg);
+      expect(user).toContain(
+        `AUDIT NOTE: a per-clip audit of this finished cut flagged the OPENING (dangling_reference). ${WEIGH}`
+      );
+      // the repaired axis's own defect must not leak into the note text
+      expect(user).not.toContain("setup_no_payoff");
+      expect(user).not.toContain("the ENDING");
+    });
+
+    it("renders an EXIT-ONLY note when exit is standing and entry is repaired", () => {
+      const arcFlags = new Map([["c1", entryRepairedExitStanding]]);
+      const user = finalizerUserPrompt([clip("c1", 0, 2)], nodes, arcFlags, liveCfg);
+      expect(user).toContain(
+        `AUDIT NOTE: a per-clip audit of this finished cut flagged the ENDING (setup_no_payoff). ${WEIGH}`
+      );
+      expect(user).not.toContain("dangling_reference");
+      expect(user).not.toContain("the OPENING");
+    });
+
+    it("renders NO note when every not-ok axis is repaired, byte-identical to an unflagged clip", () => {
+      const arcFlags = new Map([["c1", allRepaired]]);
+      const flagged = finalizerUserPrompt([clip("c1", 0, 2)], nodes, arcFlags, liveCfg);
+      const dark = finalizerUserPrompt([clip("c1", 0, 2)], nodes);
+      expect(flagged).toBe(dark);
+      expect(flagged).not.toContain("AUDIT NOTE");
+    });
+
+    it("still renders a standalone clause for a repaired-entry clip whose standalone axis is standing", () => {
+      // standalone has no `repaired` field at all - a repaired entry/exit must
+      // not accidentally suppress an unrelated, still-standing standalone flag.
+      const mixed: ArcFlags = {
+        entry: { ok: false, defect: "mid_story", repaired: true },
+        exit: { ok: true },
+        standalone: { ok: false, missing: "кто такой Иван" },
+      };
+      const arcFlags = new Map([["c1", mixed]]);
+      const user = finalizerUserPrompt([clip("c1", 0, 2)], nodes, arcFlags, liveCfg);
+      expect(user).toContain(
+        `AUDIT NOTE: a per-clip audit of this finished cut judged the clip not self-contained (кто такой Иван). ${WEIGH}`
+      );
+      expect(user).not.toContain("the OPENING");
+    });
+  });
 });
 
 describe("arcFinalizerNotesEnabled config knob", () => {
