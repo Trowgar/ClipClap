@@ -39,6 +39,8 @@ describe("computeFingerprint", () => {
       arcAuditMaxOutputTokensPerClip: arcAuditMaxOutputTokens(1) - arcAuditMaxOutputTokens(0),
       startExtensionEnabled: baseCfg.startExtensionEnabled,
       endExtensionHintsEnabled: baseCfg.endExtensionHintsEnabled,
+      longClipsEnabled: baseCfg.longClipsEnabled,
+      longClipMaxSec: baseCfg.longClipMaxSec,
     });
   });
 
@@ -67,6 +69,12 @@ describe("computeFingerprint", () => {
     // Every fixture in the repo predates task 4 entirely, same argument as
     // endExtensionEnabled and arcAuditEnabled above.
     expect(computeFingerprint(baseCfg).endExtensionHintsEnabled).toBe(false);
+  });
+
+  it("records the long-clips policy as DARK on the default config", () => {
+    // Every fixture in the repo predates task 5 entirely, same argument as
+    // endExtensionEnabled/arcAuditEnabled/endExtensionHintsEnabled above.
+    expect(computeFingerprint(baseCfg).longClipsEnabled).toBe(false);
   });
 });
 

@@ -78,6 +78,17 @@ export const BASE_VARIANT = "base";
  * WITHOUT `endExtensionEnabled` - the two end-extension switches are the thing
  * under test being separable, so a variant that turned both on at once would
  * prove nothing about whether the hint-driven path stands on its own.
+ *
+ * `longClipsEnabled` (task 5), the same door for the same reason as every
+ * *Enabled key above: without it, no config this harness builds could ever
+ * differ on the key, so a "long-clips" recording could never exist and the
+ * fingerprint entry built to catch a live long-clip run replaying against a
+ * dark recording could never fire. The "long-clips" variant sets it ALONGSIDE
+ * `arcAuditEnabled`, start-extension's own precedent - nothing can ever be
+ * blessed without a detector to bless it, so the flag alone would only ever
+ * exercise the unconditional-compression fallback, not the policy this task
+ * is actually about. `longClipMaxSec` is NOT here - a tuning door, the same
+ * refusal as `startExtensionWindowSec`/`endExtensionWindowSec`.
  */
 export type VariantOverrides = Partial<
   Pick<
@@ -89,6 +100,7 @@ export type VariantOverrides = Partial<
     | "arcAuditEnabled"
     | "startExtensionEnabled"
     | "endExtensionHintsEnabled"
+    | "longClipsEnabled"
   >
 >;
 
@@ -101,6 +113,7 @@ export const VARIANT_OVERRIDE_KEYS = [
   "arcAuditEnabled",
   "startExtensionEnabled",
   "endExtensionHintsEnabled",
+  "longClipsEnabled",
 ] as const satisfies ReadonlyArray<keyof VariantOverrides>;
 
 /**

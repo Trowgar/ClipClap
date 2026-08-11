@@ -78,6 +78,15 @@ export interface SnappedClip {
   /** The clip's final sentence is interrogative - selection charges these a
    *  score surcharge (answer-completeness backstop). */
   endsOnQuestion?: boolean;
+  /** Span exceeds `maxSec` but fits `longClipMaxSec`, and `longClipsEnabled`
+   *  was on: snapNodes DEFERRED the 5a compression walk instead of running it
+   *  (spec 2026-08-10 §2e, task 5). Optional so nothing existing changes
+   *  shape - absent, never `false`, on every clip this task does not touch.
+   *  index.ts's long-clip policy is what turns this into a shipped decision:
+   *  a BLESSED clip (arc-audit.ts's isFullyOk) keeps it and ships wide; every
+   *  other clip is compressed via `compressToFit` (clearing the flag) or
+   *  dropped. */
+  overLength?: boolean;
 }
 
 /** How far the end-extension stage may reach for one clip: the highest node

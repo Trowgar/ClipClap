@@ -101,6 +101,22 @@ export interface AnalyzeConfig {
    *  start-extension.ts uses for its own dependency on the audit). Off until
    *  measured, the same discipline as every other stage switch in this file. */
   endExtensionHintsEnabled: boolean;
+  /** Master switch for the long-clip exception (spec 2026-08-10 §2e, task 5) -
+   *  the owner's two conditions in code: a clip over `maxSec` ships only as an
+   *  EXPLICIT finalizer decision, and only on material arcAudit judged clean
+   *  on all three axes. Off until measured, the same discipline as every other
+   *  stage switch in this file. With ARC_AUDIT off nothing can ever be
+   *  blessed (arc-audit.ts's isFullyOk requires flags that only exist when the
+   *  audit ran), so LONG_CLIPS alone degrades to today's unconditional
+   *  snap-time compression - the dependency is deliberate, see index.ts. */
+  longClipsEnabled: boolean;
+  /** Ceiling for a BLESSED over-length clip, in seconds. Measured 2026-08-11
+   *  from the five fixtures' recorded critic answers (262 distinct verdicts,
+   *  186 keep): 16 keep-verdicts span over 90s - min 90 / median 104 / max
+   *  130s. 150 covers the whole measured tail with 20s of margin. NOT a
+   *  variant key (tuning door, same refusal as endExtensionWindowSec /
+   *  startExtensionWindowSec). */
+  longClipMaxSec: number;
   /** How far into a video an intro trailer montage may reach. Bounds the region
    *  scan in analyze-v2/teaser.ts; 0 switches montage detection off entirely,
    *  which is the kill switch. (spec 2026-07-24 §4.1) */
@@ -194,6 +210,11 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     // file: a stray truthy env value must not arm a stage that renders an
     // arc-audit pointer into a prompt a real user's job will read.
     endExtensionHintsEnabled: env.END_EXTENSION_HINTS === "on",
+    // Exact literal "on", same discipline as every other stage switch in this
+    // file: a stray truthy env value must not let a clip ship over maxSec by
+    // accident.
+    longClipsEnabled: env.LONG_CLIPS === "on",
+    longClipMaxSec: num(env, "LONG_CLIP_MAX_SEC", 150),
     teaserWindowSec: num(env, "TEASER_WINDOW_SEC", 120),
     teaserMinHits: num(env, "TEASER_MIN_HITS", 3),
     finalizerEnabled: env.ANALYZE_FINALIZER !== "off",

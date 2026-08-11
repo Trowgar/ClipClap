@@ -1,5 +1,6 @@
 import type OpenAI from "openai";
 import type { AnalyzeConfig } from "./config";
+import { isFullyOk } from "./arc-audit";
 import { callJsonSchema, logModelFallback } from "./llm";
 import { EXTENSION_SYSTEM, buildExtensionUser } from "./prompts";
 import { END_EXTENSION_SCHEMA } from "./schemas";
@@ -17,14 +18,27 @@ import type {
 
 /** Would a clip ending on this node still fit the platform cap? One expression,
  *  two callers - the window that stops offering ends past the cap, and the gate
- *  that would refuse one - so the ceiling and its backstop cannot drift apart. */
+ *  that would refuse one - so the ceiling and its backstop cannot drift apart.
+ *
+ *  `blessed` (spec 2026-08-10 task 5, item 4) raises the ceiling to
+ *  `cfg.longClipMaxSec` when `cfg.longClipsEnabled` and the clip is
+ *  arc-audit-blessed (`isFullyOk`) - mirrors start-extension.ts's own
+ *  fitsMaxSec exactly. Defaults to `false` so every pre-task-5 caller (this
+ *  file's own suite included) keeps today's ceiling unchanged. UNLIKE
+ *  start-extension's gate, this one IS reachable: end-extension's
+ *  SELF-MOTIVATED path (`endExtensionEnabled`) offers every clip with a
+ *  non-empty window regardless of its flags, so a clip whose arc-audit
+ *  verdict is fully ok - including one the long-clip policy already shipped
+ *  wide - can legitimately reach here blessed. */
 function fitsMaxSec(
   clip: SnappedClip,
   node: SentenceNode,
   nodes: SentenceNode[],
-  cfg: AnalyzeConfig
+  cfg: AnalyzeConfig,
+  blessed: boolean = false
 ): boolean {
-  return endSecFor(nodes, node, cfg) - clip.startSec <= cfg.maxSec;
+  const ceilingSec = cfg.longClipsEnabled && blessed ? cfg.longClipMaxSec : cfg.maxSec;
+  return endSecFor(nodes, node, cfg) - clip.startSec <= ceilingSec;
 }
 
 /**
@@ -83,11 +97,16 @@ function fitsMaxSec(
  *
  * clip.finalEndNode must be a real index into `nodes` - sceneEndAfter refuses to
  * invent a ceiling for an invalid one, and neither does this.
+ *
+ * `blessed` (spec 2026-08-10 task 5) - threaded straight into `fitsMaxSec`, so
+ * this window and the gate that later re-checks a chosen node against
+ * `fitsMaxSec` can never disagree about the ceiling. Defaults to `false`.
  */
 export function extensionWindow(
   clip: SnappedClip,
   nodes: SentenceNode[],
-  cfg: AnalyzeConfig
+  cfg: AnalyzeConfig,
+  blessed: boolean = false
 ): ExtensionWindow {
   const from = clip.finalEndNode;
   const sceneEnd = sceneEndAfter(nodes, from, cfg);
@@ -95,7 +114,7 @@ export function extensionWindow(
   let last = from;
   for (let i = from + 1; i <= sceneEnd; i++) {
     if (nodes[i].end > deadline) break;
-    if (fitsMaxSec(clip, nodes[i], nodes, cfg)) last = i;
+    if (fitsMaxSec(clip, nodes[i], nodes, cfg, blessed)) last = i;
   }
   return { lastNode: last };
 }
@@ -201,12 +220,19 @@ export type ExtensionAttempt =
  *   so a node inside the offered run can still be over the cap when word timings
  *   nest, and this is what refuses it. Shares fitsMaxSec with the window, so the
  *   ceiling and the gate cannot answer differently.
+ *
+ * `blessed` (spec 2026-08-10 task 5) - passed straight to both extensionWindow
+ * and the final fitsMaxSec gate, so the candidate list this function's caller
+ * offered and the ceiling this function enforces always agree on which cap is
+ * in effect. Defaults to `false`, so every pre-task-5 caller (including this
+ * file's own suite) keeps today's ceiling exactly.
  */
 export function applyExtension(
   clip: SnappedClip,
   nodes: SentenceNode[],
   proposedEndNode: number,
-  cfg: AnalyzeConfig
+  cfg: AnalyzeConfig,
+  blessed: boolean = false
 ): ExtensionAttempt {
   const no = (reason: ExtensionRefuseReason): ExtensionAttempt => ({ ok: false, reason });
 
@@ -222,7 +248,7 @@ export function applyExtension(
     return no("clip_end_unusable");
   }
 
-  const { lastNode } = extensionWindow(clip, nodes, cfg);
+  const { lastNode } = extensionWindow(clip, nodes, cfg, blessed);
   if (proposedEndNode > lastNode) return no("outside_window");
 
   const e = nodes[proposedEndNode];
@@ -233,7 +259,7 @@ export function applyExtension(
   // has to land where snap would have put it.
   const endSec = endSecFor(nodes, e, cfg);
   if (endSec <= clip.endSec) return no("no_gain");
-  if (!fitsMaxSec(clip, e, nodes, cfg)) return no("too_long");
+  if (!fitsMaxSec(clip, e, nodes, cfg, blessed)) return no("too_long");
 
   // A NEW clip, never the argument mutated: clips travel by reference between
   // stages, and an accepted extension must not reach back into the caller's copy.
@@ -513,17 +539,23 @@ export async function extendClipEnds(
       clip: SnappedClip;
       window: ExtensionWindow;
       hint?: { defect?: ArcExitDefect; fixEndNode: number };
+      blessed: boolean;
     }> = [];
     for (const clip of clips) {
       const end = clip.finalEndNode;
       if (!Number.isInteger(end) || end < 0 || end > nodes.length - 1) continue;
-      const window = extensionWindow(clip, nodes, cfg);
 
       // The hint-driven half of the offered set (spec 2026-08-10 task 4).
       // `cfg.arcAuditEnabled` is checked HERE, not inferred from `arcFlags`
       // being empty - the same defence-in-depth doubling every gated stage in
       // this engine uses for its own upstream dependency.
       const flags = cfg.arcAuditEnabled ? arcFlags.get(clip.verdict.id) : undefined;
+      // Blessed-ness (spec 2026-08-10 task 5, item 4) - computed BEFORE the
+      // window so the window and every later gate agree on the ceiling; see
+      // fitsMaxSec's own doc comment for why, unlike start-extension.ts's
+      // gate, this one is genuinely reachable.
+      const blessed = isFullyOk(flags);
+      const window = extensionWindow(clip, nodes, cfg, blessed);
       const hint =
         cfg.endExtensionHintsEnabled &&
         flags &&
@@ -543,7 +575,7 @@ export async function extendClipEnds(
       const selfOffers = cfg.endExtensionEnabled && window.lastNode > end;
       if (!selfOffers && !hint) continue;
 
-      offered.push({ clip, window, hint });
+      offered.push({ clip, window, hint, blessed });
     }
     telemetry.offered = offered.length;
     // Set once, right here, so it survives every early return below the same
@@ -625,7 +657,14 @@ export async function extendClipEnds(
       // which REASON to record, because "the window is empty" describes the
       // clip while "the model named a clip it was never shown" describes the
       // model, and only the second is a fault worth acting on.
-      const attempt = applyExtension(clip, nodes, proposed, cfg);
+      //
+      // Recomputed here rather than read off `offered` (spec 2026-08-10 task
+      // 5): a proposal can name a clip id that was never offered at all (a
+      // hallucinated or foreign id, the same case `not_offered` already
+      // handles), and this clip's own arc-audit flags - not membership in
+      // `offered` - are what blessed-ness is actually about.
+      const blessed = isFullyOk(cfg.arcAuditEnabled ? arcFlags.get(clip.verdict.id) : undefined);
+      const attempt = applyExtension(clip, nodes, proposed, cfg, blessed);
       if (!attempt.ok) {
         countRefusal(
           telemetry,

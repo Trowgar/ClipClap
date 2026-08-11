@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { snapNodes } from "../analyze-v2/snap";
+import { compressToFit, snapNodes } from "../analyze-v2/snap";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import type { CriticVerdict, SentenceNode } from "../analyze-v2/types";
 
 const cfg = loadAnalyzeConfig({});
+const longCfg = loadAnalyzeConfig({ LONG_CLIPS: "on" });
 
 /** 20 nodes x 2s each, all strong sentence boundaries. */
 function strongNodes(): SentenceNode[] {
@@ -645,5 +646,144 @@ describe("snapNodes", () => {
     if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
     expect(r.clip.endSec - r.clip.startSec).toBeLessThanOrEqual(90);
     expect(r.clip.startSec).toBeLessThanOrEqual(nodes[54].start);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Long-clip deferral (spec 2026-08-10 §2e, task 5). The mechanism under test
+  // is `endSec - startSec > cfg.maxSec` (branch entered at all) crossed with
+  // `cfg.longClipsEnabled && span <= cfg.longClipMaxSec` (defer instead of
+  // compress). The DEFAULT reading of an unset `overLength` is "false" -
+  // absent - so every test below that expects `true` has to make the
+  // mechanism overcome that default, not merely fail to contradict it
+  // (memory: feedback_test_matches_default).
+  //
+  // A single node, both start and end and payoff and hook, makes the SPAN a
+  // pure function of one number (node0.end) via startSecFor/endSecFor's own
+  // arithmetic: startSec is pinned at 0 (no predecessor, no lead-in room
+  // below it), endSec is node0.end + tailHoldSec (no successor to cap
+  // against). hookStartNode=hookEndNode=0 still satisfies
+  // `hookStartSec < hookEndSec` because those read `.start` and `.end` of the
+  // SAME node, which differ by construction. This buys exact control over the
+  // span down to hundredths of a second without fighting lead-in/tail-hold
+  // nesting on a bigger table.
+  // ---------------------------------------------------------------------------
+
+  function oneNodeClip(endTime: number): SentenceNode[] {
+    return [
+      {
+        index: 0,
+        start: 0,
+        end: endTime,
+        text: "Sentence zero.",
+        hasWords: true,
+        trailingStrength: 1.0,
+        leadingStrength: 1.0,
+      },
+    ];
+  }
+
+  const oneNodeVerdict = () =>
+    verdict({ startNode: 0, payoffNode: 0, endNode: 0, hookStartNode: 0, hookEndNode: 0 });
+
+  it("does not mark a span that fits maxSec, flag on or off", () => {
+    // span = maxSec exactly (90 = 89.7 + tailHoldSec 0.3): the over-length
+    // branch is never even ENTERED (endSec - startSec > cfg.maxSec is false at
+    // equality), so there is nothing to defer or compress either way - the
+    // default absence of `overLength` is the mechanism's real answer here, not
+    // an untested tie-break.
+    const nodes = oneNodeClip(89.7);
+    for (const c of [cfg, longCfg]) {
+      const r = snapNodes(oneNodeVerdict(), nodes, c);
+      if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+      expect(r.clip.endSec - r.clip.startSec).toBeCloseTo(90, 6);
+      expect(r.clip.overLength).toBeUndefined();
+    }
+  });
+
+  it("defers compression and marks overLength the instant the span crosses maxSec, flag on", () => {
+    // span = 90.05s - one hundredth past the cap, within longClipMaxSec (150).
+    // The single node has no room to compress onto (nothing before index 0),
+    // so if the mechanism did NOT defer here it would drop `too_long` instead
+    // of shipping - the two branches are impossible to confuse from outside.
+    const nodes = oneNodeClip(89.75);
+    const r = snapNodes(oneNodeVerdict(), nodes, longCfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.endSec - r.clip.startSec).toBeCloseTo(90.05, 6);
+    expect(r.clip.overLength).toBe(true);
+    expect(r.clip.finalStartNode).toBe(0); // uncompressed - the start never moved
+  });
+
+  it("compresses the same 90.05s span exactly as today when the flag is off", () => {
+    // Same clip as above, LONG_CLIPS off: today's path. The single node still
+    // has no room to compress onto, so this drops - which is exactly what
+    // this clip did before task 5 touched snap.ts, byte for byte (same
+    // reason, "too_long").
+    const nodes = oneNodeClip(89.75);
+    const r = snapNodes(oneNodeVerdict(), nodes, cfg);
+    expect(r).toEqual({ ok: false, reason: "too_long" });
+  });
+
+  it("still defers at exactly longClipMaxSec - the boundary is inclusive", () => {
+    // span = 150 exactly (149.7 + 0.3).
+    const nodes = oneNodeClip(149.7);
+    const r = snapNodes(oneNodeVerdict(), nodes, longCfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.endSec - r.clip.startSec).toBeCloseTo(150, 6);
+    expect(r.clip.overLength).toBe(true);
+  });
+
+  it("stops deferring the instant the span crosses longClipMaxSec, even with the flag on", () => {
+    // span = 150.05s - one hundredth past the long-clip ceiling. Compression
+    // is attempted (not deferred), and this single node has nowhere to
+    // compress onto, so it drops - the sharpest possible signal that the
+    // mechanism took the compress branch and not the defer one.
+    const nodes = oneNodeClip(149.75);
+    const r = snapNodes(oneNodeVerdict(), nodes, longCfg);
+    expect(r).toEqual({ ok: false, reason: "too_long" });
+  });
+
+  it("compresses a span over longClipMaxSec identically whether the flag is on or off", () => {
+    // A real, multi-node over-length clip (174s, comfortably past both caps)
+    // built the same way as "compresses >90s clips..." above. compressToFit
+    // must fire on this exact path for both configs and land on the SAME
+    // node - proving `longClipMaxSec` bounds only the DEFERRAL, never a second
+    // `maxSec`.
+    const nodes: SentenceNode[] = Array.from({ length: 90 }, (_, i) => ({
+      index: i,
+      start: i * 2,
+      end: i * 2 + 1.9,
+      text: `S${i}.`,
+      hasWords: true,
+      trailingStrength: 1.0,
+      leadingStrength: 1.0,
+    }));
+    const v = verdict({ startNode: 0, payoffNode: 85, endNode: 86, hookStartNode: 84, hookEndNode: 85 });
+    // The UNCOMPRESSED span, before either config's snapNodes call touches it:
+    // node0's startSec is 0 (already clean, no walk-back), node86's endSec is
+    // 174 (endSecFor, capped by node87's onset) - comfortably over
+    // longClipMaxSec(150), so this fixture really does force compression
+    // either way rather than accidentally fitting the deferral.
+    expect(174 - 0).toBeGreaterThan(150);
+    const flagOff = snapNodes(v, nodes, cfg);
+    const flagOn = snapNodes(v, nodes, longCfg);
+    if (!flagOff.ok) throw new Error(`unexpected drop (flag off): ${flagOff.reason}`);
+    if (!flagOn.ok) throw new Error(`unexpected drop (flag on): ${flagOn.reason}`);
+    expect(flagOff.clip.endSec - flagOff.clip.startSec).toBeLessThanOrEqual(cfg.maxSec);
+    expect(flagOn.clip).toEqual(flagOff.clip);
+    expect(flagOn.clip.overLength).toBeUndefined();
+  });
+
+  it("compressToFit picks the same earliest fit snapNodes's own compression used to inline", () => {
+    // Extraction sanity check (spec task 5): replays the real job cms2c8ahm
+    // survival-clip geometry already used above, calling compressToFit
+    // directly instead of through snapNodes, and checks it lands on the same
+    // node #807 (idx 3) the inline walk found before the extraction.
+    const nodes = survivalNodes();
+    const result = compressToFit(
+      { startNode: 0, endSec: nodes[22].end, hookStartNode: 19 },
+      nodes,
+      cfg
+    );
+    expect(result).toEqual({ ok: true, startNode: 3, startSec: 2856.18 });
   });
 });

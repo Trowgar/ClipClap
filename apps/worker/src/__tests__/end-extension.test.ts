@@ -352,6 +352,47 @@ describe("applyExtension", () => {
     expect(verdictOf(applyExtension(c, n, 47, cfgWide))).toBe("outside_window");
   });
 
+  // ---------------------------------------------------------------------------
+  // The long-clip ceiling (spec 2026-08-10 task 5, item 4). `blessed` defaults
+  // to `false` on both extensionWindow and applyExtension, so every test in
+  // this file that predates task 5 (none of which passes it) already proves
+  // today's ceiling is unchanged. UNLIKE start-extension.ts's own gate, this
+  // one is genuinely reachable in production: end-extension's self-motivated
+  // path (`endExtensionEnabled`) offers every clip with a non-empty window
+  // regardless of its arc-audit flags, so a blessed clip - including one the
+  // long-clip policy already shipped wide - can legally reach here.
+  // ---------------------------------------------------------------------------
+  const longCfg = loadAnalyzeConfig({
+    SCENE_GAP_SEC: "8",
+    END_EXTENSION_WINDOW_SEC: "1000",
+    LONG_CLIPS: "on",
+    LONG_CLIP_MAX_SEC: "150",
+  });
+
+  it("keeps today's 90s ceiling when the clip is not blessed, even with LONG_CLIPS on", () => {
+    const n = nodes(200);
+    const c = clip(n);
+    expect(extensionWindow(c, n, longCfg).lastNode).toBe(46); // same 46 as cfgWide above
+    expect(clipOf(applyExtension(c, n, 46, longCfg)).endSec - c.startSec).toBe(longCfg.maxSec);
+    expect(verdictOf(applyExtension(c, n, 47, longCfg))).toBe("outside_window");
+  });
+
+  it("raises the window and the gate to longClipMaxSec for a blessed clip", () => {
+    const n = nodes(200);
+    const c = clip(n);
+    const window = extensionWindow(c, n, longCfg, true);
+    expect(window.lastNode).toBe(76); // n[76].end(154) - c.startSec(4) = 150
+    expect(window.lastNode).toBeGreaterThan(46); // strictly past the unblessed ceiling
+    expect(clipOf(applyExtension(c, n, 76, longCfg, true)).endSec - c.startSec).toBe(
+      longCfg.longClipMaxSec
+    );
+    expect(verdictOf(applyExtension(c, n, 77, longCfg, true))).toBe("outside_window");
+    // and the SAME node 77 proposal, without `blessed`, is refused for the
+    // exact same reason it always was - the ceiling change is per-call, not
+    // a global relaxation of maxSec
+    expect(verdictOf(applyExtension(c, n, 77, longCfg))).toBe("outside_window");
+  });
+
   // maxSec SKIPS where the deadline BREAKS, and this case is why. The shipped
   // clip is cut at its END node, so an intervening node never lengthens it: node
   // 40 carries a word running to 300s while node 41 closes at 84s, comfortably

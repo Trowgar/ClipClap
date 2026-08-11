@@ -1,4 +1,5 @@
 import type { AnalyzeConfig } from "./config";
+import { isFullyOk } from "./arc-audit";
 import { isCleanStart } from "./sentence-graph";
 import { sceneStartBefore } from "./scene-gaps";
 import { startSecFor } from "./snap";
@@ -29,9 +30,31 @@ import type { ArcFlags, SentenceNode, SnappedClip } from "./types";
 
 /** Would a clip starting on this second still fit the platform cap? One
  *  expression, mirroring end-extension's fitsMaxSec, which pairs the same
- *  question against a candidate END. */
-function fitsMaxSec(clip: SnappedClip, candidateStartSec: number, cfg: AnalyzeConfig): boolean {
-  return clip.endSec - candidateStartSec <= cfg.maxSec;
+ *  question against a candidate END.
+ *
+ *  `blessed` (spec 2026-08-10 task 5, item 4) raises the ceiling to
+ *  `cfg.longClipMaxSec` when `cfg.longClipsEnabled` and the clip is
+ *  arc-audit-blessed (`isFullyOk`) - the effective ceiling is `longClipMaxSec`
+ *  only on that combination, `maxSec` otherwise. Defaults to `false`, so
+ *  every call site that predates this task (including every test that calls
+ *  `applyStartExtension` positionally without it) keeps today's ceiling
+ *  exactly.
+ *
+ *  NOTE (measured, not fixed - same posture as the NMS asymmetry index.ts
+ *  documents): `extendClipStarts`'s own eligibility loop only ever reaches
+ *  this gate for a clip whose `entry.ok` is FALSE, and `isFullyOk` requires
+ *  `entry.ok` true - so `blessed` is structurally always `false` on THIS
+ *  gate today. The parameter exists for symmetry with end-extension.ts and
+ *  because the spec names all three call sites explicitly; it is currently
+ *  unreachable here, not merely untested. See the task 5 report. */
+function fitsMaxSec(
+  clip: SnappedClip,
+  candidateStartSec: number,
+  cfg: AnalyzeConfig,
+  blessed: boolean = false
+): boolean {
+  const ceilingSec = cfg.longClipsEnabled && blessed ? cfg.longClipMaxSec : cfg.maxSec;
+  return clip.endSec - candidateStartSec <= ceilingSec;
 }
 
 /**
@@ -120,6 +143,10 @@ export type StartExtensionAttempt =
  * state extendClipStarts's single pass has reached for each of them - see
  * that function's own doc comment for exactly what "currently" means and why
  * that reading was chosen over a fixpoint.
+ *
+ * `blessed` (spec 2026-08-10 task 5) - see fitsMaxSec's own doc comment for
+ * what it does to gate 7 and why it is currently unreachable through this
+ * function's own eligibility rule. Defaults to `false`.
  */
 export function applyStartExtension(
   clip: SnappedClip,
@@ -127,7 +154,8 @@ export function applyStartExtension(
   proposedStartNode: number,
   cfg: AnalyzeConfig,
   teaserRegion: TeaserRegion | null,
-  others: SnappedClip[]
+  others: SnappedClip[],
+  blessed: boolean = false
 ): StartExtensionAttempt {
   const no = (reason: StartExtensionRefuseReason): StartExtensionAttempt => ({ ok: false, reason });
 
@@ -187,7 +215,7 @@ export function applyStartExtension(
   //    arithmetic snap's own over-length compression loop uses for a
   //    candidate start (clip.endSec - candidateStartSec), so a clip this stage
   //    accepts can never be one snap itself would have compressed away.
-  if (!fitsMaxSec(clip, startSec, cfg)) return no("too_long");
+  if (!fitsMaxSec(clip, startSec, cfg, blessed)) return no("too_long");
 
   const widened: SnappedClip = {
     ...clip,
@@ -304,13 +332,19 @@ export function extendClipStarts(
 
     telemetry.eligible += 1;
     const others = out.filter((_, j) => j !== i);
+    // isFullyOk(flags) is structurally false here - see fitsMaxSec's own doc
+    // comment - but computed via the shared helper anyway rather than a
+    // hardcoded `false`, per spec 2026-08-10 task 5 item 4 ("used by all
+    // three call sites"; do not re-derive blessed-ness in a second shape).
+    const blessed = isFullyOk(flags);
     const attempt = applyStartExtension(
       clip,
       nodes,
       flags.entry.fixStartNode,
       cfg,
       teaserRegion,
-      others
+      others,
+      blessed
     );
     if (!attempt.ok) {
       countRefusal(telemetry, attempt.reason);

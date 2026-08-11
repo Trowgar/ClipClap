@@ -96,6 +96,58 @@ export function startSecFor(
   return Math.max(Math.min(prev ? prev.end : 0, s.start), s.start - cfg.leadInSec);
 }
 
+/**
+ * Minimal shape `compressToFit` needs. NOT a `SnappedClip` - the function runs
+ * from two places: mid-way through `snapNodes` (before a `SnappedClip` exists
+ * at all, only a candidate start node and a fixed end second) and from
+ * index.ts's long-clip policy / the finalizer's defence-in-depth gate (spec
+ * 2026-08-10 task 5), both of which already hold a real `SnappedClip` and just
+ * read three fields off it.
+ */
+export interface CompressInput {
+  /** The clip's current start node index - the walk begins one PAST this. */
+  startNode: number;
+  /** The clip's end in seconds. Compression only ever moves the START;
+   *  callers that also want the end recomputed are not this function's job. */
+  endSec: number;
+  /** The hook the critic named. The walk may never pass it - see snapNodes's
+   *  own 5a comment for why that bound is not "never eat the setup". */
+  hookStartNode: number;
+}
+
+export type CompressResult =
+  | { ok: true; startNode: number; startSec: number }
+  | { ok: false };
+
+/**
+ * Extracted 2026-08-10 (spec task 5) from snapNodes's own 5a compression walk,
+ * which lived inline there since before this file's history and was about to
+ * be hand-copied a second time for the long-clip policy. Byte-identical
+ * semantics to the walk it replaced: EARLIEST fitting clean start (never the
+ * strongest or the latest - see snapNodes's own comment for why "earliest"
+ * deletes the least), never past `hookStartNode`, seconds via `startSecFor` -
+ * the same arithmetic snap uses everywhere else, so a node this function
+ * accepts can never be placed at two different seconds by two different
+ * callers.
+ */
+export function compressToFit(
+  clip: CompressInput,
+  nodes: SentenceNode[],
+  cfg: AnalyzeConfig
+): CompressResult {
+  for (let i = clip.startNode + 1; i <= clip.hookStartNode; i++) {
+    const cand = nodes[i];
+    // isCleanStart already requires hasWords - an opaque node has no reliable
+    // onset to cut at - so there is no separate word-bearing test here.
+    if (!isCleanStart(nodes, i)) continue;
+    const candidateStart = startSecFor(nodes, cand, cfg);
+    if (clip.endSec - candidateStart <= cfg.maxSec) {
+      return { ok: true, startNode: i, startSec: candidateStart };
+    }
+  }
+  return { ok: false };
+}
+
 export function snapNodes(
   verdict: CriticVerdict,
   nodes: SentenceNode[],
@@ -256,22 +308,37 @@ export function snapNodes(
   //     drop the survival clip outright, because its hook sits 19 nodes and 88s
   //     after its start, and engine-notes §3 measured hook geometry as critic
   //     variance rather than signal.
+  //
+  //     Extracted to `compressToFit`, above, 2026-08-10 (spec task 5) - the
+  //     walk itself is now shared with the long-clip policy in index.ts, which
+  //     runs the SAME compression on a clip this function shipped wide when
+  //     arc-audit did not bless it. Behaviour here is unchanged.
+  //
+  //     DEFERRAL (spec 2026-08-10 §2e, task 5): when `longClipsEnabled` and
+  //     the span fits `longClipMaxSec`, the compression walk is SKIPPED
+  //     entirely and the clip ships wide, marked `overLength`. This is a
+  //     mechanical defer, not a decision - snapNodes has no opinion on
+  //     whether the clip DESERVES to stay long; index.ts's policy (fed by
+  //     arc-audit's flags, which have not run yet at this point in the
+  //     pipeline) makes that call before extendClipStarts. A span over
+  //     `longClipMaxSec` always compresses here, exactly as before the flag
+  //     existed - `longClipMaxSec` is a ceiling on the DEFERRAL, not a second
+  //     `maxSec`. Flag off: this whole branch is unreachable and the function
+  //     is byte-for-byte identical to before task 5.
+  let overLength = false;
   if (endSec - startSec > cfg.maxSec) {
-    let compressed = false;
-    for (let i = s.index + 1; i <= verdict.hookStartNode; i++) {
-      const cand = nodes[i];
-      // isCleanStart already requires hasWords - an opaque node has no reliable
-      // onset to cut at - so there is no separate word-bearing test here.
-      if (!isCleanStart(nodes, i)) continue;
-      const candidateStart = startSecFor(nodes, cand, cfg);
-      if (endSec - candidateStart <= cfg.maxSec) {
-        s = cand;
-        startSec = candidateStart;
-        compressed = true;
-        break;
-      }
+    if (cfg.longClipsEnabled && endSec - startSec <= cfg.longClipMaxSec) {
+      overLength = true;
+    } else {
+      const compressed = compressToFit(
+        { startNode: s.index, endSec, hookStartNode: verdict.hookStartNode },
+        nodes,
+        cfg
+      );
+      if (!compressed.ok) return { ok: false, reason: "too_long" };
+      s = nodes[compressed.startNode];
+      startSec = compressed.startSec;
     }
-    if (!compressed) return { ok: false, reason: "too_long" };
   }
 
   // 4. epsilon-tolerant invariants - violation means drop, better lost than broken
@@ -305,6 +372,7 @@ export function snapNodes(
       shortMoment: duration < cfg.targetMinSec,
       boundaryConfidence,
       endsOnQuestion: endsOnQuestionMark(e.text),
+      ...(overLength ? { overLength: true } : {}),
     },
   };
 }

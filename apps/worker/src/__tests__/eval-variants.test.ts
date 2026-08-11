@@ -129,6 +129,7 @@ describe("variant definitions", () => {
       arcAuditEnabled: true,
       startExtensionEnabled: true,
       endExtensionHintsEnabled: true,
+      longClipsEnabled: true,
     };
     // Driven off VARIANT_OVERRIDE_KEYS rather than a literal, because the way
     // this test rots is that a knob is admitted to the list and nobody adds it
@@ -226,6 +227,24 @@ describe("variant definitions", () => {
     expect({ ...live, endExtensionHintsEnabled: false, arcAuditEnabled: false }).toEqual(dark);
     expect(() => assertFingerprintMatches("recorded-live", live, dark)).toThrow(
       /endExtensionHintsEnabled|arcAuditEnabled/
+    );
+  });
+
+  /** The long-clips mirror of the four tests above (task 5). Same mechanism:
+   *  until the "long-clips" variant declaration existed, no config this
+   *  harness could build ever differed on `longClipsEnabled`. Moves BOTH
+   *  `arcAuditEnabled` and `longClipsEnabled` together, start-extension's own
+   *  precedent - nothing can ever be blessed without a detector to feed it. */
+  it("makes the long-clips fingerprint key able to fire, which it could not before", () => {
+    const dark = computeFingerprint(variantConfig(BASE_VARIANT));
+    const live = computeFingerprint(variantConfig("long-clips"));
+    expect(dark.longClipsEnabled).toBe(false);
+    expect(live.longClipsEnabled).toBe(true);
+    expect(dark.arcAuditEnabled).toBe(false);
+    expect(live.arcAuditEnabled).toBe(true);
+    expect({ ...live, longClipsEnabled: false, arcAuditEnabled: false }).toEqual(dark);
+    expect(() => assertFingerprintMatches("recorded-live", live, dark)).toThrow(
+      /longClipsEnabled|arcAuditEnabled/
     );
   });
 });

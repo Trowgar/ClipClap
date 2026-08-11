@@ -700,6 +700,55 @@ and the unhinted-render-byte-identity test went red, proving unhinted rendering 
 on the guard) and the `cfg.arcAuditEnabled ? arcFlags.get(...) : undefined` defence-in-depth check
 in the offered-set loop (removed, and the "hints on but ARC_AUDIT off no-ops" test went red).
 
+### The long-clip exception (task 5, built 2026-08-11)
+
+Spec §2e. The owner's decision made code: a clip over `maxSec` (90) may ship whole up to
+`LONG_CLIP_MAX_SEC` (150) only when arcAudit blessed all three axes (`isFullyOk`) AND the
+finalizer ratified it - its prompt block carries "LENGTH EXCEPTION: this clip runs Ns..." and a
+defence-in-depth gate compresses/drops any surviving over-length clip that is not blessed.
+`snapNodes` DEFERS its 5a compression (marks `overLength`) instead of compressing when the flag
+allows; the walk itself is extracted into `compressToFit`, called by snap and by the policy in
+`index.ts`. Both extension ceilings read `longClipMaxSec` only for blessed clips; an
+extension-widened clip past 90 is caught by an unconditional mark sweep before FINALIZE (the
+asymmetry the first implementation shipped and the follow-up closed - a hint-widened clip can
+never be blessed structurally, since hint-eligibility requires `exit.ok=false`, so only the
+self-motivated extension path can legally produce one). Variant `long-clips`; `LONG_CLIP_MAX_SEC`
+is not a variant key.
+
+**The population, measured twice - and the first number was wrong.** Pooling ALL recorded
+responses gave 16 keep-verdicts over 90s; that pool mixes gpt-5.1's answers with Luna's. The
+Luna base path holds **3** (90.5 / 104.2 / 92.1s), snap's clean-end repair shortens two below the
+cap before the length check, and the one survivor (sitcom c5, 92.6s, marked `overLength: true` -
+the deferral verified live in replay) loses NMS at selection. **Zero long clips ship on today's
+fixtures; the `long-clips` variant recorded "complete already" on all five** - every prompt
+byte-identical, nothing to buy. Live code, near-zero fixture population, exactly the §7c split
+situation - the audience is production arcs like the 105s hibakusya consensus arc (labels.json).
+A quiet corollary the `overLength` telemetry hides: it counts the SELECTED set, so a marked clip
+that dies at NMS leaves the counter at zero - read `overLength: 0` as "none reached the policy",
+not "none existed".
+
+### The selection autopsy: where labeled moments die (measured 2026-08-11)
+
+Spec `2026-08-11-selection-autopsy.md`; instrument `scripts/eval-selection-autopsy.ts` (front-half
+replay shared with the stability script via `scripts/replay-front-half.ts`; every recomputed
+stage is asserted against the real engine functions at runtime - drift throws). First run,
+`podcast-nuclear`, 12 labeled moments:
+
+```
+shipped 4   scan_miss 4   snap_drop 2   nms_drop 1   critic_rejected 1
+```
+
+**All three 3/3 scout-consensus missed moments die at SCAN** - nearest raw candidate 36-56s
+away, so the scanner proposed NOTHING in those regions: §6a's `buildScanWindows` speechSec
+mis-budgeting is a measured kill stage now, not a suspicion (4 windows on a 48-minute source, 44
+raw candidates). The two snap kills carry critic scores 0.80-0.82 and die on `no_clean_end` -
+the word-timing root cause, fourth sighting. **The critic killed one moment in twelve; the judge
+is nearly innocent, the funnel is not.** Precision side: the shipped-but-unwanted clips show
+ordinary interest (0.4-0.7) and scores (0.69-0.78) - quota filler at an episode ceiling of 8-9
+postable moments, no dedicated remedy needed beyond recall. Remedy design (window budget from
+`sourceSec`, staged one-fixture-first because it invalidates EVERY recording):
+`2026-08-11-scan-recall-remedy.md`.
+
 **Ships dark; variant `arc-exit-hints` recorded the same day** (the implementing agent was
 forbidden to spend; the operator ran the topup - 9 new responses across the five fixtures - and
 blessed the snapshots). First corpus pass, replay

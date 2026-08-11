@@ -199,6 +199,44 @@ describe("finalizerUserPrompt", () => {
     expect(truncated).toContain("#5 [");
     expect(truncated).not.toContain("#6 [");
   });
+
+  // ---------------------------------------------------------------------------
+  // LENGTH EXCEPTION (spec 2026-08-10 §2e, task 5) - the owner's first
+  // condition ("an explicit finalizer decision") in code: an overLength clip's
+  // block gains one line, everything else stays byte-identical.
+  // ---------------------------------------------------------------------------
+
+  it("adds a LENGTH EXCEPTION line right after the header for an overLength clip", () => {
+    const wide: SnappedClip = { ...clip("c1", 0, 2), overLength: true };
+    const user = finalizerUserPrompt([wide], nodes);
+    const lines = user.split("\n");
+    const headerIdx = lines.findIndex((l) => l.startsWith("CLIP c1"));
+    const durationSec = Math.round(wide.endSec - wide.startSec);
+    expect(lines[headerIdx + 1]).toBe(
+      `LENGTH EXCEPTION: this clip runs ${durationSec}s, over the 90s standard - ` +
+        `ship it long only if every second earns its place.`
+    );
+    expect(lines[headerIdx + 2]).toBe("title: Заголовок c1"); // title follows immediately after
+  });
+
+  it("renders a clip WITHOUT the mark byte-identically to before this task", () => {
+    const user = finalizerUserPrompt([clip("c1", 0, 2)], nodes);
+    const lines = user.split("\n");
+    // the header is immediately followed by "title:" - no line was inserted
+    expect(lines[0]).toBe(
+      `CLIP c1 | score 0.80 | ${Math.round(nodes[2].end - nodes[0].start)}s | payoff #2`
+    );
+    expect(lines[1]).toBe("title: Заголовок c1");
+    expect(user).not.toContain("LENGTH EXCEPTION");
+  });
+
+  it("renders identically whether overLength is absent or explicitly false - the render with the feature dark", () => {
+    const absent = clip("c1", 0, 2);
+    const explicitlyDark: SnappedClip = { ...absent, overLength: false };
+    expect(finalizerUserPrompt([explicitlyDark], nodes)).toBe(
+      finalizerUserPrompt([absent], nodes)
+    );
+  });
 });
 
 describe("FINALIZER_SCHEMA", () => {

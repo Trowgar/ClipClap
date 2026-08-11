@@ -5,7 +5,7 @@ import { buildSentenceGraph } from "./sentence-graph";
 import { runScanner } from "./scanner";
 import { criticBudget, mergeCandidates, selectCriticCandidates, sourceSeconds } from "./candidates";
 import { AnalyzeTechnicalError, runCritic, repairCopy } from "./critic";
-import { snapNodes } from "./snap";
+import { snapNodes, compressToFit } from "./snap";
 import {
   EVIDENCE_BOUNDARY_SLACK_NODES,
   evidenceGate,
@@ -15,7 +15,7 @@ import {
 } from "./gates";
 import { dominantScript, isoToLanguageName, scriptMismatch } from "./language";
 import { selectAndOrder } from "./select";
-import { runArcAudit, type ArcAuditTelemetry } from "./arc-audit";
+import { runArcAudit, isFullyOk, type ArcAuditTelemetry } from "./arc-audit";
 import { extendClipStarts, type StartExtensionTelemetry } from "./start-extension";
 import { extendClipEnds } from "./end-extension";
 import { finalizeClips } from "./finalize";
@@ -381,6 +381,80 @@ export async function analyzeHighlightsV2(
     arcAuditTelemetry = audit.telemetry;
   }
 
+  // LONG-CLIP POLICY (spec 2026-08-10 §2e, task 5) - the owner's two
+  // conditions in code: a clip ships over maxSec only as an EXPLICIT
+  // finalizer decision (the LENGTH EXCEPTION line finalizerUserPrompt renders
+  // for a clip still marked `overLength` when it reaches that stage) and only
+  // on material arcAudit judged clean on all three axes. Runs HERE - after
+  // arcAudit, before extendClipStarts - so every later stage sees the
+  // resolved set: a BLESSED clip (arc-audit.ts's isFullyOk) travels wide
+  // unchanged; everything else is compressed back under maxSec by the SAME
+  // walk snapNodes itself would have run at ship time (`compressToFit`,
+  // extracted from snap.ts for exactly this reuse), or dropped when even that
+  // fails - a drop that shows in `droppedVerdicts` like any other.
+  //
+  // With ARC_AUDIT off, arcFlags is always the empty map from above, so
+  // isFullyOk is always false and every overLength clip is compressed right
+  // here - LONG_CLIPS alone degrades to today's unconditional snap-time
+  // compression, just deferred one stage. The dependency is deliberate and
+  // visible in this `isFullyOk` call, not implied by an empty map (the same
+  // discipline extendClipStarts/extendClipEnds use for their own dependency
+  // on arcAuditEnabled).
+  //
+  // KNOWN ASYMMETRY, documented rather than fixed (spec 2026-08-10 task 5
+  // hard rules: do not touch NMS semantics): selection.selected already ran
+  // NMS at the clip's WIDE size for an overLength clip snap deferred, before
+  // this policy has decided blessed/compressed/dropped - the same
+  // already-accepted asymmetry start-extension.ts's own NMS collision gate
+  // documents for a post-hoc widening. A clip this policy later compresses or
+  // drops already occupied its NMS footprint at the wide size while competing
+  // for a selection slot.
+  let longClipsTelemetry:
+    | { overLength: number; blessed: number; compressed: number; dropped: number }
+    | undefined;
+  let afterLongClipPolicy = selection.selected;
+  if (cfg.longClipsEnabled) {
+    const t = { overLength: 0, blessed: 0, compressed: 0, dropped: 0 };
+    const resolved: SnappedClip[] = [];
+    for (const clip of selection.selected) {
+      if (!clip.overLength) {
+        resolved.push(clip);
+        continue;
+      }
+      t.overLength += 1;
+      if (isFullyOk(arcFlags.get(clip.verdict.id))) {
+        t.blessed += 1;
+        resolved.push(clip);
+        continue;
+      }
+      const compressed = compressToFit(
+        { startNode: clip.finalStartNode, endSec: clip.endSec, hookStartNode: clip.verdict.hookStartNode },
+        nodes,
+        cfg
+      );
+      if (compressed.ok) {
+        t.compressed += 1;
+        resolved.push({
+          ...clip,
+          startSec: compressed.startSec,
+          finalStartNode: compressed.startNode,
+          overLength: false,
+          shortMoment: clip.endSec - compressed.startSec < cfg.targetMinSec,
+        });
+      } else {
+        t.dropped += 1;
+        droppedVerdicts.push({
+          id: clip.verdict.id,
+          stage: "long_clip_policy",
+          reason: "too_long",
+          score: clip.verdict.score,
+        });
+      }
+    }
+    afterLongClipPolicy = resolved;
+    longClipsTelemetry = t;
+  }
+
   // START EXTENSION (spec 2026-08-10 task 3) - widen-only, backward-only,
   // fed EXCLUSIVELY by arcAudit's gated entry.fixStartNode pointers. No model
   // call of its own: arc-audit already asked and gated once, so this is
@@ -390,10 +464,15 @@ export async function analyzeHighlightsV2(
   // BOTH flags, explicitly, mirroring the guard inside extendClipStarts
   // itself (defence in depth) - the dependency on arcAuditEnabled has to be
   // visible here, not merely implied by arcFlags happening to be empty.
+  //
+  // Fed `afterLongClipPolicy`, not `selection.selected` directly: the policy
+  // above already resolved every overLength clip before this stage (or any
+  // later one) ever sees it. When LONG_CLIPS is off the two are the same
+  // array.
   let startExtensionTelemetry: StartExtensionTelemetry | undefined;
-  let afterStartExtension = selection.selected;
+  let afterStartExtension = afterLongClipPolicy;
   if (cfg.arcAuditEnabled && cfg.startExtensionEnabled) {
-    const started = extendClipStarts(selection.selected, arcFlags, nodes, cfg);
+    const started = extendClipStarts(afterLongClipPolicy, arcFlags, nodes, cfg);
     afterStartExtension = started.clips;
     startExtensionTelemetry = started.telemetry;
   }
@@ -421,6 +500,38 @@ export async function analyzeHighlightsV2(
     cfg,
     { retryDelayMs: options.retryDelayMs }
   );
+
+  // LONG-CLIP SWEEP (spec 2026-08-10 task 5, follow-up) - closes an asymmetry
+  // the task 5 report flagged: a clip that started at or under maxSec but
+  // crossed it via a blessed-ceiling widening in EITHER extension stage
+  // reached the finalizer with no `overLength` mark, so the owner's first
+  // condition - a long clip ships only as an EXPLICIT finalizer decision -
+  // silently failed for it (no LENGTH EXCEPTION line, no ratification).
+  //
+  // One sweep, right here, between both extension stages and the finalizer,
+  // UNCONDITIONAL - no cfg.longClipsEnabled guard. With the flag off this is
+  // a PROVABLE no-op: start-extension's and end-extension's own too_long
+  // gates both read `cfg.longClipsEnabled && blessed` to pick their ceiling
+  // (start-extension.ts's/end-extension.ts's own fitsMaxSec), so with the
+  // flag off the ceiling is always cfg.maxSec and neither stage can hand this
+  // loop a clip whose span exceeds it - nor can snapNodes, which already
+  // enforced maxSec unconditionally before either stage ever ran. So the
+  // predicate below can only ever fire on a clip a blessed-ceiling widening
+  // actually produced, which by construction requires `cfg.longClipsEnabled`
+  // to already be true.
+  //
+  // Composes with finalize.ts's defence-in-depth gate without contradiction:
+  // reaching a widened span past maxSec required `isFullyOk` (full THREE-axis
+  // blessing, not a partial one - see start-extension.ts's/end-extension.ts's
+  // own fitsMaxSec) at the widening gate itself, so every clip this sweep
+  // marks is already blessed by the same definition finalize.ts's gate reads,
+  // and that gate ships it wide rather than compressing it.
+  const beforeFinalize = extension.clips.map((clip) =>
+    clip.overLength || clip.endSec - clip.startSec <= cfg.maxSec
+      ? clip
+      : { ...clip, overLength: true }
+  );
+
   // NEVER throws: any error, refusal, truncation or malformed output ships the
   // input set with a reason in telemetry. A stage with veto authority over
   // already-approved clips must not be able to turn a content answer into a
@@ -429,12 +540,18 @@ export async function analyzeHighlightsV2(
   const finalized = await finalizeClips(
     client,
     usage,
-    extension.clips,
+    beforeFinalize,
     nodes,
     languageIso,
     isoToLanguageName(languageIso),
     cfg,
-    { retryDelayMs: options.retryDelayMs }
+    { retryDelayMs: options.retryDelayMs },
+    // arcFlags (spec 2026-08-10 task 5): the defence-in-depth gate for a
+    // surviving unblessed overLength clip - unreachable if the policy above
+    // is correct, checked anyway. Trailing positional argument so every
+    // pre-task-5 call to finalizeClips (this file's own tests included) keeps
+    // working unmodified with its own default of an empty map.
+    arcFlags
   );
   // A title the finalizer WROTE is a model's sentence again, so the clip leaves
   // the snippet-title set. This is the only thing that removes an id from it,
@@ -565,6 +682,14 @@ export async function analyzeHighlightsV2(
 
   const highlights = shipped.map((clip) => toHighlight(clip, arcFlags));
 
+  // Pulled out of the spread below so they land in the nested `longClips`
+  // block instead of leaking as flat top-level keys (spec 2026-08-10 task 5)
+  // - finalize.ts's defence-in-depth gate is the ONLY thing that ever sets
+  // them, and it is meant to be unreachable when the policy above is correct,
+  // so both are almost always absent here.
+  const { longClipsCompressed, longClipsDropped, ...finalizedTelemetryRest } =
+    finalized.telemetry;
+
   const telemetry = {
     ...scannerTelemetry,
     criticVerdicts: critic.verdicts.length,
@@ -620,7 +745,7 @@ export async function analyzeHighlightsV2(
     // "what it was given" has to read what was given.
     selectedForFinalizer: extension.clips.length,
     finalizerSurvivors: finalized.clips.length,
-    ...finalized.telemetry,
+    ...finalizedTelemetryRest,
     kept: highlights.length,
     meanLexicalOverlap: mean(
       shipped.map((c) =>
@@ -631,6 +756,21 @@ export async function analyzeHighlightsV2(
       )
     ),
     durations: highlights.map((h) => Math.round((h.end - h.start) * 10) / 10),
+    // Absent entirely when LONG_CLIPS is off (spec 2026-08-10 task 5) - the
+    // same not-a-key promise arcAudit/startExtension keep above.
+    // `compressed`/`dropped` fold in the finalizer's own defence-in-depth
+    // counts (longClipsCompressed/longClipsDropped, pulled out above) so a
+    // reader sees ONE total regardless of which stage actually did the work.
+    ...(longClipsTelemetry
+      ? {
+          longClips: {
+            overLength: longClipsTelemetry.overLength,
+            blessed: longClipsTelemetry.blessed,
+            compressed: longClipsTelemetry.compressed + (longClipsCompressed ?? 0),
+            dropped: longClipsTelemetry.dropped + (longClipsDropped ?? 0),
+          },
+        }
+      : {}),
   };
 
   if (highlights.length === 0) {

@@ -190,9 +190,15 @@ accidental maxSec overflow), and only on material where arcAudit judges entry, e
 self-containment all ok.
 
 Mechanism sketch (design to be finalized in its own plan, measurement first):
-- `LONG_CLIPS=on` (default off) + `LONG_CLIP_MAX_SEC` (candidate default 150, MEASURE first:
-  count critic verdicts whose raw range exceeds maxSec across all five fixtures' recordings -
-  that count is the population this feature affects; one known case is thin evidence).
+- `LONG_CLIPS=on` (default off) + `LONG_CLIP_MAX_SEC` (default 150). POPULATION MEASURED
+  2026-08-11, twice, and the first number was wrong: pooling ALL recorded responses gave 16
+  keep-verdicts over 90s (min 90 / median 104 / max 130s), but that pool mixes gpt-5.1's
+  answers with Luna's - **the BASE (Luna) replay path holds only 3** (90.5 / 104.2 / 92.1s), and
+  after snap's clean-end repair shortens two of them below the cap, exactly **one genuinely
+  over-length clip survives to selection on the whole corpus, and it loses NMS there**. So on
+  today's fixtures the feature is live code with a near-zero population (the split-layout §7c
+  situation); its real audience is production arcs like the measured 105s hibakusya consensus
+  arc. 150 covers every measured span with margin either way.
 - snap: when the flag is on and a verdict fits `longClipMaxSec`, DEFER the over-length
   compression - validate boundaries at the long cap, mark the clip `overLength`. Compression
   becomes conditional policy in `index.ts` (run the exact same compression code) instead of

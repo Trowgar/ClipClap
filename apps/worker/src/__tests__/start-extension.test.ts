@@ -383,6 +383,64 @@ describe("applyStartExtension", () => {
 });
 
 // ---------------------------------------------------------------------------
+// The long-clip ceiling (spec 2026-08-10 task 5, item 4). `blessed` defaults
+// to `false`, so every test above (none of which passes it) already proves
+// today's ceiling is unchanged. These tests exercise the parameter directly.
+//
+// NOTE, honestly: extendClipStarts's OWN eligibility loop only ever reaches
+// applyStartExtension for a clip whose entry.ok is FALSE (see the "counts
+// only clips whose flags carry a gated pointer as eligible" test above,
+// where an entry-ok clip is skipped entirely) - and isFullyOk requires
+// entry.ok TRUE. So `blessed` can never actually be `true` on a REAL call
+// this stage makes; the wiring test below (long-clips-wiring.test.ts) proves
+// that end to end. What is tested here is the GATE's own contract in
+// isolation, per spec 2026-08-10 task 5 item 4's literal instruction to
+// thread blessed-ness through all three call sites - this is one of them.
+// ---------------------------------------------------------------------------
+
+describe("applyStartExtension - the long-clip ceiling (spec 2026-08-10 task 5)", () => {
+  const longCfg = loadAnalyzeConfig({
+    SCENE_GAP_SEC: "8",
+    START_EXTENSION_WINDOW_SEC: "1000",
+    CLIP_MAX_SEC: "30",
+    LONG_CLIPS: "on",
+    LONG_CLIP_MAX_SEC: "50",
+  });
+
+  it("refuses a widen past maxSec exactly as today when not blessed, even with LONG_CLIPS on", () => {
+    const n = nodes(60);
+    const c = clip(n, "c0", 20, 22); // endSec = n[22].end = 46
+    // node 5 (t=10) would make the clip 36s - over maxSec(30) but under longClipMaxSec(50)
+    expect(c.endSec - n[5].start).toBeGreaterThan(longCfg.maxSec);
+    expect(c.endSec - n[5].start).toBeLessThanOrEqual(longCfg.longClipMaxSec);
+    // default `blessed` is false - the exact same refusal as before this task
+    expect(verdictOf(applyStartExtension(c, n, 5, longCfg, null, []))).toBe("too_long");
+  });
+
+  it("raises the ceiling to longClipMaxSec for a blessed clip, letting the same widen through", () => {
+    const n = nodes(60);
+    const c = clip(n, "c0", 20, 22); // endSec = 46
+    expect(verdictOf(applyStartExtension(c, n, 5, longCfg, null, [], true))).toBe("accepted");
+    // and a widen past longClipMaxSec itself is still refused, blessed or not
+    const c2 = clip(n, "c1", 30, 32); // endSec = n[32].end = 66
+    expect(c2.endSec - n[0].start).toBeGreaterThan(longCfg.longClipMaxSec);
+    expect(verdictOf(applyStartExtension(c2, n, 0, longCfg, null, [], true))).toBe("too_long");
+  });
+
+  it("keeps today's ceiling when longClipsEnabled is off, even if blessed is somehow true", () => {
+    const n = nodes(60);
+    const c = clip(n, "c0", 20, 22);
+    const offCfg = loadAnalyzeConfig({
+      SCENE_GAP_SEC: "8",
+      START_EXTENSION_WINDOW_SEC: "1000",
+      CLIP_MAX_SEC: "30",
+    });
+    expect(offCfg.longClipsEnabled).toBe(false);
+    expect(verdictOf(applyStartExtension(c, n, 5, offCfg, null, [], true))).toBe("too_long");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // extendClipStarts - the stage. Pure and synchronous: no model call anywhere
 // in this function, so there is no "outage" or "truncation" failure mode to
 // test - the only inputs are the clips, the flags map arc-audit produced, and

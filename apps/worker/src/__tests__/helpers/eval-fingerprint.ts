@@ -156,6 +156,35 @@ import { finalizerMaxOutputTokens } from "../../analyze-v2/finalize";
  *                                the offered count returned by the stage
  *                                itself.
  *
+ *   longClipsEnabled              finalizerEnabled's/arcAuditEnabled's
+ *                                argument again: off makes the long-clip
+ *                                policy in index.ts a no-op (no clip is ever
+ *                                marked `overLength` in the first place), so
+ *                                the request hash cannot notice it turning on
+ *                                - and startExtensionEnabled's own narrower
+ *                                argument applies too, since this key changes
+ *                                no request of ITS OWN either: a blessed clip
+ *                                shipping wide changes only which clip range
+ *                                the FINALIZER is handed (plus the LENGTH
+ *                                EXCEPTION line in its prompt), the same
+ *                                shared-responses.json false-match risk
+ *                                startExtensionEnabled exists to close.
+ *   longClipMaxSec               bounds the DEFERRAL in snap.ts, not what any
+ *                                model is shown - closer to
+ *                                startExtensionWindowSec's role than
+ *                                endExtensionWindowSec's. It earns a
+ *                                fingerprint key anyway (unlike
+ *                                startExtensionWindowSec) because it can
+ *                                SILENCE the effect of `longClipsEnabled`
+ *                                being on: shrunk to `cfg.maxSec` or below, no
+ *                                clip is ever marked `overLength`, no LENGTH
+ *                                EXCEPTION line ever renders, and a recording
+ *                                made at a materially different
+ *                                `longClipMaxSec` replays byte-identical - the
+ *                                exact silent-match shape `endExtensionWindowSec`
+ *                                was added to close. No *MaxOutputTokens pair
+ *                                exists for it: no call's shape depends on it.
+ *
  * startExtensionWindowSec is NOT here, unlike endExtensionWindowSec - the
  * asymmetry is deliberate. It bounds a GATE inside arc-audit.ts (whether a
  * `fix_start_node` pointer is close enough to keep), never what the arc-audit
@@ -237,6 +266,13 @@ export interface EngineFingerprint {
    *  self-motivated switch. See the doc comment above for the narrower false-
    *  match boundary this key closes. */
   endExtensionHintsEnabled: boolean;
+  /** Whether the long-clip policy (task 5) may ship an arc-audit-blessed
+   *  overLength clip wide instead of compressing it. See the doc comment
+   *  above for why this earns a key despite making no request of its own. */
+  longClipsEnabled: boolean;
+  /** Ceiling for a blessed over-length clip, seconds. See the doc comment
+   *  above for the silent-match risk this key exists to close. */
+  longClipMaxSec: number;
 }
 
 export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
@@ -266,6 +302,8 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     arcAuditMaxOutputTokensPerClip: arcAuditMaxOutputTokens(1) - arcAuditBase,
     startExtensionEnabled: cfg.startExtensionEnabled,
     endExtensionHintsEnabled: cfg.endExtensionHintsEnabled,
+    longClipsEnabled: cfg.longClipsEnabled,
+    longClipMaxSec: cfg.longClipMaxSec,
   };
 }
 

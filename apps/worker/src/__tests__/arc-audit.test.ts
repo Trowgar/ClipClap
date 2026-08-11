@@ -5,6 +5,7 @@ import {
   arcAuditMaxOutputTokens,
   gateEntryFix,
   gateExitFix,
+  isFullyOk,
   runArcAudit,
   type ArcAuditTelemetry,
 } from "../analyze-v2/arc-audit";
@@ -12,7 +13,7 @@ import { ARC_AUDIT_SYSTEM } from "../analyze-v2/prompts";
 import { ARC_AUDIT_SCHEMA } from "../analyze-v2/schemas";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { newUsage } from "../analyze-v2/llm";
-import type { CriticVerdict, SentenceNode, SnappedClip } from "../analyze-v2/types";
+import type { ArcFlags, CriticVerdict, SentenceNode, SnappedClip } from "../analyze-v2/types";
 
 // ---------------------------------------------------------------------------
 // Fixtures shared by every describe block below.
@@ -601,5 +602,57 @@ describe("runArcAudit - flagging and gating", () => {
     const result = await runArcAudit(client, newUsage(), [clip(n, "a", 10, 13)], n, cfg);
     expect(result.flags.get("a")!.entry).toEqual({ ok: true });
     expect(result.telemetry.gatedOut).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isFullyOk (spec 2026-08-10 task 5) - "blessed", verbatim from design §2b:
+// flags EXIST and all three axes read ok:true. The default reading of a
+// missing/partial verdict is "not blessed", so every case below that expects
+// `false` has to come from a real axis failure or real absence, not the
+// function merely failing to prove `true` (memory: feedback_test_matches_
+// default - the mechanism under test is the AND of three booleans plus an
+// existence check, not a single flag).
+// ---------------------------------------------------------------------------
+
+describe("isFullyOk", () => {
+  const allOk: ArcFlags = {
+    entry: { ok: true },
+    exit: { ok: true },
+    standalone: { ok: true },
+  };
+
+  it("blesses a clip whose flags are ok on all three axes", () => {
+    expect(isFullyOk(allOk)).toBe(true);
+  });
+
+  it("refuses a clip with no flags at all - unaudited, not blessed", () => {
+    expect(isFullyOk(undefined)).toBe(false);
+  });
+
+  it("refuses when only entry is flagged", () => {
+    expect(isFullyOk({ ...allOk, entry: { ok: false, defect: "dangling_reference" } })).toBe(
+      false
+    );
+  });
+
+  it("refuses when only exit is flagged", () => {
+    expect(isFullyOk({ ...allOk, exit: { ok: false, defect: "mid_thought" } })).toBe(false);
+  });
+
+  it("refuses when only standalone is flagged", () => {
+    expect(isFullyOk({ ...allOk, standalone: { ok: false, missing: "who is speaking" } })).toBe(
+      false
+    );
+  });
+
+  it("refuses when every axis is flagged", () => {
+    expect(
+      isFullyOk({
+        entry: { ok: false, defect: "meta_opening" },
+        exit: { ok: false, defect: "transition_out" },
+        standalone: { ok: false, missing: "context" },
+      })
+    ).toBe(false);
   });
 });

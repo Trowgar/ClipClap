@@ -1,5 +1,6 @@
 import type OpenAI from "openai";
 import type { AnalyzeConfig } from "./config";
+import { isFullyOk } from "./arc-audit";
 import {
   duplicateDropCap,
   findHookDuplicates,
@@ -12,8 +13,9 @@ import { finalizerSystemPrompt, finalizerUserPrompt } from "./prompts";
 import { FINALIZER_SCHEMA } from "./schemas";
 import { nmsCollides } from "./select";
 import { carriesOnlyFiller, isCleanStart, looksLikeQuestion } from "./sentence-graph";
-import { snapNodes } from "./snap";
+import { compressToFit, snapNodes } from "./snap";
 import type {
+  ArcFlags,
   FinalizerDropReason,
   FinalizerEntry,
   LlmUsage,
@@ -102,6 +104,16 @@ export interface FinalizeTelemetry {
   dropsProtected: string[];
   /** Present whenever the LLM half did not run: "disabled" or a call outcome. */
   finalizerSkipped?: string;
+  /** Defence-in-depth counts (spec 2026-08-10 task 5) - a surviving overLength
+   *  clip this stage found unblessed after applyFinalizerEntries ran, folded
+   *  into index.ts's `longClips.compressed`/`longClips.dropped`. Unreachable
+   *  if the long-clip policy upstream is correct, so absent (never zero) on
+   *  every run where the backstop had nothing to do - the same "absent means
+   *  nothing happened" rule end-extension's `hinted` keeps, and for the same
+   *  reason: every FinalizeTelemetry object this file's own suite asserts
+   *  with an exact `toEqual` predates this task. */
+  longClipsCompressed?: number;
+  longClipsDropped?: number;
 }
 
 export interface FinalizeResult {
@@ -499,6 +511,15 @@ export interface FinalizeOptions {
  * The lexical pass runs FIRST so an LLM outage still removes the near-identical
  * openings a montage produces. Each pass caps its own drops at floor(n/2), so
  * the composition still cannot empty the set.
+ *
+ * `arcFlags` (spec 2026-08-10 task 5) feeds ONLY the defence-in-depth gate
+ * below - a check on a clip's `overLength` mark, never an input to the LLM
+ * call or to `applyFinalizerEntries`. A TRAILING parameter with a default of
+ * an empty map, deliberately, so every call site that predates task 5
+ * (including this file's own suite) keeps working unmodified: an empty map
+ * makes `isFullyOk` false for everything, but the gate is a no-op regardless
+ * unless some clip actually carries `overLength: true`, which none of those
+ * callers' clips do.
  */
 export async function finalizeClips(
   client: OpenAI,
@@ -508,7 +529,8 @@ export async function finalizeClips(
   languageIso: string,
   languageName: string,
   cfg: AnalyzeConfig,
-  options: FinalizeOptions = {}
+  options: FinalizeOptions = {},
+  arcFlags: Map<string, ArcFlags> = new Map()
 ): Promise<FinalizeResult> {
   if (clips.length === 0) {
     return { clips, telemetry: emptyFinalizeTelemetry() };
@@ -585,7 +607,56 @@ export async function finalizeClips(
     });
 
     const applied = applyFinalizerEntries(survivors, entries, nodes, cfg);
-    return { clips: applied.clips, telemetry: { ...applied.telemetry, hookDedupDrops } };
+
+    if (!cfg.longClipsEnabled) {
+      return { clips: applied.clips, telemetry: { ...applied.telemetry, hookDedupDrops } };
+    }
+
+    // LONG-CLIP DEFENCE IN DEPTH (spec 2026-08-10 task 5). The policy in
+    // index.ts already resolves every overLength clip to blessed-and-wide,
+    // compressed, or dropped BEFORE this stage ever sees one, so a clip
+    // reaching here still marked `overLength` and NOT blessed should be
+    // unreachable. Checked anyway - this stage has veto authority over the
+    // shipped set, and "the policy upstream is correct" is exactly the kind
+    // of claim this codebase never trusts on a single gate (engine-notes §6,
+    // "boundaries are code-owned"). Never a crash: the same `compressToFit`
+    // walk snap and the policy both use, or a drop - counted, never silent.
+    let longClipsCompressed: number | undefined;
+    let longClipsDropped: number | undefined;
+    const finalClips: SnappedClip[] = [];
+    for (const clip of applied.clips) {
+      if (!clip.overLength || isFullyOk(arcFlags.get(clip.verdict.id))) {
+        finalClips.push(clip);
+        continue;
+      }
+      const compressed = compressToFit(
+        { startNode: clip.finalStartNode, endSec: clip.endSec, hookStartNode: clip.verdict.hookStartNode },
+        nodes,
+        cfg
+      );
+      if (compressed.ok) {
+        longClipsCompressed = (longClipsCompressed ?? 0) + 1;
+        finalClips.push({
+          ...clip,
+          startSec: compressed.startSec,
+          finalStartNode: compressed.startNode,
+          overLength: false,
+          shortMoment: clip.endSec - compressed.startSec < cfg.targetMinSec,
+        });
+      } else {
+        longClipsDropped = (longClipsDropped ?? 0) + 1;
+      }
+    }
+
+    return {
+      clips: finalClips,
+      telemetry: {
+        ...applied.telemetry,
+        hookDedupDrops,
+        ...(longClipsCompressed !== undefined ? { longClipsCompressed } : {}),
+        ...(longClipsDropped !== undefined ? { longClipsDropped } : {}),
+      },
+    };
   } catch (error) {
     // Belt and braces: callJsonSchema already swallows API failures, so reaching
     // here means a defect in this file or in prompt rendering. A judge that

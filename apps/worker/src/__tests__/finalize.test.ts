@@ -7,6 +7,7 @@ import {
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { newUsage } from "../analyze-v2/llm";
 import type {
+  ArcFlags,
   FinalizerEntry,
   SentenceNode,
   SnappedClip,
@@ -1083,5 +1084,169 @@ describe("finalizeClips", () => {
     expect(body.model).toBe(cfg.finalizerModel);
     expect(body.messages[1].content).toContain("CLIP a");
     expect(body.messages[1].content).toContain("CLIP c");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// LONG-CLIP DEFENCE IN DEPTH (spec 2026-08-10 task 5). Unreachable if the
+// long-clip policy in index.ts is correct - every clip here arrives already
+// carrying `overLength: true` and gets a plain "ship" verdict from the judge,
+// so applyFinalizerEntries passes it straight through and the gate below is
+// the only thing that touches it. Built directly rather than through the
+// `clip()` helper: only finalStartNode/endSec/verdict.hookStartNode matter to
+// compressToFit, and controlling `hookStartNode` directly is how the
+// compressed-vs-dropped split is engineered.
+// ---------------------------------------------------------------------------
+
+describe("finalizeClips - long-clip defence in depth (spec 2026-08-10 task 5)", () => {
+  const longCfg = loadAnalyzeConfig({ LONG_CLIPS: "on" });
+  const graph = denseNodes(100); // 1s apart, every node a clean start
+
+  function wideClip(
+    id: string,
+    finalStartNode: number,
+    hookStartNode: number,
+    startSec: number,
+    endSec: number
+  ): SnappedClip {
+    return {
+      verdict: {
+        id,
+        keep: true,
+        score: 0.8,
+        grounded: true,
+        selfContained: true,
+        startNode: finalStartNode,
+        payoffNode: finalStartNode,
+        endNode: finalStartNode,
+        hookStartNode,
+        hookEndNode: hookStartNode + 1,
+        title: `Заголовок ${id}`,
+        description: "Описание",
+        titleEvidenceNodes: [finalStartNode],
+        descriptionEvidenceNodes: [finalStartNode],
+        language: "ru",
+      },
+      startSec,
+      endSec,
+      hookStartSec: startSec,
+      hookEndSec: endSec,
+      payoffSec: endSec,
+      shortMoment: false,
+      finalStartNode,
+      finalEndNode: finalStartNode,
+      overLength: true,
+    };
+  }
+
+  const okFlags: ArcFlags = {
+    entry: { ok: true },
+    exit: { ok: true },
+    standalone: { ok: true },
+  };
+  const flaggedEntry: ArcFlags = {
+    entry: { ok: false, defect: "dangling_reference" },
+    exit: { ok: true },
+    standalone: { ok: true },
+  };
+
+  it("ships a blessed overLength clip unchanged, wide", async () => {
+    const wide = wideClip("blessed", 10, 10, 10, 110); // 100s
+    const client = seqClient([() => ok([row("blessed")])]);
+    const arcFlags = new Map([["blessed", okFlags]]);
+    const r = await finalizeClips(
+      client,
+      newUsage(),
+      [wide],
+      graph,
+      "ru",
+      "Russian",
+      longCfg,
+      { retryDelayMs: 1 },
+      arcFlags
+    );
+    expect(r.clips).toEqual([wide]); // byte-identical - the gate did nothing
+    expect(r.telemetry.longClipsCompressed).toBeUndefined();
+    expect(r.telemetry.longClipsDropped).toBeUndefined();
+  });
+
+  it("compresses a surviving unblessed overLength clip that has room to fit", async () => {
+    // hookStartNode 60 gives compressToFit a long walk (21..60) to find a
+    // legal earliest fit; node 30 (candidateStart 29.85) is 0.15s short of
+    // the 90s cap, node 31 (30.85) fits - the measured earliest-fit target.
+    const wide = wideClip("compressible", 20, 60, 20, 120); // 100s
+    const client = seqClient([() => ok([row("compressible")])]);
+    const arcFlags = new Map([["compressible", flaggedEntry]]); // NOT blessed
+    const r = await finalizeClips(
+      client,
+      newUsage(),
+      [wide],
+      graph,
+      "ru",
+      "Russian",
+      longCfg,
+      { retryDelayMs: 1 },
+      arcFlags
+    );
+    expect(r.clips).toHaveLength(1);
+    const out = r.clips[0];
+    expect(out.overLength).toBe(false);
+    expect(out.finalStartNode).toBe(31);
+    expect(out.startSec).toBeCloseTo(30.85, 2);
+    expect(out.endSec - out.startSec).toBeLessThanOrEqual(longCfg.maxSec);
+    expect(r.telemetry.longClipsCompressed).toBe(1);
+    expect(r.telemetry.longClipsDropped).toBeUndefined();
+  });
+
+  it("drops a surviving unblessed overLength clip that has no room to compress", async () => {
+    // hookStartNode === finalStartNode - compressToFit's own loop (startNode+1
+    // to hookStartNode) never executes, exactly like the "unreachable" note on
+    // snapNodes's 5a compression documents for a clip with no legal candidate.
+    const wide = wideClip("uncompressible", 70, 70, 70, 170); // 100s
+    const client = seqClient([() => ok([row("uncompressible")])]);
+    const arcFlags = new Map<string, ArcFlags>(); // unaudited - not blessed
+    const r = await finalizeClips(
+      client,
+      newUsage(),
+      [wide],
+      graph,
+      "ru",
+      "Russian",
+      longCfg,
+      { retryDelayMs: 1 },
+      arcFlags
+    );
+    expect(r.clips).toEqual([]); // dropped, never a crash
+    expect(r.telemetry.longClipsDropped).toBe(1);
+    expect(r.telemetry.longClipsCompressed).toBeUndefined();
+  });
+
+  it("never touches a clip without the overLength mark, arcFlags or not", async () => {
+    const normal = clip("a", 0.9);
+    const client = seqClient([() => ok([row("a")])]);
+    const r = await finalizeClips(
+      client,
+      newUsage(),
+      [normal],
+      nodes(),
+      "ru",
+      "Russian",
+      longCfg,
+      { retryDelayMs: 1 },
+      new Map()
+    );
+    expect(r.clips).toEqual([normal]);
+    expect(r.telemetry.longClipsCompressed).toBeUndefined();
+    expect(r.telemetry.longClipsDropped).toBeUndefined();
+  });
+
+  it("is a pure no-op, byte for byte, when longClipsEnabled is off - even on an overLength clip", async () => {
+    // Defensive: an overLength mark can only exist when the flag produced it
+    // (snap.ts), but this proves the gate itself does not run at all when the
+    // flag is off, rather than running and happening to agree.
+    const wide = wideClip("uncompressible", 70, 70, 70, 170);
+    const client = seqClient([() => ok([row("uncompressible")])]);
+    const r = await run(client, [wide]); // cfg (default), no arcFlags argument at all
+    expect(r.clips).toEqual([wide]);
   });
 });

@@ -376,6 +376,15 @@ export function finalizerSystemPrompt(
  * (rules 4 and 5), which is the exact mistake the critic makes from inside its
  * padded window. The payoff index is in the header because rules 5-7 have to
  * keep a proposed trim before it.
+ *
+ * `overLength` clips (spec 2026-08-10 §2e, task 5) gain one extra line right
+ * after the header - the LENGTH EXCEPTION notice that makes the finalizer's
+ * ship decision on a wide clip an EXPLICIT one, the owner's first condition
+ * for shipping a clip over the 90s standard in code. A clip without the mark
+ * renders BYTE-IDENTICALLY to before this task - same discipline as task 4's
+ * hint line on buildExtensionUser, and for the same reason: every recorded
+ * finalizer fixture predates this task, and none of them may go stale over a
+ * feature that never touched them.
  */
 export function finalizerUserPrompt(
   clips: SnappedClip[],
@@ -386,10 +395,18 @@ export function finalizerUserPrompt(
       const v = c.verdict;
       const lines = [
         `CLIP ${v.id} | score ${v.score.toFixed(2)} | ${Math.round(c.endSec - c.startSec)}s | payoff #${v.payoffNode}`,
+      ];
+      if (c.overLength) {
+        lines.push(
+          `LENGTH EXCEPTION: this clip runs ${Math.round(c.endSec - c.startSec)}s, over the ` +
+            `90s standard - ship it long only if every second earns its place.`
+        );
+      }
+      lines.push(
         `title: ${v.title}`,
         `description: ${v.description}`,
-        "speech:",
-      ];
+        "speech:"
+      );
       const from = Math.max(0, v.startNode);
       const to = Math.min(nodes.length - 1, v.endNode);
       for (let i = from; i <= to; i++) {

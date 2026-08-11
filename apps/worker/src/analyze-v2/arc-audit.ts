@@ -117,6 +117,23 @@ export interface ArcAuditResult {
   telemetry: ArcAuditTelemetry;
 }
 
+/**
+ * "Blessed", verbatim from spec 2026-08-10 §2b (task 5): flags EXIST for this
+ * clip AND all three axes read `ok: true`. Unaudited (`undefined`) and
+ * audit-dark (arcAuditEnabled off, so the caller never even looked this id up)
+ * both read as NOT blessed - the same "absent means not established" reading
+ * this file already uses for a missing pointer, never a silent pass.
+ *
+ * ONE helper, used at all three places blessed-ness is asked (spec task 5,
+ * item 4): the long-clip policy in index.ts, start-extension.ts's too_long
+ * gate, end-extension.ts's fitsMaxSec/extensionWindow. Detection logic is
+ * untouched - this reads a verdict already computed by runArcAudit, above; it
+ * does not judge anything itself.
+ */
+export function isFullyOk(flags: ArcFlags | undefined): boolean {
+  return !!flags && flags.entry.ok && flags.exit.ok && flags.standalone.ok;
+}
+
 function emptyTelemetry(): ArcAuditTelemetry {
   return {
     audited: 0,

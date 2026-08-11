@@ -16,5 +16,9 @@
   "arc-exit-hints": {
     "arcAuditEnabled": true,
     "endExtensionHintsEnabled": true
+  },
+  "long-clips": {
+    "arcAuditEnabled": true,
+    "longClipsEnabled": true
   }
 }
