@@ -49,8 +49,18 @@ const LANG_ALIASES: Record<Locale, readonly string[]> = {
     "ingles",
     "inglés",
     "inggris",
+    "الإنجليزية",
   ],
-  ru: ["russian", "рус", "русский", "російська", "ruso", "russo", "rusia"],
+  ru: [
+    "russian",
+    "рус",
+    "русский",
+    "російська",
+    "ruso",
+    "russo",
+    "rusia",
+    "الروسية",
+  ],
   uk: [
     "ukrainian",
     "ukr",
@@ -59,10 +69,38 @@ const LANG_ALIASES: Record<Locale, readonly string[]> = {
     "украинский",
     "ucraniano",
     "ucraniana",
+    "الأوكرانية",
   ],
-  es: ["spanish", "espanol", "español", "исп", "испанский", "espanhol"],
-  pt: ["portuguese", "portugues", "português", "brasil", "br", "порт", "португальский"],
-  id: ["indonesian", "indonesia", "bahasa", "инд", "индонезийский"],
+  es: [
+    "spanish",
+    "espanol",
+    "español",
+    "исп",
+    "испанский",
+    "espanhol",
+    "الإسبانية",
+  ],
+  pt: [
+    "portuguese",
+    "portugues",
+    "português",
+    "brasil",
+    "br",
+    "порт",
+    "португальский",
+    "البرتغالية",
+  ],
+  id: [
+    "indonesian",
+    "indonesia",
+    "bahasa",
+    "инд",
+    "индонезийский",
+    "الإندونيسية",
+  ],
+  // Arabic script is caseless, so toLowerCase() leaves these entries alone and
+  // the exact-match lookup below still finds what an Arabic reader types.
+  ar: ["arabic", "arabe", "árabe", "arab", "عربي", "العربية", "араб", "арабский"],
 };
 
 export function parseLangCommand(text: string): LangChoice | "usage" | null {

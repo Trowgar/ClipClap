@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma";
 import { getPlanLimits } from "../config/plans";
-import { detectLocale, type Locale } from "../i18n";
+import { detectLocale, isolate, plural, type Locale } from "../i18n";
 import type { Plan } from "@prisma/client";
 
 export type PaymentEvent =
@@ -21,6 +21,20 @@ const PLAN_TITLES: Record<string, string> = {
 
 function planTitle(plan: Plan): string {
   return PLAN_TITLES[plan] ?? String(plan);
+}
+
+/** The counted noun in the Arabic quota line. Every plan's minutesPerPeriod is
+ *  75 or more, which Arabic selects `many` or `other` for, and both take the
+ *  singular "دقيقة" - but the small categories are written out anyway so a
+ *  smaller plan added later cannot quietly render "5 دقيقة". `zero` is not
+ *  written: the caller drops the whole line when minutes is 0. */
+function minutesAr(n: number): string {
+  return plural("ar", n, {
+    one: "دقيقة واحدة",
+    two: "دقيقتين",
+    few: `${isolate(n)} دقائق`,
+    other: `${isolate(n)} دقيقة`,
+  });
 }
 
 type PaymentCopy = (
@@ -143,6 +157,28 @@ const PAYMENT_COPY: Record<Locale, PaymentCopy> = {
         return event.graceEndsAt
           ? `⚠️ Langganan dibatalkan. Aksesmu tetap ada sampai ${formatDate(event.graceEndsAt)}.`
           : `⚠️ Langganan dibatalkan. Akses pemrosesan dimatikan.`;
+    }
+  },
+  // Right to left, so every Latin or numeric run interpolated into a sentence
+  // is isolated - a plan name, a minute count, a date. Without it the bidi
+  // algorithm lays the run out together with the punctuation touching it and
+  // "فعّال حتى 2026-06-24." renders with the full stop at the wrong end.
+  ar: (event, opts) => {
+    switch (event.kind) {
+      case "subscription_activated": {
+        const avail = opts?.minutes
+          ? `\nالمتاح للمعالجة في هذه الفترة: ${minutesAr(opts.minutes)}.`
+          : "";
+        return `🎉 تم تفعيل اشتراك ${isolate(planTitle(event.plan))}!\nفعّال حتى ${isolate(formatDate(event.periodEnd))}.${avail}\n\nللبدء: أرسل ملف فيديو أو الصق رابطًا (يوتيوب، تويتش، تيك توك وغيرها) - وسأقطّعه إلى مقاطع عمودية مع ترجمة نصية.`;
+      }
+      case "subscription_renewed":
+        return `🔄 تم تجديد الاشتراك حتى ${isolate(formatDate(event.periodEnd))}.`;
+      case "payment_failed":
+        return `⚠️ لم تنجح عملية الدفع. حدّث وسيلة الدفع، وإلا فسينتهي اشتراكك.\n\n${isolate(event.manageUrl)}`;
+      case "subscription_canceled":
+        return event.graceEndsAt
+          ? `⚠️ تم إلغاء الاشتراك. يبقى وصولك إلى المعالجة حتى ${isolate(formatDate(event.graceEndsAt))}.`
+          : `⚠️ تم إلغاء الاشتراك. الوصول إلى المعالجة متوقف الآن.`;
     }
   },
 };
