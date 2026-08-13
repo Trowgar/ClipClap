@@ -37,6 +37,24 @@ const DEFAULT_STYLE = {
 // tight, and raising it is a look decision, not a correctness one. Both limits
 // are HARD: `chunkWords` never exceeds them, it only chooses differently
 // within them.
+//
+// ARABIC IS COVERED BY THE SAME NUMBER, and this was expected not to be true.
+// The Arabic-locale work assumed Arabic ran about half the Cyrillic width per
+// character and planned a per-script budget around that. Measured instead, on
+// the real burn, Tajawal Bold at the same size 100 on the same 1080 canvas,
+// over 18 Arabic samples of 8 to 31 characters:
+//
+//   reference   19 Cyrillic characters   715px   37.6 px/char
+//   Arabic      widest sample             ...    36.8 px/char
+//   Arabic      median                    ...    ~31 px/char
+//
+//   every sample of 20 characters or fewer fitted inside 715px;
+//   22 was mixed (670px vs 730px on the same character count);
+//   23 and above never fitted.
+//
+// So the two scripts are within a few percent of each other here and 18 is
+// right for both. The per-script budget was designed, measured, and dropped -
+// do not add one back without a measurement that disagrees with this one.
 const MAX_CHUNK_WORDS = 3;
 const MAX_CHUNK_CHARS = 18;
 
