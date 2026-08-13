@@ -672,10 +672,19 @@ Append immediately after:
             where: { id: payload.clipId },
             select: { language: true, job: { select: { language: true } } },
           })
-          .then((row) => row?.language ?? row?.job.language ?? null)
+          // Both `?.` are load-bearing. `row?.job.language` would THROW when
+          // the row exists without its relation - which is exactly what a
+          // mocked findUnique returns - and the catch below would swallow it
+          // into a silent null, i.e. the Latin face on every trim, passing
+          // every test.
+          .then((row) => row?.language ?? row?.job?.language ?? null)
           .catch(() => null)
       : null;
 ```
+
+The `.catch(() => null)` is for a genuinely unavailable row, not for a programming error above it. Verify
+the happy path returns a language rather than relying on the catch: the test in Step 6 must assert the
+language that actually reaches `burnSubtitles`.
 
 - [ ] **Step 5: Use it at both trim burn sites**
 
@@ -712,10 +721,51 @@ docker compose exec -T worker-render sh -c 'cd /app && ./node_modules/.bin/vites
 
 Expected: `tsc=0`, both suites PASS.
 
-`render-trim-fallback.test.ts` asserts `burnSubtitles` was called with specific arguments
-(`expect(mocks.burnSubtitles).toHaveBeenCalledWith(...)` around line 190). It will now receive a third
-argument. Update that assertion to expect the third argument explicitly - do **not** loosen it to
-`expect.anything()`, because the whole point of the change is which language reaches the burn.
+`render-trim-fallback.test.ts` asserts `burnSubtitles` was called with specific arguments. It will now
+receive a third. The existing assertion, around line 189, is:
+
+```ts
+    expect(mocks.burnSubtitles).toHaveBeenCalledWith(
+      "/tmp/trimmed-clip.mp4",
+      fallbackPayload.subtitleTrack.cues
+    );
+```
+
+That file already mocks `prisma.clip.findUnique` as `mocks.clipFindUnique`. Make the test prove the
+language actually arrives, rather than just tolerating a third argument:
+
+```ts
+    mocks.clipFindUnique.mockResolvedValue({ language: "ar", job: { language: "en" } });
+```
+
+set before the `runRenderStage` call, and then:
+
+```ts
+    expect(mocks.burnSubtitles).toHaveBeenCalledWith(
+      "/tmp/trimmed-clip.mp4",
+      fallbackPayload.subtitleTrack.cues,
+      "ar"
+    );
+```
+
+Do **not** loosen it to `expect.anything()`, and do not accept `null` as the third argument - a null
+there means the lookup silently failed and every Arabic trim would burn in the Latin face while the
+test stayed green.
+
+Add a second case pinning the fallback, because that branch is what covers the 13 clip rows whose
+`language` is null in production:
+
+```ts
+  it("falls back to the job language when the clip row has none", async () => {
+    mocks.clipFindUnique.mockResolvedValue({ language: null, job: { language: "fa" } });
+    await runRenderStage({ ...fallbackPayload, originalHasBurnedSubtitles: false });
+    expect(mocks.burnSubtitles).toHaveBeenCalledWith(
+      "/tmp/trimmed-clip.mp4",
+      fallbackPayload.subtitleTrack.cues,
+      "fa"
+    );
+  });
+```
 
 - [ ] **Step 7: Commit**
 
