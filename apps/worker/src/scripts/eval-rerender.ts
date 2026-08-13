@@ -235,6 +235,7 @@ async function renderOne(
   highlight: Highlight,
   transcriptSegments: WhisperSegment[],
   subtitlesOn: boolean,
+  language: string | null | undefined,
   outPath: string
 ): Promise<{ plan: CropPlan | null; note: string }> {
   const tempFiles: string[] = [];
@@ -249,7 +250,9 @@ async function renderOne(
     // Clip row records was actually burned - see the caller.
     let assFilter: { filter: string; assPath: string } | null = null;
     if (subtitlesOn && cues.length > 0) {
-      assFilter = await createAssFilter(cues);
+      // Same face the original render chose, or this script reproduces a
+      // different file than the one it is supposed to be checking.
+      assFilter = await createAssFilter(cues, language);
       tempFiles.push(assFilter.assPath);
     }
 
@@ -358,6 +361,7 @@ async function main() {
         id: true,
         originalFilename: true,
         subtitles: true,
+        language: true,
         normalizedArtifactKey: true,
         sourceArtifactKey: true,
         transcriptJson: true,
@@ -424,11 +428,17 @@ async function main() {
               ? ""
               : ` !! Clip.subtitles=${subtitlesOn} but job.subtitles+cues says ${jobWould}`;
 
+          // Same precedence as stages/render.ts: the highlight's own language
+          // wins over the job's, because a source can switch language
+          // partway through and the job carries only the dominant one.
+          const clipLanguage = highlight.language ?? job.language;
+
           const { plan, note } = await renderOne(
             sourcePath,
             highlight,
             transcription.segments,
             subtitlesOn,
+            clipLanguage,
             afterPath
           );
 
