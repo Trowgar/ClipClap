@@ -315,8 +315,73 @@ describe("bot i18n", () => {
       "Español",
       "Português",
       "Bahasa Indonesia",
+      "العربية",
     ]);
     expect(new Set(names).size).toBe(LOCALES.length);
+  });
+
+  // Arabic is the only language here that selects all six CLDR categories,
+  // and a structural copy from another dictionary type-checks. Six distinct
+  // forms is the cheapest proof that six were actually written.
+  //
+  // The count is stripped before comparing, and that is the whole point of
+  // this test rather than an incidental tidy-up. Four of the six forms
+  // interpolate the number, so two categories written with IDENTICAL wording
+  // still render differently at n=3 and n=11 purely because the digits
+  // differ. Comparing the raw output would therefore pass on any pair of
+  // copy-pasted forms - it would be measuring that 3 is not 11, which was
+  // never in doubt. What is asserted here is six distinct WORDINGS.
+  // Verified by mutation: with the `two` form copied from `few`, the raw
+  // comparison stayed green and this one fails.
+  it("uses all six Arabic plural categories, distinctly", () => {
+    // U+2066-U+2069 are the isolate marks isolate() wraps the numeral in.
+    const wording = (s: string) => s.replace(/[\u2066-\u2069]|\d/g, "");
+    const forms = [0, 1, 2, 3, 11, 100].map((n) => wording(t("ar").done(n)));
+    expect(new Set(forms).size).toBe(6);
+  });
+
+  it("resolves Arabic regional tags", () => {
+    expect(detectLocale("ar")).toBe("ar");
+    expect(detectLocale("ar-SA")).toBe("ar");
+    expect(detectLocale("ar-EG")).toBe("ar");
+    expect(detectLocale("ar_MA")).toBe("ar");
+  });
+
+  // Keyboard labels are compared by exact string against what Telegram echoes
+  // back. A bidi control character inside one is invisible in review and turns
+  // a broken button into a silent one.
+  it("has no bidi control character in any keyboard label", () => {
+    // U+202A-U+202E embedding/override, U+2066-U+2069 isolates, U+200E/U+200F
+    // marks. Written as escapes on purpose: the literal characters would be
+    // invisible in this file, which is the whole point of the guard.
+    const BIDI = /[\u202A-\u202E\u2066-\u2069\u200E\u200F]/;
+    const labelKeys = [
+      "menuCreate", "menuAccount", "menuHelp", "menuSettings", "menuEarn", "menuPlans",
+      "settingsLangBtn", "settingsVideoBtn", "settingsLinkBtn", "settingsBackBtn",
+      "earnReferralBtn", "earnAdvertisersBtn", "referralWithdrawBtn",
+      "helpHowBtn", "helpSupportBtn", "supportCloseBtn",
+    ] as const;
+    for (const loc of LOCALES) {
+      for (const key of labelKeys) {
+        expect(BIDI.test(t(loc)[key] as string), `${loc}.${key}`).toBe(false);
+      }
+    }
+  });
+
+  // The type system cannot see that a key was copied from en.ts and never
+  // translated. Comparing the rendered strings can.
+  it("leaves no Arabic string identical to its English original", () => {
+    const en = t("en");
+    const ar = t("ar");
+    const same: string[] = [];
+    for (const key of Object.keys(en) as Array<keyof typeof en>) {
+      const a = en[key];
+      const b = ar[key];
+      if (typeof a === "string" && typeof b === "string" && a === b) {
+        same.push(key as string);
+      }
+    }
+    expect(same).toEqual([]);
   });
 
   const activeBase = {
