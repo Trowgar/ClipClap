@@ -91,3 +91,14 @@ INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
 DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
+
+================================================================================
+Tajawal - Copyright (c) 2016 The Tajawal Project Authors
+(https://github.com/google/fonts/tree/main/ofl/tajawal)
+
+Licensed under the SIL Open Font License, Version 1.1, reproduced above.
+Vendored for burned-in Arabic subtitles: libass cannot fall back to a second
+face because fontconfig has no font database inside the worker image, so the
+Arabic face has to be named explicitly. See
+docs/superpowers/specs/2026-08-13-arabic-locale-design.md §2.2.
+================================================================================
