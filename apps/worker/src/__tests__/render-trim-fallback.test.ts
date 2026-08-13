@@ -156,6 +156,11 @@ describe("renderTrim fallback avoids double-burning subtitles", () => {
     mocks.downloadVideo.mockResolvedValue("/tmp/original-clip.mp4");
     mocks.trimClipFile.mockResolvedValue("/tmp/trimmed-clip.mp4");
     mocks.burnSubtitles.mockResolvedValue("/tmp/subbed-clip.mp4");
+    // The burn now reads the clip's language first. A bare vi.fn() returns
+    // undefined rather than a promise, which throws before the lookup's own
+    // .catch exists - so every test that burns needs a row, not just the
+    // language ones. null here = the pre-Arabic Latin face.
+    mocks.clipFindUnique.mockResolvedValue(null);
   });
 
   it("does not burn subtitles again when the original clip is already subtitled", async () => {
@@ -182,19 +187,46 @@ describe("renderTrim fallback avoids double-burning subtitles", () => {
   });
 
   it("still burns subtitles when the original clip has none baked in", async () => {
+    // The clip's own language wins over its job's: a source can switch
+    // language partway through, and this clip is the Arabic stretch of it.
+    mocks.clipFindUnique.mockResolvedValue({
+      language: "ar",
+      job: { language: "en" },
+    });
+
     await runRenderStage({
       ...fallbackPayload,
       originalHasBurnedSubtitles: false,
     });
 
+    // The third argument must be the real language, never null: null here
+    // would mean the lookup silently failed and every Arabic trim would burn
+    // the Latin face with this test still green.
     expect(mocks.burnSubtitles).toHaveBeenCalledWith(
       "/tmp/trimmed-clip.mp4",
-      fallbackPayload.subtitleTrack.cues
+      fallbackPayload.subtitleTrack.cues,
+      "ar"
     );
     expect(mocks.uploadFile).toHaveBeenCalledWith(
       expect.stringContaining("clips/u1/job1/"),
       "/tmp/subbed-clip.mp4",
       "video/mp4"
+    );
+  });
+
+  it("falls back to the job language when the clip row has none", async () => {
+    // Covers the 13 production clip rows whose own language column is null.
+    mocks.clipFindUnique.mockResolvedValue({
+      language: null,
+      job: { language: "fa" },
+    });
+
+    await runRenderStage({ ...fallbackPayload, originalHasBurnedSubtitles: false });
+
+    expect(mocks.burnSubtitles).toHaveBeenCalledWith(
+      "/tmp/trimmed-clip.mp4",
+      fallbackPayload.subtitleTrack.cues,
+      "fa"
     );
   });
 
@@ -265,6 +297,8 @@ describe("renderTrim clean-source branch still burns subtitles as before", () =>
     mocks.clipUpdate.mockResolvedValue(undefined);
     mocks.downloadVideo.mockResolvedValue("/tmp/source.mp4");
     mocks.cutClips.mockResolvedValue([{ clipPath: "/tmp/cut-clip.mp4" }]);
+    // See the fallback suite: the language lookup runs before either burn.
+    mocks.clipFindUnique.mockResolvedValue(null);
   });
 
   it("burns the edited cues via the single-pass filter, not via burnSubtitles", async () => {

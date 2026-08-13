@@ -112,6 +112,11 @@ async function renderClips(
     let consecutiveTimeouts = 0;
 
     for (const highlight of highlights) {
+      // The face is chosen from the language actually SPOKEN in this clip.
+      // The highlight's own language wins over the job's because a source can
+      // switch language partway through and the job carries only the dominant
+      // one; both are nullable and an absent value keeps the Latin face.
+      const clipLanguage = highlight.language ?? job.language;
       // Derived even when subtitles are off so the editor can enable them later
       const cues = segmentsToCues(
         transcription.segments,
@@ -135,7 +140,7 @@ async function renderClips(
       // cut a second time just for subtitles doubled render time.
       let assFilter: { filter: string; assPath: string } | null = null;
       if (job.subtitles && cues.length > 0) {
-        assFilter = await createAssFilter(cues);
+        assFilter = await createAssFilter(cues, clipLanguage);
         tempFiles.push(assFilter.assPath);
       }
       // Smart reframe: per-shot face-aware crop (spec 2026-07-24). Any
@@ -356,6 +361,23 @@ async function renderTrim(
     const editedCues = payload.subtitleTrack?.cues ?? [];
     const windowedCues = sliceCues(editedCues, payload.start, payload.end);
     const wantSubs = payload.subtitles && windowedCues.length > 0;
+    // The trim payload predates Arabic and carries no language, so read it.
+    // One query, and only when something is actually going to be drawn.
+    // clips.language is null on 13 rows in production, hence the job fallback.
+    const trimLanguage = wantSubs
+      ? await prisma.clip
+          .findUnique({
+            where: { id: payload.clipId },
+            select: { language: true, job: { select: { language: true } } },
+          })
+          // Both `?.` are load-bearing. `row?.job.language` would THROW when
+          // the row exists without its relation - which is exactly what a
+          // mocked findUnique returns - and the catch below would swallow it
+          // into a silent null, i.e. the Latin face on every trim, passing
+          // every test.
+          .then((row) => row?.language ?? row?.job?.language ?? null)
+          .catch(() => null)
+      : null;
 
     let finalPath: string;
     let slicedPlan: CropPlan | null = null;
@@ -381,7 +403,7 @@ async function renderTrim(
       const sourcePath = cleanSourcePath;
       let assFilter: { filter: string; assPath: string } | null = null;
       if (wantSubs) {
-        assFilter = await createAssFilter(windowedCues);
+        assFilter = await createAssFilter(windowedCues, trimLanguage);
         tempFiles.push(assFilter.assPath);
       }
       // Reuse the stored crop plan re-windowed to the trim range (clip-relative,
@@ -466,7 +488,7 @@ async function renderTrim(
       // burning the new cues on top would stack two overlapping layers of
       // text, which is strictly worse.
       if (wantSubs && !payload.originalHasBurnedSubtitles) {
-        const subbedPath = await burnSubtitles(trimmedPath, windowedCues);
+        const subbedPath = await burnSubtitles(trimmedPath, windowedCues, trimLanguage);
         tempFiles.push(subbedPath);
         finalPath = subbedPath;
       } else if (wantSubs) {
