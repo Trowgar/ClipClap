@@ -12,6 +12,7 @@ import uk from "./uk";
 import es from "./es";
 import pt from "./pt";
 import id from "./id";
+import ar from "./ar";
 
 // Re-exported so the rest of the bot keeps importing its locale vocabulary
 // from one module. The definitions live in @clipclap/shared because payment
@@ -22,7 +23,7 @@ export type { Dict };
 /** One dictionary per supported language, in its own file. Keyed by the full
  *  Locale union, so adding a code to LOCALES fails to compile here until the
  *  language has words - which is the whole point of the registry. */
-const dictionaries: Record<Locale, Dict> = { en, ru, uk, es, pt, id };
+const dictionaries: Record<Locale, Dict> = { en, ru, uk, es, pt, id, ar };
 
 export function t(locale: Locale): Dict {
   return dictionaries[locale];
