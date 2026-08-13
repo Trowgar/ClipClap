@@ -46,11 +46,11 @@ A 1-second probe through the real endpoint from `worker-transcribe`, with the ow
   (`"English"` where OpenAI returns `"english"`). `whisperLanguageToIso` lowercases its input
   (`language.ts:58`), so this is already absorbed - but §6 pins it anyway, because `Job.language`
   feeds both the ANALYZE prompts and the Arabic font map of the 2026-08-13 arabic-locale spec.
-- **The key's current ceiling is 7200 audio-seconds per hour** (`x-ratelimit-limit-audio-seconds`
-  header). Two hours of audio per hour. Enough for every measurement in §4; not enough for one
-  3-hour VOD. Production flip therefore has a hard prerequisite: enable billing in the Groq console
-  and re-run this same header probe to confirm the raised ceiling. The key lives in `.env` as
-  `GROQ_API_KEY` (added 2026-08-13) and nowhere else.
+- **The key's ceiling at first probe was 7200 audio-seconds per hour** (`x-ratelimit-limit-audio-seconds`
+  header) - two hours of audio per hour, enough for §4, not enough for one 3-hour VOD. The owner
+  enabled dev billing the same evening and the re-probe measured **400,000 audio-seconds** (111
+  audio-hours per window) and 200,000 requests - the production prerequisite in §7 step 3 is
+  already met. The key lives in `.env` as `GROQ_API_KEY` (added 2026-08-13) and nowhere else.
 - **Silence hallucinates the same way.** The 1s silent probe transcribed as "Thank you." -
   whisper-1 does exactly this too. Not a regression, just a reminder that the providers share the
   model's vices.
@@ -95,21 +95,24 @@ discourse particles (engine-notes §1). That envelope is the yardstick: if Groq-
 same audio looks like whisper-1-vs-whisper-1, the provider change is indistinguishable from the
 noise the engine already tolerates.
 
-The fixture episode's audio is currently unrecoverable from our side (both jobs were manual uploads
-of `videoplayback.mp4`, both swept from R2, no `sourceUrl`). The owner is asked to supply the file
-or the episode URL. The plan does not block on it: for any source, a **fresh whisper-1 double-run
-on the identical mp3** re-establishes the self-jitter control exactly, for ~$0.62 per 52-minute
-source. The fixture episode adds one thing money cannot re-buy elsewhere: §4.4's engine-level
-comparison against the recorded fixture pair.
+The fixture episode's audio is unrecoverable from our side (both jobs were manual uploads of
+`videoplayback.mp4`, both swept from R2, no `sourceUrl`). The owner instead submitted a **fresh
+55-minute Russian episode** through the pipeline the same evening (job
+`cmsrx4ob30003i1jxfle15qef`, `https://youtu.be/EnTXXyKSL64`, 3323s, single-call path at 13.3MB), so
+the fallback design is the active one: the job's own `transcriptJson` is whisper-1 reference #1,
+free; **one more whisper-1 run on the identical mp3** (~$0.33) establishes the self-jitter control
+on this exact audio. The fixture episode's unique contribution - §4.4's engine-level comparison
+against the recorded pair - is off unless the July file surfaces; §4.4 stays in the spec for that
+case only.
 
 ### 4.2 The corpus
 
 | source | audio | whisper-1 reference | status |
 |---|---|---|---|
-| Russian, 52 min (fixture episode) | owner to supply | both fixture `transcript.json`s | wanted, not blocking |
-| Russian fallback: any current long source | re-download | fresh double-run (control included) | if the above fails |
-| Arabic, 193s (`cmsoarjd00079uhfjfj72esb9`) | **secured 2026-08-13** | job's `transcriptJson`, dumped alongside | ready |
-| Arabic, 296s (`cmsnod8kc005zuhfj95wm65fs`) | **secured 2026-08-13** | job's `transcriptJson`, dumped alongside | ready |
+| Russian, 55 min (`cmsrx4ob30003i1jxfle15qef`, Alipov episode) | **secured 2026-08-13**, `asr-russian/` | job's `transcriptJson` + one fresh run (the control) | ready; control run pending |
+| Russian, 52 min (July fixture episode) | unrecoverable | both fixture `transcript.json`s | only if the July file surfaces (§4.4) |
+| Arabic, 193s (`cmsoarjd00079uhfjfj72esb9`) | **secured 2026-08-13**, `asr-arabic/` | job's `transcriptJson`, dumped alongside | ready |
+| Arabic, 296s (`cmsnod8kc005zuhfj95wm65fs`) | **secured 2026-08-13**, `asr-arabic/` | job's `transcriptJson`, dumped alongside | ready |
 | English | optional tiebreak only | fresh double-run | only if ru+ar are marginal |
 
 The Arabic sources were pulled from R2 hours before their retention expiry, re-encoded with the
@@ -212,12 +215,12 @@ Small by design. Everything is env-gated; unset env is byte-identical to today.
 
 ## 7. Rollout
 
-1. **Owner asked for the fixture episode file/URL** (§4.1). Measurements start with Arabic
-   regardless.
+1. ~~Owner asked for the fixture episode file/URL~~ **Done 2026-08-13**: the owner supplied a fresh
+   Russian episode instead (§4.1); the corpus is complete, one whisper-1 control run pending.
 2. **Measurement script runs; numbers land in engine-notes and an addendum to this spec.** The §4.5
    rule names the model, or ends the project with a negative result.
-3. **Billing enabled in the Groq console** (owner action); the header probe re-run confirms the
-   raised audio-seconds ceiling. Production does not flip before this.
+3. ~~Billing enabled in the Groq console~~ **Done 2026-08-13**: dev tier measured at 400,000
+   audio-seconds (§2). Production does not flip before this - and now may.
 4. **Code merges with the default off.** Worker code hot-reloads from the bind mount; the env flip
    requires `docker compose up -d worker-transcribe` (not `restart` - it ignores `env_file`),
    then the per-container `prisma generate` ritual per the deploy-regen note.
