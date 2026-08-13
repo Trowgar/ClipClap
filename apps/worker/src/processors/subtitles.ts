@@ -6,6 +6,7 @@ import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import type { SubtitleCue, SubtitleWord, WhisperSegment } from "@clipclap/shared";
 import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
+import { fontForLanguage } from "./subtitle-script";
 
 const execFileAsync = promisify(execFile);
 
@@ -718,8 +719,14 @@ function shiftWord(w: SubtitleWord, offset: number): SubtitleWord {
   };
 }
 
-export function generateAss(cues: SubtitleCue[]): string {
-  const s = DEFAULT_STYLE;
+export function generateAss(
+  cues: SubtitleCue[],
+  // The clip's spoken language, not the user's interface locale. Optional and
+  // trailing so every existing caller keeps compiling, and so an absent value
+  // reproduces the pre-Arabic output character for character.
+  language?: string | null
+): string {
+  const s = { ...DEFAULT_STYLE, fontName: fontForLanguage(language) };
   const header = `[Script Info]
 Title: ClipClap Subtitles
 ScriptType: v4.00+
@@ -784,10 +791,11 @@ function formatAssTime(seconds: number): string {
  * burn with other filters (crop) in a single encode pass.
  */
 export async function createAssFilter(
-  cues: SubtitleCue[]
+  cues: SubtitleCue[],
+  language?: string | null
 ): Promise<{ filter: string; assPath: string }> {
   const assPath = join(tmpdir(), `clipclap-subs-${randomUUID()}.ass`);
-  await writeFile(assPath, generateAss(cues), "utf-8");
+  await writeFile(assPath, generateAss(cues, language), "utf-8");
   const escapeFilterPath = (p: string) =>
     p.replace(/\\/g, "/").replace(/:/g, "\\:");
   return {
@@ -798,9 +806,10 @@ export async function createAssFilter(
 
 export async function burnSubtitles(
   videoPath: string,
-  cues: SubtitleCue[]
+  cues: SubtitleCue[],
+  language?: string | null
 ): Promise<string> {
-  const assContent = generateAss(cues);
+  const assContent = generateAss(cues, language);
   const assPath = join(tmpdir(), `clipclap-subs-${randomUUID()}.ass`);
   const outputPath = join(tmpdir(), `clipclap-subbed-${randomUUID()}.mp4`);
 

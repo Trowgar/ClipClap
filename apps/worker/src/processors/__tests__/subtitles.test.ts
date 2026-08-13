@@ -288,6 +288,28 @@ describe("generateAss", () => {
     ]);
     expect(ass).toContain("line1\\Nline2 (evil)");
   });
+
+  it("names the default face when no language is given", () => {
+    expect(generateAss(cues)).toContain("Style: Default,Montserrat,");
+  });
+
+  it("names the default face for a non-Arabic language", () => {
+    expect(generateAss(cues, "ru")).toContain("Style: Default,Montserrat,");
+  });
+
+  // The whole point of the change: an Arabic clip must not be drawn with a
+  // face that has no Arabic glyphs.
+  it("names the Arabic face for an Arabic-script language", () => {
+    expect(generateAss(cues, "ar")).toContain("Style: Default,Tajawal,");
+    expect(generateAss(cues, "fa")).toContain("Style: Default,Tajawal,");
+  });
+
+  // Byte-identity is the safety claim for every existing clip: the frozen
+  // render baselines only stay valid if the style line does not move a
+  // character when the language is not Arabic.
+  it("produces a byte-identical file with no language and with a Latin one", () => {
+    expect(generateAss(cues, "en")).toBe(generateAss(cues));
+  });
 });
 
 describe("comparableText", () => {
