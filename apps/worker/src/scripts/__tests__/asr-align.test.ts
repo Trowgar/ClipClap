@@ -51,8 +51,8 @@ describe("alignTokens", () => {
   });
 
   it("refuses a table whose AREA would not fit, before allocating it", () => {
-    // 9000 x 9000 = 81M cells; each side alone passes a per-dimension check.
-    const big = Array.from({ length: 9000 }, (_, k) => `t${k}`);
+    // 12000 x 12000 = 144M cells; each side alone passes a per-dimension check.
+    const big = Array.from({ length: 12000 }, (_, k) => `t${k}`);
     expect(() => alignTokens(big, big)).toThrow(/too long/);
   });
 });

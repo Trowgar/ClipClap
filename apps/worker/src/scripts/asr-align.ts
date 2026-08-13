@@ -32,11 +32,12 @@ export function alignTokens(rawA: string[], rawB: string[]): AlignCounts {
   const B = rawB.map(normToken).filter((t) => t !== "");
   const n = A.length;
   const m = B.length;
-  // Uint16 holds the LCS length, and the table is O(n*m) cells - a 52-min
-  // episode is ~7k tokens per side, ~100MB. Cap the AREA, not just each side:
-  // two 60k-token sides would pass a per-dimension check and then attempt a
-  // ~7GB allocation on a host shared with the render workers.
-  if (n >= 65535 || m >= 65535 || n * m >= 64_000_000) {
+  // Uint16 holds the LCS length, and the table is O(n*m) cells - a 55-min
+  // episode measured 8.5k tokens per side (~145MB). Cap the AREA, not just
+  // each side: two 60k-token sides would pass a per-dimension check and then
+  // attempt a ~7GB allocation on a host shared with the render workers. 128M
+  // cells (256MB) admits ~11k x 11k, i.e. sources up to roughly 70 minutes.
+  if (n >= 65535 || m >= 65535 || n * m >= 128_000_000) {
     throw new Error(`sequences too long for LCS table: ${n} x ${m}`);
   }
   const W = m + 1;
