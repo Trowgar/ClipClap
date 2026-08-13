@@ -91,15 +91,33 @@ It joins `Montserrat-Bold.ttf` in `apps/worker/assets/fonts/`, vendored in git e
 with its licence appended to the existing `apps/worker/assets/OFL.txt`. `apps/worker/Dockerfile:42`
 already copies the whole `assets` directory, so the production image picks it up with no build change.
 
-### 2.4 Arabic is about half as wide per character
+### 2.4 Arabic is the same width per character - REFUTED, and this section is the record
 
-At size 100, `احتاج المزيد من الوقت للتفكير` - 29 characters - occupies roughly 510px of the 1080 frame.
-The comment on `MAX_CHUNK_CHARS` records the Cyrillic calibration: 19 characters sit comfortably, 26
-touch both edges. Arabic therefore runs at roughly half the Cyrillic width per character, and the current
-limit of 18 is not conservative for Arabic - it is wrong in the harmful direction, splitting three-word
-phrases that would fit with room to spare.
+**This section originally claimed Arabic ran about half the Cyrillic width per character, and that the
+existing `MAX_CHUNK_CHARS = 18` was therefore harmfully small for it. That was wrong.** The claim came
+from reading a downscaled four-up contact sheet by eye, not from a measurement, and it is left here
+rather than deleted because a spec that quietly drops its own refuted premise teaches nothing.
 
-The exact replacement number is produced by a measurement pass, not guessed here. See §3.2.
+Measured during implementation, on the real `ass` burn, Tajawal Bold at size 100 on the 1080 canvas,
+over 18 Arabic samples of 8 to 31 characters, against the "sits comfortably" reference of 19 Cyrillic
+characters:
+
+| | px/char |
+|---|---|
+| Cyrillic, 19 characters = 715px | 37.6 |
+| Arabic, widest sample | 36.8 |
+| Arabic, median | ~31 |
+
+Every Arabic sample of 20 characters or fewer fitted inside 715px. 22 was mixed - 670px and 730px on the
+same character count, depending on which letters. 23 and above never fitted.
+
+The two scripts are within a few percent of each other, so **18 is right for both** and the per-script
+budget designed in §3.2 was dropped rather than shipped as a knob whose branches hold the same number.
+The figures are recorded in the comment on `MAX_CHUNK_CHARS` in `subtitles.ts` so the next person does
+not re-derive them.
+
+Only the FACE is script-dependent. That part of the design survived contact with measurement; this part
+did not.
 
 ---
 
@@ -121,16 +139,17 @@ The map is keyed on the Arabic **script**, not on `ar` alone. Persian is already
 users) and one job has already come back with `language = 'fa'`; covering it costs nothing because it is
 the same file. Urdu and Pashto are included on the same argument.
 
-### 3.2 Cue length by script
+### 3.2 Cue length by script - designed, measured, dropped
 
-`MAX_CHUNK_CHARS` becomes a value of the same script key, by the same mechanism.
+The plan was to make `MAX_CHUNK_CHARS` a value of the same script key, with the number set by
+measurement rather than guessed. The measurement was run and it said the number would be the same on
+both branches - see §2.4. So nothing is script-keyed here: `MAX_CHUNK_CHARS` stays the module constant
+`18` in `subtitles.ts`, `chunkWords` is not touched, and `subtitle-script.ts` exports only
+`fontForLanguage`.
 
-The number is set by measurement, and the target is stated so the measurement has an answer: find the
-Arabic character count whose rendered line width matches what 19 Cyrillic characters occupy today - the
-"sits comfortably" end of the existing calibration, not the "touches both edges" end. Render Arabic
-strings of increasing length through the real `ass` burn, measure the inked width, take that count. The
-resulting figure and the strings it was measured on go into the code comment, the way the Cyrillic
-number already is.
+This is recorded rather than erased because the measurement is the deliverable. A future reader
+wondering why the face is script-dependent and the budget is not now has the answer without repeating
+the work.
 
 `MAX_CHUNK_WORDS` stays at 3 for every script. It is a readability decision, not a width one.
 

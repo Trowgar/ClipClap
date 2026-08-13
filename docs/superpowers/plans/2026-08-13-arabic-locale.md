@@ -4,10 +4,11 @@
 
 **Goal:** Arabic-language clips get readable burned subtitles, and the Telegram bot speaks Arabic.
 
-**Architecture:** Two independently shippable parts. Part A (Tasks 1-8) makes the subtitle font and the
-cue-length budget values of the clip's *script* rather than module constants, and vendors an
-Arabic-capable font; every non-Arabic render stays byte-identical because the lookup returns the same
-literal `"Montserrat"` and the same `18`. Part B (Tasks 9-15) adds `"ar"` to the single `LOCALES` list,
+**Architecture:** Two independently shippable parts. Part A (Tasks 1-8) makes the subtitle font a value
+of the clip's *script* rather than a module constant, and vendors an Arabic-capable font; every
+non-Arabic render stays byte-identical because the lookup returns the same literal `"Montserrat"`.
+Part A was also going to make the cue-length budget script-keyed - Task 7 measured that premise and
+refuted it, so it does not. Part B (Tasks 9-15) adds `"ar"` to the single `LOCALES` list,
 which turns three `Record<Locale, ...>` sites into compile errors and fourteen existing assertions red,
 then fills them in.
 
@@ -55,13 +56,13 @@ Empty result means it is safe to work.
 |---|---|
 | `apps/worker/assets/fonts/Tajawal-Bold.ttf` | new. The Arabic face. Vendored, like Montserrat. |
 | `apps/worker/assets/OFL.txt` | modify. Add Tajawal's copyright line. |
-| `apps/worker/src/processors/subtitle-script.ts` | new. The only place that knows a language maps to a font and a character budget. Pure, no I/O. |
+| `apps/worker/src/processors/subtitle-script.ts` | new. The only place that knows a language maps to a font. Pure, no I/O. |
 | `apps/worker/src/processors/__tests__/subtitle-script.test.ts` | new. Unit tests for the lookup. |
 | `apps/worker/src/processors/__tests__/subtitle-font-render.test.ts` | new. The pixel oracle: proves the burn is not `.notdef` boxes. |
-| `apps/worker/src/processors/subtitles.ts` | modify. Threads an optional `language` through `chunkWords`, `segmentsToCues`, `generateAss`, `createAssFilter`, `burnSubtitles`. |
+| `apps/worker/src/processors/subtitles.ts` | modify. Threads an optional `language` through `generateAss`, `createAssFilter`, `burnSubtitles`. `chunkWords` is NOT touched - see Task 7. |
 | `apps/worker/src/stages/render.ts` | modify. Supplies the language on both the clips path and the trim path. |
 | `apps/worker/src/scripts/eval-rerender.ts` | modify. Same language, so a re-render reproduces the original. |
-| `apps/worker/src/scripts/measure-arabic-width.ts` | new. Produces the Arabic character budget. Deleted after use. |
+| `apps/worker/src/scripts/measure-arabic-width.ts` | temporary. Produced the width measurement in Task 7, then deleted. |
 | `packages/shared/src/i18n/bidi.ts` | new. `isolate()` for interpolating non-Arabic runs into RTL text. |
 | `packages/shared/src/i18n/index.ts` | modify. Export the new module. |
 | `packages/shared/src/__tests__/bidi.test.ts` | new. |
@@ -138,8 +139,13 @@ git commit -m "assets(render): vendor Tajawal Bold for Arabic subtitles"
 
 ## Task 2: The script lookup module
 
-One module owns the language-to-font and language-to-budget decisions, so no caller has to know the rule
-and there is exactly one place to change when a fourth script arrives.
+One module owns the language-to-font decision, so no caller has to know the rule and there is exactly
+one place to change when a fourth script arrives.
+
+> **Superseded in part.** As written below this task also builds `maxChunkCharsForLanguage` and
+> `ARABIC_MAX_CHUNK_CHARS`. Task 7 measured the premise behind those and refuted it, and commit
+> `97b4cc5` removed them. The steps are left intact because they are what was actually run; read Task 7
+> before treating them as current.
 
 **Files:**
 - Create: `apps/worker/src/processors/subtitle-script.ts`
@@ -936,339 +942,69 @@ git commit -m "fix(eval): re-render reproduces the original face"
 
 ---
 
-## Task 7: Measure the Arabic cue budget
+## Task 7: Measure the Arabic cue budget - DONE, and it refuted the premise
 
-`ARABIC_MAX_CHUNK_CHARS` is a placeholder until this task replaces it with a measurement. The target is
-stated in the spec §3.2: the Arabic character count whose drawn width matches what 19 Cyrillic characters
-occupy today - the "sits comfortably" end of the existing calibration.
+Run during execution. The measurement script was written, run against the real `ass` burn, and deleted.
 
-**Files:**
-- Create (temporary): `apps/worker/src/scripts/measure-arabic-width.ts`
-- Modify: `apps/worker/src/processors/subtitle-script.ts`
+Result, over 18 Arabic samples of 8 to 31 characters against the 19-Cyrillic-character reference of
+715px: the widest Arabic sample runs **36.8 px/char** against Cyrillic's **37.6**, every sample of 20
+characters or fewer fits, 22 is mixed on the same character count, and 23+ never fits.
 
-- [ ] **Step 1: Write the measurement script**
+The two scripts are within a few percent. `MAX_CHUNK_CHARS = 18` is right for Arabic as it stands.
 
-Create `apps/worker/src/scripts/measure-arabic-width.ts`:
+Consequences, all applied in commit `97b4cc5`:
 
-```ts
-/** Throwaway. Prints the drawn width of subtitle lines so the per-script
- *  character budget is a measurement rather than a guess. Delete after use -
- *  the number it produces lives in subtitle-script.ts with its provenance. */
-import { execFile } from "child_process";
-import { mkdtemp, writeFile } from "fs/promises";
-import { tmpdir } from "os";
-import { join } from "path";
-import { promisify } from "util";
-import type { SubtitleCue } from "@clipclap/shared";
-import { generateAss, resolveFontsDir } from "../processors/subtitles";
-
-const execFileAsync = promisify(execFile);
-
-/** Width of the drawn ink, in pixels, by cropping the frame to its non-black
- *  bounding box. `cropdetect` reports that box on stderr. */
-async function inkWidth(
-  dir: string,
-  text: string,
-  language: string
-): Promise<number> {
-  const assPath = join(dir, `${language}-${text.length}.ass`);
-  const cue: SubtitleCue = { id: "probe", text, start: 0, end: 1 };
-  await writeFile(assPath, generateAss([cue], language), "utf-8");
-  const escape = (p: string) => p.replace(/\\/g, "/").replace(/:/g, "\\:");
-  try {
-    await execFileAsync("ffmpeg", [
-      "-nostdin", "-y",
-      "-f", "lavfi",
-      "-i", "color=c=black:s=1080x1920:d=1",
-      "-vf",
-      `ass=filename=${escape(assPath)}:fontsdir=${escape(resolveFontsDir())},cropdetect=limit=0.1:round=2:reset=1`,
-      "-frames:v", "1",
-      "-f", "null", "-",
-    ]);
-  } catch (err) {
-    const stderr = (err as { stderr?: string }).stderr ?? "";
-    const m = /crop=(\d+):/.exec(stderr);
-    if (m) return Number(m[1]);
-    throw err;
-  }
-  return 0;
-}
-
-async function main() {
-  const dir = await mkdtemp(join(tmpdir(), "clipclap-width-"));
-
-  // The reference: what 19 Cyrillic characters occupy today. 19 is the
-  // "sits comfortably" figure recorded on MAX_CHUNK_WORDS in subtitles.ts.
-  const cyrillic = "Оно и так было ясно";
-  const reference = await inkWidth(dir, cyrillic, "ru");
-  console.log(`reference  ${[...cyrillic].length} cyrillic chars = ${reference}px`);
-
-  // Arabic lines of increasing length, three words or fewer to match
-  // MAX_CHUNK_WORDS, which the chunker enforces independently.
-  const samples = [
-    "قرار صعب",
-    "الوقت للتفكير",
-    "احتاج المزيد جدا",
-    "مواجهة دبلوماسية جديدة",
-    "نتيجة غير متوقعة تماما",
-    "السفير التركي لم ينتظر",
-    "احتاج المزيد من الوقت للتفكير",
-  ];
-  for (const s of samples) {
-    const w = await inkWidth(dir, s, "ar");
-    console.log(`arabic     ${String([...s].length).padStart(2)} chars = ${String(w).padStart(4)}px  ${w <= reference ? "fits" : "OVER"}  ${s}`);
-  }
-}
-
-main();
-```
-
-- [ ] **Step 2: Run it**
-
-```bash
-docker compose exec -T worker-render sh -c 'cd /app && ./node_modules/.bin/tsx apps/worker/src/scripts/measure-arabic-width.ts'
-```
-
-Expected: one `reference` line and seven `arabic` lines, each with a character count and a pixel width.
-
-- [ ] **Step 3: Read the number off the output**
-
-Take the **largest Arabic character count whose width is still `<= reference`**. That is
-`ARABIC_MAX_CHUNK_CHARS`. If every sample fits, add longer samples of the same shape (three words,
-increasing length) and re-run until one goes `OVER`; the budget is the last one that fit.
-
-- [ ] **Step 4: Write it into the module with its provenance**
-
-In `apps/worker/src/processors/subtitle-script.ts`, replace:
-
-```ts
-/** Set by measurement in Task 7 of the Arabic plan. Placeholder value here is
- *  deliberately just above the default so the intent is visible; the real
- *  figure and the strings it came from replace this comment. */
-export const ARABIC_MAX_CHUNK_CHARS = 19;
-```
-
-with (substituting the measured figures for `<N>`, `<REF>`, `<W>` and `<SAMPLE>`):
-
-```ts
-/** Measured, not guessed, the same way the Cyrillic 18 was.
- *
- *  Reference: "Оно и так было ясно" - 19 Cyrillic characters, the
- *  "sits comfortably" figure recorded on MAX_CHUNK_WORDS - draws <REF>px wide
- *  at size 100 on the 1080 canvas. The longest Arabic line still inside that
- *  width is "<SAMPLE>" at <N> characters and <W>px.
- *
- *  Arabic runs roughly half the Cyrillic width per character, so reusing 18
- *  here is not conservative - it splits three-word phrases that fit with room
- *  to spare. Raising it is a look decision the same way 18 is; this is the
- *  measured ceiling, not a preference. */
-export const ARABIC_MAX_CHUNK_CHARS = <N>;
-```
-
-- [ ] **Step 5: Confirm the lookup test still holds**
-
-```bash
-docker compose exec -T worker-render sh -c 'cd /app && ./node_modules/.bin/vitest run --root . apps/worker/src/processors/__tests__/subtitle-script.test.ts'
-```
-
-Expected: PASS. The assertion `toBeGreaterThan(DEFAULT_MAX_CHUNK_CHARS)` now holds against the real
-number. If the measurement came out at or below 18, stop: that contradicts the width measurement in the
-spec and means the script measured the wrong thing.
-
-- [ ] **Step 6: Delete the script and commit**
-
-```bash
-rm apps/worker/src/scripts/measure-arabic-width.ts
-git add apps/worker/src/processors/subtitle-script.ts
-git commit -m "measure(render): Arabic cue budget from the real burn, not from 18"
-```
+- `maxChunkCharsForLanguage` and `ARABIC_MAX_CHUNK_CHARS` removed from `subtitle-script.ts`, along with
+  `DEFAULT_MAX_CHUNK_CHARS`, which had no remaining reader. The module now exports `fontForLanguage`
+  and its two face constants, nothing else.
+- The `maxChunkCharsForLanguage` describe block removed from `subtitle-script.test.ts`.
+- The measured figures written into the comment on `MAX_CHUNK_CHARS` in `subtitles.ts`, with an explicit
+  "do not add one back without a measurement that disagrees with this one".
+- Spec §2.4 and §3.2 rewritten to record the refutation rather than hide it.
 
 ---
 
-## Task 8: Thread the budget into the chunker, then prove nothing else moved
+## Task 8: Prove non-Arabic renders did not move
 
-**Files:**
-- Modify: `apps/worker/src/processors/subtitles.ts`
-- Test: `apps/worker/src/processors/__tests__/subtitles.test.ts`
+The cue-budget threading this task originally carried is gone with Task 7. What remains is the safety
+claim in spec §3.3, which is the thing protecting every existing clip and the frozen baselines.
 
-- [ ] **Step 1: Write the failing test**
+**Files:** none. This task only runs things.
 
-Append to `apps/worker/src/processors/__tests__/subtitles.test.ts`, inside the existing
-`describe("chunkWords", ...)` block (it already has the `evenly` and `say` helpers in scope):
-
-```ts
-  // 20 characters over three words: illegal on the Cyrillic-calibrated budget,
-  // legal on the Arabic one. Latin text is used deliberately - what is under
-  // test is the BUDGET, and using Arabic text here would leave it ambiguous
-  // whether the split moved because of the language or because of the glyphs.
-  it("keeps a 20-character line whole for Arabic and splits it otherwise", () => {
-    const words = evenly(["aaaaaa", "bbbbbb", "cccccc"]);
-    expect(say(chunkWords(words, 0, 3))).toHaveLength(2);
-    expect(say(chunkWords(words, 0, 3, "ar"))).toEqual(["aaaaaa bbbbbb cccccc"]);
-  });
-
-  it("treats an absent and a Latin language identically", () => {
-    const words = evenly(["aaaaaa", "bbbbbb", "cccccc"]);
-    expect(say(chunkWords(words, 0, 3, "en"))).toEqual(say(chunkWords(words, 0, 3)));
-  });
-```
-
-- [ ] **Step 2: Run it and watch it fail**
-
-```bash
-docker compose exec -T worker-render sh -c 'cd /app && ./node_modules/.bin/vitest run --root . apps/worker/src/processors/__tests__/subtitles.test.ts -t "20-character line"'
-```
-
-Expected: FAIL - the fourth argument is ignored, so both calls split the same way.
-
-- [ ] **Step 3: Import the budget lookup**
-
-In `apps/worker/src/processors/subtitles.ts`, extend the import added in Task 3:
-
-```ts
-import { fontForLanguage, maxChunkCharsForLanguage } from "./subtitle-script";
-```
-
-- [ ] **Step 4: Take the language in `chunkWords`**
-
-Find:
-
-```ts
-export function chunkWords(
-  words: SubtitleWord[],
-  segStart: number,
-  segEnd: number
-): SubtitleWord[][] {
-  const n = words.length;
-  if (n === 0) return [];
-```
-
-Replace with:
-
-```ts
-export function chunkWords(
-  words: SubtitleWord[],
-  segStart: number,
-  segEnd: number,
-  language?: string | null
-): SubtitleWord[][] {
-  const n = words.length;
-  if (n === 0) return [];
-
-  // Character budgets are proxies for pixel width, and 18 was measured on
-  // Cyrillic. Arabic draws about half as wide per character, so it gets its
-  // own figure - see subtitle-script.ts for both and their provenance.
-  const maxChunkChars = maxChunkCharsForLanguage(language);
-```
-
-- [ ] **Step 5: Use it in `legal`**
-
-Find:
-
-```ts
-  const legal = (i: number, j: number) =>
-    j - i === 1 || (j - i <= MAX_CHUNK_WORDS && width(i, j) <= MAX_CHUNK_CHARS);
-```
-
-Replace with:
-
-```ts
-  const legal = (i: number, j: number) =>
-    j - i === 1 || (j - i <= MAX_CHUNK_WORDS && width(i, j) <= maxChunkChars);
-```
-
-- [ ] **Step 6: Remove the now-unused constant**
-
-`MAX_CHUNK_CHARS` at line 40 of `subtitles.ts` has no readers left. Delete the `const` line and move its
-explanatory comment to `DEFAULT_MAX_CHUNK_CHARS` in `subtitle-script.ts`, so the derivation of 18 is not
-lost. Verify nothing still references it:
+- [ ] **Step 1: Confirm `MAX_CHUNK_CHARS` has exactly one reader**
 
 ```bash
 grep -rn "MAX_CHUNK_CHARS" apps/worker/src --include=*.ts
 ```
 
-Expected: hits only in `subtitle-script.ts` (`DEFAULT_MAX_CHUNK_CHARS`, `ARABIC_MAX_CHUNK_CHARS`), its
-test, and the comment inside `chunkWords`.
+Expected: the constant, its comment, and the single use inside `chunkWords`'s `legal` helper. If
+`subtitle-script.ts` still appears, Task 7's cleanup was incomplete.
 
-- [ ] **Step 7: Pass the language through `segmentsToCues`**
-
-Find:
-
-```ts
-export function segmentsToCues(
-  segments: WhisperSegment[],
-  clipStart: number,
-  clipEnd: number
-): SubtitleCue[] {
-```
-
-Replace with:
-
-```ts
-export function segmentsToCues(
-  segments: WhisperSegment[],
-  clipStart: number,
-  clipEnd: number,
-  language?: string | null
-): SubtitleCue[] {
-```
-
-Then find the single `chunkWords(` call inside its body and add `, language` as the fourth argument.
+- [ ] **Step 2: Full worker suite**
 
 ```bash
-grep -n "chunkWords(" apps/worker/src/processors/subtitles.ts
-```
-
-- [ ] **Step 8: Supply it from `render.ts`**
-
-In `apps/worker/src/stages/render.ts`, `clipLanguage` is already declared immediately above this call by
-Task 5. Change the call to:
-
-```ts
-      const cues = segmentsToCues(
-        transcription.segments,
-        highlight.start,
-        highlight.end,
-        clipLanguage
-      );
-```
-
-- [ ] **Step 9: Run everything in the worker**
-
-```bash
-docker compose exec -T worker-render sh -c 'cd /app/apps/worker && ../../node_modules/.bin/tsc -p tsconfig.typecheck.json --noEmit; echo "tsc=$?"'
 docker compose exec -T worker-render sh -c 'cd /app && ./node_modules/.bin/vitest run --root . apps/worker/src'
+docker compose exec -T worker-render sh -c 'cd /app/apps/worker && ../../node_modules/.bin/tsc -p tsconfig.typecheck.json --noEmit; echo "tsc=$?"'
 ```
 
-Expected: `tsc=0` and every worker suite PASS.
+Expected: 1433 tests passing, `tsc=0`.
 
-- [ ] **Step 10: Prove non-Arabic renders did not move**
-
-The byte-identity claim in spec §3.3 is what protects every existing clip and the frozen baselines. Run
-the invariance check rather than assuming it:
+- [ ] **Step 3: Prove non-Arabic renders are byte-identical**
 
 ```bash
 docker compose exec -T worker-render sh -c 'cd /app && ./node_modules/.bin/tsx apps/worker/src/scripts/eval-camera-invariance.ts 2>&1 | tail -30'
 ```
 
-Expected: level 3 green. If it is red, the style line or the chunker moved for a non-Arabic language -
-find that before shipping. A red level 3 here means a real regression, not a baseline that needs
-regenerating: nothing in Part A is supposed to change a single non-Arabic byte.
+Expected: level 3 green. If it is red, the style line or the chunker moved for a non-Arabic language.
+A red level 3 here means a real regression, not a baseline that needs regenerating: nothing in Part A is
+supposed to change a single non-Arabic byte. Read the failure before touching a baseline.
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 4: Render one real Arabic source end to end and look at it**
 
-```bash
-git add apps/worker/src/processors/subtitles.ts apps/worker/src/processors/subtitle-script.ts apps/worker/src/processors/__tests__/subtitles.test.ts apps/worker/src/stages/render.ts
-git commit -m "feat(render): per-script cue budget, Cyrillic 18 kept for everything else"
-```
-
-**Part A is now shippable.** Before starting Part B, run one real Arabic source through the pipeline and
-look at a frame with your own eyes. The pixel oracle proves "not boxes"; only an eye proves "reads
-right".
+The pixel oracle proves "not boxes". Only an eye proves "reads right". Part A is not done until a frame
+from a real Arabic clip has been looked at.
 
 ---
-
-# PART B - the bot's Arabic
 
 ## Task 9: The bidi isolation helper
 
