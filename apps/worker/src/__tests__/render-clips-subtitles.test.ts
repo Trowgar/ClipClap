@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   generateThumbnail: vi.fn(),
   queueAdd: vi.fn(),
   computeClipExpiresAt: vi.fn(),
+  createAssFilter: vi.fn(),
 }));
 
 vi.mock("@clipclap/shared", () => ({
@@ -64,6 +65,14 @@ vi.mock("../processors/thumbnail", () => ({
   generateThumbnail: mocks.generateThumbnail,
 }));
 
+// Partial: segmentsToCues stays real, because these tests depend on it deciding
+// whether a highlight has cues in range at all. Only the burn entry point is
+// swapped, so the language it receives can be asserted.
+vi.mock("../processors/subtitles", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../processors/subtitles")>();
+  return { ...actual, createAssFilter: mocks.createAssFilter };
+});
+
 import { runRenderStage } from "../stages/render";
 
 describe("renderClips stores what it actually burned, not the job's subtitles flag", () => {
@@ -97,6 +106,10 @@ describe("renderClips stores what it actually burned, not the job's subtitles fl
     mocks.clipCreate.mockResolvedValue({ id: "clip1" });
     mocks.jobUpdate.mockResolvedValue(undefined);
     mocks.computeClipExpiresAt.mockReturnValue(undefined);
+    mocks.createAssFilter.mockResolvedValue({
+      filter: "ass=filename=/tmp/fake.ass",
+      assPath: "/tmp/fake.ass",
+    });
   });
 
   it("stores subtitles: false when the job wants subtitles but this highlight has no cues in range", async () => {
@@ -164,5 +177,46 @@ describe("renderClips stores what it actually burned, not the job's subtitles fl
         data: expect.objectContaining({ subtitles: false }),
       })
     );
+  });
+
+  it("hands the highlight's language to the subtitle burn", async () => {
+    mocks.jobFindUniqueOrThrow.mockResolvedValue({
+      id: "job1",
+      normalizedArtifactKey: null,
+      sourceArtifactKey: "work/u1/job1/source.mp4",
+      language: "en",
+      transcriptJson: {
+        text: "hello",
+        segments: [{ start: 100, end: 105, text: "hello" }],
+      },
+      highlights: [{ ...highlight, language: "ar" }],
+      subtitles: true,
+    });
+
+    await runRenderStage({ mode: "clips", jobId: "job1", userId: "u1" });
+
+    expect(mocks.createAssFilter).toHaveBeenCalledWith(expect.anything(), "ar");
+  });
+
+  // The 13 production clip rows with a null language are covered by this
+  // branch, and a job-level language is what an Arabic source without
+  // per-highlight detection would carry.
+  it("falls back to the job language when the highlight has none", async () => {
+    mocks.jobFindUniqueOrThrow.mockResolvedValue({
+      id: "job1",
+      normalizedArtifactKey: null,
+      sourceArtifactKey: "work/u1/job1/source.mp4",
+      language: "ar",
+      transcriptJson: {
+        text: "hello",
+        segments: [{ start: 100, end: 105, text: "hello" }],
+      },
+      highlights: [highlight],
+      subtitles: true,
+    });
+
+    await runRenderStage({ mode: "clips", jobId: "job1", userId: "u1" });
+
+    expect(mocks.createAssFilter).toHaveBeenCalledWith(expect.anything(), "ar");
   });
 });
