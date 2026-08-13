@@ -995,9 +995,17 @@ Expected: 1433 tests passing, `tsc=0`.
 docker compose exec -T worker-render sh -c 'cd /app && ./node_modules/.bin/tsx apps/worker/src/scripts/eval-camera-invariance.ts 2>&1 | tail -30'
 ```
 
-Expected: level 3 green. If it is red, the style line or the chunker moved for a non-Arabic language.
-A red level 3 here means a real regression, not a baseline that needs regenerating: nothing in Part A is
-supposed to change a single non-Arabic byte. Read the failure before touching a baseline.
+Expected: level 3 green. If it is red, the style line moved for a non-Arabic language. A red level 3
+means a real regression, not a baseline that needs regenerating: nothing in Part A is supposed to change
+a single non-Arabic byte. Read the failure before touching a baseline.
+
+**Level 1 is red and must stay red.** It compares the live filtergraph against a frozen verbatim copy of
+the pre-`setsar` compiler embedded in the script at lines 86-130, so every `setsar=1` shows as a
+difference. That is the deliberately-red oracle from the output-geometry work, present identically on
+`main`, and this branch touches neither `reframe/` nor `cut.ts`. Do not "fix" it.
+
+Observed on this branch: level 1 FAILED (176 plans, 352 differences, all `setsar=1`), level 2 ok
+(7 replayed, 0 differences), **level 3 ok (7 renders, 0 differences)**.
 
 - [ ] **Step 4: Render one real Arabic source end to end and look at it**
 
