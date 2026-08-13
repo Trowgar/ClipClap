@@ -776,6 +776,115 @@ git commit -m "feat(render): pass the clip language to the subtitle burn on both
 
 ---
 
+## Task 5b: Pin the clips path too
+
+Added during execution. After Task 5, mutating `createAssFilter(cues, clipLanguage)` back to
+`createAssFilter(cues)` left **all 1433 tests green** - verified twice, independently. The trim path is
+pinned by Task 5's assertions; the clips path, which is the one that produces every clip a user
+actually receives, is not pinned at all. Task 4's pixel oracle proves the burn draws Arabic when it is
+handed a language; nothing proves `renderClips` hands it one.
+
+That is the exact shape of defect this repo has shipped twice before: a green test that measures nothing.
+
+**Files:**
+- Modify: `apps/worker/src/__tests__/render-clips-subtitles.test.ts`
+
+- [ ] **Step 1: Spy on `createAssFilter` without losing the real cue derivation**
+
+The suite deliberately runs the real `segmentsToCues`, so the module cannot be wholesale-mocked. Add to
+the `vi.hoisted` mocks object:
+
+```ts
+  createAssFilter: vi.fn(),
+```
+
+and, next to the other `vi.mock` calls:
+
+```ts
+// Partial: segmentsToCues stays real, because these tests depend on it deciding
+// whether a highlight has cues in range at all. Only the burn entry point is
+// swapped, so the language it receives can be asserted.
+vi.mock("../processors/subtitles", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../processors/subtitles")>();
+  return { ...actual, createAssFilter: mocks.createAssFilter };
+});
+```
+
+In `beforeEach`, give it a return value of the right shape:
+
+```ts
+    mocks.createAssFilter.mockResolvedValue({
+      filter: "ass=filename=/tmp/fake.ass",
+      assPath: "/tmp/fake.ass",
+    });
+```
+
+- [ ] **Step 2: Assert the language reaches the burn**
+
+```ts
+  it("hands the highlight's language to the subtitle burn", async () => {
+    mocks.jobFindUniqueOrThrow.mockResolvedValue({
+      id: "job1",
+      normalizedArtifactKey: null,
+      sourceArtifactKey: "work/u1/job1/source.mp4",
+      language: "en",
+      transcriptJson: {
+        text: "hello",
+        segments: [{ start: 100, end: 105, text: "hello" }],
+      },
+      highlights: [{ ...highlight, language: "ar" }],
+      subtitles: true,
+    });
+
+    await runRenderStage({ mode: "clips", jobId: "job1", userId: "u1" });
+
+    expect(mocks.createAssFilter).toHaveBeenCalledWith(expect.anything(), "ar");
+  });
+
+  // The 13 production clip rows with a null language are covered by this
+  // branch, and a job-level language is what an Arabic source without
+  // per-highlight detection would carry.
+  it("falls back to the job language when the highlight has none", async () => {
+    mocks.jobFindUniqueOrThrow.mockResolvedValue({
+      id: "job1",
+      normalizedArtifactKey: null,
+      sourceArtifactKey: "work/u1/job1/source.mp4",
+      language: "ar",
+      transcriptJson: {
+        text: "hello",
+        segments: [{ start: 100, end: 105, text: "hello" }],
+      },
+      highlights: [highlight],
+      subtitles: true,
+    });
+
+    await runRenderStage({ mode: "clips", jobId: "job1", userId: "u1" });
+
+    expect(mocks.createAssFilter).toHaveBeenCalledWith(expect.anything(), "ar");
+  });
+```
+
+- [ ] **Step 3: Mutation-test both new assertions**
+
+Neither is trusted until it has been seen to fail.
+
+1. In `render.ts`, change `createAssFilter(cues, clipLanguage)` to `createAssFilter(cues)`. Both new
+   tests must FAIL. Revert.
+2. Change `highlight.language ?? job.language` to `job.language`. Only the FIRST must fail. Revert.
+3. Change it to `highlight.language`. Only the SECOND must fail. Revert.
+
+If any mutation leaves both green, the assertion is not measuring what it claims.
+
+- [ ] **Step 4: Run and commit**
+
+```bash
+docker compose exec -T worker-render sh -c 'cd /app && ./node_modules/.bin/vitest run --root . apps/worker/src'
+git add apps/worker/src/__tests__/render-clips-subtitles.test.ts
+git commit -m "test(render): pin the language reaching the burn on the clips path"
+```
+
+---
+
 ## Task 6: Keep the re-render script faithful
 
 `eval-rerender.ts` exists to reproduce a clip exactly. If it does not pass the language it will now
