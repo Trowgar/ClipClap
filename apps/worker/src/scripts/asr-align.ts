@@ -32,9 +32,13 @@ export function alignTokens(rawA: string[], rawB: string[]): AlignCounts {
   const B = rawB.map(normToken).filter((t) => t !== "");
   const n = A.length;
   const m = B.length;
-  // Uint16 holds the LCS length; a 52-min episode is ~7k tokens, the table is
-  // ~100MB. Refuse absurd inputs instead of silently overflowing.
-  if (n >= 65535 || m >= 65535) throw new Error(`sequence too long for LCS table: ${n} x ${m}`);
+  // Uint16 holds the LCS length, and the table is O(n*m) cells - a 52-min
+  // episode is ~7k tokens per side, ~100MB. Cap the AREA, not just each side:
+  // two 60k-token sides would pass a per-dimension check and then attempt a
+  // ~7GB allocation on a host shared with the render workers.
+  if (n >= 65535 || m >= 65535 || n * m >= 64_000_000) {
+    throw new Error(`sequences too long for LCS table: ${n} x ${m}`);
+  }
   const W = m + 1;
   const dp = new Uint16Array((n + 1) * W);
   for (let i = 1; i <= n; i++) {
@@ -68,6 +72,10 @@ export function alignTokens(rawA: string[], rawB: string[]): AlignCounts {
       i--;
       j--;
     } else if (dp[(i - 1) * W + j] >= dp[i * W + (j - 1)]) {
+      // Tie-break prefers deletion. With repeated tokens several equally
+      // optimal alignments exist; the total edit count is invariant, only the
+      // substitution-vs-pure-indel split inside a hunk can shift. Fixed one
+      // way so runs are deterministic and comparable across measurements.
       hunkDel++;
       i--;
     } else {
