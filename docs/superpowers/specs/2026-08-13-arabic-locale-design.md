@@ -155,7 +155,7 @@ sites into compile errors. That is the complete surface, and the third is easy t
 
 | site | what it holds |
 |---|---|
-| `apps/bot/src/i18n/index.ts:25` `dictionaries` | the 142-key `Dict` |
+| `apps/bot/src/i18n/index.ts:25` `dictionaries` | the `Dict`: 104 keys, plus a 5-entry `JobErrorCode` map |
 | `apps/bot/src/i18n/index.ts:42` `LANG_ALIASES` | what a person may type after `/lang` |
 | `packages/shared/src/services/telegram-notification.service.ts:39` `PAYMENT_COPY` | the payment messages |
 
