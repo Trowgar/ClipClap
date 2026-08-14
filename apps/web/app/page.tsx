@@ -20,41 +20,29 @@ const outputClips = [
 const plans = [
   {
     name: "Starter",
-    price: "$3",
-    period: "/week",
-    features: [
-      "75 min / week",
-      "20 clips stored",
-      "7-day retention",
-      "TikTok subtitles",
+    cycles: [
+      { key: "weekly", label: "Weekly", price: "$3", period: "/week", minutes: "75 min / week" },
+      { key: "monthly", label: "Monthly", price: "$9", period: "/month", minutes: "270 min / month" },
     ],
+    features: ["20 clips stored", "7-day retention", "TikTok subtitles"],
     cta: "Get Starter",
     popular: false,
   },
   {
     name: "Plus",
-    price: "$29",
-    period: "/month",
-    features: [
-      "1,000 min / month",
-      "150 clips stored",
-      "30-day retention",
-      "2 jobs at once",
+    cycles: [
+      { key: "monthly", label: "Monthly", price: "$29", period: "/month", minutes: "1,000 min / month" },
     ],
+    features: ["150 clips stored", "30-day retention", "2 jobs at once"],
     cta: "Get Plus",
     popular: true,
   },
   {
     name: "Max",
-    price: "$89",
-    period: "/month",
-    features: [
-      "3,500 min / month",
-      "1,000 clips stored",
-      "90-day retention",
-      "3 jobs at once",
-      "Priority processing",
+    cycles: [
+      { key: "monthly", label: "Monthly", price: "$89", period: "/month", minutes: "3,500 min / month" },
     ],
+    features: ["1,000 clips stored", "90-day retention", "3 jobs at once", "Priority processing"],
     cta: "Get Max",
     popular: false,
   },
@@ -354,6 +342,101 @@ function TelegramMock() {
             <TelegramPlane className="w-[15px] h-[15px] fill-neutral-300" />
           </div>
         </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Pricing card ── */
+
+type Plan = (typeof plans)[number];
+
+function PlanCard({ plan }: { plan: Plan }) {
+  const [cycle, setCycle] = useState(0);
+  const active = plan.cycles[cycle];
+
+  return (
+    <div
+      className={`relative flex h-full flex-col rounded-2xl border p-6 transition-colors ${
+        plan.popular
+          ? "border-white/20 bg-white/[0.03]"
+          : "border-white/[0.06] bg-white/[0.01]"
+      }`}
+    >
+      {plan.popular && (
+        <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-white px-3 py-0.5 text-[11px] font-semibold text-black">
+          Popular
+        </span>
+      )}
+      <h3 className="text-center font-semibold text-white">{plan.name}</h3>
+
+      {/* Billing cycle - a real control on Starter, a quiet caption on the
+          monthly-only plans, so all three cards keep the same vertical rhythm */}
+      <div className="mt-3 flex justify-center">
+        {plan.cycles.length > 1 ? (
+          <div className="inline-flex rounded-full border border-white/[0.08] bg-white/[0.03] p-0.5">
+            {plan.cycles.map((c, i) => (
+              <button
+                key={c.key}
+                type="button"
+                onClick={() => setCycle(i)}
+                className={`relative rounded-full px-3 py-1 text-[11px] font-medium transition-colors ${
+                  i === cycle ? "text-black" : "text-neutral-500 hover:text-neutral-300"
+                }`}
+              >
+                {i === cycle && (
+                  <motion.span
+                    layoutId={`${plan.name}-cycle-pill`}
+                    className="absolute inset-0 rounded-full bg-white"
+                    transition={{ type: "spring", bounce: 0.2, duration: 0.45 }}
+                  />
+                )}
+                <span className="relative z-10">{c.label}</span>
+              </button>
+            ))}
+          </div>
+        ) : (
+          <span className="inline-flex items-center border border-transparent px-3 py-1 text-[11px] font-medium text-neutral-600">
+            {active.label}
+          </span>
+        )}
+      </div>
+
+      <motion.p
+        key={active.key}
+        initial={{ opacity: 0, y: 6 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+        className="mt-3 text-center"
+      >
+        <span className="text-3xl font-bold text-white tabular-nums">{active.price}</span>
+        <span className="text-sm text-neutral-600">{active.period}</span>
+      </motion.p>
+
+      <ul className="mt-5 space-y-2.5 text-sm text-neutral-400">
+        <li className="flex items-center justify-center gap-2">
+          <Check className="w-3.5 h-3.5 flex-shrink-0 text-neutral-600" />
+          {active.minutes}
+        </li>
+        {plan.features.map((f) => (
+          <li key={f} className="flex items-center justify-center gap-2">
+            <Check className="w-3.5 h-3.5 flex-shrink-0 text-neutral-600" />
+            {f}
+          </li>
+        ))}
+      </ul>
+
+      <div className="mt-auto pt-6">
+        <Link
+          href="/login"
+          className={`block rounded-lg px-4 py-2.5 text-center text-sm font-medium transition-all ${
+            plan.popular
+              ? "bg-white text-black hover:bg-neutral-200"
+              : "bg-white/[0.06] text-white hover:bg-white/[0.1]"
+          }`}
+        >
+          {plan.cta}
+        </Link>
       </div>
     </div>
   );
@@ -741,52 +824,8 @@ export default function LandingPage() {
 
           <div className="mt-6 grid gap-4 sm:grid-cols-3">
             {plans.map((plan, i) => (
-              <FadeIn key={plan.name} delay={i * 0.08}>
-                <div
-                  className={`relative rounded-2xl border p-6 transition-colors ${
-                    plan.popular
-                      ? "border-white/20 bg-white/[0.03]"
-                      : "border-white/[0.06] bg-white/[0.01]"
-                  }`}
-                >
-                  {plan.popular && (
-                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-white px-3 py-0.5 text-[11px] font-semibold text-black">
-                      Popular
-                    </span>
-                  )}
-                  <h3 className="font-semibold text-white text-center">
-                    {plan.name}
-                  </h3>
-                  <p className="mt-3 text-center">
-                    <span className="text-3xl font-bold text-white tabular-nums">
-                      {plan.price}
-                    </span>
-                    <span className="text-sm text-neutral-600">
-                      {plan.period}
-                    </span>
-                  </p>
-                  <ul className="mt-5 space-y-2.5 text-sm text-neutral-400">
-                    {plan.features.map((f) => (
-                      <li
-                        key={f}
-                        className="flex items-center gap-2 justify-center"
-                      >
-                        <Check className="w-3.5 h-3.5 text-neutral-600 flex-shrink-0" />
-                        {f}
-                      </li>
-                    ))}
-                  </ul>
-                  <Link
-                    href="/login"
-                    className={`mt-6 block rounded-lg px-4 py-2.5 text-sm font-medium text-center transition-all ${
-                      plan.popular
-                        ? "bg-white text-black hover:bg-neutral-200"
-                        : "bg-white/[0.06] text-white hover:bg-white/[0.1]"
-                    }`}
-                  >
-                    {plan.cta}
-                  </Link>
-                </div>
+              <FadeIn key={plan.name} delay={i * 0.08} className="h-full">
+                <PlanCard plan={plan} />
               </FadeIn>
             ))}
           </div>
