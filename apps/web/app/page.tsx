@@ -678,11 +678,41 @@ export default function LandingPage() {
               Simple pricing
             </h2>
             <p className="mt-2 text-sm text-neutral-500">
-              Start lean, top up when needed, upgrade when volume becomes routine.
+              Start free, top up when needed, upgrade when volume becomes routine.
             </p>
           </FadeIn>
 
-          <div className="mt-14 grid gap-4 sm:grid-cols-3">
+          {/* Free plan banner - the entry step before the paid grid.
+              The copy states exactly what FREE_TIER grants (plans.ts): 60
+              lifetime minutes of source video on a new account, no card. */}
+          <FadeIn delay={0.05}>
+            <div className="mt-12 flex flex-col gap-5 rounded-2xl border border-white/[0.1] bg-white/[0.02] p-6 sm:flex-row sm:items-center sm:gap-8 sm:p-7">
+              <div className="flex-1 text-left">
+                <div className="mb-3 inline-flex items-center rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-white">
+                    Free plan
+                  </span>
+                </div>
+                <h3 className="text-lg font-bold tracking-tight text-white sm:text-xl">
+                  Your first 60 minutes are free.
+                </h3>
+                <p className="mt-1.5 max-w-md text-sm leading-relaxed text-neutral-400">
+                  Process up to 60 minutes of source video on a new account -
+                  one-time allowance, no card required. See your clips before
+                  paying anything.
+                </p>
+              </div>
+              <Link
+                href="/login"
+                className="group inline-flex flex-shrink-0 items-center justify-center gap-2 rounded-xl bg-white px-6 py-3 text-sm font-semibold text-black transition-all hover:scale-[1.02] hover:bg-neutral-200 active:scale-[0.98]"
+              >
+                Start free
+                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+              </Link>
+            </div>
+          </FadeIn>
+
+          <div className="mt-6 grid gap-4 sm:grid-cols-3">
             {plans.map((plan, i) => (
               <FadeIn key={plan.name} delay={i * 0.08}>
                 <div
