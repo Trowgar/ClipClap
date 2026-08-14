@@ -20,6 +20,7 @@ export interface SidebarProps {
     minutesLimit: number;
     topUpRemaining: number;
     plan: string;
+    freeTrial: { usedMinutes: number; limitMinutes: number } | null;
   };
 }
 
@@ -109,6 +110,7 @@ export function SidebarContent({
           limit={usage.minutesLimit}
           topup={usage.topUpRemaining}
           plan={usage.plan}
+          freeTrial={usage.freeTrial}
         />
         {usage.plan !== "MAX" && (
           <Link
