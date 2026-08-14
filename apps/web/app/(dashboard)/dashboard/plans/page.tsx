@@ -91,7 +91,6 @@ export default async function PlansPage() {
             `Up to ${MAX_MONTHLY.maxSourceDurationMinutes} min per upload`,
             `${MAX_MONTHLY.storageClips} clips stored`,
             `${MAX_MONTHLY.retentionDays}-day retention`,
-            "All subtitle styles",
             `${MAX_MONTHLY.concurrentJobsLimit} jobs at once`,
             "Priority processing",
           ]}
