@@ -682,33 +682,60 @@ export default function LandingPage() {
             </p>
           </FadeIn>
 
-          {/* Free plan banner - the entry step before the paid grid.
-              The copy states exactly what FREE_TIER grants (plans.ts): 60
-              lifetime minutes of source video on a new account, no card. */}
+          {/* Free allowance - rendered in the page's own instrument language:
+              a source-video timeline whose head fills up to the 60-minute
+              mark. States exactly what FREE_TIER grants (plans.ts): 60
+              lifetime source minutes on a new account, no card. */}
           <FadeIn delay={0.05}>
-            <div className="mt-12 flex flex-col gap-5 rounded-2xl border border-white/[0.1] bg-white/[0.02] p-6 sm:flex-row sm:items-center sm:gap-8 sm:p-7">
-              <div className="flex-1 text-left">
-                <div className="mb-3 inline-flex items-center rounded-full border border-white/[0.08] bg-white/[0.03] px-3 py-1">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-white">
-                    Free plan
+            <div className="mt-12 rounded-xl border border-white/[0.06] bg-white/[0.01] px-5 py-4 sm:px-6 sm:py-5">
+              {/* Readout header */}
+              <div className="flex items-center justify-between font-mono text-[10px] uppercase tracking-[0.18em]">
+                <span className="flex items-center gap-2 text-neutral-400">
+                  <span className="relative flex h-1 w-1">
+                    <span className="absolute inline-flex h-full w-full rounded-full bg-white/50 animate-ping" />
+                    <span className="relative inline-flex h-1 w-1 rounded-full bg-white/90" />
                   </span>
-                </div>
-                <h3 className="text-lg font-bold tracking-tight text-white sm:text-xl">
-                  Your first 60 minutes are free.
-                </h3>
-                <p className="mt-1.5 max-w-md text-sm leading-relaxed text-neutral-400">
-                  Process up to 60 minutes of source video on a new account -
-                  one-time allowance, no card required. See your clips before
-                  paying anything.
-                </p>
+                  Free allowance
+                </span>
+                <span className="normal-case tracking-normal text-neutral-600">
+                  no card required
+                </span>
               </div>
-              <Link
-                href="/login"
-                className="group inline-flex flex-shrink-0 items-center justify-center gap-2 rounded-xl bg-white px-6 py-3 text-sm font-semibold text-black transition-all hover:scale-[1.02] hover:bg-neutral-200 active:scale-[0.98]"
-              >
-                Start free
-                <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-              </Link>
+
+              {/* Timeline - fills to the full 60-minute allowance on scroll */}
+              <div className="mt-3">
+                <div className="h-[3px] overflow-hidden rounded-full bg-white/10">
+                  <motion.div
+                    initial={{ width: 0 }}
+                    whileInView={{ width: "100%" }}
+                    viewport={{ once: true, margin: "-40px" }}
+                    transition={{ duration: 1.4, ease: [0.22, 1, 0.36, 1], delay: 0.2 }}
+                    className="h-full rounded-full bg-white/40"
+                  />
+                </div>
+                <div className="mt-1.5 flex items-center justify-between font-mono text-[10px] text-neutral-600">
+                  <span>00:00</span>
+                  <span className="text-neutral-400">60:00 free</span>
+                </div>
+              </div>
+
+              {/* Copy + quiet CTA - the only white button in this section stays on the Popular plan */}
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm leading-relaxed text-neutral-400">
+                  Your first{" "}
+                  <span className="font-medium text-white">
+                    60 minutes of source video
+                  </span>{" "}
+                  are free - one-time, on a new account.
+                </p>
+                <Link
+                  href="/login"
+                  className="group inline-flex flex-shrink-0 items-center gap-1.5 text-sm font-medium text-white transition-colors hover:text-neutral-300"
+                >
+                  Start free
+                  <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                </Link>
+              </div>
             </div>
           </FadeIn>
 
