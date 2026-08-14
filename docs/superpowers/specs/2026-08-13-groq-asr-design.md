@@ -1,8 +1,9 @@
 # Groq ASR: the same Whisper for a ninth of the price, if the measurements allow it
 
-**Status:** design, written 2026-08-13. Approved by the owner the same day (model chosen by
-measurement; minimal switch, no fallback). Probe measurements below were taken against the live Groq
-API from the running `worker-transcribe` container and are reproducible there.
+**Status:** CLOSED 2026-08-14 with a negative result - both Groq models failed the §4.5 rule by
+18-20x and whisper-1 stays (see the §4.5 addendum). Design written and approved 2026-08-13. Probe
+measurements below were taken against the live Groq API from the running `worker-transcribe`
+container and are reproducible there.
 
 **One sentence.** After the Luna migration transcription is ~93% of a job's cash cost, and Groq
 serves the same Whisper models at $0.04-0.111 per audio-hour against OpenAI's $0.36 - so the job is
@@ -162,6 +163,19 @@ numbers into engine-notes, and the spec closes with a negative result - which is
 The 2x and 5pp thresholds are judgment calls recorded in advance so the measurement cannot be
 negotiated with after the fact. Total measurement cost: under $2, dominated by the fresh whisper-1
 control runs.
+
+**Addendum - measured 2026-08-13, closed 2026-08-14: both candidates FAIL.** Against a same-audio
+whisper-1 self-jitter of 5.1 edits/1k tokens (threshold 2x = 10.2), `whisper-large-v3` measured
+**91.5/1k** and `turbo` **105.3/1k** - 18-20x. Word-timing monotonicity: 746 and 392 violations
+against the control's 0, median overlap 0.28-0.38s, max 0.98s - and the single-call path does not
+clamp, so these would reach cue fill and cut points raw. Arabic agreement: 324-722/1k. Language
+detection correct everywhere; calls 13-34x faster - irrelevant given the rest. The result is
+structural, not statistical: whisper-1 is a different checkpoint than open-source large-v3 (v3
+heard "сора2" where whisper-1 heard "42"; v3 got the guest's name right where whisper-1 did not),
+and word timestamps belong to each provider's aligner, not to the acoustic model. **whisper-1
+stays; the plan's Tasks 5-10 were intentionally not executed.** Tables in engine-notes §1;
+captures in `apps/worker/eval-media/asr-*/`; any future candidate (Nemotron 3.5 ASR etc.) reuses
+`asr-compare.ts` unchanged.
 
 ---
 

@@ -165,6 +165,23 @@ discourse particles - значит, вот, да, ну, там, если, доп
 indels, not just respellings. ё/е is a coin flip: one fixture has zero ё tokens, the other has ten, and the
 same lemma appears both ways within one run (всё/все, ещё/еще).
 
+**Groq is not "the same Whisper" - measured and rejected (2026-08-13, Groq ASR spec §4).** On a fresh
+55-min Russian episode (`cmsrx4ob30003i1jxfle15qef`, 3323s, 8509 reference tokens), whisper-1's self-jitter
+was re-established on the same audio: 25 subs / 10 ins / 8 del = **5.1 edits per 1k tokens, 0 word-timing
+monotonicity violations**. Groq `whisper-large-v3`: **91.5/1k** (296/198/283) and **746 monotonicity
+violations** (median overlap 0.28s, p90 0.48s, max 0.98s); `whisper-large-v3-turbo`: **105.3/1k** and 392
+violations. Arabic agreement on both secured sources: 324-722/1k. Language detection correct everywhere
+(note: Groq capitalizes the name - "Russian" - absorbed by `whisperLanguageToIso`'s lowercase). Calls took
+5-14s against whisper-1's 176s. Verdict by the pre-registered rule (pass = within 2x of self-jitter):
+**both fail at 18-20x; whisper-1 stays.** The gap is structural, not statistical: OpenAI's whisper-1 is a
+different checkpoint than open-source large-v3 (whisper-1 heard "42" where v3 heard "сора2" - Sora 2
+postdates v2's training; "алибов" vs the correct "алипов"), and word timestamps come from each provider's
+own aligner, not from the acoustic model - Groq's overlap ~5-9% of words by ~0.3s and would reach karaoke
+fill and cut points RAW on the unclamped single-call path. Text quality is roughly par (divergences go both
+ways); the timings are the blocker. The harness (`scripts/asr-compare.ts` + `asr-align`/`asr-metrics`) and
+the corpus (`apps/worker/eval-media/asr-*`: 5 whisper-1 references, 7 bought captures) are permanent
+assets - any future ASR candidate is one script run.
+
 **`speechSec` is not how much speech a source has.** It sums the spans of
 word-bearing nodes only, i.e. speech Whisper gave word timings we trust enough to CUT on. Measured on both
 fixtures (the same 52-minute episode, 2026-07-26):
