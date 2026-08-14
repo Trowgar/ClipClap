@@ -24,6 +24,7 @@ export function UsageBar({ used, limit, topup, plan, freeTrial }: UsageBarProps)
         Math.round((freeTrial.usedMinutes / freeTrial.limitMinutes) * 100)
       );
       const critical = percent >= 90;
+      const exhausted = freeTrial.usedMinutes >= freeTrial.limitMinutes;
       return (
         <div className="space-y-2 rounded-md border border-border p-3">
           <div className="flex items-center justify-between text-xs">
@@ -42,7 +43,9 @@ export function UsageBar({ used, limit, topup, plan, freeTrial }: UsageBarProps)
             <span className="text-muted-foreground">
               Plan: <span className="text-foreground font-medium">Free</span>
             </span>
-            <span className="text-muted-foreground">one-time</span>
+            <span className={exhausted ? "text-red-400" : "text-muted-foreground"}>
+              {exhausted ? "used up" : "one-time"}
+            </span>
           </div>
         </div>
       );
