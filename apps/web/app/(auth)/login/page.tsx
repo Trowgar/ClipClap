@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { AuthCard, AuthShell } from "@/components/auth-shell";
 import { LoginForm } from "./login-form";
@@ -29,15 +30,24 @@ export default async function LoginPage({
 }) {
   const [params, session] = await Promise.all([searchParams, auth()]);
   const verified = parseVerifiedStatus(params.verified);
+  const signedIn = Boolean(session?.user?.id);
+
+  // A signed-in user has no business on the sign-in card: with a live session
+  // every provider button silently turns into "link this identity to the
+  // current account" (Auth.js linking semantics). That is how a second Google
+  // ended up attached to an existing user, and why a Telegram click here died
+  // with OAuthAccountNotLinked on 2026-08-06. The one legitimate signed-in
+  // reader is the ?verified= acknowledgement - see the component comment above.
+  if (signedIn && !verified) redirect("/dashboard");
 
   return (
     <AuthShell>
-      {verified && (
-        <VerifiedNotice status={verified} signedIn={Boolean(session?.user?.id)} />
+      {verified && <VerifiedNotice status={verified} signedIn={signedIn} />}
+      {!signedIn && (
+        <AuthCard>
+          <LoginForm />
+        </AuthCard>
       )}
-      <AuthCard>
-        <LoginForm />
-      </AuthCard>
     </AuthShell>
   );
 }

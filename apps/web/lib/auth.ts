@@ -43,6 +43,11 @@ const nextAuth = NextAuth({
     Google({
       clientId: process.env.GOOGLE_CLIENT_ID!,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      // Always show Google's account chooser. Without this a re-auth runs with
+      // prompt=none, silently picks the browser's default Google account, and
+      // a user with several of them reads the instant re-login as "logout did
+      // not work" - and can land in an account they did not choose.
+      authorization: { params: { prompt: "select_account" } },
     }),
     ...telegramProviders,
     Credentials({
