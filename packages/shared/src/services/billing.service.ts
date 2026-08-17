@@ -22,6 +22,15 @@ export function getStripe(): Stripe {
   return new Stripe(key);
 }
 
+// The live account runs Stripe Managed Payments (Stripe as merchant of record),
+// which refuses Checkout on the SDK's pinned 2025-02-24.acacia. Only the two
+// checkout.sessions.create calls need basil - we read nothing but session.url
+// off the response. Everything else (subscriptions.retrieve, the webhook
+// endpoint) stays on acacia on purpose: handleWebhook reads invoice.subscription
+// and subscription.current_period_* which basil moved. Do not bump the whole
+// client to basil without migrating those reads.
+export const CHECKOUT_API_VERSION = "2025-03-31.basil";
+
 function requireEnv(key: string): string {
   const v = process.env[key];
   if (!v) throw new Error(`Missing env var: ${key}`);
@@ -83,7 +92,7 @@ export async function createCheckoutSession(
     subscription_data: {
       metadata: { userId, plan, cycle },
     },
-  });
+  }, { apiVersion: CHECKOUT_API_VERSION });
 
   return session.url!;
 }

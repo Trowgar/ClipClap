@@ -1,6 +1,6 @@
 import { prisma } from "../lib/prisma";
 import { TOPUP_PACKS, type TopupPack } from "../config/plans";
-import { getStripe } from "./billing.service";
+import { getStripe, CHECKOUT_API_VERSION } from "./billing.service";
 
 // 4xx-class: user must have an active Stripe customer (i.e. has subscribed
 // at some point). Safe to surface as "subscribe first" guidance.
@@ -45,7 +45,7 @@ export async function createTopupCheckoutSession(
       topupPack: pack,
       minutes: String(TOPUP_PACKS[pack].minutes),
     },
-  });
+  }, { apiVersion: CHECKOUT_API_VERSION });
 
   return session.url!;
 }

@@ -27,7 +27,12 @@ vi.mock("../../lib/prisma", () => ({
 }));
 
 import { prisma } from "../../lib/prisma";
-import { createCheckoutSession, UnsupportedPlanCycleError, handleWebhook } from "../billing.service";
+import {
+  createCheckoutSession,
+  UnsupportedPlanCycleError,
+  handleWebhook,
+  CHECKOUT_API_VERSION,
+} from "../billing.service";
 
 describe("billing.service - createCheckoutSession", () => {
   beforeEach(() => {
@@ -57,7 +62,8 @@ describe("billing.service - createCheckoutSession", () => {
         subscription_data: expect.objectContaining({
           metadata: expect.objectContaining({ userId: "u1", plan: "STARTER", cycle: "WEEKLY" }),
         }),
-      })
+      }),
+      { apiVersion: CHECKOUT_API_VERSION }
     );
   });
 
@@ -74,7 +80,8 @@ describe("billing.service - createCheckoutSession", () => {
     expect(mockStripe.checkout.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({
         line_items: [{ price: "price_pm", quantity: 1 }],
-      })
+      }),
+      { apiVersion: CHECKOUT_API_VERSION }
     );
   });
 
@@ -91,7 +98,8 @@ describe("billing.service - createCheckoutSession", () => {
     expect(mockStripe.checkout.sessions.create).toHaveBeenCalledWith(
       expect.objectContaining({
         line_items: [{ price: "price_mm", quantity: 1 }],
-      })
+      }),
+      { apiVersion: CHECKOUT_API_VERSION }
     );
   });
 
