@@ -18,6 +18,10 @@ export interface ReframeConfig {
   /** Crop-trajectory killswitch. Planning runs regardless; this decides whether
    *  a trajectory is emitted at all. */
   motion: boolean;
+  /** Cut-recovery killswitch (spec 2026-08-17-cut-recovery-design §2c). Off is
+   *  today's plan byte for byte; on lets face-track turnover confirm scdet
+   *  candidates in the 0.15-0.30 band. */
+  cutRecovery: boolean;
   camera: CameraConfig;
 }
 
@@ -54,6 +58,8 @@ export function loadReframeConfig(
     // Exact literal, the REFRAME_STREAM rule: a killswitch that can be flipped
     // by accident is not one.
     motion: env.REFRAME_MOTION === "on",
+    // Exact literal, the REFRAME_STREAM rule.
+    cutRecovery: env.REFRAME_CUT_RECOVERY === "on",
     camera: {
       deadzoneFrac: positive(env.REFRAME_CAM_DEADZONE, DEFAULT_CAMERA.deadzoneFrac),
       settleFrac: positive(env.REFRAME_CAM_SETTLE, DEFAULT_CAMERA.settleFrac),

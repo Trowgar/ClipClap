@@ -57,6 +57,7 @@ const cfg: ReframeConfig = {
   faceSmallFrac: 0.06,
   faceLargeFrac: 0.1,
   motion: false,
+  cutRecovery: false,
   camera: DEFAULT_CAMERA,
   pipMaxFrac: 0.5,
   pipEdgeMin: 4.0,

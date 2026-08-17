@@ -49,6 +49,7 @@ const cfg: ReframeConfig = {
   faceSmallFrac: 0.06,
   faceLargeFrac: 0.1,
   motion: false,
+  cutRecovery: false,
   camera: DEFAULT_CAMERA,
   pipMaxFrac: 0.5,
   pipEdgeMin: 4.0,
@@ -71,6 +72,42 @@ const detectorJson = (shotCount: number) =>
       ],
     })),
   });
+
+/** Two faces that never share the screen: A for 0-5s, B for 5-10s, one shot. */
+const turnoverJson = () => {
+  const path = (from: number, to: number, x: number) =>
+    Array.from({ length: Math.round((to - from) * 2) }, (_, k) => ({
+      t: from + k * 0.5,
+      x,
+      y: 180,
+      w: 240,
+      h: 240,
+    }));
+  return JSON.stringify({
+    shots: [
+      {
+        shotIndex: 0,
+        camRect: null,
+        tracks: [
+          { id: 1, box: { x: 100, y: 180, w: 240, h: 240 }, score: 0.9, samples: 10, mouthActivity: 0.3, path: path(0, 5, 100) },
+          { id: 2, box: { x: 900, y: 180, w: 240, h: 240 }, score: 0.9, samples: 10, mouthActivity: 0.3, path: path(5, 10, 900) },
+        ],
+      },
+    ],
+  });
+};
+
+/** scdet stderr: one candidate at 5.0s scoring 0.22 - below the 0.3 bar. */
+const candidateStderr =
+  "[Parsed_metadata_2 @ 0x1] frame:0 pts:1 pts_time:5.0\n" +
+  "[Parsed_metadata_2 @ 0x1] lavfi.scene_score=0.22\n";
+
+function turnoverPath(cmd: string, _args: string[]): ExecResult {
+  if (cmd === "ffprobe") return { stdout: "1280x720\n", stderr: "" };
+  if (cmd === "ffmpeg") return { stdout: "", stderr: candidateStderr };
+  if (cmd === "python3") return { stdout: turnoverJson(), stderr: "" };
+  throw new Error(`unexpected command ${cmd}`);
+}
 
 /**
  * Everything succeeds: 1280x720, no scene cuts (so one shot covering the
@@ -233,5 +270,50 @@ describe("computeCropPlan never throws", () => {
       "ffmpeg", // frame extraction
       "python3",
     ]);
+  });
+});
+
+describe("computeCropPlan cut recovery", () => {
+  beforeEach(() => {
+    h.calls = [];
+    h.respond = turnoverPath;
+  });
+
+  it("leaves the plan alone and reports no telemetry with the flag off", async () => {
+    const r = await computeCropPlan("/x.mp4", 0, 10, cfg);
+
+    expect(r.plan?.shots).toHaveLength(1);
+    expect(r.cutRecovery).toBeUndefined();
+    expect(r.shotCount).toBe(1);
+  });
+
+  it("splits at the confirmed candidate with the flag on and reports telemetry", async () => {
+    const r = await computeCropPlan("/x.mp4", 0, 10, { ...cfg, cutRecovery: true });
+
+    expect(r.plan?.shots.map((s) => [s.start, s.end])).toEqual([
+      [0, 5],
+      [5, 10],
+    ]);
+    // Two windows, one per face - the split changed the picture, not just the count.
+    const xs = r.plan!.shots.map((s) => (s.layout === "single" ? s.x : NaN));
+    expect(xs[0]).not.toBe(xs[1]);
+    expect(r.cutRecovery).toEqual({
+      candidates: 1,
+      confirmed: 1,
+      rejected: { noTurnover: 0, oneSideEmpty: 0, tooShort: 0, noPath: 0 },
+      capHit: 0,
+    });
+    // shotCount stays the DETECTOR count; the recovered count is the plan's.
+    expect(r.shotCount).toBe(1);
+  });
+
+  it("counts noPath and changes nothing when the sidecar sent no path", async () => {
+    h.respond = (cmd, args) =>
+      cmd === "python3" ? { stdout: detectorJson(1), stderr: "" } : turnoverPath(cmd, args);
+
+    const r = await computeCropPlan("/x.mp4", 0, 10, { ...cfg, cutRecovery: true });
+
+    expect(r.plan?.shots).toHaveLength(1);
+    expect(r.cutRecovery?.rejected.noPath).toBe(1);
   });
 });

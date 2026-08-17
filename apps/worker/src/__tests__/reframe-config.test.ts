@@ -24,8 +24,16 @@ describe("loadReframeConfig", () => {
       pipMaxFrac: 0.5,
       pipEdgeMin: 4.0,
       motion: false,
+      cutRecovery: false,
       camera: DEFAULT_CAMERA,
     });
+  });
+
+  it("turns cut recovery on only for the exact literal 'on'", () => {
+    expect(loadReframeConfig({ REFRAME_CUT_RECOVERY: "on" }).cutRecovery).toBe(true);
+    expect(loadReframeConfig({ REFRAME_CUT_RECOVERY: "true" }).cutRecovery).toBe(false);
+    expect(loadReframeConfig({ REFRAME_CUT_RECOVERY: "1" }).cutRecovery).toBe(false);
+    expect(loadReframeConfig({}).cutRecovery).toBe(false);
   });
 
   it("reads env overrides and only accepts the literal 'faces' engine", () => {

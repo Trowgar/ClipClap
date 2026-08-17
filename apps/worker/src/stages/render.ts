@@ -186,6 +186,7 @@ async function renderClips(
               shotCount: reframe.shotCount,
               detectMs: reframe.detectMs,
               fallbackReason: reframe.fallbackReason,
+              cutRecovery: reframe.cutRecovery,
             })
           );
         }

@@ -53,6 +53,27 @@ describe("buildReframeCheck", () => {
     expect("profile" in check).toBe(false);
   });
 
+  it("carries the cut-recovery telemetry when it ran, and omits it when it did not", () => {
+    const cutRecovery = {
+      candidates: 5,
+      confirmed: 1,
+      rejected: { noTurnover: 3, oneSideEmpty: 1, tooShort: 0, noPath: 0 },
+      capHit: 0,
+    };
+    const v1: CropPlan = {
+      version: 1,
+      engine: "faces",
+      source: { width: 1920, height: 1080 },
+      shots: [{ start: 0, end: 5, layout: "center", x: 656 }],
+    };
+    expect(
+      buildReframeCheck({ plan: v1, shotCount: 1, detectMs: 50, cutRecovery }).cutRecovery
+    ).toEqual(cutRecovery);
+    expect("cutRecovery" in buildReframeCheck({ plan: v1, shotCount: 1, detectMs: 50 })).toBe(
+      false
+    );
+  });
+
   it("marks a check as an encode failure without inventing layouts", () => {
     const check = buildReframeCheck({ plan: streamPlan, shotCount: 1, detectMs: 900 });
     expect(markEncodeFailed(check)).toEqual({
