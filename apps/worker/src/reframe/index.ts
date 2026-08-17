@@ -5,7 +5,7 @@ import { detectShots, type CutCandidate } from "./shots";
 import { detectFaces } from "./faces";
 import { buildCropPlan, MAX_PLAN_SHOTS } from "./plan";
 import { resolveCamRect } from "./cam-rect";
-import { recoverCuts, type CutRecoveryTelemetry } from "./cut-recovery";
+import { recoverCuts, type CutRecoveryResult, type CutRecoveryTelemetry } from "./cut-recovery";
 import type { CropPlan, Shot, ShotTracks } from "./types";
 
 import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
@@ -37,7 +37,7 @@ export interface Detection {
   height: number;
   shots: Shot[];
   candidates: CutCandidate[];
-  tracks: ShotTracks[];
+  tracksByShot: ShotTracks[];
 }
 
 export type DetectionResult =
@@ -107,7 +107,7 @@ export async function detectRange(
         height,
         shots: detected.shots,
         candidates: detected.candidates,
-        tracks,
+        tracksByShot: tracks,
       },
     };
   } catch (error) {
@@ -122,6 +122,9 @@ export async function detectRange(
 export interface PlannedDetection {
   plan: CropPlan | null;
   cutRecovery?: CutRecoveryTelemetry;
+  /** Per-candidate verdicts, for the eval only - never copied into
+   *  ReframeResult or the manifest. */
+  decisions?: CutRecoveryResult["decisions"];
 }
 
 /**
@@ -131,10 +134,11 @@ export interface PlannedDetection {
  * sub-shots cannot swing resolveCamRect's majority vote.
  */
 export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection {
-  const cam = resolveCamRect(d.tracks.map((t) => t.camRect), d.width, d.height);
+  const cam = resolveCamRect(d.tracksByShot.map((t) => t.camRect), d.width, d.height);
   let shots = d.shots;
-  let tracks = d.tracks;
+  let tracks = d.tracksByShot;
   let cutRecovery: CutRecoveryTelemetry | undefined;
+  let decisions: CutRecoveryResult["decisions"] | undefined;
   if (cfg.cutRecovery) {
     const r = recoverCuts(shots, tracks, d.candidates, {
       minShotSec: cfg.minShotSec,
@@ -144,6 +148,7 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
     shots = r.shots;
     tracks = r.tracksByShot;
     cutRecovery = r.telemetry;
+    decisions = r.decisions;
   }
   const plan = buildCropPlan(
     shots,
@@ -160,7 +165,11 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
     },
     cam
   );
-  return { plan, ...(cutRecovery ? { cutRecovery } : {}) };
+  return {
+    plan,
+    ...(cutRecovery ? { cutRecovery } : {}),
+    ...(decisions ? { decisions } : {}),
+  };
 }
 
 /**
@@ -193,7 +202,8 @@ export async function computeCropPlan(
   let planned: PlannedDetection;
   try {
     planned = planDetected(detected.detection, cfg);
-  } catch {
+  } catch (error) {
+    console.warn(`[reframe] planner threw, falling back to the legacy crop:`, error);
     return {
       plan: null,
       fallbackReason: "scdet_failed",

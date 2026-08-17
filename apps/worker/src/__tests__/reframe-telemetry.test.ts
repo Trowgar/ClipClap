@@ -18,6 +18,13 @@ const streamPlan: CropPlan = {
   ],
 };
 
+const cutRecovery = {
+  candidates: 5,
+  confirmed: 1,
+  rejected: { noTurnover: 3, oneSideEmpty: 1, tooShort: 0, noPath: 0 },
+  capHit: 0,
+};
+
 describe("buildReframeCheck", () => {
   it("carries the profile and the layout counts", () => {
     expect(
@@ -54,12 +61,6 @@ describe("buildReframeCheck", () => {
   });
 
   it("carries the cut-recovery telemetry when it ran, and omits it when it did not", () => {
-    const cutRecovery = {
-      candidates: 5,
-      confirmed: 1,
-      rejected: { noTurnover: 3, oneSideEmpty: 1, tooShort: 0, noPath: 0 },
-      capHit: 0,
-    };
     const v1: CropPlan = {
       version: 1,
       engine: "faces",
@@ -82,5 +83,12 @@ describe("buildReframeCheck", () => {
       profile: { class: "stream", faceFrac: 0.034, camRectScore: 4.7 },
       fallbackReason: "encode_failed",
     });
+    const withCutRecovery = buildReframeCheck({
+      plan: streamPlan,
+      shotCount: 1,
+      detectMs: 900,
+      cutRecovery,
+    });
+    expect(markEncodeFailed(withCutRecovery).cutRecovery).toEqual(cutRecovery);
   });
 });

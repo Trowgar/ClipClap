@@ -290,13 +290,11 @@ describe("computeCropPlan cut recovery", () => {
   it("splits at the confirmed candidate with the flag on and reports telemetry", async () => {
     const r = await computeCropPlan("/x.mp4", 0, 10, { ...cfg, cutRecovery: true });
 
-    expect(r.plan?.shots.map((s) => [s.start, s.end])).toEqual([
-      [0, 5],
-      [5, 10],
+    // Two full windows, one per face - the split changed the picture, not just the count.
+    expect(r.plan?.shots).toEqual([
+      { start: 0, end: 5, layout: "single", x: 18 }, // face A at x=100
+      { start: 5, end: 10, layout: "single", x: 818 }, // face B at x=900
     ]);
-    // Two windows, one per face - the split changed the picture, not just the count.
-    const xs = r.plan!.shots.map((s) => (s.layout === "single" ? s.x : NaN));
-    expect(xs[0]).not.toBe(xs[1]);
     expect(r.cutRecovery).toEqual({
       candidates: 1,
       confirmed: 1,
@@ -315,5 +313,68 @@ describe("computeCropPlan cut recovery", () => {
 
     expect(r.plan?.shots).toHaveLength(1);
     expect(r.cutRecovery?.rejected.noPath).toBe(1);
+  });
+
+  it("resolves the clip-level cam rect on the DETECTOR shots, before recovery (spec §4)", async () => {
+    // Faces well under REFRAME_FACE_SMALL_FRAC (0.06 * 1280 = 76.8px) so
+    // buildCropPlan falls through past normal_face to small_face and surfaces
+    // resolveCamRect's reason on plan.profile - the field this test pins.
+    const path = (from: number, to: number, x: number) =>
+      Array.from({ length: Math.round((to - from) * 2) }, (_, k) => ({
+        t: from + k * 0.5,
+        x,
+        y: 180,
+        w: 40,
+        h: 40,
+      }));
+    const camVoteJson = JSON.stringify({
+      shots: [
+        {
+          shotIndex: 0,
+          camRect: { x: 40, y: 40, w: 300, h: 220, score: 6.0 },
+          tracks: [
+            { id: 1, box: { x: 100, y: 180, w: 40, h: 40 }, score: 0.9, samples: 10, mouthActivity: 0.3, path: path(0, 5, 100) },
+            { id: 2, box: { x: 900, y: 180, w: 40, h: 40 }, score: 0.9, samples: 10, mouthActivity: 0.3, path: path(5, 10, 900) },
+          ],
+        },
+        {
+          shotIndex: 1,
+          camRect: { x: 900, y: 400, w: 300, h: 220, score: 6.0 },
+          tracks: [
+            { id: 3, box: { x: 600, y: 180, w: 40, h: 40 }, score: 0.9, samples: 20, mouthActivity: 0.3, path: path(10, 20, 600) },
+          ],
+        },
+      ],
+    });
+    // scdet: a real cut at 10.0 (0.5, above the 0.3 bar - the detector shot
+    // boundary) and a candidate at 5.0 (0.22, inside shot 0 - cut recovery's to confirm).
+    const camVoteStderr =
+      "[Parsed_metadata_2 @ 0x1] frame:0 pts:1 pts_time:5.0\n" +
+      "[Parsed_metadata_2 @ 0x1] lavfi.scene_score=0.22\n" +
+      "[Parsed_metadata_2 @ 0x1] frame:1 pts:2 pts_time:10.0\n" +
+      "[Parsed_metadata_2 @ 0x1] lavfi.scene_score=0.5\n";
+    h.respond = (cmd: string, _args: string[]): ExecResult => {
+      if (cmd === "ffprobe") return { stdout: "1280x720\n", stderr: "" };
+      if (cmd === "ffmpeg") return { stdout: "", stderr: camVoteStderr };
+      if (cmd === "python3") return { stdout: camVoteJson, stderr: "" };
+      throw new Error(`unexpected command ${cmd}`);
+    };
+
+    const r = await computeCropPlan("/x.mp4", 0, 20, { ...cfg, cutRecovery: true, stream: true });
+
+    // Pre-recovery the vote is over the two DETECTOR shots' rects only:
+    // [rectA(x=40), rectB(x=900)] disagree by far more than the 2% tolerance,
+    // so resolveCamRect declines (stream_rect_unstable) rather than average
+    // across what is really a scene change - and buildCropPlan surfaces that
+    // reason on profile since there is no normal-sized face to anchor on.
+    //
+    // If resolveCamRect instead ran AFTER recovery, shot 0 would already be
+    // split at t=5 into two sub-shots that both inherit rectA - a vote of
+    // [A, A, B] - and A's 2-of-3 majority would resolve cleanly instead of
+    // declining. That is exactly the ordering bug this seam guards against.
+    expect(r.plan?.profile).toMatchObject({
+      class: "small_face",
+      reason: "stream_rect_unstable",
+    });
   });
 });
