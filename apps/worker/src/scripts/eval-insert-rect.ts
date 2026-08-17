@@ -351,7 +351,7 @@ async function main() {
         );
         const [W, H] = stdout.trim().split("x").map(Number);
         if (!W || !H) throw new Error("probe_failed");
-        const shots = await detectShots(
+        const { shots } = await detectShots(
           url, clip.startTime, clip.endTime, cfg, SHOTS_TIMEOUT_MS
         );
         const tracks = await detectFaces(

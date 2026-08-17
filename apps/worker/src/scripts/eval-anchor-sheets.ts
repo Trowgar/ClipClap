@@ -275,7 +275,7 @@ async function main() {
       console.log(`  range         : ${start.toFixed(2)}-${end.toFixed(2)}s (${(end - start).toFixed(2)}s)`);
       console.log(`  dimensions    : ${W}x${H}`);
 
-      const shots = await detectShots(path, start, end, cfg, SHOTS_TIMEOUT_MS);
+      const { shots } = await detectShots(path, start, end, cfg, SHOTS_TIMEOUT_MS);
       const tracks: ShotTracks[] = await detectFaces(
         path, start, end, shots, W, H, cfg, FACES_TIMEOUT_MS
       );

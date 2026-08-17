@@ -379,7 +379,7 @@ async function main() {
       try {
         const { width: W, height: H } = await probe(url, clip.startTime);
         const cropW = cropWidthFor(H);
-        const shots = await detectShots(
+        const { shots } = await detectShots(
           url, clip.startTime, clip.endTime, cfg, SHOTS_TIMEOUT_MS
         );
         const tracks: ShotTracks[] = await detectFaces(

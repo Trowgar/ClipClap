@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // A separate file from reframe-shots.test.ts on purpose: that one tests the
-// pure cutsToShots and must stay free of module mocks. Here the ffmpeg boundary
-// is mocked so the scdet retry - a long window with zero cuts is probed a
-// second time at half the threshold - can be asserted at all.
+// pure functions and must stay free of module mocks. Here the ffmpeg boundary
+// is mocked so the ONE-pass contract can be asserted: scdet is asked once, at
+// the candidate floor, and cuts / retry / candidates are read off that list.
 
 const h = vi.hoisted(() => ({
   /** The args of every ffmpeg invocation, in order. */
@@ -35,6 +35,16 @@ const thresholds = () =>
     return Number(/gte\(scene,([0-9.]+)\)/.exec(vf)![1]);
   });
 
+/** ffmpeg stderr as `metadata=print` writes it. */
+const scored = (rows: Array<[number, number]>) =>
+  rows
+    .map(
+      ([t, s]) =>
+        `[Parsed_metadata_2 @ 0x1] frame:0    pts:1   pts_time:${t}\n` +
+        `[Parsed_metadata_2 @ 0x1] lavfi.scene_score=${s}\n`
+    )
+    .join("");
+
 const cfg: ReframeConfig = {
   engine: "faces",
   sampleFps: 2,
@@ -52,86 +62,124 @@ const cfg: ReframeConfig = {
   pipEdgeMin: 4.0,
 };
 
-describe("detectShots retry", () => {
+describe("detectShots single pass", () => {
   beforeEach(() => {
     h.calls = [];
     h.stderrQueue = [];
   });
 
-  it("retries a long zero-cut window at half the threshold", async () => {
-    // 0.4 halves to 0.2, which is clear of the 0.15 floor - so this asserts the
-    // halving itself and not merely that the retry lands on the floor.
-    h.stderrQueue = ["", ""];
+  it("asks scdet once at the candidate floor and keeps cuts at the configured threshold", async () => {
+    h.stderrQueue = [scored([[12.4, 0.41], [20.0, 0.22], [31.0, 0.35]])];
 
-    await detectShots("/x.mp4", 0, 40, { ...cfg, sceneThreshold: 0.4 }, 5000);
+    const r = await detectShots("/x.mp4", 0, 40, cfg, 5000);
 
-    expect(thresholds()).toEqual([0.4, 0.2]);
+    expect(thresholds()).toEqual([0.15]);
+    expect(r.shots).toEqual([
+      { start: 0, end: 12.4 },
+      { start: 12.4, end: 31.0 },
+      { start: 31.0, end: 40 },
+    ]);
+    expect(r.candidates).toEqual([{ t: 20.0, score: 0.22 }]);
   });
 
-  it("uses the cuts the second pass finds", async () => {
-    h.stderrQueue = ["", "pts_time:20.0"];
+  it("uses metadata=print and drops the progress line", async () => {
+    h.stderrQueue = [""];
+    await detectShots("/x.mp4", 0, 10, cfg, 5000);
+    const args = h.calls[0];
+    expect(args).toContain("-nostats");
+    expect(args[args.indexOf("-vf") + 1]).toBe(
+      "scale=320:-2,select='gte(scene,0.15)',metadata=print"
+    );
+  });
 
-    const shots = await detectShots("/x.mp4", 0, 40, cfg, 5000);
+  it("promotes half-threshold cuts on a long zero-cut window without a second pass", async () => {
+    // 0.4 halves to 0.2, clear of the 0.15 floor - so this asserts the halving
+    // itself: 0.25 becomes a cut, 0.16 stays a candidate.
+    h.stderrQueue = [scored([[20.0, 0.25], [30.0, 0.16]])];
 
-    expect(thresholds()).toEqual([0.3, 0.15]);
-    expect(shots).toEqual([
+    const r = await detectShots("/x.mp4", 0, 40, { ...cfg, sceneThreshold: 0.4 }, 5000);
+
+    expect(thresholds()).toEqual([0.15]);
+    expect(r.shots).toEqual([
       { start: 0, end: 20 },
       { start: 20, end: 40 },
     ]);
+    expect(r.candidates).toEqual([{ t: 30.0, score: 0.16 }]);
   });
 
-  it("does not retry when the first pass found cuts", async () => {
-    h.stderrQueue = ["pts_time:12.4\npts_time:31.0"];
+  it("does not lower the bar for a window shorter than the long-take bar", async () => {
+    h.stderrQueue = [scored([[7.0, 0.25]])];
 
-    const shots = await detectShots("/x.mp4", 0, 40, cfg, 5000);
+    const r = await detectShots("/x.mp4", 0, 14.9, cfg, 5000);
 
-    expect(thresholds()).toEqual([0.3]);
-    expect(shots).toHaveLength(3);
+    expect(r.shots).toEqual([{ start: 0, end: 14.9 }]);
+    expect(r.candidates).toEqual([{ t: 7.0, score: 0.25 }]);
   });
 
-  it("does not retry a window shorter than the long-take bar", async () => {
-    h.stderrQueue = ["", ""];
+  it("lowers the bar for a window exactly at the long-take bar", async () => {
+    h.stderrQueue = [scored([[7.0, 0.25]])];
 
-    await detectShots("/x.mp4", 0, 14.9, cfg, 5000);
+    const r = await detectShots("/x.mp4", 600, 615, cfg, 5000);
 
-    expect(thresholds()).toEqual([0.3]);
-  });
-
-  it("retries a window exactly at the long-take bar", async () => {
-    h.stderrQueue = ["", ""];
-
-    await detectShots("/x.mp4", 600, 615, cfg, 5000);
-
-    expect(thresholds()).toEqual([0.3, 0.15]);
+    expect(r.shots).toEqual([
+      { start: 0, end: 7 },
+      { start: 7, end: 15 },
+    ]);
+    expect(r.candidates).toEqual([]);
   });
 
   it("never lets the retry threshold fall below the floor", async () => {
-    h.stderrQueue = ["", ""];
+    // 0.1 would be the half; the floor holds it at 0.15, so 0.16 IS a cut and
+    // 0.12 is neither cut nor candidate.
+    h.stderrQueue = [scored([[10.0, 0.16], [20.0, 0.12]])];
 
-    await detectShots("/x.mp4", 0, 40, { ...cfg, sceneThreshold: 0.2 }, 5000);
+    const r = await detectShots("/x.mp4", 0, 40, { ...cfg, sceneThreshold: 0.2 }, 5000);
 
-    // 0.1 would be the half; the floor holds it at 0.15.
-    expect(thresholds()).toEqual([0.2, 0.15]);
+    expect(thresholds()).toEqual([0.15]);
+    expect(r.shots).toEqual([
+      { start: 0, end: 10 },
+      { start: 10, end: 40 },
+    ]);
+    expect(r.candidates).toEqual([]);
+  });
+
+  it("moves the pass down with a configured threshold below the floor", async () => {
+    h.stderrQueue = [scored([[10.0, 0.12]])];
+
+    const r = await detectShots("/x.mp4", 0, 40, { ...cfg, sceneThreshold: 0.1 }, 5000);
+
+    expect(thresholds()).toEqual([0.1]);
+    expect(r.shots).toHaveLength(2);
+    expect(r.candidates).toEqual([]);
   });
 
   it("passes the absolute window to ffmpeg and gets clip-relative shots back", async () => {
-    // -ss before -i is what makes showinfo timestamps clip-relative; the shot
-    // list is in clip time even though the window is not.
-    h.stderrQueue = ["pts_time:10.0"];
+    // -ss before -i is what makes the timestamps clip-relative; the shot list
+    // is in clip time even though the window is not.
+    h.stderrQueue = [scored([[10.0, 0.5]])];
 
-    const shots = await detectShots("/x.mp4", 600, 640, cfg, 5000);
+    const r = await detectShots("/x.mp4", 600, 640, cfg, 5000);
 
-    expect(h.calls[0].slice(0, 6)).toEqual([
+    expect(h.calls[0].slice(0, 7)).toEqual([
       "-nostdin",
+      "-nostats",
       "-ss",
       "600",
       "-to",
       "640",
       "-i",
     ]);
-    expect(shots).toEqual([
+    expect(r.shots).toEqual([
       { start: 0, end: 10 },
       { start: 10, end: 40 },
     ]);
+  });
+
+  it("rejects when a selected frame carries no score", async () => {
+    h.stderrQueue = ["[Parsed_metadata_2 @ 0x1] frame:0 pts:1 pts_time:10.0\n"];
+
+    await expect(detectShots("/x.mp4", 0, 40, cfg, 5000)).rejects.toThrow(
+      /scdet_score_missing/
+    );
   });
 });

@@ -77,7 +77,8 @@ export async function computeCropPlan(
   let shotCount = 0;
   try {
     const { width, height } = await probeDimensions(sourcePath, remaining());
-    const shots = await detectShots(sourcePath, startSec, endSec, cfg, remaining());
+    // Candidates are ignored here until cut recovery is wired (Task 3).
+    const { shots } = await detectShots(sourcePath, startSec, endSec, cfg, remaining());
     shotCount = shots.length;
     let tracks;
     try {

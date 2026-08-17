@@ -241,7 +241,7 @@ async function main() {
     const { width, height } = await probeDimensions(src);
 
     const shotsAt = Date.now();
-    const shots = await detectShots(
+    const { shots } = await detectShots(
       src, CLIP_START_SEC, CLIP_END_SEC, cfg, DETECT_TIMEOUT_MS
     );
     const shotsMs = Date.now() - shotsAt;
