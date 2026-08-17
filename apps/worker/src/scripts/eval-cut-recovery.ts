@@ -8,16 +8,25 @@
  * For every manifest item: ONE detection (probe + scdet + sidecar), then the
  * plan with the flag OFF and with it ON from that same detection. Prints:
  *   - OFF invariant: the OFF plan's shots equal the PRODUCTION shots persisted
- *     in the manifest (start/end within 1e-3, layout and x exact);
- *   - ON vs OFF: seconds where the window moves by more than 0.25 cropW,
- *     shot counts, candidate verdicts;
- *   - one contact sheet per diff span (red = OFF window, green = ON window)
- *     and one per sampled REJECTED candidate (red = OFF window at t-0.5/t+0.5),
+ *     in the manifest (start/end within 1e-3, layout and x exact (single/center));
+ *   - ON vs OFF: seconds where the window moves by more than 0.25 cropW (the
+ *     display bar), and separately seconds where it moves by ANY amount, shot
+ *     counts, and candidate verdicts;
+ *   - one contact sheet per diff span (red = OFF window, green = ON window),
+ *     one per confirmed split regardless of whether it crossed the diff bar
+ *     (split-<clip>-<t>.jpg - what a below-bar split actually did), and one
+ *     per sampled REJECTED candidate (red = OFF window at t-0.5/t+0.5), all
  *     under .corpus/director-audit/eval-cut-recovery/.
- * Read-only against DB and R2 (needs the corpus on disk: director-audit-fetch.ts).
+ * The numeric results are written to summary.json (summary-only.json under
+ * --only) right after the analysis loop, before any sheet is drawn - a sheet
+ * failure is caught and recorded per clip (ClipReport.sheetErrors) rather
+ * than aborting the run and losing everything already computed. Exits 1 if
+ * the OFF invariant failed anywhere or any clip fell back.
+ * Reads only the committed manifest and local corpus files; writes only
+ * under .corpus/director-audit/eval-cut-recovery/.
  */
-import { mkdir, rm, writeFile } from "fs/promises";
-import { join } from "path";
+import { mkdir, readdir, rm, writeFile } from "fs/promises";
+import { basename, dirname, join } from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { detectRange, planDetected } from "../reframe";
@@ -51,6 +60,12 @@ interface ClipReport {
   shotsOn: number;
   diffSec: number;
   cmpSec: number;
+  /** Grid seconds where the window moved at all (any px), not just past the diff bar. */
+  movedSec: number;
+  /** Largest |xOff - xOn| seen anywhere in the clip, in px. */
+  maxAbsDx: number;
+  /** cropWidthFor(det.detection.height) - the one source of truth for this clip's crop width. */
+  cropW: number;
   spans: Span[];
   telemetry?: CutRecoveryTelemetry;
   decisions: Array<{ t: number; score: number; verdict: CutDecision }>;
@@ -60,7 +75,22 @@ interface ClipReport {
   profileFlip: boolean;
   /** Confirmed splits whose ON sub-shot fell to a centre crop where OFF had a face window. */
   facelessSubShots: number;
+  /** Set only when telemetry.confirmed === 0: the OFF/ON plans must be identical. */
+  onEqualsOffWhenNothingConfirmed?: boolean;
   sheets: string[];
+  /** Sheet-drawing failures for this clip, recorded rather than fatal. */
+  sheetErrors: string[];
+}
+
+/** Everything a sheet-drawing pass needs that isn't worth persisting in the
+ *  (JSON-serialized) ClipReport: the plans themselves and where to read frames from. */
+interface Work {
+  item: DirectorAuditItem;
+  source: string;
+  off: CropPlan | null;
+  on: CropPlan | null;
+  cropW: number;
+  report: ClipReport;
 }
 
 function shotAt(plan: CropPlan, t: number): ShotLayout | undefined {
@@ -95,9 +125,11 @@ function diffPlans(
   on: CropPlan,
   duration: number,
   cropW: number
-): { diffSec: number; cmpSec: number; spans: Span[] } {
+): { diffSec: number; cmpSec: number; spans: Span[]; movedSec: number; maxAbsDx: number } {
   let diffSec = 0;
   let cmpSec = 0;
+  let movedSec = 0;
+  let maxAbsDx = 0;
   const spans: Span[] = [];
   let cur: Span | null = null;
   for (let t = GRID_SEC / 2; t < duration; t += GRID_SEC) {
@@ -109,6 +141,8 @@ function diffPlans(
       continue;
     }
     cmpSec += GRID_SEC;
+    if (a !== b) movedSec += GRID_SEC;
+    maxAbsDx = Math.max(maxAbsDx, Math.abs(a - b));
     if (Math.abs(a - b) > DIFF_FRAC * cropW) {
       diffSec += GRID_SEC;
       if (cur && cur.xOff === a && cur.xOn === b) cur.t1 = t + GRID_SEC / 2;
@@ -122,7 +156,26 @@ function diffPlans(
     }
   }
   if (cur) spans.push(cur);
-  return { diffSec, cmpSec, spans };
+  return { diffSec, cmpSec, spans, movedSec, maxAbsDx };
+}
+
+/** Removes numbered tile frames left over from an earlier call with this same
+ *  `out` path (a crashed prior attempt, or a re-run with a different frame
+ *  count) so the glob below only ever picks up THIS call's frames. */
+async function clearStaleTiles(out: string): Promise<void> {
+  const dir = dirname(out);
+  const prefix = `${basename(out)}.`;
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return;
+  }
+  await Promise.all(
+    entries
+      .filter((e) => e.startsWith(prefix) && e.endsWith(".jpg"))
+      .map((e) => rm(join(dir, e), { force: true }))
+  );
 }
 
 /** Source frames at absolute times with the OFF window in red and (optionally)
@@ -133,6 +186,7 @@ async function sheet(
   cropW: number,
   out: string
 ): Promise<void> {
+  await clearStaleTiles(out);
   const tmp: string[] = [];
   for (let i = 0; i < frames.length; i++) {
     const f = frames[i];
@@ -158,6 +212,8 @@ async function sheet(
   const cols = Math.min(frames.length, 3);
   const rows = Math.ceil(frames.length / cols);
   // Proven on this ffmpeg (8.0) during the audit: glob the numbered tiles in.
+  // Stale tiles from an earlier call are cleared above, so the glob can only
+  // ever match frames this call just wrote.
   await execFileAsync(
     "ffmpeg",
     [
@@ -176,15 +232,34 @@ function arg(name: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
+/** HEAD sha for the summary header; "unknown" if git isn't available in this
+ *  container or the command otherwise fails - never fatal to the run. */
+async function gitSha(): Promise<string> {
+  try {
+    const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"]);
+    return stdout.trim();
+  } catch {
+    return "unknown";
+  }
+}
+
 async function main() {
   const manifest = await loadManifest();
   const only = arg("--only")?.split(",");
-  const rejectedSample = Number(arg("--rejected-sample") ?? "30");
+  if (only) {
+    const matched = manifest.items.filter((i) => only.includes(i.clip)).length;
+    if (matched === 0) {
+      console.warn(`--only matched zero manifest items: ${only.join(",")}`);
+    }
+  }
+  const rejectedSampleRaw = Number(arg("--rejected-sample"));
+  const rejectedSample = Number.isFinite(rejectedSampleRaw) ? rejectedSampleRaw : 30;
   const corpus = join(workerRoot(), manifest.outDir);
   const outDir = join(corpus, "eval-cut-recovery");
   await mkdir(outDir, { recursive: true });
   const cfg = { ...loadReframeConfig(), engine: "faces" as const };
   const reports: ClipReport[] = [];
+  const works: Work[] = [];
 
   for (const item of manifest.items) {
     if (only && !only.includes(item.clip)) continue;
@@ -193,12 +268,16 @@ async function main() {
     const det = await detectRange(source, item.start, item.end, cfg, Date.now() + cfg.maxDetectSec * 1000);
     if (!det.ok) {
       console.log(`${item.clip} DETECTION FAILED ${det.fallbackReason}`);
-      reports.push({
+      const report: ClipReport = {
         clip: item.clip, job: item.job, start: item.start, end: item.end,
         offInvariant: "no_plan", fallback: det.fallbackReason,
-        shotsDetector: det.shotCount, shotsOff: 0, shotsOn: 0, diffSec: 0, cmpSec: 0,
-        spans: [], decisions: [], profileFlip: false, facelessSubShots: 0, sheets: [],
-      });
+        shotsDetector: det.shotCount, shotsOff: 0, shotsOn: 0,
+        diffSec: 0, cmpSec: 0, movedSec: 0, maxAbsDx: 0, cropW: 0,
+        spans: [], decisions: [], profileFlip: false, facelessSubShots: 0,
+        sheets: [], sheetErrors: [],
+      };
+      reports.push(report);
+      works.push({ item, source, off: null, on: null, cropW: 0, report });
       continue;
     }
     const off = planDetected(det.detection, { ...cfg, cutRecovery: false });
@@ -210,79 +289,163 @@ async function main() {
     // asked to be counted rather than guarded against.
     let facelessSubShots = 0;
     if (off.plan && on.plan) {
-      for (const d of decisions) {
-        if (d.verdict !== "confirmed") continue;
-        const offAt = shotAt(off.plan, d.t);
-        const onAt = shotAt(on.plan, d.t);
-        const onBefore = shotAt(on.plan, d.t - 0.01);
+      for (const dec of decisions) {
+        if (dec.verdict !== "confirmed") continue;
+        const offAt = shotAt(off.plan, dec.t);
+        const onAt = shotAt(on.plan, dec.t);
+        const onBefore = shotAt(on.plan, dec.t - 0.01);
         if (offAt?.layout === "single" && (onAt?.layout === "center" || onBefore?.layout === "center")) {
           facelessSubShots += 1;
         }
       }
     }
     const offInvariant = off.plan ? shotsEqual(item.shots, off.plan.shots) : "no_plan";
-    const d = off.plan && on.plan ? diffPlans(off.plan, on.plan, duration, cropW) : { diffSec: 0, cmpSec: 0, spans: [] };
-    const sheets: string[] = [];
-    for (const [k, s] of d.spans.entries()) {
-      const mid = (s.t0 + s.t1) / 2;
-      const times = [s.t0 + 0.3, mid, Math.max(s.t0 + 0.3, s.t1 - 0.3)].map((t) => item.start + t);
-      const outPath = join(outDir, `diff-${item.clip}-${k}-${s.t0.toFixed(1)}-${s.t1.toFixed(1)}.jpg`);
-      await sheet(source, times.map((abs) => ({ abs, xOff: s.xOff, xOn: s.xOn })), cropW, outPath);
-      sheets.push(outPath);
+    const d = off.plan && on.plan
+      ? diffPlans(off.plan, on.plan, duration, cropW)
+      : { diffSec: 0, cmpSec: 0, spans: [] as Span[], movedSec: 0, maxAbsDx: 0 };
+    // With nothing confirmed, cut recovery must be a no-op: the ON plan is
+    // read off the SAME shots/tracks as OFF. Byte identity, not just "close".
+    let onEqualsOffWhenNothingConfirmed: boolean | undefined;
+    if (off.plan && on.plan && (on.cutRecovery?.confirmed ?? 0) === 0) {
+      onEqualsOffWhenNothingConfirmed = JSON.stringify(off.plan) === JSON.stringify(on.plan);
     }
-    const r: ClipReport = {
+    const report: ClipReport = {
       clip: item.clip, job: item.job, start: item.start, end: item.end,
       offInvariant, shotsDetector: det.shotCount,
       shotsOff: off.plan?.shots.length ?? 0, shotsOn: on.plan?.shots.length ?? 0,
-      diffSec: d.diffSec, cmpSec: d.cmpSec, spans: d.spans,
-      telemetry: on.cutRecovery, decisions: decisions.map(({ t, score, verdict }) => ({ t, score, verdict })),
+      diffSec: d.diffSec, cmpSec: d.cmpSec, movedSec: d.movedSec, maxAbsDx: d.maxAbsDx, cropW,
+      spans: d.spans,
+      telemetry: on.cutRecovery,
+      decisions: decisions.map(({ t, score, verdict }) => ({ t, score, verdict })),
       profileOff: off.plan?.profile?.class, profileOn: on.plan?.profile?.class,
       profileFlip: (off.plan?.profile?.class ?? "none") !== (on.plan?.profile?.class ?? "none"),
       facelessSubShots,
-      sheets,
+      onEqualsOffWhenNothingConfirmed,
+      sheets: [],
+      sheetErrors: [],
     };
-    reports.push(r);
+    reports.push(report);
+    works.push({ item, source, off: off.plan, on: on.plan, cropW, report });
     console.log(
-      `${item.clip} start=${item.start.toFixed(1)} off=${offInvariant} shots ${r.shotsDetector}/${r.shotsOff}->${r.shotsOn} ` +
-        `diff ${r.diffSec.toFixed(1)}s of ${r.cmpSec.toFixed(1)}s ` +
-        `cand ${r.telemetry?.candidates ?? 0} conf ${r.telemetry?.confirmed ?? 0} rej ${JSON.stringify(r.telemetry?.rejected ?? {})} cap ${r.telemetry?.capHit ?? 0}` +
-        (r.profileFlip ? ` PROFILE FLIP ${r.profileOff}->${r.profileOn}` : "") +
-        (r.facelessSubShots ? ` facelessSubShots ${r.facelessSubShots}` : "") +
-        (r.spans.length ? ` spans ${JSON.stringify(r.spans.map((s) => [s.t0, s.t1, s.xOff, s.xOn]))}` : "")
+      `${item.clip} start=${item.start.toFixed(1)} off=${offInvariant} shots ${report.shotsDetector}/${report.shotsOff}->${report.shotsOn} ` +
+        `diff ${report.diffSec.toFixed(1)}s of ${report.cmpSec.toFixed(1)}s moved ${report.movedSec.toFixed(1)}s max ${report.maxAbsDx.toFixed(0)}px ` +
+        `cand ${report.telemetry?.candidates ?? 0} conf ${report.telemetry?.confirmed ?? 0} rej ${JSON.stringify(report.telemetry?.rejected ?? {})} cap ${report.telemetry?.capHit ?? 0}` +
+        (report.profileFlip ? ` PROFILE FLIP ${report.profileOff}->${report.profileOn}` : "") +
+        (report.facelessSubShots ? ` facelessSubShots ${report.facelessSubShots}` : "") +
+        (report.spans.length ? ` spans ${JSON.stringify(report.spans.map((s) => [s.t0, s.t1, s.xOff, s.xOn]))}` : "")
     );
   }
 
-  // Rejected-candidate sample: every k-th rejected candidate across the corpus.
+  // Write the numeric results BEFORE any sheet is drawn: a crash inside ffmpeg
+  // must never erase a corpus run whose analysis already succeeded. --only
+  // runs get their own filename so a partial re-run never clobbers the full
+  // corpus record.
+  const header = {
+    generatedAtNote: "stamp after run",
+    gitSha: await gitSha(),
+    cfg: {
+      sceneThreshold: cfg.sceneThreshold,
+      minShotSec: cfg.minShotSec,
+      sampleFps: cfg.sampleFps,
+      faceSmallFrac: cfg.faceSmallFrac,
+      stream: cfg.stream,
+      motion: cfg.motion,
+      cutRecovery: "off/on both planned",
+    },
+  };
+  const summaryPath = join(outDir, only ? "summary-only.json" : "summary.json");
+  await writeFile(summaryPath, JSON.stringify({ header, reports }, null, 1));
+
+  const workByClip = new Map(works.map((w) => [w.item.clip, w]));
+
+  // Sheets: every ffmpeg failure is caught and recorded per clip instead of
+  // aborting - the numbers above are already safe on disk by this point.
+  for (const w of works) {
+    if (!w.off || !w.on) continue;
+    const { item, source, off, on, cropW, report } = w;
+    for (const [k, s] of report.spans.entries()) {
+      const shortSpan = s.t1 - s.t0 < 1.0;
+      const mid = (s.t0 + s.t1) / 2;
+      const relTimes = shortSpan ? [mid] : [s.t0 + 0.3, mid, s.t1 - 0.3];
+      const times = relTimes.map((t) => item.start + t);
+      const outPath = join(outDir, `diff-${item.clip}-${k}-${s.t0.toFixed(1)}-${s.t1.toFixed(1)}.jpg`);
+      try {
+        await sheet(source, times.map((abs) => ({ abs, xOff: s.xOff, xOn: s.xOn })), cropW, outPath);
+        report.sheets.push(outPath);
+      } catch (e) {
+        report.sheetErrors.push(`diff-${k}: ${(e as Error).message}`);
+      }
+    }
+    // One sheet per CONFIRMED split, regardless of whether it crossed the
+    // diff bar - this is what shows a below-bar split actually did.
+    for (const dec of report.decisions) {
+      if (dec.verdict !== "confirmed") continue;
+      const frames: Array<{ abs: number; xOff: number; xOn: number }> = [];
+      for (const dt of [-0.5, 0.5]) {
+        const tRel = dec.t + dt;
+        const xOff = xAt(off, tRel);
+        const xOn = xAt(on, tRel);
+        if (xOff === null || xOn === null) continue;
+        frames.push({ abs: item.start + tRel, xOff, xOn });
+      }
+      if (frames.length === 0) continue;
+      const outPath = join(outDir, `split-${item.clip}-${dec.t.toFixed(2)}.jpg`);
+      try {
+        await sheet(source, frames, cropW, outPath);
+        report.sheets.push(outPath);
+      } catch (e) {
+        report.sheetErrors.push(`split-${dec.t.toFixed(2)}: ${(e as Error).message}`);
+      }
+    }
+  }
+
+  // Rejected-candidate sample: evenly spaced across the FULL rejected array
+  // (not an early stride window) so the tail - later jobs - is reachable and
+  // every job is covered proportionally to how many candidates it produced.
   const rejected = reports.flatMap((r) =>
     r.decisions.filter((x) => x.verdict !== "confirmed" && x.verdict !== "capHit").map((x) => ({ r, x }))
   );
-  const step = Math.max(1, Math.floor(rejected.length / Math.max(1, rejectedSample)));
-  const sampled = rejected.filter((_, i) => i % step === 0).slice(0, rejectedSample);
+  const sampleCount = Math.max(0, Math.min(rejectedSample, rejected.length));
+  const sampled = Array.from({ length: sampleCount }, (_, i) =>
+    rejected[Math.floor((i * rejected.length) / sampleCount)]
+  );
   for (const [k, { r, x }] of sampled.entries()) {
-    const item = manifest.items.find((i) => i.clip === r.clip)!;
-    const source = join(corpus, "sources", `${item.job}.mp4`);
+    const w = workByClip.get(r.clip);
+    if (!w) continue;
+    const item = w.item;
     const shot = item.shots.find((s) => x.t >= s.start && x.t < s.end);
-    const cropW = cropWidthFor(item.source.height);
     const outPath = join(outDir, `rejected-${k}-${r.clip}-${x.t.toFixed(2)}-${x.verdict}.jpg`);
-    await sheet(
-      source,
-      [
-        { abs: item.start + x.t - 0.5, xOff: shot?.x ?? 0 },
-        { abs: item.start + x.t + 0.5, xOff: shot?.x ?? 0 },
-      ],
-      cropW,
-      outPath
-    );
+    try {
+      await sheet(
+        w.source,
+        [
+          { abs: item.start + x.t - 0.5, xOff: shot?.x ?? 0 },
+          { abs: item.start + x.t + 0.5, xOff: shot?.x ?? 0 },
+        ],
+        r.cropW,
+        outPath
+      );
+      r.sheets.push(outPath);
+    } catch (e) {
+      r.sheetErrors.push(`rejected-${k}-${x.t.toFixed(2)}: ${(e as Error).message}`);
+    }
   }
 
   const ok = reports.filter((r) => r.offInvariant === true).length;
   const total = reports.length;
   const diffSec = reports.reduce((a, r) => a + r.diffSec, 0);
   const cmpSec = reports.reduce((a, r) => a + r.cmpSec, 0);
+  const movedSecTotal = reports.reduce((a, r) => a + r.movedSec, 0);
+  const changedClips = reports.filter((r) => r.shotsOff !== r.shotsOn || r.movedSec > 0).length;
   const sum = (f: (r: ClipReport) => number) => reports.reduce((a, r) => a + f(r), 0);
+  const nothingConfirmed = reports.filter((r) => r.onEqualsOffWhenNothingConfirmed !== undefined);
+  const nothingConfirmedOk = nothingConfirmed.filter((r) => r.onEqualsOffWhenNothingConfirmed === true).length;
+  const sheetErrorsTotal = sum((r) => r.sheetErrors.length);
+
   console.log("");
   console.log(`OFF invariant: ${ok}/${total}`);
   console.log(`diff: ${diffSec.toFixed(1)}s of ${cmpSec.toFixed(1)}s (${((100 * diffSec) / Math.max(1, cmpSec)).toFixed(2)}%), clips with diff ${reports.filter((r) => r.diffSec > 0).length}`);
+  console.log(`moved (any px): ${movedSecTotal.toFixed(1)}s; clips whose plan changed (shot count or any window): ${changedClips}`);
   console.log(`shots: detector ${sum((r) => r.shotsDetector)}, plan off ${sum((r) => r.shotsOff)}, plan on ${sum((r) => r.shotsOn)}`);
   console.log(
     `candidates ${sum((r) => r.telemetry?.candidates ?? 0)} confirmed ${sum((r) => r.telemetry?.confirmed ?? 0)} ` +
@@ -290,8 +453,12 @@ async function main() {
       `tooShort ${sum((r) => r.telemetry?.rejected.tooShort ?? 0)} noPath ${sum((r) => r.telemetry?.rejected.noPath ?? 0)} capHit ${sum((r) => r.telemetry?.capHit ?? 0)}`
   );
   console.log(`profile flips: ${reports.filter((r) => r.profileFlip).length}; faceless sub-shots after a confirmed split: ${sum((r) => r.facelessSubShots)}`);
+  console.log(`ON==OFF on ${nothingConfirmedOk}/${nothingConfirmed.length} clips with nothing confirmed (must be ${nothingConfirmed.length}/${nothingConfirmed.length})`);
   console.log(`rejected sampled: ${sampled.length} of ${rejected.length}; sheets in ${outDir}`);
-  await writeFile(join(outDir, "summary.json"), JSON.stringify(reports, null, 1));
+  console.log(`sheet errors: ${sheetErrorsTotal}${sheetErrorsTotal ? " (see per-clip sheetErrors in the report)" : ""}`);
+  console.log(`summary written to ${summaryPath}`);
+
+  if (ok !== total || reports.some((r) => r.fallback)) process.exitCode = 1;
 }
 
 main().catch((e) => {
