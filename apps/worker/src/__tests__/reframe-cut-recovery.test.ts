@@ -189,9 +189,33 @@ describe("recoverCuts", () => {
     expect(r.tracksByShot[2].tracks.map((t) => t.id)).toEqual([1]);
   });
 
-  it("uses TURNOVER_SAMPLES samples on each side of the candidate", () => {
-    // Sanity on the exported knob so a change to it is a visible diff.
+  it("looks TURNOVER_SAMPLES samples back, so one dropped detection does not empty the before-set", () => {
+    // A is on screen throughout but the detector missed it at t=4.5; B joins at 5.
+    // With two samples of look-back the before-set still holds A (from 4.0) and
+    // the candidate is a continuation (noTurnover). With one sample it would be
+    // empty and land in oneSideEmpty - the wrong bucket for the wrong reason.
+    const a = track(1, 0, 10, 100);
+    a.path = a.path!.filter((p) => p.t !== 4.5);
+    a.samples = a.path.length;
+    const r = recoverCuts([shot(0, 10)], [st(0, [a, track(2, 5, 10, 1200)])], [cand(5)], CFG);
+    expect(r.telemetry.rejected.noTurnover).toBe(1);
+    expect(r.telemetry.rejected.oneSideEmpty).toBe(0);
     expect(TURNOVER_SAMPLES).toBe(2);
+  });
+
+  it("measures the floor from the LAST confirmed split, not the shot start", () => {
+    // A 0-2, B 2-3, C 3-6, minShotSec 2.0. t=2.0 confirms (2 >= 2 from start,
+    // 6-2=4 >= 2 to end). t=3.0 has disjoint, populated sides ({B} then {C})
+    // but is only 1.0s past the just-confirmed split at 2.0 - a 1s sub-shot
+    // under a 2s floor - so it must be tooShort even though 3.0 is 3.0s past
+    // the (irrelevant) shot start.
+    const short = { ...CFG, minShotSec: 2.0 };
+    const shots = [shot(0, 6)];
+    const tracks = [st(0, [track(1, 0, 2, 100), track(2, 2, 3, 700), track(3, 3, 6, 1300)])];
+    const r = recoverCuts(shots, tracks, [cand(2.0), cand(3.0)], short);
+    expect(r.shots).toEqual([shot(0, 2), shot(2, 6)]);
+    expect(r.telemetry.confirmed).toBe(1);
+    expect(r.telemetry.rejected.tooShort).toBe(1);
   });
 });
 

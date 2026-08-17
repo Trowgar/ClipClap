@@ -36,6 +36,8 @@ export interface CutRecoveryConfig {
 }
 
 export interface CutRecoveryTelemetry {
+  /** Candidates that fell strictly inside a shot; boundary-exact ones are
+   *  already cuts and are not counted. */
   candidates: number;
   confirmed: number;
   rejected: { noTurnover: number; oneSideEmpty: number; tooShort: number; noPath: number };
@@ -54,7 +56,8 @@ export interface CutRecoveryResult {
   shots: Shot[];
   tracksByShot: ShotTracks[];
   telemetry: CutRecoveryTelemetry;
-  /** Per-candidate verdicts in shot order - for the eval, not persisted. */
+  /** Per-candidate verdicts in shot order - for the eval, not persisted.
+   *  `shotIndex` is the PRE-recovery (detector) shot index. */
   decisions: Array<{ shotIndex: number; t: number; score: number; verdict: CutDecision }>;
 }
 
@@ -63,7 +66,7 @@ export interface CutRecoveryResult {
  *  reaches into neighbouring shots on fast-cut material. */
 export const TURNOVER_SAMPLES = 2;
 
-export function emptyTelemetry(): CutRecoveryTelemetry {
+function emptyTelemetry(): CutRecoveryTelemetry {
   return {
     candidates: 0,
     confirmed: 0,
@@ -86,6 +89,11 @@ function disjoint(a: Set<number>, b: Set<number>): boolean {
   return true;
 }
 
+// Averages the two middles - np.median's convention, which is what the
+// sidecar used for the parent box (detect_faces.py), so a sliced sub-shot box
+// is exactly what the sidecar would have emitted for that sub-range.
+// cam-rect.ts deliberately takes the UPPER middle for a different reason; do
+// not unify the two.
 function median(values: number[]): number {
   const s = [...values].sort((a, b) => a - b);
   const mid = s.length >> 1;
@@ -104,8 +112,9 @@ function medianBox(samples: PathSample[]): FaceBox {
 /**
  * The parent's tracks restricted to one sub-range: same id, median box over
  * the samples in range, `samples` = their count, score and mouthActivity
- * copied. The final segment includes its end so the last sample of a shot is
- * not orphaned. A track with no sample in the range is dropped.
+ * copied. The final segment keeps every sample from `from` on, including any
+ * the sidecar filed past the shot end. A track with no sample in the range is
+ * dropped.
  */
 export function sliceTracks(
   tracks: FaceTrack[],
@@ -116,7 +125,7 @@ export function sliceTracks(
   const out: FaceTrack[] = [];
   for (const tr of tracks) {
     const samples = (tr.path ?? []).filter(
-      (p) => p.t >= from && (p.t < to || (inclusiveEnd && p.t === to))
+      (p) => p.t >= from && (inclusiveEnd ? p.t <= to : p.t < to)
     );
     if (samples.length === 0) continue;
     out.push({
@@ -140,7 +149,7 @@ export function recoverCuts(
   const telemetry = emptyTelemetry();
   const decisions: CutRecoveryResult["decisions"] = [];
   const byIndex = new Map(tracksByShot.map((s) => [s.shotIndex, s]));
-  const w = TURNOVER_SAMPLES / cfg.sampleFps;
+  const winSec = TURNOVER_SAMPLES / cfg.sampleFps;
   let budget = cfg.maxPlanShots - shots.length;
 
   const outShots: Shot[] = [];
@@ -170,8 +179,8 @@ export function recoverCuts(
         const surviving = survivingTracks(tracks);
         let segStart = shot.start;
         for (const c of inShot) {
-          const before = liveIds(surviving, c.t - w, c.t);
-          const after = liveIds(surviving, c.t, c.t + w);
+          const before = liveIds(surviving, c.t - winSec, c.t);
+          const after = liveIds(surviving, c.t, c.t + winSec);
           if (before.size === 0 || after.size === 0) {
             decide(c, "oneSideEmpty");
             continue;
@@ -198,7 +207,7 @@ export function recoverCuts(
 
     if (splits.length === 0) {
       outShots.push(shot);
-      if (st) outTracks.push(st);
+      outTracks.push(st ?? { shotIndex: i, tracks: [], camRect: null });
       return;
     }
     anyConfirmed = true;
