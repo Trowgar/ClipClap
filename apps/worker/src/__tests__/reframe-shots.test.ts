@@ -159,9 +159,15 @@ describe("classifyCuts", () => {
   });
 
   it("treats a score exactly at the threshold as a cut, like ffmpeg's gte", () => {
-    expect(classifyCuts([{ t: 10, score: 0.3 }], 40, 0.3)).toEqual({
+    // Duration is under the long-take bar so the retry cannot rescue a wrong
+    // first-pass filter and mask a boundary mutation.
+    expect(classifyCuts([{ t: 10, score: 0.3 }], 10, 0.3)).toEqual({
       cuts: [10],
       candidates: [],
+    });
+    expect(classifyCuts([{ t: 10, score: 0.2999999 }], 10, 0.3)).toEqual({
+      cuts: [],
+      candidates: [{ t: 10, score: 0.2999999 }],
     });
   });
 });
