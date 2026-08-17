@@ -8,7 +8,7 @@ Rules for this file: every number here came from a measurement, not from reasoni
 reproduced, say how. When something is believed but unmeasured, mark it. Delete an entry when it stops being
 true - a stale note is worse than none, and this file has already caught two of its own.
 
-Last substantive update: 2026-08-10.
+Last substantive update: 2026-08-17.
 
 ---
 
@@ -1175,6 +1175,62 @@ mechanically detectable (a silent hole in the timeline) where the podcast instan
 them.** `maxSec` of 90 is a platform limit, not a taste bound. Every fix shipped so far addresses edges. If the
 hit rate is to move, this is where the next work goes - the shape of the question would be "one clip, one
 question" rather than another boundary rule.
+
+## 5c. The first outside-user corpus, judged (2026-08-17)
+
+Six days after the seven-flag contour went live (2026-08-11), the database held the first
+multi-user, multi-language corpus this engine has ever produced: **15 jobs with clips, 56 live
+clips, 8 outside users, ru/en/ar/id sources** (plus fa/ur/uk in the zero-clip set). Nothing in
+it was chosen by the owner. It was judged two ways, independently, and the two agree:
+
+| | POST | FIX | SKIP |
+|---|---|---|---|
+| architect read, all 56, text only | 43% | 41% | 16% |
+| `clip-viewer` panel, 7 agents, all 56, text only | **46%** | 39% | **14%** |
+
+Against the only prior scoreboard - the owner's 2-of-8 (25%) on his own material, §5b - the
+postable share roughly doubled, on strangers' material across four languages, and the panel's
+own numbers landed within 3 points of an independent human-style read. Both instruments are
+text-only (no picture, no audio) and the panel's per-clip variance is the §8b caveat as ever;
+the AGGREGATE agreement between two blind readings is what carries weight here, not any one
+verdict.
+
+**Where the 56 fall, by source class.** Postable share is highest on narrated/structured
+speech - the Indonesian film recap (12 clips, panel 6 POST / 0 mine-SKIP), the ru
+neurobiologist interview (10 clips, 5 POST), the Arabic self-help lecture (8, 3-5 POST) - and
+lowest where the value is in the picture: NFL play-by-play (4 clips, "needs picture" on 4 of
+4), the MrBeast reaction beats, a game cutscene. That is the §1 sentence again ("ANALYZE picks
+by WORDS") measured on real users: text-first sources are where the product already works.
+
+**Audit flag precision on the corpus: 0.97, recall 0.78** (28 TP / 1 FP / 8 FN over 168 axes,
+against the architect's per-axis read). The lone false positive is "the child's name or
+identity" on the Omaha/Buffett clip - a standalone flag on a deliberate withholding that IS the
+hook, the one class of over-firing worth teaching the prompt about. The eight misses are soft:
+dialogue continuations that self-correct by the third line, and visual-reaction clips whose
+missing context is the picture. This is the THIRD precision measurement in a row (2/2 owner
+job, 7/12 series job by read, now 0.97 on 56) - the §5 bar for downrank authority (>=90% over
+two more jobs) is met with margin.
+
+**Defect residue, ranked by count over 56 (architect read):** weak openings 17, standalone gaps
+14, weak endings **5**. Endings - the programme's original headline complaint - are now the
+smallest class by three to one; openings and self-containment are what remain, and they are
+the same class: a clip cut from a continuous argument that opens on its second sentence. Two
+recurring shapes worth naming: (a) the *recap narration opener* ("Cerita dimulai dengan
+memperlihatkan..." / "In this video you saw us...") - meta lines that name the video rather
+than start it, the finalizer's rule 7 exactly, under-firing on non-Russian material; (b)
+*long-clip drag* - 8 of 56 run over 60s, and both readers marked the 89-111s lecture cuts as
+FIX-for-length even where every boundary was clean.
+
+**Zero-clip jobs are honest.** 11 DONE jobs shipped nothing; every one is a 6-179s fragment, a
+song (♫ transcript), a sub-minute phone clip or a profane game snippet - `NO_VIABLE_MOMENTS` /
+`NO_USABLE_SPEECH` behaved. One user uploaded the same 90s film scene four times and got a
+clip cut from a SONG's lyrics each time (the transcript is verse) - a source class the engine
+should refuse rather than clip; recorded, not fixed.
+
+**What was NOT measured, stated plainly.** No user gave a verdict; the five clips that
+disappeared were the retention sweep at `expiresAt + 3d`, not deletions - the corpus has ZERO
+behavioural signal (posted / kept / re-cut). Two text-only readers agreeing is the strongest
+evidence available today, and it is still not a viewer.
 
 ## 6. Invariants that must not break
 
