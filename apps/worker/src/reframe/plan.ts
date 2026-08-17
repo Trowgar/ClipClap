@@ -37,7 +37,10 @@ const DOMINANCE_LEAD = 1.5; // top-2 must each lead the 3rd by this factor
 const MERGE_DX_FRAC = 0.04; // same-layout shots merge when |dx| < 4% of iw
 const MIN_TRACK_SAMPLES = 2; // 1-sample tracks are detector noise
 const MIN_SAMPLE_FRAC = 0.3; // tracks seen in <30% of the dominant track's samples are transient noise
-const MAX_PLAN_SHOTS = 90; // ffmpeg av_expr nesting fails at ~100 segments; headroom below that
+/** ffmpeg av_expr nesting fails at ~100 segments; headroom below that. Exported
+ *  because cut recovery must cap its splits on the PRE-merge count: above this,
+ *  buildCropPlan returns null and the whole clip falls back to the centre crop. */
+export const MAX_PLAN_SHOTS = 90;
 const W_AREA = 0.5;
 const W_CENTER = 0.3;
 const W_MOUTH = 0.2;
@@ -345,7 +348,7 @@ function trySplit(
  *  classifier and the min-face guard must agree about. A stray low-sample
  *  track must not widen the fit bbox, become a split tile pointing at
  *  nothing, or reclassify a stream source as a podcast. */
-function survivingTracks(shotTracks: FaceTrack[]): FaceTrack[] {
+export function survivingTracks(shotTracks: FaceTrack[]): FaceTrack[] {
   const maxSamples = Math.max(0, ...shotTracks.map((t) => t.samples));
   return shotTracks.filter(
     (t) =>
