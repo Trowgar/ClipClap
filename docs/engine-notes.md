@@ -2246,6 +2246,90 @@ half went green immediately.
 
 ---
 
+### 7i. Cut recovery: the missed cuts, confirmed by the faces (measured and shipped 2026-08-17)
+
+**Design:** `docs/superpowers/specs/2026-08-17-cut-recovery-design.md`; plan `docs/superpowers/plans/2026-08-17-cut-recovery.md`.
+Flag `REFRAME_CUT_RECOVERY` (exact literal `on`; default off = today's plan byte for byte). Code:
+`reframe/shots.ts` (one scdet pass with scores), `reframe/cut-recovery.ts` (the mechanism),
+`reframe/index.ts` (`detectRange` + `planDetected`, the policy), telemetry `cutRecovery` on
+`renderManifest.reframe.checks[]`. Eval: `scripts/eval-cut-recovery.ts` over the committed corpus manifest
+`assets/reframe/director-audit.json` (53 planned clips of the first outside-user corpus, 10 jobs, sources
+re-materialised from R2 by `scripts/director-audit-fetch.ts`).
+
+**The defect, on real users' clips.** scdet at 0.3 under-scores real camera cuts in dark studios and dim film
+scenes; one detector shot then holds two framings and the median-box window is a compromise between angles
+that never coexist. On the corpus: 212 scene changes in the 0.15-0.30 band that were not plan boundaries
+(37 of 53 clips); the Alipov podcast cuts at 18.27s (0.292) and 20.71s (0.298) inside clip `527.85` gave 2.4s
+of a cup and a microphone with the speaker out of frame; La Brea's Veronica clip (`cmsven6bv`, 1186.4s) had
+~9 of 21.5s on half a face and then the back of a head while Lily's confession plays. A global threshold turn
+is not the fix: re-planning at 0.2 moved the window on 49.5s / 12 clips but also produced a 0.5s lamp shot
+(ar-habits) and 5s of worse framing (Isaiah cave); only 17 of the 212 band candidates moved the window at all,
+and the score distributions of the film job (real misses) and the graphics job (false cuts) have the same
+shape (mean .29 vs .24, stdev .22 vs .21) - no statistic to lower the threshold on.
+
+**The rule.** scdet runs ONCE at 0.15 with `metadata=print`; cuts are the same set as before (the scene score
+of a frame does not depend on the select threshold - verified byte-identical on 269 cuts across 6 sources
+and on the whole corpus below; the only reachable divergence is a score in `[T - 5e-7, T)` printing as T and
+ADDING a cut, 0 of 1368 recorded frames, nearest approach 0.29979), the zero-cut retry is a filter over the
+same list, and 0.15-0.30 frames come back as candidates. A candidate splits its shot when the LIVE face
+sets in the two samples before and after it are disjoint and both non-empty (`survivingTracks` only; live
+samples, not track lifetimes - the sidecar revives stale tracks by IoU), both sub-shots clear `minShotSec`,
+and the pre-merge count stays under `MAX_PLAN_SHOTS` (above 90 `buildCropPlan` returns null - a whole-clip
+fallback, so the cap is on the count that bounds it). Sub-shot tracks are rebuilt from the sidecar's own
+`path` (median per coordinate - `np.median`'s convention, matching the parent box). The clip-level cam rect
+is resolved on the DETECTOR shots, before recovery, so repeated sub-shot rects cannot swing the majority
+vote. Nothing confirmed = the same input arrays by reference.
+
+**Measured (eval run at commit 68426a4, re-run byte-identical at 954dc2c; `summary.json` in `.corpus/director-audit/eval-cut-recovery/`).**
+
+| | |
+|---|---|
+| OFF invariant: OFF plan == persisted production plan | **53 / 53** |
+| ON == OFF byte for byte on clips with nothing confirmed | **40 / 40** |
+| candidates (strictly inside a shot) | 286 |
+| confirmed / noTurnover / oneSideEmpty / tooShort / noPath / capHit | **20** / 69 / 190 / 7 / 0 / 0 |
+| clips whose plan changed | 13 of 53 |
+| window differs at all | 228.5s of 2009s |
+| window differs by > 0.25 cropW (152px at 1080p) | **32.0s on 7 clips** |
+| plan shots detector / off / on | 391 / 311 / 325 (+4.5%) |
+| profile-class flips; faceless sub-shots after a split | 0 ; 0 |
+| known 0.2 regressions (lamp, cave) | absent (cave: 1 split, 18px, merged back) |
+
+The 0.25 cropW bar is a display threshold, not a boundary: per-clip `maxAbsDx` is
+[2, 18, 96, 106, 108, 152, 154, 154, 214, 230, 238, 278, 638] - mass on both sides of 152. Every one of the
+20 confirmed splits has its own two-frame sheet regardless.
+
+**Judged on the sheets (all 8 diff spans + all 20 splits + 30 rejected candidates, 7 of 8 jobs).** Alipov
+18.5-23.5: the cup-and-mic window is gone, the host's face is held, the following guest frames go from
+edge-cut to centred - fixed. Veronica 10-18.5: red is the back of a head, green is Lily's face in every frame
+- fixed (8.5s); 18.5-21.5: her face moves from the red edge to centred - better. The other spans: an edge-cut
+face centred (Alipov 3028 @27.5), a kid's face centred (MrBeast blood), mic-centred -> face-centred, two
+neutral. The six below-bar splits: medium -> close-up of the same speaker with green a touch better centred,
+the cave and the 2px case identical. **Zero regressions.** Rejected sample: 28 of 30 harmless (same person
+through a zoom or gesture, or a cut to/from faceless b-roll); 2 are real cuts where the sidecar detected no
+face on one side (a crawling girl in profile, a motion-blurred runner) - unchanged from production and
+beyond this rule by design (spec §1). What the rule does not reach, stated: Veronica's dark 4-5s span (the
+girl's face undetected in the dark) stays as it was; the 0.2 replan fixed it by pixels alone.
+
+**Guards worth knowing.** `reframe-shots.test.ts` pins the threshold-equality boundary UNDER the long-take
+bar (at 40s the retry rescued the `>=` -> `>` mutation and the test was green for nothing - the
+`feedback_test_matches_default` trap, caught by the executor's mutation run); `reframe-cut-recovery.test.ts`
+pins live-window turnover against id-lifetime on both sides, the window width against a dropped detection,
+and the floor against the running segment start; `reframe-compute.test.ts` pins which face each window
+follows after a split (a wiring bug that fed recovered shots with un-sliced tracks left the old
+count-only assertion green) and the cam-rect ordering.
+
+**Not measured, stated plainly.** Speaker choice is untouched (still face area, §7 known limitations); a
+face the sidecar does not see cannot confirm a cut; the eval compares OFF to the persisted plans, not to the
+pre-change `detectShots` output (that half is Task 1's unit tests + the 269-cut replay). Sources of the
+corpus were still in R2 despite `sourceSweptAt` on all of them - the manifest keeps their keys.
+
+**Rollout.** `REFRAME_CUT_RECOVERY=on` in the live `.env` -> `docker compose up -d worker-render` (recreate) ->
+`prisma generate` in the container; read `cutRecovery` in `renderManifest.reframe.checks[]` on the next real
+jobs. Rollback = remove the line and recreate.
+
+---
+
 ## 8. Operational facts
 
 - Prod IS this host. Plain `docker compose up -d` (dev target) is production mode. **Do not use
@@ -2622,9 +2706,10 @@ recorded cases of a number chosen from nothing.
 1. **The clip in-point (ANALYZE).** The largest by expected value. Twelve viewer verdicts returned 0 POST,
    5 FIX, 7 SKIP, and 8 of 12 named the opening. Roughly half of that was framing and is fixed; the other
    half is that clips begin on setup rather than on the hook. Needs hook-labelled clips.
-2. **Merge-blindness and the missed cuts.** 20.5s where `mergeAdjacentLayouts` keeps the first shot's x and
-   the cut face lives in a later shot; and the finding from §7f that `scdet` misses camera cuts, so one
-   detector shot can hold two framings and the window is a compromise between angles that never coexist.
+2. **Merge-blindness** (the missed cuts half is SHIPPED, §7i, behind `REFRAME_CUT_RECOVERY`). What remains:
+   20.5s where `mergeAdjacentLayouts` keeps the first shot's x and the cut face lives in a later shot; §7i
+   adds a related, smaller shape - a confirmed split whose sub-shots merge back keeps the FIRST sub-shot's x
+   (2-18px on the corpus). Both are the same fix: recompute the merged window from the union of tracks.
 3. **Sub-floor faces.** 140.4s of edge-cut time from faces below `survivingTracks`' noise floor, which
    `placeWindow` never receives. §7e deliberately did not touch that floor; moving it changes the anchor, the
    split and this at once, so it needs its own measurement.
