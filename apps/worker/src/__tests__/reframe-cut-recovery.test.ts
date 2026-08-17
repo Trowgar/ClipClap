@@ -166,6 +166,29 @@ describe("recoverCuts", () => {
     expect(r.telemetry.rejected.noTurnover).toBe(1);
   });
 
+  it("confirms a cut back to a face that left the window earlier - live samples, not id lifetime", () => {
+    // A is on screen 0-4, leaves, and is back 8-10 (the sidecar revived its
+    // track by IoU against the last box); B holds 4-8. Two real cuts, at 4 and
+    // at 8. Around t=8 the LIVE sets are {B} then {A}: a cut. An id-lifetime
+    // test would see A "before" 8 as well (its 0-4 samples) and reject it -
+    // and around t=4 would see A "after" (its 8-10 samples) and reject that.
+    const a: FaceTrack = {
+      ...track(1, 0, 4, 100),
+      path: [...track(1, 0, 4, 100).path!, ...track(1, 8, 10, 100).path!],
+      samples: 12,
+    };
+    const shots = [shot(0, 10)];
+    const tracks = [st(0, [a, track(2, 4, 8, 1200)])];
+
+    const r = recoverCuts(shots, tracks, [cand(4), cand(8)], CFG);
+
+    expect(r.shots).toEqual([shot(0, 4), shot(4, 8), shot(8, 10)]);
+    expect(r.telemetry.confirmed).toBe(2);
+    expect(r.tracksByShot[0].tracks.map((t) => t.id)).toEqual([1]);
+    expect(r.tracksByShot[1].tracks.map((t) => t.id)).toEqual([2]);
+    expect(r.tracksByShot[2].tracks.map((t) => t.id)).toEqual([1]);
+  });
+
   it("uses TURNOVER_SAMPLES samples on each side of the candidate", () => {
     // Sanity on the exported knob so a change to it is a visible diff.
     expect(TURNOVER_SAMPLES).toBe(2);
