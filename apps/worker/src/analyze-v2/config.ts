@@ -179,6 +179,44 @@ export interface AnalyzeConfig {
    *  dependency on the audit, checked again where `finalizerUserPrompt` looks
    *  up a clip's flags rather than trusted from an empty map alone. */
   arcFinalizerNotesEnabled: boolean;
+  /** Master switch for the unrepairable-flag DOWNRANK stage (spec 2026-08-10
+   *  task 7) - the first drop authority the arc audit ever earns. Placed where
+   *  the task 5 long-clip policy already sits: after arcAudit and BOTH
+   *  extension stages (so `repaired` is final), before finalizeClips. Off
+   *  until measured, the same discipline as every other stage switch in this
+   *  file. Motivation, measured on 56 clips / 8 users / 4 languages
+   *  (engine-notes §5c): audit flag precision 0.97 clears the §5 bar for
+   *  downrank authority (>=90% over two more jobs), and crossing STANDING
+   *  flags against the architect's verdicts found the separating signal is
+   *  the COUNT of standing axes, not any single axis - all 9 SKIP clips carry
+   *  >=1 standing flag, 5 of 9 carry >=2, and of 24 POST clips ZERO carry two
+   *  or more (2 carry exactly one, both soft cases: an accepted cold-open and
+   *  a deliberate withholding that IS the hook). No-ops without
+   *  `arcAuditEnabled` too - the same defence-in-depth doubling every audit
+   *  consumer in this file uses (no flags = nothing to downrank), checked
+   *  again in index.ts rather than trusted from an empty `arcFlags` map
+   *  alone. */
+  arcDownrankEnabled: boolean;
+  /** Score penalty applied when a clip carries TWO OR MORE standing axes
+   *  (`ok: false && !repaired`). Default 0.15, sized directly from the
+   *  corpus (spec 2026-08-10 task 7, engine-notes §5c): two-flag SKIP scores
+   *  in the corpus run 0.62-0.79, so 0.15 puts every two-flag SKIP (max 0.79)
+   *  under the 0.6 threshold with margin, while a two-flag POST (none exist
+   *  in the corpus) would need a score >= 0.75 to survive it. */
+  arcDownrankPenalty2: number;
+  /** Score penalty applied when a clip carries EXACTLY ONE standing axis.
+   *  Default 0.0 - the corpus explicitly does NOT separate SKIP from POST on
+   *  a single flag (2 of 24 POST clips carry exactly one, the same rate as
+   *  noise), so this ships inert until a future corpus measures it live. The
+   *  knob exists anyway so that measurement can turn it on without a code
+   *  change - and because a penalty of exactly 0 is itself the same
+   *  "can silence the stage" case `endExtensionWindowSec`/`longClipMaxSec`
+   *  document in eval-fingerprint.ts: at the default, every one-flag clip's
+   *  effective score equals its recorded score, so a fixture recorded at
+   *  this default would replay identically under a materially different
+   *  value, which is why both penalties (not just `arcDownrankEnabled`) carry
+   *  their own fingerprint key. */
+  arcDownrankPenalty1: number;
   /** How far into a video an intro trailer montage may reach. Bounds the region
    *  scan in analyze-v2/teaser.ts; 0 switches montage detection off entirely,
    *  which is the kill switch. (spec 2026-07-24 §4.1) */
@@ -209,6 +247,16 @@ export interface AnalyzeConfig {
   finalizerHeadroom: number;
   /** Jaccard floor for the deterministic opening-line dedup pass. */
   hookDedupSimilarity: number;
+  /** Master switch for the song-lyric source refusal gate (spec 2026-08-10
+   *  task 8) - a deterministic, pre-scan check in `stages/analyze.ts` that
+   *  resolves a verse-shaped transcript to `NO_USABLE_SPEECH` before the
+   *  scanner ever runs, instead of shipping a clip cut from a song's lyrics
+   *  (engine-notes §5c: measured on a real outside-user upload). Off until
+   *  measured, the same discipline as every other stage switch in this file.
+   *  The two thresholds `detectSong` applies are NOT config fields - see
+   *  `analyze-v2/song-gate.ts`'s doc comment for why (this task's own
+   *  measurement output, not a tuning door). */
+  songGateEnabled: boolean;
 }
 
 type Env = Record<string, string | undefined>;
@@ -296,6 +344,12 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     // file: a stray truthy env value must not render an arc-audit finding
     // into the finalizer's prompt for a real user's job.
     arcFinalizerNotesEnabled: env.ARC_AUDIT_FINALIZER_NOTES === "on",
+    // Exact literal "on", same discipline as every other stage switch in this
+    // file: a stray truthy env value must not give the arc audit drop
+    // authority over a real user's clip.
+    arcDownrankEnabled: env.ARC_DOWNRANK === "on",
+    arcDownrankPenalty2: num(env, "ARC_DOWNRANK_PENALTY_2", 0.15),
+    arcDownrankPenalty1: num(env, "ARC_DOWNRANK_PENALTY_1", 0.0),
     teaserWindowSec: num(env, "TEASER_WINDOW_SEC", 120),
     teaserMinHits: num(env, "TEASER_MIN_HITS", 3),
     finalizerEnabled: env.ANALYZE_FINALIZER !== "off",
@@ -303,5 +357,8 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
       env.OPENAI_FINALIZER_MODEL || env.OPENAI_CRITIC_MODEL || "gpt-5.6-luna",
     finalizerHeadroom: num(env, "FINALIZER_HEADROOM", 4),
     hookDedupSimilarity: num(env, "HOOK_DEDUP_SIMILARITY", 0.8),
+    // Exact literal "on", same discipline as every other stage switch in this
+    // file: a stray truthy env value must not refuse a real user's video.
+    songGateEnabled: env.SONG_GATE === "on",
   };
 }

@@ -325,11 +325,11 @@ Judge in this order.
 7. META-INSTRUCTION OPENING. The first seconds must carry content, not announce
    that content is coming. Lines that only manage the conversation - "Вот просто
    резюмируем.", "Давайте по порядку.", "К следующему вопросу.", "Okay, so, to
-   recap." - say nothing to a viewer deciding in two seconds whether to keep
-   watching. Real failure: a clip spent its first 1.9s on "Вот просто
-   резюмируем." before a word of the actual point. Move trim_start_node to the
-   first ¶ line that says something. Every second of scaffolding at the top is a
-   second of the hook spent on nothing.
+   recap.", "In this video you saw us..." - say nothing to a viewer deciding in
+   two seconds whether to keep watching. Real failure: a clip spent its first
+   1.9s on "Вот просто резюмируем." before a word of the actual point. Move
+   trim_start_node to the first ¶ line that says something. Every second of
+   scaffolding at the top is a second of the hook spent on nothing.
 
 8. NO REPETITION INSIDE A CLIP. If the clip states one thought and then restates
    it with no new information, it drags: prefer trimming the start to the
@@ -750,7 +750,12 @@ three; do not invent a defect just to have something to say.
      an unseen "А какие претензии?".
    - meta_opening: the first line manages the conversation instead of starting
      it - "Вот просто резюмируем.", "Okay, so, to recap." - before a word of
-     the actual point.
+     the actual point. The same defect wears a second shape: a first line that
+     DESCRIBES the video or the story ("the story begins by showing", "in this
+     video you saw") instead of BEING its first beat - a cold viewer is told
+     about a hook rather than given one. Examples: id "Cerita dimulai dengan memperlihatkan..."
+     (a summary that narrates itself instead of starting), en "In this video you saw us..."
+     (an outro that recaps), ar "في هذا الفيديو شفنا..." (a recap-of-the-video line).
    If the entry is broken AND the true opening line lives in CONTEXT BEFORE - a
    ¶ line that states the point on its own terms - set fix_start_node to that
    line's index. If no such line exists in what you were shown, or the entry is

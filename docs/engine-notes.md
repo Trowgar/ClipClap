@@ -1232,6 +1232,45 @@ disappeared were the retention sweep at `expiresAt + 3d`, not deletions - the co
 behavioural signal (posted / kept / re-cut). Two text-only readers agreeing is the strongest
 evidence available today, and it is still not a viewer.
 
+### What the corpus verdict bought: tasks 7-9 (2026-08-17)
+
+Three changes, all from §5c's numbers, all measured before merging.
+
+**Task 7 - the audit's first drop authority (`ARC_DOWNRANK`).** The rule came from the data,
+not from taste: on the 56-clip corpus **all 9 SKIP clips carry a standing flag (ok:false, not
+repaired), 5 of 9 carry two or more; of 24 POST clips zero carry two, two carry one** - so the
+separating signal is the COUNT of standing axes. Policy sits beside the long-clip policy in
+`index.ts` (after audit + repairs, before FINALIZE): 2+ standing axes cost 0.15 off an
+EFFECTIVE score (the critic's score is never rewritten), one axis costs 0.0 by default (a knob,
+not a rule - the corpus does not separate on one flag), and an effective score under
+`scoreThreshold` drops the clip as `arc_unrepairable`. Sizing: SKIP scores ran 0.62-0.79, so
+0.15 puts every two-flag SKIP under the bar while a two-flag POST would need >= 0.75 to survive,
+and none exists. Measured on the replay corpus (`arc-downrank` variant): nuclear drops exactly
+**777.0-802.1** (the three-axis clip the informed finalizer kept) and **1466.7-1483.4** (the
+truncated hibakusya arc); answer-arc 1, creator 1, ecology/sitcom 0 - **4 drops in 61
+considered, every one with 2+ standing axes, the positive control untouched**, and every set
+refilled from the finalizer headroom (7->7, 12->12, 12->12, 8->7).
+
+**Task 8 - the song gate (`SONG_GATE`), and a correction to §5c.** Measured first
+(`scripts/eval-song-gate.ts`, 8 candidate ids vs 15 speech jobs + 5 fixture transcripts): the
+two "film scene" jobs §5c called song-cut are **100% dialogue** (0 music tokens, 6.8% line
+repetition) - I had lumped them in by user, not by transcript; §5c's "song's lyrics" sentence is
+wrong about that pair and right about the other six. The rule is a disjunction because the two
+song shapes are disjoint on each other's signal: `musicTokenShare > 0.30 || lineRepRate > 0.20`,
+line-repetition SONG min 25.0% vs SPEECH max 13.8% (11.2-point margin), music tokens 100% vs 0%.
+Fires on all six real songs, none of 20 speech transcripts, and correctly not on the dialogue
+pair. Wired in `stages/analyze.ts` BEFORE `analyzeHighlightsV2` (zero LLM spend when it fires,
+same zero-highlights path as `NO_USABLE_SPEECH`, billing invariant holds by construction).
+`medSegDur` and opaque share were measured and rejected - overlapping ranges.
+
+**Task 9 - recap-narration openers in both prompts.** "Cerita dimulai dengan
+memperlihatkan..." / "In this video you saw us..." / an ar shape added as `meta_opening`
+examples in the audit prompt and one example in finalizer rule 7. Prompt-only, and it did what
+§2d predicted: every recorded answer downstream went stale at once (36 replay cases red until
+the topup). Cost of restoring the whole tree - base + 8 variants x 5 fixtures - was ~250k in /
+40k out on Luna, roughly $0.10; the record of it is that "prompt edits are cheap in code and
+cost a full-tree topup" is now a measured sentence.
+
 ## 6. Invariants that must not break
 
 **Billing.** `usage.service.getMinutesUsedInPeriod` sums jobs whose status is NOT `FAILED`. So a job that

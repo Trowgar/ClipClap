@@ -98,6 +98,17 @@ export const BASE_VARIANT = "base";
  * "arc-finalizer-notes" variant sets it ALONGSIDE `arcAuditEnabled`, every
  * *Enabled variant's own precedent - a note can never render without a
  * detector to flag the clip it renders for.
+ *
+ * `arcDownrankEnabled` (task 7), the same door for the same reason as every
+ * *Enabled key above: without it, no config this harness builds could ever
+ * differ on the key, so an "arc-downrank" recording could never exist and the
+ * fingerprint entry built to catch a live downrank run replaying against a
+ * dark recording could never fire. The "arc-downrank" variant sets it
+ * ALONGSIDE `arcAuditEnabled`, every *Enabled variant's own precedent -
+ * nothing can ever be flagged, so nothing can ever be downranked, without a
+ * detector to flag it. `arcDownrankPenalty2`/`arcDownrankPenalty1` are NOT
+ * here - tuning doors, the same refusal as `startExtensionWindowSec`/
+ * `endExtensionWindowSec`/`longClipMaxSec`.
  */
 export type VariantOverrides = Partial<
   Pick<
@@ -111,6 +122,7 @@ export type VariantOverrides = Partial<
     | "endExtensionHintsEnabled"
     | "longClipsEnabled"
     | "arcFinalizerNotesEnabled"
+    | "arcDownrankEnabled"
   >
 >;
 
@@ -125,6 +137,7 @@ export const VARIANT_OVERRIDE_KEYS = [
   "endExtensionHintsEnabled",
   "longClipsEnabled",
   "arcFinalizerNotesEnabled",
+  "arcDownrankEnabled",
 ] as const satisfies ReadonlyArray<keyof VariantOverrides>;
 
 /**

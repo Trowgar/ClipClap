@@ -271,6 +271,49 @@ import { finalizerMaxOutputTokens } from "../../analyze-v2/finalize";
  *                                key exists so a fixture cannot silently
  *                                drift onto a config claiming otherwise.
  *
+ *   arcDownrankEnabled            whether the unrepairable-flag downrank
+ *                                policy (task 7) may DROP a clip before the
+ *                                finalizer ever sees it. finalizerEnabled's/
+ *                                arcAuditEnabled's argument again: off makes
+ *                                the block in index.ts a no-op (afterArcDownrank
+ *                                stays identical to beforeFinalize), so the
+ *                                request hash cannot notice it turning on -
+ *                                and startExtensionEnabled's own narrower
+ *                                argument applies too, since a dropped clip
+ *                                changes no request of ITS OWN either: it
+ *                                changes only which clips the FINALIZER is
+ *                                handed (fewer CLIP blocks in its prompt),
+ *                                the same shared-responses.json false-match
+ *                                risk startExtensionEnabled/longClipsEnabled
+ *                                both exist to close - a finalizer prompt
+ *                                missing one clip could, in principle, still
+ *                                collide with an answer already sitting in
+ *                                the pool for a narrower set the base run
+ *                                also produced.
+ *   arcDownrankPenalty2/          the exact "can silence the stage" case this
+ *   arcDownrankPenalty1           file already documents for longClipMaxSec/
+ *                                endExtensionWindowSec, sharpened: EITHER
+ *                                penalty at 0 makes its own tier contribute
+ *                                nothing to the drop decision (config.ts's own
+ *                                doc comment - arcDownrankPenalty1 SHIPS at
+ *                                0 by default for exactly this reason), so a
+ *                                fixture recorded at one penalty value would
+ *                                replay byte-identical under a different one
+ *                                whenever no clip's standing count crosses the
+ *                                tier the moved penalty would have changed.
+ *                                Neither penalty changes any request's text or
+ *                                shape - both bound what CODE does with an
+ *                                answer already on disk - so this is the
+ *                                windowing-knob argument's mirror image: not
+ *                                "changes the request but the hash already
+ *                                covers it," but "changes nothing the hash can
+ *                                see at all AND can silently change the
+ *                                shipped set," which is precisely the
+ *                                combination this file exists to catch. No
+ *                                *MaxOutputTokens pair exists for either: no
+ *                                call's shape depends on them, since this
+ *                                stage makes no call of its own.
+ *
  * startExtensionWindowSec is NOT here, unlike endExtensionWindowSec - the
  * asymmetry is deliberate. It bounds a GATE inside arc-audit.ts (whether a
  * `fix_start_node` pointer is close enough to keep), never what the arc-audit
@@ -366,6 +409,20 @@ export interface EngineFingerprint {
    *  boundary this key closes - the same shape endExtensionHintsEnabled's
    *  own key exists for. */
   arcFinalizerNotesEnabled: boolean;
+  /** Whether the unrepairable-flag downrank policy (task 7) may drop a clip
+   *  before the finalizer sees it. See the doc comment above for why this
+   *  earns a key despite making no request of its own - the same
+   *  shared-responses.json false-match risk startExtensionEnabled and
+   *  longClipsEnabled exist to close. */
+  arcDownrankEnabled: boolean;
+  /** Score penalty for a clip with 2+ standing arc-audit axes. See the doc
+   *  comment above for the "can silence the stage" risk this key exists to
+   *  close - the same shape endExtensionWindowSec/longClipMaxSec document. */
+  arcDownrankPenalty2: number;
+  /** Score penalty for a clip with exactly 1 standing arc-audit axis. Ships
+   *  at 0 by default (config.ts), which is itself the silencing case this
+   *  key exists to catch. */
+  arcDownrankPenalty1: number;
   /** Which node spans buildScanWindows may count toward the window/overlap
    *  budget - "speech" (word-bearing only, today's default) or "source"
    *  (every node, opaque included). See the doc comment above for why this
@@ -411,6 +468,9 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     longClipsEnabled: cfg.longClipsEnabled,
     longClipMaxSec: cfg.longClipMaxSec,
     arcFinalizerNotesEnabled: cfg.arcFinalizerNotesEnabled,
+    arcDownrankEnabled: cfg.arcDownrankEnabled,
+    arcDownrankPenalty2: cfg.arcDownrankPenalty2,
+    arcDownrankPenalty1: cfg.arcDownrankPenalty1,
     scanWindowBudget: cfg.scanWindowBudget,
     scanPasses: cfg.scanPasses,
   };

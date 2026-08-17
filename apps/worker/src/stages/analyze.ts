@@ -9,6 +9,9 @@ import { analyzeHighlightsV2 } from "../analyze-v2";
 import { AnalyzeTechnicalError } from "../analyze-v2/critic";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { resolveEngine } from "../analyze-v2/dispatch";
+import { detectSong } from "../analyze-v2/song-gate";
+import { newUsage } from "../analyze-v2/llm";
+import type { V2Result } from "../analyze-v2/types";
 import { safeTagJobError } from "./job-error";
 import { asTranscription, type AnalyzeStagePayload } from "./types";
 
@@ -79,10 +82,43 @@ export async function runAnalyzeStage(
     }
 
     // recall-critic path: content outcomes never throw
-    const result = await analyzeHighlightsV2(transcription, {
-      cfg,
-      transcriptPartial: job.transcriptPartial,
-    });
+    //
+    // Song-lyric source refusal (spec 2026-08-10 "Clip arc audit..." task 8):
+    // a deterministic, pre-scan check - BEFORE analyzeHighlightsV2 (and the
+    // scanner/critic calls inside it) ever runs, the same "free" shape the
+    // degenerate guard at the top of that function already has for an empty
+    // transcript. Placed HERE rather than inside analyze-v2/index.ts (which
+    // already owns the degenerate/NO_USABLE_SPEECH decision) because that
+    // file is off limits for this task - other agents are editing it
+    // concurrently for the arc-audit programme - so this is a second,
+    // narrower pre-scan gate for a transcript that has plenty of words but
+    // is verse. See analyze-v2/song-gate.ts for the measured thresholds.
+    const songGate = cfg.songGateEnabled
+      ? detectSong(transcription.segments)
+      : null;
+    const result: V2Result = songGate?.fired
+      ? {
+          highlights: [],
+          // Resolves exactly like NO_USABLE_SPEECH does today: an honest
+          // zero-clip DONE outcome, never FAILED (billing invariant,
+          // engine-notes §6) - reusing the enum value rather than adding one,
+          // per this task's own instruction not to touch the prisma schema.
+          noClipsReason: "NO_USABLE_SPEECH",
+          telemetry: { path: "song-gate", songGate },
+          usage: newUsage(),
+        }
+      : await analyzeHighlightsV2(transcription, {
+          cfg,
+          transcriptPartial: job.transcriptPartial,
+        });
+    // Flag on but not fired: still recorded, so the job record can show the
+    // gate evaluated this transcript and let it through - task 8's own
+    // acceptance criterion ("telemetry present when the flag is on and
+    // absent when off"). Merged onto the real result's telemetry rather than
+    // replacing it, so nothing analyzeHighlightsV2 already recorded is lost.
+    if (songGate && !songGate.fired) {
+      (result.telemetry as Record<string, unknown>).songGate = songGate;
+    }
     const analyzeMs = Date.now() - startedAt;
 
     await prisma.job.update({

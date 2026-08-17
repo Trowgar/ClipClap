@@ -131,6 +131,7 @@ describe("variant definitions", () => {
       endExtensionHintsEnabled: true,
       longClipsEnabled: true,
       arcFinalizerNotesEnabled: true,
+      arcDownrankEnabled: true,
     };
     // Driven off VARIANT_OVERRIDE_KEYS rather than a literal, because the way
     // this test rots is that a knob is admitted to the list and nobody adds it
@@ -266,6 +267,25 @@ describe("variant definitions", () => {
     expect({ ...live, arcFinalizerNotesEnabled: false, arcAuditEnabled: false }).toEqual(dark);
     expect(() => assertFingerprintMatches("recorded-live", live, dark)).toThrow(
       /arcFinalizerNotesEnabled|arcAuditEnabled/
+    );
+  });
+
+  /** The arc-downrank mirror of the six tests above (task 7). Same mechanism:
+   *  until the "arc-downrank" variant declaration existed, no config this
+   *  harness could build ever differed on `arcDownrankEnabled`. Moves BOTH
+   *  `arcAuditEnabled` and `arcDownrankEnabled` together, every *Enabled
+   *  variant's own precedent - nothing can ever be flagged, so nothing can
+   *  ever be downranked, without a detector to feed it. */
+  it("makes the arc-downrank fingerprint key able to fire, which it could not before", () => {
+    const dark = computeFingerprint(variantConfig(BASE_VARIANT));
+    const live = computeFingerprint(variantConfig("arc-downrank"));
+    expect(dark.arcDownrankEnabled).toBe(false);
+    expect(live.arcDownrankEnabled).toBe(true);
+    expect(dark.arcAuditEnabled).toBe(false);
+    expect(live.arcAuditEnabled).toBe(true);
+    expect({ ...live, arcDownrankEnabled: false, arcAuditEnabled: false }).toEqual(dark);
+    expect(() => assertFingerprintMatches("recorded-live", live, dark)).toThrow(
+      /arcDownrankEnabled|arcAuditEnabled/
     );
   });
 });

@@ -380,6 +380,65 @@ apply here (that bar gates a new verb; this feeds the existing one). Acceptance 
 all-three-axes-flagged clip (777.0-802.1) should move toward drop; the positive control
 (1113.8-1132.3, unflagged) must survive; read the bless diff by hand.
 
+**Task 7 (2026-08-17, after the first outside-user corpus): unrepairable-flag downrank.**
+Motivation, measured on 56 clips / 8 users / 4 languages (engine-notes §5c): audit flag
+precision 0.97 - the §5 bar for downrank authority (>=90% over two more jobs) is met with
+margin on the third measurement. Crossing standing flags (ok:false and NOT repaired) against the
+architect's clip verdicts: **all 9 SKIP clips carry at least one standing flag, 5 of 9 carry two
+or more; of 24 POST clips, ZERO carry two or more, 2 carry exactly one** (both the known soft
+cases - a cold-open the reader accepted, and a deliberate withholding that IS the hook). So the
+separating signal is the COUNT of standing axes, not any single axis: two-plus is a SKIP marker
+with no POST casualty in the corpus; one is noise-level.
+
+The mechanism, placed where the Task 5 long-clip policy already sits in `index.ts` - AFTER
+arcAudit + both extensions (so `repaired` is final) and BEFORE finalizeClips:
+- `ARC_DOWNRANK=on` (default off), variant `arc-downrank` = `{ arcAuditEnabled,
+  arcDownrankEnabled }`, fingerprint key.
+- For each clip: `standing` = number of axes with `ok:false && !repaired`. Penalty =
+  `standing >= 2 ? arcDownrankPenalty2 : standing === 1 ? arcDownrankPenalty1 : 0`, defaults
+  **0.15 and 0.0** (env `ARC_DOWNRANK_PENALTY_2` / `_1`; the single-axis penalty ships at zero
+  because the corpus says one flag does not separate SKIP from POST - the knob exists so a
+  future corpus can turn it on with a measurement, not a guess).
+- Effective score = `verdict.score - penalty`. If effective < `cfg.scoreThreshold` (0.6) the
+  clip is DROPPED with reason `arc_unrepairable` in `droppedVerdicts`/telemetry (`arcDownrank:
+  { considered, penalized, dropped }`); otherwise it stays, and its verdict.score is NOT
+  rewritten (the score is the critic's record - the finalizer still sees the audit note; only
+  the drop threshold is enforced here). Sizing: SKIP scores in the corpus run 0.62-0.79, so
+  0.15 puts every two-flag SKIP (max 0.79) under 0.6-0.65 while a two-flag POST (none exist)
+  would need >= 0.75 to survive - read the sizing note out loud in a code comment.
+- The finalizer keeps its own drop verbs; this stage only removes what the audit already
+  showed to be unrepairable AND weak. Never touches the positive-control class (unflagged).
+- Billing/no-clips invariant: if the downrank would empty the set, DO NOT drop the last
+  survivor set to zero - keep the top-scored penalized clips up to `hardMinKeep = 1`... NO:
+  simpler and honest - the drop is applied, and the existing "zero survivors" path handles it
+  exactly as a finalizer drop-all does today (weak video = honest answer). Do not add mechanism.
+
+Acceptance: replay all five fixtures with the variant; the ONLY removed clips must carry
+standing >= 2 (assert in a test); on `podcast-nuclear` the 777.0-802.1 all-three-axes clip
+(the one the informed finalizer kept) is now dropped and the positive control survives; the
+recorded finalizer answers may go stale where a clip disappears (topup, read the diff).
+
+**Task 8 (2026-08-17): song-lyric source refusal.** One outside user uploaded the same 90s
+film scene four times and got a clip cut from the SONG's lyrics each time (§5c). Deterministic
+gate in the analyze stage, before scanning: a transcript whose segments look like sung verse
+must resolve to `NO_USABLE_SPEECH`-class refusal, not clips. Signal design is the task's job -
+candidates: share of ♫/♪ tokens, line-repetition rate (chorus), median segment length, and the
+existing opaque-node share; measure each on the four song jobs in the DB (`cmsp6e9sg`,
+`cmsp6gy9d`, `cmsp7y0om`, `cmsp80iqk` are the film scene; `cmspy9brs`, `cmsw1rv1u`,
+`cmswkdvq2`, `cmsptnpxd` are pure ♫/verse zero-clip jobs) AGAINST all 15 real speech jobs of
+the same window - the gate must fire on the song set and on none of the speech set, with the
+separation printed. Flag `SONG_GATE=on` default off; telemetry `songGate: { fired, signals }`.
+
+**Task 9 (2026-08-17): recap-narration openers in the audit prompt.** Two shapes recurred on
+non-Russian sources and were caught by neither audit nor finalizer rule 7: "Cerita dimulai
+dengan memperlihatkan..." (a recap that narrates itself) and "In this video you saw us..." (an
+outro that recaps). Add them as `meta_opening` examples in the arc-audit prompt in id and en,
+plus one ar shape, and one recap example to the finalizer's rule 7 list. Prompt-only; both
+prompts change, so BOTH the arc-audit and finalizer recordings on all variants go stale -
+budget a full topup pass and read the bless diffs for the two known clips (recap 6.7-32.4 and
+beast 824.6-866.1 are not in fixtures - the acceptance is that the fixture sets do not regress
+and the new examples render; the real test is the next id/en upload).
+
 **Explicitly out of scope** (do not let an implementing agent drift into these): arc stacking and
 drag (no mechanism, separate programme item), any change to critic prompts or scan windows (own
 re-record budgets), retention of the finalizer's 9 rules (unchanged), genre profiles, RENDER.

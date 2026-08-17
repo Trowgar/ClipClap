@@ -24,5 +24,9 @@
   "arc-finalizer-notes": {
     "arcAuditEnabled": true,
     "arcFinalizerNotesEnabled": true
+  },
+  "arc-downrank": {
+    "arcAuditEnabled": true,
+    "arcDownrankEnabled": true
   }
 }

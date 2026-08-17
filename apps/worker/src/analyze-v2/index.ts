@@ -532,6 +532,68 @@ export async function analyzeHighlightsV2(
       : { ...clip, overLength: true }
   );
 
+  // ARC DOWNRANK (spec 2026-08-10 task 7) - the first DROP authority the arc
+  // audit earns, placed exactly where the task 5 long-clip policy sits: AFTER
+  // arcAudit and BOTH extension stages, so every `entry.repaired`/
+  // `exit.repaired` mark either of them may have written is already final,
+  // and BEFORE finalizeClips, so a dropped clip never reaches the judge's
+  // prompt at all (the finalizer keeps its own drop verbs unchanged; this
+  // stage only removes what the audit already showed to be unrepairable AND
+  // weak - spec §2b's "the audit never drops" is about DETECTION, not about
+  // this later, code-gated stage that reads its published flags).
+  //
+  // GATED ON BOTH FLAGS, explicitly, the same doubling every audit-fed stage
+  // in this file uses (extendClipStarts, the endExtensionHintsEnabled check,
+  // the long-clip policy's own isFullyOk call): with ARC_AUDIT off, arcFlags
+  // is always the empty map built above, so `standing` would already be 0 for
+  // every clip and this block would already be a no-op BY ACCIDENT - the
+  // explicit `cfg.arcAuditEnabled` check here makes that dependency a fact a
+  // reader can see, not an implication of an upstream empty map, and it is
+  // also what keeps the `arcDownrank` telemetry key genuinely ABSENT (not
+  // merely zeroed) when only ARC_DOWNRANK is set without ARC_AUDIT.
+  let arcDownrankTelemetry:
+    | { considered: number; penalized: number; dropped: number }
+    | undefined;
+  let afterArcDownrank = beforeFinalize;
+  if (cfg.arcDownrankEnabled && cfg.arcAuditEnabled) {
+    const t = { considered: 0, penalized: 0, dropped: 0 };
+    const kept: SnappedClip[] = [];
+    for (const clip of beforeFinalize) {
+      t.considered += 1;
+      const standing = standingArcFlagCount(arcFlags.get(clip.verdict.id));
+      // Penalty tiers, verbatim from spec §7/task 7: 2+ standing axes pay
+      // arcDownrankPenalty2 (default 0.15, corpus-sized - see config.ts's own
+      // doc comment for the 0.62-0.79 SKIP band this puts under threshold),
+      // exactly 1 pays arcDownrankPenalty1 (default 0.0 - the corpus does not
+      // separate SKIP from POST on a single flag), 0 pays nothing.
+      const penalty =
+        standing >= 2
+          ? cfg.arcDownrankPenalty2
+          : standing === 1
+            ? cfg.arcDownrankPenalty1
+            : 0;
+      if (penalty > 0) t.penalized += 1;
+      // NOT written back to verdict.score (spec §7: "the score is the
+      // critic's record"): `effective` exists only for this threshold
+      // comparison and is discarded immediately after. The finalizer, if this
+      // clip survives, still sees the ORIGINAL score in its prompt block.
+      const effective = clip.verdict.score - penalty;
+      if (effective < cfg.scoreThreshold) {
+        t.dropped += 1;
+        droppedVerdicts.push({
+          id: clip.verdict.id,
+          stage: "arc_downrank",
+          reason: "arc_unrepairable",
+          score: clip.verdict.score,
+        });
+        continue;
+      }
+      kept.push(clip);
+    }
+    afterArcDownrank = kept;
+    arcDownrankTelemetry = t;
+  }
+
   // NEVER throws: any error, refusal, truncation or malformed output ships the
   // input set with a reason in telemetry. A stage with veto authority over
   // already-approved clips must not be able to turn a content answer into a
@@ -540,7 +602,7 @@ export async function analyzeHighlightsV2(
   const finalized = await finalizeClips(
     client,
     usage,
-    beforeFinalize,
+    afterArcDownrank,
     nodes,
     languageIso,
     isoToLanguageName(languageIso),
@@ -742,8 +804,12 @@ export async function analyzeHighlightsV2(
     // Counted off the ARGUMENT the finalizer received, not off selection. The
     // two agree today only because the extension stage returns its input 1:1 on
     // every path, and nothing at this call site says so - a counter that reads
-    // "what it was given" has to read what was given.
-    selectedForFinalizer: extension.clips.length,
+    // "what it was given" has to read what was given. `afterArcDownrank`, not
+    // `extension.clips`, IS that argument as of spec 2026-08-10 task 7: the
+    // downrank stage above can remove clips (droppedVerdicts carries the
+    // reason), and with it dark the two stay identical, the same reason they
+    // agreed with `extension.clips` before this task existed.
+    selectedForFinalizer: afterArcDownrank.length,
     finalizerSurvivors: finalized.clips.length,
     ...finalizedTelemetryRest,
     kept: highlights.length,
@@ -771,6 +837,10 @@ export async function analyzeHighlightsV2(
           },
         }
       : {}),
+    // Absent entirely when the gate above did not run (spec 2026-08-10 task 7)
+    // - the same not-a-key promise arcAudit/startExtension/longClips keep
+    // above, not a zeroed placeholder.
+    ...(arcDownrankTelemetry ? { arcDownrank: arcDownrankTelemetry } : {}),
   };
 
   if (highlights.length === 0) {
@@ -959,6 +1029,43 @@ function toHighlight(clip: SnappedClip, arcFlags: Map<string, ArcFlags>): V2High
     _boundaryConfidence: clip.boundaryConfidence,
     ...(flags ? { _arcFlags: flags } : {}),
   };
+}
+
+/**
+ * How many of a clip's three arc-audit axes are STANDING - `ok: false` and
+ * NOT since repaired (spec 2026-08-10 task 7, §2b/§7). This is the count the
+ * ARC DOWNRANK block above tiers its penalty on, per the corpus finding that
+ * the separating signal is the COUNT of standing axes, not any single one.
+ *
+ * `!flags` (never audited, or the stage is dark) reads as 0 standing, same
+ * "absent means nothing was established" rule `isFullyOk` (arc-audit.ts)
+ * documents for its own missing-flags case - a clip nothing ever flagged is
+ * never downranked by this stage, which is also the positive-control
+ * property spec §7's acceptance criteria names explicitly.
+ *
+ * `repaired` is EXCLUDED deliberately, mirroring `isFullyOk`'s own opposite
+ * choice for the SAME field: that function stays conservative and reads
+ * `ok` only (a patched boundary does not un-flag a clip for the long-clip
+ * gate's purposes), while this one exists to count what is STILL WRONG with
+ * the clip as it ships - and a widen-only repair that actually applied did
+ * fix the boundary the detector complained about (start-extension.ts's and
+ * end-extension.ts's own `repaired` doc comments: "the STANDING defect no
+ * longer describes the shipped clip - only the historical verdict does").
+ * Counting a repaired axis here would penalize a clip for a defect this same
+ * pipeline already corrected earlier in this very function call.
+ *
+ * `standalone` carries no `repaired` field (types.ts: "the audit has no
+ * drop or repair verb for it") - `flags.standalone.ok === false` therefore
+ * always counts once nothing ever un-flags it, which is the correct reading:
+ * a standalone gap this pipeline could not act on is still standing.
+ */
+function standingArcFlagCount(flags: ArcFlags | undefined): number {
+  if (!flags) return 0;
+  let standing = 0;
+  if (!flags.entry.ok && !flags.entry.repaired) standing += 1;
+  if (!flags.exit.ok && !flags.exit.repaired) standing += 1;
+  if (!flags.standalone.ok) standing += 1;
+  return standing;
 }
 
 /** Evidence cited at most EVIDENCE_BOUNDARY_SLACK_NODES outside [startNode,

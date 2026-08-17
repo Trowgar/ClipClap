@@ -506,6 +506,27 @@ describe("arcFinalizerNotesEnabled config knob", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// rule 7 (META-INSTRUCTION OPENING): recap-narration example (spec 2026-08-10
+// task 9). The finalizer's rule 7 under-fired on non-Russian recap openers
+// ("Cerita dimulai dengan memperlihatkan...", "In this video you saw us...")
+// per engine-notes §5c; this adds one recap example to the rule's own list.
+// ---------------------------------------------------------------------------
+
+describe("finalizerSystemPrompt - rule 7 recap example (spec 2026-08-10 task 9)", () => {
+  it("renders the new recap example in the meta-instruction-opening list", () => {
+    const prompt = finalizerSystemPrompt("ru", "Russian");
+    expect(prompt).toContain("In this video you saw us...");
+  });
+
+  it("leaves a distant, unrelated rule (the duplicate_of/shared_claim field line) byte-identical", () => {
+    const prompt = finalizerSystemPrompt("ru", "Russian");
+    expect(prompt).toContain(
+      '- duplicate_of and shared_claim: only with drop_reason "duplicate", else null.'
+    );
+  });
+});
+
 describe("FINALIZER_SCHEMA", () => {
   const item = FINALIZER_SCHEMA.schema.properties.clips.items;
 

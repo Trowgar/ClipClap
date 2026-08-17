@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { arcAuditClipBlock, arcAuditUserPrompt } from "../analyze-v2/prompts";
+import { ARC_AUDIT_SYSTEM, arcAuditClipBlock, arcAuditUserPrompt } from "../analyze-v2/prompts";
 import type { CriticVerdict, SentenceNode, SnappedClip } from "../analyze-v2/types";
 
 /** 45 unique, individually-addressable nodes so a leaked line is unmistakable -
@@ -178,5 +178,28 @@ describe("arcAuditUserPrompt", () => {
     expect(user.split("\n\n---\n\n")).toHaveLength(2);
     expect(user).toContain("CLIP c1");
     expect(user).toContain("CLIP c2");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// meta_opening: recap-narration examples (spec 2026-08-10 task 9). Two shapes
+// recurred on non-Russian sources and were caught by neither audit nor
+// finalizer rule 7 - "Cerita dimulai dengan memperlihatkan..." (id, a recap
+// that narrates itself) and "In this video you saw us..." (en, an outro that
+// recaps) - plus a composed ar shape of the same kind. This block only checks
+// the examples render and that a distant, unrelated rule did not move.
+// ---------------------------------------------------------------------------
+
+describe("ARC_AUDIT_SYSTEM - recap-narration meta_opening examples (spec 2026-08-10 task 9)", () => {
+  it("renders the id, en and ar recap-narration examples under meta_opening", () => {
+    expect(ARC_AUDIT_SYSTEM).toContain("Cerita dimulai dengan memperlihatkan...");
+    expect(ARC_AUDIT_SYSTEM).toContain("In this video you saw us...");
+    expect(ARC_AUDIT_SYSTEM).toContain("في هذا الفيديو شفنا...");
+  });
+
+  it("leaves a distant, unrelated rule (EXIT's mid_thought bullet) byte-identical", () => {
+    expect(ARC_AUDIT_SYSTEM).toContain(
+      "   - mid_thought: the sentence itself is left open, mid-clause or mid-list."
+    );
   });
 });

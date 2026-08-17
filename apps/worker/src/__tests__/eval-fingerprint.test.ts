@@ -42,6 +42,9 @@ describe("computeFingerprint", () => {
       longClipsEnabled: baseCfg.longClipsEnabled,
       longClipMaxSec: baseCfg.longClipMaxSec,
       arcFinalizerNotesEnabled: baseCfg.arcFinalizerNotesEnabled,
+      arcDownrankEnabled: baseCfg.arcDownrankEnabled,
+      arcDownrankPenalty2: baseCfg.arcDownrankPenalty2,
+      arcDownrankPenalty1: baseCfg.arcDownrankPenalty1,
       scanWindowBudget: baseCfg.scanWindowBudget,
       scanPasses: baseCfg.scanPasses,
     });
@@ -97,6 +100,14 @@ describe("computeFingerprint", () => {
     // Every fixture in the repo predates task 6 entirely, same argument as
     // every *Enabled key above.
     expect(computeFingerprint(baseCfg).arcFinalizerNotesEnabled).toBe(false);
+  });
+
+  it("records the arc-downrank policy as DARK on the default config, penalties at their corpus-sized defaults", () => {
+    // Every fixture in the repo predates task 7 entirely, same argument as
+    // every *Enabled key above.
+    expect(computeFingerprint(baseCfg).arcDownrankEnabled).toBe(false);
+    expect(computeFingerprint(baseCfg).arcDownrankPenalty2).toBe(0.15);
+    expect(computeFingerprint(baseCfg).arcDownrankPenalty1).toBe(0);
   });
 });
 
@@ -232,6 +243,35 @@ describe("assertFingerprintMatches", () => {
     expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
       /arcFinalizerNotesEnabled/
     );
+  });
+
+  it("fails when the arc-downrank switch was turned on, which every fixture predates", () => {
+    // Same shape as longClipsEnabled/startExtensionEnabled: task 7 makes no
+    // request of its own, but a live replay against a dark recording could
+    // DROP a clip and hand the finalizer a narrower set than the recording
+    // describes, and the shared-responses.json false-match risk means that
+    // could still replay green without this key.
+    const changed = computeFingerprint({ ...baseCfg, arcDownrankEnabled: true });
+    expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
+      /arcDownrankEnabled/
+    );
+  });
+
+  it("fails when either arc-downrank penalty changed, even though neither touches a request", () => {
+    // The "can silence the stage" case this file already documents for
+    // endExtensionWindowSec/longClipMaxSec, sharpened: a penalty of exactly 0
+    // makes its own tier an inert no-op (arcDownrankPenalty1's own default),
+    // so a recording made at one penalty value would replay byte-identical
+    // under a different one whenever no clip's standing count crosses the
+    // tier the moved penalty would have changed.
+    const penalty2Changed = computeFingerprint({ ...baseCfg, arcDownrankPenalty2: 0.3 });
+    expect(() =>
+      assertFingerprintMatches("case", { ...current }, penalty2Changed, vi.fn())
+    ).toThrow(/arcDownrankPenalty2/);
+    const penalty1Changed = computeFingerprint({ ...baseCfg, arcDownrankPenalty1: 0.05 });
+    expect(() =>
+      assertFingerprintMatches("case", { ...current }, penalty1Changed, vi.fn())
+    ).toThrow(/arcDownrankPenalty1/);
   });
 
   it("fails when the extension output budget changed", () => {
