@@ -1755,8 +1755,7 @@ import { promisify } from "util";
 import { detectRange, planDetected } from "../reframe";
 import { loadReframeConfig } from "../reframe/config";
 import { cropWidthFor } from "../reframe/geometry";
-import { recoverCuts, type CutDecision } from "../reframe/cut-recovery";
-import { MAX_PLAN_SHOTS } from "../reframe/plan";
+import type { CutDecision, CutRecoveryTelemetry } from "../reframe/cut-recovery";
 import type { CropPlan, ShotLayout } from "../reframe/types";
 import { loadManifest, workerRoot, type DirectorAuditItem } from "./director-audit-fetch";
 import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
@@ -1785,9 +1784,19 @@ interface ClipReport {
   diffSec: number;
   cmpSec: number;
   spans: Span[];
-  telemetry?: ReturnType<typeof recoverCuts>["telemetry"];
+  telemetry?: CutRecoveryTelemetry;
   decisions: Array<{ t: number; score: number; verdict: CutDecision }>;
+  /** Source class OFF -> ON; a flip means one split re-laid-out the whole clip. */
+  profileOff?: string;
+  profileOn?: string;
+  profileFlip: boolean;
+  /** Confirmed splits whose ON sub-shot fell to a centre crop where OFF had a face window. */
+  facelessSubShots: number;
   sheets: string[];
+}
+
+function shotAt(plan: CropPlan, t: number): ShotLayout | undefined {
+  return plan.shots.find((s) => t >= s.start && t < s.end);
 }
 
 function xAt(plan: CropPlan, t: number): number | null {
@@ -1920,16 +1929,29 @@ async function main() {
         clip: item.clip, job: item.job, start: item.start, end: item.end,
         offInvariant: "no_plan", fallback: det.fallbackReason,
         shotsDetector: det.shotCount, shotsOff: 0, shotsOn: 0, diffSec: 0, cmpSec: 0,
-        spans: [], decisions: [], sheets: [],
+        spans: [], decisions: [], profileFlip: false, facelessSubShots: 0, sheets: [],
       });
       continue;
     }
     const off = planDetected(det.detection, { ...cfg, cutRecovery: false });
     const on = planDetected(det.detection, { ...cfg, cutRecovery: true });
-    const rec = recoverCuts(det.detection.shots, det.detection.tracks, det.detection.candidates, {
-      minShotSec: cfg.minShotSec, sampleFps: cfg.sampleFps, maxPlanShots: MAX_PLAN_SHOTS,
-    });
+    const decisions = on.decisions ?? [];
     const cropW = cropWidthFor(det.detection.height);
+    // A confirmed split whose sub-shot lost its faces to the noise floor and fell
+    // to centre where OFF had a face window - the regression the Task 2 review
+    // asked to be counted rather than guarded against.
+    let facelessSubShots = 0;
+    if (off.plan && on.plan) {
+      for (const d of decisions) {
+        if (d.verdict !== "confirmed") continue;
+        const offAt = shotAt(off.plan, d.t);
+        const onAt = shotAt(on.plan, d.t);
+        const onBefore = shotAt(on.plan, d.t - 0.01);
+        if (offAt?.layout === "single" && (onAt?.layout === "center" || onBefore?.layout === "center")) {
+          facelessSubShots += 1;
+        }
+      }
+    }
     const offInvariant = off.plan ? shotsEqual(item.shots, off.plan.shots) : "no_plan";
     const d = off.plan && on.plan ? diffPlans(off.plan, on.plan, duration, cropW) : { diffSec: 0, cmpSec: 0, spans: [] };
     const sheets: string[] = [];
@@ -1945,7 +1967,10 @@ async function main() {
       offInvariant, shotsDetector: det.shotCount,
       shotsOff: off.plan?.shots.length ?? 0, shotsOn: on.plan?.shots.length ?? 0,
       diffSec: d.diffSec, cmpSec: d.cmpSec, spans: d.spans,
-      telemetry: on.cutRecovery, decisions: rec.decisions.map(({ t, score, verdict }) => ({ t, score, verdict })),
+      telemetry: on.cutRecovery, decisions: decisions.map(({ t, score, verdict }) => ({ t, score, verdict })),
+      profileOff: off.plan?.profile?.class, profileOn: on.plan?.profile?.class,
+      profileFlip: (off.plan?.profile?.class ?? "none") !== (on.plan?.profile?.class ?? "none"),
+      facelessSubShots,
       sheets,
     };
     reports.push(r);
@@ -1953,6 +1978,8 @@ async function main() {
       `${item.clip} start=${item.start.toFixed(1)} off=${offInvariant} shots ${r.shotsDetector}/${r.shotsOff}->${r.shotsOn} ` +
         `diff ${r.diffSec.toFixed(1)}s of ${r.cmpSec.toFixed(1)}s ` +
         `cand ${r.telemetry?.candidates ?? 0} conf ${r.telemetry?.confirmed ?? 0} rej ${JSON.stringify(r.telemetry?.rejected ?? {})} cap ${r.telemetry?.capHit ?? 0}` +
+        (r.profileFlip ? ` PROFILE FLIP ${r.profileOff}->${r.profileOn}` : "") +
+        (r.facelessSubShots ? ` facelessSubShots ${r.facelessSubShots}` : "") +
         (r.spans.length ? ` spans ${JSON.stringify(r.spans.map((s) => [s.t0, s.t1, s.xOff, s.xOn]))}` : "")
     );
   }
@@ -1994,6 +2021,7 @@ async function main() {
       `noTurnover ${sum((r) => r.telemetry?.rejected.noTurnover ?? 0)} oneSideEmpty ${sum((r) => r.telemetry?.rejected.oneSideEmpty ?? 0)} ` +
       `tooShort ${sum((r) => r.telemetry?.rejected.tooShort ?? 0)} noPath ${sum((r) => r.telemetry?.rejected.noPath ?? 0)} capHit ${sum((r) => r.telemetry?.capHit ?? 0)}`
   );
+  console.log(`profile flips: ${reports.filter((r) => r.profileFlip).length}; faceless sub-shots after a confirmed split: ${sum((r) => r.facelessSubShots)}`);
   console.log(`rejected sampled: ${sampled.length} of ${rejected.length}; sheets in ${outDir}`);
   await writeFile(join(outDir, "summary.json"), JSON.stringify(reports, null, 1));
 }
@@ -2032,6 +2060,8 @@ ar-habits 0.0 @12.0 (lamp) .... NO span (must be absent)
 Isaiah 1831.6 @5-9.5 (cave) ... NO span, or a span the sheet shows as neutral/better
 shots: detector / off / on .... counts; capHit total (must be 0)
 candidates / confirmed / rejected by reason
+profile flips ................. count (a flip = a split re-laid-out a whole clip; each one judged on the sheets)
+faceless sub-shots ............ count (a confirmed split whose sub-shot fell to centre; each one judged on the sheets)
 rejected sample ............... 30 sheets, real cuts with a framing change seen: (architect fills)
 ```
 
