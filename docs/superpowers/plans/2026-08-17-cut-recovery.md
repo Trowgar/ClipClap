@@ -205,6 +205,7 @@ git commit -m "chore(reframe): commit the director-audit corpus manifest and a f
 - Modify: `apps/worker/src/__tests__/reframe-shots.test.ts` (append two describe blocks)
 - Rewrite: `apps/worker/src/__tests__/reframe-shots-detect.test.ts`
 - Modify: `apps/worker/src/reframe/index.ts:80` (consume `.shots` - one line, see step 6)
+- Modify (one line each, `const { shots } = await detectShots(...)`, no other change): `apps/worker/src/scripts/corpus-baseline.ts`, `eval-anchor-sheets.ts`, `eval-bisection.ts`, `eval-blind-centre.ts`, `eval-insert-anchor.ts`, `eval-insert-rect.ts`, `eval-shift-sheets.ts` - they call `detectShots` directly and the typecheck (`tsconfig.typecheck.json` includes `src/scripts`) breaks without it; also patch the gitignored `apps/worker/.eval-frames/geom/{measure,worst-corpus}.ts` on disk
 
 - [ ] **Step 1: Write the failing pure tests** - append to `apps/worker/src/__tests__/reframe-shots.test.ts`:
 
@@ -730,7 +731,7 @@ Expected: all PASS; typecheck clean.
 The Alipov clip `527.85-623.62` of job `cmsrx4ob30003i1jxfle15qef` (source materialised in Task 0). Run inside `worker-render`:
 
 ```bash
-docker compose exec -T worker-render sh -c 'cd /app/apps/worker && cat > /tmp/smoke-shots.ts <<EOF
+docker compose exec -T worker-render sh -c 'cd /app/apps/worker && cat > smoke-shots.ts <<EOF
 import { detectShots } from "./src/reframe/shots";
 import { loadReframeConfig } from "./src/reframe/config";
 (async () => {
@@ -739,8 +740,10 @@ import { loadReframeConfig } from "./src/reframe/config";
   console.log(JSON.stringify({ bounds: r.shots.map((s) => [s.start, s.end]), candidates: r.candidates }));
 })();
 EOF
-npx tsx /tmp/smoke-shots.ts'
+npx tsx smoke-shots.ts && rm smoke-shots.ts'
 ```
+
+(The script sits in `apps/worker/` so its relative imports resolve; it is deleted right after.)
 
 Expected (recorded from the audit's `scenes/cmsrxcgk60003uqaks7oudaon.txt` - the same ffmpeg on the same file):
 `bounds` = `[[0,4.95],[4.95,14.35],[14.35,15.91],[15.91,23.31],[23.31,26.63],[26.63,29.87],[29.87,32.99],[32.99,51.75],[51.75,59.63],[59.63,78.83],[78.83,84.35],[84.35,95.77]]` (the 95.63 cut is a 0.14s tail and merges backward), and `candidates` = five entries at t 18.27 (0.292175), 20.71 (0.297789), 42.59 (0.242635), 69.15 (0.236080), 89.99 (0.243011). Small float differences in the last digits are fine; different TIMES or a different count are not.
