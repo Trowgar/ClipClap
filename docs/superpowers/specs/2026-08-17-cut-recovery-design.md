@@ -231,8 +231,10 @@ first real jobs. Rollback = remove the line and recreate.
   candidates any more.
 - **Faceless / graphics / anime**: no surviving tracks - `oneSideEmpty` on every candidate -
   plan identical.
-- **Stream layout**: sub-shots inherit the parent's `camRect`; `resolveCamRect` sees the same
-  rects repeated, its majority vote is unchanged in outcome.
+- **Stream layout**: sub-shots inherit the parent's `camRect`, but the clip-level rect is
+  resolved (`resolveCamRect`, a strict-majority vote over per-shot rects) on the DETECTOR shots,
+  before recovery - repeating one parent's rect across three sub-shots must not be able to
+  swing that vote.
 - **Split layout**: unaffected (its gate is source aspect).
 - **Revived tracks**: handled by testing LIVE samples around `t`, not id lifetimes.
 - **Timeouts**: recovery is pure TS on in-memory arrays (microseconds); the detector budget is
