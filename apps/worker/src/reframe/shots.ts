@@ -62,12 +62,17 @@ export interface DetectedShots {
  * asked once for every frame scoring at least CANDIDATE_FLOOR, with the score
  * printed, and cuts / retry cuts / candidates are all read off that one list.
  * The scene score of a frame does not depend on the select threshold, so the
- * cut set at the configured threshold is exactly what the old single-threshold
- * pass returned.
+ * cut set at the configured threshold is what the old single-threshold pass
+ * returned, up to the 6-decimal rounding of the printed lavfi.scene_score -
+ * the only reachable divergence is a score in [T - 5e-7, T) printing as T and
+ * ADDING a cut, which the merge pass absorbs; measured 0 such frames in ~2900.
  */
 const LONG_TAKE_RETRY_SEC = 15;
 const RETRY_THRESHOLD_FLOOR = 0.15;
 /** Lowest score scdet is asked to report; the bottom of the candidate band. */
+// Deliberately the SAME number as the retry floor (spec §2a): a candidate
+// the retry could have promoted must be one the recovery layer can see. Not
+// two knobs.
 export const CANDIDATE_FLOOR = RETRY_THRESHOLD_FLOOR;
 
 /**
@@ -76,7 +81,8 @@ export const CANDIDATE_FLOOR = RETRY_THRESHOLD_FLOOR;
  * ffmpeg's progress line ends in \r and can share a physical line with a
  * metadata line. A frame without a score fails the whole pass - the frame
  * cannot be classified, and a wrong cut list is worse than the legacy
- * fallback the caller degrades to.
+ * fallback the caller degrades to. Symmetrically, a score arriving with no
+ * preceding frame time fails the pass too.
  */
 export function parseSceneScores(stderr: string): CutCandidate[] {
   const out: CutCandidate[] = [];
@@ -86,7 +92,8 @@ export function parseSceneScores(stderr: string): CutCandidate[] {
     if (m[1] !== undefined) {
       if (pending !== null) throw new Error("scdet_score_missing");
       pending = Number(m[1]);
-    } else if (pending !== null) {
+    } else {
+      if (pending === null) throw new Error("scdet_score_missing");
       out.push({ t: pending, score: Number(m[2]) });
       pending = null;
     }
@@ -96,7 +103,10 @@ export function parseSceneScores(stderr: string): CutCandidate[] {
 }
 
 /** Pure: which scored frames are cuts (with the long-take retry applied) and
- *  which remain candidates. Candidates never overlap cuts. */
+ *  which remain candidates. Candidates never overlap cuts. Candidates come
+ *  back in emission order (ascending t), unique and inside (0, duration)
+ *  because ffmpeg emits them so; cutsToShots re-clamps cuts, candidates
+ *  carry that contract as-is. */
 export function classifyCuts(
   scored: CutCandidate[],
   durationSec: number,

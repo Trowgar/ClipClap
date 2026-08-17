@@ -119,6 +119,18 @@ describe("computeCropPlan never throws", () => {
     expect(r.fallbackReason).toBe("scdet_failed");
   });
 
+  it("returns scdet_failed when a selected frame carries no scene score", async () => {
+    h.respond = (cmd, args) =>
+      cmd === "ffmpeg"
+        ? { stdout: "", stderr: "[Parsed_metadata_2 @ 0x1] frame:0 pts:1 pts_time:5.0\n" }
+        : happyPath(cmd, args);
+
+    const r = await computeCropPlan("/x.mp4", 0, 10, cfg);
+
+    expect(r.plan).toBeNull();
+    expect(r.fallbackReason).toBe("scdet_failed");
+  });
+
   it("maps a killed process to timeout", async () => {
     h.respond = (cmd) =>
       cmd === "ffprobe" ? killed("killed") : { stdout: "", stderr: "" };

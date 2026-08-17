@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cutsToShots } from "../reframe/shots";
+import { classifyCuts, cutsToShots, parseSceneScores, CANDIDATE_FLOOR } from "../reframe/shots";
 
 describe("cutsToShots", () => {
   it("splits the clip at scene cuts", () => {
@@ -42,8 +42,6 @@ describe("cutsToShots", () => {
   });
 });
 
-import { classifyCuts, parseSceneScores, CANDIDATE_FLOOR } from "../reframe/shots";
-
 /** ffmpeg stderr as `metadata=print` writes it: a frame line, then the score line. */
 const scoredStderr = (rows: Array<[number, number]>) =>
   rows
@@ -85,6 +83,12 @@ describe("parseSceneScores", () => {
       "[Parsed_metadata_2 @ 0x1] lavfi.scene_score=0.5\n";
     expect(() => parseSceneScores(raw)).toThrow(/scdet_score_missing/);
     expect(() => parseSceneScores("[x] frame:0 pts:1 pts_time:10.0\n")).toThrow(
+      /scdet_score_missing/
+    );
+  });
+
+  it("fails the pass when a score arrives with no preceding frame time", () => {
+    expect(() => parseSceneScores("[x] lavfi.scene_score=0.5\n")).toThrow(
       /scdet_score_missing/
     );
   });
@@ -152,5 +156,12 @@ describe("classifyCuts", () => {
     expect(classifyCuts([{ t: 5, score: CANDIDATE_FLOOR }], 10, 0.3).candidates).toEqual([
       { t: 5, score: CANDIDATE_FLOOR },
     ]);
+  });
+
+  it("treats a score exactly at the threshold as a cut, like ffmpeg's gte", () => {
+    expect(classifyCuts([{ t: 10, score: 0.3 }], 40, 0.3)).toEqual({
+      cuts: [10],
+      candidates: [],
+    });
   });
 });
