@@ -1,0 +1,2614 @@
+{
+    "note": "Director-audit corpus, 2026-08-17: the 53 planned clips of the first outside-user corpus (10 jobs with a crop plan out of 11 audited; the 11th, cmswh2mnq006ui1jx6c606b2k, is a native 720x1280 source whose 3 clips have cropPlan null; 8 users, ru/en/ar/id). shots = the PRODUCTION cropPlan.shots as persisted, i.e. the flag-off oracle for eval-cut-recovery.ts. Sources and clips live in R2 under these keys (still present despite sourceSweptAt on 2026-08-17); director-audit-fetch.ts materialises them into outDir, which is gitignored.",
+    "outDir": ".corpus/director-audit",
+    "items": [
+        {
+            "job": "cmsrx4ob30003i1jxfle15qef",
+            "clip": "cmsrxgaiv000fuqakfviul835",
+            "sourceKey": "work/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/source.mp4",
+            "clipKey": "clips/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/ffc5a4d8-e033-479a-a3b9-854477f83c94.mp4",
+            "start": 400.5500122070312,
+            "end": 511.8,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 424,
+                    "end": 11.89,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 4,
+                    "end": 14.33,
+                    "start": 11.89,
+                    "layout": "single"
+                },
+                {
+                    "x": 608,
+                    "end": 17.05,
+                    "start": 14.33,
+                    "layout": "single"
+                },
+                {
+                    "x": 438,
+                    "end": 26.81,
+                    "start": 17.05,
+                    "layout": "single"
+                },
+                {
+                    "x": 1096,
+                    "end": 33.37,
+                    "start": 26.81,
+                    "layout": "single"
+                },
+                {
+                    "x": 600,
+                    "end": 35.65,
+                    "start": 33.37,
+                    "layout": "single"
+                },
+                {
+                    "x": 462,
+                    "end": 51.37,
+                    "start": 35.65,
+                    "layout": "single"
+                },
+                {
+                    "x": 588,
+                    "end": 53.21,
+                    "start": 51.37,
+                    "layout": "single"
+                },
+                {
+                    "x": 434,
+                    "end": 64.61,
+                    "start": 53.21,
+                    "layout": "single"
+                },
+                {
+                    "x": 0,
+                    "end": 71.81,
+                    "start": 64.61,
+                    "layout": "single"
+                },
+                {
+                    "x": 538,
+                    "end": 78.77,
+                    "start": 71.81,
+                    "layout": "single"
+                },
+                {
+                    "x": 58,
+                    "end": 86.61,
+                    "start": 78.77,
+                    "layout": "single"
+                },
+                {
+                    "x": 424,
+                    "end": 91.29,
+                    "start": 86.61,
+                    "layout": "single"
+                },
+                {
+                    "x": 0,
+                    "end": 96.97,
+                    "start": 91.29,
+                    "layout": "single"
+                },
+                {
+                    "x": 440,
+                    "end": 111.2499877929688,
+                    "start": 96.97,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsrx4ob30003i1jxfle15qef",
+            "clip": "cmsrxcgk60003uqaks7oudaon",
+            "sourceKey": "work/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/source.mp4",
+            "clipKey": "clips/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/d355716f-74c0-4574-a7e9-3cec71c6f9eb.mp4",
+            "start": 527.85,
+            "end": 623.6199951171875,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 474,
+                    "end": 14.35,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 0,
+                    "end": 15.91,
+                    "start": 14.35,
+                    "layout": "single"
+                },
+                {
+                    "x": 372,
+                    "end": 23.31,
+                    "start": 15.91,
+                    "layout": "single"
+                },
+                {
+                    "x": 0,
+                    "end": 26.63,
+                    "start": 23.31,
+                    "layout": "single"
+                },
+                {
+                    "x": 686,
+                    "end": 29.87,
+                    "start": 26.63,
+                    "layout": "single"
+                },
+                {
+                    "x": 88,
+                    "end": 32.99,
+                    "start": 29.87,
+                    "layout": "single"
+                },
+                {
+                    "x": 456,
+                    "end": 51.75,
+                    "start": 32.99,
+                    "layout": "single"
+                },
+                {
+                    "x": 80,
+                    "end": 59.63,
+                    "start": 51.75,
+                    "layout": "single"
+                },
+                {
+                    "x": 434,
+                    "end": 78.83,
+                    "start": 59.63,
+                    "layout": "single"
+                },
+                {
+                    "x": 0,
+                    "end": 84.35,
+                    "start": 78.83,
+                    "layout": "single"
+                },
+                {
+                    "x": 478,
+                    "end": 95.76999511718748,
+                    "start": 84.35,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsrx4ob30003i1jxfle15qef",
+            "clip": "cmsrxhqu0000luqaktwrpalw1",
+            "sourceKey": "work/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/source.mp4",
+            "clipKey": "clips/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/3537cf14-0c4f-414a-ba8b-a063dbeee3dc.mp4",
+            "start": 1461.78994140625,
+            "end": 1513.199951171875,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 824,
+                    "end": 4.850078,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 518,
+                    "end": 8.730078,
+                    "start": 4.850078,
+                    "layout": "single"
+                },
+                {
+                    "x": 0,
+                    "end": 18.770078,
+                    "start": 8.730078,
+                    "layout": "single"
+                },
+                {
+                    "x": 1286,
+                    "end": 25.010078,
+                    "start": 18.770078,
+                    "layout": "single"
+                },
+                {
+                    "x": 0,
+                    "end": 31.450078,
+                    "start": 25.010078,
+                    "layout": "single"
+                },
+                {
+                    "x": 1222,
+                    "end": 39.610078,
+                    "start": 31.450078,
+                    "layout": "single"
+                },
+                {
+                    "x": 776,
+                    "end": 42.690078,
+                    "start": 39.610078,
+                    "layout": "single"
+                },
+                {
+                    "x": 0,
+                    "end": 48.690078,
+                    "start": 42.690078,
+                    "layout": "single"
+                },
+                {
+                    "x": 608,
+                    "end": 51.41000976562509,
+                    "start": 48.690078,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsrx4ob30003i1jxfle15qef",
+            "clip": "cmsrxgvh2000huqakaw3sy4v2",
+            "sourceKey": "work/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/source.mp4",
+            "clipKey": "clips/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/6ee428f9-b7dd-4e20-a982-6f4e31c1534f.mp4",
+            "start": 1831.78994140625,
+            "end": 1886.069946289062,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 762,
+                    "end": 3.850078,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 12.730078,
+                    "start": 3.850078,
+                    "layout": "single"
+                },
+                {
+                    "x": 920,
+                    "end": 46.970078,
+                    "start": 12.730078,
+                    "layout": "single"
+                },
+                {
+                    "x": 452,
+                    "end": 49.130078,
+                    "start": 46.970078,
+                    "layout": "single"
+                },
+                {
+                    "x": 1274,
+                    "end": 54.28000488281214,
+                    "start": 49.130078,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsrx4ob30003i1jxfle15qef",
+            "clip": "cmsrxf9bu000duqakabbkvjqc",
+            "sourceKey": "work/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/source.mp4",
+            "clipKey": "clips/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/d0e4209e-1ae1-4e53-a242-94ca2e27bfb2.mp4",
+            "start": 2236.7900390625,
+            "end": 2265.07001953125,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 642,
+                    "end": 4.69,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 726,
+                    "end": 7.69,
+                    "start": 4.69,
+                    "layout": "single"
+                },
+                {
+                    "x": 238,
+                    "end": 15.85,
+                    "start": 7.69,
+                    "layout": "single"
+                },
+                {
+                    "x": 480,
+                    "end": 28.27998046875018,
+                    "start": 15.85,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsrx4ob30003i1jxfle15qef",
+            "clip": "cmsrxcyzg0005uqak8lbig09y",
+            "sourceKey": "work/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/source.mp4",
+            "clipKey": "clips/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/a6804693-2744-4246-adce-f33296f9b114.mp4",
+            "start": 2666.279931640625,
+            "end": 2719.929931640625,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 466,
+                    "end": 13.160078,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 2,
+                    "end": 18.320078,
+                    "start": 13.160078,
+                    "layout": "single"
+                },
+                {
+                    "x": 184,
+                    "end": 23.800078,
+                    "start": 18.320078,
+                    "layout": "single"
+                },
+                {
+                    "x": 468,
+                    "end": 39.840078,
+                    "start": 23.800078,
+                    "layout": "single"
+                },
+                {
+                    "x": 8,
+                    "end": 46.400078,
+                    "start": 39.840078,
+                    "layout": "single"
+                },
+                {
+                    "x": 456,
+                    "end": 53.65000000000009,
+                    "start": 46.400078,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsrx4ob30003i1jxfle15qef",
+            "clip": "cmsrxez4u000buqakf6xmckcj",
+            "sourceKey": "work/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/source.mp4",
+            "clipKey": "clips/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/2e0a6d78-8fc0-4df1-ad0f-3c2418cbe1db.mp4",
+            "start": 2736.900048828125,
+            "end": 2788.1701171875,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 1312,
+                    "end": 5.859922,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 456,
+                    "end": 21.939922,
+                    "start": 5.859922,
+                    "layout": "single"
+                },
+                {
+                    "x": 968,
+                    "end": 43.419922,
+                    "start": 21.939922,
+                    "layout": "single"
+                },
+                {
+                    "x": 0,
+                    "end": 51.27006835937527,
+                    "start": 43.419922,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsrx4ob30003i1jxfle15qef",
+            "clip": "cmsrxh9bh000juqakihhhkb14",
+            "sourceKey": "work/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/source.mp4",
+            "clipKey": "clips/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/2f868435-14fe-4785-a100-e2f203f6e0b5.mp4",
+            "start": 2788.4798828125,
+            "end": 2828.550048828125,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 1074,
+                    "end": 7.080156,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 460,
+                    "end": 19.680156,
+                    "start": 7.080156,
+                    "layout": "single"
+                },
+                {
+                    "x": 4,
+                    "end": 27.960156,
+                    "start": 19.680156,
+                    "layout": "single"
+                },
+                {
+                    "x": 436,
+                    "end": 33.440156,
+                    "start": 27.960156,
+                    "layout": "single"
+                },
+                {
+                    "x": 742,
+                    "end": 35.320156,
+                    "start": 33.440156,
+                    "layout": "single"
+                },
+                {
+                    "x": 6,
+                    "end": 40.07016601562509,
+                    "start": 35.320156,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsrx4ob30003i1jxfle15qef",
+            "clip": "cmsrxe8sc0009uqak8pcb7o1u",
+            "sourceKey": "work/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/source.mp4",
+            "clipKey": "clips/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/7cff29a6-c040-4fd5-91aa-109e60fdebaf.mp4",
+            "start": 2956.57998046875,
+            "end": 3002.810009765625,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 0,
+                    "end": 1.1,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 934,
+                    "end": 7.14,
+                    "start": 1.1,
+                    "layout": "single"
+                },
+                {
+                    "x": 690,
+                    "end": 9.94,
+                    "start": 7.14,
+                    "layout": "single"
+                },
+                {
+                    "x": 0,
+                    "end": 16.46,
+                    "start": 9.94,
+                    "layout": "single"
+                },
+                {
+                    "x": 836,
+                    "end": 21.5,
+                    "start": 16.46,
+                    "layout": "single"
+                },
+                {
+                    "x": 1090,
+                    "end": 33.7,
+                    "start": 21.5,
+                    "layout": "single"
+                },
+                {
+                    "x": 898,
+                    "end": 46.23002929687527,
+                    "start": 33.7,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsrx4ob30003i1jxfle15qef",
+            "clip": "cmsrxdmnb0007uqakultkpdeu",
+            "sourceKey": "work/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/source.mp4",
+            "clipKey": "clips/cmp1apxno0000eeug8to69vi0/cmsrx4ob30003i1jxfle15qef/ee70ae67-f1fd-469a-94c4-77008e294c04.mp4",
+            "start": 3027.9798828125,
+            "end": 3090.090087890625,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 834,
+                    "end": 8.420156,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 24,
+                    "end": 16.340156,
+                    "start": 8.420156,
+                    "layout": "single"
+                },
+                {
+                    "x": 884,
+                    "end": 27.260156,
+                    "start": 16.340156,
+                    "layout": "single"
+                },
+                {
+                    "x": 804,
+                    "end": 44.300156,
+                    "start": 27.260156,
+                    "layout": "single"
+                },
+                {
+                    "x": 672,
+                    "end": 46.380156,
+                    "start": 44.300156,
+                    "layout": "single"
+                },
+                {
+                    "x": 896,
+                    "end": 62.11020507812509,
+                    "start": 46.380156,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmstjdr3y000ri1jxj26494q9",
+            "clip": "cmstji9ki000vuqaksb32c2uv",
+            "sourceKey": "work/cmstjdr3g000li1jxxshr2kzf/cmstjdr3y000ri1jxj26494q9/source.mp4",
+            "clipKey": "clips/cmstjdr3g000li1jxxshr2kzf/cmstjdr3y000ri1jxj26494q9/27fee849-c724-40e4-9f7e-ba1f81e5d09c.mp4",
+            "start": 94.57000122070312,
+            "end": 118.1399963378906,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 656,
+                    "end": 23.56999511718747,
+                    "start": 0,
+                    "layout": "center"
+                }
+            ]
+        },
+        {
+            "job": "cmstjdr3y000ri1jxj26494q9",
+            "clip": "cmstjhvtz000tuqak772y8a1u",
+            "sourceKey": "work/cmstjdr3g000li1jxxshr2kzf/cmstjdr3y000ri1jxj26494q9/source.mp4",
+            "clipKey": "clips/cmstjdr3g000li1jxxshr2kzf/cmstjdr3y000ri1jxj26494q9/e49c9c20-5170-4f7d-8090-4b987979f502.mp4",
+            "start": 192.1500030517578,
+            "end": 213.4999969482422,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 656,
+                    "end": 21.34999389648439,
+                    "start": 0,
+                    "layout": "center"
+                }
+            ]
+        },
+        {
+            "job": "cmstjdr3y000ri1jxj26494q9",
+            "clip": "cmstjh79u000puqakuymepqbj",
+            "sourceKey": "work/cmstjdr3g000li1jxxshr2kzf/cmstjdr3y000ri1jxj26494q9/source.mp4",
+            "clipKey": "clips/cmstjdr3g000li1jxxshr2kzf/cmstjdr3y000ri1jxj26494q9/36df67c5-2aca-4902-81c7-a1ad89bf25ee.mp4",
+            "start": 377.9099975585938,
+            "end": 397.8199890136719,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 656,
+                    "end": 19.90999145507811,
+                    "start": 0,
+                    "layout": "center"
+                }
+            ]
+        },
+        {
+            "job": "cmstjdr3y000ri1jxj26494q9",
+            "clip": "cmstjhfj3000ruqaku8wh7jjc",
+            "sourceKey": "work/cmstjdr3g000li1jxxshr2kzf/cmstjdr3y000ri1jxj26494q9/source.mp4",
+            "clipKey": "clips/cmstjdr3g000li1jxxshr2kzf/cmstjdr3y000ri1jxj26494q9/5a8baa77-c0c3-44a5-a411-e5038aa99641.mp4",
+            "start": 640.35,
+            "end": 650.9799926757812,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 656,
+                    "end": 10.62999267578118,
+                    "start": 0,
+                    "layout": "center"
+                }
+            ]
+        },
+        {
+            "job": "cmsv093kq0025i1jxdn1up8hu",
+            "clip": "cmsv0c5hx000zuqakz1ppcl5g",
+            "sourceKey": "work/cmsv08k3r001qi1jxcivoeqd1/cmsv093kq0025i1jxdn1up8hu/source.mp4",
+            "clipKey": "clips/cmsv08k3r001qi1jxcivoeqd1/cmsv093kq0025i1jxdn1up8hu/bebea63e-fdf9-4b9b-9424-f332f6f81cd8.mp4",
+            "start": 484.4699951171875,
+            "end": 506,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 434,
+                    "end": 21.53000488281248,
+                    "start": 0,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsv0kmlk002hi1jx35h7eh1f",
+            "clip": "cmsv0ohvr0019uqakbfjtxzvv",
+            "sourceKey": "work/cmsv08k3r001qi1jxcivoeqd1/cmsv0kmlk002hi1jx35h7eh1f/source.mp4",
+            "clipKey": "clips/cmsv08k3r001qi1jxcivoeqd1/cmsv0kmlk002hi1jx35h7eh1f/8be93a9b-83fe-4692-8d51-b2a48137f9f9.mp4",
+            "start": 0,
+            "end": 29.50000076293945,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 778,
+                    "end": 5.2052,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 502,
+                    "end": 9.275933,
+                    "start": 5.2052,
+                    "layout": "single"
+                },
+                {
+                    "x": 662,
+                    "end": 13.6136,
+                    "start": 9.275933,
+                    "layout": "single"
+                },
+                {
+                    "x": 968,
+                    "end": 17.1171,
+                    "start": 13.6136,
+                    "layout": "single"
+                },
+                {
+                    "x": 634,
+                    "end": 23.289933,
+                    "start": 17.1171,
+                    "layout": "single"
+                },
+                {
+                    "x": 262,
+                    "end": 25.358667,
+                    "start": 23.289933,
+                    "layout": "single"
+                },
+                {
+                    "x": 436,
+                    "end": 27.594233,
+                    "start": 25.358667,
+                    "layout": "single"
+                },
+                {
+                    "x": 582,
+                    "end": 29.50000076293945,
+                    "start": 27.594233,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsv0kmlk002hi1jx35h7eh1f",
+            "clip": "cmsv0nz9y0017uqaka1q7us5d",
+            "sourceKey": "work/cmsv08k3r001qi1jxcivoeqd1/cmsv0kmlk002hi1jx35h7eh1f/source.mp4",
+            "clipKey": "clips/cmsv08k3r001qi1jxcivoeqd1/cmsv0kmlk002hi1jx35h7eh1f/1975975f-8331-4b32-a3cd-2bafa2cdbcb1.mp4",
+            "start": 126.2600021362305,
+            "end": 135.2400054931641,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 656,
+                    "end": 1.0672,
+                    "start": 0,
+                    "layout": "center"
+                },
+                {
+                    "x": 310,
+                    "end": 5.037833,
+                    "start": 1.0672,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 6.138933,
+                    "start": 5.037833,
+                    "layout": "center"
+                },
+                {
+                    "x": 580,
+                    "end": 7.506967,
+                    "start": 6.138933,
+                    "layout": "single"
+                },
+                {
+                    "x": 866,
+                    "end": 8.980003356933594,
+                    "start": 7.506967,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsv0kmlk002hi1jx35h7eh1f",
+            "clip": "cmsv0nbo90013uqakuqo0dbwl",
+            "sourceKey": "work/cmsv08k3r001qi1jxcivoeqd1/cmsv0kmlk002hi1jx35h7eh1f/source.mp4",
+            "clipKey": "clips/cmsv08k3r001qi1jxcivoeqd1/cmsv0kmlk002hi1jx35h7eh1f/71ca2907-3ce9-4b3b-a455-dfed7fe2366e.mp4",
+            "start": 184.9899993896484,
+            "end": 209.9600036621094,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 784,
+                    "end": 5.2,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 676,
+                    "end": 13.1079,
+                    "start": 5.2,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 14.776233,
+                    "start": 13.1079,
+                    "layout": "center"
+                },
+                {
+                    "x": 1006,
+                    "end": 18.446567,
+                    "start": 14.776233,
+                    "layout": "single"
+                },
+                {
+                    "x": 762,
+                    "end": 20.0148,
+                    "start": 18.446567,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 22.050167,
+                    "start": 20.0148,
+                    "layout": "center"
+                },
+                {
+                    "x": 678,
+                    "end": 23.551667,
+                    "start": 22.050167,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 24.97000427246098,
+                    "start": 23.551667,
+                    "layout": "center"
+                }
+            ]
+        },
+        {
+            "job": "cmsv0kmlk002hi1jx35h7eh1f",
+            "clip": "cmsv0pi3l001duqakulrros7l",
+            "sourceKey": "work/cmsv08k3r001qi1jxcivoeqd1/cmsv0kmlk002hi1jx35h7eh1f/source.mp4",
+            "clipKey": "clips/cmsv08k3r001qi1jxcivoeqd1/cmsv0kmlk002hi1jx35h7eh1f/ee093793-5ab4-41a8-b750-8c1e79e52a14.mp4",
+            "start": 640.2000122070312,
+            "end": 659.080029296875,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 176,
+                    "end": 3.8434,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 604,
+                    "end": 11.0506,
+                    "start": 3.8434,
+                    "layout": "single"
+                },
+                {
+                    "x": 950,
+                    "end": 14.587467,
+                    "start": 11.0506,
+                    "layout": "single"
+                },
+                {
+                    "x": 476,
+                    "end": 18.8800170898437,
+                    "start": 14.587467,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsv0kmlk002hi1jx35h7eh1f",
+            "clip": "cmsv0nt3l0015uqakgzr1sdpw",
+            "sourceKey": "work/cmsv08k3r001qi1jxcivoeqd1/cmsv0kmlk002hi1jx35h7eh1f/source.mp4",
+            "clipKey": "clips/cmsv08k3r001qi1jxcivoeqd1/cmsv0kmlk002hi1jx35h7eh1f/8c4450a8-d6cf-4e97-b9bd-2b738a2c2238.mp4",
+            "start": 716.0299926757813,
+            "end": 743.9199829101562,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 656,
+                    "end": 1.2866,
+                    "start": 0,
+                    "layout": "center"
+                },
+                {
+                    "x": 732,
+                    "end": 3.0884,
+                    "start": 1.2866,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 5.223867,
+                    "start": 3.0884,
+                    "layout": "center"
+                },
+                {
+                    "x": 956,
+                    "end": 6.458433,
+                    "start": 5.223867,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 7.659633,
+                    "start": 6.458433,
+                    "layout": "center"
+                },
+                {
+                    "x": 284,
+                    "end": 11.8972,
+                    "start": 7.659633,
+                    "layout": "single"
+                },
+                {
+                    "x": 668,
+                    "end": 14.466433,
+                    "start": 11.8972,
+                    "layout": "single"
+                },
+                {
+                    "x": 1012,
+                    "end": 16.234867,
+                    "start": 14.466433,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 19.237867,
+                    "start": 16.234867,
+                    "layout": "center"
+                },
+                {
+                    "x": 862,
+                    "end": 20.772733,
+                    "start": 19.237867,
+                    "layout": "single"
+                },
+                {
+                    "x": 222,
+                    "end": 23.9092,
+                    "start": 20.772733,
+                    "layout": "single"
+                },
+                {
+                    "x": 586,
+                    "end": 27.88999023437498,
+                    "start": 23.9092,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsv0kmlk002hi1jx35h7eh1f",
+            "clip": "cmsv0p7cq001buqak5ly9jtg4",
+            "sourceKey": "work/cmsv08k3r001qi1jxcivoeqd1/cmsv0kmlk002hi1jx35h7eh1f/source.mp4",
+            "clipKey": "clips/cmsv08k3r001qi1jxcivoeqd1/cmsv0kmlk002hi1jx35h7eh1f/d6abe6b5-239f-451d-81e2-d47c0b624d80.mp4",
+            "start": 824.6199951171875,
+            "end": 866.0999755859375,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 838,
+                    "end": 2.9067,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 542,
+                    "end": 4.474933,
+                    "start": 2.9067,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 6.0098,
+                    "start": 4.474933,
+                    "layout": "center"
+                },
+                {
+                    "x": 556,
+                    "end": 7.344467,
+                    "start": 6.0098,
+                    "layout": "single"
+                },
+                {
+                    "x": 428,
+                    "end": 11.281733,
+                    "start": 7.344467,
+                    "layout": "single"
+                },
+                {
+                    "x": 512,
+                    "end": 12.749867,
+                    "start": 11.281733,
+                    "layout": "single"
+                },
+                {
+                    "x": 1006,
+                    "end": 15.4192,
+                    "start": 12.749867,
+                    "layout": "single"
+                },
+                {
+                    "x": 378,
+                    "end": 24.094533,
+                    "start": 15.4192,
+                    "layout": "single"
+                },
+                {
+                    "x": 976,
+                    "end": 31.201633,
+                    "start": 24.094533,
+                    "layout": "single"
+                },
+                {
+                    "x": 1162,
+                    "end": 33.270367,
+                    "start": 31.201633,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 34.905333,
+                    "start": 33.270367,
+                    "layout": "center"
+                },
+                {
+                    "x": 1064,
+                    "end": 36.974067,
+                    "start": 34.905333,
+                    "layout": "single"
+                },
+                {
+                    "x": 738,
+                    "end": 40.077167,
+                    "start": 36.974067,
+                    "layout": "single"
+                },
+                {
+                    "x": 402,
+                    "end": 41.47998046875,
+                    "start": 40.077167,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsve8dwk0030i1jxa5l0byza",
+            "clip": "cmsvecz62001luqakdo5bkuth",
+            "sourceKey": "work/cmsve8dvz002ui1jxjv80lqzb/cmsve8dwk0030i1jxa5l0byza/source.mp4",
+            "clipKey": "clips/cmsve8dvz002ui1jxjv80lqzb/cmsve8dwk0030i1jxa5l0byza/5647dbc9-a380-48a4-aba2-94b8996df213.mp4",
+            "start": 26.71999931335449,
+            "end": 93.99999694824218,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 626,
+                    "end": 67.27999763488769,
+                    "start": 0,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsve8dwk0030i1jxa5l0byza",
+            "clip": "cmsvecb2b001juqak20lw3eu2",
+            "sourceKey": "work/cmsve8dvz002ui1jxjv80lqzb/cmsve8dwk0030i1jxa5l0byza/source.mp4",
+            "clipKey": "clips/cmsve8dvz002ui1jxjv80lqzb/cmsve8dwk0030i1jxa5l0byza/5dbed50d-feea-484d-8e6e-3c8887958508.mp4",
+            "start": 313.1299987792969,
+            "end": 377.7800109863281,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 642,
+                    "end": 64.65001220703118,
+                    "start": 0,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsve8dwk0030i1jxa5l0byza",
+            "clip": "cmsvebmwd001huqak9jprdb5e",
+            "sourceKey": "work/cmsve8dvz002ui1jxjv80lqzb/cmsve8dwk0030i1jxa5l0byza/source.mp4",
+            "clipKey": "clips/cmsve8dvz002ui1jxjv80lqzb/cmsve8dwk0030i1jxa5l0byza/ddadf1e7-7295-4398-ab0e-9e0b1aafd9ae.mp4",
+            "start": 540.069970703125,
+            "end": 597,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 652,
+                    "end": 56.93002929687498,
+                    "start": 0,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsve8dwk0030i1jxa5l0byza",
+            "clip": "cmsvedcbr001nuqak68xu9yxc",
+            "sourceKey": "work/cmsve8dvz002ui1jxjv80lqzb/cmsve8dwk0030i1jxa5l0byza/source.mp4",
+            "clipKey": "clips/cmsve8dvz002ui1jxjv80lqzb/cmsve8dwk0030i1jxa5l0byza/76c58e64-5d1e-42eb-afd0-f72ab31cd43a.mp4",
+            "start": 858.4499755859375,
+            "end": 889.7600219726562,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 634,
+                    "end": 31.31004638671868,
+                    "start": 0,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsve8dwk0030i1jxa5l0byza",
+            "clip": "cmsvedj9k001puqak0xbx4wg3",
+            "sourceKey": "work/cmsve8dvz002ui1jxjv80lqzb/cmsve8dwk0030i1jxa5l0byza/source.mp4",
+            "clipKey": "clips/cmsve8dvz002ui1jxjv80lqzb/cmsve8dwk0030i1jxa5l0byza/74308b4d-9831-4275-9915-47ad882d5f94.mp4",
+            "start": 905.630029296875,
+            "end": 923.4600219726562,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 604,
+                    "end": 17.82999267578123,
+                    "start": 0,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvegtch003li1jxf0y0ust6",
+            "clip": "cmsveol0e0025uqakwelp3u3s",
+            "sourceKey": "work/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/source.mp4",
+            "clipKey": "clips/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/d2f10912-1bed-4ecf-a739-c1d3927cebbb.mp4",
+            "start": 6.710000133514404,
+            "end": 32.43999862670898,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 656,
+                    "end": 5.260292,
+                    "start": 0,
+                    "layout": "center"
+                },
+                {
+                    "x": 832,
+                    "end": 9.723083,
+                    "start": 5.260292,
+                    "layout": "single"
+                },
+                {
+                    "x": 1312,
+                    "end": 11.725083,
+                    "start": 9.723083,
+                    "layout": "single"
+                },
+                {
+                    "x": 938,
+                    "end": 14.686375,
+                    "start": 11.725083,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 25.72999849319457,
+                    "start": 14.686375,
+                    "layout": "center"
+                }
+            ]
+        },
+        {
+            "job": "cmsvegtch003li1jxf0y0ust6",
+            "clip": "cmsveq0zl002duqakmgl8asxa",
+            "sourceKey": "work/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/source.mp4",
+            "clipKey": "clips/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/b9cb8abd-2108-4819-a361-8cb4c45b9139.mp4",
+            "start": 32.28999862670898,
+            "end": 91.78000335693359,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 1146,
+                    "end": 1.201792,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 6.290208,
+                    "start": 1.201792,
+                    "layout": "center"
+                },
+                {
+                    "x": 490,
+                    "end": 7.833417,
+                    "start": 6.290208,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 12.087667,
+                    "start": 7.833417,
+                    "layout": "center"
+                },
+                {
+                    "x": 204,
+                    "end": 14.2565,
+                    "start": 12.087667,
+                    "layout": "single"
+                },
+                {
+                    "x": 510,
+                    "end": 15.674583,
+                    "start": 14.2565,
+                    "layout": "single"
+                },
+                {
+                    "x": 1108,
+                    "end": 18.761,
+                    "start": 15.674583,
+                    "layout": "single"
+                },
+                {
+                    "x": 560,
+                    "end": 21.01325,
+                    "start": 18.761,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 24.600167,
+                    "start": 21.01325,
+                    "layout": "center"
+                },
+                {
+                    "x": 122,
+                    "end": 26.643875,
+                    "start": 24.600167,
+                    "layout": "single"
+                },
+                {
+                    "x": 364,
+                    "end": 28.604167,
+                    "start": 26.643875,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 31.815708,
+                    "start": 28.604167,
+                    "layout": "center"
+                },
+                {
+                    "x": 620,
+                    "end": 34.067958,
+                    "start": 31.815708,
+                    "layout": "single"
+                },
+                {
+                    "x": 1220,
+                    "end": 36.153375,
+                    "start": 34.067958,
+                    "layout": "single"
+                },
+                {
+                    "x": 582,
+                    "end": 38.405625,
+                    "start": 36.153375,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 44.077958,
+                    "start": 38.405625,
+                    "layout": "center"
+                },
+                {
+                    "x": 1050,
+                    "end": 45.788,
+                    "start": 44.077958,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 53.253792,
+                    "start": 45.788,
+                    "layout": "center"
+                },
+                {
+                    "x": 992,
+                    "end": 54.463333,
+                    "start": 53.253792,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 56.465333,
+                    "start": 54.463333,
+                    "layout": "center"
+                },
+                {
+                    "x": 232,
+                    "end": 57.841708,
+                    "start": 56.465333,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 59.49000473022461,
+                    "start": 57.841708,
+                    "layout": "center"
+                }
+            ]
+        },
+        {
+            "job": "cmsvegtch003li1jxf0y0ust6",
+            "clip": "cmsvemxsi001vuqakle3gne1a",
+            "sourceKey": "work/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/source.mp4",
+            "clipKey": "clips/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/361f68a5-c23c-4a96-9a36-80db6e10aab4.mp4",
+            "start": 317.5500122070312,
+            "end": 337.0200012207031,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 656,
+                    "end": 6.315208,
+                    "start": 0,
+                    "layout": "center"
+                },
+                {
+                    "x": 996,
+                    "end": 7.608167,
+                    "start": 6.315208,
+                    "layout": "single"
+                },
+                {
+                    "x": 676,
+                    "end": 11.779,
+                    "start": 7.608167,
+                    "layout": "single"
+                },
+                {
+                    "x": 442,
+                    "end": 19.46998901367186,
+                    "start": 11.779,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvegtch003li1jxf0y0ust6",
+            "clip": "cmsveqc5x002fuqakb04zs0uw",
+            "sourceKey": "work/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/source.mp4",
+            "clipKey": "clips/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/6792218d-b39b-46f2-a1a6-23abafcc2eb3.mp4",
+            "start": 629.9300170898438,
+            "end": 651.6599731445312,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 652,
+                    "end": 2.243208,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 1122,
+                    "end": 3.95325,
+                    "start": 2.243208,
+                    "layout": "single"
+                },
+                {
+                    "x": 832,
+                    "end": 5.579875,
+                    "start": 3.95325,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 12.128083,
+                    "start": 5.579875,
+                    "layout": "center"
+                },
+                {
+                    "x": 452,
+                    "end": 14.380333,
+                    "start": 12.128083,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 21.72995605468748,
+                    "start": 14.380333,
+                    "layout": "center"
+                }
+            ]
+        },
+        {
+            "job": "cmsvegtch003li1jxf0y0ust6",
+            "clip": "cmsveotjx0027uqakelggvdpd",
+            "sourceKey": "work/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/source.mp4",
+            "clipKey": "clips/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/457bc72c-8a32-4141-b5d5-3881432963f8.mp4",
+            "start": 940.9600219726562,
+            "end": 961.019970703125,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 424,
+                    "end": 2.524167,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 4.44275,
+                    "start": 2.524167,
+                    "layout": "center"
+                },
+                {
+                    "x": 824,
+                    "end": 5.735708,
+                    "start": 4.44275,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 7.278917,
+                    "start": 5.735708,
+                    "layout": "center"
+                },
+                {
+                    "x": 626,
+                    "end": 10.782417,
+                    "start": 7.278917,
+                    "layout": "single"
+                },
+                {
+                    "x": 316,
+                    "end": 13.702,
+                    "start": 10.782417,
+                    "layout": "single"
+                },
+                {
+                    "x": 502,
+                    "end": 17.706,
+                    "start": 13.702,
+                    "layout": "single"
+                },
+                {
+                    "x": 1082,
+                    "end": 20.0599487304687,
+                    "start": 17.706,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvegtch003li1jxf0y0ust6",
+            "clip": "cmsven6bv001xuqakfsqqwc9s",
+            "sourceKey": "work/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/source.mp4",
+            "clipKey": "clips/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/fa81799d-814f-4f71-bf88-4b9ca379402e.mp4",
+            "start": 1186.429956054688,
+            "end": 1207.980053710938,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 92,
+                    "end": 4.926875,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 824,
+                    "end": 21.55009765624982,
+                    "start": 4.926875,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvegtch003li1jxf0y0ust6",
+            "clip": "cmsvenmxx001zuqak8a8bffr9",
+            "sourceKey": "work/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/source.mp4",
+            "clipKey": "clips/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/7fca4e53-716a-4b95-8c1f-476b2ff13ad3.mp4",
+            "start": 1215.35,
+            "end": 1254.659985351562,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 658,
+                    "end": 3.742875,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 15.796583,
+                    "start": 3.742875,
+                    "layout": "center"
+                },
+                {
+                    "x": 958,
+                    "end": 20.926708,
+                    "start": 15.796583,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 25.3895,
+                    "start": 20.926708,
+                    "layout": "center"
+                },
+                {
+                    "x": 384,
+                    "end": 27.516625,
+                    "start": 25.3895,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 39.30998535156209,
+                    "start": 27.516625,
+                    "layout": "center"
+                }
+            ]
+        },
+        {
+            "job": "cmsvegtch003li1jxf0y0ust6",
+            "clip": "cmsvep9g1002buqak8y2zlyq1",
+            "sourceKey": "work/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/source.mp4",
+            "clipKey": "clips/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/65d23064-d634-4fbd-8301-f373ca13340f.mp4",
+            "start": 1340.030053710938,
+            "end": 1361.639965820312,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 656,
+                    "end": 6.857167,
+                    "start": 0,
+                    "layout": "center"
+                },
+                {
+                    "x": 292,
+                    "end": 8.734042,
+                    "start": 6.857167,
+                    "layout": "single"
+                },
+                {
+                    "x": 570,
+                    "end": 10.152125,
+                    "start": 8.734042,
+                    "layout": "single"
+                },
+                {
+                    "x": 838,
+                    "end": 11.820458,
+                    "start": 10.152125,
+                    "layout": "single"
+                },
+                {
+                    "x": 1146,
+                    "end": 14.573208,
+                    "start": 11.820458,
+                    "layout": "single"
+                },
+                {
+                    "x": 1026,
+                    "end": 17.075708,
+                    "start": 14.573208,
+                    "layout": "single"
+                },
+                {
+                    "x": 646,
+                    "end": 21.60991210937391,
+                    "start": 17.075708,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvegtch003li1jxf0y0ust6",
+            "clip": "cmsveo8vm0023uqak1vtjdlqa",
+            "sourceKey": "work/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/source.mp4",
+            "clipKey": "clips/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/26a8f84a-f7b0-4896-818b-999bd4de7074.mp4",
+            "start": 1377.669946289062,
+            "end": 1403.3,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 760,
+                    "end": 2.166833,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 4.210542,
+                    "start": 2.166833,
+                    "layout": "center"
+                },
+                {
+                    "x": 1118,
+                    "end": 8.715042,
+                    "start": 4.210542,
+                    "layout": "single"
+                },
+                {
+                    "x": 422,
+                    "end": 11.175833,
+                    "start": 8.715042,
+                    "layout": "single"
+                },
+                {
+                    "x": 44,
+                    "end": 12.844167,
+                    "start": 11.175833,
+                    "layout": "single"
+                },
+                {
+                    "x": 274,
+                    "end": 14.595917,
+                    "start": 12.844167,
+                    "layout": "single"
+                },
+                {
+                    "x": 488,
+                    "end": 22.5205,
+                    "start": 14.595917,
+                    "layout": "single"
+                },
+                {
+                    "x": 692,
+                    "end": 25.630053710938,
+                    "start": 22.5205,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvegtch003li1jxf0y0ust6",
+            "clip": "cmsvenwtu0021uqak4bdjmmf7",
+            "sourceKey": "work/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/source.mp4",
+            "clipKey": "clips/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/b95eb276-5886-4052-a13a-aa40cea83432.mp4",
+            "start": 1831.630029296875,
+            "end": 1862.480053710938,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 656,
+                    "end": 2.619042,
+                    "start": 0,
+                    "layout": "center"
+                },
+                {
+                    "x": 336,
+                    "end": 4.203958,
+                    "start": 2.619042,
+                    "layout": "single"
+                },
+                {
+                    "x": 726,
+                    "end": 16.4245,
+                    "start": 4.203958,
+                    "layout": "single"
+                },
+                {
+                    "x": 976,
+                    "end": 18.009417,
+                    "start": 16.4245,
+                    "layout": "single"
+                },
+                {
+                    "x": 494,
+                    "end": 26.601333,
+                    "start": 18.009417,
+                    "layout": "single"
+                },
+                {
+                    "x": 868,
+                    "end": 30.850024414063,
+                    "start": 26.601333,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvegtch003li1jxf0y0ust6",
+            "clip": "cmsvemq40001tuqakfai0s7ex",
+            "sourceKey": "work/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/source.mp4",
+            "clipKey": "clips/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/78637a3d-464a-4667-81ac-9f77c2c1a566.mp4",
+            "start": 2201.269921875,
+            "end": 2248.459912109375,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 656,
+                    "end": 6.393875,
+                    "start": 0,
+                    "layout": "center"
+                },
+                {
+                    "x": 426,
+                    "end": 10.147625,
+                    "start": 6.393875,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 13.442583,
+                    "start": 10.147625,
+                    "layout": "center"
+                },
+                {
+                    "x": 506,
+                    "end": 14.485292,
+                    "start": 13.442583,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 18.239042,
+                    "start": 14.485292,
+                    "layout": "center"
+                },
+                {
+                    "x": 636,
+                    "end": 20.449583,
+                    "start": 18.239042,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 21.659125,
+                    "start": 20.449583,
+                    "layout": "center"
+                },
+                {
+                    "x": 22,
+                    "end": 22.910375,
+                    "start": 21.659125,
+                    "layout": "single"
+                },
+                {
+                    "x": 786,
+                    "end": 24.745542,
+                    "start": 22.910375,
+                    "layout": "single"
+                },
+                {
+                    "x": 386,
+                    "end": 25.746542,
+                    "start": 24.745542,
+                    "layout": "single"
+                },
+                {
+                    "x": 258,
+                    "end": 27.998792,
+                    "start": 25.746542,
+                    "layout": "single"
+                },
+                {
+                    "x": 842,
+                    "end": 30.0425,
+                    "start": 27.998792,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 44.848958,
+                    "start": 30.0425,
+                    "layout": "center"
+                },
+                {
+                    "x": 528,
+                    "end": 47.18999023437527,
+                    "start": 44.848958,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvegtch003li1jxf0y0ust6",
+            "clip": "cmsvep0qa0029uqakmuliwu3b",
+            "sourceKey": "work/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/source.mp4",
+            "clipKey": "clips/cmsve8dvz002ui1jxjv80lqzb/cmsvegtch003li1jxf0y0ust6/59b1dd77-4b07-455b-beed-7324a6505e2b.mp4",
+            "start": 2430.089990234375,
+            "end": 2446.760009765625,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 766,
+                    "end": 2.256583,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 5.468125,
+                    "start": 2.256583,
+                    "layout": "center"
+                },
+                {
+                    "x": 188,
+                    "end": 8.679667,
+                    "start": 5.468125,
+                    "layout": "single"
+                },
+                {
+                    "x": 476,
+                    "end": 11.932917,
+                    "start": 8.679667,
+                    "layout": "single"
+                },
+                {
+                    "x": 0,
+                    "end": 16.67001953125009,
+                    "start": 11.932917,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvo8jfo004bi1jxqp0pp4x3",
+            "clip": "cmsvoe13k002juqak93yruue0",
+            "sourceKey": "work/cmsvo8jf40045i1jxi6pt9jti/cmsvo8jfo004bi1jxqp0pp4x3/source.mp4",
+            "clipKey": "clips/cmsvo8jf40045i1jxi6pt9jti/cmsvo8jfo004bi1jxqp0pp4x3/6e55c57f-5faa-4c6f-89cf-ce0216bc1469.mp4",
+            "start": 0,
+            "end": 90.13999938964844,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 606,
+                    "end": 1.6,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 9.25,
+                    "start": 1.6,
+                    "layout": "center"
+                },
+                {
+                    "x": 660,
+                    "end": 12.4,
+                    "start": 9.25,
+                    "layout": "single"
+                },
+                {
+                    "x": 94,
+                    "end": 14.933333,
+                    "start": 12.4,
+                    "layout": "single"
+                },
+                {
+                    "x": 684,
+                    "end": 21.483333,
+                    "start": 14.933333,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 22.766667,
+                    "start": 21.483333,
+                    "layout": "center"
+                },
+                {
+                    "x": 672,
+                    "end": 25.533333,
+                    "start": 22.766667,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 27.2,
+                    "start": 25.533333,
+                    "layout": "center"
+                },
+                {
+                    "x": 656,
+                    "end": 29.4,
+                    "start": 27.2,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 31.65,
+                    "start": 29.4,
+                    "layout": "center"
+                },
+                {
+                    "x": 688,
+                    "end": 37.4,
+                    "start": 31.65,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 40.65,
+                    "start": 37.4,
+                    "layout": "center"
+                },
+                {
+                    "x": 692,
+                    "end": 48.933333,
+                    "start": 40.65,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 51.733333,
+                    "start": 48.933333,
+                    "layout": "center"
+                },
+                {
+                    "x": 680,
+                    "end": 55.65,
+                    "start": 51.733333,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 57.733333,
+                    "start": 55.65,
+                    "layout": "center"
+                },
+                {
+                    "x": 656,
+                    "end": 67,
+                    "start": 57.733333,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 68.133333,
+                    "start": 67,
+                    "layout": "center"
+                },
+                {
+                    "x": 328,
+                    "end": 78.333333,
+                    "start": 68.133333,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 90.13999938964844,
+                    "start": 78.333333,
+                    "layout": "center"
+                }
+            ]
+        },
+        {
+            "job": "cmsvo8jfo004bi1jxqp0pp4x3",
+            "clip": "cmsvohp6g002tuqak5i89r43b",
+            "sourceKey": "work/cmsvo8jf40045i1jxi6pt9jti/cmsvo8jfo004bi1jxqp0pp4x3/source.mp4",
+            "clipKey": "clips/cmsvo8jf40045i1jxi6pt9jti/cmsvo8jfo004bi1jxqp0pp4x3/b7a12617-617a-46e3-80fc-347132432483.mp4",
+            "start": 197.4799957275391,
+            "end": 223.4799957275391,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 656,
+                    "end": 6.75332,
+                    "start": 0,
+                    "layout": "center"
+                },
+                {
+                    "x": 648,
+                    "end": 11.436654,
+                    "start": 6.75332,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 12.519987,
+                    "start": 11.436654,
+                    "layout": "center"
+                },
+                {
+                    "x": 728,
+                    "end": 26,
+                    "start": 12.519987,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvo8jfo004bi1jxqp0pp4x3",
+            "clip": "cmsvoim2a002vuqakweu6bgct",
+            "sourceKey": "work/cmsvo8jf40045i1jxi6pt9jti/cmsvo8jfo004bi1jxqp0pp4x3/source.mp4",
+            "clipKey": "clips/cmsvo8jf40045i1jxi6pt9jti/cmsvo8jfo004bi1jxqp0pp4x3/de7a0c3c-4c00-4dff-b112-e0f760fd0279.mp4",
+            "start": 434.2000122070312,
+            "end": 483.9800109863281,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 656,
+                    "end": 1.233333,
+                    "start": 0,
+                    "layout": "center"
+                },
+                {
+                    "x": 758,
+                    "end": 6.633333,
+                    "start": 1.233333,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 9.35,
+                    "start": 6.633333,
+                    "layout": "center"
+                },
+                {
+                    "x": 1180,
+                    "end": 10.35,
+                    "start": 9.35,
+                    "layout": "single"
+                },
+                {
+                    "x": 686,
+                    "end": 29,
+                    "start": 10.35,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 30.266667,
+                    "start": 29,
+                    "layout": "center"
+                },
+                {
+                    "x": 670,
+                    "end": 49.77999877929693,
+                    "start": 30.266667,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvo8jfo004bi1jxqp0pp4x3",
+            "clip": "cmsvogtbs002puqakhvzi7etf",
+            "sourceKey": "work/cmsvo8jf40045i1jxi6pt9jti/cmsvo8jfo004bi1jxqp0pp4x3/source.mp4",
+            "clipKey": "clips/cmsvo8jf40045i1jxi6pt9jti/cmsvo8jfo004bi1jxqp0pp4x3/9f8d1485-8d8d-4d86-b339-eb387f676746.mp4",
+            "start": 550.9600219726562,
+            "end": 592.6799926757812,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 656,
+                    "end": 2.573307,
+                    "start": 0,
+                    "layout": "center"
+                },
+                {
+                    "x": 646,
+                    "end": 15.523307,
+                    "start": 2.573307,
+                    "layout": "single"
+                },
+                {
+                    "x": 806,
+                    "end": 41.719970703125,
+                    "start": 15.523307,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvo8jfo004bi1jxqp0pp4x3",
+            "clip": "cmsvoh6r5002ruqakidadq8fs",
+            "sourceKey": "work/cmsvo8jf40045i1jxi6pt9jti/cmsvo8jfo004bi1jxqp0pp4x3/source.mp4",
+            "clipKey": "clips/cmsvo8jf40045i1jxi6pt9jti/cmsvo8jfo004bi1jxqp0pp4x3/dfe11742-6b70-48fd-9d40-0d1442665d79.mp4",
+            "start": 601.2000122070312,
+            "end": 620.3800048828125,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 656,
+                    "end": 2.133333,
+                    "start": 0,
+                    "layout": "center"
+                },
+                {
+                    "x": 678,
+                    "end": 19.17999267578125,
+                    "start": 2.133333,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvo8jfo004bi1jxqp0pp4x3",
+            "clip": "cmsvoekhv002luqak4vvumtm9",
+            "sourceKey": "work/cmsvo8jf40045i1jxi6pt9jti/cmsvo8jfo004bi1jxqp0pp4x3/source.mp4",
+            "clipKey": "clips/cmsvo8jf40045i1jxi6pt9jti/cmsvo8jfo004bi1jxqp0pp4x3/f22e9b65-c25b-4758-872c-529b079f54da.mp4",
+            "start": 661.6599731445312,
+            "end": 690.780029296875,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 1204,
+                    "end": 1.840039,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 4.156706,
+                    "start": 1.840039,
+                    "layout": "center"
+                },
+                {
+                    "x": 690,
+                    "end": 29.12005615234375,
+                    "start": 4.156706,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvo8jfo004bi1jxqp0pp4x3",
+            "clip": "cmsvog22b002nuqakcwe2kace",
+            "sourceKey": "work/cmsvo8jf40045i1jxi6pt9jti/cmsvo8jfo004bi1jxqp0pp4x3/source.mp4",
+            "clipKey": "clips/cmsvo8jf40045i1jxi6pt9jti/cmsvo8jfo004bi1jxqp0pp4x3/bdce087e-2931-4bfb-8e00-8fcdc379e966.mp4",
+            "start": 695.7999877929688,
+            "end": 779.02001953125,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 656,
+                    "end": 2.05,
+                    "start": 0,
+                    "layout": "center"
+                },
+                {
+                    "x": 668,
+                    "end": 4.566667,
+                    "start": 2.05,
+                    "layout": "single"
+                },
+                {
+                    "x": 138,
+                    "end": 6.05,
+                    "start": 4.566667,
+                    "layout": "single"
+                },
+                {
+                    "x": 670,
+                    "end": 17.966667,
+                    "start": 6.05,
+                    "layout": "single"
+                },
+                {
+                    "x": 264,
+                    "end": 22.133333,
+                    "start": 17.966667,
+                    "layout": "single"
+                },
+                {
+                    "x": 684,
+                    "end": 81.933333,
+                    "start": 22.133333,
+                    "layout": "single"
+                },
+                {
+                    "x": 802,
+                    "end": 83.22003173828125,
+                    "start": 81.933333,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvo8jfo004bi1jxqp0pp4x3",
+            "clip": "cmsvojomj002xuqak677jlrry",
+            "sourceKey": "work/cmsvo8jf40045i1jxi6pt9jti/cmsvo8jfo004bi1jxqp0pp4x3/source.mp4",
+            "clipKey": "clips/cmsvo8jf40045i1jxi6pt9jti/cmsvo8jfo004bi1jxqp0pp4x3/5a2a8d0c-8060-4cf4-b21f-4466bf95787d.mp4",
+            "start": 1148.3099609375,
+            "end": 1207.800048828125,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 656,
+                    "end": 4.606706,
+                    "start": 0,
+                    "layout": "center"
+                },
+                {
+                    "x": 722,
+                    "end": 20.523372,
+                    "start": 4.606706,
+                    "layout": "single"
+                },
+                {
+                    "x": 1312,
+                    "end": 22.756706,
+                    "start": 20.523372,
+                    "layout": "single"
+                },
+                {
+                    "x": 704,
+                    "end": 59.49008789062509,
+                    "start": 22.756706,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvv44iz005di1jxu4n6eodg",
+            "clip": "cmsvv64y20035uqakw3p21ozd",
+            "sourceKey": "work/cmsvv44ic0057i1jxtq7yibgy/cmsvv44iz005di1jxu4n6eodg/source.mp4",
+            "clipKey": "clips/cmsvv44ic0057i1jxtq7yibgy/cmsvv44iz005di1jxu4n6eodg/bbc2a0a2-4d68-40e8-98a8-7a74b37a955b.mp4",
+            "start": 0,
+            "end": 16.3,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 284,
+                    "end": 1.68,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 884,
+                    "end": 3.44,
+                    "start": 1.68,
+                    "layout": "single"
+                },
+                {
+                    "x": 0,
+                    "end": 5.04,
+                    "start": 3.44,
+                    "layout": "single"
+                },
+                {
+                    "x": 810,
+                    "end": 6.52,
+                    "start": 5.04,
+                    "layout": "single"
+                },
+                {
+                    "x": 396,
+                    "end": 8.08,
+                    "start": 6.52,
+                    "layout": "single"
+                },
+                {
+                    "x": 986,
+                    "end": 9.92,
+                    "start": 8.08,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 11.48,
+                    "start": 9.92,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 13,
+                    "start": 11.48,
+                    "layout": "center"
+                },
+                {
+                    "x": 634,
+                    "end": 14.52,
+                    "start": 13,
+                    "layout": "single"
+                },
+                {
+                    "x": 6,
+                    "end": 16.3,
+                    "start": 14.52,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvv44iz005di1jxu4n6eodg",
+            "clip": "cmsvv5pbp0031uqak9i2w78xq",
+            "sourceKey": "work/cmsvv44ic0057i1jxtq7yibgy/cmsvv44iz005di1jxu4n6eodg/source.mp4",
+            "clipKey": "clips/cmsvv44ic0057i1jxtq7yibgy/cmsvv44iz005di1jxu4n6eodg/a400b8db-9f6e-44dc-a268-23bcda7e540d.mp4",
+            "start": 33.98999938964844,
+            "end": 45.07999877929688,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 530,
+                    "end": 2.45,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 822,
+                    "end": 3.61,
+                    "start": 2.45,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 5.65,
+                    "start": 3.61,
+                    "layout": "center"
+                },
+                {
+                    "x": 774,
+                    "end": 6.77,
+                    "start": 5.65,
+                    "layout": "single"
+                },
+                {
+                    "x": 660,
+                    "end": 7.89,
+                    "start": 6.77,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 9.41,
+                    "start": 7.89,
+                    "layout": "center"
+                },
+                {
+                    "x": 492,
+                    "end": 11.08999938964844,
+                    "start": 9.41,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmsvv44iz005di1jxu4n6eodg",
+            "clip": "cmsvv5xc90033uqakiiyfaafw",
+            "sourceKey": "work/cmsvv44ic0057i1jxtq7yibgy/cmsvv44iz005di1jxu4n6eodg/source.mp4",
+            "clipKey": "clips/cmsvv44ic0057i1jxtq7yibgy/cmsvv44iz005di1jxu4n6eodg/fab3ae8b-0322-4eb9-9d5a-15bae6b6a641.mp4",
+            "start": 328.3900085449219,
+            "end": 345.560009765625,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 606,
+                    "end": 1.57,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 784,
+                    "end": 3.09,
+                    "start": 1.57,
+                    "layout": "single"
+                },
+                {
+                    "x": 1312,
+                    "end": 4.69,
+                    "start": 3.09,
+                    "layout": "single"
+                },
+                {
+                    "x": 454,
+                    "end": 7.17,
+                    "start": 4.69,
+                    "layout": "single"
+                },
+                {
+                    "x": 672,
+                    "end": 8.85,
+                    "start": 7.17,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 10.85,
+                    "start": 8.85,
+                    "layout": "center"
+                },
+                {
+                    "x": 734,
+                    "end": 12.17,
+                    "start": 10.85,
+                    "layout": "single"
+                },
+                {
+                    "x": 528,
+                    "end": 13.41,
+                    "start": 12.17,
+                    "layout": "single"
+                },
+                {
+                    "x": 656,
+                    "end": 15.29,
+                    "start": 13.41,
+                    "layout": "center"
+                },
+                {
+                    "x": 408,
+                    "end": 17.17000122070311,
+                    "start": 15.29,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmswcjq1h006mi1jxxg6z7h7r",
+            "clip": "cmswcm0da0039uqak15lotuvm",
+            "sourceKey": "work/cmsvo8jf40045i1jxi6pt9jti/cmswcjq1h006mi1jxxg6z7h7r/source.mp4",
+            "clipKey": "clips/cmsvo8jf40045i1jxi6pt9jti/cmswcjq1h006mi1jxxg6z7h7r/00d9065a-c80b-4536-952e-e99d8836e587.mp4",
+            "start": 120.4499984741211,
+            "end": 138.5399932861328,
+            "source": {
+                "width": 1920,
+                "height": 1080
+            },
+            "shots": [
+                {
+                    "x": 740,
+                    "end": 18.08999481201171,
+                    "start": 0,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmswiirz30072i1jxmgv89du9",
+            "clip": "cmswil8ha003luqakze5lhnkv",
+            "sourceKey": "work/cmsvo8jf40045i1jxi6pt9jti/cmswiirz30072i1jxmgv89du9/source.mp4",
+            "clipKey": "clips/cmsvo8jf40045i1jxi6pt9jti/cmswiirz30072i1jxmgv89du9/44b3f9f4-6044-4470-9c21-bb4009b0eac2.mp4",
+            "start": 0,
+            "end": 9.220000267028809,
+            "source": {
+                "width": 1280,
+                "height": 720
+            },
+            "shots": [
+                {
+                    "x": 410,
+                    "end": 9.220000267028809,
+                    "start": 0,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmswiirz30072i1jxmgv89du9",
+            "clip": "cmswim74e003nuqakj4j50wjl",
+            "sourceKey": "work/cmsvo8jf40045i1jxi6pt9jti/cmswiirz30072i1jxmgv89du9/source.mp4",
+            "clipKey": "clips/cmsvo8jf40045i1jxi6pt9jti/cmswiirz30072i1jxmgv89du9/331c1eba-9fc0-4017-834c-27b900fd5c78.mp4",
+            "start": 581.260009765625,
+            "end": 670.5999755859375,
+            "source": {
+                "width": 1280,
+                "height": 720
+            },
+            "shots": [
+                {
+                    "x": 382,
+                    "end": 68.106641,
+                    "start": 0,
+                    "layout": "single"
+                },
+                {
+                    "x": 438,
+                    "end": 70.773307,
+                    "start": 68.106641,
+                    "layout": "center"
+                },
+                {
+                    "x": 388,
+                    "end": 89.3399658203125,
+                    "start": 70.773307,
+                    "layout": "single"
+                }
+            ]
+        },
+        {
+            "job": "cmswiirz30072i1jxmgv89du9",
+            "clip": "cmswimexy003puqakiwznvbtw",
+            "sourceKey": "work/cmsvo8jf40045i1jxi6pt9jti/cmswiirz30072i1jxmgv89du9/source.mp4",
+            "clipKey": "clips/cmsvo8jf40045i1jxi6pt9jti/cmswiirz30072i1jxmgv89du9/712a9a87-ff0a-4235-a86a-c3d98431acb0.mp4",
+            "start": 703.2999877929688,
+            "end": 722.739990234375,
+            "source": {
+                "width": 1280,
+                "height": 720
+            },
+            "shots": [
+                {
+                    "x": 438,
+                    "end": 3.1,
+                    "start": 0,
+                    "layout": "center"
+                },
+                {
+                    "x": 408,
+                    "end": 19.44000244140625,
+                    "start": 3.1,
+                    "layout": "single"
+                }
+            ]
+        }
+    ]
+}
