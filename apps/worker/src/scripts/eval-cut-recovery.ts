@@ -20,8 +20,12 @@
  * The numeric results are written to summary.json (summary-only.json under
  * --only) right after the analysis loop, before any sheet is drawn - a sheet
  * failure is caught and recorded per clip (ClipReport.sheetErrors) rather
- * than aborting the run and losing everything already computed. Exits 1 if
- * the OFF invariant failed anywhere or any clip fell back.
+ * than aborting the run and losing everything already computed. The same
+ * file is re-written once all sheets are done so `sheets`/`sheetErrors` land
+ * on disk too; that second write is itself best-effort; a failure there is
+ * logged, not fatal - the first write already made the numbers safe. Exits 1
+ * if the OFF invariant failed anywhere, any clip fell back, or the ON==OFF
+ * check failed on a clip with nothing confirmed.
  * Reads only the committed manifest and local corpus files; writes only
  * under .corpus/director-audit/eval-cut-recovery/.
  */
@@ -341,8 +345,8 @@ async function main() {
   // runs get their own filename so a partial re-run never clobbers the full
   // corpus record.
   const header = {
-    generatedAtNote: "stamp after run",
-    gitSha: await gitSha(),
+    generatedAt: new Date().toISOString(),
+    gitSha: process.env.GIT_SHA ?? (await gitSha()),
     cfg: {
       sceneThreshold: cfg.sceneThreshold,
       minShotSec: cfg.minShotSec,
@@ -431,6 +435,15 @@ async function main() {
     }
   }
 
+  // Re-write now that sheets/sheetErrors are populated. The earlier write
+  // already made every number safe on disk, so a failure here is logged, not
+  // fatal - it only costs the sheet paths, never the analysis.
+  try {
+    await writeFile(summaryPath, JSON.stringify({ header, reports }, null, 1));
+  } catch (e) {
+    console.error(`failed to re-write ${summaryPath} with sheet data:`, e);
+  }
+
   const ok = reports.filter((r) => r.offInvariant === true).length;
   const total = reports.length;
   const diffSec = reports.reduce((a, r) => a + r.diffSec, 0);
@@ -458,7 +471,13 @@ async function main() {
   console.log(`sheet errors: ${sheetErrorsTotal}${sheetErrorsTotal ? " (see per-clip sheetErrors in the report)" : ""}`);
   console.log(`summary written to ${summaryPath}`);
 
-  if (ok !== total || reports.some((r) => r.fallback)) process.exitCode = 1;
+  if (
+    ok !== total ||
+    reports.some((r) => r.fallback) ||
+    reports.some((r) => r.onEqualsOffWhenNothingConfirmed === false)
+  ) {
+    process.exitCode = 1;
+  }
 }
 
 main().catch((e) => {
