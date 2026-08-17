@@ -126,7 +126,11 @@ when all three hold:
 3. **Duration floor.** Each resulting sub-shot is at least `minShotSec` (1.0s); a shorter
    segment is not created - the candidate is dropped, exactly as `cutsToShots` drops a cut that
    would make a short segment (this is what kills the 0.5s lamp shot). Confirmations stop when
-   the plan would exceed `MAX_PLAN_SHOTS` (90); the remainder is counted as `capHit`.
+   `shots.length + confirmed` would exceed `MAX_PLAN_SHOTS` (90, exported from `plan.ts`); the
+   remainder is counted as `capHit`. The cap is on the PRE-merge count, deliberately:
+   `buildCropPlan` returns `null` above 90 merged shots (`plan.ts:747`), which is a whole-clip
+   fallback to the legacy centre crop - a recovery that could trip it would turn a 2s defect
+   into a 60s one. Pre-merge count is an upper bound of the merged count, so the guard is safe.
 
 Confirmed candidates split the shot into sub-shots `[start, t1), [t1, t2), ... [tk, end)`. Each
 sub-shot's `ShotTracks` is derived from the parent's tracks by `path`: for every parent track,
