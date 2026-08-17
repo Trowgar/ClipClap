@@ -225,6 +225,14 @@ describe("sliceTracks", () => {
     const tail = sliceTracks([tr], 9.5, 10, true);
     expect(tail).toHaveLength(1);
     expect(tail[0].samples).toBe(1);
+
+    // The sidecar can file a sample past the nominal shot end (10.4 in a shot
+    // ending at 10). Only the final sub-shot's flag lets it through.
+    const past = { ...track(1, 0, 10, 100) };
+    past.path = [...past.path!, { t: 10.4, x: 100, y: 100, w: 200, h: 200 }];
+    past.samples = past.path.length;
+    expect(sliceTracks([past], 9.5, 10, true)[0].samples).toBe(2);
+    expect(sliceTracks([past], 9.5, 10, false)[0].samples).toBe(1);
   });
 
   it("takes a per-coordinate median of the sub-range samples", () => {

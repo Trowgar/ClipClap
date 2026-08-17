@@ -125,7 +125,7 @@ export function sliceTracks(
   const out: FaceTrack[] = [];
   for (const tr of tracks) {
     const samples = (tr.path ?? []).filter(
-      (p) => p.t >= from && (inclusiveEnd ? p.t <= to : p.t < to)
+      (p) => p.t >= from && (inclusiveEnd || p.t < to)
     );
     if (samples.length === 0) continue;
     out.push({
