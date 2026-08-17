@@ -10,8 +10,11 @@
  * are not: .corpus/ is gitignored and outside the Job table, so the retention
  * sweep cannot reach it - the same reason corpus-fetch.ts exists.
  */
-import { mkdir, readFile, stat, writeFile } from "fs/promises";
+import { createWriteStream } from "fs";
+import { mkdir, readFile, stat } from "fs/promises";
 import { join } from "path";
+import { pipeline } from "stream/promises";
+import { Readable } from "stream";
 import { downloadFile } from "@clipclap/shared";
 import { reframeAssetsDir } from "../reframe/faces";
 
@@ -42,7 +45,11 @@ export function workerRoot(): string {
 }
 
 export async function loadManifest(): Promise<DirectorAuditManifest> {
-  return JSON.parse(await readFile(manifestPath(), "utf-8")) as DirectorAuditManifest;
+  const m = JSON.parse(await readFile(manifestPath(), "utf-8"));
+  if (!Array.isArray(m.items) || typeof m.outDir !== "string") {
+    throw new Error("director-audit.json: malformed manifest");
+  }
+  return m as DirectorAuditManifest;
 }
 
 async function present(path: string): Promise<boolean> {
@@ -56,9 +63,9 @@ async function present(path: string): Promise<boolean> {
 async function save(key: string, out: string): Promise<string> {
   if (await present(out)) return "cached";
   const stream = await downloadFile(key);
-  const buf = Buffer.from(await new Response(stream).arrayBuffer());
-  await writeFile(out, buf);
-  return `${buf.length} bytes`;
+  await pipeline(Readable.fromWeb(stream as any), createWriteStream(out));
+  const { size } = await stat(out);
+  return `fetched (${size} bytes)`;
 }
 
 async function main() {
@@ -66,25 +73,41 @@ async function main() {
   const manifest = await loadManifest();
   const dir = join(workerRoot(), manifest.outDir);
   await mkdir(join(dir, "sources"), { recursive: true });
-  await mkdir(join(dir, "clips"), { recursive: true });
+  if (withClips) await mkdir(join(dir, "clips"), { recursive: true });
+
+  let fetched = 0;
+  let cached = 0;
+  let failed = 0;
+
   const seenJobs = new Set<string>();
   for (const item of manifest.items) {
     if (!seenJobs.has(item.job)) {
       seenJobs.add(item.job);
       try {
-        console.log("source", item.job, await save(item.sourceKey, join(dir, "sources", `${item.job}.mp4`)));
+        const result = await save(item.sourceKey, join(dir, "sources", `${item.job}.mp4`));
+        console.log("source", item.job, result);
+        if (result === "cached") cached += 1;
+        else fetched += 1;
       } catch (e) {
-        console.log("source", item.job, "ERR", (e as Error).name ?? e);
+        console.log("source", item.job, "ERR", (e as Error).message ?? String(e));
+        failed += 1;
       }
     }
     if (withClips) {
       try {
-        console.log("clip", item.clip, await save(item.clipKey, join(dir, "clips", `${item.clip}.mp4`)));
+        const result = await save(item.clipKey, join(dir, "clips", `${item.clip}.mp4`));
+        console.log("clip", item.clip, result);
+        if (result === "cached") cached += 1;
+        else fetched += 1;
       } catch (e) {
-        console.log("clip", item.clip, "ERR", (e as Error).name ?? e);
+        console.log("clip", item.clip, "ERR", (e as Error).message ?? String(e));
+        failed += 1;
       }
     }
   }
+
+  console.log(`done: ${fetched} fetched, ${cached} cached, ${failed} failed`);
+  if (failed > 0) process.exitCode = 1;
 }
 
 // Same guard as corpus-fetch.ts: eval-cut-recovery.ts imports the helpers
