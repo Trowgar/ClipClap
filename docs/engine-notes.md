@@ -2258,8 +2258,9 @@ re-materialised from R2 by `scripts/director-audit-fetch.ts`).
 
 **The defect, on real users' clips.** scdet at 0.3 under-scores real camera cuts in dark studios and dim film
 scenes; one detector shot then holds two framings and the median-box window is a compromise between angles
-that never coexist. On the corpus: 212 scene changes in the 0.15-0.30 band that were not plan boundaries
-(37 of 53 clips); the Alipov podcast cuts at 18.27s (0.292) and 20.71s (0.298) inside clip `527.85` gave 2.4s
+that never coexist. On the corpus (the audit's own scene scan, `scenes/*.txt`, counting band frames that were
+not PLAN boundaries - a narrower definition than the eval's 286 candidates strictly inside DETECTOR shots,
+since the plan merges detector shots): 212 scene changes in the 0.15-0.30 band (37 of 53 clips); the Alipov podcast cuts at 18.27s (0.292) and 20.71s (0.298) inside clip `527.85` gave 2.4s
 of a cup and a microphone with the speaker out of frame; La Brea's Veronica clip (`cmsven6bv`, 1186.4s) had
 ~9 of 21.5s on half a face and then the back of a head while Lily's confession plays. A global threshold turn
 is not the fix: re-planning at 0.2 moved the window on 49.5s / 12 clips but also produced a 0.5s lamp shot
@@ -2280,7 +2281,7 @@ fallback, so the cap is on the count that bounds it). Sub-shot tracks are rebuil
 is resolved on the DETECTOR shots, before recovery, so repeated sub-shot rects cannot swing the majority
 vote. Nothing confirmed = the same input arrays by reference.
 
-**Measured (eval run at commit 68426a4, re-run byte-identical at 954dc2c; `summary.json` in `.corpus/director-audit/eval-cut-recovery/`).**
+**Measured (`summary.json` in `.corpus/director-audit/eval-cut-recovery/`, gitignored - the evidence lives on this host; produced by the 954dc2c eval code on the 68426a4 tree it stamps as `gitSha`, numbers byte-identical across both runs).**
 
 | | |
 |---|---|
