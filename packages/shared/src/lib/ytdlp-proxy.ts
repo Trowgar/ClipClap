@@ -52,6 +52,22 @@ export function isBotCheckFailure(text: string | undefined | null): boolean {
   return /confirm\s+you.{0,3}re\s+not\s+a\s+bot/i.test(text);
 }
 
+/** A bare `HTTP Error 403: Forbidden` from yt-dlp - NOT the bot check.
+ *
+ *  These are transient. worker-download logged nine of them on 2026-08-14..16
+ *  ("unable to download video data: HTTP Error 403"), and every one cleared on
+ *  the next BullMQ attempt seconds later; a bot user who got one at the probe
+ *  resent the same link 25s later and it went through. So the right response
+ *  is one plain retry after a short pause - and NEVER a rotation: rotation
+ *  drops every connection through the shared exit, and treating a
+ *  self-clearing 403 as a blocked exit would turn a routine hiccup into a
+ *  proxy-wide outage several times a day. Kept apart from the bot check for
+ *  exactly that reason: the two failures want opposite repairs. */
+export function isTransient403(text: string | undefined | null): boolean {
+  if (!text) return false;
+  return /HTTP Error 403/i.test(text) && !isBotCheckFailure(text);
+}
+
 export interface RotateOutcome {
   /** True only when the exit address actually MOVED. A rotation that returned
    *  the same address must not be reported as success: the caller would retry
@@ -59,7 +75,11 @@ export interface RotateOutcome {
   rotated: boolean;
   ip?: string | null;
   previousIp?: string | null;
+  /** "cooldown" | "pinned" | "escalation-no-move" | "egress-unreadable" from
+   *  the control server, or a transport reason set here. Absent on success. */
   reason?: string;
+  /** The control server went as far as a fresh registration. */
+  escalated?: boolean;
 }
 
 /** Ask WARP for a new exit address.

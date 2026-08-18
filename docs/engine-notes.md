@@ -2389,6 +2389,29 @@ touch it.
 - **Heavy testing burns the exit.** A few dozen probes in a row earned an `HTTP Error 429` and then the bot
   check on that address. Measure sparingly, and read a sudden "0 formats" as a rate limit before believing
   it is a regression.
+- **ROTATION STOPPED MOVING THE IPv4 EXIT around 2026-08-16 (measured 2026-08-18).** The bot's surviving
+  logs held 10 probe failures from 5 users, 8 of them `exit refused as a bot` -> `rotation did not move the
+  exit (unknown)` on 08-16/17 - the control server ran the full ritual (3 reconnects, `registration delete`
+  + `new`, tunnel back in ~1s) and ipify answered every second with the SAME address. Reproduced live: two
+  rotations, a MASQUE->WireGuard switch and a container recreate all came back on `104.28.193.116`; 0 moves
+  in 9 attempts across two days, where on 08-10 the same code moved it in 2s and 34s. Cloudflare evidently
+  maps this host to one IPv4 egress now. The IPv6 exit (`2a09:bac1:...`) DOES change per registration and
+  even per reconnect, but yt-dlp with remote DNS (`socks5h://`) over it hit the bot check on the FIRST
+  probe - so it is not a way out either; yt-dlp keeps `socks5://` (local DNS in a v4-only container = v4
+  exit). What changed: the control server remembers a failed escalation (`WARP_PIN_MEMORY_SEC`, 6h) and
+  answers `reason: "pinned"` after ONE reconnect (~10s) instead of 75s of dropped connections; failed
+  escalations are named (`escalation-no-move` / `egress-unreadable`) and every rotation prints one
+  `[warp-control] rotate a -> b rotated= escalated= reason= took=` line; both callers log the addresses.
+  Also measured: the bot check on this exit **comes and goes on its own** - clean at 18:50, checked at
+  19:00 after ~3 probes + 2 rotations, clean again at 19:12 - so the YouTube copy now says "try this same
+  link again in a while", which is the only honest advice left. On 08-16 it lasted hours (5 refusals
+  16:22-21:54). A second egress (another host's WARP, a paid proxy) is the only real rotation now; that is
+  a money decision, not written here.
+- **A bare `HTTP Error 403` is NOT the bot check and must not rotate.** worker-download logged nine
+  `unable to download video data: HTTP Error 403` on 08-14..16, every one cleared by the next BullMQ
+  attempt seconds later; a bot user who got one at the probe resent the link 25s later and it went
+  through. The probe now retries ONCE after 2s without rotation (`isTransient403`, kept apart from
+  `isBotCheckFailure` because the two want opposite repairs); the worker already had its retries.
 
 ---
 

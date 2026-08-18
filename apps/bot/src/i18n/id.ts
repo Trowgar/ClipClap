@@ -249,7 +249,7 @@ const id: Dict = {
   urlAccessFailed:
     "Tidak bisa mengakses video di tautan itu. Coba tautan lain atau unggah filenya langsung.",
   urlYouTubeUnavailable:
-    "Tautan YouTube sedang tidak berfungsi - yang memblokir adalah YouTube, bukan tautanmu, jadi tautan YouTube lain juga tidak akan membantu. Unggah file videonya langsung di sini, atau kirim tautan TikTok atau Twitch.",
+    "Tautan YouTube sedang tidak berfungsi - yang memblokir adalah YouTube, bukan tautanmu, jadi tautan YouTube lain juga tidak akan membantu. Pemblokirannya datang dan pergi: coba kirim tautan yang sama lagi nanti, unggah file videonya langsung di sini, atau kirim tautan TikTok atau Twitch.",
   referralInfo: (web, tg, earned, pending) =>
     `Tautan referalmu:\nWeb: ${web}\nTelegram: ${tg}\n\nPenghasilan referal: $${earned}\nTertahan (14 hari): $${pending}`,
   referralWithdrawBtn: "💸 Ajukan penarikan",

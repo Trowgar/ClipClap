@@ -181,6 +181,99 @@ describe("probeVideoUrl rotate-and-retry", () => {
   });
 });
 
+describe("probeVideoUrl transient 403", () => {
+  const FORBIDDEN =
+    "ERROR: unable to download video data: HTTP Error 403: Forbidden";
+  const BOT_CHECK =
+    "ERROR: [youtube] abc: Sign in to confirm you’re not a bot.";
+
+  beforeEach(() => {
+    execFileMock.mockReset();
+    process.env.WARP_CONTROL_URL = "http://warp:8080";
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    delete process.env.WARP_CONTROL_URL;
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** Scripted stderr per call; a null entry is a success. */
+  function script(...stderrs: Array<string | null>) {
+    let call = 0;
+    execFileMock.mockImplementation(
+      (_cmd: string, _args: string[], _opts: unknown, cb: ExecCb) => {
+        const stderr = stderrs[Math.min(call, stderrs.length - 1)];
+        call += 1;
+        if (stderr === null) cb(null, "42||Recovered\n", "");
+        else cb(new Error("exit code 1"), "", stderr);
+        return { kill: vi.fn() };
+      }
+    );
+  }
+
+  // The observed shape: a 403 that clears seconds later. One plain retry, no
+  // rotation - rotation would drop every other download to fix a hiccup.
+  it("retries once after a pause and never rotates", async () => {
+    script(FORBIDDEN, null);
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    const pending = probeVideoUrl("https://youtube.com/abc");
+    // The retry waits; nothing has been re-run yet.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await expect(pending).resolves.toEqual({
+      ok: true,
+      durationSec: 42,
+      title: "Recovered",
+    });
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  // ONE retry, not a loop: a second 403 is the answer.
+  it("gives up after the second 403 without rotating", async () => {
+    script(FORBIDDEN, FORBIDDEN, null);
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    const pending = probeVideoUrl("https://youtube.com/abc");
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      reason: "yt-dlp-error",
+    });
+    expect(execFileMock).toHaveBeenCalledTimes(2);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  // The retry's answer goes through the ordinary path: a 403 that becomes the
+  // bot check on retry still reaches rotation.
+  it("still rotates when the retry hits the bot check", async () => {
+    script(FORBIDDEN, BOT_CHECK, null);
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ rotated: true, previousIp: "1.1.1.1", ip: "2.2.2.2" }),
+        { status: 200 }
+      )
+    );
+
+    const pending = probeVideoUrl("https://youtube.com/abc");
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    await expect(pending).resolves.toEqual({
+      ok: true,
+      durationSec: 42,
+      title: "Recovered",
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(execFileMock).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe("probeVideoUrl", () => {
   beforeEach(() => {
     execFileMock.mockReset();

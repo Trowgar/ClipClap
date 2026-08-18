@@ -1,6 +1,11 @@
 import { execFile } from "child_process";
 import type { ChildProcess } from "child_process";
-import { isBotCheckFailure, proxyArgs, rotateWarpExit } from "./ytdlp-proxy";
+import {
+  isBotCheckFailure,
+  isTransient403,
+  proxyArgs,
+  rotateWarpExit,
+} from "./ytdlp-proxy";
 
 /** stdout+stderr cap for the probe children.
  *
@@ -169,6 +174,10 @@ export function probeVideoUrl(
   return probeWithRotation(url, timeoutMs, options.rotateBudgetMs ?? 120_000);
 }
 
+/** Pause before the one plain retry of a transient 403. Short on purpose: the
+ *  observed 403s cleared within seconds, and a bot user is waiting. */
+const TRANSIENT_403_RETRY_DELAY_MS = 2_000;
+
 /** Probe, and on a bot check ask WARP for a new exit and probe once more.
  *
  *  ONE retry, not a loop. The control server already coalesces concurrent
@@ -179,13 +188,25 @@ export function probeVideoUrl(
  *
  *  Retrying only when the exit MOVED matters: `rotated` is false for a cooldown
  *  hit or an unreachable control server, and re-running the same probe against
- *  the same address would just double the user's wait for the same refusal. */
+ *  the same address would just double the user's wait for the same refusal.
+ *
+ *  A bare 403 gets its own, cheaper repair BEFORE any of that: one plain retry
+ *  after a short pause and no rotation (see isTransient403). The second
+ *  answer then goes through the ordinary path, so a 403 that turns into the
+ *  bot check on retry still reaches the rotation branch. */
 async function probeWithRotation(
   url: string,
   timeoutMs: number,
   rotateBudgetMs: number
 ): Promise<ProbeResult> {
-  const first = await probeOnce(url, timeoutMs);
+  let first = await probeOnce(url, timeoutMs);
+  if (!first.result.ok && isTransient403(first.stderr)) {
+    console.warn(
+      "[source-probe] yt-dlp got a 403; retrying once without rotation"
+    );
+    await new Promise((r) => setTimeout(r, TRANSIENT_403_RETRY_DELAY_MS));
+    first = await probeOnce(url, timeoutMs);
+  }
   if (first.result.ok || !isBotCheckFailure(first.stderr)) {
     return first.result;
   }
@@ -196,9 +217,13 @@ async function probeWithRotation(
   );
   const rotation = await rotateWarpExit(rotateBudgetMs);
   if (!rotation.rotated) {
+    // The addresses are in the answer; on 2026-08-16 this line said "unknown"
+    // seven times and hid that the exit had never moved - not that ipify
+    // was down, not that the control server was slow. Print them.
     console.warn(
-      `[source-probe] rotation did not move the exit (${rotation.reason ?? "unknown"}); ` +
-        "reporting the original failure"
+      `[source-probe] rotation did not move the exit (${rotation.reason ?? "unknown"}, ` +
+        `${rotation.previousIp ?? "?"} -> ${rotation.ip ?? "?"}` +
+        `${rotation.escalated ? ", escalated" : ""}); reporting the original failure`
     );
     return first.result;
   }

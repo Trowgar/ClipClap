@@ -79,8 +79,9 @@ export async function runYtDlpWithRotation(
     const rotation = await rotateWarpExit();
     if (!rotation.rotated) {
       console.warn(
-        `[download] rotation did not move the exit (${rotation.reason ?? "unknown"}); ` +
-          "reporting the original failure"
+        `[download] rotation did not move the exit (${rotation.reason ?? "unknown"}, ` +
+          `${rotation.previousIp ?? "?"} -> ${rotation.ip ?? "?"}` +
+          `${rotation.escalated ? ", escalated" : ""}); reporting the original failure`
       );
       throw error;
     }

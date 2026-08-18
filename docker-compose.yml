@@ -217,8 +217,11 @@ services:
     # NO named volume for /var/lib/cloudflare-warp ON PURPOSE. The stock
     # entrypoint skips registration when reg.json already exists, so persisting
     # it would pin us to one exit address forever - the opposite of what this
-    # service is for. A fresh container is a fresh IP, which makes "recreate it"
-    # a working last-resort rotation.
+    # service is for. A fresh container is a fresh registration - which as of
+    # 2026-08-16 does NOT mean a fresh IPv4 exit any more (measured 08-18:
+    # 104.28.193.116 survives reconnects, re-registration and a protocol
+    # switch; see docker/warp/control.py). Kept anyway: it costs nothing and
+    # is the state the mapping may return to.
     healthcheck:
       # Proves the PROXY PATH reaches the internet, not merely that a daemon is
       # up: /health reads the egress address through the SOCKS port itself.

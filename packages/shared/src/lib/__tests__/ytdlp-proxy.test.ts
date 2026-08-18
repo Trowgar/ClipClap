@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isBotCheckFailure,
+  isTransient403,
   proxyArgs,
   rotateWarpExit,
   warpControlUrl,
@@ -57,6 +58,44 @@ describe("isBotCheckFailure", () => {
   it("tolerates null and undefined", () => {
     expect(isBotCheckFailure(null)).toBe(false);
     expect(isBotCheckFailure(undefined)).toBe(false);
+  });
+});
+
+describe("isTransient403", () => {
+  // The exact line worker-download logged nine times on 2026-08-14..16, every
+  // one cleared by the next attempt. This wants a plain retry, not a rotation.
+  it("matches yt-dlp's bare 403", () => {
+    expect(
+      isTransient403("ERROR: unable to download video data: HTTP Error 403: Forbidden")
+    ).toBe(true);
+    expect(isTransient403("HTTP Error 403: Forbidden")).toBe(true);
+  });
+
+  // The two failures want OPPOSITE repairs (retry vs rotate), so a message
+  // that carries the bot check must never be read as a transient 403 even if
+  // a 403 status appears somewhere in the same stderr.
+  it("yields to the bot check when both appear", () => {
+    expect(
+      isTransient403(
+        "WARNING: HTTP Error 403: Forbidden\n" +
+          "ERROR: [youtube] abc: Sign in to confirm you’re not a bot."
+      )
+    ).toBe(false);
+  });
+
+  it.each([
+    "ERROR: [youtube] abc: Video unavailable",
+    "ERROR: [youtube] abc: Sign in to confirm you’re not a bot.",
+    "HTTP Error 429: Too Many Requests",
+    "HTTP Error 404: Not Found",
+    "",
+  ])("does not fire on %s", (text) => {
+    expect(isTransient403(text)).toBe(false);
+  });
+
+  it("tolerates null and undefined", () => {
+    expect(isTransient403(null)).toBe(false);
+    expect(isTransient403(undefined)).toBe(false);
   });
 });
 

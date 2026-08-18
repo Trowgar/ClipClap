@@ -252,7 +252,7 @@ const pt: Dict = {
   urlAccessFailed:
     "Não consegui acessar o vídeo desse link. Tente outro link ou envie o arquivo direto.",
   urlYouTubeUnavailable:
-    "Links do YouTube não funcionam no momento - quem está bloqueando é o YouTube, não é o seu link, então outro link do YouTube também não vai adiantar. Envie o arquivo de vídeo aqui direto, ou mande um link do TikTok ou da Twitch.",
+    "Links do YouTube não funcionam no momento - quem está bloqueando é o YouTube, não é o seu link, então outro link do YouTube também não vai adiantar. O bloqueio vai e volta: mande este mesmo link de novo daqui a pouco, envie o arquivo de vídeo aqui direto, ou mande um link do TikTok ou da Twitch.",
   referralInfo: (web, tg, earned, pending) =>
     `Seus links de indicação:\nWeb: ${web}\nTelegram: ${tg}\n\nGanhos por indicação: $${earned}\nPendente (retenção de 14 dias): $${pending}`,
   referralWithdrawBtn: "💸 Solicitar saque",
