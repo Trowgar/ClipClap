@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Prisma } from "@prisma/client";
 
 /**
  * Two properties matter and are both tested here:
@@ -8,15 +9,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  *    with the product is worse than no telemetry.
  */
 
-const mocks = vi.hoisted(() => ({ upsert: vi.fn() }));
+const mocks = vi.hoisted(() => ({ upsert: vi.fn(), create: vi.fn() }));
 
 vi.mock("../../lib/prisma", () => ({
-  prisma: { funnelEvent: { upsert: mocks.upsert } },
+  prisma: {
+    funnelEvent: { upsert: mocks.upsert },
+    uploadRefusal: { create: mocks.create },
+  },
 }));
 
 import {
   FUNNEL_EVENTS,
   recordFunnelEvent,
+  recordUploadRefusal,
+  refusalHost,
   uploadRejectedEvent,
 } from "../funnel.service";
 
@@ -136,5 +142,121 @@ describe("recordFunnelEvent", () => {
     await expect(
       recordFunnelEvent("bot", "42", FUNNEL_EVENTS.FIRST_SCREEN)
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("recordUploadRefusal", () => {
+  beforeEach(() => {
+    mocks.upsert.mockReset();
+    mocks.upsert.mockResolvedValue({});
+    mocks.create.mockReset();
+    mocks.create.mockResolvedValue({});
+    vi.restoreAllMocks();
+  });
+
+  // Both halves, and the funnel half is exactly what recordFunnelEvent writes:
+  // the people-count on /admin must not change shape because a ledger row is
+  // now written beside it.
+  it("writes the funnel step AND one ledger row with the detail", async () => {
+    await recordUploadRefusal(
+      "bot",
+      42,
+      "PROBE_FAILED",
+      { url: "https://youtu.be/x", host: "youtu.be", reason: "yt-dlp-error" },
+      "id"
+    );
+
+    expect(mocks.upsert).toHaveBeenCalledTimes(1);
+    expect(mocks.upsert.mock.calls[0][0].where).toEqual({
+      surface_subjectId_event: {
+        surface: "bot",
+        subjectId: "42",
+        event: "upload_rejected_probe_failed",
+      },
+    });
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+    expect(mocks.create.mock.calls[0][0]).toEqual({
+      data: {
+        surface: "bot",
+        subjectId: "42",
+        code: "PROBE_FAILED",
+        detail: {
+          url: "https://youtu.be/x",
+          host: "youtu.be",
+          reason: "yt-dlp-error",
+        },
+        locale: "id",
+      },
+    });
+  });
+
+  // Callers pass optional fields freely; Prisma's Json input rejects
+  // `undefined` values, so they must be gone before the write.
+  it("drops undefined detail fields before writing", async () => {
+    await recordUploadRefusal("web", "u1", "FREE_EXHAUSTED", {
+      durationSec: 600,
+      remainingSec: undefined,
+      lifetimeSec: 3600,
+    });
+    expect(mocks.create.mock.calls[0][0].data.detail).toEqual({
+      durationSec: 600,
+      lifetimeSec: 3600,
+    });
+  });
+
+  it("writes an explicit JSON null when there is no detail", async () => {
+    await recordUploadRefusal("web", "u1", "BUSY");
+    const data = mocks.create.mock.calls[0][0].data;
+    // Prisma.JsonNull is a sentinel object; the property must be present and
+    // must be that sentinel, not undefined (which Prisma would reject) and
+    // not a plain empty object (which would store `{}`).
+    expect(data.detail).toBe(Prisma.JsonNull);
+    expect(data.locale).toBeNull();
+  });
+
+  // The two halves are guarded separately: a client that predates the
+  // upload_refusals migration must still record the funnel step it always did,
+  // and neither failure may reach the caller.
+  it("still records the funnel step when the ledger write fails, and never throws", async () => {
+    mocks.create.mockRejectedValue(new Error("relation does not exist"));
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await expect(
+      recordUploadRefusal("bot", 7, "CONCURRENT", { inFlight: 1, limit: 1 })
+    ).resolves.toBeUndefined();
+
+    expect(mocks.upsert).toHaveBeenCalledTimes(1);
+    expect(err).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves when the client has no such model at all", async () => {
+    const original = mocks.create.getMockImplementation();
+    // Simulate `prisma.uploadRefusal` being undefined: the property access
+    // throws synchronously inside the try.
+    mocks.create.mockImplementation(() => {
+      throw new TypeError("Cannot read properties of undefined (reading 'create')");
+    });
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(
+      recordUploadRefusal("web", "u1", "QUOTA")
+    ).resolves.toBeUndefined();
+    if (original) mocks.create.mockImplementation(original);
+  });
+});
+
+describe("refusalHost", () => {
+  it.each([
+    ["https://www.youtube.com/watch?v=1", "youtube.com"],
+    ["https://YOUTU.BE/abc", "youtu.be"],
+    ["https://vt.tiktok.com/ZS/", "vt.tiktok.com"],
+  ])("%s -> %s", (url, host) => {
+    expect(refusalHost(url)).toBe(host);
+  });
+
+  it("returns null for junk and empties", () => {
+    expect(refusalHost("not a url")).toBeNull();
+    expect(refusalHost("")).toBeNull();
+    expect(refusalHost(null)).toBeNull();
+    expect(refusalHost(undefined)).toBeNull();
   });
 });

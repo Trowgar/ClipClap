@@ -6,7 +6,8 @@ import {
   getPlanLimits,
   canSubmitJob,
   recordFunnelEvent,
-  uploadRejectedEvent,
+  recordUploadRefusal,
+  refusalHost,
   estimatedFreeCostUsd,
   probeVideoUrl,
   FUNNEL_EVENTS,
@@ -104,7 +105,14 @@ export async function POST(req: NextRequest) {
     }
 
     if (!probe.ok) {
-      await recordFunnelEvent("web", userId, uploadRejectedEvent("PROBE_FAILED"));
+      await recordUploadRefusal("web", userId, "PROBE_FAILED", {
+        source: "url",
+        url: String(url),
+        host: refusalHost(String(url)),
+        reason: probe.reason,
+        error: probe.error,
+        rotation: probe.rotation,
+      });
       return NextResponse.json(
         {
           error:
@@ -160,7 +168,11 @@ export async function POST(req: NextRequest) {
   // from TOO_LONG to QUOTA, and TOO_LONG is the truer answer there - a 200
   // minute source is refused for its length whatever minutes are left.
   if (!isOnFreeTier(user) && durationMinutes > limits.maxSourceDurationMinutes) {
-    await recordFunnelEvent("web", userId, uploadRejectedEvent("TOO_LONG"));
+    await recordUploadRefusal("web", userId, "TOO_LONG", {
+      source: url ? "url" : "file",
+      durationSec,
+      maxMinutes: limits.maxSourceDurationMinutes,
+    });
     return NextResponse.json(
       {
         error: `Source exceeds max duration (${limits.maxSourceDurationMinutes} min). Trim before uploading.`,
@@ -170,12 +182,26 @@ export async function POST(req: NextRequest) {
   }
 
   if (!submission.allowed) {
-    await recordFunnelEvent("web", userId, uploadRejectedEvent(submission.code));
+    await recordUploadRefusal("web", userId, submission.code, {
+      source: url ? "url" : "file",
+      durationSec,
+      remainingSec: submission.trial?.remainingSeconds,
+      lifetimeSec: submission.trial?.lifetimeSeconds,
+      usedMinutes: submission.quota?.usedMinutes,
+      limitMinutes: submission.quota?.limitMinutes,
+      topUpMinutes: submission.quota?.topUpMinutes,
+      phase: submission.phase,
+    });
     return NextResponse.json({ error: submission.reason }, { status: 402 });
   }
 
   if (jobsToday >= limits.maxJobsPerDay) {
-    await recordFunnelEvent("web", userId, uploadRejectedEvent("DAILY_LIMIT"));
+    await recordUploadRefusal("web", userId, "DAILY_LIMIT", {
+      source: url ? "url" : "file",
+      durationSec,
+      jobsToday,
+      limit: limits.maxJobsPerDay,
+    });
     return NextResponse.json(
       {
         error: `Daily job limit reached (${limits.maxJobsPerDay}). Try again tomorrow or upgrade.`,
@@ -217,7 +243,11 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     console.error(`[jobs] createJob threw for user ${userId}:`, error);
-    await recordFunnelEvent("web", userId, uploadRejectedEvent("SUBMIT_FAILED"));
+    await recordUploadRefusal("web", userId, "SUBMIT_FAILED", {
+      source: url ? "url" : "file",
+      durationSec,
+      error: error instanceof Error ? error.message.slice(0, 300) : String(error),
+    });
     return NextResponse.json(
       {
         error:
@@ -228,7 +258,12 @@ export async function POST(req: NextRequest) {
   }
 
   if (created.status === "concurrent_limit") {
-    await recordFunnelEvent("web", userId, uploadRejectedEvent("CONCURRENT"));
+    await recordUploadRefusal("web", userId, "CONCURRENT", {
+      source: url ? "url" : "file",
+      durationSec,
+      inFlight: created.inFlight,
+      limit: created.limit,
+    });
     return NextResponse.json(
       {
         error: `You have ${created.inFlight} active jobs (limit: ${created.limit}). Wait for one to finish.`,
@@ -241,7 +276,10 @@ export async function POST(req: NextRequest) {
   // nothing is broken and retrying is the correct next action - which is also
   // what the copy says, without inventing a count we do not have.
   if (created.status === "busy") {
-    await recordFunnelEvent("web", userId, uploadRejectedEvent("BUSY"));
+    await recordUploadRefusal("web", userId, "BUSY", {
+      source: url ? "url" : "file",
+      durationSec,
+    });
     return NextResponse.json(
       {
         error:

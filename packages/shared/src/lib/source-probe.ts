@@ -5,6 +5,7 @@ import {
   isTransient403,
   proxyArgs,
   rotateWarpExit,
+  type RotateOutcome,
 } from "./ytdlp-proxy";
 
 /** stdout+stderr cap for the probe children.
@@ -69,7 +70,29 @@ export type ProbeResult =
         | "no-duration"
         | "probe-error"
         | "probe-unavailable";
+      /** yt-dlp's (or ffprobe's) last ERROR line, capped - the one string
+       *  that says WHY a link failed. Ten surviving prod refusals all read
+       *  `reason: yt-dlp-error`; without this they were indistinguishable. */
+      error?: string;
+      /** Set when a bot check was met and WARP was asked to rotate: what the
+       *  control server answered. Absent when rotation was not attempted. */
+      rotation?: {
+        rotated: boolean;
+        reason?: string;
+        previousIp?: string | null;
+        ip?: string | null;
+      };
     };
+
+/** The last line that starts with ERROR, else the last non-empty line, capped
+ *  so a JSON detail column never carries a whole traceback. */
+export function lastErrorLine(text: string | undefined | null): string | undefined {
+  if (!text) return undefined;
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  if (lines.length === 0) return undefined;
+  const err = [...lines].reverse().find((l) => /^ERROR/i.test(l));
+  return (err ?? lines[lines.length - 1]).slice(0, 300);
+}
 
 /** execFile reports a binary that is not on PATH as ENOENT on the callback
  *  error, which is an operational fault rather than anything the submitter
@@ -125,7 +148,10 @@ function probeOnce(
             finish({ ok: false, reason: "probe-unavailable" });
             return;
           }
-          finish({ ok: false, reason: "yt-dlp-error" }, stderr ?? "");
+          finish(
+            { ok: false, reason: "yt-dlp-error", error: lastErrorLine(stderr) },
+            stderr ?? ""
+          );
           return;
         }
         const line = stdout.split("\n").find((l) => l.trim().length > 0);
@@ -225,14 +251,33 @@ async function probeWithRotation(
         `${rotation.previousIp ?? "?"} -> ${rotation.ip ?? "?"}` +
         `${rotation.escalated ? ", escalated" : ""}); reporting the original failure`
     );
-    return first.result;
+    return withRotation(first.result, rotation);
   }
 
   console.warn(
     `[source-probe] rotated ${rotation.previousIp ?? "?"} -> ${rotation.ip ?? "?"}, re-probing`
   );
   const second = await probeOnce(url, timeoutMs);
-  return second.result;
+  return withRotation(second.result, rotation);
+}
+
+/** Attach the rotation outcome to a failure so the refusal ledger can tell
+ *  "the exit was refused and could not be moved" from "dead link". A success
+ *  is returned untouched. */
+function withRotation(
+  result: ProbeResult,
+  rotation: RotateOutcome
+): ProbeResult {
+  if (result.ok) return result;
+  return {
+    ...result,
+    rotation: {
+      rotated: rotation.rotated,
+      reason: rotation.reason,
+      previousIp: rotation.previousIp,
+      ip: rotation.ip,
+    },
+  };
 }
 
 /** Duration of a local file. Used for uploads, where there is no URL to ask. */
@@ -250,7 +295,7 @@ export function probeLocalFile(path: string): Promise<ProbeResult> {
         path,
       ],
       { timeout: 15_000, maxBuffer: PROBE_MAX_BUFFER_BYTES },
-      (err, stdout) => {
+      (err, stdout, stderr) => {
         if (err) {
           if (isMissingBinary(err)) {
             console.error(
@@ -260,7 +305,11 @@ export function probeLocalFile(path: string): Promise<ProbeResult> {
             resolve({ ok: false, reason: "probe-unavailable" });
             return;
           }
-          resolve({ ok: false, reason: "probe-error" });
+          resolve({
+            ok: false,
+            reason: "probe-error",
+            error: lastErrorLine(stderr) ?? lastErrorLine(err.message),
+          });
           return;
         }
         const durationSec = Number(stdout.trim());

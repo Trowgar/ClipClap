@@ -311,6 +311,37 @@ model FunnelEvent {
   @@map("funnel_events")
 }
 
+/// One row per REFUSED submission, carrying the why. funnel_events answers
+/// "how many people hit code X" and by design cannot hold a per-event detail:
+/// its row is unique per (surface, subject, code), so sixteen people with 39
+/// probe failures are sixteen rows. This is the per-event ledger beside it -
+/// the URL that failed and the probe's own reason, the source length against
+/// the balance that refused it, the in-flight count, the phase. Added 2026-08-18
+/// after four weeks of not knowing what those 39 people had actually sent: the
+/// only place the reason was written was a console.warn that died with the
+/// container.
+///
+/// Not aggregated on purpose, and not related to User for the same reason as
+/// funnel_events. Sized by refusals, which is small; the retention sweep may
+/// trim it later if that ever changes.
+model UploadRefusal {
+  id        String   @id @default(cuid())
+  /// "bot" | "web".
+  surface   String
+  /// bot: telegramId, web: users.id - same convention as funnel_events.
+  subjectId String
+  /// UploadRejectionCode literal ("PROBE_FAILED", "FREE_EXHAUSTED", ...).
+  code      String
+  /// Shape per code - see recordUploadRefusal in funnel.service.ts.
+  detail    Json?
+  locale    String?
+  createdAt DateTime @default(now())
+
+  @@index([code, createdAt])
+  @@index([subjectId, createdAt])
+  @@map("upload_refusals")
+}
+
 enum TributeWebhookStatus {
   RECEIVED
   PROCESSING

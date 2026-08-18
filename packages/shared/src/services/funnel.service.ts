@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 
 /**
@@ -166,6 +167,79 @@ export async function recordFunnelEvent(
     // caught here as well because the throw happens inside the try.
     console.error(
       `Funnel telemetry: could not record ${event} for ${surface}:${subjectId}:`,
+      error instanceof Error ? error.message : error
+    );
+  }
+}
+
+/**
+ * The per-code shape of `upload_refusals.detail`. Loose on purpose - it is a
+ * JSON column read by hand in SQL - but every key here is one somebody has
+ * already needed and not had:
+ *
+ *   PROBE_FAILED          url, host, reason (source-probe's), error (yt-dlp's
+ *                         last ERROR line), rotation {reason, previousIp, ip}
+ *   FREE_EXHAUSTED        durationSec, remainingSec, lifetimeSec
+ *   FREE_SOURCE_TOO_LONG  durationSec, maxMinutes
+ *   TOO_LONG              durationSec, maxMinutes
+ *   TOO_SHORT             durationSec, minSec
+ *   QUOTA                 durationSec, usedMinutes, limitMinutes, topUpMinutes
+ *   LIFECYCLE             phase
+ *   DAILY_LIMIT           jobsToday, limit
+ *   CONCURRENT            inFlight, limit
+ *   BUSY, SUBMIT_FAILED   error (message) when there is one
+ *   plus `durationSec` and `source: "url" | "file"` wherever the caller knows.
+ */
+export type RefusalDetail = Record<string, unknown>;
+
+/** Hostname of a submitted URL, lowercased, without `www.` - or null when the
+ *  string does not parse. Cheap to store, and "which sites do people paste"
+ *  is the first question a probe-failure query asks. */
+export function refusalHost(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return host.startsWith("www.") ? host.slice(4) : host;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Records a refused submission TWICE, on purpose: the people-count in
+ * funnel_events (unchanged) and one row in upload_refusals with the detail.
+ * Every `upload_rejected_*` call site should go through here, so the two
+ * cannot disagree about what counts as a refusal.
+ *
+ * NEVER THROWS, for the same reason as recordFunnelEvent - and each half is
+ * guarded separately, so a Prisma client that predates the upload_refusals
+ * migration still records the funnel step it always did.
+ */
+export async function recordUploadRefusal(
+  surface: FunnelSurface,
+  subjectId: string | number,
+  code: UploadRejectionCode,
+  detail?: RefusalDetail,
+  locale?: string | null
+): Promise<void> {
+  await recordFunnelEvent(surface, subjectId, uploadRejectedEvent(code), locale);
+  try {
+    await prisma.uploadRefusal.create({
+      data: {
+        surface,
+        subjectId: String(subjectId),
+        code,
+        // Prisma's Json input rejects `undefined` values inside the object;
+        // stripping them here keeps callers free to pass optional fields.
+        detail: detail
+          ? (JSON.parse(JSON.stringify(detail)) as Prisma.InputJsonValue)
+          : Prisma.JsonNull,
+        locale: locale ?? null,
+      },
+    });
+  } catch (error) {
+    console.error(
+      `Refusal ledger: could not record ${code} for ${surface}:${subjectId}:`,
       error instanceof Error ? error.message : error
     );
   }

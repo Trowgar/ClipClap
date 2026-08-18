@@ -30,13 +30,15 @@ import {
   parseJobErrorCode,
   prisma,
   recordFunnelEvent,
+  recordUploadRefusal,
   redeemLinkFromBot,
+  refusalHost,
   telegramDeliveryService,
   uploadFile,
-  uploadRejectedEvent,
 } from "@clipclap/shared";
 import type {
   FreeChargeInput,
+  RefusalDetail,
   SubscriptionPhase,
   UploadRejectionCode,
 } from "@clipclap/shared";
@@ -2164,10 +2166,11 @@ async function handleVideo(
       // be counted. The advisory check earlier may have recorded this already;
       // the upsert bumps `occurrences` rather than writing a second row, which
       // is the shape the funnel wants - people, not presses.
-      await recordFunnelEvent(
+      await recordUploadRefusal(
         "bot",
         from.id,
-        uploadRejectedEvent("CONCURRENT"),
+        "CONCURRENT",
+        { source: "file", inFlight: created.inFlight, limit: created.limit },
         from.language_code
       );
       return;
@@ -2175,10 +2178,11 @@ async function handleVideo(
 
     if (created.status === "busy") {
       await client.sendMessage(message.chat.id, dict.blocked(dict.submitBusy));
-      await recordFunnelEvent(
+      await recordUploadRefusal(
         "bot",
         from.id,
-        uploadRejectedEvent("BUSY"),
+        "BUSY",
+        { source: "file" },
         from.language_code
       );
       return;
@@ -2340,10 +2344,22 @@ async function handleVideoUrl(
     console.warn(
       `[bot] url probe failed (${probe.reason}) for telegram ${from.id}`
     );
-    await recordFunnelEvent(
+    // The detail is the whole point: for four weeks the reason lived in the
+    // line above and died with the container, and "yt-dlp-error" on its own
+    // said nothing anyway - the URL, its host, yt-dlp's last ERROR line and
+    // what the rotation answered are what a diagnosis needs.
+    await recordUploadRefusal(
       "bot",
       from.id,
-      uploadRejectedEvent("PROBE_FAILED"),
+      "PROBE_FAILED",
+      {
+        source: "url",
+        url,
+        host: refusalHost(url),
+        reason: probe.reason,
+        error: probe.error,
+        rotation: probe.rotation,
+      },
       from.language_code
     );
     return;
@@ -2380,10 +2396,16 @@ async function handleVideoUrl(
       message.chat.id,
       dict.blocked(dict.planConcurrentLimit(created.inFlight, created.limit))
     );
-    await recordFunnelEvent(
+    await recordUploadRefusal(
       "bot",
       from.id,
-      uploadRejectedEvent("CONCURRENT"),
+      "CONCURRENT",
+      {
+        source: "url",
+        durationSec: probedSec,
+        inFlight: created.inFlight,
+        limit: created.limit,
+      },
       from.language_code
     );
     return;
@@ -2394,10 +2416,11 @@ async function handleVideoUrl(
   // `video_submitted` with nothing after it.
   if (created.status === "busy") {
     await client.sendMessage(message.chat.id, dict.blocked(dict.submitBusy));
-    await recordFunnelEvent(
+    await recordUploadRefusal(
       "bot",
       from.id,
-      uploadRejectedEvent("BUSY"),
+      "BUSY",
+      { source: "url", durationSec: probedSec },
       from.language_code
     );
     return;
@@ -2482,9 +2505,15 @@ export async function getSubmissionBlocker(
   // return type from string|null to something structured, which would also
   // touch every other test that calls getSubmissionBlocker directly. Recorded
   // here, ahead of the reply, as the accepted compromise.
-  const recordRejection = (code: UploadRejectionCode) =>
+  const recordRejection = (code: UploadRejectionCode, detail: RefusalDetail = {}) =>
     subject
-      ? recordFunnelEvent("bot", subject.telegramId, uploadRejectedEvent(code), subject.locale)
+      ? recordUploadRefusal(
+          "bot",
+          subject.telegramId,
+          code,
+          { durationSec, ...detail },
+          subject.locale
+        )
       : Promise.resolve();
 
   if (
@@ -2492,19 +2521,33 @@ export async function getSubmissionBlocker(
     durationMinutes > limits.maxSourceDurationMinutes
   ) {
     if (user.plan === "NONE") {
-      await recordRejection("FREE_SOURCE_TOO_LONG");
+      await recordRejection("FREE_SOURCE_TOO_LONG", {
+        maxMinutes: limits.maxSourceDurationMinutes,
+      });
       return dict.freeSourceTooLong(
         limits.maxSourceDurationMinutes,
         STARTER_WEEKLY.maxSourceDurationMinutes
       );
     }
-    await recordRejection("TOO_LONG");
+    await recordRejection("TOO_LONG", {
+      maxMinutes: limits.maxSourceDurationMinutes,
+    });
     return dict.planSourceTooLong(limits.maxSourceDurationMinutes);
   }
 
   const submission = await canSubmitJob(userId, durationMinutes);
   if (!submission.allowed) {
-    await recordRejection(submission.code);
+    await recordRejection(submission.code, {
+      // What the gate saw, per code: the balance for FREE_EXHAUSTED, the
+      // period usage for QUOTA, the phase for LIFECYCLE. Undefined fields are
+      // dropped by the ledger.
+      remainingSec: submission.trial?.remainingSeconds,
+      lifetimeSec: submission.trial?.lifetimeSeconds,
+      usedMinutes: submission.quota?.usedMinutes,
+      limitMinutes: submission.quota?.limitMinutes,
+      topUpMinutes: submission.quota?.topUpMinutes,
+      phase: submission.phase,
+    });
     switch (submission.code) {
       // Unreachable in practice: every account that reaches this function came
       // in through Telegram, so it carries a phone-backed telegramId and
@@ -2566,7 +2609,10 @@ export async function getSubmissionBlocker(
     where: { userId, createdAt: { gte: dayStart } },
   });
   if (jobsToday >= limits.maxJobsPerDay) {
-    await recordRejection("DAILY_LIMIT");
+    await recordRejection("DAILY_LIMIT", {
+      jobsToday,
+      limit: limits.maxJobsPerDay,
+    });
     return dict.planDailyLimit(limits.maxJobsPerDay);
   }
 
@@ -2578,7 +2624,10 @@ export async function getSubmissionBlocker(
     where: { userId, status: { in: [...ACTIVE_JOB_STATUSES] } },
   });
   if (inFlight >= limits.concurrentJobsLimit) {
-    await recordRejection("CONCURRENT");
+    await recordRejection("CONCURRENT", {
+      inFlight,
+      limit: limits.concurrentJobsLimit,
+    });
     return dict.planConcurrentLimit(inFlight, limits.concurrentJobsLimit);
   }
 

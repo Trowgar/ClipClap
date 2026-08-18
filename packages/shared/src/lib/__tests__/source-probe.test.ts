@@ -138,9 +138,14 @@ describe("probeVideoUrl rotate-and-retry", () => {
       })
     );
 
+    // The refusal ledger needs both halves: WHY the probe failed and WHAT the
+    // rotation answered - "the exit was refused and could not be moved" is a
+    // different diagnosis from "dead link".
     await expect(probeVideoUrl("https://youtube.com/abc")).resolves.toEqual({
       ok: false,
       reason: "yt-dlp-error",
+      error: BOT_CHECK,
+      rotation: { rotated: false, reason: "cooldown", previousIp: undefined, ip: undefined },
     });
     expect(execFileMock).toHaveBeenCalledTimes(1);
   });
@@ -159,6 +164,7 @@ describe("probeVideoUrl rotate-and-retry", () => {
     await expect(probeVideoUrl("https://youtube.com/abc")).resolves.toEqual({
       ok: false,
       reason: "yt-dlp-error",
+      error: "ERROR: [youtube] abc: Video unavailable",
     });
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(execFileMock).toHaveBeenCalledTimes(1);
@@ -245,6 +251,7 @@ describe("probeVideoUrl transient 403", () => {
     await expect(pending).resolves.toEqual({
       ok: false,
       reason: "yt-dlp-error",
+      error: FORBIDDEN,
     });
     expect(execFileMock).toHaveBeenCalledTimes(2);
     expect(fetchSpy).not.toHaveBeenCalled();
@@ -324,7 +331,11 @@ describe("probeVideoUrl", () => {
 
     await expect(
       probeVideoUrl("https://invalid.example/x")
-    ).resolves.toEqual({ ok: false, reason: "yt-dlp-error" });
+    ).resolves.toEqual({
+      ok: false,
+      reason: "yt-dlp-error",
+      error: "ERROR: video unavailable",
+    });
   });
 
   // A container without yt-dlp must not tell the user their link is dead. The
@@ -434,6 +445,7 @@ describe("probeLocalFile", () => {
     await expect(probeLocalFile("/tmp/missing.mp4")).resolves.toEqual({
       ok: false,
       reason: "probe-error",
+      error: "No such file or directory",
     });
   });
 
@@ -493,9 +505,12 @@ describe("probeVideoUrl rotation budget", () => {
   it("skips rotation entirely when the budget is zero", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
 
-    await expect(
-      probeVideoUrl("https://youtube.com/abc", 10_000, { rotateBudgetMs: 0 })
-    ).resolves.toEqual({ ok: false, reason: "yt-dlp-error" });
+    const result = await probeVideoUrl("https://youtube.com/abc", 10_000, {
+      rotateBudgetMs: 0,
+    });
+    expect(result).toMatchObject({ ok: false, reason: "yt-dlp-error" });
+    // No rotation was attempted, so none is reported.
+    expect(result).not.toHaveProperty("rotation");
 
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(execFileMock).toHaveBeenCalledTimes(1);
@@ -517,7 +532,11 @@ describe("probeVideoUrl rotation budget", () => {
 
     // The rotation failed, so the ORIGINAL probe failure is what surfaces -
     // never an error about the control server the user cannot act on.
-    expect(result).toEqual({ ok: false, reason: "yt-dlp-error" });
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "yt-dlp-error",
+      rotation: { rotated: false, reason: "The operation was aborted." },
+    });
     expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 });

@@ -43,6 +43,7 @@ vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
       create: mocks.accountCreate,
     },
     funnelEvent: { upsert: mocks.funnelUpsert },
+    uploadRefusal: { create: vi.fn().mockResolvedValue({}) },
     job: { count: mocks.jobCount, aggregate: mocks.jobAggregate },
     freeUsage: {
       groupBy: mocks.freeUsageGroupBy,

@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   accountCreate: vi.fn(),
   linkTokenCreate: vi.fn(),
   funnelUpsert: vi.fn(),
+  refusalCreate: vi.fn(),
   jobCount: vi.fn(),
   freeUsageGroupBy: vi.fn(),
   freeUsageAggregate: vi.fn(),
@@ -41,6 +42,7 @@ vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
     },
     telegramLinkToken: { create: mocks.linkTokenCreate },
     funnelEvent: { upsert: mocks.funnelUpsert },
+    uploadRefusal: { create: mocks.refusalCreate },
     job: { count: mocks.jobCount },
     freeUsage: {
       groupBy: mocks.freeUsageGroupBy,
@@ -105,6 +107,14 @@ function eventsRecorded() {
   return mocks.funnelUpsert.mock.calls.map(
     (c) => c[0].where.surface_subjectId_event.event
   );
+}
+
+/** The refusal ledger rows written, as {code, detail}. */
+function refusalsRecorded() {
+  return mocks.refusalCreate.mock.calls.map((c) => ({
+    code: c[0].data.code as string,
+    detail: c[0].data.detail as Record<string, unknown>,
+  }));
 }
 
 describe("first-screen telemetry", () => {
@@ -433,6 +443,15 @@ describe("app-open and video-submitted telemetry", () => {
     expect(eventsRecorded()).toContain(
       uploadRejectedEvent("FREE_SOURCE_TOO_LONG")
     );
+    expect(refusalsRecorded()).toEqual([
+      {
+        code: "FREE_SOURCE_TOO_LONG",
+        detail: {
+          durationSec: overCap,
+          maxMinutes: getPlanLimits("NONE").maxSourceDurationMinutes,
+        },
+      },
+    ]);
   });
 });
 
@@ -504,7 +523,12 @@ describe("refusals the bot used to swallow", () => {
   }
 
   it("records upload_rejected_probe_failed for a link it cannot read", async () => {
-    mocks.probeVideoUrl.mockResolvedValue({ ok: false, reason: "yt-dlp-error" });
+    mocks.probeVideoUrl.mockResolvedValue({
+      ok: false,
+      reason: "yt-dlp-error",
+      error: "ERROR: [generic] dead-link: Unsupported URL",
+      rotation: { rotated: false, reason: "pinned", previousIp: "1.1.1.1", ip: "1.1.1.1" },
+    });
     const { client } = harness();
 
     await handleUpdate(
@@ -518,6 +542,21 @@ describe("refusals the bot used to swallow", () => {
       t("ru").urlAccessFailed
     );
     expect(eventsRecorded()).toContain(uploadRejectedEvent("PROBE_FAILED"));
+    // The ledger row is the part that was missing for four weeks: WHAT was
+    // sent and WHY it failed, not just that it did.
+    expect(refusalsRecorded()).toEqual([
+      {
+        code: "PROBE_FAILED",
+        detail: {
+          source: "url",
+          url: "https://example.com/watch?v=dead-link",
+          host: "example.com",
+          reason: "yt-dlp-error",
+          error: "ERROR: [generic] dead-link: Unsupported URL",
+          rotation: { rotated: false, reason: "pinned", previousIp: "1.1.1.1", ip: "1.1.1.1" },
+        },
+      },
+    ]);
   });
 
   it("does not blame the user when yt-dlp is missing from the container", async () => {
@@ -555,6 +594,16 @@ describe("refusals the bot used to swallow", () => {
     );
 
     expect(eventsRecorded()).toContain(uploadRejectedEvent("DAILY_LIMIT"));
+    expect(refusalsRecorded()).toEqual([
+      {
+        code: "DAILY_LIMIT",
+        detail: {
+          durationSec: 120,
+          jobsToday: getPlanLimits("NONE").maxJobsPerDay,
+          limit: getPlanLimits("NONE").maxJobsPerDay,
+        },
+      },
+    ]);
   });
 
   it("records upload_rejected_concurrent", async () => {
@@ -576,6 +625,16 @@ describe("refusals the bot used to swallow", () => {
     );
 
     expect(eventsRecorded()).toContain(uploadRejectedEvent("CONCURRENT"));
+    expect(refusalsRecorded()).toEqual([
+      {
+        code: "CONCURRENT",
+        detail: {
+          durationSec: 120,
+          inFlight: getPlanLimits("NONE").concurrentJobsLimit,
+          limit: getPlanLimits("NONE").concurrentJobsLimit,
+        },
+      },
+    ]);
   });
 });
 

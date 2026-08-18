@@ -68,7 +68,11 @@ describe("probeVideoUrl", () => {
       return { kill: vi.fn() } as never;
     });
     const result = await probeVideoUrl("https://invalid.example/x");
-    expect(result).toEqual({ ok: false, reason: "yt-dlp-error" });
+    expect(result).toEqual({
+      ok: false,
+      reason: "yt-dlp-error",
+      error: "ERROR: unavailable",
+    });
   });
 
   it("returns ok=false with reason 'no-duration' when duration is NA", async () => {
