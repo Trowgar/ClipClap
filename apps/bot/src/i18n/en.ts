@@ -147,6 +147,10 @@ const en: Dict = {
     "This video is under a minute long. I cut clips out of longer talk - streams, podcasts, interviews, lectures - and there is nothing to cut here yet. Send something at least a minute long; ten minutes and up works best.",
   shortSourceNotice:
     "Heads-up: this one is under five minutes. Short sources usually give 0-2 clips - ten minutes and up is where I do my best work.",
+  duplicateActive:
+    "I'm already working on this exact video - I'll message you the moment it's ready. No need to send it again.",
+  duplicateDone: (clipCount) =>
+    `You've sent me this video before - here ${clipCount === 1 ? "is the clip" : `are the ${clipCount} clips`} I made from it, no minutes spent.`,
   planNotActive:
     "There is no active subscription on this account, so I cannot process videos yet. Pick a plan and I'll start right away.",
   planCanceled:

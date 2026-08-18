@@ -41,7 +41,7 @@ vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
     telegramLinkToken: { create: mocks.linkTokenCreate },
     funnelEvent: { upsert: mocks.funnelUpsert },
     uploadRefusal: { create: vi.fn().mockResolvedValue({}) },
-    job: { count: mocks.jobCount },
+    job: { count: mocks.jobCount, findMany: vi.fn(async () => []) },
   },
 }));
 

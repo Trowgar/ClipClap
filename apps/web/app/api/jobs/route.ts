@@ -10,6 +10,7 @@ import {
   refusalHost,
   isBelowSourceFloor,
   SOURCE_FLOOR,
+  urlSourceFingerprint,
   estimatedFreeCostUsd,
   probeVideoUrl,
   FUNNEL_EVENTS,
@@ -160,6 +161,34 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // A resent link. Recognised by the canonical URL (lib/source-fingerprint),
+  // not the raw string, so youtu.be-with-share-token and the watch URL are one
+  // key. A job still running or finished with clips still in storage makes a
+  // new run pointless; a FAILED one is the legitimate retry and passes. Web
+  // file uploads carry no fingerprint (fresh R2 key per upload, no hash).
+  const sourceFingerprint = url ? urlSourceFingerprint(String(url)) : null;
+  const duplicate = await jobService.findDuplicateJob(userId, sourceFingerprint);
+  if (duplicate) {
+    await recordUploadRefusal("web", userId, "DUPLICATE", {
+      source: "url",
+      url: String(url),
+      durationSec,
+      fingerprint: sourceFingerprint,
+      priorJobId: duplicate.job.id,
+      priorStatus: duplicate.job.status,
+    });
+    return NextResponse.json(
+      {
+        error:
+          duplicate.kind === "active"
+            ? "This video is already being processed - it will show up in your projects when it is done."
+            : "You already have clips from this video - open it in your projects instead of running it again.",
+        jobId: duplicate.job.id,
+      },
+      { status: 409 }
+    );
+  }
+
   // All limit checks are independent reads - run them in one round trip
   const dayStart = new Date();
   dayStart.setHours(0, 0, 0, 0);
@@ -257,6 +286,7 @@ export async function POST(req: NextRequest) {
       userId,
       sourceUrl: url || undefined,
       sourceKey: sourceKey || undefined,
+      sourceFingerprint,
       originalFilename: originalFilename || undefined,
       subtitles: subtitles !== false,
       sourceDurationSec: durationSec,

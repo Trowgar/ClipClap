@@ -30,4 +30,5 @@ export {
 } from "./referral-queue";
 export * from "./email-identity";
 export * from "./source-probe";
+export * from "./source-fingerprint";
 export * from "./ytdlp-proxy";

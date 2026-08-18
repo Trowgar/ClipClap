@@ -98,6 +98,10 @@ const id: Dict = {
     "Video ini kurang dari satu menit. Aku memotong klip dari obrolan yang panjang - siaran langsung, podcast, wawancara, kuliah - dan di sini belum ada yang bisa dipotong. Kirim yang minimal satu menit; sepuluh menit ke atas hasilnya paling bagus.",
   shortSourceNotice:
     "Catatan: video ini kurang dari lima menit. Dari sumber pendek biasanya cuma keluar 0-2 klip - sepuluh menit ke atas adalah tempat aku bekerja paling baik.",
+  duplicateActive:
+    "Aku sudah sedang mengerjakan video yang persis ini - aku kabari begitu selesai. Tidak perlu dikirim lagi.",
+  duplicateDone: (clipCount) =>
+    `Video ini sudah pernah kamu kirim - ini ${clipCount === 1 ? "klip yang" : `${clipCount} klip yang`} kubuat darinya, tanpa memakai menit.`,
   planNotActive:
     "Tidak ada langganan aktif di akun ini, jadi aku belum bisa memproses video. Pilih paket dan aku langsung mulai.",
   planCanceled:

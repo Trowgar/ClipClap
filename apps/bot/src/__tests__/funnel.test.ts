@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   funnelUpsert: vi.fn(),
   refusalCreate: vi.fn(),
   jobCount: vi.fn(),
+  jobFindMany: vi.fn(),
   freeUsageGroupBy: vi.fn(),
   freeUsageAggregate: vi.fn(),
   probeVideoUrl: vi.fn(),
@@ -43,7 +44,7 @@ vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
     telegramLinkToken: { create: mocks.linkTokenCreate },
     funnelEvent: { upsert: mocks.funnelUpsert },
     uploadRefusal: { create: mocks.refusalCreate },
-    job: { count: mocks.jobCount },
+    job: { count: mocks.jobCount, findMany: mocks.jobFindMany },
     freeUsage: {
       groupBy: mocks.freeUsageGroupBy,
       aggregate: mocks.freeUsageAggregate,
@@ -92,6 +93,10 @@ function harness() {
       order.push("setChatMenuButton");
       return {};
     }),
+    sendVideo: vi.fn(async () => {
+      order.push("sendVideo");
+      return {};
+    }),
   };
   return { client, order };
 }
@@ -130,6 +135,7 @@ describe("first-screen telemetry", () => {
     mocks.linkTokenCreate.mockResolvedValue({});
     mocks.userFindUniqueOrThrow.mockResolvedValue({ id: "u1", plan: "NONE" });
     mocks.jobCount.mockResolvedValue(0);
+    mocks.jobFindMany.mockResolvedValue([]);
     // freeUsage is deliberately NOT stubbed in this block. These tests assert
     // the exact welcome copy, and a working freeBudgetStatus would append the
     // "free runs are paused" note to it - which is the truth in prod today and
@@ -282,6 +288,7 @@ describe("app-open and video-submitted telemetry", () => {
       billingCycle: null,
     });
     mocks.jobCount.mockResolvedValue(0);
+    mocks.jobFindMany.mockResolvedValue([]);
     mocks.freeUsageGroupBy.mockResolvedValue([]);
     mocks.freeUsageAggregate.mockResolvedValue({
       _sum: { estimatedCostUsd: 0 },
@@ -508,6 +515,7 @@ describe("refusals the bot used to swallow", () => {
       _sum: { estimatedCostUsd: 0 },
     });
     mocks.jobCount.mockResolvedValue(0);
+    mocks.jobFindMany.mockResolvedValue([]);
     mocks.probeVideoUrl.mockReset();
   });
 
@@ -627,6 +635,105 @@ describe("refusals the bot used to swallow", () => {
     ).resolves.toBeNull();
     expect(eventsRecorded()).not.toContain(uploadRejectedEvent("TOO_SHORT"));
     expect(refusalsRecorded()).toEqual([]);
+  });
+
+  // A resent source. The link is spelled differently each time (youtu.be with
+  // a share token vs the watch URL) and must still be recognised as the same
+  // job; the ledger names the prior job so the repeat is countable.
+  it("refuses a link whose job is still running, without touching the balance", async () => {
+    mocks.probeVideoUrl.mockResolvedValue({ ok: true, durationSec: 900, title: "Same talk" });
+    mocks.jobFindMany.mockResolvedValue([
+      { id: "j-running", status: "TRANSCRIBING", createdAt: new Date(), clips: [] },
+    ]);
+    const { client } = harness();
+
+    await handleUpdate(
+      client as never,
+      videoUrlUpdate("https://youtu.be/dQw4w9WgXcQ?si=share-token") as never,
+      CONFIG
+    );
+
+    // Looked up by THIS user and the canonical key, not the raw string.
+    expect(mocks.jobFindMany.mock.calls[0][0].where).toEqual({
+      userId: "u1",
+      sourceFingerprint: "url:https://youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+    expect(client.sendMessage).toHaveBeenCalledWith(CHAT.id, t("ru").duplicateActive);
+    expect(client.sendVideo).not.toHaveBeenCalled();
+    expect(eventsRecorded()).toContain(uploadRejectedEvent("DUPLICATE"));
+    expect(refusalsRecorded()).toEqual([
+      {
+        code: "DUPLICATE",
+        detail: {
+          source: "url",
+          url: "https://youtu.be/dQw4w9WgXcQ?si=share-token",
+          durationSec: 900,
+          fingerprint: "url:https://youtube.com/watch?v=dQw4w9WgXcQ",
+          priorJobId: "j-running",
+          priorStatus: "TRANSCRIBING",
+        },
+      },
+    ]);
+    // No balance was consulted and no job was created.
+    expect(mocks.freeUsageGroupBy).not.toHaveBeenCalled();
+  });
+
+  it("hands back a finished job's clips from Telegram's cache instead of re-running", async () => {
+    mocks.probeVideoUrl.mockResolvedValue({ ok: true, durationSec: 900, title: "Same talk" });
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "j-done",
+        status: "DONE",
+        createdAt: new Date(),
+        clips: [
+          { id: "c1", title: "Clip one", telegramFileId: "file-1", storageKey: "k1" },
+          { id: "c2", title: "Clip two", telegramFileId: null, storageKey: "k2" },
+          { id: "c3", title: "Clip three", telegramFileId: "file-3", storageKey: "k3" },
+        ],
+      },
+    ]);
+    const { client } = harness();
+
+    await handleUpdate(
+      client as never,
+      videoUrlUpdate("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s") as never,
+      CONFIG
+    );
+
+    // Two of three clips ever reached the chat; those two come back by id.
+    expect(client.sendMessage).toHaveBeenCalledWith(CHAT.id, t("ru").duplicateDone(2));
+    expect(client.sendVideo).toHaveBeenCalledTimes(2);
+    expect(client.sendVideo).toHaveBeenNthCalledWith(1, CHAT.id, "file-1", "Clip one");
+    expect(client.sendVideo).toHaveBeenNthCalledWith(2, CHAT.id, "file-3", "Clip three");
+    expect(refusalsRecorded()[0]).toMatchObject({
+      code: "DUPLICATE",
+      detail: { priorJobId: "j-done", priorStatus: "DONE", resent: 2 },
+    });
+    expect(mocks.freeUsageGroupBy).not.toHaveBeenCalled();
+  });
+
+  // The legitimate retry: after a FAILED run the same link goes through the
+  // ordinary path (here: on to the blocker, which reads the balance).
+  it("lets the same link through after a failed job", async () => {
+    mocks.probeVideoUrl.mockResolvedValue({ ok: true, durationSec: 900, title: "Same talk" });
+    mocks.jobFindMany.mockResolvedValue([
+      { id: "j-failed", status: "FAILED", createdAt: new Date(), clips: [] },
+    ]);
+    // Refuse at the blocker on the free ledger, so the test does not need the
+    // job-creation transaction: what matters is that the duplicate gate let it
+    // pass to the ordinary path.
+    delete process.env.FREE_TIER_MONTHLY_BUDGET_USD;
+    const { client } = harness();
+
+    await handleUpdate(
+      client as never,
+      videoUrlUpdate("https://youtu.be/dQw4w9WgXcQ") as never,
+      CONFIG
+    );
+
+    expect(eventsRecorded()).not.toContain(uploadRejectedEvent("DUPLICATE"));
+    expect(client.sendVideo).not.toHaveBeenCalled();
+    expect(eventsRecorded()).toContain(uploadRejectedEvent("FREE_BUDGET_CLOSED"));
   });
 
   it("records upload_rejected_daily_limit", async () => {

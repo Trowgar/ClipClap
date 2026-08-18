@@ -22,6 +22,8 @@ import {
   isBelowSourceFloor,
   isShortSource,
   SOURCE_FLOOR,
+  telegramSourceFingerprint,
+  urlSourceFingerprint,
   getUsageForUser,
   isPermanentTelegramError,
   jobService,
@@ -40,6 +42,7 @@ import {
   uploadFile,
 } from "@clipclap/shared";
 import type {
+  DuplicateJob,
   FreeChargeInput,
   RefusalDetail,
   SubscriptionPhase,
@@ -2074,6 +2077,55 @@ function freeChargeFor(
   return { seconds, estimatedCostUsd: estimatedFreeCostUsd(seconds) };
 }
 
+/** The same source again. Says so, hands the clips back when there are any,
+ *  and files the refusal - a resend that never became a job must not read on
+ *  /admin as a `video_submitted` with nothing after it.
+ *
+ *  Three of the first fifteen outside users did this (one link three times,
+ *  two files twice each); every repeat was a full paid run for clips they
+ *  already had. A finished job's clips come back from Telegram's cache by
+ *  file_id - no download, no upload, no minutes; clips that never reached the
+ *  chat (no file_id) are simply not among them. */
+async function answerDuplicate(
+  client: TelegramClient,
+  chatId: number | string,
+  from: TelegramUser,
+  dict: Dict,
+  dup: DuplicateJob,
+  detail: RefusalDetail
+): Promise<void> {
+  if (dup.kind === "active") {
+    await client.sendMessage(chatId, dict.duplicateActive);
+    await recordUploadRefusal(
+      "bot",
+      from.id,
+      "DUPLICATE",
+      { ...detail, priorJobId: dup.job.id, priorStatus: dup.job.status },
+      from.language_code
+    );
+    return;
+  }
+  const cached = dup.clips.filter((c) => c.telegramFileId);
+  await client.sendMessage(chatId, dict.duplicateDone(cached.length));
+  let resent = 0;
+  for (const clip of cached) {
+    try {
+      await client.sendVideo(chatId, clip.telegramFileId as string, clip.title ?? undefined);
+      resent += 1;
+    } catch (error) {
+      // One clip's failure costs only itself, same rule as delivery.
+      console.warn(`[duplicate] could not re-send clip ${clip.id}:`, error);
+    }
+  }
+  await recordUploadRefusal(
+    "bot",
+    from.id,
+    "DUPLICATE",
+    { ...detail, priorJobId: dup.job.id, priorStatus: dup.job.status, resent },
+    from.language_code
+  );
+}
+
 async function handleVideo(
   client: TelegramClient,
   message: TelegramMessage,
@@ -2090,6 +2142,18 @@ async function handleVideo(
     from.language_code
   );
   const subject = { telegramId: from.id, locale: from.language_code };
+  // Before the blocker and long before the Telegram download and the R2
+  // upload: a resend costs nothing to recognise from file_unique_id alone.
+  const fingerprint = telegramSourceFingerprint(source.fileUniqueId);
+  const duplicate = await jobService.findDuplicateJob(user.id, fingerprint);
+  if (duplicate) {
+    await answerDuplicate(client, message.chat.id, from, dict, duplicate, {
+      source: "file",
+      durationSec: source.duration,
+      fingerprint,
+    });
+    return;
+  }
   const blockedReason = await getSubmissionBlocker(user.id, dict, source.duration, subject);
   if (blockedReason) {
     await client.sendMessage(message.chat.id, dict.blocked(blockedReason), {
@@ -2163,6 +2227,7 @@ async function handleVideo(
     const created = await jobService.createJob({
       userId: user.id,
       sourceKey,
+      sourceFingerprint: fingerprint,
       originalFilename: source.fileName || "telegram-video.mp4",
       subtitles: user.subtitlesEnabled,
       sourceDurationSec: source.duration,
@@ -2397,6 +2462,20 @@ async function handleVideoUrl(
 
   const user = await resolveTelegramUser(from);
   const subject = { telegramId: from.id, locale: from.language_code };
+  // After the probe (it is the account, not the link, that decides whether
+  // this is a repeat) and before the blocker: a resent link that is already
+  // running or already clipped must not be answered with a balance.
+  const fingerprint = urlSourceFingerprint(url);
+  const duplicate = await jobService.findDuplicateJob(user.id, fingerprint);
+  if (duplicate) {
+    await answerDuplicate(client, message.chat.id, from, dict, duplicate, {
+      source: "url",
+      url,
+      durationSec: Math.round(probe.durationSec),
+      fingerprint,
+    });
+    return;
+  }
   const blockedReason = await getSubmissionBlocker(user.id, dict, probe.durationSec, subject);
   if (blockedReason) {
     await client.sendMessage(message.chat.id, dict.blocked(blockedReason), {
@@ -2414,6 +2493,7 @@ async function handleVideoUrl(
   const created = await jobService.createJob({
     userId: user.id,
     sourceUrl: url,
+    sourceFingerprint: fingerprint,
     originalFilename: probe.title,
     subtitles: user.subtitlesEnabled,
     sourceDurationSec: probedSec,

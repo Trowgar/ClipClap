@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   accountCreate: vi.fn(),
   funnelUpsert: vi.fn(),
   jobCount: vi.fn(),
+  jobFindMany: vi.fn(),
   jobAggregate: vi.fn(),
   freeUsageGroupBy: vi.fn(),
   freeUsageAggregate: vi.fn(),
@@ -44,7 +45,7 @@ vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
     },
     funnelEvent: { upsert: mocks.funnelUpsert },
     uploadRefusal: { create: vi.fn().mockResolvedValue({}) },
-    job: { count: mocks.jobCount, aggregate: mocks.jobAggregate },
+    job: { count: mocks.jobCount, aggregate: mocks.jobAggregate, findMany: mocks.jobFindMany },
     freeUsage: {
       groupBy: mocks.freeUsageGroupBy,
       aggregate: mocks.freeUsageAggregate,
@@ -148,6 +149,7 @@ describe("handleVideo cleans up the object it uploaded", () => {
     mocks.accountFindUnique.mockResolvedValue({ userId: "u1" });
     mocks.funnelUpsert.mockResolvedValue({});
     mocks.jobCount.mockResolvedValue(0);
+    mocks.jobFindMany.mockResolvedValue([]);
     mocks.jobAggregate.mockResolvedValue({ _sum: { sourceDurationSec: 0 } });
     mocks.freeUsageGroupBy.mockResolvedValue([]);
     mocks.freeUsageAggregate.mockResolvedValue({ _sum: { estimatedCostUsd: 0 } });

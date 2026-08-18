@@ -91,6 +91,7 @@ describe("recordFunnelEvent", () => {
     // Route-level refusals that never reach canSubmitJob
     expect(uploadRejectedEvent("TOO_LONG")).toBe("upload_rejected_too_long");
     expect(uploadRejectedEvent("TOO_SHORT")).toBe("upload_rejected_too_short");
+    expect(uploadRejectedEvent("DUPLICATE")).toBe("upload_rejected_duplicate");
     expect(uploadRejectedEvent("DAILY_LIMIT")).toBe("upload_rejected_daily_limit");
     expect(uploadRejectedEvent("CONCURRENT")).toBe("upload_rejected_concurrent");
     expect(uploadRejectedEvent("PROBE_FAILED")).toBe("upload_rejected_probe_failed");
@@ -113,6 +114,7 @@ describe("recordFunnelEvent", () => {
         "LIFECYCLE",
         "TOO_LONG",
         "TOO_SHORT",
+        "DUPLICATE",
         "DAILY_LIMIT",
         "CONCURRENT",
         "PROBE_FAILED",

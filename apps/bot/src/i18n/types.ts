@@ -138,6 +138,11 @@ export interface Dict {
   /** Not a refusal: accepted, but the source is short enough that 0-2 clips
    *  is the honest expectation. Sent once, after the queued board. */
   shortSourceNotice: string;
+  /** The same source again while its job is still running. */
+  duplicateActive: string;
+  /** The same source again after a finished job whose clips still exist;
+   *  the clips follow this message, re-sent from Telegram's cache. */
+  duplicateDone: (clipCount: number) => string;
   /** Lifecycle: has a plan on the account but no subscription behind it. */
   planNotActive: string;
   /** Lifecycle: subscription canceled (with or without grace left). */

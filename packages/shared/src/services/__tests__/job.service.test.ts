@@ -41,8 +41,11 @@ const tx = {
   }),
 };
 
+const jobFindMany = vi.fn();
+
 vi.mock("../../lib/prisma", () => ({
   prisma: {
+    job: { findMany: (...args: unknown[]) => jobFindMany(...args) },
     // A faithful-enough interactive transaction: it runs the callback and, if
     // the callback throws, propagates without committing. What matters for
     // these tests is that everything inside it happens before $transaction
@@ -66,7 +69,7 @@ vi.mock("../../lib/queues", () => ({
 
 import { prisma } from "../../lib/prisma";
 import { getStageQueue } from "../../lib/queues";
-import { createJob } from "../job.service";
+import { createJob, findDuplicateJob } from "../job.service";
 
 const JOB = { id: "job_1", userId: "u1" };
 
@@ -401,5 +404,110 @@ describe("job.service createJob - lock contention", () => {
         freeCharge: { seconds: 60, estimatedCostUsd: 0.042 },
       })
     ).rejects.toThrow();
+  });
+});
+
+describe("createJob stores the source fingerprint", () => {
+  beforeEach(() => {
+    calls.length = 0;
+    inner.length = 0;
+    tx.job.create.mockReset();
+    tx.job.create.mockResolvedValue({ id: "j1", userId: "u1" });
+    tx.job.count.mockResolvedValue(0);
+    tx.user.findUniqueOrThrow.mockResolvedValue({ plan: "NONE", billingCycle: null });
+  });
+
+  it("writes it on the row, and null when absent", async () => {
+    await createJob({
+      userId: "u1",
+      sourceUrl: "https://youtu.be/dQw4w9WgXcQ",
+      sourceFingerprint: "url:https://youtube.com/watch?v=dQw4w9WgXcQ",
+    });
+    expect(tx.job.create.mock.calls[0][0].data.sourceFingerprint).toBe(
+      "url:https://youtube.com/watch?v=dQw4w9WgXcQ"
+    );
+
+    tx.job.create.mockClear();
+    await createJob({ userId: "u1", sourceKey: "uploads/x.mp4" });
+    expect(tx.job.create.mock.calls[0][0].data.sourceFingerprint).toBeNull();
+  });
+});
+
+describe("findDuplicateJob", () => {
+  const FP = "url:https://youtube.com/watch?v=dQw4w9WgXcQ";
+  const clip = (id: string) => ({
+    id,
+    title: `clip ${id}`,
+    telegramFileId: `file-${id}`,
+    storageKey: `clips/${id}.mp4`,
+  });
+
+  beforeEach(() => {
+    jobFindMany.mockReset();
+    jobFindMany.mockResolvedValue([]);
+  });
+
+  it("does not even query without a fingerprint", async () => {
+    await expect(findDuplicateJob("u1", null)).resolves.toBeNull();
+    await expect(findDuplicateJob("u1", undefined)).resolves.toBeNull();
+    expect(jobFindMany).not.toHaveBeenCalled();
+  });
+
+  // The query shape is the test - a mocked prisma cannot tell a wrong where
+  // from a right one, so it is asserted: this user's jobs with this key,
+  // newest first, and only clips that are still in storage.
+  it("asks for this user's jobs with this key, newest first, with live clips only", async () => {
+    await findDuplicateJob("u1", FP);
+    const arg = jobFindMany.mock.calls[0][0];
+    expect(arg.where).toEqual({ userId: "u1", sourceFingerprint: FP });
+    expect(arg.orderBy).toEqual({ createdAt: "desc" });
+    expect(arg.select.clips.where.deletedAt).toBeNull();
+    expect(arg.select.clips.where.OR[0]).toEqual({ expiresAt: null });
+    expect(arg.select.clips.where.OR[1].expiresAt.gt).toBeInstanceOf(Date);
+  });
+
+  it("reports a running job as active", async () => {
+    jobFindMany.mockResolvedValue([
+      { id: "j2", status: "TRANSCRIBING", createdAt: new Date(), clips: [] },
+    ]);
+    await expect(findDuplicateJob("u1", FP)).resolves.toMatchObject({
+      kind: "active",
+      job: { id: "j2" },
+    });
+  });
+
+  it("reports a finished job with live clips as completed, with the clips", async () => {
+    jobFindMany.mockResolvedValue([
+      { id: "j3", status: "DONE", createdAt: new Date(), clips: [clip("a"), clip("b")] },
+    ]);
+    await expect(findDuplicateJob("u1", FP)).resolves.toMatchObject({
+      kind: "completed",
+      job: { id: "j3" },
+      clips: [clip("a"), clip("b")],
+    });
+  });
+
+  // The legitimate retries: a failed run, a run whose clips were swept, a run
+  // that produced nothing. None of them may block a resend.
+  it.each([
+    ["FAILED", []],
+    ["DONE", []],
+  ])("lets a resend through after a %s job with %j clips", async (status, clips) => {
+    jobFindMany.mockResolvedValue([{ id: "j4", status, createdAt: new Date(), clips }]);
+    await expect(findDuplicateJob("u1", FP)).resolves.toBeNull();
+  });
+
+  // Newest decides: a fresh FAILED retry after an older DONE-with-clips is
+  // still a duplicate of the DONE one (the clips exist), but a running job
+  // outranks everything.
+  it("walks candidates newest first and takes the first that qualifies", async () => {
+    jobFindMany.mockResolvedValue([
+      { id: "new-failed", status: "FAILED", createdAt: new Date(), clips: [] },
+      { id: "old-done", status: "DONE", createdAt: new Date(0), clips: [clip("a")] },
+    ]);
+    await expect(findDuplicateJob("u1", FP)).resolves.toMatchObject({
+      kind: "completed",
+      job: { id: "old-done" },
+    });
   });
 });

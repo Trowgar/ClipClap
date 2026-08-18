@@ -59,6 +59,9 @@ export interface CreateJobInput {
   subtitles?: boolean;
   sourceDurationSec?: number;
   freeCharge?: FreeChargeInput;
+  /** "url:<normalized>" | "tg:<file_unique_id>" (lib/source-fingerprint.ts),
+   *  or absent when the source has no stable identity (web file uploads). */
+  sourceFingerprint?: string | null;
 }
 
 export interface EditClipInput {

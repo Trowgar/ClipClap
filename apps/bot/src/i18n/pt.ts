@@ -101,6 +101,10 @@ const pt: Dict = {
     "Este vídeo tem menos de um minuto. Eu recorto clipes de conversas longas - lives, podcasts, entrevistas, aulas - e aqui ainda não tem o que cortar. Manda algo com pelo menos um minuto; a partir de dez minutos é onde funciona melhor.",
   shortSourceNotice:
     "Aviso: este tem menos de cinco minutos. De fontes curtas costumam sair 0-2 clipes - a partir de dez minutos é onde eu trabalho melhor.",
+  duplicateActive:
+    "Já estou trabalhando exatamente neste vídeo - aviso assim que ficar pronto. Não precisa mandar de novo.",
+  duplicateDone: (clipCount) =>
+    `Você já tinha me mandado este vídeo - ${clipCount === 1 ? "aqui está o clipe que" : `aqui estão os ${clipCount} clipes que`} eu fiz dele, sem gastar minutos.`,
   planNotActive:
     "Não há assinatura ativa nesta conta, então ainda não posso processar vídeos. Escolha um plano que eu começo na hora.",
   planCanceled:

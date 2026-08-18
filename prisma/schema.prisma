@@ -412,6 +412,10 @@ model Job {
   user                          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   sourceUrl                     String?
   sourceKey                     String?
+  /// "url:<normalized>" or "tg:<file_unique_id>" - the key that recognises a
+  /// resent source (lib/source-fingerprint.ts). Nullable: web file uploads and
+  /// every job before 2026-08-18 have none.
+  sourceFingerprint             String?
   originalFilename              String?
   status                        JobStatus @default(PENDING)
   error                         String?
@@ -484,6 +488,7 @@ model Job {
   @@index([userId, status])
   @@index([userId, createdAt])
   @@index([status, createdAt])
+  @@index([userId, sourceFingerprint])
   @@map("jobs")
 }
 

@@ -218,6 +218,7 @@ export async function createJob(
             userId: input.userId,
             sourceUrl: input.sourceUrl,
             sourceKey: input.sourceKey,
+            sourceFingerprint: input.sourceFingerprint ?? null,
             originalFilename: input.originalFilename,
             subtitles: input.subtitles ?? true,
             sourceDurationSec: input.sourceDurationSec,
@@ -320,4 +321,58 @@ export async function updateJobStatus(
         : {}),
     },
   });
+}
+
+/**
+ * A resent source, if this user already has a job for it that makes a new run
+ * pointless: one still RUNNING (a second copy of the same work), or one that
+ * finished with clips that are still in storage (they can be handed back for
+ * free). A FAILED job, a job whose clips were swept, or a job with no clips is
+ * NOT a duplicate - resending after those is the legitimate retry.
+ *
+ * Fingerprints came in on 2026-08-18; older jobs have none and never match.
+ */
+export type DuplicateJob =
+  | { kind: "active"; job: Pick<Job, "id" | "status" | "createdAt"> }
+  | {
+      kind: "completed";
+      job: Pick<Job, "id" | "status" | "createdAt">;
+      clips: Array<{
+        id: string;
+        title: string | null;
+        telegramFileId: string | null;
+        storageKey: string;
+      }>;
+    };
+
+export async function findDuplicateJob(
+  userId: string,
+  fingerprint: string | null | undefined
+): Promise<DuplicateJob | null> {
+  if (!fingerprint) return null;
+  const now = new Date();
+  const candidates = await prisma.job.findMany({
+    where: { userId, sourceFingerprint: fingerprint },
+    orderBy: { createdAt: "desc" },
+    take: 5,
+    select: {
+      id: true,
+      status: true,
+      createdAt: true,
+      clips: {
+        where: { deletedAt: null, OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+        orderBy: { startTime: "asc" },
+        select: { id: true, title: true, telegramFileId: true, storageKey: true },
+      },
+    },
+  });
+  for (const job of candidates) {
+    if ((ACTIVE_JOB_STATUSES as readonly string[]).includes(job.status)) {
+      return { kind: "active", job };
+    }
+    if (job.status === "DONE" && job.clips.length > 0) {
+      return { kind: "completed", job, clips: job.clips };
+    }
+  }
+  return null;
 }

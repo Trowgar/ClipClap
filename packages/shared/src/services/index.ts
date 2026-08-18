@@ -1,5 +1,6 @@
 export * as userService from "./user.service";
 export * as jobService from "./job.service";
+export type { DuplicateJob } from "./job.service";
 export * as clipService from "./clip.service";
 export * as billingService from "./billing.service";
 export * as topupService from "./topup.service";
