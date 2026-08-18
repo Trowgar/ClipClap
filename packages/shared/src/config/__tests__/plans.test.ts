@@ -49,7 +49,12 @@ describe("Plan Limits", () => {
     expect(limits.retentionDays).toBe(3);
     expect(limits.concurrentJobsLimit).toBe(1);
     expect(limits.priorityQueue).toBe(false);
-    expect(limits.maxJobsPerDay).toBe(5);
+    // 60 since 2026-08-18: at the 60s floor and 3600 lifetime seconds it is
+    // the most jobs a free account can EVER create, so the day cap can no
+    // longer bind before the ledger does (it had refused only good accounts).
+    expect(limits.maxJobsPerDay).toBe(
+      FREE_TIER.lifetimeSeconds / SOURCE_FLOOR.minDurationSec
+    );
   });
 
   // The trial is a taste, not a tier: the free source cap must stay well under
@@ -226,11 +231,11 @@ describe("Plan Limits", () => {
       expect(getPlanLimits("NONE").concurrentJobsLimit).toBe(1);
     });
 
-    // maxJobsPerDay is deliberately LOOSER than the allowance can pay for -
-    // five jobs a day against sixty lifetime minutes. It is a rate limit, not
-    // the allowance: the free_usage ledger is what stops the sixty-first
-    // minute, and a daily cap tight enough to double as the allowance would
-    // refuse the second short video of someone who has minutes left.
+    // maxJobsPerDay is deliberately LOOSER than the allowance can pay for.
+    // It is a rate limit, not the allowance: the free_usage ledger is what
+    // stops the sixty-first minute, and a daily cap tight enough to double as
+    // the allowance would refuse the second short video of someone who has
+    // minutes left - which the old cap of five did, to three real people.
     it("leaves the lifetime bound to the ledger, not to the daily cap", () => {
       const free = getPlanLimits("NONE");
       expect(free.maxJobsPerDay * free.maxSourceDurationMinutes).toBeGreaterThan(

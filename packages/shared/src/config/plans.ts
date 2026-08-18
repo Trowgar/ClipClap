@@ -263,7 +263,14 @@ const NONE_LIMITS: PlanLimits = {
   concurrentJobsLimit: 1,
   maxSourceDurationMinutes: 60,
   maxFileSizeBytes: ABUSE_CAPS.maxFileSizeBytes,
-  maxJobsPerDay: 5,
+  // Was 5 until 2026-08-18. In three weeks it refused four submissions from
+  // three people - and they were the best accounts we had (one with 15 free
+  // minutes still unspent). It protected nothing the ledger does not: with the
+  // 60-second floor (SOURCE_FLOOR) and 3600 lifetime seconds, sixty jobs is the
+  // most a free account can EVER create, so a day cap of sixty binds after the
+  // ledger does, never before. Kept as a number rather than deleted so a bug
+  // that made jobs free would still hit a wall.
+  maxJobsPerDay: 60,
   priceUsd: 0,
 };
 
