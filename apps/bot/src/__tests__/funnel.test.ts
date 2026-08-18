@@ -64,7 +64,7 @@ import {
   getPlanLimits,
   uploadRejectedEvent,
 } from "@clipclap/shared";
-import { getSubmissionBlocker, handleUpdate } from "../handlers";
+import { blockedKeyboard, getSubmissionBlocker, handleUpdate } from "../handlers";
 import { t } from "../i18n";
 
 const CONFIG = { appUrl: "https://clipclap.io" };
@@ -594,10 +594,16 @@ describe("refusals the bot used to swallow", () => {
       CONFIG
     );
 
+    // With the Plans button under it - every refusal carries one now.
     expect(client.sendMessage).toHaveBeenCalledWith(
       CHAT.id,
-      t("ru").blocked(t("ru").sourceTooShort)
+      t("ru").blocked(t("ru").sourceTooShort),
+      { replyMarkup: blockedKeyboard(t("ru")) }
     );
+    expect(blockedKeyboard(t("ru")).inline_keyboard[0][0]).toEqual({
+      text: t("ru").menuPlans,
+      callback_data: "plans:open",
+    });
     expect(eventsRecorded()).toContain(uploadRejectedEvent("TOO_SHORT"));
     expect(refusalsRecorded()).toEqual([
       { code: "TOO_SHORT", detail: { durationSec: 40, minSec: 60 } },

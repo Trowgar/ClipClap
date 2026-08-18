@@ -87,6 +87,19 @@ export function isLangCallback(data: string | undefined): boolean {
 }
 
 export const CALLBACK_SUBTITLES_TOGGLE = "subs_toggle";
+/** Under every refusal. The refusal copy has always ENDED with "💳 Plans -
+ *  choose or manage your subscription", as a sentence; 31 free_exhausted
+ *  refusals to one user produced zero checkouts, and the Plans entry was a
+ *  reply-keyboard button somewhere below the conversation. Now the sentence
+ *  has a button. */
+export const CALLBACK_PLANS_OPEN = "plans:open";
+
+/** The one-button keyboard under a refusal: opens the plans view. */
+export function blockedKeyboard(dict: Dict): InlineKeyboardMarkup {
+  return {
+    inline_keyboard: [[{ text: dict.menuPlans, callback_data: CALLBACK_PLANS_OPEN }]],
+  };
+}
 
 export function isReferralAdmin(
   telegramId: string,
@@ -1724,6 +1737,15 @@ async function handleCallbackQuery(
       await handleSubtitlesToggle(client, query, dict);
       return;
     }
+    case CALLBACK_PLANS_OPEN: {
+      // Same view the 💳 Plans menu button renders, in the same chat.
+      const account = await prisma.user.findUnique({
+        where: { telegramId: String(query.from.id) },
+        select: { id: true },
+      });
+      await sendPlansView(client, query.message, dict, config, account);
+      return;
+    }
     default:
       return;
   }
@@ -2070,10 +2092,9 @@ async function handleVideo(
   const subject = { telegramId: from.id, locale: from.language_code };
   const blockedReason = await getSubmissionBlocker(user.id, dict, source.duration, subject);
   if (blockedReason) {
-    await client.sendMessage(
-      message.chat.id,
-      dict.blocked(blockedReason)
-    );
+    await client.sendMessage(message.chat.id, dict.blocked(blockedReason), {
+      replyMarkup: blockedKeyboard(dict),
+    });
     return;
   }
 
@@ -2163,7 +2184,8 @@ async function handleVideo(
         message.chat.id,
         dict.blocked(
           dict.planConcurrentLimit(created.inFlight, created.limit)
-        )
+        ),
+        { replyMarkup: blockedKeyboard(dict) }
       );
       // The locked count is the one that decides, so it is the one that has to
       // be counted. The advisory check earlier may have recorded this already;
@@ -2180,7 +2202,9 @@ async function handleVideo(
     }
 
     if (created.status === "busy") {
-      await client.sendMessage(message.chat.id, dict.blocked(dict.submitBusy));
+      await client.sendMessage(message.chat.id, dict.blocked(dict.submitBusy), {
+        replyMarkup: blockedKeyboard(dict),
+      });
       await recordUploadRefusal(
         "bot",
         from.id,
@@ -2375,10 +2399,9 @@ async function handleVideoUrl(
   const subject = { telegramId: from.id, locale: from.language_code };
   const blockedReason = await getSubmissionBlocker(user.id, dict, probe.durationSec, subject);
   if (blockedReason) {
-    await client.sendMessage(
-      message.chat.id,
-      dict.blocked(blockedReason)
-    );
+    await client.sendMessage(message.chat.id, dict.blocked(blockedReason), {
+      replyMarkup: blockedKeyboard(dict),
+    });
     return;
   }
 
@@ -2400,7 +2423,8 @@ async function handleVideoUrl(
   if (created.status === "concurrent_limit") {
     await client.sendMessage(
       message.chat.id,
-      dict.blocked(dict.planConcurrentLimit(created.inFlight, created.limit))
+      dict.blocked(dict.planConcurrentLimit(created.inFlight, created.limit)),
+      { replyMarkup: blockedKeyboard(dict) }
     );
     await recordUploadRefusal(
       "bot",
@@ -2421,7 +2445,9 @@ async function handleVideoUrl(
   // but the refusal still has to be said and counted, or the funnel shows a
   // `video_submitted` with nothing after it.
   if (created.status === "busy") {
-    await client.sendMessage(message.chat.id, dict.blocked(dict.submitBusy));
+    await client.sendMessage(message.chat.id, dict.blocked(dict.submitBusy), {
+      replyMarkup: blockedKeyboard(dict),
+    });
     await recordUploadRefusal(
       "bot",
       from.id,

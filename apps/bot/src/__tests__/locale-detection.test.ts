@@ -394,3 +394,28 @@ describe("changing the language from the settings menu", () => {
     expect(mocks.userUpdate).not.toHaveBeenCalled();
   });
 });
+
+// The Plans button under a refusal. `plans:open` must land on the same view
+// the 💳 Plans menu button renders - for a stranger and a NONE account alike
+// that is the plans text with the four subscribe buttons - in the user's own
+// language.
+describe("the Plans button under a refusal", () => {
+  it("opens the plans view with the subscribe buttons, in the user's language", async () => {
+    const client = harness();
+
+    await handleUpdate(client as never, callback("plans:open", "ru") as never, CONFIG);
+
+    expect(client.answerCallbackQuery).toHaveBeenCalled();
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      CHAT.id,
+      t("ru").plansText,
+      expect.objectContaining({
+        replyMarkup: expect.objectContaining({
+          inline_keyboard: expect.arrayContaining([
+            [expect.objectContaining({ callback_data: "sub:STARTER:WEEKLY" })],
+          ]),
+        }),
+      })
+    );
+  });
+});

@@ -77,7 +77,7 @@ vi.mock(
 );
 
 import { uploadRejectedEvent } from "@clipclap/shared";
-import { handleUpdate } from "../handlers";
+import { blockedKeyboard, handleUpdate } from "../handlers";
 import { t } from "../i18n";
 
 const CONFIG = { appUrl: "https://clipclap.io" };
@@ -177,7 +177,8 @@ describe("handleVideo cleans up the object it uploaded", () => {
     // Said, and counted. An uncaught throw did neither.
     expect(c.sendMessage).toHaveBeenCalledWith(
       CHAT.id,
-      t("en").blocked(t("en").submitBusy)
+      t("en").blocked(t("en").submitBusy),
+      { replyMarkup: blockedKeyboard(t("en")) }
     );
     expect(eventsRecorded()).toContain(uploadRejectedEvent("BUSY"));
   });
