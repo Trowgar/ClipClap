@@ -97,6 +97,10 @@ const pt: Dict = {
     `Seu teste grátis aceita vídeos de até ${freeMaxMinutes} minutos, e este é mais longo. Manda um vídeo mais curto, ou um trecho de ${freeMaxMinutes} minutos deste, para testar de graça. Com um plano eu aceito fontes de até ${planMaxMinutes} minutos.`,
   planSourceTooLong: (maxMinutes) =>
     `Este vídeo passa de ${maxMinutes} minutos, que é a fonte mais longa que eu aceito. Manda um corte menor que eu processo.`,
+  sourceTooShort:
+    "Este vídeo tem menos de um minuto. Eu recorto clipes de conversas longas - lives, podcasts, entrevistas, aulas - e aqui ainda não tem o que cortar. Manda algo com pelo menos um minuto; a partir de dez minutos é onde funciona melhor.",
+  shortSourceNotice:
+    "Aviso: este tem menos de cinco minutos. De fontes curtas costumam sair 0-2 clipes - a partir de dez minutos é onde eu trabalho melhor.",
   planNotActive:
     "Não há assinatura ativa nesta conta, então ainda não posso processar vídeos. Escolha um plano que eu começo na hora.",
   planCanceled:

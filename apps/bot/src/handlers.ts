@@ -19,6 +19,9 @@ import {
   getOrCreateTelegramUser,
   getPlanLimits,
   getTributeCatalogEntry,
+  isBelowSourceFloor,
+  isShortSource,
+  SOURCE_FLOOR,
   getUsageForUser,
   isPermanentTelegramError,
   jobService,
@@ -2201,6 +2204,9 @@ async function handleVideo(
     });
 
     await showQueuedBoard(client, message.chat.id, ack, dict);
+    if (isShortSource(source.duration)) {
+      await client.sendMessage(message.chat.id, dict.shortSourceNotice);
+    }
   } finally {
     await rm(tempPath, { force: true });
     if (unownedKey) {
@@ -2437,6 +2443,9 @@ async function handleVideoUrl(
   });
 
   await showQueuedBoard(client, message.chat.id, ack, dict);
+  if (isShortSource(probedSec)) {
+    await client.sendMessage(message.chat.id, dict.shortSourceNotice);
+  }
 }
 
 /**
@@ -2515,6 +2524,15 @@ export async function getSubmissionBlocker(
           subject.locale
         )
       : Promise.resolve();
+
+  // Under the engine floor: nothing to cut, whatever the plan. First among the
+  // duration gates on purpose - a 30-second video from an exhausted trial
+  // account is refused for being 30 seconds, which is the sentence that
+  // teaches them what the product wants; "your minutes ran out" would not.
+  if (isBelowSourceFloor(durationSec)) {
+    await recordRejection("TOO_SHORT", { minSec: SOURCE_FLOOR.minDurationSec });
+    return dict.sourceTooShort;
+  }
 
   if (
     durationMinutes > 0 &&

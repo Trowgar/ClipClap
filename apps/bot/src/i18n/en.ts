@@ -143,6 +143,10 @@ const en: Dict = {
     `Your free run covers videos up to ${freeMaxMinutes} minutes, and this one is longer. Send a shorter video - or a ${freeMaxMinutes}-minute section of this one - to try it free. A plan takes sources up to ${planMaxMinutes} minutes.`,
   planSourceTooLong: (maxMinutes) =>
     `This video is longer than ${maxMinutes} minutes, which is the longest source I can take. Send a shorter cut and I'll clip it.`,
+  sourceTooShort:
+    "This video is under a minute long. I cut clips out of longer talk - streams, podcasts, interviews, lectures - and there is nothing to cut here yet. Send something at least a minute long; ten minutes and up works best.",
+  shortSourceNotice:
+    "Heads-up: this one is under five minutes. Short sources usually give 0-2 clips - ten minutes and up is where I do my best work.",
   planNotActive:
     "There is no active subscription on this account, so I cannot process videos yet. Pick a plan and I'll start right away.",
   planCanceled:

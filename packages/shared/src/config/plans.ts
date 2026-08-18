@@ -267,6 +267,44 @@ const NONE_LIMITS: PlanLimits = {
   priceUsd: 0,
 };
 
+/** The floor under every plan - an ENGINE fact, not a plan limit.
+ *
+ *  Measured on the first outside-user corpus (57 jobs, 2026-08-18): sources
+ *  under 60s gave 1 clip in 14 jobs; 1-5 minutes gave 13 clips in 20 jobs
+ *  (0.65 per job); over 5 minutes gave 98 in 23 (4.3 per job). The engine cuts
+ *  clips OUT of talk; there is nothing to cut in a 40-second video, and the
+ *  user learns that after a wait and a "no clips" message - or worse, spends
+ *  the one zero-clip forgiveness the free tier grants. Duration is known
+ *  before a job exists (probe, Telegram metadata, the web client), so the
+ *  refusal happens there, in copy that says what works.
+ *
+ *  `shortNoticeSec` is not a refusal: below it the source is accepted with a
+ *  one-line heads-up that short sources usually give 0-2 clips. */
+export const SOURCE_FLOOR = {
+  minDurationSec: 60,
+  shortNoticeSec: 300,
+} as const;
+
+/** True when a KNOWN duration is under the floor. Unknown (0/undefined) is
+ *  not judged - a document without metadata is not a 30-second video. */
+export function isBelowSourceFloor(durationSec: number | undefined | null): boolean {
+  return (
+    typeof durationSec === "number" &&
+    durationSec > 0 &&
+    durationSec < SOURCE_FLOOR.minDurationSec
+  );
+}
+
+/** True when a known duration is at or above the floor but under the notice
+ *  line - accepted, but worth a word about what to expect. */
+export function isShortSource(durationSec: number | undefined | null): boolean {
+  return (
+    typeof durationSec === "number" &&
+    durationSec >= SOURCE_FLOOR.minDurationSec &&
+    durationSec < SOURCE_FLOOR.shortNoticeSec
+  );
+}
+
 export function getPlanLimits(plan: Plan, cycle?: BillingCycle): PlanLimits {
   if (plan === "NONE") return NONE_LIMITS;
   const cycleToUse = cycle ?? "MONTHLY";

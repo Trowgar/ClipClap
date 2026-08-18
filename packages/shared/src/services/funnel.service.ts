@@ -77,6 +77,8 @@ export type UploadRejectionCode =
   | "QUOTA"
   | "LIFECYCLE"
   | "TOO_LONG"
+  /** Under SOURCE_FLOOR.minDurationSec - see plans.ts for the numbers. */
+  | "TOO_SHORT"
   | "DAILY_LIMIT"
   | "CONCURRENT"
   | "PROBE_FAILED"
@@ -98,6 +100,7 @@ const REJECTION_SUFFIX: Record<UploadRejectionCode, string> = {
   QUOTA: "quota",
   LIFECYCLE: "lifecycle",
   TOO_LONG: "too_long",
+  TOO_SHORT: "too_short",
   DAILY_LIMIT: "daily_limit",
   CONCURRENT: "concurrent",
   PROBE_FAILED: "probe_failed",

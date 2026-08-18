@@ -64,7 +64,7 @@ import {
   getPlanLimits,
   uploadRejectedEvent,
 } from "@clipclap/shared";
-import { handleUpdate } from "../handlers";
+import { getSubmissionBlocker, handleUpdate } from "../handlers";
 import { t } from "../i18n";
 
 const CONFIG = { appUrl: "https://clipclap.io" };
@@ -575,6 +575,52 @@ describe("refusals the bot used to swallow", () => {
     // Our fault, not theirs: it must not land in the funnel as a refusal the
     // submitter could have avoided.
     expect(eventsRecorded()).not.toContain(uploadRejectedEvent("PROBE_FAILED"));
+  });
+
+  // The engine floor. 14 of the first 57 outside jobs were under a minute and
+  // gave one clip between them; the refusal now happens at the probe, in
+  // words that say what works, and it lands in the ledger with the number.
+  it("refuses a source under the floor as TOO_SHORT, before any balance check", async () => {
+    mocks.probeVideoUrl.mockResolvedValue({
+      ok: true,
+      durationSec: 40,
+      title: "A TikTok someone forwarded",
+    });
+    const { client } = harness();
+
+    await handleUpdate(
+      client as never,
+      videoUrlUpdate("https://example.com/watch?v=forty-seconds") as never,
+      CONFIG
+    );
+
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      CHAT.id,
+      t("ru").blocked(t("ru").sourceTooShort)
+    );
+    expect(eventsRecorded()).toContain(uploadRejectedEvent("TOO_SHORT"));
+    expect(refusalsRecorded()).toEqual([
+      { code: "TOO_SHORT", detail: { durationSec: 40, minSec: 60 } },
+    ]);
+    // Nothing further was consulted: no free-tier ledger read, no job.
+    expect(mocks.freeUsageGroupBy).not.toHaveBeenCalled();
+    expect(mocks.freeUsageAggregate).not.toHaveBeenCalled();
+  });
+
+  // A document without metadata is not a 30-second video: an unknown
+  // duration walks past the floor untouched (and past the length cap, as
+  // before). Asserted on the blocker directly - the URL path would go on to
+  // create a job, which this suite does not mock.
+  it("does not judge a source whose duration is unknown", async () => {
+    const subject = { telegramId: FROM.id, locale: "ru" };
+    await expect(
+      getSubmissionBlocker("u1", t("ru"), undefined, subject)
+    ).resolves.toBeNull();
+    await expect(
+      getSubmissionBlocker("u1", t("ru"), 0, subject)
+    ).resolves.toBeNull();
+    expect(eventsRecorded()).not.toContain(uploadRejectedEvent("TOO_SHORT"));
+    expect(refusalsRecorded()).toEqual([]);
   });
 
   it("records upload_rejected_daily_limit", async () => {

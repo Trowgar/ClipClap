@@ -6,6 +6,9 @@ export {
   MAX_SOURCE_FILESIZE_BYTES,
   FREE_TIER,
   estimatedFreeCostUsd,
+  SOURCE_FLOOR,
+  isBelowSourceFloor,
+  isShortSource,
 } from "./plans";
 export type { PlanLimits, TopupPack } from "./plans";
 export {

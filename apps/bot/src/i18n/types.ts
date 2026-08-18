@@ -133,6 +133,11 @@ export interface Dict {
    * cannot act on is only a wall. */
   /** Source longer than the plan's hard cap. */
   planSourceTooLong: (maxMinutes: number) => string;
+  /** Refusal: the source is under the engine floor (SOURCE_FLOOR). */
+  sourceTooShort: string;
+  /** Not a refusal: accepted, but the source is short enough that 0-2 clips
+   *  is the honest expectation. Sent once, after the queued board. */
+  shortSourceNotice: string;
   /** Lifecycle: has a plan on the account but no subscription behind it. */
   planNotActive: string;
   /** Lifecycle: subscription canceled (with or without grace left). */

@@ -5,6 +5,9 @@ import {
   getPlanFromPriceId,
   FREE_TIER,
   estimatedFreeCostUsd,
+  SOURCE_FLOOR,
+  isBelowSourceFloor,
+  isShortSource,
 } from "../plans";
 
 // The free trial was zeroed on 2026-07-25 and turned back on 2026-07-29, once
@@ -259,5 +262,35 @@ describe("Plan Limits", () => {
       vi.stubEnv("STRIPE_STARTER_MONTHLY_PRICE_ID", "");
       expect(getPlanFromPriceId("")).toBeNull();
     });
+  });
+});
+
+describe("SOURCE_FLOOR", () => {
+  // The numbers come from the 57-job corpus in the plans.ts comment; the
+  // shape is what matters here: unknown is never judged, the floor is a strict
+  // less-than, and the notice band is [floor, notice).
+  it("refuses only a KNOWN duration under the floor", () => {
+    expect(isBelowSourceFloor(SOURCE_FLOOR.minDurationSec - 1)).toBe(true);
+    expect(isBelowSourceFloor(1)).toBe(true);
+    expect(isBelowSourceFloor(SOURCE_FLOOR.minDurationSec)).toBe(false);
+    expect(isBelowSourceFloor(0)).toBe(false);
+    expect(isBelowSourceFloor(undefined)).toBe(false);
+    expect(isBelowSourceFloor(null)).toBe(false);
+    expect(isBelowSourceFloor(-5)).toBe(false);
+  });
+
+  it("notices a short source only inside [floor, notice)", () => {
+    expect(isShortSource(SOURCE_FLOOR.minDurationSec)).toBe(true);
+    expect(isShortSource(SOURCE_FLOOR.shortNoticeSec - 1)).toBe(true);
+    expect(isShortSource(SOURCE_FLOOR.shortNoticeSec)).toBe(false);
+    // Under the floor is a refusal, not a notice - the two must not overlap.
+    expect(isShortSource(SOURCE_FLOOR.minDurationSec - 1)).toBe(false);
+    expect(isShortSource(0)).toBe(false);
+    expect(isShortSource(undefined)).toBe(false);
+  });
+
+  it("keeps the measured numbers", () => {
+    expect(SOURCE_FLOOR.minDurationSec).toBe(60);
+    expect(SOURCE_FLOOR.shortNoticeSec).toBe(300);
   });
 });

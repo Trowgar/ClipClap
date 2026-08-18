@@ -94,6 +94,10 @@ const id: Dict = {
     `Percobaan gratis menerima video sampai ${freeMaxMinutes} menit, dan yang ini lebih panjang. Kirim video yang lebih pendek, atau potongan ${freeMaxMinutes} menit dari video ini, untuk mencobanya gratis. Dengan paket, aku menerima sumber sampai ${planMaxMinutes} menit.`,
   planSourceTooLong: (maxMinutes) =>
     `Video ini lebih dari ${maxMinutes} menit, dan itu sumber terpanjang yang bisa aku terima. Kirim potongan yang lebih pendek dan aku proses.`,
+  sourceTooShort:
+    "Video ini kurang dari satu menit. Aku memotong klip dari obrolan yang panjang - siaran langsung, podcast, wawancara, kuliah - dan di sini belum ada yang bisa dipotong. Kirim yang minimal satu menit; sepuluh menit ke atas hasilnya paling bagus.",
+  shortSourceNotice:
+    "Catatan: video ini kurang dari lima menit. Dari sumber pendek biasanya cuma keluar 0-2 klip - sepuluh menit ke atas adalah tempat aku bekerja paling baik.",
   planNotActive:
     "Tidak ada langganan aktif di akun ini, jadi aku belum bisa memproses video. Pilih paket dan aku langsung mulai.",
   planCanceled:

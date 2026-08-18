@@ -8,6 +8,8 @@ import {
   recordFunnelEvent,
   recordUploadRefusal,
   refusalHost,
+  isBelowSourceFloor,
+  SOURCE_FLOOR,
   estimatedFreeCostUsd,
   probeVideoUrl,
   FUNNEL_EVENTS,
@@ -138,6 +140,25 @@ export async function POST(req: NextRequest) {
     typeof durationSec === "number" && durationSec > 0
       ? Math.ceil(durationSec / 60)
       : 0;
+
+  // Under the engine floor: nothing to cut, whatever the plan (SOURCE_FLOOR in
+  // plans.ts has the numbers). Before every other gate, so the answer names
+  // the actual problem rather than the account's balance. On the file path
+  // this reads the client's provisional number - lying about it buys a job
+  // that yields nothing, so there is nothing to protect against.
+  if (isBelowSourceFloor(durationSec)) {
+    await recordUploadRefusal("web", userId, "TOO_SHORT", {
+      source: url ? "url" : "file",
+      durationSec,
+      minSec: SOURCE_FLOOR.minDurationSec,
+    });
+    return NextResponse.json(
+      {
+        error: `That video is under a minute long. Clips are cut out of longer talk - streams, podcasts, interviews, lectures - so send something at least a minute long; ten minutes and up works best.`,
+      },
+      { status: 400 }
+    );
+  }
 
   // All limit checks are independent reads - run them in one round trip
   const dayStart = new Date();
