@@ -2325,9 +2325,11 @@ face the sidecar does not see cannot confirm a cut; the eval compares OFF to the
 pre-change `detectShots` output (that half is Task 1's unit tests + the 269-cut replay). Sources of the
 corpus were still in R2 despite `sourceSweptAt` on all of them - the manifest keeps their keys.
 
-**Rollout.** `REFRAME_CUT_RECOVERY=on` in the live `.env` -> `docker compose up -d worker-render` (recreate) ->
-`prisma generate` in the container; read `cutRecovery` in `renderManifest.reframe.checks[]` on the next real
-jobs. Rollback = remove the line and recreate.
+**Rollout.** **LIVE in prod since 2026-08-18**: `REFRAME_CUT_RECOVERY=on` in the live `.env` (not in git),
+`docker compose up -d worker-render` (recreate), `prisma generate` in the container, `loadReframeConfig()`
+verified `cutRecovery: true` from inside. Read `cutRecovery` in `renderManifest.reframe.checks[]` on the next
+real jobs - the first stream-class source under the flag is the unmeasured case. Rollback = remove the line
+and recreate.
 
 ---
 
