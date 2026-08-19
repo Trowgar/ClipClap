@@ -622,6 +622,11 @@ describe("releaseNextQueued", () => {
     freeUsageFindFirst.mockReset();
     freeUsageFindFirst.mockResolvedValue(null);
     queueAdd.mockClear();
+    // Top-level prisma.job.update, distinct from tx.job.update above: the
+    // stamp happens inside the transaction, but the un-stamp on a failed
+    // enqueue happens after it, so it goes through the top-level client.
+    jobUpdate.mockReset();
+    jobUpdate.mockResolvedValue({});
   });
 
   it("takes the SAME per-user lock before counting - lock, then count", async () => {
@@ -692,6 +697,41 @@ describe("releaseNextQueued", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await expect(releaseNextQueued("u1")).resolves.toEqual([]);
     warn.mockRestore();
+  });
+
+  // A stamped-but-never-added job is invisible to every other repair path:
+  // it is no longer "waiting" (enqueuedAt is set) and it was never handed to
+  // BullMQ. The function must un-stamp it and move on to the next job rather
+  // than let one Redis hiccup take down the whole release - and, worse, abort
+  // releaseStalledQueues' per-user loop for every user still to come.
+  // Mutation: remove the per-job try/catch -> this test goes red (the
+  // rejection propagates out of releaseNextQueued instead of being caught).
+  it("un-stamps a job whose enqueue fails and never throws; the other still lands", async () => {
+    tx.user.findUniqueOrThrow.mockResolvedValue({ plan: "PLUS", billingCycle: "MONTHLY" });
+    tx.job.count.mockResolvedValueOnce(0); // 0 active, PLUS limit 2 -> 2 slots
+    tx.job.findMany = vi.fn(async () => [
+      { id: "q1", userId: "u1", createdAt: new Date(1) },
+      { id: "q2", userId: "u1", createdAt: new Date(2) },
+    ]);
+    queueAdd.mockImplementationOnce(async () => {
+      throw new Error("redis unreachable");
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const released = await releaseNextQueued("u1");
+
+    // q1's add rejected; q2's still landed. Only the successful one is
+    // reported as released.
+    expect(released.map((j) => j.id)).toEqual(["q2"]);
+    expect(queueAdd).toHaveBeenCalledTimes(2);
+    // The top-level client, not tx - the stamp was committed already, so
+    // undoing it is a separate write after the transaction.
+    expect(jobUpdate).toHaveBeenCalledWith({
+      where: { id: "q1" },
+      data: { enqueuedAt: null },
+    });
+
+    errorSpy.mockRestore();
   });
 });
 

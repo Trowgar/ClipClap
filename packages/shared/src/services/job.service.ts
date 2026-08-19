@@ -505,22 +505,56 @@ export async function releaseNextQueued(
 
   // Outside the transaction for the same reason createJob enqueues outside:
   // a worker may pick the download up the instant the add lands.
+  //
+  // Each job gets its own try/catch. This loop must never throw - it is
+  // called from an hourly sweep that visits every user with a waiting job in
+  // one pass, and one user's transient Redis/DB failure must not abort the
+  // release for every user still to come. A failure here is also worse than
+  // one in the transaction above: the row already has enqueuedAt stamped, so
+  // neither createJob's in-flight count nor this function's own "waiting"
+  // query will ever consider it again - a stamped-but-never-added job is
+  // invisible to every other repair path there is. The catch below undoes
+  // the stamp so the row falls back into the waiting pool for the next
+  // release attempt to retry. If the add actually landed despite the error
+  // (say, it succeeded but the acknowledgement was lost), the retry costs
+  // nothing: downloadJobId is deterministic, so BullMQ ignores the second add
+  // for an id it has already seen.
+  const actuallyReleased: Job[] = [];
   for (const job of released) {
-    const freeCharged = await prisma.freeUsage.findFirst({
-      where: { jobId: job.id, kind: "CHARGE" },
-      select: { id: true },
-    });
-    await getStageQueue("download").add(
-      "download",
-      { jobId: job.id, userId: job.userId },
-      {
-        jobId: downloadJobId(job.id),
-        ...(freeCharged ? { priority: FREE_JOB_PRIORITY } : {}),
+    try {
+      const freeCharged = await prisma.freeUsage.findFirst({
+        where: { jobId: job.id, kind: "CHARGE" },
+        select: { id: true },
+      });
+      await getStageQueue("download").add(
+        "download",
+        { jobId: job.id, userId: job.userId },
+        {
+          jobId: downloadJobId(job.id),
+          ...(freeCharged ? { priority: FREE_JOB_PRIORITY } : {}),
+        }
+      );
+      console.log(`[queue] released job ${job.id} for user ${job.userId}`);
+      actuallyReleased.push(job);
+    } catch (err) {
+      console.error(`[queue] could not enqueue released job ${job.id}:`, err);
+      try {
+        await prisma.job.update({
+          where: { id: job.id },
+          data: { enqueuedAt: null },
+        });
+      } catch (undoErr) {
+        // Nothing further to do: the job is stranded until an operator or a
+        // future sweep notices it by hand. A second failure here must not
+        // throw either - the loop still owes every remaining job its try.
+        console.error(
+          `[queue] could not un-stamp job ${job.id} after a failed enqueue:`,
+          undoErr
+        );
       }
-    );
-    console.log(`[queue] released job ${job.id} for user ${job.userId}`);
+    }
   }
-  return released;
+  return actuallyReleased;
 }
 
 /**
