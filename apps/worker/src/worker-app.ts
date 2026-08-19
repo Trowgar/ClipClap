@@ -1,4 +1,4 @@
-import { Worker } from "bullmq";
+import { Worker, type Job } from "bullmq";
 import {
   getQueueNameForStage,
   getRedis,
@@ -34,7 +34,7 @@ export function createStageWorker(
   const role = parseWorkerRole(roleValue);
   const worker = new Worker(
     getQueueNameForStage(role),
-    async (job) => dispatchStageJob(role, job.data),
+    async (job, token) => dispatchStageJob(role, job.data, job, token),
     {
       connection: getRedis(),
       concurrency: getWorkerConcurrency(role),
@@ -58,9 +58,15 @@ export function createStageWorker(
 
 export async function dispatchStageJob(
   role: StageName,
-  data: unknown
+  data: unknown,
+  job?: Job,
+  token?: string
 ): Promise<void> {
-  if (role === "download") return runDownloadStage(data as never);
+  // Only DOWNLOAD ever parks a job (see FLAP_WAIT_DELAYS_MS in
+  // stages/download.ts): it is the one stage whose failure class - YouTube
+  // throttling the WARP exit - passes on its own. No other stage gets the
+  // BullMQ job handle, so no other stage can call moveToDelayed by accident.
+  if (role === "download") return runDownloadStage(data as never, job, token);
   if (role === "transcribe") return runTranscribeStage(data as never);
   if (role === "analyze") return runAnalyzeStage(data as never);
   if (role === "render") return runRenderStage(data as never);

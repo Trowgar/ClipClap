@@ -40,6 +40,15 @@ vi.mock("@clipclap/shared", async () => ({
       "@clipclap/shared/lib/job-error"
     )
   ).tagJobError,
+  // real implementation: the download stage's flap-wait gate calls this
+  // unconditionally (see isFlapFailure in stages/download.ts), even on the
+  // 2-arg calls this suite makes with no BullMQ job handle - a mock module
+  // missing the export throws before the gate ever gets to check for one.
+  isBotCheckFailure: (
+    await vi.importActual<typeof import("@clipclap/shared/lib/ytdlp-proxy")>(
+      "@clipclap/shared/lib/ytdlp-proxy"
+    )
+  ).isBotCheckFailure,
   probeLocalFile: mocks.probeLocalFile,
   // Pricing is not what this suite tests. The two lookups are the real ones -
   // they are pure - but loadModelPrices is stubbed to an empty table, below the

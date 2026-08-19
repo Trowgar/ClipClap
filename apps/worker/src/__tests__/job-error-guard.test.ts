@@ -35,7 +35,7 @@ const mocks = vi.hoisted(() => ({
   jobUpdate: vi.fn(),
 }));
 
-vi.mock("@clipclap/shared", () => ({
+vi.mock("@clipclap/shared", async () => ({
   jobStepService: {
     startJobStep: mocks.startJobStep,
     completeJobStep: mocks.completeJobStep,
@@ -43,6 +43,17 @@ vi.mock("@clipclap/shared", () => ({
   },
   getStageQueue: mocks.getStageQueue,
   uploadFile: mocks.uploadFile,
+  // NOT part of the stale-dist simulation below: unlike probeLocalFile and
+  // its neighbours, isBotCheckFailure predates the free-tier work and was
+  // already present in every dist this file is pretending to run. The
+  // download stage's flap-wait gate calls it unconditionally, so the mock
+  // needs the real function or every test in this file throws before it
+  // reaches the behaviour it means to exercise.
+  isBotCheckFailure: (
+    await vi.importActual<typeof import("@clipclap/shared/lib/ytdlp-proxy")>(
+      "@clipclap/shared/lib/ytdlp-proxy"
+    )
+  ).isBotCheckFailure,
   // the stale-dist worker, reproduced: the export exists on the namespace but
   // carries no function
   tagJobError: undefined,

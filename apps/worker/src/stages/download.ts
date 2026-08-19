@@ -1,9 +1,11 @@
 import {
   getStageQueue,
+  isBotCheckFailure,
   jobStepService,
   prisma,
   uploadFile,
 } from "@clipclap/shared";
+import { DelayedError } from "bullmq";
 import { unlink } from "fs/promises";
 import { downloadVideo } from "../processors/download";
 import { normalizeSource } from "../processors/normalize";
@@ -21,8 +23,39 @@ import {
   normalizedArtifactKey as buildNormalizedArtifactKey,
 } from "./artifact-keys";
 
+/** The flap-wait ladder. YouTube throttles the pinned WARP exit in episodes
+ *  that pass on their own - measured 25 minutes to a few hours - so a 403 or
+ *  bot check on a URL download is weather, not a verdict. Three waits, ~2.2h
+ *  total, cover every observed episode; after that the failure is real enough
+ *  to tell the user. Delays consume NO BullMQ attempt (moveToDelayed +
+ *  DelayedError), so the ordinary 3-attempt budget still guards ordinary
+ *  failures. Kill switch: DOWNLOAD_FLAP_WAIT=off. */
+const FLAP_WAIT_DELAYS_MS = [10 * 60 * 1000, 30 * 60 * 1000, 90 * 60 * 1000];
+
+function flapWaitEnabled(): boolean {
+  return process.env.DOWNLOAD_FLAP_WAIT !== "off";
+}
+
+/** A failure class that passes on its own: YouTube's bot check or a bare 403
+ *  from the media CDN. Only meaningful for URL sources - an uploaded file
+ *  cannot be weather. */
+function isFlapFailure(message: string): boolean {
+  return isBotCheckFailure(message) || /HTTP Error 403/i.test(message);
+}
+
+/** The slice of BullMQ's `Job` the flap-wait path needs, not the full class -
+ *  so a test can hand in a plain object instead of constructing a real Job.
+ *  The real `Job` the worker processor passes in satisfies this structurally. */
+interface FlapWaitJob {
+  data: unknown;
+  updateData(data: unknown): Promise<void>;
+  moveToDelayed(timestamp: number, token?: string): Promise<void>;
+}
+
 export async function runDownloadStage(
-  payload: DownloadStagePayload
+  payload: DownloadStagePayload,
+  bullJob?: FlapWaitJob,
+  token?: string
 ): Promise<void> {
   let localPath: string | undefined;
   let tempNormalizedPath: string | undefined;
@@ -82,6 +115,40 @@ export async function runDownloadStage(
     });
     await getStageQueue("transcribe").add("transcribe", payload);
   } catch (error) {
+    // A 403 or bot check on a URL download is weather, not a verdict - see
+    // FLAP_WAIT_DELAYS_MS above. SourceUnavailableError is only ever thrown
+    // from the URL branch of downloadVideo (processors/download.ts) - the R2
+    // branch (downloadFromR2) has no yt-dlp in it and cannot produce this
+    // error class - so a SourceUnavailableError whose message matches
+    // isFlapFailure IS a URL flap. No separate read of payload.sourceUrl is
+    // needed (payload only carries jobId/userId; the stage loads the job row
+    // itself, above), and an uploaded file can never reach this branch.
+    if (
+      error instanceof SourceUnavailableError &&
+      isFlapFailure(error.message) &&
+      bullJob &&
+      token &&
+      flapWaitEnabled()
+    ) {
+      const flapWaits = ((bullJob.data as { flapWaits?: number }).flapWaits ?? 0);
+      if (flapWaits < FLAP_WAIT_DELAYS_MS.length) {
+        const delay = FLAP_WAIT_DELAYS_MS[flapWaits];
+        // Park, do not fail: no failJobStep, no FAILED write, no attempt spent.
+        // The job keeps DOWNLOADING and its concurrency slot - the user's later
+        // videos queue behind it, which is the serialisation the queue promises.
+        await bullJob.updateData({ ...(bullJob.data as object), flapWaits: flapWaits + 1 });
+        console.warn(
+          `[download] ${payload.jobId}: exit flap (${flapWaits + 1}/${FLAP_WAIT_DELAYS_MS.length}), parking for ${Math.round(delay / 60000)}min`
+        );
+        await bullJob.moveToDelayed(Date.now() + delay, token);
+        // DelayedError is thrown only here, only on this path, so it can never
+        // be a different failure that we are accidentally swallowing into the
+        // markJobFailed path below - nothing else in this stage throws one.
+        throw new DelayedError();
+      }
+      // Waits exhausted: fall through to the real FAILED path below.
+    }
+
     await jobStepService.failJobStep(payload.jobId, "DOWNLOAD", error);
     await markJobFailed(payload.jobId, error);
     throw error;
