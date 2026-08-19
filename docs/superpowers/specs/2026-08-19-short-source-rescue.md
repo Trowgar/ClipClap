@@ -10,14 +10,15 @@ as-is after review: a 6-second fragment is a legal rescue clip (snap's
 hardMinSec is the only length bar - selection's short-clip surcharge is a
 selection rule, and durations are in telemetry for the checkpoint).
 
-**BILLING INTERACTION (review finding, owner decision required BEFORE the
-flag goes live):** free-settlement's `refundZeroClipJob` hands the WHOLE
-reservation back on a DONE 0-clip job, once per account - and the rescue
-converts exactly those jobs into 1-clip DONE jobs that KEEP the charge. The
-zero-clip forgiveness exists so "a first attempt on unclippable video" does
-not end the trial; the rescue fixes the experience half and silently removes
-the refund half. The 2026-09 checkpoint must also expect ZERO_CLIPS refund
-counts to drop while the flag is on.
+**BILLING INTERACTION (review finding) - OWNER DECISION 2026-08-19: enabled
+as-is.** free-settlement's `refundZeroClipJob` hands the WHOLE reservation
+back on a DONE 0-clip job, once per account - and the rescue converts exactly
+those jobs into 1-clip DONE jobs that KEEP the charge (2-5 of the 60 free
+minutes for a typical test upload). The owner accepted the trade: a clip
+shipped is a clip paid for, and the alternative (a RESCUE_ONLY refund branch
+in settleFreeLedger) buys a corner case with real plumbing. The 2026-09
+checkpoint must expect ZERO_CLIPS refund counts to DROP while the flag is on
+- compare like with like via the `rescue` telemetry key.
 
 ## 0. The problem, measured
 
