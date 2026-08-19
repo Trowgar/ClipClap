@@ -86,6 +86,18 @@ streamers (edge detection has nothing to find - measured 0.31/0.62). The
 multipliers are provisional; the corpus harness renders decide them. OFF by
 default in code; .env enables after corpus verification.
 
+D4b - CONTAINMENT BY CONSTRUCTION (added after the first landing): bottom =
+max(16:9-derived, faceBottom + VIRTUAL_CAM_CHIN_FRAC(0.15) * faceH). The
+real tox YuNet box is h/w 1.32 - taller than the 16:9 derivation covers;
+measured 2026-08-19, the synthesized bottom (314) sat 11px above the real
+face bottom (325.3), per-shot isInsideInset failed, and the clip classified
+"stream" while every shot rendered CENTER - a stream in telemetry, a centre
+crop on screen. The rect's aspect may exceed 16:9 (solveStreamGeometry
+handles any aspect); the invariant is pinned by a test that uses the
+per-shot loop's own isInsideInset predicate across face aspects up to 1.6.
+The sub-0.06 band is deliberately INSIDE D4's gate (a tiny borderless cam
+deserves the tile even more), pinned by its own test.
+
 **D5 - classifier: rect-first under a ceiling.** In plan.ts, when
 cfg.stream is on and 0 < faceFrac < REFRAME_STREAM_FACE_CEILING (default
 0.15): resolve the cam rect; if a rect (real, or D4-virtual when that flag is
@@ -95,6 +107,39 @@ below). faceSmallFrac stays 0.06 and keeps its unconditional anchor-guard
 role. Ceiling rationale: strogo/tox sit at 0.077; podcasts are 0.15-0.30;
 buster at 0.089 is safe because no rect resolves on a fullscreen face
 (measured) - and DOMER at 0.165 sits above the ceiling entirely.
+
+**D5b - the sidecar's own face gate (found on live measurement AFTER D5
+landed).** detect_faces.py's main loop only attempts find_cam_rect when the
+dominant face is under face_small_frac - a third copy of the face-size gate,
+invisible to the TS classifier, there so podcasts never pay for
+median_edge_map. With D5 alone, strogo still classified normal_face: the
+sidecar never produced a camRect for its 0.077 face. Fix: the sidecar gate
+reads a new --stream-face-ceiling arg (wired from cfg.streamFaceCeiling;
+absent/0 = old behaviour) so the attempt band matches the classifier's.
+Cost: faces in [0.06, 0.15) now pay the one-time edge map (~240ms) and the
+per-shot search; podcasts (0.15+) still never do.
+
+**D1b - containment slop for detector-box overhang (found after D5b).** The
+real dominant YuNet box on strogo ends at det y=81.0 - a 1px chin overhang
+(2.4% of face height) past the true border row at 80 - so D1's exact
+containment still vetoed a rect whose sides score 12+ vs threshold 4. The
+hand-labeled GT face in the first autopsy (bottom 70) masked this. Fix:
+containment tests the face box shrunk by FACE_CONTAIN_SLOP_FRAC = 0.10 per
+side around its centre - face-relative, unlike the frame-relative margin D1
+removed for the opposite overshoot. face_area for the 1.5x rule stays full.
+
+**D1c - the third overhang site: isInsideInset in plan.ts.** With D1b in,
+7 of 8 strogo shots resolve the exact correct rect (src 0,0,350,160), and
+the block moved downstream: the widest face track's bottom (166.56)
+overhangs the rect bottom (160) by 6.56px = 7% of face height, and
+isInsideInset's hardcoded 2px absolute tolerance vetoes it - killing BOTH
+the D5 join and the per-shot stream-vs-center layout decision. Fix: the
+predicate shrinks the face box by FACE_CONTAIN_SLOP_FRAC = 0.10 per side
+(the SAME rule and value as detect_faces.py's D1b constant - two languages,
+one rule, cross-referenced comments) before the 2px-tolerance containment.
+Three instances of one class: frame-relative margin (D1), python exact
+containment (D1b), TS 2px tolerance (D1c) - every one measured, none
+guessed.
 
 **D6 - content tile shows the action.** streamContentX already biases the
 content crop toward sourceWidth/2 inside the free band (game centre =
