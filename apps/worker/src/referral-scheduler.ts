@@ -12,6 +12,8 @@ import {
   runFreeRefundSweep,
   TRIBUTE_RECONCILE_JOB,
   reconcilePendingTributeOrders,
+  QUEUE_STALL_JOB,
+  releaseStalledQueues,
 } from "@clipclap/shared";
 
 export function createReferralScheduler(): Worker {
@@ -45,6 +47,12 @@ export function createReferralScheduler(): Worker {
         console.log(
           `[tribute-reconcile] checked=${r.checked} activated=${r.activated} failed=${r.failed} expired=${r.expired}`
         );
+        return;
+      }
+      if (job.name === QUEUE_STALL_JOB) {
+        // Logs its own releases; a zero run is silent on purpose - an hourly
+        // "nothing happened" line is noise that buries the real ones.
+        await releaseStalledQueues(now);
         return;
       }
     },

@@ -3,6 +3,7 @@ import {
   getQueueNameForStage,
   getRedis,
   parseWorkerRole,
+  releaseNextQueued,
   type StageName,
 } from "@clipclap/shared";
 import { runAnalyzeStage } from "./stages/analyze";
@@ -45,9 +46,11 @@ export function createStageWorker(
 
   worker.on("completed", (job) => {
     console.log(`[${role}] completed ${job.id}`);
+    void maybeReleaseAfterStageEvent(role, "completed", job);
   });
   worker.on("failed", (job, err) => {
     console.error(`[${role}] failed ${job?.id}:`, err.message);
+    void maybeReleaseAfterStageEvent(role, "failed", job ?? undefined);
   });
 
   return worker;
@@ -62,6 +65,51 @@ export async function dispatchStageJob(
   if (role === "analyze") return runAnalyzeStage(data as never);
   if (role === "render") return runRenderStage(data as never);
   return runFinalizeStage(data as never);
+}
+
+/**
+ * Free a queue slot when - and only when - a job's PIPELINE ended.
+ *
+ * "Ended" is finalize completing (the one stage that runs last) or any stage
+ * exhausting its BullMQ attempts (a mid-pipeline terminal failure never
+ * reaches finalize). A retriable failure keeps its slot: the job is still
+ * alive and about to run again, and releasing on it would put two of the
+ * user's jobs on workers with a limit of one - exactly what the advisory
+ * lock in createJob exists to prevent.
+ *
+ * Swallows everything. This runs inside BullMQ event handlers; the queue is
+ * self-healing (next completion or the hourly stall guard retries), a downed
+ * worker is not.
+ */
+export async function maybeReleaseAfterStageEvent(
+  role: StageName,
+  event: "completed" | "failed",
+  job:
+    | {
+        data?: unknown;
+        attemptsMade?: number;
+        opts?: { attempts?: number };
+      }
+    | undefined
+): Promise<void> {
+  try {
+    if (!job) return;
+    if (event === "completed" && role !== "finalize") return;
+    if (event === "failed") {
+      const attempts = job.opts?.attempts ?? 1;
+      if ((job.attemptsMade ?? 0) < attempts) return;
+    }
+    const userId = (job.data as { userId?: string } | undefined)?.userId;
+    if (!userId) return;
+    const released = await releaseNextQueued(userId);
+    if (released.length > 0) {
+      console.log(
+        `[queue] ${event === "completed" ? "finalize" : "terminal failure"} freed a slot for ${userId}; released ${released.map((j) => j.id).join(", ")}`
+      );
+    }
+  } catch (error) {
+    console.error(`[queue] post-${event} release failed:`, error);
+  }
 }
 
 function readPositiveInt(value: string | undefined, fallback: number): number {

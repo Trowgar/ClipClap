@@ -49,6 +49,9 @@ export { reconcilePendingTributeOrders } from "./tribute-reconcile.service";
 // its advisory pre-check, and both surfaces branch on the submission result.
 export { ACTIVE_JOB_STATUSES } from "./job.service";
 export type { CreateJobResult } from "./job.service";
+// Submission-queue release hooks: the worker's stage-event handlers and the
+// hourly stall sweep both need these by name.
+export { releaseNextQueued, releaseStalledQueues, QUEUE_STALL_MS } from "./job.service";
 // Named re-exports for error classes that callers need to instanceof-check
 export { UnsupportedPlanCycleError } from "./billing.service";
 export type { InvoiceRow, InvoicePage } from "./billing.service";
