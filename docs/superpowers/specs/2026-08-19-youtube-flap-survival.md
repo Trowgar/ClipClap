@@ -1,4 +1,18 @@
-# Surviving YouTube's exit flaps for free (2026-08-19, APPROVED - owner: "нет средств, найди решение")
+# Surviving YouTube's exit flaps for free (2026-08-19, SHIPPED same day)
+
+**BOTH SOLUTIONS LIVE IN PROD since 2026-08-19 ~12:30.**
+- B (flap-wait): commits d7f4b2f + 4040d46, reviewed (one load-bearing fix: a failed
+  park degrades to an ordinary failed attempt, never a stranded DOWNLOADING row).
+- A (PO-token sidecar): commits fe6ea14 + 07d7c49. THE DECISIVE MEASUREMENT, taken
+  during the live blockade: default clients 403 on every segment; web_safari mints a
+  token but YouTube forces SABR so its https formats vanish; **mweb + GVS token
+  downloads clean THROUGH the blockade** - small video AND the env-driven prod-shaped
+  command AND probeVideoUrl on the exact link that killed the 10:40 job all pass.
+  So potArgs() ships the token wiring and player_client=mweb as ONE mechanism,
+  kill switch = clear YTDLP_POT_PROVIDER_URL.
+- NOT fixed (upstream, yt-dlp 15586): post-live manifestless VODs
+  (youtube.com/live/...) still 403 with a valid token - Leonardo's VOD confirmed in
+  this class. Regular videos - the dominant user traffic - work.
 
 ## 0. The problem, measured
 
