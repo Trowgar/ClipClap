@@ -47,7 +47,7 @@ export { reconcilePendingTributeOrders } from "./tribute-reconcile.service";
 // job.service stays a namespace so createJob/getJob do not land in the top-level
 // surface, but these two are needed by name: the bot counts in-flight jobs for
 // its advisory pre-check, and both surfaces branch on the submission result.
-export { ACTIVE_JOB_STATUSES } from "./job.service";
+export { ACTIVE_JOB_STATUSES, submissionQueueEnabled } from "./job.service";
 export type { CreateJobResult } from "./job.service";
 // Submission-queue release hooks: the worker's stage-event handlers and the
 // hourly stall sweep both need these by name.

@@ -143,6 +143,9 @@ export interface Dict {
   /** The same source again after a finished job whose clips still exist;
    *  the clips follow this message, re-sent from Telegram's cache. */
   duplicateDone: (clipCount: number) => string;
+  /** Accepted into the queue: a job is already running, this one starts by
+   *  itself. position is 1-based (1 = next in line). */
+  queuedBehind: (position: number) => string;
   /** Lifecycle: has a plan on the account but no subscription behind it. */
   planNotActive: string;
   /** Lifecycle: subscription canceled (with or without grace left). */

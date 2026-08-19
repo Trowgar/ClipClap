@@ -38,6 +38,7 @@ import {
   recordUploadRefusal,
   redeemLinkFromBot,
   refusalHost,
+  submissionQueueEnabled,
   telegramDeliveryService,
   uploadFile,
 } from "@clipclap/shared";
@@ -2293,6 +2294,18 @@ async function handleVideo(
     });
 
     await showQueuedBoard(client, message.chat.id, ack, dict);
+    if (created.status === "queued") {
+      await client.sendMessage(
+        message.chat.id,
+        dict.queuedBehind(created.position)
+      );
+      await recordFunnelEvent(
+        "bot",
+        from.id,
+        FUNNEL_EVENTS.VIDEO_QUEUED,
+        from.language_code
+      );
+    }
     if (isShortSource(source.duration)) {
       await client.sendMessage(message.chat.id, dict.shortSourceNotice);
     }
@@ -2549,6 +2562,18 @@ async function handleVideoUrl(
   });
 
   await showQueuedBoard(client, message.chat.id, ack, dict);
+  if (created.status === "queued") {
+    await client.sendMessage(
+      message.chat.id,
+      dict.queuedBehind(created.position)
+    );
+    await recordFunnelEvent(
+      "bot",
+      from.id,
+      FUNNEL_EVENTS.VIDEO_QUEUED,
+      from.language_code
+    );
+  }
   if (isShortSource(probedSec)) {
     await client.sendMessage(message.chat.id, dict.shortSourceNotice);
   }
@@ -2740,19 +2765,37 @@ export async function getSubmissionBlocker(
     return dict.planDailyLimit(limits.maxJobsPerDay);
   }
 
-  // Advisory only. The count that actually enforces the limit is the one
-  // createJob takes under a per-user lock; this one is here so a second video
-  // gets the localised refusal before we spend a Telegram download and an R2
-  // upload on it.
-  const inFlight = await prisma.job.count({
-    where: { userId, status: { in: [...ACTIVE_JOB_STATUSES] } },
-  });
-  if (inFlight >= limits.concurrentJobsLimit) {
-    await recordRejection("CONCURRENT", {
-      inFlight,
-      limit: limits.concurrentJobsLimit,
+  // Advisory only, and only while the queue is OFF. With SUBMISSION_QUEUE=on,
+  // "at capacity" is an acceptance (queued), not a refusal, and only
+  // createJob's locked count may decide that - it is the one that creates the
+  // row and picks the position. Refusing here as well would make the queue
+  // unreachable from the bot: every second video would die at this check
+  // before createJob ever got the chance to queue it instead, and the bot is
+  // the surface with real submit traffic. So this whole block is skipped when
+  // the flag is on - no count, no CONCURRENT ledger row - and createJob is
+  // left to answer on its own.
+  if (!submissionQueueEnabled()) {
+    // The count that actually enforces the limit when the queue is off is the
+    // one createJob takes under a per-user lock; this one is here so a second
+    // video gets the localised refusal before we spend a Telegram download
+    // and an R2 upload on it. enqueuedAt: { not: null } matches createJob's
+    // own definition of in-flight - the two counts must agree on what
+    // "in-flight" means or they disagree exactly at the boundary this check
+    // exists to guard.
+    const inFlight = await prisma.job.count({
+      where: {
+        userId,
+        status: { in: [...ACTIVE_JOB_STATUSES] },
+        enqueuedAt: { not: null },
+      },
     });
-    return dict.planConcurrentLimit(inFlight, limits.concurrentJobsLimit);
+    if (inFlight >= limits.concurrentJobsLimit) {
+      await recordRejection("CONCURRENT", {
+        inFlight,
+        limit: limits.concurrentJobsLimit,
+      });
+      return dict.planConcurrentLimit(inFlight, limits.concurrentJobsLimit);
+    }
   }
 
   return null;

@@ -28,6 +28,8 @@ const mocks = vi.hoisted(() => ({
   freeUsageGroupBy: vi.fn(),
   freeUsageAggregate: vi.fn(),
   probeVideoUrl: vi.fn(),
+  createJob: vi.fn(),
+  createTelegramDelivery: vi.fn(),
 }));
 
 vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
@@ -59,6 +61,26 @@ vi.mock("../url-probe", async (importOriginal) => {
     probeVideoUrl: mocks.probeVideoUrl,
   };
 });
+
+// Only overridden by the queue tests below - every other test in this file
+// gets refused before it would ever reach createJob or createTelegramDelivery,
+// so leaving these unmocked-by-default cannot change what they assert.
+vi.mock("../../../../packages/shared/src/services/job.service", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../../../../packages/shared/src/services/job.service")
+  >();
+  return { ...actual, createJob: mocks.createJob };
+});
+
+vi.mock(
+  "../../../../packages/shared/src/services/telegram-delivery.service",
+  async (importOriginal) => {
+    const actual = await importOriginal<
+      typeof import("../../../../packages/shared/src/services/telegram-delivery.service")
+    >();
+    return { ...actual, createTelegramDelivery: mocks.createTelegramDelivery };
+  }
+);
 
 import {
   FUNNEL_EVENTS,
@@ -794,6 +816,87 @@ describe("refusals the bot used to swallow", () => {
         },
       },
     ]);
+  });
+
+  it("accepts a second video into the queue: says the position, keeps the delivery row, counts video_queued", async () => {
+    process.env.SUBMISSION_QUEUE = "on";
+    try {
+      mocks.probeVideoUrl.mockResolvedValue({
+        ok: true,
+        durationSec: 900,
+        title: "A talk",
+      });
+      mocks.createJob.mockResolvedValue({
+        status: "queued",
+        job: { id: "jq1", userId: "u1" },
+        position: 2,
+      });
+      mocks.createTelegramDelivery.mockResolvedValue({});
+      const { client } = harness();
+
+      await handleUpdate(
+        client as never,
+        videoUrlUpdate("https://example.com/watch?v=second-in-line") as never,
+        CONFIG
+      );
+
+      expect(client.sendMessage).toHaveBeenCalledWith(
+        CHAT.id,
+        t("ru").queuedBehind(2)
+      );
+      expect(mocks.createTelegramDelivery).toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: "jq1" })
+      );
+      expect(eventsRecorded()).toContain(FUNNEL_EVENTS.VIDEO_QUEUED);
+      expect(refusalsRecorded()).toEqual([]);
+    } finally {
+      delete process.env.SUBMISSION_QUEUE;
+    }
+  });
+
+  // I6 from the quality review: with the queue on, the advisory pre-check
+  // used to refuse a second video before createJob ever got a chance to queue
+  // it instead - making the queue unreachable from the only surface with real
+  // traffic. getSubmissionBlocker is called directly here, exactly as "does
+  // not judge a source whose duration is unknown" does above, because the
+  // point under test is the blocker's own decision, not the reply it produces.
+  it("the advisory pre-check steps aside when the queue is on", async () => {
+    const subject = { telegramId: FROM.id, locale: "ru" };
+
+    process.env.SUBMISSION_QUEUE = "on";
+    try {
+      // jobsToday only - the in-flight count must not even be taken while the
+      // queue is on, so there is nothing for a second resolved value to serve.
+      mocks.jobCount.mockResolvedValueOnce(0);
+
+      await expect(
+        getSubmissionBlocker("u1", t("ru"), 900, subject)
+      ).resolves.toBeNull();
+
+      expect(mocks.jobCount).toHaveBeenCalledTimes(1);
+      expect(eventsRecorded()).not.toContain(uploadRejectedEvent("CONCURRENT"));
+      expect(refusalsRecorded()).toEqual([]);
+    } finally {
+      delete process.env.SUBMISSION_QUEUE;
+    }
+
+    // Flag off reproduces the old refusal exactly, and the count it refuses
+    // on must define "in-flight" the same way createJob does: enqueuedAt not
+    // null, or the two would disagree right at the boundary this exists to
+    // guard.
+    mocks.jobCount
+      .mockResolvedValueOnce(0) // jobsToday
+      .mockResolvedValueOnce(1); // inFlight
+
+    await expect(
+      getSubmissionBlocker("u1", t("ru"), 900, subject)
+    ).resolves.toBe(t("ru").planConcurrentLimit(1, 1));
+
+    expect(eventsRecorded()).toContain(uploadRejectedEvent("CONCURRENT"));
+    // Calls so far: [0] flag-on jobsToday, [1] flag-off jobsToday,
+    // [2] flag-off inFlight - the one under test here.
+    const inFlightCall = mocks.jobCount.mock.calls[2][0];
+    expect(inFlightCall.where.enqueuedAt).toEqual({ not: null });
   });
 });
 

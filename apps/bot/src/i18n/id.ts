@@ -102,6 +102,10 @@ const id: Dict = {
     "Aku sudah sedang mengerjakan video yang persis ini - aku kabari begitu selesai. Tidak perlu dikirim lagi.",
   duplicateDone: (clipCount) =>
     `Video ini sudah pernah kamu kirim - ini ${clipCount === 1 ? "klip yang" : `${clipCount} klip yang`} kubuat darinya, tanpa memakai menit.`,
+  queuedBehind: (position) =>
+    position <= 1
+      ? "Diterima - aku masih mengerjakan videomu yang lain, jadi yang ini menunggu giliran: dia berikutnya dan mulai sendiri. Tidak perlu dikirim ulang."
+      : `Diterima - aku masih mengerjakan videomu yang lain, jadi yang ini menunggu giliran: nomor ${position} dalam antrean. Mulai sendiri - tidak perlu dikirim ulang.`,
   planNotActive:
     "Tidak ada langganan aktif di akun ini, jadi aku belum bisa memproses video. Pilih paket dan aku langsung mulai.",
   planCanceled:

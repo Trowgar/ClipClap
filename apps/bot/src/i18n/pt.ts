@@ -105,6 +105,10 @@ const pt: Dict = {
     "Já estou trabalhando exatamente neste vídeo - aviso assim que ficar pronto. Não precisa mandar de novo.",
   duplicateDone: (clipCount) =>
     `Você já tinha me mandado este vídeo - ${clipCount === 1 ? "aqui está o clipe que" : `aqui estão os ${clipCount} clipes que`} eu fiz dele, sem gastar minutos.`,
+  queuedBehind: (position) =>
+    position <= 1
+      ? "Recebido - ainda estou no seu outro vídeo, então este espera a vez: é o próximo e começa sozinho. Não precisa reenviar."
+      : `Recebido - ainda estou no seu outro vídeo, então este espera a vez: é o número ${position} da fila. Começa sozinho - não precisa reenviar.`,
   planNotActive:
     "Não há assinatura ativa nesta conta, então ainda não posso processar vídeos. Escolha um plano que eu começo na hora.",
   planCanceled:

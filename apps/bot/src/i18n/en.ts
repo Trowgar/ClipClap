@@ -151,6 +151,10 @@ const en: Dict = {
     "I'm already working on this exact video - I'll message you the moment it's ready. No need to send it again.",
   duplicateDone: (clipCount) =>
     `You've sent me this video before - here ${clipCount === 1 ? "is the clip" : `are the ${clipCount} clips`} I made from it, no minutes spent.`,
+  queuedBehind: (position) =>
+    position <= 1
+      ? "Got it - I'm still working on your other video, so this one waits its turn: it's next in line and starts by itself. No need to resend it."
+      : `Got it - I'm still working on your other video, so this one waits its turn: number ${position} in line. It starts by itself - no need to resend it.`,
   planNotActive:
     "There is no active subscription on this account, so I cannot process videos yet. Pick a plan and I'll start right away.",
   planCanceled:
