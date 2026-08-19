@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { Prisma } from "@prisma/client";
 
 /** The unique index on (userId, jobId, kind). */
@@ -24,6 +24,11 @@ const tx = {
       inner.push("count");
       return 0;
     }),
+    // release-side additions: the release transaction reads the waiting rows
+    // and stamps enqueuedAt on them, both inside the same tx handle as the
+    // lock and the count.
+    update: vi.fn(),
+    findMany: vi.fn(),
   },
   freeUsage: { create: vi.fn() },
   user: { findUniqueOrThrow: vi.fn() },
@@ -42,10 +47,20 @@ const tx = {
 };
 
 const jobFindMany = vi.fn();
+const jobUpdate = vi.fn();
+const jobGroupBy = vi.fn();
+const freeUsageFindFirst = vi.fn();
 
 vi.mock("../../lib/prisma", () => ({
   prisma: {
-    job: { findMany: (...args: unknown[]) => jobFindMany(...args) },
+    job: {
+      findMany: (...args: unknown[]) => jobFindMany(...args),
+      update: (...args: unknown[]) => jobUpdate(...args),
+      groupBy: (...args: unknown[]) => jobGroupBy(...args),
+    },
+    freeUsage: {
+      findFirst: (...args: unknown[]) => freeUsageFindFirst(...args),
+    },
     // A faithful-enough interactive transaction: it runs the callback and, if
     // the callback throws, propagates without committing. What matters for
     // these tests is that everything inside it happens before $transaction
@@ -69,7 +84,13 @@ vi.mock("../../lib/queues", () => ({
 
 import { prisma } from "../../lib/prisma";
 import { getStageQueue } from "../../lib/queues";
-import { createJob, findDuplicateJob } from "../job.service";
+import {
+  createJob,
+  findDuplicateJob,
+  releaseNextQueued,
+  releaseStalledQueues,
+  ACTIVE_JOB_STATUSES,
+} from "../job.service";
 
 const JOB = { id: "job_1", userId: "u1" };
 
@@ -157,7 +178,13 @@ describe("job.service createJob", () => {
     // prioritized set, and addJob only routes into the prioritized set when
     // opts.priority is truthy. Giving paid jobs an explicit priority would
     // move them off the fast list and make paying users worse off.
-    expect(queueAdd.mock.calls[0][2]).toBeUndefined();
+    //
+    // The options object itself is no longer undefined for a paid job - it
+    // now always carries the dl:<jobId> dedup id (see downloadJobId) - so the
+    // priority key is what's asserted here, not the whole object.
+    const paidOpts = queueAdd.mock.calls[0][2] as any;
+    expect(paidOpts.jobId).toBe("dl:job_1");
+    expect(paidOpts.priority).toBeUndefined();
   });
 
   it("does not enqueue when the reservation cannot be written", async () => {
@@ -509,5 +536,188 @@ describe("findDuplicateJob", () => {
       kind: "completed",
       job: { id: "old-done" },
     });
+  });
+});
+
+describe("createJob under the submission queue", () => {
+  beforeEach(() => {
+    calls.length = 0;
+    inner.length = 0;
+    tx.job.create.mockReset();
+    tx.job.create.mockResolvedValue({ id: "j1", userId: "u1", createdAt: new Date() });
+    tx.job.count.mockReset();
+    tx.job.count.mockImplementation(async () => {
+      inner.push("count");
+      return 0;
+    });
+    tx.user.findUniqueOrThrow.mockResolvedValue({ plan: "NONE", billingCycle: null });
+    tx.freeUsage.create.mockReset();
+    queueAdd.mockClear();
+    delete process.env.SUBMISSION_QUEUE;
+  });
+
+  afterEach(() => {
+    delete process.env.SUBMISSION_QUEUE;
+  });
+
+  // The in-flight count must not see rows that are WAITING - else one queued
+  // job would block the next release forever. Mutation: drop the enqueuedAt
+  // filter from the count -> this test goes red.
+  it("counts only ENQUEUED active jobs as in flight", async () => {
+    await createJob({ userId: "u1", sourceKey: "k" });
+    const where = (tx.job.count.mock.calls as any[])[0][0].where;
+    expect(where.enqueuedAt).toEqual({ not: null });
+    expect(where.status).toEqual({ in: [...ACTIVE_JOB_STATUSES] });
+  });
+
+  it("stamps enqueuedAt on an immediately-started job and dedupes the BullMQ add", async () => {
+    await createJob({ userId: "u1", sourceKey: "k" });
+    expect(tx.job.create.mock.calls[0][0].data.enqueuedAt).toBeInstanceOf(Date);
+    expect(queueAdd).toHaveBeenCalledTimes(1);
+    // Deterministic BullMQ id, so a double release can never enqueue twice.
+    expect(queueAdd.mock.calls[0][2]).toMatchObject({ jobId: "dl:j1" });
+  });
+
+  // Flag off = today's behaviour, byte for byte.
+  it("refuses as concurrent_limit at the cap when the flag is off", async () => {
+    tx.job.count.mockResolvedValueOnce(1);
+    const result = await createJob({ userId: "u1", sourceKey: "k" });
+    expect(result).toEqual({ status: "concurrent_limit", inFlight: 1, limit: 1 });
+    expect(tx.job.create).not.toHaveBeenCalled();
+    expect(queueAdd).not.toHaveBeenCalled();
+  });
+
+  it("queues at the cap when the flag is on: row without enqueuedAt, charge kept, NO BullMQ add", async () => {
+    process.env.SUBMISSION_QUEUE = "on";
+    // First count: in-flight (at cap). Second count: queued rows for position.
+    tx.job.count.mockResolvedValueOnce(1).mockResolvedValueOnce(2);
+    const result = await createJob({
+      userId: "u1",
+      sourceKey: "k",
+      freeCharge: { seconds: 60, estimatedCostUsd: 0.01 },
+    });
+    expect(result).toMatchObject({ status: "queued", position: 2 });
+    expect(tx.job.create.mock.calls[0][0].data.enqueuedAt).toBeNull();
+    // The reservation is written exactly as for a started job.
+    expect(tx.freeUsage.create).toHaveBeenCalledTimes(1);
+    expect(queueAdd).not.toHaveBeenCalled();
+    // Mutation: drop the enqueuedAt:null term -> red.
+    const posWhere = (tx.job.count.mock.calls as any[])[1][0].where;
+    expect(posWhere).toEqual({ userId: "u1", status: "PENDING", enqueuedAt: null });
+  });
+});
+
+describe("releaseNextQueued", () => {
+  beforeEach(() => {
+    calls.length = 0;
+    inner.length = 0;
+    tx.job.count.mockReset();
+    tx.job.count.mockImplementation(async () => {
+      inner.push("count");
+      return 0;
+    });
+    tx.job.findMany = vi.fn(async () => []);
+    tx.job.update = vi.fn(async () => ({}));
+    tx.user.findUniqueOrThrow.mockResolvedValue({ plan: "NONE", billingCycle: null });
+    freeUsageFindFirst.mockReset();
+    freeUsageFindFirst.mockResolvedValue(null);
+    queueAdd.mockClear();
+  });
+
+  it("takes the SAME per-user lock before counting - lock, then count", async () => {
+    await releaseNextQueued("u1");
+    expect(inner[0]).toMatch(/^set:/);
+    expect(inner[1]).toBe("lock");
+    expect(inner[2]).toBe("count");
+  });
+
+  it("releases the oldest waiting job into the free slot and stamps enqueuedAt", async () => {
+    tx.job.count.mockResolvedValueOnce(0); // 0 active, limit 1 -> 1 slot
+    tx.job.findMany = vi.fn(async () => [
+      { id: "q1", userId: "u1", createdAt: new Date(1) },
+    ]);
+    const released = await releaseNextQueued("u1");
+    expect(released.map((j) => j.id)).toEqual(["q1"]);
+    // Oldest first. Mutation: orderBy desc -> red.
+    expect((tx.job.findMany as any).mock.calls[0][0]).toMatchObject({
+      where: { userId: "u1", status: "PENDING", enqueuedAt: null },
+      orderBy: { createdAt: "asc" },
+      take: 1,
+    });
+    expect(tx.job.update).toHaveBeenCalledWith({
+      where: { id: "q1" },
+      data: { enqueuedAt: expect.any(Date) },
+    });
+    // Enqueued with the dedup id; no free CHARGE row -> no priority.
+    expect(queueAdd).toHaveBeenCalledTimes(1);
+    expect(queueAdd.mock.calls[0][1]).toEqual({ jobId: "q1", userId: "u1" });
+    expect(queueAdd.mock.calls[0][2]).toEqual({ jobId: "dl:q1" });
+  });
+
+  it("keeps the free-job priority for a job charged to the free ledger", async () => {
+    tx.job.count.mockResolvedValueOnce(0);
+    tx.job.findMany = vi.fn(async () => [
+      { id: "q1", userId: "u1", createdAt: new Date(1) },
+    ]);
+    freeUsageFindFirst.mockResolvedValue({ id: "fu1" });
+    await releaseNextQueued("u1");
+    expect(freeUsageFindFirst.mock.calls[0][0].where).toEqual({
+      jobId: "q1",
+      kind: "CHARGE",
+    });
+    expect(queueAdd.mock.calls[0][2]).toMatchObject({ priority: 10 });
+  });
+
+  it("releases nothing while the slot is genuinely held", async () => {
+    tx.job.count.mockResolvedValueOnce(1); // 1 active, limit 1
+    const released = await releaseNextQueued("u1");
+    expect(released).toEqual([]);
+    expect(queueAdd).not.toHaveBeenCalled();
+  });
+
+  // The stall guard's view: an active job silent for 3h does not hold the
+  // slot. Mutation: drop the updatedAt term when staleBefore is set -> red.
+  it("ignores actives silent since staleBefore when asked to", async () => {
+    const staleBefore = new Date("2026-08-19T09:00:00Z");
+    await releaseNextQueued("u1", { staleBefore });
+    const where = (tx.job.count.mock.calls as any[])[0][0].where;
+    expect(where.updatedAt).toEqual({ gte: staleBefore });
+    expect(where.enqueuedAt).toEqual({ not: null });
+  });
+
+  it("returns [] instead of throwing on lock contention", async () => {
+    (prisma.$transaction as any).mockRejectedValueOnce(
+      Object.assign(new Error("timeout"), { code: "P2028" })
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(releaseNextQueued("u1")).resolves.toEqual([]);
+    warn.mockRestore();
+  });
+});
+
+describe("releaseStalledQueues", () => {
+  beforeEach(() => {
+    jobGroupBy.mockReset();
+    tx.job.count.mockReset();
+    tx.job.count.mockResolvedValue(0);
+    tx.job.findMany = vi.fn(async () => []);
+    tx.job.update = vi.fn(async () => ({}));
+    tx.user.findUniqueOrThrow.mockResolvedValue({ plan: "NONE", billingCycle: null });
+    freeUsageFindFirst.mockReset();
+    freeUsageFindFirst.mockResolvedValue(null);
+    queueAdd.mockClear();
+  });
+
+  it("visits exactly the users who have a waiting job, with the 3h line", async () => {
+    jobGroupBy.mockResolvedValue([{ userId: "u1" }, { userId: "u2" }]);
+    const now = new Date("2026-08-19T12:00:00Z");
+    await releaseStalledQueues(now);
+    expect(jobGroupBy.mock.calls[0][0]).toMatchObject({
+      by: ["userId"],
+      where: { status: "PENDING", enqueuedAt: null },
+    });
+    const staleBefore = new Date(now.getTime() - 3 * 60 * 60 * 1000);
+    const countWheres = tx.job.count.mock.calls.map((c: any[]) => c[0].where);
+    expect(countWheres.filter((w: any) => +w.updatedAt.gte === +staleBefore)).toHaveLength(2);
   });
 });

@@ -41,9 +41,17 @@ export const ACTIVE_JOB_STATUSES = [
  * see at all, because nothing records a funnel event for a thrown request. It
  * carries no numbers - there is nothing true to say about a queue we gave up
  * on - and the honest copy is "try again in a moment".
+ *
+ * `queued` is the third: at the cap with the queue flag on, the row is
+ * created and charged exactly as `created`, but it waits for a slot instead
+ * of being refused. See SUBMISSION_QUEUE below.
  */
 export type CreateJobResult =
   | { status: "created"; job: Job }
+  /** Created and charged, but WAITING for a concurrency slot. `position` is
+   *  1-based among this user's waiting jobs (1 = next in line). Only emitted
+   *  when SUBMISSION_QUEUE=on; the flag off reproduces concurrent_limit. */
+  | { status: "queued"; job: Job; position: number }
   | { status: "concurrent_limit"; inFlight: number; limit: number }
   | { status: "busy" };
 
@@ -109,6 +117,21 @@ function isLockContention(err: unknown): boolean {
  * underneath it.
  */
 const FREE_JOB_PRIORITY = 10;
+
+/** Kill switch, read per call like YTDLP_PROXY: only the exact literal "on"
+ *  queues; anything else refuses at the cap exactly as before the queue
+ *  existed. The RELEASE path deliberately does not consult this - turning the
+ *  flag off must drain the queue, not strand it. */
+export function submissionQueueEnabled(): boolean {
+  return process.env.SUBMISSION_QUEUE === "on";
+}
+
+/** Deterministic BullMQ id for a job's download add. BullMQ ignores an add
+ *  whose id it has already seen, which makes a double release (completion
+ *  hook and stall guard racing) a no-op instead of a double download. */
+function downloadJobId(jobId: string): string {
+  return `dl:${jobId}`;
+}
 
 /**
  * Creates the Job row and, for a free account, its reservation - then enqueues.
@@ -203,13 +226,18 @@ export async function createJob(
         // first has already committed its Job row by the time it releases the
         // lock, so this count sees it. Read Committed is enough for the same
         // reason it is enough in withdrawal.service.
+        // enqueuedAt: { not: null } excludes rows that are WAITING in the
+        // queue, not running - counting them here would mean one queued job
+        // permanently blocks the slot the queue exists to eventually give it.
         const inFlight = await tx.job.count({
           where: {
             userId: input.userId,
             status: { in: [...ACTIVE_JOB_STATUSES] },
+            enqueuedAt: { not: null },
           },
         });
-        if (inFlight >= limit) {
+        const atCapacity = inFlight >= limit;
+        if (atCapacity && !submissionQueueEnabled()) {
           return { status: "concurrent_limit", inFlight, limit };
         }
 
@@ -223,6 +251,11 @@ export async function createJob(
             subtitles: input.subtitles ?? true,
             sourceDurationSec: input.sourceDurationSec,
             status: "PENDING",
+            // NULL is the queue: this row is created and charged but not yet
+            // handed to BullMQ. The freeUsage reservation below is written
+            // either way - a queued job has reserved its seconds the moment
+            // the user was told "got it", not the moment a worker starts it.
+            enqueuedAt: atCapacity ? null : new Date(),
           },
         });
 
@@ -236,6 +269,15 @@ export async function createJob(
               estimatedCostUsd: input.freeCharge.estimatedCostUsd,
             },
           });
+        }
+
+        if (atCapacity) {
+          // 1-based among this user's waiting rows, self included - the row
+          // above is visible to this count because it is the same transaction.
+          const position = await tx.job.count({
+            where: { userId: input.userId, status: "PENDING", enqueuedAt: null },
+          });
+          return { status: "queued", job: created, position };
         }
 
         return { status: "created", job: created };
@@ -263,10 +305,11 @@ export async function createJob(
     return { status: "busy" };
   }
 
-  // A refusal never reaches the queue. The enqueue also stays outside the
-  // transaction: a worker can pick the download up the instant the add lands,
-  // and it must not be able to do that before the Job row and its reservation
-  // have committed.
+  // A refusal never reaches the queue, and neither does a `queued` row - it is
+  // handed to BullMQ later, by releaseNextQueued, once a slot actually opens.
+  // The enqueue also stays outside the transaction: a worker can pick the
+  // download up the instant the add lands, and it must not be able to do that
+  // before the Job row and its reservation have committed.
   if (result.status !== "created") return result;
   const job = result.job;
 
@@ -276,11 +319,19 @@ export async function createJob(
       jobId: job.id,
       userId: job.userId,
     },
-    // Only free jobs carry a priority. Passing one for paid jobs would move
-    // them OFF the wait list into the prioritized set, which - per the read of
-    // moveToActive above - is the slower of the two, so "being explicit" would
-    // make paying users worse off.
-    input.freeCharge ? { priority: FREE_JOB_PRIORITY } : undefined
+    {
+      // Deterministic id, not a generated one: releaseNextQueued adds the
+      // same job again if a stall-guard sweep and a completion hook both race
+      // to release it, and BullMQ silently ignores an add whose id it has
+      // already seen. A createJob-started job never gets a second add, but
+      // the id is set unconditionally so both paths agree on what it is.
+      jobId: downloadJobId(job.id),
+      // Only free jobs carry a priority. Passing one for paid jobs would move
+      // them OFF the wait list into the prioritized set, which - per the read
+      // of moveToActive above - is the slower of the two, so "being explicit"
+      // would make paying users worse off.
+      ...(input.freeCharge ? { priority: FREE_JOB_PRIORITY } : {}),
+    }
   );
 
   return result;
@@ -375,4 +426,122 @@ export async function findDuplicateJob(
     }
   }
   return null;
+}
+
+/** How long an active job may go without touching its row before the stall
+ *  guard presumes its worker dead and stops counting it against the limit.
+ *  Every stage updates Job.status (and thus updatedAt) as it runs, so a 3h
+ *  silence is not a slow job - it is a job nobody is running. */
+export const QUEUE_STALL_MS = 3 * 60 * 60 * 1000;
+
+/**
+ * Hand the oldest waiting jobs to BullMQ while this user has free slots.
+ *
+ * Runs under the SAME advisory lock as createJob, so a submission and a
+ * release can never both read a stale count. NEVER throws: it is called from
+ * worker event handlers and an hourly sweep, and a failed release is repaired
+ * by the next completion or the stall guard - taking a worker down over it
+ * would cost more than the wait.
+ *
+ * `staleBefore` is the stall guard's view: actives whose updatedAt is older
+ * stop holding a slot. The normal hooks pass nothing and trust every active.
+ */
+export async function releaseNextQueued(
+  userId: string,
+  opts: { staleBefore?: Date } = {}
+): Promise<Job[]> {
+  let released: Job[] = [];
+  try {
+    released = await prisma.$transaction(
+      async (tx): Promise<Job[]> => {
+        await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = ${LOCK_WAIT_MS}`);
+        await tx.$queryRaw`SELECT 1 AS ok FROM (SELECT pg_advisory_xact_lock(hashtext(${userId}), 1)) AS _lock`;
+
+        const user = await tx.user.findUniqueOrThrow({
+          where: { id: userId },
+          select: { plan: true, billingCycle: true },
+        });
+        const limit = getPlanLimits(
+          user.plan,
+          user.billingCycle ?? "MONTHLY"
+        ).concurrentJobsLimit;
+
+        const active = await tx.job.count({
+          where: {
+            userId,
+            status: { in: [...ACTIVE_JOB_STATUSES] },
+            enqueuedAt: { not: null },
+            ...(opts.staleBefore ? { updatedAt: { gte: opts.staleBefore } } : {}),
+          },
+        });
+        const slots = limit - active;
+        if (slots <= 0) return [];
+
+        const next = await tx.job.findMany({
+          where: { userId, status: "PENDING", enqueuedAt: null },
+          orderBy: { createdAt: "asc" },
+          take: slots,
+        });
+        const now = new Date();
+        for (const job of next) {
+          await tx.job.update({
+            where: { id: job.id },
+            data: { enqueuedAt: now },
+          });
+        }
+        return next;
+      },
+      { timeout: 15_000, maxWait: 10_000 }
+    );
+  } catch (err) {
+    // Includes lock contention AND a user row deleted mid-flight. Both are
+    // repaired by the next release attempt; neither may take the caller down.
+    console.warn(
+      `[queue] release for user ${userId} failed:`,
+      err instanceof Error ? err.message : err
+    );
+    return [];
+  }
+
+  // Outside the transaction for the same reason createJob enqueues outside:
+  // a worker may pick the download up the instant the add lands.
+  for (const job of released) {
+    const freeCharged = await prisma.freeUsage.findFirst({
+      where: { jobId: job.id, kind: "CHARGE" },
+      select: { id: true },
+    });
+    await getStageQueue("download").add(
+      "download",
+      { jobId: job.id, userId: job.userId },
+      {
+        jobId: downloadJobId(job.id),
+        ...(freeCharged ? { priority: FREE_JOB_PRIORITY } : {}),
+      }
+    );
+    console.log(`[queue] released job ${job.id} for user ${job.userId}`);
+  }
+  return released;
+}
+
+/**
+ * The hourly stall guard: for every user with a waiting job, run a release
+ * that refuses to count actives silent for QUEUE_STALL_MS as slot-holders.
+ * A dead worker must not hold somebody's queue forever; a healthy active has
+ * touched its row within the window and keeps its slot.
+ */
+export async function releaseStalledQueues(now: Date): Promise<number> {
+  const users = await prisma.job.groupBy({
+    by: ["userId"],
+    where: { status: "PENDING", enqueuedAt: null },
+  });
+  const staleBefore = new Date(now.getTime() - QUEUE_STALL_MS);
+  let releasedTotal = 0;
+  for (const { userId } of users) {
+    const released = await releaseNextQueued(userId, { staleBefore });
+    releasedTotal += released.length;
+  }
+  if (releasedTotal > 0) {
+    console.warn(`[queue] stall guard released ${releasedTotal} job(s)`);
+  }
+  return releasedTotal;
 }

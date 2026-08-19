@@ -56,6 +56,11 @@ export const FUNNEL_EVENTS = {
   APP_OPENED: "app_opened",
   /** Both: an attempt to create a job, recorded before the limit checks. */
   VIDEO_SUBMITTED: "video_submitted",
+  /** Both: a submission was accepted into the queue (not refused) because a
+   *  job was already running. Counts people who ever waited; the jobs table
+   *  holds the how-often. NOT a refusal - upload_rejected_concurrent stops
+   *  being written the day the flag turns on. */
+  VIDEO_QUEUED: "video_queued",
 } as const;
 
 export type FunnelEvent = string;
