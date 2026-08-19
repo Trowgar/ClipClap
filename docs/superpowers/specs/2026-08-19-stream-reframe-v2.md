@@ -141,6 +141,25 @@ Three instances of one class: frame-relative margin (D1), python exact
 containment (D1b), TS 2px tolerance (D1c) - every one measured, none
 guessed.
 
+**D2b - nested sprawl on real overlays (owner review round 2).** recrent's
+winning candidate was cam + the overlay graphics under it (src 0,280,290x296,
+score 4.47) - static captions/banners give a taller nested box legitimate
+borders; largest-area picks it. A flat AREA-ratio guard (1.25) was tried and
+is a measured dead end: must-not-trim area ratios (1.705 v1 pin, 3.27
+companion) STRADDLE the must-trim one (1.85), and live it trimmed Rtt's
+correct 174x124 crop to 126x90 - no flat area threshold exists. The signal
+is the SCORE ratio: a sprawl's weak side is a junk edge and the contained
+true box beats it by 1.67x (recrent) to 3.7x (strogo), while legitimate
+nestings sit at ~1.25x (Rtt) - trim gains are small by nature (means over
+near-identical spans). Rule: drop a survivor that CONTAINS a survivor
+scoring >= NESTED_SCORE_DOMINANCE (1.5) times more.
+
+**D4c - virtual cam headroom 0.55 -> 0.75 (owner review round 2).** The one
+real react source falsified 0.55: the pompadour tops the YuNet box by more
+than 0.55*faceH and the tile clipped it. Chin floor anchors the bottom, so
+the crop centre moves by half the headroom delta - explained, not a bug.
+Still one source, one haircut.
+
 **D6 - content tile shows the action.** streamContentX already biases the
 content crop toward sourceWidth/2 inside the free band (game centre =
 crosshair). Add the missing test that pins this and a corpus assertion that
