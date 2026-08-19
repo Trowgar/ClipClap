@@ -25,6 +25,12 @@ vi.mock("@clipclap/shared", () => ({
   // line and the plain error classification, and those must keep describing
   // what happens when YTDLP_PROXY is unset. The rotation tests below opt in.
   proxyArgs: () => [],
+  // Same contract as proxyArgs: the PO-token sidecar unconfigured, so the
+  // command lines asserted below stay the plain ones. Missing from the mock
+  // when potArgs() was wired into the processor (2026-08-19), which turned
+  // this whole file red - but only in a container whose live env sets
+  // YTDLP_POT_PROVIDER_URL, which is how it shipped unnoticed.
+  potArgs: () => [],
   isBotCheckFailure: (text?: string | null) =>
     !!text && /confirm\s+you.{0,3}re\s+not\s+a\s+bot/i.test(text),
   rotateWarpExit: rotateWarpExitMock,

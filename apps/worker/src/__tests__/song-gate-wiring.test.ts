@@ -173,7 +173,12 @@ describe("song gate wiring (stages/analyze.ts)", () => {
   });
 
   it("SONG_GATE off (default): analyzeHighlightsV2 runs even on a song transcript, no songGate telemetry - dark-stage byte-identical", async () => {
-    // no SONG_GATE stub at all - the documented default
+    // The documented default is ABSENCE - but this suite runs inside the
+    // worker container, whose live .env sets SONG_GATE=on, so "no stub at
+    // all" was really testing the production value and went red the moment
+    // the container was recreated with it. Deleting the variable is the
+    // default; anything else here tests the host, not the code.
+    vi.stubEnv("SONG_GATE", undefined);
     mocks.jobFind.mockResolvedValue({
       id: "job3",
       transcriptJson: songTranscript(),
