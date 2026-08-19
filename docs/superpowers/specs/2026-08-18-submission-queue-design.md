@@ -1,4 +1,25 @@
-# Submission queue instead of the concurrency refusal - design (2026-08-18, APPROVED)
+# Submission queue instead of the concurrency refusal - design (2026-08-18, SHIPPED)
+
+**LIVE IN PROD since 2026-08-19** (SUBMISSION_QUEUE=on in the live .env, not in git).
+Commits 93f6cee..3ed8c8c + 45ff47a on feat/free-plan-usage-bar. Proven by a live E2E
+against the real stack: created -> queued (enqueuedAt NULL in real Postgres despite
+the DB default) -> terminal failure of the running job -> worker hook released the
+queued one in 14s -> it ran. Suites 1017/1017. Rollback: delete the .env line and
+recreate bot+web+workers - the release path ignores the flag, so the queue DRAINS.
+
+Post-design decisions that reviews forced (recorded so nobody re-litigates):
+- Job.updatedAt did not exist; added @updatedAt @default(now()) as the stall guard's
+  liveness signal (the original design assumed it). Direct-key where forms only -
+  tsc skips excess-property checks on spreads, which is how the phantom column
+  shipped green.
+- BullMQ REJECTS ':' in custom ids (throws). dl-<jobId>, and the constraint is now
+  asserted outside the queue mock. The first dl:<id> version threw on a real user's
+  submission (2026-08-19 10:11) - video dropped, charge stranded; repaired by hand
+  (delivery row + release) and refunded by the sweep.
+- The bot's advisory concurrency pre-check steps aside when the flag is on (it would
+  have made the queue unreachable) and defines in-flight exactly as createJob does.
+- Queued jobs are excluded from the 20-row progress-board window.
+- A failed enqueue un-stamps the row (self-heal) and the release self-retries once.
 
 ## 0. The defect, in numbers
 
