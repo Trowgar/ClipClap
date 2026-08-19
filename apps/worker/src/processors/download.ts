@@ -9,6 +9,7 @@ import { randomUUID } from "crypto";
 import {
   downloadFile,
   isBotCheckFailure,
+  potArgs,
   proxyArgs,
   rotateWarpExit,
   MAX_SOURCE_FILESIZE_BYTES,
@@ -106,6 +107,8 @@ async function downloadFromUrl(
         // for YouTube links the proxy is the difference between a file and
         // nothing at all.
         ...proxyArgs(),
+        // PO-token plugin wiring - empty when the sidecar is unconfigured.
+        ...potArgs(),
         "-f",
         "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
         "--merge-output-format",

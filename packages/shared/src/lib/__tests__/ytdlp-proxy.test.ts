@@ -2,13 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isBotCheckFailure,
   isTransient403,
+  potArgs,
   proxyArgs,
   rotateWarpExit,
   warpControlUrl,
   ytdlpProxy,
 } from "../ytdlp-proxy";
 
-const ENV_KEYS = ["YTDLP_PROXY", "WARP_CONTROL_URL"] as const;
+const ENV_KEYS = ["YTDLP_PROXY", "WARP_CONTROL_URL", "YTDLP_POT_PROVIDER_URL"] as const;
 const saved: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -188,5 +189,20 @@ describe("rotateWarpExit", () => {
       rotated: false,
       reason: "control-http-500",
     });
+  });
+});
+
+describe("potArgs", () => {
+  it("is empty when the sidecar is unconfigured - byte-identical yt-dlp args", () => {
+    delete process.env.YTDLP_POT_PROVIDER_URL;
+    expect(potArgs()).toEqual([]);
+  });
+
+  it("wires the bgutil plugin at the configured base url, trailing slash trimmed", () => {
+    process.env.YTDLP_POT_PROVIDER_URL = "http://potprovider:4416/";
+    expect(potArgs()).toEqual([
+      "--extractor-args",
+      "youtubepot-bgutilhttp:base_url=http://potprovider:4416",
+    ]);
   });
 });

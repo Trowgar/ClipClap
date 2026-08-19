@@ -3,6 +3,7 @@ import type { ChildProcess } from "child_process";
 import {
   isBotCheckFailure,
   isTransient403,
+  potArgs,
   proxyArgs,
   rotateWarpExit,
   type RotateOutcome,
@@ -123,6 +124,8 @@ function probeOnce(
         // Proxy first so it is visible at the head of any logged command line.
         // Empty when unconfigured, which is the pre-WARP behaviour exactly.
         ...proxyArgs(),
+        // PO-token plugin wiring - empty when the sidecar is unconfigured.
+        ...potArgs(),
         "--simulate",
         "--no-playlist",
         "--print",

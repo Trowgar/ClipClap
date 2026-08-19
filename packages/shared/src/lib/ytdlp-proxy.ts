@@ -39,6 +39,26 @@ export function proxyArgs(): string[] {
   return proxy ? ["--proxy", proxy] : [];
 }
 
+/** Base URL of the GVS PO-token provider sidecar, or null to run tokenless.
+ *
+ *  Same kill-switch shape as the proxy: read per call, cleared in .env to
+ *  disable, and the bgutil plugin inside the images stays inert without it.
+ *  See docker-compose.yml's potprovider service and spec
+ *  2026-08-19-youtube-flap-survival 2 for why this exists: YouTube's
+ *  "metadata fine, every segment 403" mode is a Proof-of-Origin demand. */
+export function potProviderUrl(): string | null {
+  const raw = process.env.YTDLP_POT_PROVIDER_URL?.trim();
+  return raw ? raw.replace(/\/+$/, "") : null;
+}
+
+/** yt-dlp args pointing the bgutil PO-token plugin at the sidecar, or nothing. */
+export function potArgs(): string[] {
+  const url = potProviderUrl();
+  return url
+    ? ["--extractor-args", `youtubepot-bgutilhttp:base_url=${url}`]
+    : [];
+}
+
 /** Did YouTube refuse this exit as a bot?
  *
  *  Matched loosely ON PURPOSE. The live message uses a CURLY apostrophe

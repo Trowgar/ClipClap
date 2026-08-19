@@ -193,6 +193,20 @@ services:
       - "6379"
     restart: unless-stopped
 
+  # GVS PO-token provider for yt-dlp (spec 2026-08-19-youtube-flap-survival 2).
+  # YouTube demands a Proof-of-Origin token for googlevideo streaming from
+  # suspicious IPs - the "metadata fine, every segment 403" mode our pinned
+  # WARP exit falls into. The three yt-dlp images carry the plugin; it calls
+  # this sidecar only when YTDLP_POT_PROVIDER_URL points here, and a down
+  # sidecar degrades to tokenless - so this service can be removed without
+  # touching anything else. Never published to the host.
+  potprovider:
+    image: brainicism/bgutil-ytdlp-pot-provider:1.3.1
+    init: true
+    expose:
+      - "4416"
+    restart: unless-stopped
+
   # Cloudflare WARP as a SOCKS5 exit for yt-dlp ONLY.
   #
   # YouTube refuses this host's Hetzner address outright - "Sign in to confirm

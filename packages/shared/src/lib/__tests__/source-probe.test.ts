@@ -170,6 +170,27 @@ describe("probeVideoUrl rotate-and-retry", () => {
     expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 
+  it("passes the PO-token extractor-args when the sidecar is configured", async () => {
+    process.env.YTDLP_POT_PROVIDER_URL = "http://potprovider:4416";
+    execFileMock.mockImplementation(
+      (_cmd: string, _args: string[], _opts: unknown, cb: ExecCb) => {
+        cb(null, "10||x\n", "");
+        return { kill: vi.fn() };
+      }
+    );
+
+    try {
+      await probeVideoUrl("https://youtube.com/abc");
+    } finally {
+      delete process.env.YTDLP_POT_PROVIDER_URL;
+    }
+
+    const [, args] = execFileMock.mock.calls[0] as [string, string[]];
+    const i = args.indexOf("--extractor-args");
+    expect(i).toBeGreaterThan(-1);
+    expect(args[i + 1]).toBe("youtubepot-bgutilhttp:base_url=http://potprovider:4416");
+  });
+
   it("passes --proxy to yt-dlp when YTDLP_PROXY is set", async () => {
     process.env.YTDLP_PROXY = "socks5://warp:1080";
     execFileMock.mockImplementation(
