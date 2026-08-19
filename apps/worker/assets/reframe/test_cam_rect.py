@@ -198,6 +198,14 @@ class TestD1D2Selection(unittest.TestCase):
         # the v1 anti-shrink property (see
         # test_prefers_the_larger_rectangle_over_a_stronger_smaller_one)
         # surviving the D2 rewrite.
+        #
+        # Unchanged by D2b, 2026-08-19 (score-dominance nesting, see
+        # find_cam_rect's docstring): this pair's inner/outer score ratio is
+        # 361.0/299.5 = 1.205, comfortably under NESTED_SCORE_DOMINANCE
+        # (1.5), so the nested rule never fires here and the outer keeps
+        # winning on area exactly as before. Measured, not assumed - this
+        # fixture is one of the four must-NOT-trim cases in
+        # NESTED_SCORE_DOMINANCE's comment.
         img = np.full((360, 640), 128, np.uint8)
         img[0:150, 0:309] = 70   # outer fill: diff 58 vs background
         img[0:81, 0:175] = 0     # inner fill: diff 70 vs outer fill
@@ -274,6 +282,58 @@ class TestD1D2Selection(unittest.TestCase):
         vx, hy = df.median_edge_map([img])
         rect = df.find_cam_rect(vx, hy, face, 640, 360, 0.5, 4.0)
         self.assertIsNone(rect)
+
+    def test_nested_dominance_trims_a_cam_plus_overlay_sprawl(self):
+        # D2b, 2026-08-19: recrent-shaped, at its NATURAL score ratio - this
+        # exact geometry is the "tw-recrent (synthetic repro)" row in
+        # NESTED_SCORE_DOMINANCE's comment. A cam with a strong border (rows
+        # 0:80) sits directly above a static overlay band (rows 80:150,
+        # weaker but still real contrast) - both nested from the same
+        # corner, so "cam plus overlay" is itself a valid candidate: it
+        # clears best_score/2 (measured 306.76 >= 511.27/2 = 255.6) but its
+        # inner/outer score ratio is 511.27/306.76 = 1.67, past
+        # NESTED_SCORE_DOMINANCE (1.5). Without the rule, plain
+        # dominance-then-area picks the sprawling outer, which is exactly
+        # the tw-recrent defect (cam + captions + ad banner).
+        img = np.full((360, 640), 128, np.uint8)
+        img[0:150, 0:175] = 80   # overlay band, weaker contrast
+        img[0:80, 0:175] = 0     # cam, strong contrast, on top
+        face = (20, 15, 30, 20)
+        vx, hy = df.median_edge_map([img])
+        rect = df.find_cam_rect(vx, hy, face, 640, 360, 0.6, 4.0)
+        self.assertIsNotNone(rect)
+        self.assertEqual((rect["w"], rect["h"]), (175, 80))
+        # Mutation check: raise the ratio far past any real geometry and the
+        # SAME scenario must flip to the sprawling outer - proving the rule,
+        # not something else, is what kept the cam alone winning.
+        old = df.NESTED_SCORE_DOMINANCE
+        df.NESTED_SCORE_DOMINANCE = 1000.0
+        try:
+            mutated = df.find_cam_rect(vx, hy, face, 640, 360, 0.6, 4.0)
+            self.assertEqual((mutated["w"], mutated["h"]), (175, 150))
+        finally:
+            df.NESTED_SCORE_DOMINANCE = old
+
+    def test_nested_dominance_spares_a_close_score_anti_shrink_case(self):
+        # Mutation-style companion, pinning NESTED_SCORE_DOMINANCE's (1.5)
+        # bound from below. Same geometry as above, overlay fill tuned so
+        # the inner/outer score ratio is 1.42 (measured 474.70/335.45),
+        # under 1.5 - the outer still scores lower than the cam alone and
+        # still contains it, but must NOT be trimmed: this is the v1
+        # anti-shrink property
+        # (test_prefers_the_larger_rectangle_over_a_stronger_smaller_one) -
+        # a close-score "outer wins despite a stronger, smaller inner" case
+        # must survive D2b, not just a genuinely sprawling one. (Area is no
+        # longer the tuning knob here - D2b's first, abandoned area-ratio
+        # attempt is why; see NESTED_SCORE_DOMINANCE's comment.)
+        img = np.full((360, 640), 128, np.uint8)
+        img[0:150, 0:175] = 75   # overlay band, ratio 1.42 vs the cam
+        img[0:80, 0:175] = 0     # cam, strong contrast, on top
+        face = (20, 15, 30, 20)
+        vx, hy = df.median_edge_map([img])
+        rect = df.find_cam_rect(vx, hy, face, 640, 360, 0.6, 4.0)
+        self.assertIsNotNone(rect)
+        self.assertEqual((rect["w"], rect["h"]), (175, 150))
 
 
 if __name__ == "__main__":

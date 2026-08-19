@@ -73,6 +73,30 @@ FACE_CONTAIN_SLOP_FRAC = 0.10
 # evidence. Re-measure before trusting it on a second source shape.
 CAM_EDGE_MIN = 4.0
 
+# D2b, 2026-08-19: nested-dominance rule, on SCORE not area. First attempt
+# used an area ratio (a survivor containing another that scored higher was
+# trimmed once its area exceeded the inner's by 1.25x) and measured a DEAD
+# END: area cannot separate the two sets, because they overlap. Must-NOT-
+# trim area ratios measured 1.705 (test_prefers_the_larger_rectangle_over_a_
+# stronger_smaller_one) and 3.27 (this file's own within-2x D2 test) sit on
+# BOTH SIDES of the must-trim tw-recrent ratio, 1.85 - no threshold separates
+# them, and the area rule also trimmed Rtt2StnXpxw's correct 174x124 crop
+# down to a wrong 126x90 in production. SCORE ratio does separate them,
+# measured on the same candidates:
+#   must trim:      tw-recrent (synthetic repro)  511.27 / 306.76 = 1.67
+#                    strogo sprawl (already dominance-killed) 15.09/4.04=3.7
+#   must NOT trim:   test_prefers_the_larger...                 1.33
+#                    test_finds_the_corner_inset_on_gameplay    1.13
+#                    test_agrees_across_two_different_moments   1.41
+#                    this file's own within-2x D2 test          1.21
+#                    Rtt2StnXpxw (live, pre/post this change)   1.25
+# Every must-NOT-trim case is < 1.5; the must-trim cases are >= 1.67. 1.5
+# sits in the empty gap. The outer's weak side in a must-trim case is a junk
+# edge (an overlay, a HUD sprawl) - the score collapses outright rather than
+# merely dipping, which is exactly why v1's shrink bias was subtle (a few
+# tens of percent) rather than catastrophic (50%+).
+NESTED_SCORE_DOMINANCE = 1.5
+
 
 def median_edge_map(grays):
     """Per-pixel MEDIAN Sobel magnitude across frames.
@@ -146,6 +170,24 @@ def find_cam_rect(vx, hy, face, W, H, pip_max_frac, edge_min=CAM_EDGE_MIN):
     first, then area, keeps both properties: a weak sprawling false candidate
     never reaches the area comparison, and among genuinely competitive
     candidates the larger one still wins.
+
+    A nested-dominance rule runs after that filter (D2b, 2026-08-19): drop a
+    survivor that CONTAINS another survivor scoring at least
+    NESTED_SCORE_DOMINANCE times as much. tw-recrent's true cam sits
+    directly above a static caption/ad-banner overlay, so "cam plus overlay"
+    is itself a legitimate candidate - weaker-bordered than the cam alone,
+    but not weak enough to miss the /2 dominance band, and it used to win
+    outright on area. The /2 filter alone cannot fix this: it compares every
+    candidate to the GLOBAL best, and the sprawling outer candidate here
+    often outscores unrelated candidates by more than half while still
+    losing badly to its own inner rect. Containment is the signal dominance-
+    alone cannot see. This is a SCORE rule, not an area rule (see
+    NESTED_SCORE_DOMINANCE's comment for the measured reason an area ratio
+    was tried first and abandoned): a junk edge collapses score outright,
+    while the ordinary area-vs-score tradeoff between two legitimate
+    candidates (the shape
+    test_prefers_the_larger_rectangle_over_a_stronger_smaller_one pins)
+    never reaches this ratio.
     """
     if vx is None or hy is None:
         return None
@@ -211,6 +253,26 @@ def find_cam_rect(vx, hy, face, W, H, pip_max_frac, edge_min=CAM_EDGE_MIN):
         return None
     best_score = max(c["score"] for c in candidates)
     survivors = [c for c in candidates if c["score"] >= best_score / 2.0]
+    # D2b, 2026-08-19: nested-dominance rule - see the docstring above and
+    # NESTED_SCORE_DOMINANCE's comment for the measured score table. A
+    # survivor that contains another survivor scoring
+    # NESTED_SCORE_DOMINANCE times as much or more is sprawl (cam + junk
+    # overlay), not a legitimate larger candidate, and is dropped before the
+    # area sort. No area term: area could not separate the must-trim and
+    # must-not-trim sets (they overlap), score can.
+    survivors = [
+        o for o in survivors
+        if not any(
+            i is not o
+            and o["x"] <= i["x"] and o["y"] <= i["y"]
+            and o["x"] + o["w"] >= i["x"] + i["w"]
+            and o["y"] + o["h"] >= i["y"] + i["h"]
+            and i["score"] >= NESTED_SCORE_DOMINANCE * o["score"]
+            for i in survivors
+        )
+    ]
+    if not survivors:
+        return None
     survivors.sort(key=lambda c: (c["w"] * c["h"], c["score"]), reverse=True)
     return survivors[0]
 
