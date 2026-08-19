@@ -16,6 +16,8 @@ import {
   sliceCropPlan,
   synthesizeVirtualCamRect,
   tileWidthFor,
+  VIRTUAL_CAM_CHIN_FRAC,
+  VIRTUAL_CAM_HEADROOM_FRAC,
   widestFaceInInset,
   windowXFor,
 } from "../reframe/plan";
@@ -1355,12 +1357,14 @@ describe("stream layout", () => {
       // Full geometry, pinned like the sibling "emits a stream layout" test
       // above: 3.2x face width centred on the face, height covers both the
       // 16:9-of-width derivation AND the chin-coverage floor (whichever is
-      // taller - toxFace's h/w 1.122 makes the chin term win here, h=96 not
-      // the 16:9-only 90), clamped to the frame (face right edge sits flush
-      // at 624, close to the 640 edge). Only camCrop.y moves versus a plain
-      // 16:9 rect - the taller rect centres the cam window a little lower.
+      // taller), clamped to the frame (face right edge sits flush at 624,
+      // close to the 640 edge). Headroom 0.75 (owner-reviewed 2026-08-19,
+      // was 0.55 - the pompadour on the real tox render got cut by the tile
+      // edge): the chin floor still dominates the bottom (unaffected by
+      // headroom), so raising headroom only pushes the top up and grows h to
+      // match - w is untouched.
       expect(plan?.stream).toEqual({
-        camCrop: { w: 120, h: 86, y: 260 },
+        camCrop: { w: 120, h: 86, y: 254 },
         contentCrop: { w: 338, h: 360 },
         outCamH: 770,
         outContentH: 1150,
@@ -1374,20 +1378,24 @@ describe("stream layout", () => {
       });
 
       // The synthesized rect itself: contains the face box, with headroom
-      // above it (>= the provisional 0.55*faceHeight, modulo even-snapping)
-      // AND chin clearance below it (>= 0.15*faceHeight, modulo snapping) -
-      // this is the exact containment that broke on the real tox probe
-      // before the chin floor existed (spec: synthesized bottom 314 sat 11px
-      // above the real face bottom 325.3).
+      // above it (>= VIRTUAL_CAM_HEADROOM_FRAC*faceHeight, modulo even-
+      // snapping) AND chin clearance below it (>=
+      // VIRTUAL_CAM_CHIN_FRAC*faceHeight, modulo snapping) - this is the
+      // exact containment that broke on the real tox probe before the chin
+      // floor existed (spec: synthesized bottom 314 sat 11px above the real
+      // face bottom 325.3), and the hair-clipping owner feedback the
+      // headroom bump exists for.
       const rect = synthesizeVirtualCamRect(toxFace.box, VSW, VSH);
-      expect(rect).toEqual({ x: 520, y: 254, w: 120, h: 96, score: 0 });
+      expect(rect).toEqual({ x: 520, y: 242, w: 120, h: 108, score: 0 });
       expect(rect.x).toBeLessThanOrEqual(toxFace.box.x);
       expect(rect.x + rect.w).toBeGreaterThanOrEqual(toxFace.box.x + toxFace.box.w);
       expect(rect.y).toBeLessThanOrEqual(toxFace.box.y);
       expect(rect.y + rect.h).toBeGreaterThanOrEqual(toxFace.box.y + toxFace.box.h);
-      expect(toxFace.box.y - rect.y).toBeGreaterThanOrEqual(0.55 * toxFace.box.h - 2);
+      expect(toxFace.box.y - rect.y).toBeGreaterThanOrEqual(
+        VIRTUAL_CAM_HEADROOM_FRAC * toxFace.box.h - 2
+      );
       expect(rect.y + rect.h - (toxFace.box.y + toxFace.box.h)).toBeGreaterThanOrEqual(
-        0.15 * toxFace.box.h - 2
+        VIRTUAL_CAM_CHIN_FRAC * toxFace.box.h - 2
       );
       // And the per-shot loop's OWN containment check - the exact predicate
       // that silently failed before this fix - must agree.
@@ -1453,7 +1461,9 @@ describe("stream layout", () => {
       // resolveCamRect before its own clamp (cam-rect.ts's closing comment).
       const cornerFace: FaceBox = { x: 620, y: 340, w: 20, h: 20 };
       const rect = synthesizeVirtualCamRect(cornerFace, VSW, VSH);
-      expect(rect).toEqual({ x: 598, y: 328, w: 42, h: 32, score: 0 });
+      // Headroom 0.75 (owner-reviewed 2026-08-19, was 0.55): top moves up,
+      // so y drops and h grows to compensate.
+      expect(rect).toEqual({ x: 598, y: 324, w: 42, h: 36, score: 0 });
       expect(rect.x).toBeGreaterThanOrEqual(0);
       expect(rect.y).toBeGreaterThanOrEqual(0);
       expect(rect.x + rect.w).toBeLessThanOrEqual(VSW);
@@ -1464,14 +1474,28 @@ describe("stream layout", () => {
       expect(rect.y % 2).toBe(0);
       expect(rect.w % 2).toBe(0);
       expect(rect.h % 2).toBe(0);
+      // The frame clamp cannot break containment (per the headroom-bump
+      // instructions: it only ever ADDS top coverage, and clamping only cuts
+      // at an edge the face itself cannot extend past) - checked directly,
+      // not assumed.
+      expect(isInsideInset({ id: 0, box: cornerFace, score: 0.9, samples: 5, mouthActivity: 0.05 }, rect))
+        .toBe(true);
 
       // Top-left corner too: both axes' `Math.max(0, ...)` floor matter
       // independently.
       const tlFace: FaceBox = { x: 0, y: 0, w: 40, h: 40 };
       const tlRect = synthesizeVirtualCamRect(tlFace, VSW, VSH);
-      expect(tlRect).toEqual({ x: 0, y: 0, w: 84, h: 50, score: 0 });
+      // At headroom 0.75, the top clamps to 0 (already did at 0.55) but the
+      // UNCLAMPED top is now further above the frame, so the 16:9-derived
+      // bottom (top + fixed width-derived height) is correspondingly lower -
+      // the chin floor (unaffected by headroom) now governs instead of the
+      // aspect term, giving a SMALLER h here than at 0.55 (46 vs 50).
+      // Investigated, not assumed: still contains tlFace, checked below.
+      expect(tlRect).toEqual({ x: 0, y: 0, w: 84, h: 46, score: 0 });
       expect(tlRect.x).toBeGreaterThanOrEqual(0);
       expect(tlRect.y).toBeGreaterThanOrEqual(0);
+      expect(isInsideInset({ id: 0, box: tlFace, score: 0.9, samples: 5, mouthActivity: 0.05 }, tlRect))
+        .toBe(true);
     });
 
     it("fires below the normal_face floor too - the band is deliberate, not an accident", () => {

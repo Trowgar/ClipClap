@@ -49,8 +49,16 @@ export const MAX_PLAN_SHOTS = 90;
 
 // D4 virtual-cam multipliers (spec 2026-08-19-stream-reframe-v2 §3). PROVISIONAL:
 // the corpus render decides them, not a fixture - see `synthesizeVirtualCamRect`.
-const VIRTUAL_CAM_WIDTH_FACES = 3.2; // cam tile width, in multiples of face width
-const VIRTUAL_CAM_HEADROOM_FRAC = 0.55; // cam tile top, in face heights above faceTop
+// Exported so tests pin geometry by referencing these, not by re-typing their
+// values as literals that silently go stale the next time a real render moves
+// one (as the 0.55->0.75 headroom bump did on 2026-08-19).
+export const VIRTUAL_CAM_WIDTH_FACES = 3.2; // cam tile width, in multiples of face width
+// Owner-reviewed 2026-08-19 on the real rendered tox sample: at 0.55, the
+// streamer's pompadour extended above face.y - 0.55*face.h and got cut by
+// the cam tile's top edge - hair is not covered by the YuNet face box, so
+// headroom sized only off that box was too tight. 0.75 clears it on that
+// source. Still provisional - one source, one haircut.
+export const VIRTUAL_CAM_HEADROOM_FRAC = 0.75; // cam tile top, in face heights above faceTop
 // Chin-coverage floor, added 2026-08-19 after the tox live-acceptance run: its
 // real YuNet face box is h/w 1.32 (taller than a typical face box), so the
 // 16:9-of-width height alone put the synthesized bottom at 314 - 11px ABOVE
@@ -58,7 +66,7 @@ const VIRTUAL_CAM_HEADROOM_FRAC = 0.55; // cam tile top, in face heights above f
 // rendered `center` instead of `stream` despite the clip classifying `stream`.
 // This constant forces bottom coverage by construction (below) rather than by
 // retuning WIDTH_FACES/HEADROOM_FRAC to fit one probe.
-const VIRTUAL_CAM_CHIN_FRAC = 0.15; // required clearance below faceBottom, in face heights
+export const VIRTUAL_CAM_CHIN_FRAC = 0.15; // required clearance below faceBottom, in face heights
 const W_AREA = 0.5;
 const W_CENTER = 0.3;
 const W_MOUTH = 0.2;
