@@ -14,7 +14,9 @@ import {
   planLayoutCounts,
   selectGroupForShot,
   sliceCropPlan,
+  synthesizeVirtualCamRect,
   tileWidthFor,
+  widestFaceInInset,
   windowXFor,
 } from "../reframe/plan";
 // DEFAULT_CAMERA lives in camera.ts and plan.ts does not re-export it, so this
@@ -23,6 +25,7 @@ import { DEFAULT_CAMERA } from "../reframe/camera";
 import type {
   CamRect,
   CropPlan,
+  FaceBox,
   FaceTrack,
   Shot,
   ShotTracks,
@@ -1100,6 +1103,485 @@ describe("stream layout", () => {
       { start: 0, end: 30, layout: "single", x: 1256 },
     ]);
   });
+
+  // spec 2026-08-19-stream-reframe-v2 D5: rect-first under a ceiling. Below
+  // `streamFaceCeiling`, a resolvable rect around the widest face wins
+  // classification BEFORE the normal_face floor is even consulted - this is
+  // what a corner-cam stream (measured strogo/tox 0.076-0.077, both above
+  // faceSmallFrac 0.06) needs to ever reach `stream` at all.
+  describe("D5 rect-first classification", () => {
+    // 103/1280 = 0.0805625: clears the v1 normal_face floor (0.06 * 1280 =
+    // 76.8) AND sits inside `camRect` (x+w = 253 <= 430).
+    const eightPct: FaceTrack = {
+      id: 0,
+      box: { x: 150, y: 100, w: 103, h: 56 },
+      score: 0.89,
+      samples: 111,
+      mouthActivity: 0.05,
+    };
+
+    it("fires on a face at 8% of frame width with a valid rect (v1 would say normal_face)", () => {
+      expect(hasNormalSizedFace(103, 0.06 * SW)).toBe(true); // the v1 trap
+      const plan = buildCropPlan(oneShot, withTracks([eightPct]), SW, SH, streamOpts, camRes);
+      expect(plan?.profile?.class).toBe("stream");
+      expect(plan?.profile?.faceFrac).toBe(103 / SW);
+    });
+
+    it("pins the ceiling as a strict less-than at exactly 0.15", () => {
+      // 192/1280 = 0.15 exactly (verified: 192/1280 === 0.15 in IEEE754).
+      const atCeiling: FaceTrack = { ...eightPct, box: { ...eightPct.box, w: 192 } };
+      const atPlan = buildCropPlan(oneShot, withTracks([atCeiling]), SW, SH, streamOpts, camRes);
+      expect(atPlan?.profile?.class).toBe("normal_face");
+
+      // 191/1280 = 0.14921875, strictly under.
+      const underCeiling: FaceTrack = { ...eightPct, box: { ...eightPct.box, w: 191 } };
+      const underPlan = buildCropPlan(
+        oneShot,
+        withTracks([underCeiling]),
+        SW,
+        SH,
+        streamOpts,
+        camRes
+      );
+      expect(underPlan?.profile?.class).toBe("stream");
+    });
+
+    it("leaves a buster-shaped fullscreen face alone: no rect resolves, so the ceiling adds nothing", () => {
+      // 114/1280 = 0.0890625 - between faceSmallFrac and the ceiling, same
+      // shape as tw-buster (measured 0.089), but with NO rect at all: this is
+      // the case D5's own rationale names as the one a bigger ceiling alone
+      // would have broken (spec §2, §3 D5).
+      const busterShaped: FaceTrack = {
+        id: 0,
+        box: { x: 400, y: 100, w: 114, h: 200 },
+        score: 0.89,
+        samples: 111,
+        mouthActivity: 0.05,
+      };
+      const withDefaultCeiling = buildCropPlan(
+        oneShot,
+        withTracks([busterShaped]),
+        SW,
+        SH,
+        streamOpts,
+        null
+      );
+      expect(withDefaultCeiling?.profile?.class).toBe("normal_face");
+
+      // Proves the fall-through adds nothing: with no rect to attempt,
+      // shrinking the ceiling to 0 cannot change a single byte of the plan.
+      const withZeroCeiling = buildCropPlan(
+        oneShot,
+        withTracks([busterShaped]),
+        SW,
+        SH,
+        { ...streamOpts, streamFaceCeiling: 0 },
+        null
+      );
+      expect(withZeroCeiling).toEqual(withDefaultCeiling);
+    });
+
+    it("still reports stream_no_rect for a sub-floor face with no rect, unchanged", () => {
+      // 38/1280 = 0.029688, under faceSmallFrac - the pre-D5 population this
+      // change must leave byte-for-byte alone.
+      const subFloor: FaceTrack = {
+        id: 0,
+        box: { x: 400, y: 100, w: 38, h: 50 },
+        score: 0.89,
+        samples: 111,
+        mouthActivity: 0.05,
+      };
+      const plan = buildCropPlan(oneShot, withTracks([subFloor]), SW, SH, streamOpts, null);
+      expect(plan?.profile?.class).toBe("small_face");
+      expect(plan?.profile?.reason).toBe("stream_no_rect");
+    });
+
+    it("keeps the killswitch as master over the rect-first path", () => {
+      const plan = buildCropPlan(
+        oneShot,
+        withTracks([eightPct]),
+        SW,
+        SH,
+        { ...streamOpts, stream: false },
+        camRes
+      );
+      expect(plan?.profile?.class).toBe("normal_face");
+    });
+  });
+
+  // D1b (spec 2026-08-19-stream-reframe-v2): a detector face box may
+  // legitimately overhang a correctly-resolved camRect by real pixels and
+  // still BE the webcam inset - `isInsideInset`'s old hardcoded 2px-per-edge
+  // floor (sized for median-vs-median jitter) rejected strogo's own dead-on
+  // rect for exactly this reason: `widestFaceInInset` said false, D5's
+  // rect-first branch never fired, and strogo stayed `normal_face`. Fixture
+  // is strogo's OWN measured numbers (python agent, 2026-08-19): GT rect src
+  // 0,0,350,160 on the corpus's real 1280x720 source; widest surviving face
+  // track (163.56, 73.04, 98.82, 93.52), bottom 166.56 - 6.56px (7% of face
+  // height) past the rect's bottom edge.
+  describe("D1b overhang tolerance", () => {
+    const strogoRect: CamRect = { x: 0, y: 0, w: 350, h: 160, score: 6.1 };
+    const strogoFace: FaceTrack = {
+      id: 0,
+      box: { x: 163.56, y: 73.04, w: 98.82, h: 93.52 },
+      score: 0.9,
+      samples: 40,
+      mouthActivity: 0.05,
+    };
+
+    it("strogo-shaped: a 7%-of-face-height overhang is contained, and the clip classifies stream with stream-layout shots", () => {
+      expect(
+        widestFaceInInset([strogoFace], strogoFace.box.w, strogoRect)
+      ).toBe(true);
+
+      const plan = buildCropPlan(
+        oneShot,
+        [{ shotIndex: 0, tracks: [strogoFace], camRect: strogoRect }],
+        SW,
+        SH,
+        streamOpts,
+        { rect: strogoRect }
+      );
+      expect(plan?.profile?.class).toBe("stream");
+      expect(plan?.version).toBe(2);
+      expect(plan?.stream).toEqual({
+        camCrop: { w: 224, h: 160, y: 0 },
+        contentCrop: { w: 676, h: 720 },
+        outCamH: 770,
+        outContentH: 1150,
+      });
+      expect(plan?.shots[0]).toEqual({
+        start: 0,
+        end: 30,
+        layout: "stream",
+        cam: { x: 100 },
+        content: { x: 350 },
+      });
+    });
+
+    it("bound pin: a 25%-of-face-height overhang still fails - the duet-podcast protection holds", () => {
+      // Same face, shifted down so its bottom clears the rect by 25% of its
+      // own height (23.38px) instead of 7% - well beyond what a 10% shrink
+      // plus the 2px floor can cover.
+      // box.y chosen so box.y + box.h = rect.bottom(160) + 0.25*box.h(93.52):
+      // 160 + 23.38 - 93.52 = 89.86.
+      const farOverhang: FaceTrack = {
+        ...strogoFace,
+        box: { ...strogoFace.box, y: 89.86 },
+      };
+      // Sanity: bottom really is rect.bottom + 25% of face height.
+      expect(farOverhang.box.y + farOverhang.box.h).toBeCloseTo(
+        strogoRect.y + strogoRect.h + 0.25 * farOverhang.box.h,
+        6
+      );
+      expect(
+        widestFaceInInset([farOverhang], farOverhang.box.w, strogoRect)
+      ).toBe(false);
+
+      const plan = buildCropPlan(
+        oneShot,
+        [{ shotIndex: 0, tracks: [farOverhang], camRect: strogoRect }],
+        SW,
+        SH,
+        streamOpts,
+        { rect: strogoRect }
+      );
+      // D5's branch is the ONLY path that can promote a normal_face-sized
+      // widest face (98.82 >= the 76.8 floor) to `stream` - the legacy
+      // final-else branch further down the chain is reserved for sub-floor
+      // faces and is never reached once `hasNormalSizedFace` is true. So a
+      // failed join here does not fall through to a different route to
+      // `stream`; it falls all the way through to `normal_face`, exactly the
+      // duet-podcast protection `widestFaceInInset` exists for.
+      expect(plan?.profile?.class).toBe("normal_face");
+    });
+  });
+
+  // spec 2026-08-19-stream-reframe-v2 D4: the virtual cam tile. Only mechanism
+  // that can ever serve a borderless/chroma-key cam - edge detection has
+  // nothing to find on that class (tox's true sides measured 0.31/0.62 vs
+  // edge_min 4.0). Self-contained at tox's own scale (640x360) rather than
+  // reusing this file's 1280x720 fixtures above, so the synthesized rect's
+  // numbers below are the real corpus numbers, not a rescale of them.
+  describe("D4 virtual cam tile", () => {
+    const VSW = 640;
+    const VSH = 360;
+    const vStreamOpts = {
+      faceSmallFrac: 0.06,
+      faceLargeFrac: 0.1,
+      stream: true,
+      camShare: 0.4,
+      motion: false,
+      camera: DEFAULT_CAMERA,
+    };
+    // Real tox_4X88jJU.mp4 GT face box (.corpus/stream-v2/README.md):
+    // ~49x55 at (575,285) on a 640x360 source, 49/640 = 0.0765625.
+    const toxFace: FaceTrack = {
+      id: 0,
+      box: { x: 575, y: 285, w: 49, h: 55 },
+      score: 0.89,
+      samples: 111,
+      mouthActivity: 0.05,
+    };
+
+    it("flag off (default) matches a run with the option omitted entirely, byte for byte", () => {
+      const omitted = buildCropPlan(oneShot, withTracks([toxFace]), VSW, VSH, vStreamOpts, null);
+      const explicitOff = buildCropPlan(
+        oneShot,
+        withTracks([toxFace]),
+        VSW,
+        VSH,
+        { ...vStreamOpts, streamVirtualCam: false },
+        null
+      );
+      expect(omitted?.profile?.class).toBe("normal_face");
+      expect(omitted?.profile?.virtualCam).toBeUndefined();
+      expect(JSON.stringify(omitted)).toBe(JSON.stringify(explicitOff));
+    });
+
+    it("classifies stream with a virtualCam marker when the flag is on, cam crop containing the face with headroom, content excluding its band", () => {
+      const plan = buildCropPlan(
+        oneShot,
+        withTracks([toxFace]),
+        VSW,
+        VSH,
+        { ...vStreamOpts, streamVirtualCam: true },
+        null
+      );
+      expect(plan?.profile?.class).toBe("stream");
+      expect(plan?.profile?.virtualCam).toBe(true);
+      expect(plan?.profile?.camRectScore).toBe(0); // synthesized: no edge evidence
+      expect(plan?.version).toBe(2);
+      // Full geometry, pinned like the sibling "emits a stream layout" test
+      // above: 3.2x face width centred on the face, height covers both the
+      // 16:9-of-width derivation AND the chin-coverage floor (whichever is
+      // taller - toxFace's h/w 1.122 makes the chin term win here, h=96 not
+      // the 16:9-only 90), clamped to the frame (face right edge sits flush
+      // at 624, close to the 640 edge). Only camCrop.y moves versus a plain
+      // 16:9 rect - the taller rect centres the cam window a little lower.
+      expect(plan?.stream).toEqual({
+        camCrop: { w: 120, h: 86, y: 260 },
+        contentCrop: { w: 338, h: 360 },
+        outCamH: 770,
+        outContentH: 1150,
+      });
+      expect(plan?.shots[0]).toEqual({
+        start: 0,
+        end: 30,
+        layout: "stream",
+        cam: { x: 520 },
+        content: { x: 152 },
+      });
+
+      // The synthesized rect itself: contains the face box, with headroom
+      // above it (>= the provisional 0.55*faceHeight, modulo even-snapping)
+      // AND chin clearance below it (>= 0.15*faceHeight, modulo snapping) -
+      // this is the exact containment that broke on the real tox probe
+      // before the chin floor existed (spec: synthesized bottom 314 sat 11px
+      // above the real face bottom 325.3).
+      const rect = synthesizeVirtualCamRect(toxFace.box, VSW, VSH);
+      expect(rect).toEqual({ x: 520, y: 254, w: 120, h: 96, score: 0 });
+      expect(rect.x).toBeLessThanOrEqual(toxFace.box.x);
+      expect(rect.x + rect.w).toBeGreaterThanOrEqual(toxFace.box.x + toxFace.box.w);
+      expect(rect.y).toBeLessThanOrEqual(toxFace.box.y);
+      expect(rect.y + rect.h).toBeGreaterThanOrEqual(toxFace.box.y + toxFace.box.h);
+      expect(toxFace.box.y - rect.y).toBeGreaterThanOrEqual(0.55 * toxFace.box.h - 2);
+      expect(rect.y + rect.h - (toxFace.box.y + toxFace.box.h)).toBeGreaterThanOrEqual(
+        0.15 * toxFace.box.h - 2
+      );
+      // And the per-shot loop's OWN containment check - the exact predicate
+      // that silently failed before this fix - must agree.
+      expect(isInsideInset(toxFace, rect)).toBe(true);
+
+      // freeBand semantics: the content tile and the cam rect never overlap
+      // horizontally.
+      const shot = plan!.shots[0];
+      if (shot.layout !== "stream") throw new Error("expected a stream shot");
+      const contentRight = shot.content.x + plan!.stream!.contentCrop.w;
+      const overlapsRect = shot.content.x < rect.x + rect.w && contentRight > rect.x;
+      expect(overlapsRect).toBe(false);
+    });
+
+    it("leaves a face at the ceiling untouched: normal_face, no virtualCam key", () => {
+      // 96/640 = 0.15 exactly - same strict-less-than boundary as D5.
+      const atCeiling: FaceTrack = { ...toxFace, box: { ...toxFace.box, w: 96 } };
+      const plan = buildCropPlan(
+        oneShot,
+        withTracks([atCeiling]),
+        VSW,
+        VSH,
+        { ...vStreamOpts, streamVirtualCam: true },
+        null
+      );
+      expect(plan?.profile?.class).toBe("normal_face");
+      expect(plan?.profile?.virtualCam).toBeUndefined();
+    });
+
+    it("a real, resolvable camRect wins via D5 - no virtualCam key, real score preserved", () => {
+      // Same geometry as the previous test's synthesized rect, so it is
+      // known to contain toxFace and to solve - only the score (5.2, not 0)
+      // marks it as a REAL rect this time.
+      const realRect: CamRect = { x: 520, y: 254, w: 120, h: 90, score: 5.2 };
+      const plan = buildCropPlan(
+        oneShot,
+        withTracks([toxFace]),
+        VSW,
+        VSH,
+        { ...vStreamOpts, streamVirtualCam: true },
+        { rect: realRect }
+      );
+      expect(plan?.profile?.class).toBe("stream");
+      expect(plan?.profile?.virtualCam).toBeUndefined();
+      expect(plan?.profile?.camRectScore).toBe(5.2);
+    });
+
+    it("does not synthesize without a face: faceless stays faceless", () => {
+      const plan = buildCropPlan(
+        oneShot,
+        withTracks([]),
+        VSW,
+        VSH,
+        { ...vStreamOpts, streamVirtualCam: true },
+        null
+      );
+      expect(plan?.profile?.class).toBe("faceless");
+      expect(plan?.profile?.virtualCam).toBeUndefined();
+    });
+
+    it("frame-edge safety: a corner face synthesizes a rect fully inside the frame, even, positive", () => {
+      // Bottom-right corner, flush against both edges - the shape that broke
+      // resolveCamRect before its own clamp (cam-rect.ts's closing comment).
+      const cornerFace: FaceBox = { x: 620, y: 340, w: 20, h: 20 };
+      const rect = synthesizeVirtualCamRect(cornerFace, VSW, VSH);
+      expect(rect).toEqual({ x: 598, y: 328, w: 42, h: 32, score: 0 });
+      expect(rect.x).toBeGreaterThanOrEqual(0);
+      expect(rect.y).toBeGreaterThanOrEqual(0);
+      expect(rect.x + rect.w).toBeLessThanOrEqual(VSW);
+      expect(rect.y + rect.h).toBeLessThanOrEqual(VSH);
+      expect(rect.w).toBeGreaterThan(0);
+      expect(rect.h).toBeGreaterThan(0);
+      expect(rect.x % 2).toBe(0);
+      expect(rect.y % 2).toBe(0);
+      expect(rect.w % 2).toBe(0);
+      expect(rect.h % 2).toBe(0);
+
+      // Top-left corner too: both axes' `Math.max(0, ...)` floor matter
+      // independently.
+      const tlFace: FaceBox = { x: 0, y: 0, w: 40, h: 40 };
+      const tlRect = synthesizeVirtualCamRect(tlFace, VSW, VSH);
+      expect(tlRect).toEqual({ x: 0, y: 0, w: 84, h: 50, score: 0 });
+      expect(tlRect.x).toBeGreaterThanOrEqual(0);
+      expect(tlRect.y).toBeGreaterThanOrEqual(0);
+    });
+
+    it("fires below the normal_face floor too - the band is deliberate, not an accident", () => {
+      // 25.6/640 = 0.04, well under faceSmallFrac (0.06): a tiny borderless
+      // cam deserves the virtual tile even more than a bigger one, since it
+      // is the LEAST likely shape to ever grow a detectable border. Placed
+      // near the right edge (like tox itself) so the free band left over is
+      // wide enough for solveStreamGeometry's content tile to actually fit -
+      // a face too close to centre starves both sides and the geometry
+      // legitimately fails to solve, which is a different thing entirely
+      // from the band being denied.
+      const tinyFace: FaceTrack = {
+        id: 0,
+        box: { x: 600, y: 250, w: 25.6, h: 30 },
+        score: 0.89,
+        samples: 60,
+        mouthActivity: 0.05,
+      };
+      expect(hasNormalSizedFace(25.6, 0.06 * VSW)).toBe(false); // confirms sub-floor
+
+      const on = buildCropPlan(
+        oneShot,
+        withTracks([tinyFace]),
+        VSW,
+        VSH,
+        { ...vStreamOpts, streamVirtualCam: true },
+        null
+      );
+      expect(on?.profile?.class).toBe("stream");
+      expect(on?.profile?.virtualCam).toBe(true);
+
+      const off = buildCropPlan(
+        oneShot,
+        withTracks([tinyFace]),
+        VSW,
+        VSH,
+        vStreamOpts,
+        null
+      );
+      expect(off?.profile?.class).toBe("small_face");
+      expect(off?.profile?.reason).toBe("stream_no_rect");
+      expect(off?.profile?.virtualCam).toBeUndefined();
+    });
+  });
+
+  // Orchestrator review 2026-08-19: the tox live-acceptance run classified
+  // `stream` but rendered its one shot `center` - the synthesized rect's
+  // unclamped bottom sat 11px above the real face's bottom edge, so the
+  // per-shot loop's OWN containment check (`isInsideInset`, 2px tolerance)
+  // silently failed. This grid is the test that would have caught it: it
+  // replicates that exact predicate - not a looser one invented for the
+  // test - across a spread of face aspect ratios and frame positions.
+  describe("D4 chin-coverage invariant: the synthesized rect always contains its own face", () => {
+    const GSW = 640;
+    const GSH = 360;
+    const FACE_W = 40;
+    // h/w: 0.9 (wide) and 1.16 (near the pre-chin-fix containment boundary,
+    // ~1.161 - see synthesizeVirtualCamRect's comment) do not need the chin
+    // term to be contained; 1.35 and 1.6 (tox itself measured 1.32) do -
+    // the mutation check below drops the chin term and expects exactly
+    // those two to redden.
+    const ASPECTS = [0.9, 1.16, 1.35, 1.6];
+    const POSITIONS: Array<{
+      label: string;
+      place: (w: number, h: number) => { x: number; y: number };
+    }> = [
+      { label: "centre", place: () => ({ x: 300, y: 150 }) },
+      { label: "near top-left corner", place: () => ({ x: 4, y: 4 }) },
+      {
+        label: "near bottom-right corner",
+        place: (w, h) => ({ x: GSW - w - 4, y: GSH - h - 4 }),
+      },
+    ];
+
+    for (const aspect of ASPECTS) {
+      for (const pos of POSITIONS) {
+        it(`contains a h/w=${aspect} face ${pos.label}`, () => {
+          const h = FACE_W * aspect;
+          const { x, y } = pos.place(FACE_W, h);
+          const box: FaceBox = { x, y, w: FACE_W, h };
+          const track: FaceTrack = {
+            id: 0,
+            box,
+            score: 0.9,
+            samples: 20,
+            mouthActivity: 0.05,
+          };
+          const rect = synthesizeVirtualCamRect(box, GSW, GSH);
+
+          // Frame safety, unconditionally - the same discipline as the
+          // corner tests above, now swept across every aspect.
+          expect(rect.x).toBeGreaterThanOrEqual(0);
+          expect(rect.y).toBeGreaterThanOrEqual(0);
+          expect(rect.x + rect.w).toBeLessThanOrEqual(GSW);
+          expect(rect.y + rect.h).toBeLessThanOrEqual(GSH);
+          expect(rect.w).toBeGreaterThan(0);
+          expect(rect.h).toBeGreaterThan(0);
+          expect(rect.x % 2).toBe(0);
+          expect(rect.y % 2).toBe(0);
+          expect(rect.w % 2).toBe(0);
+          expect(rect.h % 2).toBe(0);
+
+          // The invariant: the exact predicate the per-shot loop uses to
+          // decide "does this shot show the streamer" must hold for the
+          // face the rect was built around.
+          expect(isInsideInset(track, rect)).toBe(true);
+        });
+      }
+    }
+  });
 });
 
 // Written before the anchor policy existed, when the second argument was the
@@ -1483,14 +1965,74 @@ describe("isInsideInset", () => {
   });
 
   it("tolerates 2px of slop on every edge, because both boxes are medians", () => {
-    // exactly 2px outside on the left and top, and 2px past the right and bottom
+    // exactly 2px outside on the left and top, and 2px past the right and bottom.
+    // Unaffected by the D1b shrink below: shrinking only pulls a box further
+    // IN, so anything already inside the old 2px floor stays inside it -
+    // this case does not need a tiny face to isolate the floor.
     expect(isInsideInset({ ...face(98, 48), box: { x: 98, y: 48, w: 204, h: 154 } }, rect))
       .toBe(true);
   });
 
-  it("rejects 3px of slop", () => {
-    expect(isInsideInset({ ...face(97, 47), box: { x: 97, y: 47, w: 206, h: 156 } }, rect))
-      .toBe(false);
+  // D1b (spec 2026-08-19-stream-reframe-v2): the box is now shrunk
+  // FACE_CONTAIN_SLOP_FRAC (10%) per edge toward its own centre BEFORE the
+  // 2px floor is applied - see plan.ts's comment on the constant (strogo's
+  // widest face overhangs a dead-on rect by 7% of its own height, and the
+  // old floor alone rejected it). A face sized close to the RECT itself (as
+  // the two tests above use, ~200-206px on a 200px rect) makes that 10%
+  // shrink tens of pixels - it would swamp a boundary test aimed at the 2px
+  // floor specifically. So these two use a TINY face (6x6, "sub-pixel
+  // jitter" scale per the constant's own comment: shrink is 0.6px per edge)
+  // to isolate the floor from the shrink and pin that the floor still bites.
+  describe("2px floor, isolated from the D1b shrink with a tiny (6x6) face", () => {
+    const tinyFace = (x: number, y: number) => ({
+      id: 0,
+      box: { x, y, w: 6, h: 6 },
+      score: 0.9,
+      samples: 5,
+      mouthActivity: 0.05,
+    });
+
+    it("tolerates 2px outside on one edge", () => {
+      // Left edge 2px outside the rect (98 = rect.x - 2); comfortably inside
+      // vertically so only the left edge is in play.
+      expect(isInsideInset(tinyFace(98, 100), rect)).toBe(true);
+    });
+
+    it("rejects 3px outside on one edge", () => {
+      expect(isInsideInset(tinyFace(97, 100), rect)).toBe(false);
+    });
+  });
+
+  // The other half of D1b: a face proportionally large relative to ITS OWN
+  // size, not the rect's, gets real tolerance from the shrink - this is the
+  // strogo shape (a detector box may legitimately overhang a correctly-
+  // resolved rect and still BE the inset).
+  it("tolerates an overhang up to FACE_CONTAIN_SLOP_FRAC of the face's own size, from the shrink alone", () => {
+    // Face is 100x100, positioned so it overhangs the rect's bottom edge by
+    // exactly 10% of its own height (10px) - the shrink does the heavy
+    // lifting (90px vs. the old floor's 2px), leaving just the ordinary 2px
+    // floor margin, same as any other contained case.
+    const overhangingFace = {
+      id: 0,
+      box: { x: 150, y: 110, w: 100, h: 100 }, // bottom = 210 = rect.bottom(200) + 10
+      score: 0.9,
+      samples: 5,
+      mouthActivity: 0.05,
+    };
+    expect(isInsideInset(overhangingFace, rect)).toBe(true);
+  });
+
+  it("still rejects an overhang well beyond FACE_CONTAIN_SLOP_FRAC", () => {
+    // Same face, bottom now 30px (30% of its height) past the rect - more
+    // than the 10% shrink plus the 2px floor can cover.
+    const farOverhangingFace = {
+      id: 0,
+      box: { x: 150, y: 130, w: 100, h: 100 }, // bottom = 230 = rect.bottom(200) + 30
+      score: 0.9,
+      samples: 5,
+      mouthActivity: 0.05,
+    };
+    expect(isInsideInset(farOverhangingFace, rect)).toBe(false);
   });
 });
 

@@ -115,4 +115,14 @@ export interface SourceProfile {
   faceFrac: number;
   camRectScore?: number;
   reason?: string;
+  /**
+   * Set to `true` only on a `stream` profile whose camRect was synthesized
+   * from the face box rather than detected (D4, spec
+   * 2026-08-19-stream-reframe-v2 §3): the borderless/chroma-key cams that
+   * `find_cam_rect` can never see (tox's true sides score 0.31/0.62 against
+   * edge_min 4.0). Absent everywhere else, including on a real-rect `stream`
+   * profile - never `false` - the repo's "not a key" discipline, so telemetry
+   * can tell virtual from real by presence alone.
+   */
+  virtualCam?: true;
 }

@@ -160,6 +160,14 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
       faceLargeFrac: cfg.faceLargeFrac,
       stream: cfg.stream,
       camShare: cfg.camShare,
+      // Threaded so REFRAME_STREAM_FACE_CEILING actually reaches the
+      // classifier in production; omitting it would make the knob readable
+      // from config but inert (spec 2026-08-19-stream-reframe-v2 D5).
+      streamFaceCeiling: cfg.streamFaceCeiling,
+      // Threaded so REFRAME_STREAM_VIRTUAL_CAM actually reaches the
+      // classifier in production; omitting it would make the knob readable
+      // from config but inert (spec 2026-08-19-stream-reframe-v2 D4).
+      streamVirtualCam: cfg.streamVirtualCam,
       motion: cfg.motion,
       camera: cfg.camera,
     },

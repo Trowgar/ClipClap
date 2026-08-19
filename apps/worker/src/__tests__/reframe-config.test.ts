@@ -21,6 +21,8 @@ describe("loadReframeConfig", () => {
       camShare: DEFAULT_PLAN_OPTIONS.camShare,
       faceSmallFrac: DEFAULT_PLAN_OPTIONS.faceSmallFrac,
       faceLargeFrac: DEFAULT_PLAN_OPTIONS.faceLargeFrac,
+      streamFaceCeiling: DEFAULT_PLAN_OPTIONS.streamFaceCeiling,
+      streamVirtualCam: false,
       pipMaxFrac: 0.5,
       pipEdgeMin: 4.0,
       motion: false,
@@ -94,6 +96,29 @@ describe("stream knobs", () => {
 
   it("ignores a nonsense override rather than emitting a broken plan", () => {
     expect(loadReframeConfig({ REFRAME_CAM_SHARE: "banana" }).camShare).toBe(0.4);
+  });
+
+  // spec 2026-08-19-stream-reframe-v2 D5.
+  it("defaults REFRAME_STREAM_FACE_CEILING to 0.15 and rejects junk", () => {
+    expect(loadReframeConfig({}).streamFaceCeiling).toBe(0.15);
+    expect(
+      loadReframeConfig({ REFRAME_STREAM_FACE_CEILING: "banana" }).streamFaceCeiling
+    ).toBe(0.15);
+    expect(loadReframeConfig({ REFRAME_STREAM_FACE_CEILING: "0.2" }).streamFaceCeiling).toBe(
+      0.2
+    );
+  });
+
+  // spec 2026-08-19-stream-reframe-v2 D4. Same rule as REFRAME_STREAM: a
+  // stray truthy value must not re-layout someone's clip.
+  it("enables the virtual cam tile only on the exact literal 'on'", () => {
+    expect(loadReframeConfig({}).streamVirtualCam).toBe(false);
+    expect(loadReframeConfig({ REFRAME_STREAM_VIRTUAL_CAM: "true" }).streamVirtualCam).toBe(
+      false
+    );
+    expect(loadReframeConfig({ REFRAME_STREAM_VIRTUAL_CAM: "1" }).streamVirtualCam).toBe(false);
+    expect(loadReframeConfig({ REFRAME_STREAM_VIRTUAL_CAM: "ON" }).streamVirtualCam).toBe(false);
+    expect(loadReframeConfig({ REFRAME_STREAM_VIRTUAL_CAM: "on" }).streamVirtualCam).toBe(true);
   });
 });
 

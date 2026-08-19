@@ -1,4 +1,4 @@
-import { DEFAULT_PLAN_OPTIONS } from "./options";
+import { DEFAULT_PLAN_OPTIONS, DEFAULT_STREAM_FACE_CEILING } from "./options";
 import { DEFAULT_CAMERA, type CameraConfig } from "./camera";
 
 export interface ReframeConfig {
@@ -13,6 +13,17 @@ export interface ReframeConfig {
   camShare: number;
   faceSmallFrac: number;
   faceLargeFrac: number;
+  /** Rect-first stream classification ceiling (spec 2026-08-19-stream-reframe-v2
+   *  D5). Optional for the same reason as PlanOptions.streamFaceCeiling -
+   *  existing hand-built ReframeConfig literals elsewhere in the tree don't
+   *  need updating for a new knob; loadReframeConfig always sets it below. */
+  streamFaceCeiling?: number;
+  /** Virtual cam tile killswitch (spec 2026-08-19-stream-reframe-v2 D4).
+   *  Required, not optional: unlike `streamFaceCeiling` this is a boolean
+   *  feature switch in the `stream`/`motion`/`cutRecovery` family, so
+   *  loadReframeConfig always sets it and an omitted value would be a
+   *  silent-disable footgun, not a harmless default. */
+  streamVirtualCam: boolean;
   pipMaxFrac: number;
   pipEdgeMin: number;
   /** Crop-trajectory killswitch. Planning runs regardless; this decides whether
@@ -53,6 +64,13 @@ export function loadReframeConfig(
       env.REFRAME_FACE_LARGE_FRAC,
       DEFAULT_PLAN_OPTIONS.faceLargeFrac
     ),
+    streamFaceCeiling: positive(
+      env.REFRAME_STREAM_FACE_CEILING,
+      DEFAULT_STREAM_FACE_CEILING
+    ),
+    // Exact literal, the REFRAME_STREAM rule: a stray truthy value must not
+    // re-layout someone's clip.
+    streamVirtualCam: env.REFRAME_STREAM_VIRTUAL_CAM === "on",
     pipMaxFrac: positive(env.REFRAME_PIP_MAX_FRAC, 0.5),
     pipEdgeMin: positive(env.REFRAME_PIP_EDGE_MIN, 4.0),
     // Exact literal, the REFRAME_STREAM rule: a killswitch that can be flipped

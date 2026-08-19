@@ -15,6 +15,39 @@ export interface PlanOptions {
   stream: boolean;
   /** Target cam tile share of output height. */
   camShare: number;
+  /** Ceiling below which the classifier ATTEMPTS the rect-first stream
+   *  layout before falling back to the normal_face/small_face chain (spec
+   *  2026-08-19-stream-reframe-v2 D5). Below this fraction of frame width, a
+   *  resolvable camRect around the widest face wins classification BEFORE
+   *  the normal_face floor is even consulted - this is what lets a real
+   *  corner-cam stream (measured strogo/tox 0.076-0.077, both ABOVE
+   *  faceSmallFrac 0.06) ever reach `stream`: under the old ordering they hit
+   *  normal_face first and the rect was never asked. Podcasts measured at
+   *  0.15-0.30 sit above it by design; tw-buster (0.089, fullscreen face) is
+   *  safe under the ceiling only because no rect resolves on a fullscreen
+   *  face, not because of the ceiling's position - a bigger ceiling alone was
+   *  measured to degrade buster, the rect-first ORDERING is what protects it.
+   *  Provisional until more corpus shapes exist.
+   *
+   *  Optional, unlike its siblings above: making it required would force
+   *  every hand-built PlanOptions literal elsewhere in the tree (the eval
+   *  scripts under src/scripts/) to be edited for a knob that did not exist
+   *  when they were written. buildCropPlan falls back to
+   *  DEFAULT_STREAM_FACE_CEILING when it is omitted, so those callers are
+   *  unaffected by its addition. */
+  streamFaceCeiling?: number;
+  /** Synthesize a camRect from the widest face when stream is on, faceFrac
+   *  sits under `streamFaceCeiling`, and no real rect was found or resolved
+   *  (D4, spec 2026-08-19-stream-reframe-v2 §3): the only mechanism that can
+   *  ever serve a borderless/chroma-key cam, which edge detection cannot see
+   *  at all (tox's true sides measured 0.31/0.62 against edge_min 4.0).
+   *  Provisional multipliers - see `synthesizeVirtualCamRect` in plan.ts.
+   *
+   *  Optional and defaults to false for the same reason as `streamFaceCeiling`:
+   *  a knob that did not exist when the eval scripts' hand-built PlanOptions
+   *  literals were written must not force them to be edited. buildCropPlan
+   *  treats an omitted value as off, so those callers are unaffected. */
+  streamVirtualCam?: boolean;
   /** Emit crop-window trajectories at all. Off means every plan is byte-
    *  identical to the static-window one that ships today.
    *
@@ -32,11 +65,18 @@ export interface PlanOptions {
   camera: CameraConfig;
 }
 
+/** Default for `PlanOptions.streamFaceCeiling` and `ReframeConfig.streamFaceCeiling`
+ *  - named so config.ts's env fallback and this file's default cannot drift
+ *  apart (spec 2026-08-19-stream-reframe-v2 D5). */
+export const DEFAULT_STREAM_FACE_CEILING = 0.15;
+
 export const DEFAULT_PLAN_OPTIONS: Readonly<PlanOptions> = Object.freeze({
   faceSmallFrac: 0.06,
   faceLargeFrac: 0.1,
   stream: false,
   camShare: 0.4,
+  streamFaceCeiling: DEFAULT_STREAM_FACE_CEILING,
+  streamVirtualCam: false,
   motion: false,
   camera: DEFAULT_CAMERA,
 });

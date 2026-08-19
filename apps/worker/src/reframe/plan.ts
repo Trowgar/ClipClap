@@ -1,6 +1,7 @@
 import type {
   CamRect,
   CropPlan,
+  FaceBox,
   FaceTrack,
   Keyframe,
   PathSample,
@@ -11,7 +12,11 @@ import type {
   SourceProfile,
   StreamGeometry,
 } from "./types";
-import { DEFAULT_PLAN_OPTIONS, type PlanOptions } from "./options";
+import {
+  DEFAULT_PLAN_OPTIONS,
+  DEFAULT_STREAM_FACE_CEILING,
+  type PlanOptions,
+} from "./options";
 import {
   DEFAULT_CAMERA,
   solveCamera,
@@ -41,6 +46,19 @@ const MIN_SAMPLE_FRAC = 0.3; // tracks seen in <30% of the dominant track's samp
  *  because cut recovery must cap its splits on the PRE-merge count: above this,
  *  buildCropPlan returns null and the whole clip falls back to the centre crop. */
 export const MAX_PLAN_SHOTS = 90;
+
+// D4 virtual-cam multipliers (spec 2026-08-19-stream-reframe-v2 §3). PROVISIONAL:
+// the corpus render decides them, not a fixture - see `synthesizeVirtualCamRect`.
+const VIRTUAL_CAM_WIDTH_FACES = 3.2; // cam tile width, in multiples of face width
+const VIRTUAL_CAM_HEADROOM_FRAC = 0.55; // cam tile top, in face heights above faceTop
+// Chin-coverage floor, added 2026-08-19 after the tox live-acceptance run: its
+// real YuNet face box is h/w 1.32 (taller than a typical face box), so the
+// 16:9-of-width height alone put the synthesized bottom at 314 - 11px ABOVE
+// the real face bottom (325.3) - `isInsideInset` failed and the one shot
+// rendered `center` instead of `stream` despite the clip classifying `stream`.
+// This constant forces bottom coverage by construction (below) rather than by
+// retuning WIDTH_FACES/HEADROOM_FRAC to fit one probe.
+const VIRTUAL_CAM_CHIN_FRAC = 0.15; // required clearance below faceBottom, in face heights
 const W_AREA = 0.5;
 const W_CENTER = 0.3;
 const W_MOUTH = 0.2;
@@ -356,27 +374,194 @@ export function survivingTracks(shotTracks: FaceTrack[]): FaceTrack[] {
   );
 }
 
+// D1b (spec 2026-08-19-stream-reframe-v2). This is the SAME rule and the
+// SAME value as FACE_CONTAIN_SLOP_FRAC in assets/reframe/detect_faces.py's
+// find_cam_rect - two languages, one rule; if you change one, change the
+// other (python side should gain the mirror of this comment - out of scope
+// here, that file is another agent's).
+//
+// Measured 2026-08-19 on strogo: 7 of 8 shots already resolve the exact GT
+// rect (src 0,0,350,160), but the widest surviving face track is
+// (163.56, 73.04, 98.82, 93.52) - bottom 166.56, 6.56px past the rect's
+// bottom edge (160), 7% of the face's own height. `isInsideInset`'s
+// hardcoded 2px-per-edge tolerance (sized for median-vs-median jitter, not a
+// detector box legitimately overhanging a correctly-resolved rect) rejected
+// it, so `widestFaceInInset` said false, D5's rect-first branch never fired,
+// and strogo stayed `normal_face` despite a dead-on rect.
+//
+// A detector box may overhang the true inset by real pixels and still BE
+// the inset - shrinking it 10% per edge toward its own centre before the 2px
+// check covers strogo's 7% with margin, while a 25% overhang (the duet-
+// podcast shape `widestFaceInInset`'s own regression test protects) still
+// fails: see reframe-plan.test.ts's bound-pin test.
+const FACE_CONTAIN_SLOP_FRAC = 0.1;
+
 /** Is this face inside the resolved inset?
  *
- *  Tolerant by 2px on each edge: the rect is a median of per-shot detections and
- *  the track box is a median of per-sample boxes, so exact containment is luck.
+ *  The box is first shrunk `FACE_CONTAIN_SLOP_FRAC` per edge toward its own
+ *  centre (D1b, spec 2026-08-19-stream-reframe-v2 - a detector box may
+ *  overhang a correctly-resolved rect by real pixels and still BE it), then
+ *  the shrunk box is tested with the ORIGINAL 2px-per-edge floor: the rect is
+ *  a median of per-shot detections and the track box is a median of
+ *  per-sample boxes, so exact containment is luck even after the shrink, and
+ *  a tiny face's shrink can round to sub-pixel - the 2px floor still catches
+ *  that jitter on its own.
  *
  *  Exported because two different questions need it - "does this shot show the
  *  streamer" and "may this face anchor the window" - and a second copy of the
  *  tolerance would drift from this one. The tolerance is the part that was
  *  reasoned about; the comparison is not. */
 export function isInsideInset(track: FaceTrack, rect: CamRect): boolean {
+  const shrinkW = FACE_CONTAIN_SLOP_FRAC * track.box.w;
+  const shrinkH = FACE_CONTAIN_SLOP_FRAC * track.box.h;
+  const box = {
+    x: track.box.x + shrinkW,
+    y: track.box.y + shrinkH,
+    w: track.box.w - 2 * shrinkW,
+    h: track.box.h - 2 * shrinkH,
+  };
   return (
-    track.box.x >= rect.x - 2 &&
-    track.box.x + track.box.w <= rect.x + rect.w + 2 &&
-    track.box.y >= rect.y - 2 &&
-    track.box.y + track.box.h <= rect.y + rect.h + 2
+    box.x >= rect.x - 2 &&
+    box.x + box.w <= rect.x + rect.w + 2 &&
+    box.y >= rect.y - 2 &&
+    box.y + box.h <= rect.y + rect.h + 2
   );
 }
 
 /** The face this shot shows inside the resolved inset, if any. */
 function faceInInset(tracks: FaceTrack[], rect: CamRect): FaceTrack | undefined {
   return tracks.find((t) => isInsideInset(t, rect));
+}
+
+/**
+ * Does ANY track tied for the clip's widest surviving face sit inside `rect`?
+ *
+ * Ties are resolved permissively - it is enough that one of them does, the
+ * same "the group could be it" spirit as `anchorableTracks`. This is D5's
+ * extra join for the rect-first gate in `buildCropPlan` (spec
+ * 2026-08-19-stream-reframe-v2 §3): a resolvable camRect on its own only says
+ * "some rectangle of border energy fits somewhere in this frame", which is a
+ * different claim from "this small face is a webcam inset". Scoped to the
+ * NEW rect-first branch only - the pre-D5 branch at the bottom of the
+ * classification chain never asked this and must not start asking now, or a
+ * sub-floor clip that used to classify `stream` on rect existence alone would
+ * silently stop. See `buildCropPlan`'s "leaves podcast and facecam sources on
+ * the existing path" test for the regression this join exists to prevent: a
+ * 16:9 duet where an unrelated, easily-solvable camRect must not turn the
+ * clip into `stream`.
+ *
+ * Exported (D1b, spec 2026-08-19-stream-reframe-v2) so strogo's rect-vs-
+ * overhang shape can be pinned directly, not only through `buildCropPlan`'s
+ * full classification.
+ */
+export function widestFaceInInset(
+  tracks: FaceTrack[],
+  widestFace: number,
+  rect: CamRect
+): boolean {
+  return tracks.some((t) => t.box.w === widestFace && isInsideInset(t, rect));
+}
+
+/**
+ * D4: synthesizes a camRect around a face box when no real rect could be
+ * found at all - the only mechanism that can ever serve a borderless or
+ * chroma-key cam, which edge detection cannot see (tox's true sides measured
+ * 0.31/0.62 against edge_min 4.0; spec 2026-08-19-stream-reframe-v2 §2, §3
+ * D4). Width is `VIRTUAL_CAM_WIDTH_FACES` face-widths centred on the face,
+ * top sits `VIRTUAL_CAM_HEADROOM_FRAC` face-heights above the face box for
+ * headroom. Height is the LARGER of 16:9-of-width and enough to clear
+ * `VIRTUAL_CAM_CHIN_FRAC` face-heights below the face box - a bottom-
+ * coverage floor, by construction, not a retuned aspect: a tall face box
+ * (h/w > 16:9-implied) must not push the face's chin past the synthesized
+ * rect's bottom edge (measured on tox - see the constant's comment). The
+ * synthesized rect's own aspect may therefore exceed 16:9;
+ * `solveStreamGeometry` cover-crops any camRect to the output aspect inside
+ * `CAM_SHARE_MIN`/`CAM_SHARE_MAX`, so a taller rect just yields a taller cam
+ * tile, never a broken one.
+ *
+ * Even-snaps and frame-clamps with the EXACT arithmetic `resolveCamRect`
+ * uses (cam-rect.ts): floor the top-left down to even, size from the
+ * ORIGINAL right/bottom edge against the new top-left and ceil to even, then
+ * clamp so the rect cannot reach past the frame. cam-rect.ts's closing
+ * comment documents the crop-past-frame encode failure (ffmpeg error -22)
+ * this discipline exists to prevent - a synthesized rect must be exactly as
+ * encode-safe as a detected one, not "safe enough because it's usually small".
+ * Run AFTER the coverage math below, not before: the chin guarantee is about
+ * where the UNCLAMPED bottom edge sits relative to the face, and frame-edge
+ * clamping can only cut the rect shorter at the frame boundary, where the
+ * face cannot extend past anyway (a face detected inside the frame can never
+ * have its chin cut off by clamping to that same frame).
+ *
+ * `score` is 0: this rect was never detected, only inferred, so there is no
+ * edge evidence to report.
+ */
+export function synthesizeVirtualCamRect(
+  face: FaceBox,
+  sourceWidth: number,
+  sourceHeight: number
+): CamRect {
+  const rawW = VIRTUAL_CAM_WIDTH_FACES * face.w;
+  const rawY = face.y - VIRTUAL_CAM_HEADROOM_FRAC * face.h;
+  const aspectBottom = rawY + (rawW * 9) / 16;
+  const chinBottom = face.y + face.h + VIRTUAL_CAM_CHIN_FRAC * face.h;
+  const rawBottom = Math.max(aspectBottom, chinBottom);
+  const rawH = rawBottom - rawY;
+  const rawX = face.x + face.w / 2 - rawW / 2;
+
+  const x = Math.max(0, 2 * Math.floor(rawX / 2));
+  const y = Math.max(0, 2 * Math.floor(rawY / 2));
+  const w = 2 * Math.ceil((rawX + rawW - x) / 2);
+  const h = 2 * Math.ceil((rawY + rawH - y) / 2);
+  return {
+    x,
+    y,
+    w: Math.min(w, 2 * Math.floor((sourceWidth - x) / 2)),
+    h: Math.min(h, 2 * Math.floor((sourceHeight - y) / 2)),
+    score: 0,
+  };
+}
+
+/**
+ * D4's attempt: synthesize a rect around `face` and try to solve stream
+ * geometry with it, exactly like a real rect would be tried. Null when the
+ * synthesized rect does not yield a solvable geometry (e.g. the free band
+ * left over is too narrow) - the caller falls through to the untouched
+ * legacy chain in that case, the same as a real rect that fails to solve.
+ */
+function attemptVirtualCam(
+  face: FaceBox,
+  sourceWidth: number,
+  sourceHeight: number,
+  camShare: number
+): { rect: CamRect; geom: StreamGeometry } | null {
+  const rect = synthesizeVirtualCamRect(face, sourceWidth, sourceHeight);
+  const geom = solveStreamGeometry({ sourceWidth, sourceHeight, camRect: rect, camShare });
+  return geom ? { rect, geom } : null;
+}
+
+/**
+ * The `stream` profile plus the geometry-derived content offset, built from
+ * an already-solved `StreamGeometry`. One formula, called from both the D5
+ * rect-first branch and the pre-D5 branch at the end of the classification
+ * chain in `buildCropPlan`, so the two paths cannot compute a `stream` clip
+ * differently.
+ */
+function buildStreamProfile(
+  geom: StreamGeometry,
+  rect: CamRect,
+  faceFrac: number,
+  sourceWidth: number
+): { profile: SourceProfile; streamGeom: StreamGeometry; contentX: number } {
+  return {
+    profile: { class: "stream", faceFrac, camRectScore: rect.score },
+    streamGeom: geom,
+    contentX: streamContentX(
+      freeBand(rect, sourceWidth),
+      geom.contentCrop.w,
+      sourceWidth,
+      sourceWidth / 2
+    ),
+  };
 }
 
 /**
@@ -580,19 +765,108 @@ export function buildCropPlan(
   const centerX = evenClamp((sourceWidth - cropW) / 2, cropW, sourceWidth);
   const byIndex = new Map(tracksByShot.map((s) => [s.shotIndex, s.tracks]));
 
-  // --- Source classification (spec §4). One pass over the tracks the detector
-  // already produced, plus the clip-level rect resolved by resolveCamRect.
+  // --- Source classification (spec §4, extended by D5 of
+  // 2026-08-19-stream-reframe-v2 §3/§5B). One pass over the tracks the
+  // detector already produced, plus the clip-level rect resolved by
+  // resolveCamRect.
   const camRect = cam?.rect ?? null;
   const minFaceWidth = opts.faceSmallFrac * sourceWidth;
+  const streamFaceCeiling = opts.streamFaceCeiling ?? DEFAULT_STREAM_FACE_CEILING;
   const allTracks = tracksByShot.flatMap((s) => survivingTracks(s.tracks));
   const widestFace = Math.max(0, ...allTracks.map((t) => t.box.w));
   const faceFrac = sourceWidth > 0 ? widestFace / sourceWidth : 0;
 
+  // One attempt at the stream geometry for this clip, shared by the D5 gate
+  // below and the pre-D5 branch further down: solveStreamGeometry is pure,
+  // depending only on camRect/sourceWidth/sourceHeight/camShare and never on
+  // which branch is asking, so there is exactly one call site for it.
+  const streamAttempt =
+    opts.stream && camRect
+      ? solveStreamGeometry({ sourceWidth, sourceHeight, camRect, camShare: opts.camShare })
+      : null;
+
+  // D5's extra join - see `widestFaceInInset` for why the rect-first branch
+  // needs it and the pre-D5 branch below must not.
+  const rectFirstFace = camRect !== null && widestFaceInInset(allTracks, widestFace, camRect);
+
+  // D4: synthesize a rect around the widest surviving face and try to solve
+  // stream geometry with it, computed unconditionally (same discipline as
+  // `streamAttempt` above - solveStreamGeometry is pure, so there is exactly
+  // one call site whether the rect was detected or synthesized here). Ties on
+  // `widestFace` resolve to the FIRST tying track in `allTracks` order -
+  // deterministic, not "whichever `.find` happens to hit".
+  const widestFaceBox = allTracks.find((t) => t.box.w === widestFace)?.box ?? null;
+  const virtualCamAttempt =
+    opts.stream &&
+    opts.streamVirtualCam &&
+    camRect === null &&
+    widestFaceBox !== null &&
+    faceFrac > 0 &&
+    faceFrac < streamFaceCeiling
+      ? attemptVirtualCam(widestFaceBox, sourceWidth, sourceHeight, opts.camShare)
+      : null;
+
   let streamGeom: StreamGeometry | null = null;
   let contentX = centerX;
   let profile: SourceProfile;
+  // The rect the per-shot loop and the anchor policy below actually use.
+  // Equal to `camRect` (real, possibly null) everywhere except the D4 branch,
+  // which points it at the synthesized rect - so "does this shot show the
+  // streamer" and "where does the cam window sit" work identically for a
+  // virtual cam and a real one, off the ONE rect this plan actually solved
+  // geometry against.
+  let effectiveCamRect: CamRect | null = camRect;
 
-  if (allTracks.length === 0) {
+  if (
+    opts.stream &&
+    allTracks.length > 0 &&
+    hasNormalSizedFace(widestFace, minFaceWidth) &&
+    faceFrac < streamFaceCeiling &&
+    rectFirstFace &&
+    camRect !== null &&
+    streamAttempt !== null
+  ) {
+    // D5: rect-first under a ceiling. A face at or above the normal_face
+    // floor but still under `streamFaceCeiling` gets the stream layout
+    // BEFORE normal_face is even considered - this is what lets a real
+    // corner-cam stream (measured strogo/tox 0.076-0.077, both above
+    // faceSmallFrac 0.06) ever reach `stream`. Under the unchanged chain
+    // below, they hit normal_face first and the rect is never asked.
+    ({ profile, streamGeom, contentX } = buildStreamProfile(
+      streamAttempt,
+      camRect,
+      faceFrac,
+      sourceWidth
+    ));
+  } else if (
+    opts.stream &&
+    opts.streamVirtualCam &&
+    allTracks.length > 0 &&
+    faceFrac > 0 &&
+    faceFrac < streamFaceCeiling &&
+    camRect === null &&
+    virtualCamAttempt !== null
+  ) {
+    // D4: the ONLY mechanism that can ever serve a borderless/chroma-key cam
+    // (spec 2026-08-19-stream-reframe-v2 §2, §3 D4) - edge detection has
+    // nothing to find on that class (tox's true sides score 0.31/0.62 vs
+    // edge_min 4.0), so D5's rect-first branch above can never reach it: no
+    // real camRect exists to satisfy it. Placed immediately after D5's branch
+    // and before the legacy chain, gated on `camRect === null` so a real
+    // rect - real or unresolved-but-present - always takes the branches
+    // above/below this one; only the "no rect at all" case reaches here. A
+    // synthesized rect that fails to solve leaves `virtualCamAttempt` null,
+    // so this condition is false and the legacy chain runs exactly as it
+    // does today (normal_face/small_face, untouched).
+    ({ profile, streamGeom, contentX } = buildStreamProfile(
+      virtualCamAttempt.geom,
+      virtualCamAttempt.rect,
+      faceFrac,
+      sourceWidth
+    ));
+    profile = { ...profile, virtualCam: true };
+    effectiveCamRect = virtualCamAttempt.rect;
+  } else if (allTracks.length === 0) {
     profile = { class: "faceless", faceFrac };
   } else if (hasNormalSizedFace(widestFace, minFaceWidth)) {
     // Anything at or above the floor keeps the existing single/split rules.
@@ -612,29 +886,20 @@ export function buildCropPlan(
       reason: "stream_disabled",
       camRectScore: camRect.score,
     };
+  } else if (!streamAttempt) {
+    profile = {
+      class: "small_face",
+      faceFrac,
+      reason: "stream_no_fit",
+      camRectScore: camRect.score,
+    };
   } else {
-    streamGeom = solveStreamGeometry({
-      sourceWidth,
-      sourceHeight,
+    ({ profile, streamGeom, contentX } = buildStreamProfile(
+      streamAttempt,
       camRect,
-      camShare: opts.camShare,
-    });
-    if (!streamGeom) {
-      profile = {
-        class: "small_face",
-        faceFrac,
-        reason: "stream_no_fit",
-        camRectScore: camRect.score,
-      };
-    } else {
-      profile = { class: "stream", faceFrac, camRectScore: camRect.score };
-      contentX = streamContentX(
-        freeBand(camRect, sourceWidth),
-        streamGeom.contentCrop.w,
-        sourceWidth,
-        sourceWidth / 2
-      );
-    }
+      faceFrac,
+      sourceWidth
+    ));
   }
 
   // The anchor rule. `profile` is settled before this point, which is what lets
@@ -642,7 +907,7 @@ export function buildCropPlan(
   const anchorPolicy: AnchorPolicy = {
     minFaceWidth,
     sourceClass: profile.class,
-    camRect,
+    camRect: effectiveCamRect,
   };
 
   // The group each shot's `single` window was anchored on, recorded as the
@@ -653,10 +918,10 @@ export function buildCropPlan(
     // Keep only tracks that clear the noise floor AND are seen often enough
     // relative to the dominant track.
     const tracks = survivingTracks(byIndex.get(i) ?? []);
-    if (streamGeom && camRect) {
+    if (streamGeom && effectiveCamRect) {
       // A shot only splits if it actually shows the streamer: advertisement
       // cards, intermissions and replays have no face inside the inset.
-      const inInset = faceInInset(tracks, camRect);
+      const inInset = faceInInset(tracks, effectiveCamRect);
       if (!inInset) {
         return { start: shot.start, end: shot.end, layout: "center", x: centerX };
       }
@@ -666,7 +931,7 @@ export function buildCropPlan(
         layout: "stream",
         cam: {
           x: streamCamX(
-            camRect,
+            effectiveCamRect,
             streamGeom.camCrop.w,
             inInset.box.x + inInset.box.w / 2
           ),
