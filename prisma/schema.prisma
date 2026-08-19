@@ -416,6 +416,12 @@ model Job {
   /// resent source (lib/source-fingerprint.ts). Nullable: web file uploads and
   /// every job before 2026-08-18 have none.
   sourceFingerprint             String?
+  /// When this job was handed to BullMQ. NULL = created and charged but
+  /// WAITING for a concurrency slot (the submission queue, spec 2026-08-18).
+  /// Backfilled to createdAt for every job that predates the column - they
+  /// were all enqueued at creation. The release path (job.service
+  /// releaseNextQueued) is what stamps it for queued jobs.
+  enqueuedAt                    DateTime?
   originalFilename              String?
   status                        JobStatus @default(PENDING)
   error                         String?
@@ -489,6 +495,7 @@ model Job {
   @@index([userId, createdAt])
   @@index([status, createdAt])
   @@index([userId, sourceFingerprint])
+  @@index([userId, enqueuedAt, createdAt])
   @@map("jobs")
 }
 
