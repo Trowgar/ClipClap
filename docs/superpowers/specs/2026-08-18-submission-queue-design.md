@@ -1,4 +1,4 @@
-# Submission queue instead of the concurrency refusal - design (2026-08-18, DRAFT for approval)
+# Submission queue instead of the concurrency refusal - design (2026-08-18, APPROVED)
 
 ## 0. The defect, in numbers
 
@@ -62,13 +62,15 @@ ordinary behaviour, not abuse, and the answer should be a queue.
   sees count 1 >= limit 1 -> queued. Reproduce against Postgres in the test, as the
   concurrency limit was.
 
-## 5. Decisions for the owner
+## 5. Decisions (owner, 2026-08-18)
 
-- A. Queue length cap per user: none (bounded by seconds anyway) or 10?
-- B. Release on terminal FAILED too (recommended: yes - a failed run must not block the
-  next video) - confirm.
-- C. Stall guard threshold 3 h - fine?
-- D. Web: 202 + "Queued" badge, or keep refusing on web (zero real web jobs today)?
+- A. Queue length cap per user: NONE. The existing walls bound it - free seconds are
+  charged at creation, the daily cap is 60, paid accounts have minutes per period. No
+  new refusal code.
+- B. Release on terminal FAILED: YES. A failed run must not block the next video.
+- C. Stall guard threshold: 3 hours.
+- D. Web: 202 + { queued: true, position }, dashboard shows a "Queued" badge
+  (status PENDING and enqueuedAt NULL).
 
 ## 6. Size
 
