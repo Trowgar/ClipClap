@@ -2774,6 +2774,12 @@ export async function getSubmissionBlocker(
   // the surface with real submit traffic. So this whole block is skipped when
   // the flag is on - no count, no CONCURRENT ledger row - and createJob is
   // left to answer on its own.
+  //
+  // A cost this skip accepts ON PURPOSE: with the queue on, a second video's
+  // Telegram download and R2 upload now happen BEFORE createJob decides
+  // queued-vs-created - the spend this check used to avoid. That is not an
+  // oversight: a queued job needs its source in R2 to run at all, so the
+  // upload is work the queue was going to do anyway, just earlier.
   if (!submissionQueueEnabled()) {
     // The count that actually enforces the limit when the queue is off is the
     // one createJob takes under a per-user lock; this one is here so a second
