@@ -132,7 +132,12 @@ export function submissionQueueEnabled(): boolean {
  *  BullMQ retains the id (removeOnComplete count 200 / removeOnFail 100), so
  *  the guarantee is retention-bounded, not forever. */
 function downloadJobId(jobId: string): string {
-  return `dl:${jobId}`;
+  // A hyphen, NEVER a colon: BullMQ rejects custom ids containing ":" with a
+  // THROW (bullmq job.js "Custom Id cannot contain :"), and the queue mock in
+  // the tests swallowed exactly that - the first dl:<id> shipped green and
+  // threw on the first real submission in prod (2026-08-19, one user's video
+  // silently dropped and their free charge stranded).
+  return `dl-${jobId}`;
 }
 
 /**

@@ -48,7 +48,11 @@ export async function getInFlightTelegramDeliveries(take = 20) {
     where: {
       status: "PENDING",
       progressMessageId: { not: null },
-      job: { status: { notIn: ["DONE", "FAILED"] } },
+      // enqueuedAt not null: a QUEUED job (waiting for a concurrency slot) has
+      // no stage to narrate, and with no queue-length cap one album sender's
+      // waiting jobs would otherwise hold all `take` slots of this window for
+      // hours and freeze every other user's progress board.
+      job: { status: { notIn: ["DONE", "FAILED"] }, enqueuedAt: { not: null } },
     },
     select: {
       id: true,

@@ -183,7 +183,7 @@ describe("job.service createJob", () => {
     // now always carries the dl:<jobId> dedup id (see downloadJobId) - so the
     // priority key is what's asserted here, not the whole object.
     const paidOpts = queueAdd.mock.calls[0][2] as any;
-    expect(paidOpts.jobId).toBe("dl:job_1");
+    expect(paidOpts.jobId).toBe("dl-job_1");
     expect(paidOpts.priority).toBeUndefined();
   });
 
@@ -575,7 +575,7 @@ describe("createJob under the submission queue", () => {
     expect(tx.job.create.mock.calls[0][0].data.enqueuedAt).toBeInstanceOf(Date);
     expect(queueAdd).toHaveBeenCalledTimes(1);
     // Deterministic BullMQ id, so a double release can never enqueue twice.
-    expect(queueAdd.mock.calls[0][2]).toMatchObject({ jobId: "dl:j1" });
+    expect(queueAdd.mock.calls[0][2]).toMatchObject({ jobId: "dl-j1" });
   });
 
   // Flag off = today's behaviour, byte for byte.
@@ -661,6 +661,27 @@ describe("createJob - a failed download add", () => {
   });
 });
 
+describe("the BullMQ download id", () => {
+  // NOT behind the lib/queues mock, which is what let the first version ship:
+  // BullMQ THROWS on a custom id containing ":" (bullmq classes/job.js
+  // addJob: "Custom Id cannot contain :"), the mock swallowed the constraint,
+  // 1016 tests were green, and the first real submission in prod threw.
+  // This test enforces the constraint itself, so a future "tidy the prefix"
+  // edit cannot reintroduce it without going red here.
+  it("never contains a colon - BullMQ rejects such ids with a throw", async () => {
+    tx.job.count.mockReset();
+    tx.job.count.mockResolvedValue(0);
+    tx.job.create.mockReset();
+    tx.job.create.mockResolvedValue({ id: "j1", userId: "u1", createdAt: new Date() });
+    tx.user.findUniqueOrThrow.mockResolvedValue({ plan: "NONE", billingCycle: null });
+    queueAdd.mockClear();
+    await createJob({ userId: "u1", sourceKey: "k" });
+    const opts = queueAdd.mock.calls[0][2] as { jobId: string };
+    expect(opts.jobId).not.toContain(":");
+    expect(opts.jobId).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+});
+
 describe("releaseNextQueued", () => {
   beforeEach(() => {
     calls.length = 0;
@@ -718,7 +739,7 @@ describe("releaseNextQueued", () => {
     // Enqueued with the dedup id; no free CHARGE row -> no priority.
     expect(queueAdd).toHaveBeenCalledTimes(1);
     expect(queueAdd.mock.calls[0][1]).toEqual({ jobId: "q1", userId: "u1" });
-    expect(queueAdd.mock.calls[0][2]).toEqual({ jobId: "dl:q1" });
+    expect(queueAdd.mock.calls[0][2]).toEqual({ jobId: "dl-q1" });
   });
 
   it("keeps the free-job priority for a job charged to the free ledger", async () => {
