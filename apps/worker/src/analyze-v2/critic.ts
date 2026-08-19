@@ -1,6 +1,7 @@
 import type OpenAI from "openai";
 import type { AnalyzeConfig } from "./config";
 import { callJsonSchema, logModelFallback, mapWithConcurrency } from "./llm";
+import type { AnalysisMode } from "./mode";
 import { criticSystemPrompt, criticUserPrompt } from "./prompts";
 import { CRITIC_SCHEMA, REPAIR_SCHEMA } from "./schemas";
 import { isoToLanguageName } from "./language";
@@ -176,9 +177,11 @@ export async function runCritic(
   candidates: MergedCandidate[],
   languageIso: string,
   cfg: AnalyzeConfig,
-  options: CriticOptions = {}
+  options: CriticOptions = {},
+  // consumed by tasks T2-T4 of the stream-analyze-mode spec
+  mode: AnalysisMode = "standard"
 ): Promise<CriticRunResult> {
-  const system = criticSystemPrompt(languageIso, isoToLanguageName(languageIso));
+  const system = criticSystemPrompt(languageIso, isoToLanguageName(languageIso), mode);
   const telemetry = {
     batchSplits: 0,
     refusalDrops: 0,

@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import type { TranscriptionResult } from "@clipclap/shared";
 import { loadAnalyzeConfig, type AnalyzeConfig } from "./config";
 import { buildSentenceGraph } from "./sentence-graph";
+import { resolveAnalysisMode } from "./mode";
 import { runScanner } from "./scanner";
 import { criticBudget, mergeCandidates, selectCriticCandidates, sourceSeconds } from "./candidates";
 import { AnalyzeTechnicalError, runCritic, repairCopy } from "./critic";
@@ -44,6 +45,13 @@ export interface AnalyzeV2Options {
    *  with the rescue permanently dark, which is what keeps the corpus
    *  comparable across runs. */
   sourceDurationSec?: number;
+  /** The job's source URL, mirroring sourceDurationSec above: powers ONLY
+   *  resolveAnalysisMode's hostname rules (spec 2026-08-19-stream-analyze-
+   *  mode, S1) and nothing else. stages/analyze.ts threads job.sourceUrl in;
+   *  eval scripts pass nothing, so the corpus never sees the URL-based rules
+   *  fire (density fallback can still apply to an eval transcript that
+   *  supplies sourceDurationSec, same as production). */
+  sourceUrl?: string;
   /** Test hook - forwarded to scanner/critic. */
   retryDelayMs?: number;
 }
@@ -85,6 +93,19 @@ export async function analyzeHighlightsV2(
   // dominant script so a Russian video does not get English-prompted copy.
   const languageIso =
     transcription.language ?? scriptFallbackIso(transcription.text);
+
+  // Mode resolution (spec 2026-08-19-stream-analyze-mode, S1): ONCE per job,
+  // after speechSec is computed, before the scanner - every stage this task
+  // threads it into (scanner, merge, candidate selection, critic) reads this
+  // SAME value. cfg.streamModeEnabled is checked again inside
+  // resolveAnalysisMode itself; the flag gate lives there so this call site
+  // cannot forget it. The degenerate-guard return above ran before this line
+  // and therefore never carries `analysisMode` - only telemetry built after
+  // this point does (not-a-key discipline, same as arcAudit).
+  const mode = resolveAnalysisMode(
+    { sourceUrl: options.sourceUrl, durationSec: options.sourceDurationSec, speechSec },
+    cfg
+  );
   let candidates: MergedCandidate[];
   let scannerTelemetry: Record<string, unknown> = {};
 
@@ -103,9 +124,14 @@ export async function analyzeHighlightsV2(
     ];
     scannerTelemetry = { path: "tiny" };
   } else {
-    const scan = await runScanner(client, usage, nodes, cfg, {
-      retryDelayMs: options.retryDelayMs,
-    });
+    const scan = await runScanner(
+      client,
+      usage,
+      nodes,
+      cfg,
+      { retryDelayMs: options.retryDelayMs },
+      mode
+    );
 
     // A dead window costs recall (runScanner's contract); EVERY window dead is
     // the analysis models being unavailable, which is a technical failure, not
@@ -120,7 +146,7 @@ export async function analyzeHighlightsV2(
       );
     }
 
-    const merged = mergeCandidates(scan.candidates, nodes, cfg);
+    const merged = mergeCandidates(scan.candidates, nodes, cfg, mode);
     // Intro montage fragments quote later speech verbatim and are truncated by
     // the source editor, so every clean-start/clean-end guard passes on them.
     // Dropping them HERE - before stratified selection, not after the critic -
@@ -150,7 +176,7 @@ export async function analyzeHighlightsV2(
       });
       return false;
     });
-    candidates = selectCriticCandidates(withoutTeasers, nodes, cfg);
+    candidates = selectCriticCandidates(withoutTeasers, nodes, cfg, mode);
     scannerTelemetry = {
       path: "full",
       ...scan.telemetry,
@@ -216,14 +242,29 @@ export async function analyzeHighlightsV2(
       // already ruled this coverage shippable (TRANSCRIPT_MIN_COVERAGE), so we
       // say so honestly rather than failing a job a retry could never change.
       noClipsReason: partial ? "PARTIAL_TRANSCRIPT" : "NO_VIABLE_MOMENTS",
-      telemetry: { ...scannerTelemetry, keptVerdicts: 0, holeDrops },
+      telemetry: {
+        ...scannerTelemetry,
+        keptVerdicts: 0,
+        holeDrops,
+        // Not-a-key discipline, same as arcAudit: present only when the flag
+        // is on. This return runs AFTER mode resolution above, unlike the
+        // degenerate guard earlier in this function.
+        ...(cfg.streamModeEnabled ? { analysisMode: mode } : {}),
+      },
       usage,
     };
   }
 
-  const critic = await runCritic(client, usage, nodes, candidates, languageIso, cfg, {
-    retryDelayMs: options.retryDelayMs,
-  });
+  const critic = await runCritic(
+    client,
+    usage,
+    nodes,
+    candidates,
+    languageIso,
+    cfg,
+    { retryDelayMs: options.retryDelayMs },
+    mode
+  );
 
   // A critic that judged the candidates and rejected them returns REAL verdicts
   // with keep:false - that is a content outcome and falls through below. Zero
@@ -760,6 +801,10 @@ export async function analyzeHighlightsV2(
     finalized.telemetry;
 
   const telemetry = {
+    // Not-a-key discipline (spec 2026-08-19-stream-analyze-mode, S1), same as
+    // arcAudit below: present only when cfg.streamModeEnabled is true, so a
+    // dark run adds no key at all - not "standard", not undefined, absent.
+    ...(cfg.streamModeEnabled ? { analysisMode: mode } : {}),
     ...scannerTelemetry,
     criticVerdicts: critic.verdicts.length,
     verdictScores: critic.verdicts

@@ -56,6 +56,7 @@ export async function runAnalyzeStage(
             cfg,
             transcriptPartial: job.transcriptPartial,
             sourceDurationSec: job.sourceDurationSec ?? undefined,
+            sourceUrl: job.sourceUrl ?? undefined,
           });
           shadow = {
             highlights: v2.highlights,
@@ -115,6 +116,9 @@ export async function runAnalyzeStage(
           // AnalyzeV2Options; source-recheck persisted this from the real
           // downloaded file before ANALYZE ever runs.
           sourceDurationSec: job.sourceDurationSec ?? undefined,
+          // Powers ONLY resolveAnalysisMode's hostname rules (spec 2026-08-
+          // 19-stream-analyze-mode, S1) - mirrors sourceDurationSec above.
+          sourceUrl: job.sourceUrl ?? undefined,
         });
     // Flag on but not fired: still recorded, so the job record can show the
     // gate evaluated this transcript and let it through - task 8's own

@@ -271,6 +271,38 @@ export interface AnalyzeConfig {
    *  short-source notice fires under, imported rather than copied so the
    *  product copy and the engine can never disagree about what "short" is. */
   shortSourceRescueMaxSec: number;
+  /** Master switch for stream analyze mode (spec 2026-08-19-stream-analyze-
+   *  mode, S1) - the door `resolveAnalysisMode` (mode.ts) checks before any
+   *  URL or density logic runs, so every consumer of `AnalysisMode` is dark
+   *  by construction when this is off. Off until the corpus proof in the
+   *  spec's §3 ships it, the same discipline as every other stage switch in
+   *  this file. */
+  streamModeEnabled: boolean;
+  /** Speech density (speechSec / durationSec) BELOW which a source longer
+   *  than 20 minutes resolves "stream" via the density fallback (mode.ts) -
+   *  the two hostname rules never touch this knob. MEASURED (spec §1): the
+   *  two labeled stream corpora sit at 0.40 (strogo) and 0.27 (recrent); the
+   *  two podcast eval fixtures - the same 52-minute podcast, two
+   *  transcription runs, used throughout this file's own measurement
+   *  comments (see `sourceSeconds`) - sit at 0.89 (podcast-ecology,
+   *  2793s/3136s) and 0.89 (podcast-answer-arc, 2792s/3136s), computed as sum
+   *  of segment (end-start) over total duration, the same formula this knob
+   *  is compared against. 0.55 sits in the wide gap between 0.40 and 0.89
+   *  with room on both sides. */
+  streamDensityMax: number;
+  /** In stream mode, the effective criticMaxCandidates (spec §S3, consumed by
+   *  task T3) - replaces cfg.criticMaxCandidates entirely rather than adding
+   *  to it, so standard-mode sources are untouched by this knob existing.
+   *  Default 80: double the standard 40, sized against the spec's own cost
+   *  fact that a full 3h scan+critic run is ~$0.04, so doubling it is noise
+   *  against the ~$1.21 total cost of a 3h job. */
+  streamCriticMaxCandidates: number;
+  /** In stream mode, the minimum node-time span (seconds) a merged candidate
+   *  must reach before burst-expansion (spec §S4, consumed by task T4) stops
+   *  widening it - the fix for merge's "3.2-second stub" defect (spec §0.3).
+   *  Standard mode never reads this: merge's existing span guard is
+   *  untouched there. */
+  streamMinCandidateSec: number;
 }
 
 type Env = Record<string, string | undefined>;
@@ -385,5 +417,12 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     // them at once). short-source-rescue.test.ts pins the two values
     // together and goes red if either side drifts.
     shortSourceRescueMaxSec: num(env, "SHORT_SOURCE_RESCUE_MAX_SEC", 300),
+    // Exact literal "on", same discipline as every other stage switch in this
+    // file: a stray truthy env value must not silently switch a real job onto
+    // the stream-mode critic rubric/budget/merge behaviour tasks T2-T4 build.
+    streamModeEnabled: env.ANALYZE_STREAM_MODE === "on",
+    streamDensityMax: num(env, "STREAM_DENSITY_MAX", 0.55),
+    streamCriticMaxCandidates: num(env, "STREAM_CRITIC_MAX_CANDIDATES", 80),
+    streamMinCandidateSec: num(env, "STREAM_MIN_CANDIDATE_SEC", 12),
   };
 }

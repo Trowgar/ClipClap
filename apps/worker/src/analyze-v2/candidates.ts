@@ -1,8 +1,15 @@
 import type { AnalyzeConfig } from "./config";
+import type { AnalysisMode } from "./mode";
 import type { MergedCandidate, ScanCandidate, SentenceNode } from "./types";
 
 const SPAN_GUARD_SEC = 130;
 const REGION_SEC = 600;
+
+/** STREAM MODE burst expansion (spec 2026-08-19-stream-analyze-mode §S4):
+ *  a silence gap strictly longer than this between two adjacent nodes is a
+ *  real scene cut, and expansion may not cross one. Literal, not a cfg
+ *  field - the spec names this exact number, not a tuning door. */
+const BURST_EXPANSION_GAP_SEC = 3;
 
 function speechSpanSec(c: { startNode: number; endNode: number }, nodes: SentenceNode[]): number {
   let sec = 0;
@@ -19,7 +26,9 @@ function overlapNodes(a: ScanCandidate, b: ScanCandidate): number {
 export function mergeCandidates(
   candidates: ScanCandidate[],
   nodes: SentenceNode[],
-  cfg: AnalyzeConfig
+  cfg: AnalyzeConfig,
+  // consumed by tasks T2-T4 of the stream-analyze-mode spec
+  mode: AnalysisMode = "standard"
 ): MergedCandidate[] {
   const maxNode = nodes.length - 1;
   // copy before clamping - callers' objects must stay untouched
@@ -115,6 +124,65 @@ export function mergeCandidates(
     }
   }
 
+  // STREAM MODE burst expansion (spec §S4, task T4). Phase-1 measurement
+  // (2026-08-19-stream-moment-selection.md): merge only unions OVERLAPPING
+  // candidates, so a lone 1-node scanner hit shipped as a 3.2-second
+  // candidate (the "ГОЛЫЙ КОРОЛЬ" label) - too short for any critic verdict
+  // to save (it died at critic score 0.12). Every stream-mode candidate
+  // still under streamMinCandidateSec widens node-by-node, BACKWARD FIRST -
+  // "the trigger of a reaction lives before the burst" (spec §S4): a
+  // scream's setup line sits just before it, not after, so recovering that
+  // context is worth more than a trailing node the reaction has already
+  // finished by. Backward expansion runs until it is blocked (a >3s silence
+  // gap, another candidate's own pre-expansion range, or node 0), and only
+  // then does forward expansion take over for whatever span is still
+  // missing - never the two interleaved, and never past `maxNode`.
+  // Standard mode never reaches this block; the return value is otherwise
+  // unchanged by its presence.
+  if (mode === "stream") {
+    // Neighbor walls, computed ONCE from every candidate's range as it
+    // stands right now (post-merge, post-split, pre-expansion) and fixed
+    // for the whole pass - so candidate A's expansion can never be widened
+    // or narrowed by the fact that candidate B, processed earlier in this
+    // same loop, already grew. Order-independent by construction.
+    const order = guarded
+      .map((_, i) => i)
+      .sort((a, b) => guarded[a].startNode - guarded[b].startNode);
+    const backLimit: number[] = new Array(guarded.length);
+    const fwdLimit: number[] = new Array(guarded.length);
+    for (let k = 0; k < order.length; k++) {
+      const idx = order[k];
+      backLimit[idx] = k > 0 ? guarded[order[k - 1]].endNode + 1 : 0;
+      fwdLimit[idx] = k < order.length - 1 ? guarded[order[k + 1]].startNode - 1 : maxNode;
+    }
+
+    for (let i = 0; i < guarded.length; i++) {
+      const c = guarded[i];
+      while (nodes[c.endNode].end - nodes[c.startNode].start < cfg.streamMinCandidateSec) {
+        const canBack =
+          c.startNode > backLimit[i] &&
+          nodes[c.startNode].start - nodes[c.startNode - 1].end <= BURST_EXPANSION_GAP_SEC;
+        if (canBack) {
+          c.startNode--;
+          continue;
+        }
+        const canFwd =
+          c.endNode < fwdLimit[i] &&
+          nodes[c.endNode + 1].start - nodes[c.endNode].end <= BURST_EXPANSION_GAP_SEC;
+        if (canFwd) {
+          c.endNode++;
+          continue;
+        }
+        break; // both directions blocked - ships shorter than the target, never crashes
+      }
+      // payoffNode clamp, same convention as the top of this function: widening
+      // can only ever keep an already-inside payoff inside, so this is a
+      // defensive no-op on every real input, not a live code path.
+      if (c.payoffNode < c.startNode) c.payoffNode = c.startNode;
+      if (c.payoffNode > c.endNode) c.payoffNode = c.endNode;
+    }
+  }
+
   // thread collation: earliest start node per thread label
   const threadSetup = new Map<string, number>();
   for (const c of guarded) {
@@ -197,9 +265,20 @@ export function sourceSeconds(nodes: SentenceNode[]): number {
  * the caller to hand it a derived quantity it could get wrong.
  */
 export function criticBudget(nodes: SentenceNode[], cfg: AnalyzeConfig): number {
+  return budgetForCap(nodes, cfg.criticMaxCandidates);
+}
+
+/** The rate/floor math behind `criticBudget`, pulled out so
+ *  `selectCriticCandidates` can apply the STREAM MODE cap override (spec
+ *  §S3, task T3) by passing a different ceiling, without duplicating the
+ *  per-minute rate or the CRITIC_MIN_CANDIDATES floor and without touching
+ *  `criticBudget`'s own signature - every existing caller (index.ts's
+ *  telemetry line, eval-selection-autopsy.ts) keeps reading the
+ *  standard-mode number, unchanged, exactly as before this task. */
+function budgetForCap(nodes: SentenceNode[], maxCandidates: number): number {
   const sourceMinutes = sourceSeconds(nodes) / 60;
   return Math.min(
-    cfg.criticMaxCandidates,
+    maxCandidates,
     Math.max(
       CRITIC_MIN_CANDIDATES,
       Math.round(sourceMinutes * CRITIC_CANDIDATES_PER_SOURCE_MINUTE)
@@ -211,9 +290,22 @@ export function criticBudget(nodes: SentenceNode[], cfg: AnalyzeConfig): number 
 export function selectCriticCandidates(
   merged: MergedCandidate[],
   nodes: SentenceNode[],
-  cfg: AnalyzeConfig
+  cfg: AnalyzeConfig,
+  // consumed by tasks T2-T4 of the stream-analyze-mode spec
+  mode: AnalysisMode = "standard"
 ): MergedCandidate[] {
-  const K = criticBudget(nodes, cfg);
+  // STREAM MODE budget override (spec §S3, task T3). Phase-1 measurement
+  // (2026-08-19-stream-moment-selection.md): on a 3h stream the per-window
+  // quota (perWindowMinCandidates=2, ~18 windows) consumed 36 of
+  // criticMaxCandidates=40 slots before global interest fill ever ran - the
+  // scanner's OWN find, the corpus's most-viral labeled moment (15,847
+  // views, "осуждаю"), was rationed out unjudged. The cap swaps to
+  // streamCriticMaxCandidates (80) rather than adding a flat number, so K
+  // still SCALES WITH SPEECH exactly as standard mode does (`budgetForCap`
+  // unchanged) - just against double the ceiling. That doubling is free: a
+  // full 3h scan+critic run measured 126k in / 15k out tokens (~$0.04)
+  // against the spec's own ~$1.21 total cost for a 3h job (spec §0.1).
+  const K = budgetForCap(nodes, mode === "stream" ? cfg.streamCriticMaxCandidates : cfg.criticMaxCandidates);
 
   const byWindow = new Map<number, MergedCandidate[]>();
   for (const c of merged) {
@@ -230,11 +322,17 @@ export function selectCriticCandidates(
     result.push(c);
   };
 
-  // guaranteed per-window quota
+  // guaranteed per-window quota. STREAM MODE drops this 2 -> 1 (spec §S3):
+  // the 2-per-window guarantee is exactly what ate the budget above (36 of
+  // 40 slots on the measured 3h source) - dropping to 1 keeps the coverage
+  // promise (every window still gets its single best candidate judged) and
+  // frees the rest of K to global interest order, which is where the
+  // ration-victim moment actually lived.
+  const perWindowQuota = mode === "stream" ? 1 : cfg.perWindowMinCandidates;
   for (const list of byWindow.values()) {
     list
       .sort((a, b) => b.interest - a.interest)
-      .slice(0, cfg.perWindowMinCandidates)
+      .slice(0, perWindowQuota)
       .forEach(take);
   }
 

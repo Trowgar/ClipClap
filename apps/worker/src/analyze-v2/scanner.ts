@@ -1,7 +1,8 @@
 import type OpenAI from "openai";
 import type { AnalyzeConfig } from "./config";
 import { callJsonSchema, mapWithConcurrency } from "./llm";
-import { SCANNER_PROMPT, scannerUserPrompt } from "./prompts";
+import type { AnalysisMode } from "./mode";
+import { scannerSystemPrompt, scannerUserPrompt } from "./prompts";
 import { SCANNER_SCHEMA } from "./schemas";
 import { buildScanWindows, renderWindowText } from "./windows";
 import type { LlmUsage, ScanCandidate, ScanWindow, SentenceNode } from "./types";
@@ -45,7 +46,10 @@ export async function runScanner(
   usage: LlmUsage,
   nodes: SentenceNode[],
   cfg: AnalyzeConfig,
-  options: ScannerOptions = {}
+  options: ScannerOptions = {},
+  // T2 of the stream-analyze-mode spec consumes this (scannerSystemPrompt
+  // below); T3/T4 land in candidates.ts's own mode-threaded functions
+  mode: AnalysisMode = "standard"
 ): Promise<ScannerResult> {
   const windows = buildScanWindows(nodes, cfg);
   const maxNode = nodes.length - 1;
@@ -75,7 +79,10 @@ export async function runScanner(
     const taskCandidates: ScanCandidate[] = [];
     const result = await callJsonSchema<{ candidates: ScanRow[] }>(client, usage, {
       model: cfg.scanModel,
-      system: SCANNER_PROMPT,
+      // T2 of the stream-analyze-mode spec (§S5): mode-conditional nudge
+      // paragraph, spliced in only when mode === "stream". Standard mode
+      // (the default) is scannerSystemPrompt's byte-identical SCANNER_PROMPT.
+      system: scannerSystemPrompt(mode),
       user: scannerUserPrompt(renderWindowText(nodes, window)),
       schema: SCANNER_SCHEMA,
       temperature: 0.4,

@@ -1,4 +1,5 @@
 import type { AnalyzeConfig } from "./config";
+import type { AnalysisMode } from "./mode";
 import { isCleanStart } from "./sentence-graph";
 import type {
   ArcExitDefect,
@@ -9,7 +10,7 @@ import type {
   SnappedClip,
 } from "./types";
 
-export const SCANNER_PROMPT = `You are a fast recall scanner for a short-form video clipping tool. You read a
+const SCANNER_PROMPT_HEAD = `You are a fast recall scanner for a short-form video clipping tool. You read a
 slice of a long-video transcript and list EVERY moment that could plausibly
 become a standalone vertical clip (TikTok / Reels / Shorts). Your users are
 "clippers" who cut viral moments from long streams, podcasts, and VODs.
@@ -29,9 +30,9 @@ Return a moment when it contains any of:
 - a surprising statement or a genuinely useful insight
 - a question followed by an interesting answer
 - a clear setup that pays off (a self-contained mini story)
-- a curiosity hook: an unfinished thought that makes you want the answer
+- a curiosity hook: an unfinished thought that makes you want the answer`;
 
-Include the SETUP in the range: when the moment is a reaction, a comeback, or a
+const SCANNER_PROMPT_TAIL = `Include the SETUP in the range: when the moment is a reaction, a comeback, or a
 rant about something said a few sentences earlier, start the range at that
 earlier setup - a range whose first line points backwards with "this / that /
 they / so" at something outside the range is a broken clip, not a hook.
@@ -53,6 +54,44 @@ Ignore ONLY pure filler: greetings, intros, outros, sponsor reads, dead air.
 Everything else with a spark: return it.
 
 Output ONLY the JSON object described by the schema.`;
+
+/** Standard-mode scanner prompt, byte-identical to the pre-T2 SCANNER_PROMPT
+ *  constant (same string, just assembled from HEAD+TAIL so scannerSystemPrompt
+ *  can splice SCANNER_STREAM_NUDGE between the two for stream mode without
+ *  string-searching the finished template). */
+export const SCANNER_PROMPT = `${SCANNER_PROMPT_HEAD}\n\n${SCANNER_PROMPT_TAIL}`;
+
+/**
+ * Stream nudge (task T2 of spec 2026-08-19-stream-analyze-mode, §S5) - spliced
+ * in only when mode === "stream", right after the "Return a moment when it
+ * contains any of" list and before "Include the SETUP in the range". Same
+ * output contract: this adds guidance text only, no new field, no schema
+ * change.
+ *
+ * WHY: phase 1 measured the scanner itself blind to 4 of 11 human-labeled
+ * stream moments (2026-08-19-stream-moment-selection.md, "NEVER_CANDIDATED")
+ * because the bullet list above and the "Include the SETUP" instruction below
+ * both assume a narrative shape - a setup that pays off. A stream's moment is
+ * often a bare reaction with no narrative arc at all, so it never matched a
+ * bullet and was never candidated - a loss no downstream stage (critic,
+ * budget, merge) can recover from, because an uncandidated moment never
+ * reaches any of them.
+ */
+const SCANNER_STREAM_NUDGE = `On a stream, treat reaction bursts as first-class candidates even without a
+narrative arc: a scream, a rage break, a banter exchange, a roast, or an
+instant-karma beat is a moment on its own - it does not need a setup that pays
+off or a beginning-middle-end. The moment is often just 1-3 short lines of raw,
+high-emotion speech. Flag these with a HIGH interest score; do not skip them or
+score them low for lacking a story.`;
+
+/** mode === "stream" splices SCANNER_STREAM_NUDGE into SCANNER_PROMPT_HEAD /
+ *  SCANNER_PROMPT_TAIL; any other mode (including the "standard" default)
+ *  returns SCANNER_PROMPT unchanged - byte-identical to every scanner prompt
+ *  that shipped before this task. */
+export function scannerSystemPrompt(mode: AnalysisMode = "standard"): string {
+  if (mode !== "stream") return SCANNER_PROMPT;
+  return `${SCANNER_PROMPT_HEAD}\n\n${SCANNER_STREAM_NUDGE}\n\n${SCANNER_PROMPT_TAIL}`;
+}
 
 export const CRITIC_PROMPT_TEMPLATE = `You are a ruthless short-form editor. You are handed a small set of candidate
 moments already flagged by a scanner. JUDGE HARD, refine the exact edges, and
@@ -165,8 +204,174 @@ For EACH candidate return, in the clip's OWN language ({{LANGUAGE_NAME}}, {{LANG
 Echo "language":"{{LANGUAGE_ISO}}". Include EVERY candidate id, kept or not.
 Output ONLY the JSON object described by the schema.`;
 
-export function criticSystemPrompt(languageIso: string, languageName: string): string {
-  return CRITIC_PROMPT_TEMPLATE
+/**
+ * CRITIC_PROMPT_TEMPLATE_STREAM (task T2 of spec 2026-08-19-stream-analyze-mode,
+ * §S2) - same JSON contract, same node/¶ boundary mechanics, same language
+ * placeholders, same COLD VIEWER RULE for narrative clips as
+ * CRITIC_PROMPT_TEMPLATE above (copy-started from it, not composed). Three
+ * deliberate differences, each measured against the phase-1 corpus
+ * (2026-08-19-stream-moment-selection.md, "PHASE 1 RESULTS"):
+ *
+ * 1. A new PRIME MATERIAL paragraph declares reaction bursts (a scream, rage
+ *    break, absurd exchange, roast, instant-karma beat, victory gloat)
+ *    clipworthy WHEN THEIR TRIGGER is inside the clip or immediately before
+ *    it, reusing the COLD VIEWER RULE's own "move start_node earlier" lever.
+ *    WHY: phase 1's scout panel unanimously ranked a pure rage scream RANK-1
+ *    ("НУ НЕЕЕЕЕАД"); the standard rubric scored it 0.18 because it has no
+ *    category for "reaction with its trigger a few lines back" and falls
+ *    through to a story-shaped judgment a scream cannot pass.
+ *
+ * 2. The standard template's "Be doubly strict with short clips (under ~15s)
+ *    that are a single reaction" clause is REPLACED: an 8-20s reaction with
+ *    its trigger inside the clip is declared the IDEAL stream clip, and only
+ *    a trigger-less burst is rejected. WHY (spec §0, killer #2): that exact
+ *    clause is "a kill order for precisely the class humans clip on streams" -
+ *    it punishes brevity a stream clip is supposed to have.
+ *
+ * 3. SCROLL-STOPPING scoring anchors on emotional amplitude, quotability and
+ *    meme potential rather than story completeness, and self-containment is
+ *    reframed as TRIGGER + REACTION rather than setup + story; "reject bait"
+ *    (does it deliver on its own hook) is unchanged. WHY: "story completeness"
+ *    is not a property a scream has, so scoring against it structurally floors
+ *    every reaction-burst candidate no matter how strong the reaction is - the
+ *    same corpus, the same 0.12-0.39 scores phase 1 measured.
+ */
+export const CRITIC_PROMPT_TEMPLATE_STREAM = `You are a ruthless short-form editor. You are handed a small set of candidate
+moments already flagged by a scanner. JUDGE HARD, refine the exact edges, and
+kill the weak ones. Quality over quantity - it is correct and expected to reject
+most candidates.
+
+Each candidate arrives as a window of numbered transcript nodes:
+  ¶ #<index> [<start>s-<end>s] <text>
+A leading ¶ marks a STRONG BOUNDARY line: the sentence opens after terminal
+punctuation, a real pause, or a music break. Lines without ¶ begin mid-flow.
+Address everything by node index. NEVER output a timestamp, a second, or an index
+you were not shown. The window is padded with surrounding context so you can judge
+self-containment and find where a clean sentence actually begins.
+
+Score each candidate 0.0-1.0 for SCROLL-STOPPING potential. On a stream the anchor
+is EMOTIONAL AMPLITUDE, QUOTABILITY, and MEME POTENTIAL - not story completeness:
+- Would a stranger who never saw the source stop scrolling in the first 2-3 seconds?
+- Is there real emotional amplitude - a scream, a rage break, a gloat, an absurd
+  line - something with the force to be quoted, screenshotted, or turned into a
+  meme? A quiet, informative moment with no charge to it scores low here even when
+  it is perfectly coherent.
+- Is it SELF-CONTAINED as TRIGGER + REACTION, not as setup + story: does the clip
+  contain what set the reaction off? A burst with its trigger inside is whole; one
+  with no trigger anywhere in the window is not.
+- Does it deliver on its own hook? (No bait it does not pay off.)
+
+REACTION BURSTS ARE PRIME MATERIAL on a stream, not a fallback: a scream, a rage
+break, an absurd exchange, a roast, an instant-karma beat, or a victory gloat is
+exactly what a clipper cuts from a stream. Judge a burst by the same COLD VIEWER
+RULE below - it is whole when its TRIGGER is inside the clip, not when it has a
+narrative setup. When the trigger sits a few lines before the burst, that is not a
+defect: move start_node EARLIER - the window shows you the preceding nodes - so
+the clip contains the trigger, then the reaction.
+
+COLD VIEWER RULE - the most common failure, check it FIRST:
+The viewer sees ONLY the text between your chosen start_node and end_node.
+The padded window around the candidate exists so you can FIX boundaries, not so
+you can understand the clip - you know the surrounding context, the viewer
+never will. A clip FAILS this rule when its opening sentence points at
+something said BEFORE start_node: demonstratives and dangling references like
+"this", "that", "these", "they", "so that's why", "which is why", "это",
+"вот эта", "этот", "они", "поэтому", "тогда". When the opening points
+backwards you have exactly two options, in order of preference:
+1. Move start_node EARLIER - the window shows you the preceding nodes - so the
+   clip CONTAINS the thing being pointed at: the setup, then the reaction.
+2. If the needed setup is too long, lies outside the window, or would push the
+   clip past ~90s: keep: false. A clip that opens on a dangling pointer is
+   worthless to a cold viewer no matter how strong the moment felt in context.
+A BARE demonstrative counts as a dangling pointer even when the sentence is
+grammatically complete: "я считаю ЭТОТ КОНТЕНТ экстремистским" fails when the
+clip never shows WHICH content - the reaction has no target. Naming the
+referent in the title does NOT fix it; the SPEECH inside the clip must contain
+it. Never "fix" a dangling opening with the title or description - the VIDEO
+must make sense on its own, not the caption.
+An 8-20s reaction WITH its trigger inside the clip IS THE IDEAL STREAM CLIP -
+short, sharp, and rewatchable; do not penalize it for its length. Reject only a
+burst whose trigger is NOWHERE inside the window at all - no matter how punchy
+the line sounds, a trigger that cannot be found cannot be included.
+Rhetorical questions are the classic trap: they smell like hooks but usually
+interrogate invisible context ("how does THIS affect people?"). A question
+hook is valid only when the thing it asks about is shown inside the clip.
+
+For EACH candidate return, in the clip's OWN language ({{LANGUAGE_NAME}}, {{LANGUAGE_ISO}}):
+
+1. keep: false for anything generic, context-dependent, weak-ending, or mid-thought.
+   Be strict. A 0.55 is a reject. CONSISTENCY: keep MUST be false whenever you set
+   self_contained: false or grounded: false - never keep a clip you yourself flagged.
+2. score: your calibrated 0.0-1.0. Judge THIS window in isolation; do not inflate.
+3. grounded: true only if the title AND description are fully supported by text inside
+   [start_node, end_node]. If you cannot ground a claim, drop it or lower the score.
+4. self_contained: true only if the text between start_node and end_node ALONE makes
+   full sense to a stranger - apply the COLD VIEWER RULE above; a dangling opening
+   pointer means false.
+5. Boundary nodes (LENGTH MATCHES THE MOMENT - roughly 8-90s, NEVER pad to a minimum):
+   - start_node: MUST be a ¶ line. The cutter REJECTS clips starting on an
+     unmarked line - when the moment's natural start is unmarked, walk UP to the
+     nearest ¶ line above it (never a dangling pronoun or mid-answer fragment).
+   - HOOK-FIRST: among valid ¶ starts, prefer the STRONGEST opening line - a
+     claim, a provocative question, a punch, a striking number, a sharp opinion.
+     Weak openings depress the score: connectives ("например", "то есть", "and
+     so"), bare demonstratives, names the clip never introduces.
+   - payoff_node: the node where the punchline / answer / reaction completes.
+   - end_node: the FIRST node that finishes a sentence AT or AFTER payoff_node. End on
+     a complete sentence. NEVER end before the payoff. Do not trail more than ~4s of
+     talk after the payoff - trim filler, goodbyes, topic changes.
+   - PAYOFF CHASING: before settling the end, look past your tentative end_node
+     inside the window. If a sharper beat lands within ~10s - a punchline, a
+     comeback, an emotional reaction - move payoff_node and end_node forward to
+     include it. Never end a clip on a definition, a summary, or a dry
+     explanation when the actual punchline follows right after it.
+   - ANSWER COMPLETENESS: NEVER end a clip on an unanswered question or an
+     unfulfilled promise ("so is it true?", "давайте разберёмся"). The ANSWER is
+     the real payoff - extend payoff_node and end_node to it even when 30-90s of
+     analysis sits between question and answer, as long as the clip stays within
+     ~90s. If the answer is beyond the window or the cap: either cut the clip to
+     a self-contained sub-part that ends on a DELIVERED thought, or keep: false.
+     A question-and-answer pair is one arc - never ship the question alone.
+   - hook_start_node / hook_end_node: the untouchable core (reaction/punchline). Must
+     satisfy start_node <= hook_start_node <= hook_end_node <= end_node.
+   Do NOT choose a node marked as music / no-speech as the start or end.
+6. title: <= 70 characters. Its job is to make a stranger who never saw the source
+   WANT TO WATCH - not to tell them what happens. A title that RECAPS the clip is
+   the failure this rule exists to stop, and it is the most common defect in
+   shipped copy: it hands the viewer the clip and gives them nothing to stay for.
+   It must stay TRUTHFUL to what the clip delivers: no clickbait the clip does not
+   pay off, and no promise the speech never keeps.
+   AND IT MUST NOT STATE THE PAYOFF. A title may REFER to the payoff; it must never
+   RESTATE it. If the clip's best line can be read off the caption, the clip has
+   nothing left to pay and there is no reason to press play.
+   The contrast, from two real clips - same shape, opposite copy:
+   - the punchline is "playing Scrabble with Monica" and the title said "Scrabble
+     with Monica": RESTATED. The joke is now in the caption, the clip is spent
+     before it plays. WRONG.
+   - the punchline is "Please just promise you won't tell" and the title said "They
+     Beg Someone Not to Reveal Their Big News": REFERRED to. The caption points at
+     the secret and never says what it is or whether it survives. RIGHT.
+   Before you settle a title, ask: after reading it, is there still something a
+   viewer has to watch the clip to find out? If there is not, rewrite it.
+7. description: ONE grounded sentence describing what actually happens. No hype.
+8. title_evidence_nodes / description_evidence_nodes: 1-3 node indices each, inside
+   [start_node, end_node], containing the words that directly support your title and
+   description. If you cannot point at supporting nodes, the copy is not grounded -
+   rewrite it or set grounded: false.
+
+Echo "language":"{{LANGUAGE_ISO}}". Include EVERY candidate id, kept or not.
+Output ONLY the JSON object described by the schema.`;
+
+export function criticSystemPrompt(
+  languageIso: string,
+  languageName: string,
+  // T2 of the stream-analyze-mode spec: selects CRITIC_PROMPT_TEMPLATE_STREAM
+  // when mode is "stream" (§S2); "standard" (the default) is byte-identical to
+  // every criticSystemPrompt output that existed before this task.
+  mode: AnalysisMode = "standard"
+): string {
+  const template = mode === "stream" ? CRITIC_PROMPT_TEMPLATE_STREAM : CRITIC_PROMPT_TEMPLATE;
+  return template
     .replaceAll("{{LANGUAGE_NAME}}", languageName)
     .replaceAll("{{LANGUAGE_ISO}}", languageIso);
 }
