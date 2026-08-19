@@ -10,9 +10,14 @@
   command AND probeVideoUrl on the exact link that killed the 10:40 job all pass.
   So potArgs() ships the token wiring and player_client=mweb as ONE mechanism,
   kill switch = clear YTDLP_POT_PROVIDER_URL.
-- NOT fixed (upstream, yt-dlp 15586): post-live manifestless VODs
-  (youtube.com/live/...) still 403 with a valid token - Leonardo's VOD confirmed in
-  this class. Regular videos - the dominant user traffic - work.
+- NOT fixed: RECORDINGS OF FINISHED STREAMS (VODs at youtube.com/live/...) - checked
+  on BOTH stream VODs in our jobs table: 403 with default clients AND with mweb+token.
+  Not permanent damage - both processed fine through the pipeline in early August - but
+  the token mechanism does not cover this class (matches upstream yt-dlp 15586), so
+  stream VODs stay hostage to the exit's weather; their recovery path is the flap-wait
+  ladder (2.2h of retries) and time. LIVE streams were never supported (no duration ->
+  probe refuses) and that is unchanged. Regular uploaded videos work through the
+  blockade right now.
 
 ## 0. The problem, measured
 
