@@ -933,6 +933,10 @@ describe("createJob and releaseNextQueued take the SAME advisory lock", () => {
     expect(releaseStrings.join("?")).toEqual(createStrings.join("?"));
     expect(releaseUserId).toBe(createUserId);
     expect(createUserId).toBe("u9");
+    // Equality alone stays green if BOTH sites are redesigned the same wrong
+    // way; pin the actual mechanism too - the advisory lock keyed on the user.
+    expect(createStrings.join("?")).toContain("pg_advisory_xact_lock(hashtext(");
+    expect(createStrings.join("?")).toContain("), 1)");
   });
 });
 
