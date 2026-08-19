@@ -35,7 +35,7 @@ export const api = {
       subtitles: boolean;
       sourceDurationSec?: number;
     }) =>
-      fetchApi<JobWithClips>("/api/jobs", {
+      fetchApi<JobWithClips & { queued?: boolean; position?: number }>("/api/jobs", {
         method: "POST",
         body: JSON.stringify(data),
       }),

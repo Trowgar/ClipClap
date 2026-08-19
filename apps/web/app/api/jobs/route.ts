@@ -340,6 +340,18 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  if (created.status === "queued") {
+    // Accepted, not refused: 202 with the job itself at the top level so the
+    // upload flow (which reads job.id and navigates to the project) works
+    // unchanged, plus the queue facts for any client that wants to say so.
+    // The dashboard already labels a PENDING job "queued".
+    await recordFunnelEvent("web", userId, FUNNEL_EVENTS.VIDEO_QUEUED);
+    return NextResponse.json(
+      { ...created.job, queued: true, position: created.position },
+      { status: 202 }
+    );
+  }
+
   return NextResponse.json(created.job, { status: 201 });
 }
 
