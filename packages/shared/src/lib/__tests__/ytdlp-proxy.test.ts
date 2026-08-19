@@ -198,11 +198,15 @@ describe("potArgs", () => {
     expect(potArgs()).toEqual([]);
   });
 
-  it("wires the bgutil plugin at the configured base url, trailing slash trimmed", () => {
+  // The pair is ONE mechanism - measured 2026-08-19: mweb without the token
+  // 403s, the token without mweb never reaches a client that serves https.
+  it("wires the plugin AND the mweb client together, trailing slash trimmed", () => {
     process.env.YTDLP_POT_PROVIDER_URL = "http://potprovider:4416/";
     expect(potArgs()).toEqual([
       "--extractor-args",
       "youtubepot-bgutilhttp:base_url=http://potprovider:4416",
+      "--extractor-args",
+      "youtube:player_client=mweb",
     ]);
   });
 });

@@ -51,11 +51,29 @@ export function potProviderUrl(): string | null {
   return raw ? raw.replace(/\/+$/, "") : null;
 }
 
-/** yt-dlp args pointing the bgutil PO-token plugin at the sidecar, or nothing. */
+/** yt-dlp args pointing the bgutil PO-token plugin at the sidecar, or nothing.
+ *
+ *  The client override travels WITH the token wiring on purpose - they are one
+ *  mechanism, measured live on 2026-08-19 during an active segment blockade:
+ *    - default client mix (android_vr picked): 403 on every media segment;
+ *    - web_safari: token minted and attached, but YouTube forces SABR
+ *      streaming for that client (yt-dlp 12482) so its https formats vanish;
+ *    - mweb + GVS token: full video+audio download THROUGH the blockade.
+ *  mweb without a token is useless (403s like everything else), and the token
+ *  without mweb never gets attached to a client that still serves https - so
+ *  shipping them separately would offer two knobs that only work as a pair.
+ *  Extractor-scoped, so non-YouTube URLs ignore both args. Kill switch stays
+ *  the one variable: clear YTDLP_POT_PROVIDER_URL and the ENTIRE mechanism -
+ *  token and client override alike - vanishes, restoring the stock client mix. */
 export function potArgs(): string[] {
   const url = potProviderUrl();
   return url
-    ? ["--extractor-args", `youtubepot-bgutilhttp:base_url=${url}`]
+    ? [
+        "--extractor-args",
+        `youtubepot-bgutilhttp:base_url=${url}`,
+        "--extractor-args",
+        "youtube:player_client=mweb",
+      ]
     : [];
 }
 
