@@ -421,7 +421,13 @@ model Job {
   /// Backfilled to createdAt for every job that predates the column - they
   /// were all enqueued at creation. The release path (job.service
   /// releaseNextQueued) is what stamps it for queued jobs.
-  enqueuedAt                    DateTime?
+  /// DB-level default now() is the deploy-window guard, not the semantics:
+  /// both live paths set the column explicitly (null = queued, now = started).
+  /// It only catches an INSERT from code that predates the column - which
+  /// enqueues to BullMQ at creation, i.e. IS started - so the safe default is
+  /// "enqueued", never "waiting" (a false "waiting" row would be re-added
+  /// under a different BullMQ id and downloaded twice).
+  enqueuedAt                    DateTime? @default(now())
   originalFilename              String?
   status                        JobStatus @default(PENDING)
   error                         String?
@@ -484,6 +490,12 @@ model Job {
   criticModel           String?
   transcriptionModel    String?
   createdAt                     DateTime  @default(now())
+  /// The liveness signal the queue's stall guard reads: every stage writes
+  /// Job.status through prisma.job.update as it runs, and @updatedAt makes
+  /// each of those writes touch this column. A job silent for 3h is presumed
+  /// dead by releaseStalledQueues. DB default now() exists for the deploy
+  /// window (old code INSERTing without the column must not hit NOT NULL).
+  updatedAt                     DateTime  @default(now()) @updatedAt
 
   clips            Clip[]
   steps            JobStep[]
