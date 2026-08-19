@@ -142,5 +142,99 @@ class TestRectConstraints(unittest.TestCase):
         self.assertLess(abs(rect["h"] - 120), 4)
 
 
+class TestD1D2Selection(unittest.TestCase):
+    """New coverage for the 2026-08-19 stream-reframe-v2 changes: D1 (no
+    containment margin) and D2 (score-dominance-then-area selection, area
+    rule 4x -> 1.5x). D3 (BORDER_CANDIDATES 12 -> 24) was tried and reverted
+    the same day - see the constant's comment in detect_faces.py - so there
+    is no peaks-budget test here. See find_cam_rect's docstring and
+    docs/superpowers/specs/2026-08-19-stream-reframe-v2.md sections 2-3 for
+    the strogo/tox measurements these cases pin.
+    """
+
+    def test_margin_removed_reaches_a_border_close_to_the_face(self):
+        # True border only 6px below the face's bottom edge. Under the OLD
+        # 0.02*W containment margin (0.02*640 = 12.8), need_y1 would have
+        # been 75 + 12.8 = 87.8, past the true border at 81 - this is
+        # strogo's measured kill (need_y1 = faceBottom + 0.02*W = 82.8 >
+        # true border 81). With the margin removed, need_y1 = faceBottom =
+        # 75 <= 81, and the true border is reachable.
+        img = np.full((360, 640), 128, np.uint8)
+        img[0:81, 0:175] = 40
+        face = (20, 50, 30, 25)  # faceBottom=75, gap to true border = 6
+        vx, hy = df.median_edge_map([img])
+        rect = df.find_cam_rect(vx, hy, face, 640, 360, 0.5, 4.0)
+        self.assertIsNotNone(rect)
+        self.assertEqual((rect["x"], rect["y"]), (0, 0))
+        self.assertLess(abs(rect["w"] - 175), 4)
+        self.assertLess(abs(rect["h"] - 81), 4)
+
+    def test_dominant_true_rect_beats_a_sprawling_low_score_rival(self):
+        # Two nested corner-flush rects: a true small one (0,0,175,81) with
+        # a strong border (measured score 693.7), and a larger sprawl
+        # (0,0,309,150) with a weak one (measured score 113.7, well under
+        # half of 693.7). The same shape as strogo, where a 309-wide HUD
+        # sprawl (score 4.04) beat the true 175-wide rect (score 15.09)
+        # under plain largest-area-first. Score dominance must filter the
+        # sprawl before area gets a vote.
+        img = np.full((360, 640), 128, np.uint8)
+        img[0:150, 0:309] = 110  # sprawl fill: weak diff (18) vs background
+        img[0:81, 0:175] = 0     # true fill: strong diff (110) vs sprawl fill
+        face = (20, 15, 30, 20)
+        vx, hy = df.median_edge_map([img])
+        rect = df.find_cam_rect(vx, hy, face, 640, 360, 0.6, 4.0)
+        self.assertIsNotNone(rect)
+        self.assertEqual((rect["w"], rect["h"]), (175, 81))
+
+    def test_within_2x_the_larger_rect_still_wins_the_anti_shrink_property(self):
+        # Same nested-rect shape, contrast gap narrowed so the two
+        # candidates score within 2x of each other (measured 361.0 vs
+        # 299.5 - both clear best_score/2 = 180.5). Both survive dominance,
+        # so selection falls to area - the LARGER (sprawl-shaped) rect must
+        # still win. Mutation-style companion to the test above: this is
+        # the v1 anti-shrink property (see
+        # test_prefers_the_larger_rectangle_over_a_stronger_smaller_one)
+        # surviving the D2 rewrite.
+        img = np.full((360, 640), 128, np.uint8)
+        img[0:150, 0:309] = 70   # outer fill: diff 58 vs background
+        img[0:81, 0:175] = 0     # inner fill: diff 70 vs outer fill
+        face = (20, 15, 30, 20)
+        vx, hy = df.median_edge_map([img])
+        rect = df.find_cam_rect(vx, hy, face, 640, 360, 0.6, 4.0)
+        self.assertIsNotNone(rect)
+        self.assertEqual((rect["w"], rect["h"]), (309, 150))
+
+    def test_tight_cam_at_one_point_six_x_face_area_is_found(self):
+        # Rect area ~1.6x the face area (4410 / 2750) - inside the new 1.5x
+        # floor but would have failed the old 4x rule outright (tox's
+        # measured tight face-cam rect area 7728 < 4*face 10780 is the same
+        # shape of failure). Corner-flush by construction (not a bordered
+        # cv2.rectangle off in the middle of the frame): x0=0/y0=0 are the
+        # rect's REAL sides here, not a canvas-edge candidate borrowing just
+        # the real right/bottom border of an off-corner box - that shadow
+        # candidate is a distinct, correctly-contained rect the search would
+        # otherwise legitimately find (D1 dropped the margin that used to
+        # keep it out of reach) and it would confound this area-threshold
+        # assertion with an unrelated pass/fail.
+        img = np.full((360, 640), 128, np.uint8)
+        img[0:63, 0:70] = 40  # area 4410, ratio 1.60x
+        face = (20, 8, 50, 55)  # area 2750
+        vx, hy = df.median_edge_map([img])
+        rect = df.find_cam_rect(vx, hy, face, 640, 360, 0.5, 4.0)
+        self.assertIsNotNone(rect)
+
+    def test_tight_cam_at_one_point_four_x_face_area_is_rejected(self):
+        # Same shape, area trimmed to 1.4x (3850 / 2750) - below the new
+        # 1.5x floor, must still be rejected. The floor still does an
+        # anti-degenerate job, just at a lower bar than v1's 4x. Corner-flush
+        # for the same reason as above.
+        img = np.full((360, 640), 128, np.uint8)
+        img[0:55, 0:70] = 40  # area 3850, ratio 1.40x
+        face = (20, 0, 50, 55)
+        vx, hy = df.median_edge_map([img])
+        rect = df.find_cam_rect(vx, hy, face, 640, 360, 0.5, 4.0)
+        self.assertIsNone(rect)
+
+
 if __name__ == "__main__":
     unittest.main()

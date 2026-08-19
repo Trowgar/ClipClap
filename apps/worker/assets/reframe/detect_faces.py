@@ -21,8 +21,30 @@ MOUTH_PATCH = (32, 16)  # w, h - fixed size so motion energy is comparable
 
 EDGE_SAMPLE_MAX = 24     # frames fed to the median edge map
 BORDER_CANDIDATES = 12   # strongest projection peaks kept per axis
+# Raised to 24 (D3, 2026-08-19) on the theory that tox's true x0/y0 borders
+# were ranked outside the top-12, crowded out by the watched video's static
+# edges - and reverted the SAME DAY. Measured cost: on the real CS2 fixture
+# (pip-gameplay.jpg / pip-scoreboard.jpg) the bigger budget admitted a weak
+# sub-border at row 177 (raw mean 132, vs 452 for the true border at row
+# 119), and D2's score-dominance filter passes it at 4.13/5.96 = 1.28x -
+# comfortably inside the /2 band - so largest-area then picks the true cam
+# PLUS 58px of gameplay below it: exactly the "gap under the cam" defect
+# this spec exists to kill, regressing the v1 pin
+# (test_finds_the_corner_inset_on_gameplay). Measured benefit: none. strogo
+# needed only D1+D2 - its true x1=175 border was already in the top-12, and
+# its sprawl candidate (x1=309) is ALSO in the top-12, filtered by D2's
+# dominance rule (score 4.04 vs 15.09) with no help from a bigger budget.
+# Rtt2StnXpxw and tw-recrent already resolved correctly at budget 12. tox's
+# failure is not a ranking problem - its true borders are ABSENT from the
+# peak list at any budget (borderless overlay, no static edge exists to
+# rank) - that is task C's job, not this one's.
 MIN_RECT_PX = 16         # a rectangle thinner than this is noise
-FACE_MARGIN_FRAC = 0.02  # rect must clear the face by this much of frame width
+# FACE_MARGIN_FRAC removed (D1, 2026-08-19): a 2%-of-frame-width containment
+# margin was the SOLE kill of a true rect on strogo - need_y1 = faceBottom +
+# 0.02*W = 82.8 > true border 81, while that true rect's sides scored 15-20
+# against edge_min 4. The margin's anti-degenerate job (stopping the search
+# collapsing onto the face itself) moved to selection - see find_cam_rect's
+# docstring.
 
 # Measured on a 55-minute CS2 VOD, 2026-08-02: 26 true detections scored
 # 5.65-8.84, the strongest false candidate scored 1.54, and every threshold
@@ -71,11 +93,27 @@ def find_cam_rect(vx, hy, face, W, H, pip_max_frac, edge_min=CAM_EDGE_MIN):
     left, top and bottom sides all lie on the canvas and are therefore skipped,
     leaving it to win on a single real border.
 
-    Selection is LARGEST AREA among candidates clearing edge_min, tie-broken on
-    score - not the highest score. Each border is a mean over the rectangle's
-    own span, so scoring highest rewards shrinking inward to exclude the weakest
-    part of a border; largest-area removes that incentive, and the height cap
-    plus min-of-sides keeps "largest" from running away.
+    Containment requires the rect to contain the FACE BOX and nothing more
+    (D1, 2026-08-19 - no margin). A 2%-of-frame-width margin used to pad
+    need_x0/need_y0/need_x1/need_y1; on strogo that made need_y1 = faceBottom
+    + 0.02*W = 82.8, past the true border at 81, and the margin was the SOLE
+    kill of a true rect whose sides scored 15.09/20.17 against edge_min 4.0.
+    The margin's anti-degenerate job (stopping the search from collapsing
+    onto the face itself) moves to selection, below.
+
+    Selection is score-dominance-then-area (D2, 2026-08-19) over every
+    candidate clearing edge_min: drop candidates scoring below HALF the best
+    candidate's score, then take the LARGEST AREA among survivors, tie-broken
+    on score. Plain largest-area-first let a false candidate win outright: on
+    strogo a 309-wide HUD sprawl scored 4.04 and beat the true 175-wide rect
+    at 15.09 on area alone. Plain highest-score-first reintroduces the shrink
+    bias largest-area used to guard against - each border is a mean over the
+    rectangle's own span, so scoring highest rewards shrinking inward to
+    exclude the weakest part of a border (see
+    test_prefers_the_larger_rectangle_over_a_stronger_smaller_one). Dominance
+    first, then area, keeps both properties: a weak sprawling false candidate
+    never reaches the area comparison, and among genuinely competitive
+    candidates the larger one still wins.
     """
     if vx is None or hy is None:
         return None
@@ -83,9 +121,8 @@ def find_cam_rect(vx, hy, face, W, H, pip_max_frac, edge_min=CAM_EDGE_MIN):
     if gmean <= 1e-6:
         return None
     fx, fy, fw, fh = face
-    margin = FACE_MARGIN_FRAC * W
-    need_x0, need_y0 = fx - margin, fy - margin
-    need_x1, need_y1 = fx + fw + margin, fy + fh + margin
+    need_x0, need_y0 = fx, fy
+    need_x1, need_y1 = fx + fw, fy + fh
     face_area = max(1.0, fw * fh)
     max_w = pip_max_frac * W
     max_h = pip_max_frac * H
@@ -93,7 +130,7 @@ def find_cam_rect(vx, hy, face, W, H, pip_max_frac, edge_min=CAM_EDGE_MIN):
     xs = sorted(set([0, W] + _peaks(vx.sum(axis=0), BORDER_CANDIDATES)))
     ys = sorted(set([0, H] + _peaks(hy.sum(axis=1), BORDER_CANDIDATES)))
 
-    best, best_key = None, None
+    candidates = []
     for x0 in xs:
         if x0 > need_x0:
             continue
@@ -106,7 +143,11 @@ def find_cam_rect(vx, hy, face, W, H, pip_max_frac, edge_min=CAM_EDGE_MIN):
                 for y1 in ys:
                     if y1 < need_y1 or y1 - y0 < MIN_RECT_PX or y1 - y0 > max_h:
                         continue
-                    if (x1 - x0) * (y1 - y0) < 4.0 * face_area:
+                    # 4.0x -> 1.5x (D2, 2026-08-19): the 4x floor existed to
+                    # fight sprawl by area alone, but that job now belongs to
+                    # dominance above, and 4x was itself killing true rects -
+                    # tox's tight face-cam rect area 7728 < 4*face 10780.
+                    if (x1 - x0) * (y1 - y0) < 1.5 * face_area:
                         continue
                     # A side lying ON the canvas edge is skipped, not scored.
                     # Sobel uses BORDER_REFLECT_101, so column 0 and row 0 are
@@ -130,12 +171,14 @@ def find_cam_rect(vx, hy, face, W, H, pip_max_frac, edge_min=CAM_EDGE_MIN):
                     score = min(sides) / gmean
                     if score < edge_min:
                         continue
-                    key = ((x1 - x0) * (y1 - y0), score)
-                    if best_key is None or key > best_key:
-                        best_key = key
-                        best = {"x": x0, "y": y0, "w": x1 - x0,
-                                "h": y1 - y0, "score": score}
-    return best
+                    candidates.append({"x": x0, "y": y0, "w": x1 - x0,
+                                        "h": y1 - y0, "score": score})
+    if not candidates:
+        return None
+    best_score = max(c["score"] for c in candidates)
+    survivors = [c for c in candidates if c["score"] >= best_score / 2.0]
+    survivors.sort(key=lambda c: (c["w"] * c["h"], c["score"]), reverse=True)
+    return survivors[0]
 
 
 def iou(a, b):
