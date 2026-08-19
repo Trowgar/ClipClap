@@ -46,6 +46,26 @@ MIN_RECT_PX = 16         # a rectangle thinner than this is noise
 # collapsing onto the face itself) moved to selection - see find_cam_rect's
 # docstring.
 
+# D1b, 2026-08-19: even with D1's margin gone, strogo STILL returned None -
+# a direct sidecar run showed the real dominant YuNet track's det-scale box
+# is (87.9, 39.9, 42.8, 41.1), bottom edge 81.0, landing EXACTLY past the
+# cam's true bottom border (the y-peak at 80). D1's exact containment
+# (need_y1 = fy+fh = 81.0) then demands a rect deeper than the true border -
+# a single chin pixel, 2.4% of face height, was the entire remaining kill
+# (the only surviving y1 candidates jump to the next peak, ~343, and die on
+# the height cap). YuNet's box edges are approximate; a chin pixel landing
+# on the border must not veto a rect whose sides score 12+ against edge_min
+# 4. FACE_CONTAIN_SLOP_FRAC shrinks the containment requirement by this
+# fraction of the FACE'S OWN size, per side, toward its centre - this is NOT
+# FACE_MARGIN_FRAC reborn: that was a frame-relative margin that PADDED the
+# requirement outward (by 2% of frame width) and overshot small cams; this
+# pulls the requirement INWARD by a face-relative fraction, so it cannot
+# recreate the overshoot D1 fixed.
+# MIRRORED in apps/worker/src/reframe/plan.ts (same name, same value): the
+# TS isInsideInset predicate applies the identical face-relative shrink (its
+# D1c) - two languages, one rule; change one, change the other.
+FACE_CONTAIN_SLOP_FRAC = 0.10
+
 # Measured on a 55-minute CS2 VOD, 2026-08-02: 26 true detections scored
 # 5.65-8.84, the strongest false candidate scored 1.54, and every threshold
 # in 3.0-5.0 gave identical output. 4.0 is the middle of that empty corridor.
@@ -101,6 +121,18 @@ def find_cam_rect(vx, hy, face, W, H, pip_max_frac, edge_min=CAM_EDGE_MIN):
     The margin's anti-degenerate job (stopping the search from collapsing
     onto the face itself) moves to selection, below.
 
+    Containment then shrinks by FACE_CONTAIN_SLOP_FRAC (D1b, 2026-08-19):
+    need_x0/need_y0/need_x1/need_y1 are computed from the face box pulled in
+    by 10% of its OWN width/height per side, toward its centre - not padded
+    outward by a frame-relative fraction, which is what D1 just removed.
+    Even with D1's margin gone, strogo still returned None: the real YuNet
+    box's bottom edge (81.0) landed exactly past the true border (80), and
+    exact containment demanded a rect deeper than that border over a single
+    chin pixel. Detector boxes are approximate; a pixel of overhang must not
+    veto a rect whose sides clear edge_min by 3-5x. face_area for the area
+    rule below stays the FULL, un-shrunk face box - the slop is containment
+    tolerance, not a claim that the face is smaller than detected.
+
     Selection is score-dominance-then-area (D2, 2026-08-19) over every
     candidate clearing edge_min: drop candidates scoring below HALF the best
     candidate's score, then take the LARGEST AREA among survivors, tie-broken
@@ -121,8 +153,10 @@ def find_cam_rect(vx, hy, face, W, H, pip_max_frac, edge_min=CAM_EDGE_MIN):
     if gmean <= 1e-6:
         return None
     fx, fy, fw, fh = face
-    need_x0, need_y0 = fx, fy
-    need_x1, need_y1 = fx + fw, fy + fh
+    need_x0 = fx + FACE_CONTAIN_SLOP_FRAC * fw
+    need_x1 = fx + fw - FACE_CONTAIN_SLOP_FRAC * fw
+    need_y0 = fy + FACE_CONTAIN_SLOP_FRAC * fh
+    need_y1 = fy + fh - FACE_CONTAIN_SLOP_FRAC * fh
     face_area = max(1.0, fw * fh)
     max_w = pip_max_frac * W
     max_h = pip_max_frac * H
@@ -243,6 +277,11 @@ def main():
     ap.add_argument("--model", required=True)
     ap.add_argument("--min-score", type=float, default=0.7)
     ap.add_argument("--face-small-frac", type=float, default=0.06)
+    # 0.0 means "not passed" - keep gating on --face-small-frac, so a direct
+    # CLI invocation without this flag behaves exactly as before. Real callers
+    # (faces.ts) always pass the classifier's rect-first ceiling instead; see
+    # the gate below for why the two used to disagree.
+    ap.add_argument("--stream-face-ceiling", type=float, default=0.0)
     ap.add_argument("--pip-max-frac", type=float, default=0.50)
     ap.add_argument("--pip-edge-min", type=float, default=CAM_EDGE_MIN)
     ap.add_argument("--source-width", type=int, required=True)
@@ -336,12 +375,23 @@ def main():
                 "mouthActivity": float(np.mean(tr["mouth"])) if tr["mouth"] else 0.0,
                 "path": render_path(tr, scale),
             })
-        # Gate: only a SMALL dominant face can be a webcam inset. Podcasts and
-        # facecams never reach median_edge_map, so they pay nothing for this.
+        # Gate: only a dominant face under the threshold can be a webcam inset.
+        # Podcasts and facecams never reach median_edge_map, so they pay
+        # nothing for this. The threshold used to be --face-small-frac (the
+        # anchor floor), which meant a real corner-cam stream with a
+        # fairly large face - strogo/tox measured 0.076-0.077, both ABOVE that
+        # 0.06 floor - never even got a rect search: TS classified normal_face
+        # before find_cam_rect ever ran. It now matches the classifier's D5
+        # rect-first ceiling (spec 2026-08-19-stream-reframe-v2) instead, so
+        # the two gates agree; --stream-face-ceiling 0.0 (unset) falls back to
+        # the old --face-small-frac behaviour unchanged.
+        threshold = (
+            args.stream_face_ceiling if args.stream_face_ceiling > 0 else args.face_small_frac
+        )
         rect = None
         if rendered:
             dom = max(rendered, key=lambda t: t["samples"])
-            if dom["box"]["w"] <= args.face_small_frac * args.source_width:
+            if dom["box"]["w"] <= threshold * args.source_width:
                 if edge_vx is None:
                     edge_vx, edge_hy = median_edge_map(edge_frames)
                 # Boxes are rendered in SOURCE pixels; the search runs in

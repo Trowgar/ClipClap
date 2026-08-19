@@ -20,7 +20,7 @@ import cv2
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from detect_faces import (
     median_edge_map, _peaks, find_cam_rect,
-    BORDER_CANDIDATES, MIN_RECT_PX, EDGE_SAMPLE_MAX,
+    BORDER_CANDIDATES, MIN_RECT_PX, EDGE_SAMPLE_MAX, FACE_CONTAIN_SLOP_FRAC,
 )
 
 
@@ -80,15 +80,21 @@ def near(peaks, v, tol=4):
 print(f"GT x0={gx:.0f} in peaks(+-4): {near(xs, gx)}   GT x1={gx+gw:.0f}: {near(xs, gx+gw)}")
 print(f"GT y0={gy:.0f} in peaks(+-4): {near(ys, gy)}   GT y1={gy+gh:.0f}: {near(ys, gy+gh)}")
 
-# D1, 2026-08-19: containment margin removed. need_* now equal the face box
-# exactly - no more FACE_MARGIN_FRAC padding (that constant no longer
-# exists in detect_faces.py; its anti-degenerate job moved to selection).
+# D1, 2026-08-19: containment margin removed - no more FACE_MARGIN_FRAC
+# padding (that constant no longer exists; its anti-degenerate job moved to
+# selection). D1b, 2026-08-19: need_* then pull IN by FACE_CONTAIN_SLOP_FRAC
+# of the face's own width/height per side (a detector box can overhang the
+# true border by a pixel or two - strogo's real YuNet box did).
 ok = lambda b: "OK" if b else "FAIL"
+sx, sy = FACE_CONTAIN_SLOP_FRAC * fw, FACE_CONTAIN_SLOP_FRAC * fh
+need_x0, need_x1 = fx + sx, fx + fw - sx
+need_y0, need_y1 = fy + sy, fy + fh - sy
 print(
-    f"containment (D1, no margin): need x0<={fx:.1f} (gt {gx:.0f} {ok(gx<=fx)}), "
-    f"x1>={fx+fw:.1f} (gt {gx+gw:.0f} {ok(gx+gw>=fx+fw)}), "
-    f"y0<={fy:.1f} (gt {gy:.0f} {ok(gy<=fy)}), "
-    f"y1>={fy+fh:.1f} (gt {gy+gh:.0f} {ok(gy+gh>=fy+fh)})"
+    f"containment (D1 no margin, D1b slop {FACE_CONTAIN_SLOP_FRAC}): "
+    f"need x0<={need_x0:.1f} (gt {gx:.0f} {ok(gx<=need_x0)}), "
+    f"x1>={need_x1:.1f} (gt {gx+gw:.0f} {ok(gx+gw>=need_x1)}), "
+    f"y0<={need_y0:.1f} (gt {gy:.0f} {ok(gy<=need_y0)}), "
+    f"y1>={need_y1:.1f} (gt {gy+gh:.0f} {ok(gy+gh>=need_y1)})"
 )
 print(
     f"size caps: w {gw:.0f} <= {args.pip_max_frac*W:.0f} {ok(gw<=args.pip_max_frac*W)}, "

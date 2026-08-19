@@ -144,10 +144,13 @@ class TestRectConstraints(unittest.TestCase):
 
 class TestD1D2Selection(unittest.TestCase):
     """New coverage for the 2026-08-19 stream-reframe-v2 changes: D1 (no
-    containment margin) and D2 (score-dominance-then-area selection, area
-    rule 4x -> 1.5x). D3 (BORDER_CANDIDATES 12 -> 24) was tried and reverted
-    the same day - see the constant's comment in detect_faces.py - so there
-    is no peaks-budget test here. See find_cam_rect's docstring and
+    frame-relative containment margin) plus D1b (a face-relative containment
+    SLOP, FACE_CONTAIN_SLOP_FRAC, added the same day once D1 alone still
+    left strogo returning None over a single chin pixel), and D2
+    (score-dominance-then-area selection, area rule 4x -> 1.5x). D3
+    (BORDER_CANDIDATES 12 -> 24) was tried and reverted the same day - see
+    the constant's comment in detect_faces.py - so there is no peaks-budget
+    test here. See find_cam_rect's docstring and
     docs/superpowers/specs/2026-08-19-stream-reframe-v2.md sections 2-3 for
     the strogo/tox measurements these cases pin.
     """
@@ -231,6 +234,43 @@ class TestD1D2Selection(unittest.TestCase):
         img = np.full((360, 640), 128, np.uint8)
         img[0:55, 0:70] = 40  # area 3850, ratio 1.40x
         face = (20, 0, 50, 55)
+        vx, hy = df.median_edge_map([img])
+        rect = df.find_cam_rect(vx, hy, face, 640, 360, 0.5, 4.0)
+        self.assertIsNone(rect)
+
+    def test_slop_absorbs_a_small_chin_overhang_past_the_true_border(self):
+        # D1b, 2026-08-19: even with D1's margin gone, strogo still returned
+        # None - the real YuNet box's bottom edge (81.0) landed exactly past
+        # the true border (80), and exact containment demanded a rect deeper
+        # than the true border over a single chin pixel (2.4% of face
+        # height). Here the face overhangs the true border by 5% of its own
+        # height (2px of 40) - within the 10% slop - so the true border must
+        # still be found.
+        img = np.full((360, 640), 128, np.uint8)
+        img[0:100, 0:175] = 40
+        face = (60, 62, 40, 40)  # faceBottom=102, true border=100, overhang=2 (5%)
+        vx, hy = df.median_edge_map([img])
+        rect = df.find_cam_rect(vx, hy, face, 640, 360, 0.5, 4.0)
+        self.assertIsNotNone(rect)
+        self.assertEqual((rect["x"], rect["y"]), (0, 0))
+        self.assertLess(abs(rect["w"] - 175), 4)
+        self.assertLess(abs(rect["h"] - 100), 4)
+        # Mutation check: zero the slop and the SAME scenario must fail -
+        # proving the slop, not something else, is what let it through.
+        old = df.FACE_CONTAIN_SLOP_FRAC
+        df.FACE_CONTAIN_SLOP_FRAC = 0.0
+        try:
+            self.assertIsNone(df.find_cam_rect(vx, hy, face, 640, 360, 0.5, 4.0))
+        finally:
+            df.FACE_CONTAIN_SLOP_FRAC = old
+
+    def test_slop_does_not_absorb_a_large_chin_overhang(self):
+        # Same shape, overhang widened to 20% of face height (8px of 40) -
+        # past the 10% slop. The true border must NOT be accepted (pins the
+        # bound both ways against the test above).
+        img = np.full((360, 640), 128, np.uint8)
+        img[0:100, 0:175] = 40
+        face = (60, 68, 40, 40)  # faceBottom=108, true border=100, overhang=8 (20%)
         vx, hy = df.median_edge_map([img])
         rect = df.find_cam_rect(vx, hy, face, 640, 360, 0.5, 4.0)
         self.assertIsNone(rect)

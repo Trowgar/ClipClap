@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import type { ReframeConfig } from "./config";
+import { DEFAULT_STREAM_FACE_CEILING } from "./options";
 import type { CamRect, FaceTrack, PathSample, Shot, ShotTracks } from "./types";
 
 import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
@@ -144,6 +145,11 @@ export async function detectFaces(
         "--model", join(reframeAssetsDir(), "face_detection_yunet_2023mar.onnx"),
         "--min-score", String(cfg.faceMinScore),
         "--face-small-frac", String(cfg.faceSmallFrac),
+        // Matches the classifier's D5 rect-first ceiling (spec
+        // 2026-08-19-stream-reframe-v2), so the sidecar's own gate on
+        // median_edge_map does not silently exclude a face the TS side would
+        // otherwise attempt rect-first for.
+        "--stream-face-ceiling", String(cfg.streamFaceCeiling ?? DEFAULT_STREAM_FACE_CEILING),
         "--pip-max-frac", String(cfg.pipMaxFrac),
         "--pip-edge-min", String(cfg.pipEdgeMin),
         "--source-width", String(sourceWidth),
