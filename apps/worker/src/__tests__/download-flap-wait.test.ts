@@ -155,6 +155,53 @@ describe("download stage: flap-wait parking", () => {
     expect(timestamp).toBeLessThanOrEqual(after + 30 * 60 * 1000);
   });
 
+  it("parks a third flap at the 90-minute wait and bumps the counter to 3", async () => {
+    // Pins the third rung's literal and the `flapWaits < LENGTH` boundary:
+    // index 2 is the last delay the ladder still grants before the fourth
+    // failure (flapWaits: 3) falls through as exhausted.
+    mocks.downloadVideo.mockRejectedValue(ytDlp403Error());
+    const bullJob = fakeBullJob({ ...PAYLOAD, flapWaits: 2 });
+    const before = Date.now();
+
+    await expect(
+      runDownloadStage(PAYLOAD, bullJob, "t")
+    ).rejects.toBeInstanceOf(DelayedError);
+
+    const after = Date.now();
+
+    expect(bullJob.updateData).toHaveBeenCalledWith({
+      jobId: "job1",
+      userId: "u1",
+      flapWaits: 3,
+    });
+    const [timestamp] = bullJob.moveToDelayed.mock.calls[0];
+    expect(timestamp).toBeGreaterThanOrEqual(before + 90 * 60 * 1000);
+    expect(timestamp).toBeLessThanOrEqual(after + 90 * 60 * 1000);
+  });
+
+  it("degrades to the normal failure path when the park itself fails (moveToDelayed rejects)", async () => {
+    // A lock-token mismatch or a Redis hiccup can make the BullMQ pair itself
+    // throw. On the last BullMQ attempt this catch block is the only place
+    // anything still runs, so a park failure that escapes unguarded would
+    // skip failJobStep/markJobFailed entirely and strand the Prisma row in
+    // DOWNLOADING forever - never billed, never cleared, never delivered.
+    // The stage must fall through to the ordinary failure path instead, with
+    // the ORIGINAL flap error (not the park error), and no DelayedError may
+    // escape.
+    const error = ytDlp403Error();
+    mocks.downloadVideo.mockRejectedValue(error);
+    const bullJob = fakeBullJob(PAYLOAD);
+    bullJob.moveToDelayed.mockRejectedValue(new Error("lock mismatch"));
+
+    await expect(runDownloadStage(PAYLOAD, bullJob, "t")).rejects.toBe(error);
+
+    expect(mocks.failJobStep).toHaveBeenCalledWith("job1", "DOWNLOAD", error);
+    expect(mocks.jobUpdate).toHaveBeenCalledWith({
+      where: { id: "job1" },
+      data: { status: "FAILED", error: expect.stringContaining("SOURCE_UNAVAILABLE") },
+    });
+  });
+
   it("falls through to the real FAILED path once the ladder is exhausted", async () => {
     const error = ytDlp403Error();
     mocks.downloadVideo.mockRejectedValue(error);

@@ -43,12 +43,13 @@ vi.mock("@clipclap/shared", async () => ({
   },
   getStageQueue: mocks.getStageQueue,
   uploadFile: mocks.uploadFile,
-  // NOT part of the stale-dist simulation below: unlike probeLocalFile and
-  // its neighbours, isBotCheckFailure predates the free-tier work and was
-  // already present in every dist this file is pretending to run. The
-  // download stage's flap-wait gate calls it unconditionally, so the mock
-  // needs the real function or every test in this file throws before it
-  // reaches the behaviour it means to exercise.
+  // NOT part of the stale-dist simulation below: kept real, not undefined,
+  // because the download stage's flap-wait gate calls it unconditionally -
+  // any dist recent enough to be missing it would fail every test in this
+  // file loudly (the same "no export defined" throw the free-tier symbols
+  // below are undefined to simulate), not degrade quietly the way the guard
+  // this file tests for actually behaves. Mocking it away would test our own
+  // plumbing, not the stale-dist guard.
   isBotCheckFailure: (
     await vi.importActual<typeof import("@clipclap/shared/lib/ytdlp-proxy")>(
       "@clipclap/shared/lib/ytdlp-proxy"

@@ -136,17 +136,47 @@ export async function runDownloadStage(
         // Park, do not fail: no failJobStep, no FAILED write, no attempt spent.
         // The job keeps DOWNLOADING and its concurrency slot - the user's later
         // videos queue behind it, which is the serialisation the queue promises.
-        await bullJob.updateData({ ...(bullJob.data as object), flapWaits: flapWaits + 1 });
-        console.warn(
-          `[download] ${payload.jobId}: exit flap (${flapWaits + 1}/${FLAP_WAIT_DELAYS_MS.length}), parking for ${Math.round(delay / 60000)}min`
-        );
-        await bullJob.moveToDelayed(Date.now() + delay, token);
-        // DelayedError is thrown only here, only on this path, so it can never
-        // be a different failure that we are accidentally swallowing into the
-        // markJobFailed path below - nothing else in this stage throws one.
-        throw new DelayedError();
+        //
+        // The pair below talks to BullMQ/Redis and can itself fail (lock lost,
+        // Redis hiccup - a lock-token mismatch throws out of the Lua script).
+        // That failure must never escape past failJobStep/markJobFailed below:
+        // on the LAST BullMQ attempt this catch is the only place anything
+        // still runs, so a park that fails here and throws its own error would
+        // skip the FAILED write entirely and strand the Prisma row in
+        // DOWNLOADING forever - unbilled, uncleared, never delivered, exactly
+        // what job-error-guard.test.ts exists to catch for every OTHER error
+        // path in this stage. A failed park must degrade to an ordinary
+        // failed attempt, never to a stranded row: on a park failure we do
+        // NOT throw here, so control falls through - past both `if`s below -
+        // to the existing failJobStep/markJobFailed/throw at the bottom of
+        // this catch, with the ORIGINAL flap error (not the park failure),
+        // so the user sees the real diagnosis and BullMQ still spends a
+        // normal attempt on a normal retry.
+        let parked = false;
+        try {
+          await bullJob.updateData({ ...(bullJob.data as object), flapWaits: flapWaits + 1 });
+          console.warn(
+            `[download] ${payload.jobId}: exit flap (${flapWaits + 1}/${FLAP_WAIT_DELAYS_MS.length}), parking for ${Math.round(delay / 60000)}min`
+          );
+          await bullJob.moveToDelayed(Date.now() + delay, token);
+          parked = true;
+        } catch (parkError) {
+          console.error(
+            `[download] ${payload.jobId}: failed to park the flap wait, falling through to the normal failure path`,
+            parkError
+          );
+        }
+        if (parked) {
+          // DelayedError is thrown only here, only on this path, so it can
+          // never be a different failure that we are accidentally
+          // swallowing into the markJobFailed path below - nothing else in
+          // this stage throws one.
+          throw new DelayedError();
+        }
+        // Park failed: fall through to the real FAILED path below, same as
+        // the exhausted-ladder case, with the original flap error intact.
       }
-      // Waits exhausted: fall through to the real FAILED path below.
+      // Waits exhausted (or the park itself failed): fall through below.
     }
 
     await jobStepService.failJobStep(payload.jobId, "DOWNLOAD", error);
