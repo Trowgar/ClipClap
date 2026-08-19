@@ -257,6 +257,20 @@ export interface AnalyzeConfig {
    *  `analyze-v2/song-gate.ts`'s doc comment for why (this task's own
    *  measurement output, not a tuning door). */
   songGateEnabled: boolean;
+  /** SHORT-SOURCE RESCUE (spec 2026-08-19-short-source-rescue): when the
+   *  engine's answer for a source at or under `shortSourceRescueMaxSec`
+   *  seconds would be zero clips, ship the best snappable critic verdict as
+   *  ONE lowQuality clip instead. Half of all users' first submission is a
+   *  short test upload, and "no clips" on it reads as "the product does not
+   *  work" - the rescue makes every judged short source demonstrate the
+   *  product (crop + subtitles), captioned by the existing lowQualityNote.
+   *  Dark for every caller that does not pass sourceDurationSec, which is
+   *  all eval scripts - the corpus never sees it. */
+  shortSourceRescueEnabled: boolean;
+  /** Default is SOURCE_FLOOR.shortNoticeSec - the SAME 300s the bot's
+   *  short-source notice fires under, imported rather than copied so the
+   *  product copy and the engine can never disagree about what "short" is. */
+  shortSourceRescueMaxSec: number;
 }
 
 type Env = Record<string, string | undefined>;
@@ -360,5 +374,16 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     // Exact literal "on", same discipline as every other stage switch in this
     // file: a stray truthy env value must not refuse a real user's video.
     songGateEnabled: env.SONG_GATE === "on",
+    // Exact literal "on", same discipline as every other stage switch in this
+    // file: a stray truthy env value must not ship a below-bar clip to a real
+    // user by accident.
+    shortSourceRescueEnabled: env.SHORT_SOURCE_RESCUE === "on",
+    // 300 IS SOURCE_FLOOR.shortNoticeSec - the bot's own "short source"
+    // definition - but written as a literal, NOT imported: this file
+    // deliberately imports nothing, so loadAnalyzeConfig({}) works under
+    // every test that mocks @clipclap/shared (an import here broke 40 of
+    // them at once). short-source-rescue.test.ts pins the two values
+    // together and goes red if either side drifts.
+    shortSourceRescueMaxSec: num(env, "SHORT_SOURCE_RESCUE_MAX_SEC", 300),
   };
 }

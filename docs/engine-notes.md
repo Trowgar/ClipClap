@@ -860,6 +860,32 @@ prompt, not a command). **Both nuclear refusals are the §3 word-timing root cau
 completing nodes are opaque, so `opaque_end`/`no_clean_end` refuse them however good the hint;
 the lever remains Whisper word-timing coverage, now visible from a third direction.
 
+### Short-source rescue: a judged-empty short source ships one demo clip (2026-08-19)
+
+Spec `2026-08-19-short-source-rescue.md`; flag `SHORT_SOURCE_RESCUE` (exact literal "on"),
+threshold `SHORT_SOURCE_RESCUE_MAX_SEC` default 300 - a LITERAL in config.ts pinned by test to
+`SOURCE_FLOOR.shortNoticeSec` (config.ts deliberately imports nothing: a real import broke 40
+mocked-shared tests at once).
+
+The funnel numbers that motivated it: 16 of 33 users' FIRST submission was under 5 minutes, they
+averaged 0.2 clips, 2 of 16 returned; job_steps telemetry on all 17 short NO_VIABLE_MOMENTS jobs
+shows the scanner FOUND candidates and everything died downstream of the critic (keep:false,
+gate, snap, selection tier "none") - never for lack of judged material. So the weak-fallback
+tier in select.ts could rescue nothing: eligibility empties the pool before selection ever runs.
+
+Mechanism (`analyze-v2/rescue.ts`, called only at the engine's final empty exit, strictly AFTER
+the unjudged guard so technical failures keep failing): best-scoring critic verdict - keep:false
+included, that judgement is exactly what a demo clip overrides - that `snapNodes` can realize,
+`regroundCopy` then verbatim-snippet on script mismatch (zero LLM calls), `lowQuality: true` so
+the existing "best available" caption and web badge travel with it. An overLength snap is
+compressed like an unblessed clip, never shipped wide. `sourceDurationSec` reaches the engine
+only from stages/analyze.ts; eval scripts never pass it, so every corpus run stays
+byte-identical. Telemetry: `rescue` key present iff the stage ran (arcAudit's not-a-key
+promise); `tier` stays "none" truthfully.
+
+NO_USABLE_SPEECH shorts (8 of 25 measured) stay honest zeros - nothing to subtitle - as do
+song-gate refusals and scanner-empty sources: no verdict, no rescue.
+
 ---
 
 ## 4. Approaches that were tried and failed

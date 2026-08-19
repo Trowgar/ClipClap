@@ -15,6 +15,7 @@ import {
 } from "./gates";
 import { dominantScript, isoToLanguageName, scriptMismatch } from "./language";
 import { selectAndOrder } from "./select";
+import { rescueShortSource, type RescueTelemetry } from "./rescue";
 import { runArcAudit, isFullyOk, type ArcAuditTelemetry } from "./arc-audit";
 import { extendClipStarts, type StartExtensionTelemetry } from "./start-extension";
 import { extendClipEnds } from "./end-extension";
@@ -37,6 +38,12 @@ export interface AnalyzeV2Options {
   client?: OpenAI;
   cfg?: AnalyzeConfig;
   transcriptPartial?: boolean;
+  /** The job row's source duration. Powers the short-source rescue's "is this
+   *  short" test (spec 2026-08-19-short-source-rescue) and NOTHING else -
+   *  callers that omit it (every eval script) get byte-identical behaviour
+   *  with the rescue permanently dark, which is what keeps the corpus
+   *  comparable across runs. */
+  sourceDurationSec?: number;
   /** Test hook - forwarded to scanner/critic. */
   retryDelayMs?: number;
 }
@@ -947,6 +954,61 @@ export async function analyzeHighlightsV2(
       );
     }
 
+    // SHORT-SOURCE RESCUE (spec 2026-08-19-short-source-rescue). Every
+    // candidate was really judged (the guard above) and really rejected - for
+    // a normal source that honest "no" ships below, unchanged. For a SHORT
+    // source that "no" is usually the user's first impression of the product
+    // (half of all first submissions are under 5 minutes, 0.2 clips on
+    // average, 2 of 16 returned), and the measured population died entirely
+    // downstream of the critic - so the best snappable verdict ships as ONE
+    // lowQuality clip instead. Deliberately AFTER the unjudged throw: a
+    // technical failure must keep failing - its retries are free to the user
+    // and genuinely re-roll the critic - and a rescue there would bill for an
+    // answer that was never obtained. `sourceDurationSec` comes only from the
+    // stage; eval scripts never pass it, so the corpus never sees this path.
+    // STRICTLY under, matching isShortSource in shared plans.ts exactly: the
+    // bot's notice and this rescue must describe the same population, and the
+    // bot's is `durationSec < shortNoticeSec`. A 300s source gets neither.
+    const shortSource =
+      typeof options.sourceDurationSec === "number" &&
+      options.sourceDurationSec > 0 &&
+      options.sourceDurationSec < cfg.shortSourceRescueMaxSec;
+    let rescueTelemetry: RescueTelemetry | undefined;
+    if (cfg.shortSourceRescueEnabled && shortSource) {
+      const rescue = rescueShortSource(critic.verdicts, nodes, cfg);
+      rescueTelemetry = rescue.telemetry;
+      if (rescue.clip) {
+        // An EMPTY map, never `arcFlags`: with ARC_AUDIT on, a verdict that
+        // was selected, audited and then dropped (downrank, finalizer) is
+        // exactly what the rescue re-snaps - and its flags can carry
+        // `repaired` entries the extension stages set for a geometry this
+        // clip does not have. No audit ran on the rescue geometry, so no
+        // flags may travel with it (toHighlight's own rule: a diagnostic
+        // that names things the clip does not contain sends investigations
+        // to the wrong place).
+        const h = toHighlight(rescue.clip, new Map());
+        return {
+          highlights: [h],
+          // `tier` stays "none", truthfully - selection found nothing, and
+          // the rescue is not selection. The `rescue` key is the record that
+          // this clip exists despite that, and `kept`/`durations` describe
+          // what actually shipped. The OTHER counters - selectedForFinalizer,
+          // finalizerSurvivors, meanLexicalOverlap, snippetFallbacks - keep
+          // their selection-path values deliberately: they describe the
+          // selection that found nothing (kept > finalizerSurvivors is the
+          // rescue's signature in a job record, not a bug), and the rescue's
+          // own copy provenance lives in rescue.copySource.
+          telemetry: {
+            ...telemetry,
+            kept: 1,
+            durations: [Math.round((h.end - h.start) * 10) / 10],
+            rescue: rescueTelemetry,
+          },
+          usage,
+        };
+      }
+    }
+
     // Every candidate survived the holes, every one came back with a real
     // verdict, and the emptiness is therefore a judgement - keep:false, or our
     // own evidence/snap/selection bar - made on audio we really heard. Never
@@ -955,7 +1017,10 @@ export async function analyzeHighlightsV2(
     return {
       highlights: [],
       noClipsReason: partial ? "PARTIAL_TRANSCRIPT" : "NO_VIABLE_MOMENTS",
-      telemetry,
+      // The rescue key is present iff the stage RAN (same not-a-key promise
+      // as arcAudit) - here that is "ran and could not realize any verdict",
+      // which the 2026-09 checkpoint needs to see as clearly as a success.
+      telemetry: rescueTelemetry ? { ...telemetry, rescue: rescueTelemetry } : telemetry,
       usage,
     };
   }

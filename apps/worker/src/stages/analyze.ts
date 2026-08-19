@@ -55,6 +55,7 @@ export async function runAnalyzeStage(
           const v2 = await analyzeHighlightsV2(transcription, {
             cfg,
             transcriptPartial: job.transcriptPartial,
+            sourceDurationSec: job.sourceDurationSec ?? undefined,
           });
           shadow = {
             highlights: v2.highlights,
@@ -110,6 +111,10 @@ export async function runAnalyzeStage(
       : await analyzeHighlightsV2(transcription, {
           cfg,
           transcriptPartial: job.transcriptPartial,
+          // Powers ONLY the short-source rescue's "is this short" test - see
+          // AnalyzeV2Options; source-recheck persisted this from the real
+          // downloaded file before ANALYZE ever runs.
+          sourceDurationSec: job.sourceDurationSec ?? undefined,
         });
     // Flag on but not fired: still recorded, so the job record can show the
     // gate evaluated this transcript and let it through - task 8's own
