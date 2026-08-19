@@ -128,7 +128,9 @@ export function submissionQueueEnabled(): boolean {
 
 /** Deterministic BullMQ id for a job's download add. BullMQ ignores an add
  *  whose id it has already seen, which makes a double release (completion
- *  hook and stall guard racing) a no-op instead of a double download. */
+ *  hook and stall guard racing) a no-op instead of a double download - while
+ *  BullMQ retains the id (removeOnComplete count 200 / removeOnFail 100), so
+ *  the guarantee is retention-bounded, not forever. */
 function downloadJobId(jobId: string): string {
   return `dl:${jobId}`;
 }
@@ -313,26 +315,55 @@ export async function createJob(
   if (result.status !== "created") return result;
   const job = result.job;
 
-  await getStageQueue("download").add(
-    "download",
-    {
-      jobId: job.id,
-      userId: job.userId,
-    },
-    {
-      // Deterministic id, not a generated one: releaseNextQueued adds the
-      // same job again if a stall-guard sweep and a completion hook both race
-      // to release it, and BullMQ silently ignores an add whose id it has
-      // already seen. A createJob-started job never gets a second add, but
-      // the id is set unconditionally so both paths agree on what it is.
-      jobId: downloadJobId(job.id),
-      // Only free jobs carry a priority. Passing one for paid jobs would move
-      // them OFF the wait list into the prioritized set, which - per the read
-      // of moveToActive above - is the slower of the two, so "being explicit"
-      // would make paying users worse off.
-      ...(input.freeCharge ? { priority: FREE_JOB_PRIORITY } : {}),
+  try {
+    await getStageQueue("download").add(
+      "download",
+      {
+        jobId: job.id,
+        userId: job.userId,
+      },
+      {
+        // Deterministic id, not a generated one: releaseNextQueued adds the
+        // same job again if a stall-guard sweep and a completion hook both
+        // race to release it, and BullMQ silently ignores an add whose id it
+        // has already seen - while BullMQ retains the id (removeOnComplete
+        // count 200 / removeOnFail 100), so the guarantee is retention-bounded,
+        // not forever. A createJob-started job never gets a second add, but
+        // the id is set unconditionally so both paths agree on what it is.
+        jobId: downloadJobId(job.id),
+        // Only free jobs carry a priority. Passing one for paid jobs would move
+        // them OFF the wait list into the prioritized set, which - per the read
+        // of moveToActive above - is the slower of the two, so "being explicit"
+        // would make paying users worse off.
+        ...(input.freeCharge ? { priority: FREE_JOB_PRIORITY } : {}),
+      }
+    );
+  } catch (err) {
+    // This is the exact hazard releaseNextQueued guards against elsewhere: a
+    // row with enqueuedAt stamped but nothing in BullMQ is invisible to every
+    // repair path (it is not "waiting" any more, and it was never handed to a
+    // worker). Un-stamping turns it back into a waiting row that the next
+    // release picks up; the deterministic dl:<id> makes that retry a no-op
+    // if the add actually landed despite the error. Unlike releaseNextQueued,
+    // this failure is RETHROWN rather than swallowed - the caller is the
+    // request that is about to tell the user "got it" and must instead see
+    // the failure and answer SUBMIT_FAILED.
+    try {
+      await prisma.job.update({
+        where: { id: job.id },
+        data: { enqueuedAt: null },
+      });
+    } catch (undoErr) {
+      // Nothing further to do: the row is stranded until an operator or the
+      // stall guard notices it, but a second failure here must not hide the
+      // original one - it is rethrown below regardless.
+      console.error(
+        `[jobs] could not un-stamp job ${job.id} after a failed enqueue:`,
+        undoErr
+      );
     }
-  );
+    throw err;
+  }
 
   return result;
 }
@@ -431,7 +462,8 @@ export async function findDuplicateJob(
 /** How long an active job may go without touching its row before the stall
  *  guard presumes its worker dead and stops counting it against the limit.
  *  Every stage updates Job.status (and thus updatedAt) as it runs, so a 3h
- *  silence is not a slow job - it is a job nobody is running. */
+ *  silence is not a slow job - it is a job nobody is running. (Job.updatedAt
+ *  is @updatedAt, column added for exactly this purpose, 2026-08-19.) */
 export const QUEUE_STALL_MS = 3 * 60 * 60 * 1000;
 
 /**
@@ -445,10 +477,13 @@ export const QUEUE_STALL_MS = 3 * 60 * 60 * 1000;
  *
  * `staleBefore` is the stall guard's view: actives whose updatedAt is older
  * stop holding a slot. The normal hooks pass nothing and trust every active.
+ *
+ * `_retried` is internal, not part of the public contract - no external
+ * caller ever sets it. It bounds the one-shot self-retry below at depth 1.
  */
 export async function releaseNextQueued(
   userId: string,
-  opts: { staleBefore?: Date } = {}
+  opts: { staleBefore?: Date; _retried?: boolean } = {}
 ): Promise<Job[]> {
   let released: Job[] = [];
   try {
@@ -471,7 +506,14 @@ export async function releaseNextQueued(
             userId,
             status: { in: [...ACTIVE_JOB_STATUSES] },
             enqueuedAt: { not: null },
-            ...(opts.staleBefore ? { updatedAt: { gte: opts.staleBefore } } : {}),
+            // Written as a direct key, not a spread (`...(cond ? {...} : {})`),
+            // because tsc does NOT excess-property-check a spread key against
+            // the where's type - that is exactly how a filter on a column
+            // that did not exist yet (updatedAt, before 2026-08-19) compiled
+            // green and only died at runtime, silently, inside the catch
+            // below. A direct key puts `updatedAt` under the same structural
+            // check as `userId` and `status` above it.
+            updatedAt: opts.staleBefore ? { gte: opts.staleBefore } : undefined,
           },
         });
         const slots = limit - active;
@@ -483,20 +525,38 @@ export async function releaseNextQueued(
           take: slots,
         });
         const now = new Date();
+        // Collect what tx.job.update RETURNS, not the pre-update `next` rows.
+        // Prisma's update gives back the row as it now stands in the
+        // database, so a caller of releaseNextQueued sees enqueuedAt already
+        // set - `next` would hand back rows that still say null even though
+        // the stamp has committed by the time this function returns.
+        const stamped: Job[] = [];
         for (const job of next) {
-          await tx.job.update({
-            where: { id: job.id },
-            data: { enqueuedAt: now },
-          });
+          stamped.push(
+            await tx.job.update({
+              where: { id: job.id },
+              data: { enqueuedAt: now },
+            })
+          );
         }
-        return next;
+        return stamped;
       },
       { timeout: 15_000, maxWait: 10_000 }
     );
   } catch (err) {
     // Includes lock contention AND a user row deleted mid-flight. Both are
-    // repaired by the next release attempt; neither may take the caller down.
-    console.warn(
+    // repaired by the next release attempt; neither may take the caller down,
+    // which is why this always returns [] rather than rethrowing.
+    //
+    // The LEVEL still has to tell them apart. Contention is expected and
+    // rate-limited by its own rarity, so it stays at warn - the same message
+    // as before. Anything else is a real bug, and warn was exactly how one
+    // hid for a full review cycle: a filter on a column that did not exist
+    // (see the direct-key comment on `updatedAt` above) threw on every call
+    // and was swallowed here at warn level, indistinguishable in the logs
+    // from routine lock noise. console.error is what would have surfaced it.
+    const log = isLockContention(err) ? console.warn : console.error;
+    log(
       `[queue] release for user ${userId} failed:`,
       err instanceof Error ? err.message : err
     );
@@ -518,7 +578,9 @@ export async function releaseNextQueued(
   // release attempt to retry. If the add actually landed despite the error
   // (say, it succeeded but the acknowledgement was lost), the retry costs
   // nothing: downloadJobId is deterministic, so BullMQ ignores the second add
-  // for an id it has already seen.
+  // for an id it has already seen - while BullMQ retains the id
+  // (removeOnComplete count 200 / removeOnFail 100), so this is a
+  // retention-bounded guarantee, not a forever one.
   const actuallyReleased: Job[] = [];
   for (const job of released) {
     try {
@@ -553,6 +615,19 @@ export async function releaseNextQueued(
         );
       }
     }
+  }
+
+  // A job un-stamped above is available again the moment the NEXT release
+  // runs for this user - but without this, "the next release" usually means
+  // the hourly stall guard, and a one-off Redis blip would cost a waiting
+  // user up to an hour instead of a few seconds. One immediate retry turns
+  // that hour into a second. Bounded at depth 1 by `_retried`, an internal
+  // flag no external caller sets: a persistent outage is left to the hourly
+  // guard rather than spun on here, which is what keeps this a retry and not
+  // a hot loop.
+  if (actuallyReleased.length < released.length && !opts._retried) {
+    const retried = await releaseNextQueued(userId, { ...opts, _retried: true });
+    return [...actuallyReleased, ...retried];
   }
   return actuallyReleased;
 }

@@ -607,6 +607,60 @@ describe("createJob under the submission queue", () => {
   });
 });
 
+/**
+ * I3: createJob's own post-transaction add had exactly the hazard fed7323
+ * fixed for releaseNextQueued - a row committed with enqueuedAt stamped, and
+ * an add that can still fail after that commit. Unlike releaseNextQueued
+ * (which is a background sweep and must never throw), createJob is answering
+ * a live request: the caller has to see the failure and answer SUBMIT_FAILED,
+ * so the un-stamp happens but the original error is RETHROWN, not swallowed.
+ */
+describe("createJob - a failed download add", () => {
+  beforeEach(() => {
+    calls.length = 0;
+    inner.length = 0;
+    tx.job.create.mockReset();
+    tx.job.create.mockResolvedValue({ id: "j1", userId: "u1", createdAt: new Date() });
+    tx.job.count.mockReset();
+    tx.job.count.mockImplementation(async () => {
+      inner.push("count");
+      return 0;
+    });
+    tx.user.findUniqueOrThrow.mockResolvedValue({ plan: "NONE", billingCycle: null });
+    tx.freeUsage.create.mockReset();
+    tx.freeUsage.create.mockResolvedValue({});
+    jobUpdate.mockReset();
+    jobUpdate.mockResolvedValue({});
+    delete process.env.SUBMISSION_QUEUE;
+  });
+
+  afterEach(() => {
+    delete process.env.SUBMISSION_QUEUE;
+  });
+
+  // Mutation: remove the un-stamp (the prisma.job.update call in the catch)
+  // -> this test goes red on the jobUpdate assertion even though the reject
+  // assertion still passes, which is exactly why both are checked.
+  it("un-stamps the row and rethrows when the download add fails", async () => {
+    queueAdd.mockImplementationOnce(async () => {
+      throw new Error("redis unreachable");
+    });
+
+    await expect(
+      createJob({ userId: "u1", sourceKey: "k" })
+    ).rejects.toThrow("redis unreachable");
+
+    // The row was created and committed - the transaction had already
+    // returned "created" - so undoing the stamp is the only way to keep it
+    // from being permanently invisible to both createJob's own count and
+    // releaseNextQueued's "waiting" query.
+    expect(jobUpdate).toHaveBeenCalledWith({
+      where: { id: "j1" },
+      data: { enqueuedAt: null },
+    });
+  });
+});
+
 describe("releaseNextQueued", () => {
   beforeEach(() => {
     calls.length = 0;
@@ -617,7 +671,15 @@ describe("releaseNextQueued", () => {
       return 0;
     });
     tx.job.findMany = vi.fn(async () => []);
-    tx.job.update = vi.fn(async () => ({}));
+    // Returns the row as Prisma's own update would - the POST-update state,
+    // with the id it was called on - not `{}`. N7: a caller of
+    // releaseNextQueued must see enqueuedAt already set on what it gets back;
+    // an empty object hid that the code used to return the pre-update rows.
+    tx.job.update = vi.fn(async ({ where, data }: any) => ({
+      id: where.id,
+      userId: "u1",
+      ...data,
+    }));
     tx.user.findUniqueOrThrow.mockResolvedValue({ plan: "NONE", billingCycle: null });
     freeUsageFindFirst.mockReset();
     freeUsageFindFirst.mockResolvedValue(null);
@@ -690,6 +752,18 @@ describe("releaseNextQueued", () => {
     expect(where.enqueuedAt).toEqual({ not: null });
   });
 
+  // C1: `updatedAt` is written as a direct key (`updatedAt: cond ? {...} :
+  // undefined`), not a spread - Prisma ignores an undefined key the same way
+  // it would ignore an absent one, but tsc only excess-property-checks a
+  // DIRECT key. Without staleBefore there must be no constraining value at
+  // all, which this pins down explicitly rather than leaving it implied by
+  // the test above.
+  it("applies no updatedAt constraint at all without staleBefore", async () => {
+    await releaseNextQueued("u1");
+    const where = (tx.job.count.mock.calls as any[])[0][0].where;
+    expect(where.updatedAt).toBeUndefined();
+  });
+
   it("returns [] instead of throwing on lock contention", async () => {
     (prisma.$transaction as any).mockRejectedValueOnce(
       Object.assign(new Error("timeout"), { code: "P2028" })
@@ -704,15 +778,81 @@ describe("releaseNextQueued", () => {
   // BullMQ. The function must un-stamp it and move on to the next job rather
   // than let one Redis hiccup take down the whole release - and, worse, abort
   // releaseStalledQueues' per-user loop for every user still to come.
+  //
+  // A single job that keeps failing (not just once), so the one-shot retry
+  // (I4, below) also fails and cannot rescue it - this test is only about the
+  // never-throws-and-un-stamps property, in isolation from the retry.
   // Mutation: remove the per-job try/catch -> this test goes red (the
-  // rejection propagates out of releaseNextQueued instead of being caught).
-  it("un-stamps a job whose enqueue fails and never throws; the other still lands", async () => {
-    tx.user.findUniqueOrThrow.mockResolvedValue({ plan: "PLUS", billingCycle: "MONTHLY" });
-    tx.job.count.mockResolvedValueOnce(0); // 0 active, PLUS limit 2 -> 2 slots
+  // rejection propagates out of releaseNextQueued instead of resolving to []).
+  it("never throws when an enqueue keeps failing, and un-stamps on every attempt", async () => {
     tx.job.findMany = vi.fn(async () => [
       { id: "q1", userId: "u1", createdAt: new Date(1) },
-      { id: "q2", userId: "u1", createdAt: new Date(2) },
     ]);
+    // Two rejections queued, not a persisting mockRejectedValue: the first
+    // pass and the one bounded retry, and nothing beyond - a persisting
+    // rejection would leak into whatever test runs next on this shared mock.
+    queueAdd
+      .mockImplementationOnce(async () => {
+        throw new Error("redis unreachable");
+      })
+      .mockImplementationOnce(async () => {
+        throw new Error("redis unreachable");
+      });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const released = await releaseNextQueued("u1");
+
+    expect(released).toEqual([]);
+    // First pass, then the one retry - never a third attempt. That bound is
+    // what keeps a persistent outage a job for the hourly stall guard, not a
+    // hot loop here.
+    expect(queueAdd).toHaveBeenCalledTimes(2);
+    // The top-level client, not tx - the stamp was committed already, so
+    // undoing it is a separate write after the transaction. Once per failed
+    // attempt: the row must never be left stamped with nothing in BullMQ.
+    expect(jobUpdate).toHaveBeenCalledTimes(2);
+    expect(jobUpdate).toHaveBeenCalledWith({
+      where: { id: "q1" },
+      data: { enqueuedAt: null },
+    });
+
+    errorSpy.mockRestore();
+  });
+
+  // I4: the retry is what turns a one-off blip into a non-event instead of an
+  // hour's wait for the stall guard. Two jobs, a realistic (stateful) mock
+  // standing in for the DB row: findMany only returns rows whose enqueuedAt
+  // is still null, and update mutates the shared store - which is what makes
+  // the retry pass see ONLY the un-stamped job, not both jobs again, exactly
+  // as the real `enqueuedAt: null` filter would.
+  // Mutation: delete the retry block at the end of the function -> this test
+  // goes red (only q2 comes back, q1 is left un-stamped and unreported).
+  it("retries once when an add fails, so both jobs land across the two passes", async () => {
+    tx.user.findUniqueOrThrow.mockResolvedValue({ plan: "PLUS", billingCycle: "MONTHLY" });
+    tx.job.count.mockResolvedValue(0); // 0 active, PLUS limit 2 -> 2 slots, every pass
+
+    type Row = { id: string; userId: string; createdAt: Date; enqueuedAt: Date | null };
+    const rows = new Map<string, Row>([
+      ["q1", { id: "q1", userId: "u1", createdAt: new Date(1), enqueuedAt: null }],
+      ["q2", { id: "q2", userId: "u1", createdAt: new Date(2), enqueuedAt: null }],
+    ]);
+    tx.job.findMany = vi.fn(async ({ take }: any) =>
+      [...rows.values()]
+        .filter((r) => r.enqueuedAt === null)
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+        .slice(0, take)
+    );
+    // Both the transaction's own update (the stamp) and the top-level one
+    // (the un-stamp on a failed add) write through the same store - they are
+    // the same DB row in reality, just two different Prisma clients.
+    const applyUpdate = async ({ where, data }: any) => {
+      const updated: Row = { ...rows.get(where.id)!, ...data };
+      rows.set(where.id, updated);
+      return updated;
+    };
+    tx.job.update = vi.fn(applyUpdate);
+    jobUpdate.mockImplementation(applyUpdate);
+
     queueAdd.mockImplementationOnce(async () => {
       throw new Error("redis unreachable");
     });
@@ -720,18 +860,79 @@ describe("releaseNextQueued", () => {
 
     const released = await releaseNextQueued("u1");
 
-    // q1's add rejected; q2's still landed. Only the successful one is
-    // reported as released.
-    expect(released.map((j) => j.id)).toEqual(["q2"]);
-    expect(queueAdd).toHaveBeenCalledTimes(2);
-    // The top-level client, not tx - the stamp was committed already, so
-    // undoing it is a separate write after the transaction.
-    expect(jobUpdate).toHaveBeenCalledWith({
-      where: { id: "q1" },
-      data: { enqueuedAt: null },
-    });
+    expect(released.map((j) => j.id).sort()).toEqual(["q1", "q2"]);
+    // First pass: q1 fails, q2 lands (2 calls). Retry: only q1 is still
+    // waiting, and it lands (1 call). 3 total, never a duplicate add for q2.
+    expect(queueAdd).toHaveBeenCalledTimes(3);
 
     errorSpy.mockRestore();
+  });
+});
+
+/**
+ * I5: the lock statement is hand-written raw SQL in two places (createJob and
+ * releaseNextQueued) because pg_advisory_xact_lock's classid has to be a
+ * literal, not a bound parameter (see the comment above createJob's lock
+ * call). Two hand-written copies of the same SQL can drift, and a drift here
+ * is silent - both statements still run, they just stop serialising against
+ * each other, which is not something either function's own tests can catch
+ * in isolation. This test reads the raw call args ($queryRaw is a vi.fn(), so
+ * every call's template strings and interpolated values are already on the
+ * mock) and compares the two sites directly.
+ */
+describe("createJob and releaseNextQueued take the SAME advisory lock", () => {
+  beforeEach(() => {
+    calls.length = 0;
+    inner.length = 0;
+    tx.job.create.mockReset();
+    tx.job.create.mockResolvedValue({ id: "j9", userId: "u9", createdAt: new Date() });
+    tx.job.count.mockReset();
+    tx.job.count.mockImplementation(async () => {
+      inner.push("count");
+      return 0;
+    });
+    tx.job.findMany = vi.fn(async () => []);
+    tx.job.update = vi.fn(async ({ where, data }: any) => ({
+      id: where.id,
+      userId: "u9",
+      ...data,
+    }));
+    tx.user.findUniqueOrThrow.mockResolvedValue({ plan: "NONE", billingCycle: null });
+    tx.freeUsage.create.mockReset();
+    tx.freeUsage.create.mockResolvedValue({});
+    tx.$queryRaw.mockClear();
+    queueAdd.mockClear();
+    delete process.env.SUBMISSION_QUEUE;
+  });
+
+  afterEach(() => {
+    delete process.env.SUBMISSION_QUEUE;
+  });
+
+  // Mutation: change the classid literal from 1 to 2 in releaseNextQueued's
+  // lock statement only -> this test goes red (the two template strings stop
+  // matching; classid is baked into the SQL TEXT, not an interpolated value,
+  // so a divergence there shows up as different strings, not a different arg).
+  it("bakes the same classid and the same userId value into both call sites", async () => {
+    await createJob({ userId: "u9", sourceKey: "k" });
+    expect(tx.$queryRaw).toHaveBeenCalledOnce();
+    const [createStrings, createUserId] = tx.$queryRaw.mock.calls[0] as [
+      TemplateStringsArray,
+      string,
+    ];
+
+    tx.$queryRaw.mockClear();
+
+    await releaseNextQueued("u9");
+    expect(tx.$queryRaw).toHaveBeenCalledOnce();
+    const [releaseStrings, releaseUserId] = tx.$queryRaw.mock.calls[0] as [
+      TemplateStringsArray,
+      string,
+    ];
+
+    expect(releaseStrings.join("?")).toEqual(createStrings.join("?"));
+    expect(releaseUserId).toBe(createUserId);
+    expect(createUserId).toBe("u9");
   });
 });
 
@@ -741,7 +942,18 @@ describe("releaseStalledQueues", () => {
     tx.job.count.mockReset();
     tx.job.count.mockResolvedValue(0);
     tx.job.findMany = vi.fn(async () => []);
-    tx.job.update = vi.fn(async () => ({}));
+    // Same N7 shape as releaseNextQueued's own describe: the post-update row,
+    // not `{}`.
+    tx.job.update = vi.fn(async ({ where, data }: any) => ({
+      id: where.id,
+      userId: where.id,
+      ...data,
+    }));
+    // .mockReset(), not just a fresh resolved value: this mock is shared
+    // across the whole file, and N15 below reads its call history to see
+    // WHICH users were visited - a stale call from an earlier describe would
+    // make that assertion lie.
+    tx.user.findUniqueOrThrow.mockReset();
     tx.user.findUniqueOrThrow.mockResolvedValue({ plan: "NONE", billingCycle: null });
     freeUsageFindFirst.mockReset();
     freeUsageFindFirst.mockResolvedValue(null);
@@ -759,5 +971,12 @@ describe("releaseStalledQueues", () => {
     const staleBefore = new Date(now.getTime() - 3 * 60 * 60 * 1000);
     const countWheres = tx.job.count.mock.calls.map((c: any[]) => c[0].where);
     expect(countWheres.filter((w: any) => +w.updatedAt.gte === +staleBefore)).toHaveLength(2);
+    // N15: not just "two calls happened" - the RIGHT two users, each once.
+    // releaseNextQueued reads the plan from inside the transaction per user
+    // it visits, so this call list is a faithful trace of who got released.
+    const visitedUserIds = tx.user.findUniqueOrThrow.mock.calls.map(
+      (c: any[]) => c[0].where.id
+    );
+    expect(visitedUserIds).toEqual(["u1", "u2"]);
   });
 });

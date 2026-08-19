@@ -91,7 +91,12 @@ export const RETIRED_FUNNEL_EVENTS = ["first_screen_new_account"] as const;
  *  Anything listed here is deliberately invisible on /admin's funnel chart, which
  *  is exactly the hole the test in analytics.service.test.ts exists to catch - so
  *  a name only belongs here after someone has decided it is not a stage. */
-export const SIDE_ACTION_EVENTS = ["earn_advertisers_tapped"] as const;
+// video_queued is a branch off video_submitted (the submission waited for a
+// slot instead of being refused), not a stage everyone passes through.
+export const SIDE_ACTION_EVENTS = [
+  "earn_advertisers_tapped",
+  "video_queued",
+] as const;
 
 /** An event that is recorded but missing from FUNNEL_ORDER is invisible here -
  *  getFunnel walks this list, not the table - so adding a step to
