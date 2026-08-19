@@ -2357,6 +2357,40 @@ verified `cutRecovery: true` from inside. Read `cutRecovery` in `renderManifest.
 real jobs - the first stream-class source under the flag is the unmeasured case. Rollback = remove the line
 and recreate.
 
+### 7j. Stream reframe v2: the two-tile layout fires on real streams now (shipped 2026-08-19)
+
+Spec `2026-08-19-stream-reframe-v2.md` carries every measurement; this is the operational record. §7a's
+"one video, one layout" debt came due on owner review: ONE real job ever used the stream layout, because
+the classifier gated it behind faceFrac < 0.06 and the rect detector missed common cam styles. A 7-source
+corpus (`apps/worker/.corpus/stream-v2/`, README has URLs and GT labels) replaced the deleted fixture:
+4 positives (corner-flush CS2, borderless react, floating-bordered Minecraft, mid-left Elden Ring),
+3 controls (faceless Dota, two fullscreen faces - buster at faceFrac 0.089 is the source that FORBIDS
+naive threshold raising).
+
+**One defect class, three sites, each found only after the previous fix landed**: the frame-relative
+containment margin (D1 - need_y1 82.8 past the true border 81 on sides scoring 15-20); python exact
+containment vs the real YuNet box (D1b - chin pixel AT the border row, det 81.0 vs peak 80); the TS
+isInsideInset 2px tolerance (D1c - face bottom 166.56 vs rect 160). All three now use the same
+face-relative FACE_CONTAIN_SLOP_FRAC = 0.10, cross-referenced between detect_faces.py and plan.ts.
+Selection became score-dominance-then-area (a 309-wide HUD sprawl at 4.04 must lose to the true 175-wide
+rect at 15.09 without reviving v1's shrink bias); the peaks-budget raise to 24 was tried and REVERTED
+same day (regressed the v1 CS2 fixture pin, bought nothing). The sidecar's own face gate (a third copy
+of the size gate) now reads the classifier's ceiling.
+
+Classifier: rect-first under REFRAME_STREAM_FACE_CEILING (0.15 default) - stream requires a resolved
+rect CONTAINING the widest face; buster stays normal_face because no rect resolves on a fullscreen
+source, measured, not assumed. Borderless/chroma-key cams (react streams - true border sides score
+0.31/0.62, nothing for edges to find) get a SYNTHESIZED cam rect from the face box behind
+REFRAME_STREAM_VIRTUAL_CAM=on (live since 2026-08-19), containment by construction (chin floor 0.15 -
+the real tox box is h/w 1.32 and the pure 16:9 derivation shipped "stream" telemetry over CENTER
+renders).
+
+Corpus verdict at ship: 7/7 expected classes, 3/3 controls byte-identical with flags on AND off, game
+centre inside the content crop on all four positives (`eval-stream-corpus.ts` re-checks all of it in
+one run; it exits 1 only on control breakage). Owner reviewed all four rendered positives in the bot
+(messages 2916-2919). Watch item: the virtual-cam multipliers (3.2x width / 0.55 headroom / 0.15 chin)
+rest on one react source; the D4 grid tests pin geometry, not taste.
+
 ---
 
 ## 8. Operational facts
