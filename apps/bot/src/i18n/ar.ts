@@ -518,6 +518,8 @@ const ar: Dict = {
   feedbackNoted: (reason: string) =>
     `تم التسجيل: ${reason}. رد على هذا المقطع إن أردت الإضافة - أنا أقرأ الردود.`,
   feedbackNoteSaved: "تم، حُفظ مع ذلك المقطع. شكرًا.",
+  feedbackNoteUnmatched:
+    "لم أتمكن من ربط ذلك بمقطع. استخدم الأزرار أسفل المقطع لتخبرني بما به من خلل.",
 };
 
 export default ar;

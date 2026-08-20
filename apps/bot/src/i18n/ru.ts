@@ -308,6 +308,8 @@ const ru: Dict = {
   feedbackNoted: (reason: string) =>
     `Записали: ${reason}. Ответь на этот клип, если хочешь дописать - я читаю.`,
   feedbackNoteSaved: "Принял, записал к этому клипу. Спасибо.",
+  feedbackNoteUnmatched:
+    "Не смог привязать это к клипу. Нажми кнопки под клипом, чтобы сказать, что с ним не так.",
 };
 
 export default ru;

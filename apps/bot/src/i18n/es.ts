@@ -291,6 +291,8 @@ const es: Dict = {
   feedbackNoted: (reason: string) =>
     `Anotado: ${reason}. Responde a este clip si quieres añadir algo - los leo.`,
   feedbackNoteSaved: "Listo, guardado junto a ese clip. Gracias.",
+  feedbackNoteUnmatched:
+    "No pude asociar eso a un clip. Usa los botones debajo de un clip para decirme qué falla.",
 };
 
 export default es;

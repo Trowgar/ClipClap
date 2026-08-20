@@ -287,6 +287,8 @@ const id: Dict = {
   feedbackNoted: (reason: string) =>
     `Dicatat: ${reason}. Balas klip ini kalau mau menambahkan - saya baca.`,
   feedbackNoteSaved: "Oke, tersimpan untuk klip itu. Terima kasih.",
+  feedbackNoteUnmatched:
+    "Saya tidak bisa mengaitkan itu dengan klip. Pakai tombol di bawah klip untuk memberi tahu apa yang salah.",
 };
 
 export default id;

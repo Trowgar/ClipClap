@@ -748,10 +748,18 @@ export async function handleUpdate(
   // passed on.
   const repliedTo = message.reply_to_message;
   if (repliedTo?.from?.is_bot && repliedTo.video && text && existing?.id) {
-    const handled = await tryRecordClipReply(existing.id, repliedTo.message_id, text);
-    if (handled) {
+    const outcome = await tryRecordClipReply(existing.id, repliedTo.message_id, text);
+    if (outcome !== "empty") {
+      // "recorded" is the only outcome that may claim success. The other two
+      // still return here rather than falling through: a reply that happens to
+      // contain a link must never reach the URL branch and start a job the user
+      // did not ask for, and that risk is identical whether the anchor was
+      // missing or the database refused.
       await client
-        .sendMessage(message.chat.id, dict.feedbackNoteSaved)
+        .sendMessage(
+          message.chat.id,
+          outcome === "recorded" ? dict.feedbackNoteSaved : dict.feedbackNoteUnmatched
+        )
         .catch(() => undefined);
       return;
     }
@@ -1783,26 +1791,44 @@ export async function handleFeedbackCallback(
   }
 }
 
+/** The result of trying to attach a Telegram reply to a clip as feedback.
+ *
+ *  Deliberately not a boolean: "should this text be kept away from the URL
+ *  branch" and "should the user be told it saved" are different questions,
+ *  and a miss answers yes to the first and no to the second. Collapsing them
+ *  produced a false "saved" confirmation on every miss. */
+export type ClipReplyOutcome =
+  /** A note was written against a clip. */
+  | "recorded"
+  /** No clip of this user is anchored to that message - the project was
+   *  deleted, the send never returned a message id, or the clip predates the
+   *  anchor column entirely, which is true of every clip delivered before this
+   *  feature shipped (telegramMessageId is NULL on all of them). */
+  | "no-anchor"
+  /** The lookup or the write failed. Nothing was stored. */
+  | "failed"
+  /** Nothing worth recording; the caller should handle the message normally. */
+  | "empty";
+
 /** A reply to one of the bot's clip videos, recorded as free text on that clip.
  *
  *  This is the entire free-text channel from Telegram, and it costs one column
  *  and one branch: no force_reply, no pending-state machine, no Redis key.
  *
- *  Returns true when the message has been DEALT WITH - which includes the miss.
- *  That is not sloppiness: the anchor can be gone (the project was deleted, or
- *  the send never returned a message id), and letting a miss fall through would
- *  hand the text to the source-URL branch, where a reply containing a link
- *  would start a job the user never asked for.
- *
- *  The lookup keys on the PAIR: message_id is unique per chat and is a small
- *  integer, so ids collide across chats freely. */
+ *  The lookup here keys on the PAIR (userId, telegramMessageId): message_id is
+ *  unique per chat and is a small integer, so ids collide across chats freely.
+ *  recordClipFeedback then does its OWN ownership check by (clipId, userId) -
+ *  that is not redundant, it is the same guard the web surface relies on, and
+ *  clipId is caller-suppliable there. Two round trips on what should be a rare
+ *  path (most replies hit an anchored, owned clip on the first try) is the
+ *  right trade for not weakening either surface's guard. */
 export async function tryRecordClipReply(
   userId: string,
   repliedToMessageId: number,
   text: string
-): Promise<boolean> {
+): Promise<ClipReplyOutcome> {
   const note = text.trim();
-  if (!note) return false;
+  if (!note) return "empty";
 
   try {
     const clip = await prisma.clip.findFirst({
@@ -1813,25 +1839,36 @@ export async function tryRecordClipReply(
       console.warn(
         `[feedback] reply from ${userId} to message ${repliedToMessageId} matched no clip`
       );
-      return true;
+      return "no-anchor";
     }
 
-    await recordClipFeedback({
+    const result = await recordClipFeedback({
       clipId: clip.id,
       userId,
       surface: "bot",
       note,
     });
-    return true;
+    // The clip can vanish between the lookup above and this write (deleted in
+    // the gap, or a race with the retention sweep). Same as handleFeedbackCallback,
+    // a refusal here is treated as no match rather than a stored note.
+    if (!result.ok) {
+      console.warn(
+        `[feedback] reply from ${userId} to message ${repliedToMessageId} refused: ${result.code}`
+      );
+      return "no-anchor";
+    }
+    return "recorded";
   } catch (error) {
-    // A database wobble must not cost the user their message. Falling through
-    // to ordinary handling is the safe direction here: the worst case is the
-    // sendVideoHint reply, not a lost note and not a job nobody asked for.
+    // The note is gone either way once this throws - the lookup or the write
+    // failed, nothing was stored. The return value's only job from here is to
+    // decide whether the raw text gets a second chance to be read as a source
+    // URL, and short-circuiting it is the safe choice: a reply that happens to
+    // contain a link must not start a job nobody asked for.
     console.error(
       `[feedback] could not record reply from ${userId}:`,
       error instanceof Error ? error.message : error
     );
-    return false;
+    return "failed";
   }
 }
 

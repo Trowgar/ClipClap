@@ -322,4 +322,10 @@ export interface Dict {
   feedbackNoted: (reason: string) => string;
   /** Acknowledges a reply that was recorded as a note on a clip. */
   feedbackNoteSaved: string;
+  /** The honest answer when a reply cannot be attached to a clip - the anchor
+   *  is missing (including every clip delivered before this feature shipped,
+   *  which all have a null telegramMessageId) or the write itself failed.
+   *  Claiming a save here would be a lie, which is exactly the defect this
+   *  key exists to avoid. */
+  feedbackNoteUnmatched: string;
 }

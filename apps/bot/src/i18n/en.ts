@@ -386,6 +386,8 @@ const en: Dict = {
   feedbackNoted: (reason: string) =>
     `Noted: ${reason}. Reply to this clip if you want to add anything - I read these.`,
   feedbackNoteSaved: "Got it, saved against that clip. Thank you.",
+  feedbackNoteUnmatched:
+    "I could not match that to a clip. Tap the buttons under a clip to tell me what is wrong with it.",
 };
 
 export default en;

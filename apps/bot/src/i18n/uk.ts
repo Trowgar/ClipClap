@@ -301,6 +301,8 @@ const uk: Dict = {
   feedbackNoted: (reason: string) =>
     `Записали: ${reason}. Відповідай на цей кліп, якщо хочеш дописати - я читаю.`,
   feedbackNoteSaved: "Прийняв, записав до цього кліпу. Дякую.",
+  feedbackNoteUnmatched:
+    "Не зміг прив'язати це до кліпу. Натисни кнопки під кліпом, щоб сказати, що з ним не так.",
 };
 
 export default uk;
