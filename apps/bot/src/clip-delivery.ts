@@ -53,9 +53,20 @@ export interface DeliverableClip {
 }
 
 export interface ClipDeliveryDeps {
-  markSent(clipId: string, fileId: string | undefined): Promise<void>;
+  /** messageId is undefined when Telegram confirmed without a parseable
+   *  payload - the same case that makes telegramFileId fall back to "sent". */
+  markSent(
+    clipId: string,
+    fileId: string | undefined,
+    messageId: number | undefined
+  ): Promise<void>;
   markUnsendable(clipId: string, reason: string): Promise<void>;
 }
+
+/** Inline keyboard to attach to a clip, or undefined for none. Undefined is the
+ *  flag-off case and must not become an empty keyboard - Telegram renders that
+ *  as a stray blank row. */
+export type ClipKeyboardFor<C> = (clip: C) => unknown | undefined;
 
 export interface ClipDeliveryResult {
   /** Clips that reached the chat during THIS pass. */
@@ -81,13 +92,15 @@ export async function deliverClips<C extends DeliverableClip>(
     sendVideoUpload(
       chatId: string | number,
       filePath: string,
-      caption?: string
+      caption?: string,
+      replyMarkup?: unknown
     ): Promise<{ fileId: string | undefined; messageId: number | undefined }>;
   },
   chatId: string,
   clips: readonly C[],
   captionFor: (clip: C) => string,
-  deps: ClipDeliveryDeps
+  deps: ClipDeliveryDeps,
+  keyboardFor?: ClipKeyboardFor<C>
 ): Promise<ClipDeliveryResult> {
   const result: ClipDeliveryResult = { delivered: 0, pending: 0, unsendable: 0 };
   const maxBytes = uploadMaxBytes();
@@ -138,8 +151,13 @@ export async function deliverClips<C extends DeliverableClip>(
     let path: string | undefined;
     try {
       path = await downloadToFile(clip.storageKey);
-      const { fileId } = await client.sendVideoUpload(chatId, path, captionFor(clip));
-      await deps.markSent(clip.id, fileId);
+      const { fileId, messageId } = await client.sendVideoUpload(
+        chatId,
+        path,
+        captionFor(clip),
+        keyboardFor?.(clip)
+      );
+      await deps.markSent(clip.id, fileId, messageId);
       result.delivered += 1;
     } catch (error) {
       const kind = classifySendFailure(error);

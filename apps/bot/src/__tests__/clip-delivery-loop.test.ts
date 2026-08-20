@@ -74,8 +74,8 @@ describe("deliverClips", () => {
     expect(h.sent).toEqual(["a", "b", "c"]);
     expect(result.delivered).toBe(2);
     expect(result.pending).toBe(1);
-    expect(markSentMock).toHaveBeenCalledWith("a", "FID-a");
-    expect(markSentMock).toHaveBeenCalledWith("c", "FID-c");
+    expect(markSentMock).toHaveBeenCalledWith("a", "FID-a", 1);
+    expect(markSentMock).toHaveBeenCalledWith("c", "FID-c", 1);
   });
 
   it("never re-sends a clip that already has a file id", async () => {
@@ -165,5 +165,75 @@ describe("deliverClips", () => {
     const result = await deliverClips(h.client as never, "chat-1", [clip("a")], (c) => c.title, h.deps as never);
     expect(result.delivered).toBe(1);
     expect(result.pending).toBe(0);
+  });
+});
+
+describe("deliverClips feedback keyboard", () => {
+  it("passes the keyboard for each clip to the send call", async () => {
+    const sends: unknown[] = [];
+    const client = {
+      sendVideoUpload: async (
+        _chat: string | number,
+        _path: string,
+        _caption?: string,
+        markup?: unknown
+      ) => {
+        sends.push(markup);
+        return { fileId: "F1", messageId: 7 };
+      },
+    };
+    const markSent = vi.fn();
+    await deliverClips(
+      client,
+      "chat-1",
+      [{ id: "c1", storageKey: "k1", telegramFileId: null, telegramSendError: null }],
+      () => "caption",
+      { markSent, markUnsendable: vi.fn() },
+      (clip) => ({ inline_keyboard: [[{ text: "As is", callback_data: `fb:a:${clip.id}` }]] })
+    );
+    expect(sends[0]).toEqual({
+      inline_keyboard: [[{ text: "As is", callback_data: "fb:a:c1" }]],
+    });
+  });
+
+  // The message id is the only anchor a later reply can be matched against.
+  it("hands the message id to markSent", async () => {
+    const markSent = vi.fn();
+    const client = {
+      sendVideoUpload: async () => ({ fileId: "F1", messageId: 4242 }),
+    };
+    await deliverClips(
+      client,
+      "chat-1",
+      [{ id: "c1", storageKey: "k1", telegramFileId: null, telegramSendError: null }],
+      () => "caption",
+      { markSent, markUnsendable: vi.fn() }
+    );
+    expect(markSent).toHaveBeenCalledWith("c1", "F1", 4242);
+  });
+
+  // Flag-off must send no keyboard at all. An empty inline_keyboard is not the
+  // same thing: Telegram renders it as a stray blank row under the video.
+  it("passes undefined when no keyboard builder is given", async () => {
+    const sends: unknown[] = [];
+    const client = {
+      sendVideoUpload: async (
+        _chat: string | number,
+        _path: string,
+        _caption?: string,
+        markup?: unknown
+      ) => {
+        sends.push(markup);
+        return { fileId: "F1", messageId: 7 };
+      },
+    };
+    await deliverClips(
+      client,
+      "chat-1",
+      [{ id: "c1", storageKey: "k1", telegramFileId: null, telegramSendError: null }],
+      () => "caption",
+      { markSent: vi.fn(), markUnsendable: vi.fn() }
+    );
+    expect(sends[0]).toBeUndefined();
   });
 });

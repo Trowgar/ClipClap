@@ -587,10 +587,13 @@ describe("the pickup window drains", () => {
     }
 
     expect(store.rowAt(WALL).status).toBe("DELIVERED");
+    // 4th arg is the per-clip keyboard; handlers.ts does not wire one in yet
+    // (that is Task 8), so deliverClips passes an explicit undefined here.
     expect(client.sendVideoUpload).toHaveBeenCalledWith(
       "victim-chat",
       expect.anything(),
-      expect.anything()
+      expect.anything(),
+      undefined
     );
     // 60 polls is 10 minutes. A wall of dead rows must clear in a small
     // multiple of the poll interval, not in a multiple of the user's patience.

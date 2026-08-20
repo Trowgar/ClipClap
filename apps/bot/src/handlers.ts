@@ -1352,14 +1352,20 @@ export async function deliverReadyTelegramJobs(
             lowQualityNote: strings.lowQualityNote,
           }),
         {
-          markSent: async (clipId, fileId) => {
+          markSent: async (clipId, fileId, messageId) => {
             await prisma.clip.update({
               where: { id: clipId },
               // `?? "sent"` is deliberate: Telegram has confirmed the clip is in
               // the chat even when it returns no id, and this column's job is
               // "do not send this again". A null here would resend a clip the
               // user already has.
-              data: { telegramFileId: fileId ?? "sent" },
+              //
+              // telegramMessageId gets no such fallback: it is an anchor for a
+              // reply, and a wrong anchor is worse than none.
+              data: {
+                telegramFileId: fileId ?? "sent",
+                telegramMessageId: messageId ?? null,
+              },
             });
           },
           markUnsendable: async (clipId, reason) => {
