@@ -3117,7 +3117,11 @@ docker compose up -d
 
 - [ ] **Step 5: Verify against a real job end to end**
 
-Submit a short source through the bot. Confirm: the caption ends with the prompt, three buttons sit under each video, `As is` replaces the keyboard with a thank-you, `No` swaps in the 2/2/1 reason row, tapping a reason confirms, and replying to the video acknowledges. Then:
+Submit a short source through the bot. Confirm: the caption ends with the prompt, three buttons sit under each video, `As is` replaces the keyboard with a thank-you, `No` swaps in the 2/2/1 reason row, tapping a reason confirms, and replying to the video acknowledges.
+
+**Look at the button labels on a narrow phone, not only on a desktop client.** No test can see this and no reviewer can judge it: Telegram truncates inline-button text to fit, and the second reason row pairs a 13-character label with an 18-character one (`Не видно лицо` / `Ошибки в субтитрах` in Russian). If either truncates to something unreadable, shorten the label in the seven locale files rather than changing the layout - the 2/2/1 shape is already the concession to width.
+
+Then:
 
 ```bash
 docker compose exec -T postgres psql -U clipclap -d clipclap -c \
