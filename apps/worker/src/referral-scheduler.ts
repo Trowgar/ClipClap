@@ -14,6 +14,8 @@ import {
   reconcilePendingTributeOrders,
   QUEUE_STALL_JOB,
   releaseStalledQueues,
+  DOWNLOAD_WATCHDOG_JOB,
+  runDownloadWatchdog,
 } from "@clipclap/shared";
 
 export function createReferralScheduler(): Worker {
@@ -53,6 +55,18 @@ export function createReferralScheduler(): Worker {
         // Logs its own releases; a zero run is silent on purpose - an hourly
         // "nothing happened" line is noise that buries the real ones.
         await releaseStalledQueues(now);
+        return;
+      }
+      if (job.name === DOWNLOAD_WATCHDOG_JOB) {
+        // Loud only when it actually alerted - same reasoning as the stall
+        // guard above: an hourly "0 submitted, 0 failed" line for a normal
+        // day is exactly the noise that buries the run that matters.
+        const r = await runDownloadWatchdog(now);
+        if (r.alerted) {
+          console.log(
+            `[download-watchdog] alerted: submitted=${r.submitted} failed=${r.failed} done=${r.done}`
+          );
+        }
         return;
       }
     },

@@ -28,6 +28,7 @@ export {
   FREE_REFUND_SWEEP_JOB,
   TRIBUTE_RECONCILE_JOB,
   QUEUE_STALL_JOB,
+  DOWNLOAD_WATCHDOG_JOB,
 } from "./referral-queue";
 export * from "./email-identity";
 export * from "./source-probe";

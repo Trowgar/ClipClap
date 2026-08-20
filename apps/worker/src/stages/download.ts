@@ -155,8 +155,12 @@ export async function runDownloadStage(
         let parked = false;
         try {
           await bullJob.updateData({ ...(bullJob.data as object), flapWaits: flapWaits + 1 });
+          // The underlying error rides along, truncated: diagnosing the
+          // 2026-08-18 outage meant reproducing failures by hand with yt-dlp
+          // because this line used to say only "exit flap", never why. These
+          // messages can carry a multi-kilobyte yt-dlp dump, hence the cap.
           console.warn(
-            `[download] ${payload.jobId}: exit flap (${flapWaits + 1}/${FLAP_WAIT_DELAYS_MS.length}), parking for ${Math.round(delay / 60000)}min`
+            `[download] ${payload.jobId}: exit flap (${flapWaits + 1}/${FLAP_WAIT_DELAYS_MS.length}), parking for ${Math.round(delay / 60000)}min - ${error.message.slice(0, 200)}`
           );
           await bullJob.moveToDelayed(Date.now() + delay, token);
           parked = true;

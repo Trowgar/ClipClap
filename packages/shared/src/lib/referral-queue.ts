@@ -15,6 +15,11 @@ export const TRIBUTE_RECONCILE_JOB = "tribute-order-reconcile";
 /** Submission-queue stall guard. Same queue, same reasoning as the sweeps:
  *  hourly, idempotent, nobody is waiting on the rule itself. */
 export const QUEUE_STALL_JOB = "submission-queue-stall";
+/** Download watchdog: did any link submission complete in the last 24h? Same
+ *  queue and the same reasoning as the other hourly checks - idempotent,
+ *  nobody is waiting on the rule itself, and a second queue would mean a
+ *  second Worker for no gain. */
+export const DOWNLOAD_WATCHDOG_JOB = "download-watchdog";
 
 let referralQueue: Queue | null = null;
 
@@ -44,6 +49,9 @@ export async function registerReferralSchedules(): Promise<void> {
   await queue.add(FREE_REFUND_SWEEP_JOB, {}, { repeat: { pattern: "0 * * * *" }, jobId: FREE_REFUND_SWEEP_JOB });
   await queue.add(TRIBUTE_RECONCILE_JOB, {}, { repeat: { pattern: "*/10 * * * *" }, jobId: TRIBUTE_RECONCILE_JOB });
   await queue.add(QUEUE_STALL_JOB, {}, { repeat: { pattern: "30 * * * *" }, jobId: QUEUE_STALL_JOB });
+  // Minute 15: distinct from the four jobs on the hour, the ten-minute
+  // cadence job (which also lands on :00), and the :30 stall guard above.
+  await queue.add(DOWNLOAD_WATCHDOG_JOB, {}, { repeat: { pattern: "15 * * * *" }, jobId: DOWNLOAD_WATCHDOG_JOB });
   // Retire the old 1st/15th payout batch if still scheduled in Redis.
   for (const job of await queue.getRepeatableJobs()) {
     if (job.name === "payout-batch") await queue.removeRepeatableByKey(job.key);
