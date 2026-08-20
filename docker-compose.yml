@@ -200,6 +200,20 @@ services:
   # this sidecar only when YTDLP_POT_PROVIDER_URL points here, and a down
   # sidecar degrades to tokenless - so this service can be removed without
   # touching anything else. Never published to the host.
+  # NOTE (2026-08-20): routing this sidecar through WARP is almost certainly
+  # REQUIRED - yt-dlp's own PO-token guide says the token must be generated
+  # from the same IP that fetches the media, and right now this mints from the
+  # host address while yt-dlp fetches through WARP, which matches the symptom
+  # exactly (extraction fine, every media URL a bare 403).
+  #
+  # It could not be done with a SOCKS proxy: with ALL_PROXY (with or without
+  # HTTPS_PROXY) the provider dies on "Could not get BotGuard challenge ...
+  # AssertionError: protocol mismatch" - its HTTP client will not take a socks
+  # agent - and then mints nothing at all, so mweb returns no formats and the
+  # failure gets WORSE. Measured and reverted 2026-08-20.
+  #
+  # The remaining route is an HTTP proxy listener on the warp container (gost
+  # already runs there and speaks http), then ALL_PROXY=http://warp:<port>.
   potprovider:
     image: brainicism/bgutil-ytdlp-pot-provider:1.3.1
     init: true
