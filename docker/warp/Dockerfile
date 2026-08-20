@@ -10,6 +10,7 @@ FROM caomingjun/warp:latest
 # (its own entrypoint reaches for sudo), so a build-time chmod fails with
 # "Operation not permitted".
 COPY --chmod=755 control.py /usr/local/bin/warp-control.py
+COPY --chmod=755 connect4.py /usr/local/bin/connect4.py
 COPY --chmod=755 entrypoint-with-control.sh /usr/local/bin/entrypoint-with-control.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint-with-control.sh"]

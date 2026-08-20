@@ -230,12 +230,20 @@ services:
     # reverted 2026-08-20. gost in the warp container listens in auto mode on
     # 1080 and answers HTTP CONNECT there as well as SOCKS5, so this needs no
     # change to warp itself.
-    # DISABLED pending a clean re-test - see the note below.
-    # environment:
-    #   - ALL_PROXY=http://warp:1080
-    # depends_on:
-    #   warp:
-    #     condition: service_started
+    # ENABLED 2026-08-20, third attempt - through connect4 on 1081, NOT gost's
+    # own 1080. Candidate 1 below was CONFIRMED by measurement: api64.ipify
+    # answered 2a09:bac5:... (IPv6) through http://, socks5:// and socks5h://
+    # alike from inside the warp container, so gost's CONNECT egress was the
+    # IPv6 exit - the one section 8 measured as bot-refused on the FIRST
+    # probe - while yt-dlp takes the pinned IPv4 one. The 400 on /att/get was
+    # that mismatch. connect4.py resolves A records only and dials IPv4, so
+    # the token now mints from the same exit that fetches the media.
+    environment:
+      - ALL_PROXY=http://warp:1081
+      - NO_PROXY=localhost,127.0.0.1
+    depends_on:
+      warp:
+        condition: service_started
     #
     # 2026-08-20, second attempt: over http:// the proxy DOES work (the socks
     # "protocol mismatch" is gone and the log shows "Using proxy:
@@ -243,14 +251,13 @@ services:
     # /youtubei/v1/att/get and the sidecar mints nothing - worse than the 403 it
     # was meant to fix, so it is off again.
     #
-    # Two candidate explanations, NOT distinguished yet:
+    # Two candidate explanations (resolved 2026-08-20: it was 1):
     #   1. gost resolves remotely on CONNECT and may leave over the IPv6 exit,
     #      while yt-dlp deliberately uses socks5:// with local DNS in a v4-only
     #      container to get the IPv4 one (engine-notes section 8). Different
     #      exit family would defeat the whole point AND could explain the 400.
     #   2. The exit was measured heavily that afternoon, and section 8 warns
     #      that a burnt exit answers oddly. The 400 may simply be that.
-    # Re-test on a cold exit before drawing any conclusion.
     expose:
       - "4416"
     restart: unless-stopped
@@ -270,6 +277,7 @@ services:
       context: ./docker/warp
     expose:
       - "1080"   # SOCKS5, for yt-dlp
+      - "1081"   # IPv4-only HTTP CONNECT (connect4.py), for the PO-token sidecar
       - "8080"   # rotate/health control, compose network only - never published
     cap_add:
       - NET_ADMIN

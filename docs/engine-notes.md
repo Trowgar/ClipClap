@@ -2467,6 +2467,23 @@ touch it.
   link again in a while", which is the only honest advice left. On 08-16 it lasted hours (5 refusals
   16:22-21:54). A second egress (another host's WARP, a paid proxy) is the only real rotation now; that is
   a money decision, not written here.
+- **PO-token egress mismatch, and the fix (2026-08-20).** The 08-19 blockade beat (mweb + GVS
+  token) died within a day: the sidecar minted from the HOST address while yt-dlp fetched through
+  WARP, and a GVS token is only honoured when minted from the address that fetches the media - six
+  URL jobs 08-18..20, zero done, every media URL a bare 403. Giving the sidecar the WARP egress
+  failed twice before it worked: socks5 - the provider's axios client refuses a socks agent
+  ("protocol mismatch"); gost's http listener on 1080 - the provider does NOT use CONNECT, it sends
+  https requests in absolute-form, and gost's own dial rides IPv6 whenever the name has AAAA records
+  (measured: api64.ipify answered 2a09:bac5:... on http://, socks5:// and socks5h:// alike from
+  inside the warp container) - and the IPv6 exit is bot-refused on first contact, hence the 400 on
+  /att/get. The fix is `docker/warp/connect4.py`: an IPv4-only proxy on `warp:1081` (CONNECT
+  tunnelled, absolute-form replayed to the origin over TLS, A records only), with
+  `ALL_PROXY=http://warp:1081` on the potprovider service. Verified 2026-08-20: same destination =
+  same IPv4 exit on both paths (the WARP exit is per-DESTINATION, so ipify readings differ across
+  hostnames - compare like with like), the full mint chain through the proxy (/att/get -> BotGuard
+  JS -> GenerateIT -> POT), and a prod-args download straight through the blockade (395+251, merged
+  mp4). If minting dies on 405/502 later, suspect the provider's proxy dialect changed, not the
+  exit.
 - **A bare `HTTP Error 403` is NOT the bot check and must not rotate.** worker-download logged nine
   `unable to download video data: HTTP Error 403` on 08-14..16, every one cleared by the next BullMQ
   attempt seconds later; a bot user who got one at the probe resent the link 25s later and it went
