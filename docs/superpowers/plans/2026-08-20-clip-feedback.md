@@ -313,24 +313,75 @@ In `prisma/schema.prisma`, inside `model Clip`, directly **below** the `telegram
   telegramMessageId Int?
 ```
 
-- [ ] **Step 3: Generate and apply the migration**
+- [ ] **Step 3: Generate the SQL WITHOUT applying it**
+
+**Never run `prisma migrate dev` on this host.** It is a development command: on any drift it offers to reset the database, and this database is production. The repo's own convention is a hand-placed migration folder applied with `migrate deploy` - read
+`prisma/migrations/20260819100000_job_updated_at_and_enqueued_default/migration.sql` first to see the house style, which is commented SQL explaining why each statement is shaped the way it is.
+
+Print the SQL the schema edit implies. This only reads the database:
 
 ```bash
-docker compose exec -T bot sh -c 'cd /app && node_modules/.bin/prisma migrate dev --name clip_feedback --skip-generate'
+docker compose exec -T bot sh -c 'cd /app && node_modules/.bin/prisma migrate diff \
+  --from-schema-datasource prisma/schema.prisma \
+  --to-schema-datamodel prisma/schema.prisma \
+  --script'
+```
+
+Read the output before doing anything with it. It must contain **exactly**:
+- `CREATE TABLE "clip_feedback"` with the thirteen columns,
+- one unique index on `("clipId", "userId")` and three plain indexes,
+- `ALTER TABLE "clips" ADD COLUMN "telegramMessageId" INTEGER`.
+
+It must contain **no** `DROP`, **no** `ALTER ... DROP COLUMN`, and **no** `FOREIGN KEY` / `REFERENCES` clause. Any of those means something is wrong - a relation crept into the model, or the schema edit hit the wrong place. Stop and report rather than applying it.
+
+- [ ] **Step 4: Save it as a migration**
+
+Create `prisma/migrations/20260820120000_clip_feedback/migration.sql` (use the real UTC time in `YYYYMMDDHHMMSS` form, and it must sort after `20260819100000`). Paste the generated SQL, and put a comment header above it in the house style, for example:
+
+```sql
+-- clip_feedback: one row per (clip, user) verdict on a delivered clip.
+--
+-- No foreign keys, deliberately. deleteProject hard-deletes the Job and Clip
+-- cascades from it, and clip.service deletes single clips outright, so a
+-- relation would erase "I rejected this clip and then deleted it" - the
+-- strongest signal this table exists to hold. Same decision, same reason, as
+-- funnel_events and upload_refusals.
+--
+-- clips.telegramMessageId is the anchor a user's reply is matched against.
+-- Nullable on purpose: the delivery path already tolerates Telegram confirming
+-- a send without a parseable payload.
+```
+
+- [ ] **Step 5: Apply it**
+
+```bash
+docker compose exec -T bot sh -c 'cd /app && node_modules/.bin/prisma migrate deploy'
 docker compose exec -T bot sh -c 'cd /app && node_modules/.bin/prisma generate'
 ```
 
-Expected: a new folder under `prisma/migrations/` and `The following migration(s) have been applied`.
+Expected: `The following migration(s) have been applied` naming only your folder. `migrate deploy` never resets and never prompts - that is why it is the only apply command allowed here.
 
-- [ ] **Step 4: Verify the table exists with the right shape**
+- [ ] **Step 6: Verify the table shape against the database**
 
 ```bash
 docker compose exec -T postgres psql -U postgres -d clipclap -c '\d clip_feedback'
+docker compose exec -T postgres psql -U postgres -d clipclap -c '\d clips'
 ```
 
-Expected: columns `id, clipId, jobId, userId, surface, verdict, reason, note, snapshot, evidenceKey, locale, createdAt, updatedAt`, a unique index on `(clipId, userId)`, and three further indexes. Confirm there are **no foreign-key constraints** listed - if any appear, a relation crept into the model and must be removed.
+Expected on `clip_feedback`: columns `id, clipId, jobId, userId, surface, verdict, reason, note, snapshot, evidenceKey, locale, createdAt, updatedAt`, a unique index on `("clipId", "userId")`, three further indexes, and a `Foreign-key constraints` section that is **absent or empty**. If any foreign key is listed, a relation crept into the model - stop and report.
 
-- [ ] **Step 5: Regenerate the client in every service that needs it and commit**
+Expected on `clips`: a new `telegramMessageId | integer` column, nullable.
+
+Also confirm nothing was lost:
+
+```bash
+docker compose exec -T postgres psql -U postgres -d clipclap -c 'select count(*) from clips;'
+docker compose exec -T postgres psql -U postgres -d clipclap -c 'select count(*) from jobs;'
+```
+
+Both counts must be non-zero on this host. A zero is evidence the database was reset and must be escalated immediately, not worked around.
+
+- [ ] **Step 7: Regenerate the client in every service that needs it and commit**
 
 ```bash
 for s in web worker-download worker-transcribe worker-analyze worker-render worker-finalize bot; do
