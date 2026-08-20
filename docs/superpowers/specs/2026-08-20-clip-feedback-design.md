@@ -304,9 +304,10 @@ rate and response rate.
 
 ## i18n
 
-Bot copy is six locales (en/ru/uk/es/pt/id) through the existing single dictionary - about ten
-strings. Web is English only. Splitting the bot dictionary across locales is not an option;
-the registry is shared.
+Bot copy is **seven** locales - `LOCALES` in `packages/shared/src/i18n/locales.ts` is
+`en, ru, uk, es, pt, id, ar`, and `apps/bot/src/i18n/` has a file per locale. About ten
+strings each. `Dict` is a TypeScript interface, so a missing translation is a typecheck
+failure, not a silent English fallback. Web is English only.
 
 ## Testing
 
