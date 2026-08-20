@@ -2331,16 +2331,23 @@ async function answerDuplicate(
   await client.sendMessage(chatId, dict.duplicateDone(cached.length));
 
   // Clips this user has already judged keep their answer: re-asking would put
-  // live buttons over a settled verdict. Keyed on clipId alone, with no user
-  // filter, because a feedback row can only exist for the clip's owner -
-  // recordClipFeedback checks ownership on the clip row before it writes - and
-  // this function has no local user id to filter by anyway.
+  // live buttons over a settled verdict. Keyed on clipId alone - not scoped to
+  // this user - because the filter would be redundant rather than unavailable:
+  // findDuplicateJob already scoped `cached` to this user's own clips, and
+  // recordClipFeedback only ever writes a row for the clip's owner, so any row
+  // found here is this user's.
   const feedbackOn = isClipFeedbackEnabled("bot");
   const alreadyRated = feedbackOn
     ? new Set(
         (
           await prisma.clipFeedback.findMany({
-            where: { clipId: { in: cached.map((c) => c.id) } },
+            where: {
+              clipId: { in: cached.map((c) => c.id) },
+              // A reply-only note also creates a row, with an empty-string
+              // verdict - see recordClipFeedback's create arm. That is not a
+              // judgement, so those clips must still get buttons.
+              verdict: { not: "" },
+            },
             select: { clipId: true },
           })
         ).map((r) => r.clipId)
@@ -2362,17 +2369,32 @@ async function answerDuplicate(
         clip.title ?? undefined,
         markup
       );
+      // The send succeeded; count it before doing anything else that could
+      // throw, so a downstream failure cannot masquerade as a failed send.
+      resent += 1;
+
       // The resend is a NEW message, so the reply anchor moves to it: a reply
       // to the copy the user is actually looking at must find the clip. The
       // old message stays in the chat as a dead anchor, which degrades to the
       // "could not match that to a clip" reply rather than a false confirmation.
+      //
+      // Its own catch: the clip IS in the chat by now, and a failure to move
+      // the anchor must not be logged as a failed send or subtracted from the
+      // resent count. The cost of losing it is one reply that answers "could
+      // not match that to a clip" instead of recording a note.
       if (sent?.message_id) {
-        await prisma.clip.update({
-          where: { id: clip.id },
-          data: { telegramMessageId: sent.message_id },
-        });
+        try {
+          await prisma.clip.update({
+            where: { id: clip.id },
+            data: { telegramMessageId: sent.message_id },
+          });
+        } catch (error) {
+          console.warn(
+            `[duplicate] anchor not moved for clip ${clip.id}:`,
+            error instanceof Error ? error.message : error
+          );
+        }
       }
-      resent += 1;
     } catch (error) {
       // One clip's failure costs only itself, same rule as delivery.
       console.warn(`[duplicate] could not re-send clip ${clip.id}:`, error);

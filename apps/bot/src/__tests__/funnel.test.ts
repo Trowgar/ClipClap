@@ -544,10 +544,13 @@ describe("refusals the bot used to swallow", () => {
     mocks.jobCount.mockResolvedValue(0);
     mocks.jobFindMany.mockResolvedValue([]);
     mocks.probeVideoUrl.mockReset();
-    // The container this suite runs in loads the real .env, which may or may
-    // not set the feedback flag. Neutralise it so every test starts from a
-    // known "off" and turns it "on" explicitly when that is what it means to
-    // measure.
+    // The container this suite runs in loads the real, production .env -
+    // there is no test-only override for it - so CLIP_FEEDBACK_BOT arrives
+    // here as whatever is live in prod right now, not as "unset". Any test in
+    // THIS FILE that reaches answerDuplicate's resend loop (only this describe
+    // block does today) must neutralise the flag itself, the same way this
+    // block does, or it will start failing the day the flag flips in prod
+    // rather than the day it was written.
     delete process.env.CLIP_FEEDBACK_BOT;
     mocks.clipFeedbackFindMany.mockResolvedValue([]);
     mocks.clipUpdate.mockResolvedValue({});
@@ -771,10 +774,11 @@ describe("refusals the bot used to swallow", () => {
       CONFIG
     );
 
-    // Looked up by clip id alone - there is no local user id on this path to
-    // filter by, and a feedback row can only exist for the clip's owner.
+    // Looked up by clip id alone - no user filter is needed because a
+    // feedback row can only exist for the clip's owner - scoped to rows that
+    // carry a real verdict, since a note-only reply also writes a row.
     expect(mocks.clipFeedbackFindMany).toHaveBeenCalledWith({
-      where: { clipId: { in: ["c1"] } },
+      where: { clipId: { in: ["c1"] }, verdict: { not: "" } },
       select: { clipId: true },
     });
     expect(client.sendVideo).toHaveBeenCalledWith(
@@ -810,6 +814,44 @@ describe("refusals the bot used to swallow", () => {
     expect(client.sendVideo).toHaveBeenCalledWith(CHAT.id, "file-1", "Clip one", undefined);
   });
 
+  // recordClipFeedback writes a row for a reply-only note too, with an
+  // empty-string verdict (its create arm defaults to `input.verdict ?? ""`).
+  // That is commentary, not a judgement, so it must not suppress the buttons.
+  it("still carries a keyboard when the clip's only feedback row has no verdict", async () => {
+    process.env.CLIP_FEEDBACK_BOT = "on";
+    mocks.probeVideoUrl.mockResolvedValue({ ok: true, durationSec: 900, title: "Same talk" });
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "j-done",
+        status: "DONE",
+        createdAt: new Date(),
+        clips: [{ id: "c1", title: "Clip one", telegramFileId: "file-1", storageKey: "k1" }],
+      },
+    ]);
+    // The clip's Prisma-side row is filtered by `verdict: { not: "" }`; the
+    // mock here plays the part of Prisma applying that filter and simply
+    // returning nothing, exactly as it would for a note-only row.
+    mocks.clipFeedbackFindMany.mockResolvedValue([]);
+    const { client } = harness();
+
+    await handleUpdate(
+      client as never,
+      videoUrlUpdate("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s") as never,
+      CONFIG
+    );
+
+    expect(mocks.clipFeedbackFindMany).toHaveBeenCalledWith({
+      where: { clipId: { in: ["c1"] }, verdict: { not: "" } },
+      select: { clipId: true },
+    });
+    expect(client.sendVideo).toHaveBeenCalledWith(
+      CHAT.id,
+      "file-1",
+      "Clip one",
+      verdictKeyboard("c1", t("ru"))
+    );
+  });
+
   it("moves the reply anchor to the resend's own message", async () => {
     mocks.probeVideoUrl.mockResolvedValue({ ok: true, durationSec: 900, title: "Same talk" });
     mocks.jobFindMany.mockResolvedValue([
@@ -835,6 +877,30 @@ describe("refusals the bot used to swallow", () => {
       where: { id: "c1" },
       data: { telegramMessageId: 555 },
     });
+  });
+
+  it("does not move the anchor when Telegram confirms a send with no message id", async () => {
+    mocks.probeVideoUrl.mockResolvedValue({ ok: true, durationSec: 900, title: "Same talk" });
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "j-done",
+        status: "DONE",
+        createdAt: new Date(),
+        clips: [{ id: "c1", title: "Clip one", telegramFileId: "file-1", storageKey: "k1" }],
+      },
+    ]);
+    const { client } = harness();
+    // The harness's default sendVideo already resolves to {} (no message_id) -
+    // spelled out here so the point of the test does not depend on reading it.
+    client.sendVideo.mockResolvedValueOnce({});
+
+    await handleUpdate(
+      client as never,
+      videoUrlUpdate("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s") as never,
+      CONFIG
+    );
+
+    expect(mocks.clipUpdate).not.toHaveBeenCalled();
   });
 
   it("keeps resending after one clip's send fails, and never anchors the one that failed", async () => {
@@ -873,6 +939,49 @@ describe("refusals the bot used to swallow", () => {
     expect(refusalsRecorded()[0]).toMatchObject({
       code: "DUPLICATE",
       detail: { priorJobId: "j-done", priorStatus: "DONE", resent: 1 },
+    });
+  });
+
+  // The clip is already sitting in the chat by the time the anchor write is
+  // attempted - a DB hiccup there is not a failed send, and must not be
+  // reported or counted as one.
+  it("still counts the send and moves on when the anchor write itself rejects", async () => {
+    mocks.probeVideoUrl.mockResolvedValue({ ok: true, durationSec: 900, title: "Same talk" });
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "j-done",
+        status: "DONE",
+        createdAt: new Date(),
+        clips: [
+          { id: "c1", title: "Clip one", telegramFileId: "file-1", storageKey: "k1" },
+          { id: "c2", title: "Clip two", telegramFileId: "file-2", storageKey: "k2" },
+        ],
+      },
+    ]);
+    const { client } = harness();
+    client.sendVideo
+      .mockResolvedValueOnce({ message_id: 111 })
+      .mockResolvedValueOnce({ message_id: 222 });
+    mocks.clipUpdate.mockRejectedValueOnce(new Error("db is down"));
+
+    await handleUpdate(
+      client as never,
+      videoUrlUpdate("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s") as never,
+      CONFIG
+    );
+
+    // Both clips were sent, and the loop reached the second clip's anchor
+    // write despite the first one throwing.
+    expect(client.sendVideo).toHaveBeenCalledTimes(2);
+    expect(mocks.clipUpdate).toHaveBeenCalledTimes(2);
+    expect(mocks.clipUpdate).toHaveBeenNthCalledWith(2, {
+      where: { id: "c2" },
+      data: { telegramMessageId: 222 },
+    });
+    // A failed anchor write is not a failed send: both clips still count.
+    expect(refusalsRecorded()[0]).toMatchObject({
+      code: "DUPLICATE",
+      detail: { priorJobId: "j-done", priorStatus: "DONE", resent: 2 },
     });
   });
 
