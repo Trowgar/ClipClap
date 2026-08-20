@@ -6,6 +6,7 @@ import {
   ACTIVE_JOB_STATUSES,
   FUNNEL_EVENTS,
   buildClipCaption,
+  campaignStartEvent,
   cancelShopOrder,
   canSubmitJob,
   createBotInitiatedLink,
@@ -37,6 +38,7 @@ import {
   prisma,
   recordClipFeedback,
   recordFunnelEvent,
+  sanitiseCampaignSlug,
   recordUploadRefusal,
   redeemLinkFromBot,
   refusalHost,
@@ -1689,6 +1691,17 @@ async function handleStart(
       FUNNEL_EVENTS.FIRST_SCREEN,
       message.from!.language_code
     );
+    // Recorded only for strangers, and deliberately: the question a campaign tag answers is
+    // "how many people did this placement bring", and an existing user clicking the same link
+    // is not one of them. Same ordering rule as above - the person has already been answered.
+    if (payload?.kind === "src") {
+      await recordFunnelEvent(
+        "bot",
+        message.from!.id,
+        campaignStartEvent(payload.code),
+        message.from!.language_code
+      );
+    }
     return;
   }
 
@@ -2249,6 +2262,7 @@ function renderLinkResult(
 type StartPayload =
   | { kind: "link"; code: string }
   | { kind: "ref"; code: string }
+  | { kind: "src"; code: string }
   | null;
 
 export function parseStartPayload(text: string): StartPayload {
@@ -2261,6 +2275,13 @@ export function parseStartPayload(text: string): StartPayload {
   if (trimmed.startsWith("ref_")) {
     const code = trimmed.slice("ref_".length).trim();
     if (code) return { kind: "ref", code };
+  }
+  // A campaign tag: t.me/clipclapio_bot?start=src_<slug>. Everything unrecognised used to fall
+  // through to null and vanish, which made a bought placement indistinguishable from an organic
+  // arrival. Sanitised here because the slug becomes part of a database key.
+  if (trimmed.startsWith("src_")) {
+    const code = sanitiseCampaignSlug(trimmed.slice("src_".length).trim());
+    if (code) return { kind: "src", code };
   }
   return null;
 }

@@ -143,6 +143,28 @@ export function uploadRejectedEvent(code: UploadRejectionCode): string {
 }
 
 /**
+ * The event name for a stranger who reached the bot through a tagged link, e.g.
+ * "bot_start_src_tg_clipperschat" from `t.me/clipclapio_bot?start=src_tg_clipperschat`.
+ *
+ * It exists because until 2026-08-20 the bot silently discarded every start payload it did not
+ * recognise, so a bought placement and an organic arrival were indistinguishable - which makes
+ * any paid test unmeasurable and therefore not worth running. `site_visits` cannot cover this:
+ * it instruments the web app, and a Telegram ad never touches the web app at all.
+ *
+ * The slug is sanitised by the caller rather than here, because an event name is a database key
+ * and an unbounded one lets a stranger write arbitrary rows by editing a link.
+ */
+export function campaignStartEvent(slug: string): string {
+  return `bot_start_src_${slug}`;
+}
+
+/** Lowercase, [a-z0-9_-] only, 32 characters at most - or null if nothing survives. */
+export function sanitiseCampaignSlug(raw: string): string | null {
+  const slug = raw.toLowerCase().replace(/[^a-z0-9_-]/g, "").slice(0, 32);
+  return slug.length ? slug : null;
+}
+
+/**
  * Records that `subjectId` reached `event` on `surface`. Counts people, not
  * presses: the row is unique per (surface, subjectId, event) and a repeat
  * bumps `occurrences`.

@@ -34,4 +34,34 @@ describe("parseStartPayload", () => {
       code: "ABCD1234",
     });
   });
+
+  it("parses a campaign tag and lowercases it", () => {
+    expect(parseStartPayload("/start src_TG_ClippersChat")).toEqual({
+      kind: "src",
+      code: "tg_clipperschat",
+    });
+  });
+
+  it("strips characters that have no business in a database key", () => {
+    // The slug becomes part of a funnel_events row, so a link anyone can edit must not be able
+    // to write arbitrary event names. Dots, slashes, spaces and quotes are dropped rather than
+    // rejected, so a mistyped tag still records under a usable name.
+    expect(parseStartPayload("/start src_tg/../drop me'\"")).toEqual({
+      kind: "src",
+      code: "tgdropme",
+    });
+  });
+
+  it("truncates a long slug to 32 characters", () => {
+    const long = "a".repeat(50);
+    expect(parseStartPayload(`/start src_${long}`)).toEqual({
+      kind: "src",
+      code: "a".repeat(32),
+    });
+  });
+
+  it("returns null when nothing survives sanitising", () => {
+    expect(parseStartPayload("/start src_...")).toBeNull();
+    expect(parseStartPayload("/start src_")).toBeNull();
+  });
 });
