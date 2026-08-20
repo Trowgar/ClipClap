@@ -36,13 +36,53 @@ describe("sendVideoUpload", () => {
     unlinkSync(path);
   });
 
-  it("returns the file_id Telegram assigned", async () => {
+  it("returns the ids Telegram assigned", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      new Response(JSON.stringify({ ok: true, result: { video: { file_id: "FID-123" } } }), { status: 200 })
+      new Response(
+        JSON.stringify({ ok: true, result: { message_id: 4242, video: { file_id: "FID-123" } } }),
+        { status: 200 }
+      )
     );
     const path = tempVideo();
     const client = new TelegramClient("token", "http://local");
-    await expect(client.sendVideoUpload(42, path, "c")).resolves.toBe("FID-123");
+    await expect(client.sendVideoUpload(42, path, "c")).resolves.toEqual({
+      fileId: "FID-123",
+      messageId: 4242,
+    });
+    unlinkSync(path);
+  });
+
+  // reply_markup is not a plain form field: Telegram reads it as a JSON string
+  // inside multipart. Passing the object raw stringifies to "[object Object]"
+  // and the keyboard silently never appears.
+  it("serialises reply_markup as JSON into the form", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, result: { message_id: 1, video: { file_id: "F" } } }), { status: 200 })
+    );
+    const path = tempVideo();
+    const client = new TelegramClient("token", "http://local");
+    const markup = { inline_keyboard: [[{ text: "As is", callback_data: "fb:a:c1" }]] };
+
+    await client.sendVideoUpload(42, path, "c", markup);
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect((init.body as FormData).get("reply_markup")).toBe(JSON.stringify(markup));
+    unlinkSync(path);
+  });
+
+  // An empty keyboard is not the same as no keyboard: Telegram renders an
+  // empty inline_keyboard as a stray blank row under the video.
+  it("sends no reply_markup field at all when there is no keyboard", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, result: { message_id: 1, video: { file_id: "F" } } }), { status: 200 })
+    );
+    const path = tempVideo();
+    const client = new TelegramClient("token", "http://local");
+
+    await client.sendVideoUpload(42, path, "c");
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect((init.body as FormData).get("reply_markup")).toBeNull();
     unlinkSync(path);
   });
 

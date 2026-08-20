@@ -77,7 +77,13 @@ export interface ClipDeliveryResult {
  *  temp files and Telegram rate pressure, and the poller already serialises
  *  rows. */
 export async function deliverClips<C extends DeliverableClip>(
-  client: { sendVideoUpload(chatId: string | number, filePath: string, caption?: string): Promise<string | undefined> },
+  client: {
+    sendVideoUpload(
+      chatId: string | number,
+      filePath: string,
+      caption?: string
+    ): Promise<{ fileId: string | undefined; messageId: number | undefined }>;
+  },
   chatId: string,
   clips: readonly C[],
   captionFor: (clip: C) => string,
@@ -132,7 +138,7 @@ export async function deliverClips<C extends DeliverableClip>(
     let path: string | undefined;
     try {
       path = await downloadToFile(clip.storageKey);
-      const fileId = await client.sendVideoUpload(chatId, path, captionFor(clip));
+      const { fileId } = await client.sendVideoUpload(chatId, path, captionFor(clip));
       await deps.markSent(clip.id, fileId);
       result.delivered += 1;
     } catch (error) {

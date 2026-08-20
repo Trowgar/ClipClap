@@ -47,7 +47,8 @@ function harness(sendImpl: (clipId: string) => Promise<string | undefined>) {
       sendVideoUpload: vi.fn(async (_chat: unknown, _path: string, caption?: string) => {
         const id = String(caption).replace("t-", "");
         sent.push(id);
-        return await sendImpl(id);
+        const fileId = await sendImpl(id);
+        return { fileId, messageId: 1 };
       }),
     },
     deps: { markSent: markSentMock, markUnsendable: markUnsendableMock },

@@ -285,7 +285,9 @@ function makeClient() {
     sendMessage: vi.fn().mockResolvedValue(undefined),
     // (chatId, filePath, caption) - the file path is `/tmp/<storageKey>` here,
     // so `calls[i][1]` still names the clip the way the signed URL used to.
-    sendVideoUpload: vi.fn().mockResolvedValue(undefined),
+    // sendVideoUpload now resolves an { fileId, messageId } pair, not a bare
+    // file_id - see telegram-client.ts.
+    sendVideoUpload: vi.fn().mockResolvedValue({ fileId: undefined, messageId: 1 }),
     deleteMessage: vi.fn().mockResolvedValue(undefined),
   };
 }
@@ -504,7 +506,7 @@ describe("deliverReadyTelegramJobs", () => {
           "sendVideo"
         );
       }
-      return "FID-c1";
+      return { fileId: "FID-c1", messageId: 1 };
     });
 
     await poll(client);
@@ -521,7 +523,7 @@ describe("deliverReadyTelegramJobs", () => {
     expect(sentTo("c1.mp4")).toHaveLength(1);
     expect(sentTo("c2.mp4")).toHaveLength(2);
 
-    client.sendVideoUpload.mockResolvedValue("FID-c2");
+    client.sendVideoUpload.mockResolvedValue({ fileId: "FID-c2", messageId: 1 });
     await poll(client);
 
     expect(sentTo("c1.mp4")).toHaveLength(1);
@@ -564,6 +566,7 @@ describe("the pickup window drains", () => {
     const client = makeClient();
     client.sendVideoUpload.mockImplementation(async (chatId: string) => {
       if (chatId.startsWith("stuck-chat-")) throw failure;
+      return { fileId: undefined, messageId: 1 };
     });
     return client;
   }
@@ -655,7 +658,7 @@ describe("a partial delivery is admitted, not hidden", () => {
     store = createStore(doneJob("job1", [clip("c1"), clip("c2"), clip("c3")]));
     const client = makeClient();
     client.sendVideoUpload.mockImplementation(async (_chat, path: string) => {
-      if (path.endsWith("c1.mp4")) return "FID-c1";
+      if (path.endsWith("c1.mp4")) return { fileId: "FID-c1", messageId: 1 };
       throw new TelegramApiError(
         "Bad Request: failed to get HTTP URL content",
         "sendVideo"
@@ -808,11 +811,15 @@ describe("a delivery that is given up on is not given up on in silence", () => {
       { job: doneJob("job2", [clip("b1")]), chatId: "chat-b" }
     );
     const client = makeClient();
-    const dead = async (chatId: string) => {
+    const deadVideo = async (chatId: string) => {
+      if (chatId === "chat-a") throw new Error("connection reset by peer");
+      return { fileId: undefined, messageId: 1 };
+    };
+    const deadMessage = async (chatId: string) => {
       if (chatId === "chat-a") throw new Error("connection reset by peer");
     };
-    client.sendVideoUpload.mockImplementation(dead);
-    client.sendMessage.mockImplementation(dead);
+    client.sendVideoUpload.mockImplementation(deadVideo);
+    client.sendMessage.mockImplementation(deadMessage);
 
     for (let i = 0; i <= MAX_TELEGRAM_DELIVERY_ATTEMPTS; i++) {
       await expect(poll(client)).resolves.toBeUndefined();
@@ -927,7 +934,7 @@ describe("a failing status write cannot abort the batch", () => {
           "sendVideo"
         );
       }
-      return "FID";
+      return { fileId: "FID", messageId: 1 };
     });
     store.breakWrites(true);
 
@@ -980,6 +987,7 @@ describe("the progress board is retired with the job", () => {
     const order: string[] = [];
     client.sendVideoUpload.mockImplementation(async () => {
       order.push("video");
+      return { fileId: undefined, messageId: 1 };
     });
     client.deleteMessage.mockImplementation(async () => {
       order.push("delete");

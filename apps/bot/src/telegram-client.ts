@@ -87,6 +87,24 @@ export class TelegramClient {
     });
   }
 
+  /** Swap the keyboard under a message that is already sent.
+   *
+   *  This is what turns a feedback keyboard into the reason row, and then into
+   *  a confirmation, without posting anything new into the chat. Telegram
+   *  answers "message is not modified" if the markup is identical; callers
+   *  swallow that. */
+  async editMessageReplyMarkup(
+    chatId: string | number,
+    messageId: number,
+    replyMarkup?: InlineKeyboardMarkup
+  ) {
+    return this.request("editMessageReplyMarkup", {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: replyMarkup,
+    });
+  }
+
   /** Removes one of the bot's own messages. Telegram allows this for 48 hours,
    *  and the longest run measured in production is 13 minutes, so the progress
    *  board is always well inside the window. */
@@ -217,28 +235,38 @@ export class TelegramClient {
     return payload.result as T;
   }
 
-  /** Send a local video file and return the file_id Telegram assigned it.
+  /** Send a local video file; return the ids Telegram assigned it.
    *
    *  `openAsBlob` rather than reading the file: it hands fetch a file-backed
    *  Blob, so a 36 MB clip is streamed off disk instead of sitting in the
    *  worker's heap. The size gate in the delivery loop is still the guard - this
-   *  just means the ordinary case costs no memory. */
+   *  just means the ordinary case costs no memory.
+   *
+   *  message_id is returned because a user's reply to this exact message is the
+   *  free-text feedback channel; without it there is nothing to map a reply to.
+   *  Both ids are optional in the result for the same reason telegramFileId
+   *  falls back to "sent": Telegram sometimes confirms a send with a payload we
+   *  cannot fully parse. */
   async sendVideoUpload(
     chatId: string | number,
     filePath: string,
-    caption?: string
-  ): Promise<string | undefined> {
+    caption?: string,
+    replyMarkup?: InlineKeyboardMarkup
+  ): Promise<{ fileId: string | undefined; messageId: number | undefined }> {
     const form = new FormData();
     form.set("chat_id", String(chatId));
     if (caption) form.set("caption", caption);
     form.set("supports_streaming", "true");
+    // Multipart carries no types: Telegram reads reply_markup as a JSON string
+    // here, and an object would be stringified as "[object Object]" and dropped.
+    if (replyMarkup) form.set("reply_markup", JSON.stringify(replyMarkup));
     form.set("video", await openAsBlob(filePath), "clip.mp4");
 
-    const sent = await this.requestMultipart<{ video?: { file_id?: string } }>(
-      "sendVideo",
-      form
-    );
-    return sent.video?.file_id;
+    const sent = await this.requestMultipart<{
+      message_id?: number;
+      video?: { file_id?: string };
+    }>("sendVideo", form);
+    return { fileId: sent.video?.file_id, messageId: sent.message_id };
   }
 
   async copyMessage(
