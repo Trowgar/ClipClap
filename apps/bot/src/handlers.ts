@@ -2329,10 +2329,49 @@ async function answerDuplicate(
   }
   const cached = dup.clips.filter((c) => c.telegramFileId);
   await client.sendMessage(chatId, dict.duplicateDone(cached.length));
+
+  // Clips this user has already judged keep their answer: re-asking would put
+  // live buttons over a settled verdict. Keyed on clipId alone, with no user
+  // filter, because a feedback row can only exist for the clip's owner -
+  // recordClipFeedback checks ownership on the clip row before it writes - and
+  // this function has no local user id to filter by anyway.
+  const feedbackOn = isClipFeedbackEnabled("bot");
+  const alreadyRated = feedbackOn
+    ? new Set(
+        (
+          await prisma.clipFeedback.findMany({
+            where: { clipId: { in: cached.map((c) => c.id) } },
+            select: { clipId: true },
+          })
+        ).map((r) => r.clipId)
+      )
+    : new Set<string>();
+
   let resent = 0;
   for (const clip of cached) {
     try {
-      await client.sendVideo(chatId, clip.telegramFileId as string, clip.title ?? undefined);
+      // Undefined, not an empty keyboard: Telegram renders an empty
+      // inline_keyboard as a stray blank row under the video.
+      const markup =
+        feedbackOn && !alreadyRated.has(clip.id)
+          ? verdictKeyboard(clip.id, dict)
+          : undefined;
+      const sent = await client.sendVideo(
+        chatId,
+        clip.telegramFileId as string,
+        clip.title ?? undefined,
+        markup
+      );
+      // The resend is a NEW message, so the reply anchor moves to it: a reply
+      // to the copy the user is actually looking at must find the clip. The
+      // old message stays in the chat as a dead anchor, which degrades to the
+      // "could not match that to a clip" reply rather than a false confirmation.
+      if (sent?.message_id) {
+        await prisma.clip.update({
+          where: { id: clip.id },
+          data: { telegramMessageId: sent.message_id },
+        });
+      }
       resent += 1;
     } catch (error) {
       // One clip's failure costs only itself, same rule as delivery.

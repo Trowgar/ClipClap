@@ -30,6 +30,8 @@ const mocks = vi.hoisted(() => ({
   probeVideoUrl: vi.fn(),
   createJob: vi.fn(),
   createTelegramDelivery: vi.fn(),
+  clipUpdate: vi.fn(),
+  clipFeedbackFindMany: vi.fn(),
 }));
 
 vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
@@ -51,6 +53,8 @@ vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
       groupBy: mocks.freeUsageGroupBy,
       aggregate: mocks.freeUsageAggregate,
     },
+    clip: { update: mocks.clipUpdate },
+    clipFeedback: { findMany: mocks.clipFeedbackFindMany },
   },
 }));
 
@@ -88,6 +92,7 @@ import {
   uploadRejectedEvent,
 } from "@clipclap/shared";
 import { blockedKeyboard, getSubmissionBlocker, handleUpdate } from "../handlers";
+import { verdictKeyboard } from "../clip-feedback-keyboard";
 import { t } from "../i18n";
 
 const CONFIG = { appUrl: "https://clipclap.io" };
@@ -539,10 +544,18 @@ describe("refusals the bot used to swallow", () => {
     mocks.jobCount.mockResolvedValue(0);
     mocks.jobFindMany.mockResolvedValue([]);
     mocks.probeVideoUrl.mockReset();
+    // The container this suite runs in loads the real .env, which may or may
+    // not set the feedback flag. Neutralise it so every test starts from a
+    // known "off" and turns it "on" explicitly when that is what it means to
+    // measure.
+    delete process.env.CLIP_FEEDBACK_BOT;
+    mocks.clipFeedbackFindMany.mockResolvedValue([]);
+    mocks.clipUpdate.mockResolvedValue({});
   });
 
   afterEach(() => {
     delete process.env.FREE_TIER_MONTHLY_BUDGET_USD;
+    delete process.env.CLIP_FEEDBACK_BOT;
   });
 
   function videoUrlUpdate(url: string) {
@@ -725,13 +738,142 @@ describe("refusals the bot used to swallow", () => {
     // Two of three clips ever reached the chat; those two come back by id.
     expect(client.sendMessage).toHaveBeenCalledWith(CHAT.id, t("ru").duplicateDone(2));
     expect(client.sendVideo).toHaveBeenCalledTimes(2);
-    expect(client.sendVideo).toHaveBeenNthCalledWith(1, CHAT.id, "file-1", "Clip one");
-    expect(client.sendVideo).toHaveBeenNthCalledWith(2, CHAT.id, "file-3", "Clip three");
+    // The flag is off (neutralised in beforeEach): no keyboard, and no query
+    // to find out who has already rated - that lookup would be pointless work
+    // if nothing is ever going to render buttons.
+    expect(client.sendVideo).toHaveBeenNthCalledWith(1, CHAT.id, "file-1", "Clip one", undefined);
+    expect(client.sendVideo).toHaveBeenNthCalledWith(2, CHAT.id, "file-3", "Clip three", undefined);
+    expect(mocks.clipFeedbackFindMany).not.toHaveBeenCalled();
     expect(refusalsRecorded()[0]).toMatchObject({
       code: "DUPLICATE",
       detail: { priorJobId: "j-done", priorStatus: "DONE", resent: 2 },
     });
     expect(mocks.freeUsageGroupBy).not.toHaveBeenCalled();
+  });
+
+  it("carries a feedback keyboard on a resend when the flag is on and the clip is unrated", async () => {
+    process.env.CLIP_FEEDBACK_BOT = "on";
+    mocks.probeVideoUrl.mockResolvedValue({ ok: true, durationSec: 900, title: "Same talk" });
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "j-done",
+        status: "DONE",
+        createdAt: new Date(),
+        clips: [{ id: "c1", title: "Clip one", telegramFileId: "file-1", storageKey: "k1" }],
+      },
+    ]);
+    mocks.clipFeedbackFindMany.mockResolvedValue([]);
+    const { client } = harness();
+
+    await handleUpdate(
+      client as never,
+      videoUrlUpdate("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s") as never,
+      CONFIG
+    );
+
+    // Looked up by clip id alone - there is no local user id on this path to
+    // filter by, and a feedback row can only exist for the clip's owner.
+    expect(mocks.clipFeedbackFindMany).toHaveBeenCalledWith({
+      where: { clipId: { in: ["c1"] } },
+      select: { clipId: true },
+    });
+    expect(client.sendVideo).toHaveBeenCalledWith(
+      CHAT.id,
+      "file-1",
+      "Clip one",
+      verdictKeyboard("c1", t("ru"))
+    );
+  });
+
+  it("sends no keyboard on a resend for a clip the user already rated", async () => {
+    process.env.CLIP_FEEDBACK_BOT = "on";
+    mocks.probeVideoUrl.mockResolvedValue({ ok: true, durationSec: 900, title: "Same talk" });
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "j-done",
+        status: "DONE",
+        createdAt: new Date(),
+        clips: [{ id: "c1", title: "Clip one", telegramFileId: "file-1", storageKey: "k1" }],
+      },
+    ]);
+    // A verdict already sits on this clip: re-asking would put live buttons
+    // over a settled answer.
+    mocks.clipFeedbackFindMany.mockResolvedValue([{ clipId: "c1" }]);
+    const { client } = harness();
+
+    await handleUpdate(
+      client as never,
+      videoUrlUpdate("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s") as never,
+      CONFIG
+    );
+
+    expect(client.sendVideo).toHaveBeenCalledWith(CHAT.id, "file-1", "Clip one", undefined);
+  });
+
+  it("moves the reply anchor to the resend's own message", async () => {
+    mocks.probeVideoUrl.mockResolvedValue({ ok: true, durationSec: 900, title: "Same talk" });
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "j-done",
+        status: "DONE",
+        createdAt: new Date(),
+        clips: [{ id: "c1", title: "Clip one", telegramFileId: "file-1", storageKey: "k1" }],
+      },
+    ]);
+    const { client } = harness();
+    client.sendVideo.mockResolvedValueOnce({ message_id: 555 });
+
+    await handleUpdate(
+      client as never,
+      videoUrlUpdate("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s") as never,
+      CONFIG
+    );
+
+    // The resend is a new message; a reply to it must be able to find the
+    // clip, so the stored anchor has to move onto this message id.
+    expect(mocks.clipUpdate).toHaveBeenCalledWith({
+      where: { id: "c1" },
+      data: { telegramMessageId: 555 },
+    });
+  });
+
+  it("keeps resending after one clip's send fails, and never anchors the one that failed", async () => {
+    mocks.probeVideoUrl.mockResolvedValue({ ok: true, durationSec: 900, title: "Same talk" });
+    mocks.jobFindMany.mockResolvedValue([
+      {
+        id: "j-done",
+        status: "DONE",
+        createdAt: new Date(),
+        clips: [
+          { id: "c1", title: "Clip one", telegramFileId: "file-1", storageKey: "k1" },
+          { id: "c2", title: "Clip two", telegramFileId: "file-2", storageKey: "k2" },
+        ],
+      },
+    ]);
+    const { client } = harness();
+    client.sendVideo
+      .mockRejectedValueOnce(new Error("Telegram 400"))
+      .mockResolvedValueOnce({ message_id: 777 });
+
+    await handleUpdate(
+      client as never,
+      videoUrlUpdate("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s") as never,
+      CONFIG
+    );
+
+    // The second clip was still attempted after the first rejected.
+    expect(client.sendVideo).toHaveBeenCalledTimes(2);
+    expect(client.sendVideo).toHaveBeenNthCalledWith(2, CHAT.id, "file-2", "Clip two", undefined);
+    // Only the clip that actually sent got its anchor moved.
+    expect(mocks.clipUpdate).toHaveBeenCalledTimes(1);
+    expect(mocks.clipUpdate).toHaveBeenCalledWith({
+      where: { id: "c2" },
+      data: { telegramMessageId: 777 },
+    });
+    expect(refusalsRecorded()[0]).toMatchObject({
+      code: "DUPLICATE",
+      detail: { priorJobId: "j-done", priorStatus: "DONE", resent: 1 },
+    });
   });
 
   // The legitimate retry: after a FAILED run the same link goes through the

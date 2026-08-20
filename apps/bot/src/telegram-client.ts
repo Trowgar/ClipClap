@@ -200,7 +200,7 @@ export class TelegramClient {
     caption?: string,
     replyMarkup?: unknown
   ) {
-    return this.request("sendVideo", {
+    return this.request<{ message_id: number }>("sendVideo", {
       chat_id: chatId,
       video,
       caption,
