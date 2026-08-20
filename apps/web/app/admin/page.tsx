@@ -3,6 +3,8 @@ import { cookies } from "next/headers";
 import {
   getBotUserDetails,
   getBotUsers,
+  getFeedbackRows,
+  getFeedbackSummary,
   getFunnel,
   getPulse,
   getRefusals,
@@ -14,6 +16,7 @@ import {
   verifyAdminCookie,
   type FunnelSurface,
 } from "@clipclap/shared";
+import { FeedbackTable } from "./feedback-table";
 import { GuestsTable } from "./guests-table";
 import { MiniAppGate } from "./mini-app-gate";
 import { UsersTable } from "./users-table";
@@ -100,19 +103,30 @@ export default async function AdminAnalyticsPage({
   // Anything unparseable is page 1; paginate() clamps the rest.
   const requestedPage = Number(rawPage) || 1;
 
-  const [pulse, funnel, refusals, totals, traffic, users, guests] =
-    await Promise.all([
-      getPulse(surface, ownAccounts),
-      getFunnel(surface),
-      getRefusals(surface),
-      getTotals(surface, ownAccounts),
-      surface === "bot" ? Promise.resolve(null) : getTraffic(30),
-      // The row tables belong to one surface each. Combined stays the overview.
-      surface === "bot"
-        ? getBotUsers(requestedPage, ownAccounts)
-        : Promise.resolve(null),
-      surface === "web" ? getWebGuests(requestedPage) : Promise.resolve(null),
-    ]);
+  const [
+    pulse,
+    funnel,
+    refusals,
+    totals,
+    traffic,
+    users,
+    guests,
+    feedbackSummary,
+    feedbackRows,
+  ] = await Promise.all([
+    getPulse(surface, ownAccounts),
+    getFunnel(surface),
+    getRefusals(surface),
+    getTotals(surface, ownAccounts),
+    surface === "bot" ? Promise.resolve(null) : getTraffic(30),
+    // The row tables belong to one surface each. Combined stays the overview.
+    surface === "bot"
+      ? getBotUsers(requestedPage, ownAccounts)
+      : Promise.resolve(null),
+    surface === "web" ? getWebGuests(requestedPage) : Promise.resolve(null),
+    getFeedbackSummary(surface),
+    getFeedbackRows(surface),
+  ]);
 
   const userDetails = users
     ? await getBotUserDetails(
@@ -253,6 +267,9 @@ export default async function AdminAnalyticsPage({
           </div>
         </section>
       )}
+
+      {/* 4b. Feedback - per-clip verdicts/reasons/notes from the bot and web. */}
+      <FeedbackTable summary={feedbackSummary} rows={feedbackRows} />
 
       {/* 5. Traffic - hidden on the bot surface, which has no guests. */}
       {traffic && (

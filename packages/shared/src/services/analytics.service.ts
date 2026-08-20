@@ -637,3 +637,93 @@ export async function getPulse(
 
   return { today, last7, last30 };
 }
+
+export interface FeedbackSummary {
+  /** Rated clips by verdict. The empty-string verdict is a note or a reason
+   *  arriving before any tap - reported as its own bucket rather than folded
+   *  into one it does not belong to. */
+  verdicts: { verdict: string; count: number }[];
+  reasons: { reason: string; count: number }[];
+  /** Clips that were delivered at all, for the response rate. */
+  clipsDelivered: number;
+  clipsRated: number;
+}
+
+export async function getFeedbackSummary(
+  surface?: FunnelSurface
+): Promise<FeedbackSummary> {
+  const where = surface ? { surface } : {};
+  const [verdicts, reasons, clipsDelivered, clipsRated] = await Promise.all([
+    prisma.clipFeedback.groupBy({
+      by: ["verdict"],
+      where,
+      _count: { _all: true },
+    }),
+    prisma.clipFeedback.groupBy({
+      by: ["reason"],
+      where: { ...where, reason: { not: null } },
+      _count: { _all: true },
+    }),
+    prisma.clip.count(),
+    prisma.clipFeedback.count({ where }),
+  ]);
+
+  return {
+    verdicts: verdicts.map((v) => ({ verdict: v.verdict, count: v._count._all })),
+    reasons: reasons.map((r) => ({ reason: r.reason ?? "-", count: r._count._all })),
+    clipsDelivered,
+    clipsRated,
+  };
+}
+
+export interface FeedbackRow {
+  id: string;
+  clipId: string;
+  jobId: string;
+  surface: string;
+  verdict: string;
+  reason: string | null;
+  note: string | null;
+  evidenceKey: string | null;
+  title: string | null;
+  createdAt: Date;
+}
+
+/** Most recent answers, newest first. */
+export async function getFeedbackRows(
+  surface?: FunnelSurface,
+  take = 50
+): Promise<FeedbackRow[]> {
+  const rows = await prisma.clipFeedback.findMany({
+    where: surface ? { surface } : {},
+    orderBy: { createdAt: "desc" },
+    take,
+    select: {
+      id: true,
+      clipId: true,
+      jobId: true,
+      surface: true,
+      verdict: true,
+      reason: true,
+      note: true,
+      evidenceKey: true,
+      snapshot: true,
+      createdAt: true,
+    },
+  });
+
+  return rows.map((r) => ({
+    id: r.id,
+    clipId: r.clipId,
+    jobId: r.jobId,
+    surface: r.surface,
+    verdict: r.verdict,
+    reason: r.reason,
+    note: r.note,
+    evidenceKey: r.evidenceKey,
+    // The clip may be long gone - deleteProject hard-deletes jobs and clips
+    // cascade - so the frozen snapshot is the only surviving title.
+    title: (r.snapshot as { title?: string } | null)?.title ?? null,
+    createdAt: r.createdAt,
+  }));
+}
