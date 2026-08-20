@@ -319,4 +319,22 @@ describe("owner relay", () => {
     expect(sendTelegramMessageMock).not.toHaveBeenCalled();
     delete process.env.SUPPORT_CHAT_ID;
   });
+
+  // An empty note is still a note - it is written - but relaying an empty
+  // message to the owner would be noise. `if (input.note)` is the guard;
+  // pinning both halves so a regression to `!== undefined` is caught even
+  // though it would leave every other test green.
+  it("does not relay an empty-string note", async () => {
+    process.env.SUPPORT_CHAT_ID = "999";
+    const result = await recordClipFeedback({
+      clipId: "clip-1",
+      userId: "user-1",
+      surface: "bot",
+      note: "",
+    });
+    expect(sendTelegramMessageMock).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    expect(feedbackUpsert.mock.calls[0][0].create.note).toBe("");
+    delete process.env.SUPPORT_CHAT_ID;
+  });
 });

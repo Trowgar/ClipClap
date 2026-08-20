@@ -42,7 +42,7 @@ interface TranscriptSegment {
 }
 
 /** Text of every segment that overlaps the clip window, joined and capped. */
-export function sliceTranscript(
+function sliceTranscript(
   transcriptJson: unknown,
   startTime: number,
   endTime: number
@@ -87,9 +87,13 @@ function digestCropPlan(cropPlan: unknown): Record<string, unknown> | null {
  *  arrives from a Telegram callback or an HTTP body on both surfaces and is
  *  forgeable.
  *
- *  Nothing here throws for an operational failure. A tap has already been
- *  acknowledged by the time this runs, and losing an answer is worse than
- *  losing an evidence copy. */
+ *  The evidence copy and the owner relay never throw - a failure in either
+ *  costs at most a copy or a notification, never the feedback row itself. A
+ *  database failure is not swallowed the same way: prisma.clip.findFirst,
+ *  clipFeedback.findUnique and clipFeedback.upsert are unguarded here and a
+ *  failure propagates to the caller, on purpose - the web route needs a real
+ *  500 rather than a fake success, and the bot callback already wraps this
+ *  call on its own side. */
 export async function recordClipFeedback(
   input: RecordClipFeedbackInput
 ): Promise<RecordClipFeedbackResult> {
@@ -168,12 +172,22 @@ export async function recordClipFeedback(
     ),
   };
 
+  // Prisma's Json input rejects `undefined` values inside the object; the
+  // round-trip strips them, the same trick recordUploadRefusal in
+  // funnel.service.ts uses for the same reason. Computed once and reused in
+  // both arms of the upsert below: snapshot can carry a 4000-character
+  // transcript, and both arms of an upsert are evaluated eagerly, so writing
+  // this inline twice would round-trip it twice on every call.
+  const snapshotJson = JSON.parse(
+    JSON.stringify(snapshot)
+  ) as Prisma.InputJsonValue;
+
   // A verdict change invalidates the reason it was given under; a note arrives
   // on its own path and must survive one. Hence three separate partial updates
   // rather than one object with undefined holes.
   const update: Prisma.ClipFeedbackUpdateInput = {
     surface: input.surface,
-    snapshot: JSON.parse(JSON.stringify(snapshot)) as Prisma.InputJsonValue,
+    snapshot: snapshotJson,
     evidenceKey,
   };
   if (input.verdict !== undefined) {
@@ -197,7 +211,7 @@ export async function recordClipFeedback(
       verdict: input.verdict ?? "",
       reason: input.reason ?? null,
       note: input.note ?? null,
-      snapshot: JSON.parse(JSON.stringify(snapshot)) as Prisma.InputJsonValue,
+      snapshot: snapshotJson,
       evidenceKey,
       locale: input.locale ?? null,
     },
@@ -218,6 +232,9 @@ export async function recordClipFeedback(
 
   return {
     ok: true,
+    // `""` in the column exists only because verdict is not nullable; `null`
+    // here is the honest shape for a `string | null` result. Both mean "no
+    // verdict yet" - this is not an inconsistency to fix.
     verdict: input.verdict ?? existing?.verdict ?? null,
     // Symmetric with `verdict` above, but not a plain `?? existing?.reason`:
     // a verdict-only call just cleared the stored reason (see the write
