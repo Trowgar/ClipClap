@@ -2483,7 +2483,24 @@ touch it.
   hostnames - compare like with like), the full mint chain through the proxy (/att/get -> BotGuard
   JS -> GenerateIT -> POT), and a prod-args download straight through the blockade (395+251, merged
   mp4). If minting dies on 405/502 later, suspect the provider's proxy dialect changed, not the
-  exit.
+  exit. SUPERSEDED SAME DAY by the next bullet: the token chain it fixed is real but no longer
+  sufficient, and the mechanism now ships disconnected.
+- **The POT path lost anyway, and the DEFAULT clients won (2026-08-20 evening).** With the token
+  minted correctly (connect4) - and then even minted per-VIDEO through yt-dlp's own proxy by a
+  sidecar built from upstream master a0be235 - every mweb download still died at EXACTLY the first
+  10MB chunk boundary: first range request streams at full speed, second gets 403. Upstream says
+  this is the provider-side casualty of YouTube's video-id-binding/SABR push (yt-dlp issue 17368,
+  closed "not planned": "disable the plugin and use default player clients"). The A/B that decided
+  it, same minute, same video, same exit: mweb+POT died at 10MB; the default client mix on yt-dlp
+  2026.08.19 downloaded the full 440MB and merged clean. So the 08-19 measurement "default clients
+  403" is stale - the landscape moved within the month. SHIPPED: yt-dlp pinned 2026.7.4 ->
+  2026.8.19 in all three images (bump together, as always); `YTDLP_POT_PROVIDER_URL` CLEARED in
+  .env (the designed kill switch - potArgs() returns [] and the whole mweb+token mechanism
+  vanishes); the potprovider service now builds from a local clone of upstream master
+  (docker/bgutil-src, gitignored) and stays running but disconnected, ready to re-enable by
+  restoring the .env line if YouTube widens POT enforcement. Residual noise: the plugin pings
+  127.0.0.1:4416 once per run and warns; harmless. What would tell us to flip back: downloads
+  cutting at the first chunk boundary again, or "Sign in to confirm" returning on default clients.
 - **A bare `HTTP Error 403` is NOT the bot check and must not rotate.** worker-download logged nine
   `unable to download video data: HTTP Error 403` on 08-14..16, every one cleared by the next BullMQ
   attempt seconds later; a bot user who got one at the probe resent the link 25s later and it went

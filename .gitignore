@@ -53,3 +53,14 @@ apps/worker/.eval-frames*/
 
 # Reframe corpus - materialised from assets/reframe/corpus.json, never committed
 .corpus/
+
+# Business Operator agent (business/) - kept out of the repo for now.
+# Two reasons: the agent definitions and the /biz-turn skill are tooling, not product;
+# and business/DATA/ holds real lead names, emails and conversation threads, which must
+# not land in git by an accidental `git add -A`.
+# .claude/ (where install.sh copies the agents and the skill) is already ignored above.
+# To track parts of it later, negate what you want, e.g.:
+#   !business/PLAN.md
+#   !business/LOGS/
+business/
+docker/bgutil-src/

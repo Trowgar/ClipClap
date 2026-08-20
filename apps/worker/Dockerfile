@@ -9,7 +9,7 @@ RUN apk add --no-cache ffmpeg python3 py3-pip openssl fontconfig py3-opencv py3-
 # another, so a drift means a link that passes the gate and then fails the job.
 # `[default]` pulls in yt-dlp-ejs, the challenge-solver scripts deno runs. See
 # apps/bot/Dockerfile for the full reasoning and its measured limits.
-RUN pip3 install --break-system-packages "yt-dlp[default]==2026.7.4" \
+RUN pip3 install --break-system-packages "yt-dlp[default]==2026.8.19" \
     "bgutil-ytdlp-pot-provider==1.3.1"
 # ^ the GVS PO-token plugin (spec 2026-08-19-youtube-flap-survival 2). Inert
 # unless YTDLP_POT_PROVIDER_URL is set; pinned like yt-dlp itself so the three

@@ -213,7 +213,16 @@ services:
   # failure gets WORSE. Measured and reverted 2026-08-20.
   #
   potprovider:
-    image: brainicism/bgutil-ytdlp-pot-provider:1.3.1
+    # Built from a local clone of upstream master (docker/bgutil-src, commit
+    # a0be235, 2026-08-19 "[deps] update dependencies and sync with upstream"):
+    # the 1.3.1 release image is from March and its minted tokens hit YouTube's
+    # video-id-binding/BotGuard churn of Aug 2026 - mweb downloads died at the
+    # first chunk boundary (~10MB) with the release sidecar. No newer image is
+    # published, so we build the server_node target ourselves. To update:
+    # git -C docker/bgutil-src pull && docker compose build potprovider.
+    build:
+      context: ./docker/bgutil-src/server
+      target: server_node
     init: true
     # THE TOKEN MUST BE MINTED FROM THE SAME EGRESS THAT FETCHES THE MEDIA.
     #

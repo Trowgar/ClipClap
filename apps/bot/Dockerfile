@@ -26,7 +26,7 @@ RUN apk add --no-cache openssl python3 py3-pip deno
 # challenge - intermittently, ~2 runs in 4 - and no format-count difference was
 # measurable here (23 either way on the runs that were clean). This is installed
 # because upstream requires it for YouTube, not because a regression was proven.
-RUN pip3 install --break-system-packages "yt-dlp[default]==2026.7.4" \
+RUN pip3 install --break-system-packages "yt-dlp[default]==2026.8.19" \
     "bgutil-ytdlp-pot-provider==1.3.1"
 # ^ the GVS PO-token plugin (spec 2026-08-19-youtube-flap-survival 2). Inert
 # unless YTDLP_POT_PROVIDER_URL is set; pinned like yt-dlp itself so the three
