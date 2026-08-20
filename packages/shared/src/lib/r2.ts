@@ -4,6 +4,7 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
   HeadObjectCommand,
+  CopyObjectCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createReadStream } from "fs";
@@ -115,4 +116,28 @@ export async function getPresignedDownloadUrl(
   return getSignedUrl(getS3Client(), command, {
     expiresIn: expiresInSeconds,
   });
+}
+
+/** Server-side copy inside the bucket. No download, no egress.
+ *
+ *  Used to take a permanent copy of a clip the moment someone gives feedback on
+ *  it. The alternative - exempting the clip from the retention sweep - was
+ *  rejected: Rule A soft-deletes precisely because usage.service counts stored
+ *  clips as `deletedAt: null`, so a sweep exemption would keep a clip inside
+ *  the user's storage quota for the length of the exemption.
+ *
+ *  CopySource must include the bucket and be URI-encoded; a key with a space or
+ *  a non-ASCII character resolves to a different object otherwise. */
+export async function copyObject(
+  sourceKey: string,
+  destinationKey: string
+): Promise<void> {
+  const bucket = getBucket();
+  await getS3Client().send(
+    new CopyObjectCommand({
+      Bucket: bucket,
+      CopySource: encodeURI(`${bucket}/${sourceKey}`),
+      Key: destinationKey,
+    })
+  );
 }
