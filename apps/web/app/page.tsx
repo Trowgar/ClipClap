@@ -560,9 +560,15 @@ export default function LandingPage() {
               href="https://t.me/clipclapio_bot"
               target="_blank"
               rel="noopener noreferrer"
-              className="group inline-flex items-center gap-2.5 rounded-xl bg-[#2AABEE] px-6 py-3 text-sm font-semibold text-white transition-all hover:bg-[#229ED9] hover:scale-[1.02] active:scale-[0.98]"
+              // White, not Telegram blue: the same action is already a white button in the
+              // header, and this page is monochrome everywhere else - grain, dot grid, every
+              // other control. A saturated blue pill in the hero reads as a pasted-in widget.
+              // The plane icon carries "this opens Telegram" without spending the only colour
+              // on the page. The dedicated Telegram section further down keeps its blue button,
+              // where the colour belongs to the whole block.
+              className="group inline-flex items-center gap-2.5 rounded-xl bg-white px-6 py-3 text-sm font-semibold text-black transition-all hover:bg-neutral-200 hover:scale-[1.02] active:scale-[0.98]"
             >
-              <TelegramPlane className="w-4 h-4 fill-white" />
+              <TelegramPlane className="w-4 h-4 fill-black" />
               Start free in Telegram
               <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
             </a>
@@ -574,7 +580,7 @@ export default function LandingPage() {
             </Link>
           </motion.div>
 
-          <p className="mt-3 text-xs text-neutral-600">
+          <p className="mt-3.5 text-xs text-neutral-400">
             First 60 minutes of source video are free - no card needed.
           </p>
         </div>
