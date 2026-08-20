@@ -56,3 +56,4 @@ export { releaseNextQueued, releaseStalledQueues, QUEUE_STALL_MS } from "./job.s
 export { UnsupportedPlanCycleError } from "./billing.service";
 export type { InvoiceRow, InvoicePage } from "./billing.service";
 export { TopupRequiresSubscriptionError } from "./topup.service";
+export * from "./clip-feedback.service";
