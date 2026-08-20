@@ -295,6 +295,19 @@ const ru: Dict = {
   checkoutError: "Не удалось начать оплату. Попробуй ещё раз через минуту.",
   cycleWeekly: "недельный",
   cycleMonthly: "месячный",
+  feedbackPrompt: "Выложил бы?",
+  feedbackVerdictAsIs: "Как есть",
+  feedbackVerdictEdit: "Доработаю",
+  feedbackVerdictNo: "Мимо",
+  feedbackReasonBoring: "Скучный момент",
+  feedbackReasonCutoff: "Обрывается",
+  feedbackReasonFraming: "Не видно лицо",
+  feedbackReasonSubs: "Ошибки в субтитрах",
+  feedbackReasonQuality: "Плохое качество",
+  feedbackThanks: "Спасибо.",
+  feedbackNoted: (reason: string) =>
+    `Записали: ${reason}. Ответь на этот клип, если хочешь дописать - я читаю.`,
+  feedbackNoteSaved: "Принял, записал к этому клипу. Спасибо.",
 };
 
 export default ru;

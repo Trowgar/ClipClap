@@ -298,4 +298,28 @@ export interface Dict {
   checkoutError: string;
   cycleWeekly: string;
   cycleMonthly: string;
+  /** Asked in the caption under every delivered clip. The buttons say "As is",
+   *  "I'd edit" and "No" and are meaningless without this line. */
+  feedbackPrompt: string;
+  /** Verdict buttons. "As is" is deliberately not "I like it": the product
+   *  question is whether this clip is postable WITHOUT hand editing, and the
+   *  middle button is what separates "nearly there" from "no". */
+  feedbackVerdictAsIs: string;
+  feedbackVerdictEdit: string;
+  feedbackVerdictNo: string;
+  /** Reason buttons - symptoms as a user would name them, not pipeline stages.
+   *  Each maps to one subsystem: boring to moment selection, cut off to
+   *  boundaries, face to reframing, subtitles to subtitles, quality to render. */
+  feedbackReasonBoring: string;
+  feedbackReasonCutoff: string;
+  feedbackReasonFraming: string;
+  feedbackReasonSubs: string;
+  feedbackReasonQuality: string;
+  /** Replaces the keyboard after a positive verdict. One tap, then done. */
+  feedbackThanks: string;
+  /** Replaces the keyboard after a reason. Invites the free-text reply, which
+   *  is the only way text ever reaches us from Telegram. */
+  feedbackNoted: (reason: string) => string;
+  /** Acknowledges a reply that was recorded as a note on a clip. */
+  feedbackNoteSaved: string;
 }

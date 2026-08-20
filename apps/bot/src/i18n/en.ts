@@ -373,6 +373,19 @@ const en: Dict = {
   checkoutError: "Could not start checkout. Please try again in a moment.",
   cycleWeekly: "weekly",
   cycleMonthly: "monthly",
+  feedbackPrompt: "Would you post this?",
+  feedbackVerdictAsIs: "As is",
+  feedbackVerdictEdit: "I'd edit it",
+  feedbackVerdictNo: "No",
+  feedbackReasonBoring: "Boring moment",
+  feedbackReasonCutoff: "Cut off",
+  feedbackReasonFraming: "Face off-screen",
+  feedbackReasonSubs: "Subtitle errors",
+  feedbackReasonQuality: "Bad quality",
+  feedbackThanks: "Thanks.",
+  feedbackNoted: (reason: string) =>
+    `Noted: ${reason}. Reply to this clip if you want to add anything - I read these.`,
+  feedbackNoteSaved: "Got it, saved against that clip. Thank you.",
 };
 
 export default en;

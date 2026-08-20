@@ -505,6 +505,19 @@ const ar: Dict = {
   checkoutError: "تعذّر بدء عملية الدفع. حاول مرة أخرى بعد قليل.",
   cycleWeekly: "أسبوعي",
   cycleMonthly: "شهري",
+  feedbackPrompt: "هل ستنشر هذا؟",
+  feedbackVerdictAsIs: "كما هو",
+  feedbackVerdictEdit: "سأعدّله",
+  feedbackVerdictNo: "لا",
+  feedbackReasonBoring: "لحظة مملة",
+  feedbackReasonCutoff: "مقطوع",
+  feedbackReasonFraming: "الوجه خارج الإطار",
+  feedbackReasonSubs: "أخطاء في الترجمة",
+  feedbackReasonQuality: "جودة سيئة",
+  feedbackThanks: "شكرًا.",
+  feedbackNoted: (reason: string) =>
+    `تم التسجيل: ${reason}. رد على هذا المقطع إن أردت الإضافة - أنا أقرأ الردود.`,
+  feedbackNoteSaved: "تم، حُفظ مع ذلك المقطع. شكرًا.",
 };
 
 export default ar;

@@ -288,6 +288,19 @@ const uk: Dict = {
   checkoutError: "Не вдалося почати оплату. Спробуй, будь ласка, за мить.",
   cycleWeekly: "тижневий",
   cycleMonthly: "місячний",
+  feedbackPrompt: "Виклав би?",
+  feedbackVerdictAsIs: "Як є",
+  feedbackVerdictEdit: "Допрацюю",
+  feedbackVerdictNo: "Повз",
+  feedbackReasonBoring: "Нудний момент",
+  feedbackReasonCutoff: "Обривається",
+  feedbackReasonFraming: "Не видно обличчя",
+  feedbackReasonSubs: "Помилки в субтитрах",
+  feedbackReasonQuality: "Погана якість",
+  feedbackThanks: "Дякую.",
+  feedbackNoted: (reason: string) =>
+    `Записали: ${reason}. Відповідай на цей кліп, якщо хочеш дописати - я читаю.`,
+  feedbackNoteSaved: "Прийняв, записав до цього кліпу. Дякую.",
 };
 
 export default uk;

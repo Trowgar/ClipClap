@@ -278,6 +278,19 @@ const es: Dict = {
   checkoutError: "No pude iniciar el pago. Inténtalo de nuevo en un momento.",
   cycleWeekly: "semanal",
   cycleMonthly: "mensual",
+  feedbackPrompt: "¿Lo publicarías?",
+  feedbackVerdictAsIs: "Tal cual",
+  feedbackVerdictEdit: "Lo editaría",
+  feedbackVerdictNo: "No",
+  feedbackReasonBoring: "Momento aburrido",
+  feedbackReasonCutoff: "Se corta",
+  feedbackReasonFraming: "No se ve la cara",
+  feedbackReasonSubs: "Errores en subtítulos",
+  feedbackReasonQuality: "Mala calidad",
+  feedbackThanks: "Gracias.",
+  feedbackNoted: (reason: string) =>
+    `Anotado: ${reason}. Responde a este clip si quieres añadir algo - los leo.`,
+  feedbackNoteSaved: "Listo, guardado junto a ese clip. Gracias.",
 };
 
 export default es;

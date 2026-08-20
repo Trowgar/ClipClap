@@ -274,6 +274,19 @@ const id: Dict = {
   checkoutError: "Tidak bisa memulai pembayaran. Coba lagi sebentar lagi.",
   cycleWeekly: "mingguan",
   cycleMonthly: "bulanan",
+  feedbackPrompt: "Mau posting ini?",
+  feedbackVerdictAsIs: "Apa adanya",
+  feedbackVerdictEdit: "Perlu diedit",
+  feedbackVerdictNo: "Tidak",
+  feedbackReasonBoring: "Momennya membosankan",
+  feedbackReasonCutoff: "Terpotong",
+  feedbackReasonFraming: "Wajah tidak terlihat",
+  feedbackReasonSubs: "Subtitle salah",
+  feedbackReasonQuality: "Kualitas buruk",
+  feedbackThanks: "Terima kasih.",
+  feedbackNoted: (reason: string) =>
+    `Dicatat: ${reason}. Balas klip ini kalau mau menambahkan - saya baca.`,
+  feedbackNoteSaved: "Oke, tersimpan untuk klip itu. Terima kasih.",
 };
 
 export default id;
