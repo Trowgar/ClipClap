@@ -364,8 +364,8 @@ Expected: `The following migration(s) have been applied` naming only your folder
 - [ ] **Step 6: Verify the table shape against the database**
 
 ```bash
-docker compose exec -T postgres psql -U postgres -d clipclap -c '\d clip_feedback'
-docker compose exec -T postgres psql -U postgres -d clipclap -c '\d clips'
+docker compose exec -T postgres psql -U clipclap -d clipclap -c '\d clip_feedback'
+docker compose exec -T postgres psql -U clipclap -d clipclap -c '\d clips'
 ```
 
 Expected on `clip_feedback`: columns `id, clipId, jobId, userId, surface, verdict, reason, note, snapshot, evidenceKey, locale, createdAt, updatedAt`, a unique index on `("clipId", "userId")`, three further indexes, and a `Foreign-key constraints` section that is **absent or empty**. If any foreign key is listed, a relation crept into the model - stop and report.
@@ -375,8 +375,8 @@ Expected on `clips`: a new `telegramMessageId | integer` column, nullable.
 Also confirm nothing was lost:
 
 ```bash
-docker compose exec -T postgres psql -U postgres -d clipclap -c 'select count(*) from clips;'
-docker compose exec -T postgres psql -U postgres -d clipclap -c 'select count(*) from jobs;'
+docker compose exec -T postgres psql -U clipclap -d clipclap -c 'select count(*) from clips;'
+docker compose exec -T postgres psql -U clipclap -d clipclap -c 'select count(*) from jobs;'
 ```
 
 Both counts must be non-zero on this host. A zero is evidence the database was reset and must be escalated immediately, not worked around.
@@ -3046,7 +3046,7 @@ docker compose up -d
 Submit a short source through the bot. Confirm: the caption ends with the prompt, three buttons sit under each video, `As is` replaces the keyboard with a thank-you, `No` swaps in the 2/2/1 reason row, tapping a reason confirms, and replying to the video acknowledges. Then:
 
 ```bash
-docker compose exec -T postgres psql -U postgres -d clipclap -c \
+docker compose exec -T postgres psql -U clipclap -d clipclap -c \
   'select surface, verdict, reason, "evidenceKey" is not null as has_copy, left(note, 40) from clip_feedback order by "createdAt" desc limit 10;'
 ```
 
