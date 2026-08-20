@@ -1109,55 +1109,73 @@ sed -n '1,60p' apps/bot/src/__tests__/send-video-upload.test.ts
 
 `sendVideoUpload` currently returns `string | undefined`. This task changes it to an object, so existing assertions in that file must be updated in the same commit or the suite goes red for the wrong reason.
 
-- [ ] **Step 2: Write the failing test**
+- [ ] **Step 2: Update the existing test, then add the new ones**
 
-Append to `apps/bot/src/__tests__/send-video-upload.test.ts`, adapting the mocking style already used at the top of that file:
+`apps/bot/src/__tests__/send-video-upload.test.ts` already exists and its style is not the one to invent: it spies on the global fetch with `vi.spyOn(globalThis, "fetch")`, resolves a real `Response`, and writes a real temp file through a local `tempVideo()` helper. Follow it.
+
+**First fix the test this change breaks.** Its second case asserts the old return type:
 
 ```ts
-describe("sendVideoUpload with a keyboard", () => {
-  // Records the multipart body so the assertions below can read it back. The
-  // file itself is a Blob and is not inspected - only the fields around it.
-  let lastForm: FormData | undefined;
+    await expect(client.sendVideoUpload(42, path, "c")).resolves.toBe("FID-123");
+```
 
-  beforeEach(() => {
-    lastForm = undefined;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_url: string, init?: RequestInit) => {
-        lastForm = init?.body as FormData;
-        return {
-          ok: true,
-          json: async () => ({
-            ok: true,
-            result: { message_id: 4242, video: { file_id: "F1" } },
-          }),
-        } as Response;
-      })
+That must become the new shape, and the fixture must carry a `message_id` so both halves are covered:
+
+```ts
+  it("returns the ids Telegram assigned", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({ ok: true, result: { message_id: 4242, video: { file_id: "FID-123" } } }),
+        { status: 200 }
+      )
     );
+    const path = tempVideo();
+    const client = new TelegramClient("token", "http://local");
+    await expect(client.sendVideoUpload(42, path, "c")).resolves.toEqual({
+      fileId: "FID-123",
+      messageId: 4242,
+    });
+    unlinkSync(path);
   });
+```
 
-  it("returns both the file id and the message id", async () => {
-    const sent = await client.sendVideoUpload("123", "/tmp/clip.mp4", "cap");
-    expect(sent).toEqual({ fileId: "F1", messageId: 4242 });
-  });
+Then append two new cases:
 
-  // reply_markup is not a plain form field: Telegram expects it JSON-encoded
+```ts
+  // reply_markup is not a plain form field: Telegram reads it as a JSON string
   // inside multipart. Passing the object raw stringifies to "[object Object]"
   // and the keyboard silently never appears.
   it("serialises reply_markup as JSON into the form", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, result: { message_id: 1, video: { file_id: "F" } } }), { status: 200 })
+    );
+    const path = tempVideo();
+    const client = new TelegramClient("token", "http://local");
     const markup = { inline_keyboard: [[{ text: "As is", callback_data: "fb:a:c1" }]] };
-    await client.sendVideoUpload("123", "/tmp/clip.mp4", "cap", markup);
-    expect(lastForm?.get("reply_markup")).toBe(JSON.stringify(markup));
+
+    await client.sendVideoUpload(42, path, "c", markup);
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect((init.body as FormData).get("reply_markup")).toBe(JSON.stringify(markup));
+    unlinkSync(path);
   });
 
+  // An empty keyboard is not the same as no keyboard: Telegram renders an
+  // empty inline_keyboard as a stray blank row under the video.
   it("sends no reply_markup field at all when there is no keyboard", async () => {
-    await client.sendVideoUpload("123", "/tmp/clip.mp4", "cap");
-    expect(lastForm?.get("reply_markup")).toBeNull();
-  });
-});
-```
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, result: { message_id: 1, video: { file_id: "F" } } }), { status: 200 })
+    );
+    const path = tempVideo();
+    const client = new TelegramClient("token", "http://local");
 
-The file already builds a `client` and stubs `openAsBlob`; reuse those rather than creating a second set. If its existing fetch stub is defined at module scope, move the `vi.stubGlobal` above into that same place instead of duplicating it.
+    await client.sendVideoUpload(42, path, "c");
+
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
+    expect((init.body as FormData).get("reply_markup")).toBeNull();
+    unlinkSync(path);
+  });
+```
 
 - [ ] **Step 3: Run to verify it fails**
 
