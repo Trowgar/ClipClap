@@ -55,6 +55,14 @@ export const api = {
     ) =>
       fetchApi<ClipData>(`/api/clips/${id}/edit`, { method: "PUT", body: JSON.stringify(data) }),
     delete: (id: string) => fetchApi<{ ok: boolean }>(`/api/clips/${id}`, { method: "DELETE" }),
+    feedback: (
+      id: string,
+      data: { verdict?: string; reason?: string; note?: string }
+    ) =>
+      fetchApi<{ ok: boolean; verdict: string | null; reason: string | null }>(
+        `/api/clips/${id}/feedback`,
+        { method: "POST", body: JSON.stringify(data) }
+      ),
   },
   billing: {
     subscription: () => fetchApi<SubscriptionData>("/api/billing/subscription"),
