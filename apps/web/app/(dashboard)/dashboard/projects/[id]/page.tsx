@@ -1,6 +1,6 @@
 import { auth } from "@/lib/auth";
 import { redirect, notFound } from "next/navigation";
-import { projectService } from "@clipclap/shared";
+import { isClipFeedbackEnabled, projectService } from "@clipclap/shared";
 import { ProjectDetail } from "@/components/project-detail";
 
 export default async function ProjectPage({
@@ -17,5 +17,10 @@ export default async function ProjectPage({
 
   const serializedProject = JSON.parse(JSON.stringify(project));
 
-  return <ProjectDetail initialProject={serializedProject} />;
+  return (
+    <ProjectDetail
+      initialProject={serializedProject}
+      feedbackEnabled={isClipFeedbackEnabled("web")}
+    />
+  );
 }

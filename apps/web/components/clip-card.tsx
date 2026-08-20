@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { DownloadSimple, FilmStrip, CircleNotch, PencilSimple, Trash } from "@phosphor-icons/react";
 import { formatDuration } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { ClipFeedback } from "@/components/clip-feedback";
 import Link from "next/link";
 
 const CLIP_URL_TTL_MS = 50 * 60 * 1000;
@@ -26,12 +27,15 @@ interface ClipCardProps {
   clip: ClipCardClip;
   previewUrl?: string | null;
   onDelete?: () => void;
+  /** Server-read CLIP_FEEDBACK_WEB. Absent means off. */
+  feedbackEnabled?: boolean;
 }
 
 export function ClipCard({
   clip,
   previewUrl: previewUrlProp,
   onDelete,
+  feedbackEnabled,
 }: ClipCardProps) {
   const initialPreviewUrl = previewUrlProp ?? clip.previewUrl ?? null;
   const [previewUrl, setPreviewUrl] = useState<string | null>(() =>
@@ -231,6 +235,8 @@ export function ClipCard({
             )}
           </Button>
         </div>
+
+        {feedbackEnabled && <ClipFeedback clipId={clip.id} />}
       </div>
     </article>
   );

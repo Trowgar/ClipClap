@@ -34,8 +34,10 @@ export type SerializedProjectDetail = Omit<
 
 export function ProjectDetail({
   initialProject,
+  feedbackEnabled,
 }: {
   initialProject: SerializedProjectDetail;
+  feedbackEnabled?: boolean;
 }) {
   const router = useRouter();
   const [project, setProject] = useState(initialProject);
@@ -224,6 +226,7 @@ export function ProjectDetail({
                 key={clip.id}
                 clip={clip}
                 onDelete={() => handleDelete(clip.id)}
+                feedbackEnabled={feedbackEnabled}
               />
             ))}
           </div>
