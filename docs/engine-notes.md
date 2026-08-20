@@ -8,7 +8,7 @@ Rules for this file: every number here came from a measurement, not from reasoni
 reproduced, say how. When something is believed but unmeasured, mark it. Delete an entry when it stops being
 true - a stale note is worse than none, and this file has already caught two of its own.
 
-Last substantive update: 2026-08-17.
+Last substantive update: 2026-08-20.
 
 ---
 
@@ -2806,3 +2806,53 @@ recorded cases of a number chosen from nothing.
 6. **`find_cam_rect` on a second source.** The Booster CS2 stream resolves no `camRect`, and §7g measured
    that lifting the size gate and building a per-shot edge map does NOT fix it - the best rectangle scores
    1.35 against a threshold of 4.0. Whatever this needs, it is not relaxed thresholds.
+
+---
+
+## 11. Clip feedback: what an agent reads to fix a complaint (2026-08-20)
+
+Per-clip feedback shipped on both surfaces - three verdict buttons (`AS_IS` / `EDIT` / `NO`) under every
+delivered clip, five reason buttons after a negative verdict, and free text - landing in `clip_feedback`. Two
+independent kill switches, fail-closed like `SUBMISSION_QUEUE`: `CLIP_FEEDBACK_BOT` and `CLIP_FEEDBACK_WEB`,
+each read from `.env` by `isClipFeedbackEnabled` (`config/feedback.ts`). Either can be `on` without the other.
+Turning one off only stops NEW taps from being recorded - it never un-shows a keyboard already sitting in
+someone's Telegram chat, so the callback handler keeps recording after the switch is thrown on purpose.
+
+Each `reason` routes to exactly one subsystem - this is the map to have open before touching the engine on the
+back of a complaint:
+
+| reason | subsystem |
+|---|---|
+| BORING | moment selection (ANALYZE) |
+| CUTOFF | clip boundaries (ANALYZE `snapNodes`) |
+| FRAMING | reframing (RENDER crop/reframe stage) |
+| SUBS | subtitles (RENDER subtitle burn-in) |
+| QUALITY | rendering (RENDER, general render quality) |
+
+`clip_feedback` deliberately carries no relations to Clip/Job/User - deleting a project hard-deletes the job
+and cascades the clips, and a relation would erase exactly the strongest signal in the table. Everything is
+frozen into a `snapshot` JSON column at tap time instead (`recordClipFeedback` in `clip-feedback.service.ts`),
+plus a permanent R2 copy of the clip (`evidenceKey`) that never expires and sits outside the retention sweep.
+`verdict` is `""`, not null, when someone leaves a note or picks a reason before ever tapping a verdict button
+- that is a real value meaning "no verdict yet," never folded into one of the three real verdicts.
+
+**Read it with the digest, not with a query.** `apps/worker/src/scripts/feedback-digest.ts` turns the raw rows
+into an agent-readable report: a header with response rate and postable rate (both zero-denominator safe),
+then sections grouped by reason - commonest first, no-reason rows in their own final group - each clip printed
+with its window, score, clipKind, hook/payoff, engine and highlights version, the cropPlan digest, the note,
+the transcript slice, and a freshly-signed video link.
+
+```
+docker compose exec -T worker-render sh -c \
+  "cd /app/apps/worker && npx tsx src/scripts/feedback-digest.ts"
+```
+
+Writes to `apps/worker/.corpus/feedback/` (gitignored): `<date>.md` to read, `feedback.jsonl` (overwritten
+each run) to grep or feed into another tool. Presigned links are generated at run time and never stored - a
+link written into a report is dead within 7 days, the R2 copy never expires, so re-running always regenerates
+a working one; a failed signature falls back to noting the raw key rather than losing the rest of the report.
+
+`clip_feedback` was empty in production when this shipped. The digest was verified against that empty state
+(a readable report saying so, not a crash) and separately against seeded rows covering both reasoned and
+reasonless feedback, a signed link and a missing one, and a sparse snapshot missing most fields - the seeded
+rows were deleted immediately after.
