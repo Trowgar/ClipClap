@@ -34,3 +34,11 @@ export {
   formatLocalDateTime,
 } from "./analytics";
 export * from "./disposable-domains";
+export {
+  FEEDBACK_VERDICTS,
+  FEEDBACK_REASONS,
+  isFeedbackVerdict,
+  isFeedbackReason,
+  isClipFeedbackEnabled,
+} from "./feedback";
+export type { FeedbackVerdict, FeedbackReason, FeedbackSurface } from "./feedback";
