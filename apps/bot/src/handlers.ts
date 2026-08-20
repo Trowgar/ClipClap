@@ -740,6 +740,23 @@ export async function handleUpdate(
     return;
   }
 
+  // A reply to one of our own clip videos is feedback, not a submission.
+  //
+  // Below the support capture on purpose: an open ticket is a deliberate act by
+  // the user and the operator is waiting for that text. Above the URL branch on
+  // purpose: see tryRecordClipReply for why a miss is swallowed rather than
+  // passed on.
+  const repliedTo = message.reply_to_message;
+  if (repliedTo?.from?.is_bot && repliedTo.video && text && existing?.id) {
+    const handled = await tryRecordClipReply(existing.id, repliedTo.message_id, text);
+    if (handled) {
+      await client
+        .sendMessage(message.chat.id, dict.feedbackNoteSaved)
+        .catch(() => undefined);
+      return;
+    }
+  }
+
   const url = extractVideoUrl(text);
   if (url) {
     await handleVideoUrl(client, message, from, url, dict, config);
@@ -1763,6 +1780,58 @@ export async function handleFeedbackCallback(
       `[feedback] callback ${press.data} failed:`,
       error instanceof Error ? error.message : error
     );
+  }
+}
+
+/** A reply to one of the bot's clip videos, recorded as free text on that clip.
+ *
+ *  This is the entire free-text channel from Telegram, and it costs one column
+ *  and one branch: no force_reply, no pending-state machine, no Redis key.
+ *
+ *  Returns true when the message has been DEALT WITH - which includes the miss.
+ *  That is not sloppiness: the anchor can be gone (the project was deleted, or
+ *  the send never returned a message id), and letting a miss fall through would
+ *  hand the text to the source-URL branch, where a reply containing a link
+ *  would start a job the user never asked for.
+ *
+ *  The lookup keys on the PAIR: message_id is unique per chat and is a small
+ *  integer, so ids collide across chats freely. */
+export async function tryRecordClipReply(
+  userId: string,
+  repliedToMessageId: number,
+  text: string
+): Promise<boolean> {
+  const note = text.trim();
+  if (!note) return false;
+
+  try {
+    const clip = await prisma.clip.findFirst({
+      where: { userId, telegramMessageId: repliedToMessageId },
+      select: { id: true },
+    });
+    if (!clip) {
+      console.warn(
+        `[feedback] reply from ${userId} to message ${repliedToMessageId} matched no clip`
+      );
+      return true;
+    }
+
+    await recordClipFeedback({
+      clipId: clip.id,
+      userId,
+      surface: "bot",
+      note,
+    });
+    return true;
+  } catch (error) {
+    // A database wobble must not cost the user their message. Falling through
+    // to ordinary handling is the safe direction here: the worst case is the
+    // sendVideoHint reply, not a lost note and not a job nobody asked for.
+    console.error(
+      `[feedback] could not record reply from ${userId}:`,
+      error instanceof Error ? error.message : error
+    );
+    return false;
   }
 }
 

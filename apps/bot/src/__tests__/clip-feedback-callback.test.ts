@@ -55,6 +55,7 @@ describe("handleFeedbackCallback", () => {
       t("en")
     );
     expect(client.editMessageReplyMarkup).toHaveBeenCalledWith(1, 10, undefined);
+    expect(client.sendMessage).toHaveBeenCalledWith(1, t("en").feedbackThanks);
   });
 
   // The keyboard is attacker-controlled. A refused write must change nothing
@@ -96,7 +97,10 @@ describe("handleFeedbackCallback", () => {
     expect(arg).toMatchObject({ clipId: "clip-1", surface: "bot", reason: "FRAMING" });
     expect(arg).not.toHaveProperty("verdict");
     expect(client.editMessageReplyMarkup).toHaveBeenCalledWith(1, 10, undefined);
-    expect(client.sendMessage).toHaveBeenCalled();
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      1,
+      t("en").feedbackNoted(t("en").feedbackReasonFraming)
+    );
   });
 
   // Not ours: the router must fall through to its other branches rather than
