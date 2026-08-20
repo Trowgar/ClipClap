@@ -445,19 +445,75 @@ export async function copyObject(
 }
 ```
 
-- [ ] **Step 3: Confirm it is exported from the lib barrel**
+- [ ] **Step 3: Export it from the lib barrel**
 
-Check `packages/shared/src/lib/index.ts`. If R2 functions are re-exported by name rather than `export *`, add `copyObject` to that list; if it uses `export * from "./r2"`, nothing to do.
+`packages/shared/src/lib/index.ts:3` re-exports the R2 functions **by name**, so a new function is invisible until it is listed. Add `copyObject` to that export list.
 
-```bash
-grep -n "r2" packages/shared/src/lib/index.ts
+- [ ] **Step 4: Write the test**
+
+Create `packages/shared/src/lib/__tests__/r2-copy.test.ts`. The mocking pattern is not invented here - it is copied from the neighbouring `r2-size.test.ts`, which stubs the S3 client class the same way:
+
+```ts
+import { describe, expect, it, vi, beforeEach } from "vitest";
+
+const sendMock = vi.hoisted(() => vi.fn());
+
+vi.mock("@aws-sdk/client-s3", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aws-sdk/client-s3")>();
+  return {
+    ...actual,
+    S3Client: class {
+      send = sendMock;
+    },
+  };
+});
+
+import { CopyObjectCommand } from "@aws-sdk/client-s3";
+import { copyObject } from "../r2";
+
+beforeEach(() => {
+  sendMock.mockReset();
+  sendMock.mockResolvedValue({});
+});
+
+describe("copyObject", () => {
+  it("copies inside the bucket, with the source qualified by the bucket name", async () => {
+    await copyObject("clips/a.mp4", "feedback/a.mp4");
+    const command = sendMock.mock.calls[0][0];
+    expect(command).toBeInstanceOf(CopyObjectCommand);
+    const bucket = process.env.R2_BUCKET_NAME;
+    expect(command.input).toEqual({
+      Bucket: bucket,
+      CopySource: `${bucket}/clips/a.mp4`,
+      Key: "feedback/a.mp4",
+    });
+  });
+
+  // CopySource is a URL path, not a plain string. An un-encoded space or
+  // non-ASCII character in the key makes S3 resolve a different object - the
+  // copy 404s, or worse, silently lands somewhere else. The bucket prefix is
+  // what makes it a same-bucket copy at all; without it S3 reads the first
+  // path segment as the bucket.
+  it("URI-encodes the source key", async () => {
+    await copyObject("clips/my clip.mp4", "feedback/x.mp4");
+    expect(sendMock.mock.calls[0][0].input.CopySource).toContain("my%20clip.mp4");
+  });
+});
 ```
 
-- [ ] **Step 4: Typecheck and commit**
+Run it:
+
+```bash
+docker compose exec -T bot sh -c 'cd /app && node_modules/.bin/vitest run packages/shared/src/lib/__tests__/r2-copy.test.ts'
+```
+
+Expected: PASS, 2 tests. Then mutation-check the encoding: drop `encodeURI` from the implementation and confirm the second test goes red. Restore it.
+
+- [ ] **Step 5: Typecheck and commit**
 
 ```bash
 docker compose exec -T bot sh -c 'cd /app && npx tsc -p packages/shared/tsconfig.json --noEmit'
-git add packages/shared/src/lib/r2.ts packages/shared/src/lib/index.ts
+git add packages/shared/src/lib/r2.ts packages/shared/src/lib/index.ts packages/shared/src/lib/__tests__/r2-copy.test.ts
 git commit -m "feat(feedback): copyObject helper for evidence copies"
 ```
 
