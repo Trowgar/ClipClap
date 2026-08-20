@@ -212,11 +212,45 @@ services:
   # agent - and then mints nothing at all, so mweb returns no formats and the
   # failure gets WORSE. Measured and reverted 2026-08-20.
   #
-  # The remaining route is an HTTP proxy listener on the warp container (gost
-  # already runs there and speaks http), then ALL_PROXY=http://warp:<port>.
   potprovider:
     image: brainicism/bgutil-ytdlp-pot-provider:1.3.1
     init: true
+    # THE TOKEN MUST BE MINTED FROM THE SAME EGRESS THAT FETCHES THE MEDIA.
+    #
+    # yt-dlp's PO-token guide requires it: a GVS token is tied to the address
+    # that asked for it. Without this the sidecar minted from this host's own
+    # address - the one YouTube refuses outright - while yt-dlp fetched through
+    # WARP, so the token never matched the fetch. The symptom was a bare 403 on
+    # every media URL while extraction and the token call both looked healthy:
+    # six consecutive URL jobs from four users, 2026-08-18 to 08-20, zero done.
+    #
+    # http://, NOT socks5://. The provider's HTTP client refuses a socks agent
+    # ("Could not get BotGuard challenge ... AssertionError: protocol mismatch")
+    # and then mints nothing at all, which is worse than the 403 - measured and
+    # reverted 2026-08-20. gost in the warp container listens in auto mode on
+    # 1080 and answers HTTP CONNECT there as well as SOCKS5, so this needs no
+    # change to warp itself.
+    # DISABLED pending a clean re-test - see the note below.
+    # environment:
+    #   - ALL_PROXY=http://warp:1080
+    # depends_on:
+    #   warp:
+    #     condition: service_started
+    #
+    # 2026-08-20, second attempt: over http:// the proxy DOES work (the socks
+    # "protocol mismatch" is gone and the log shows "Using proxy:
+    # http://warp:1080/"), but YouTube then answers 400 on
+    # /youtubei/v1/att/get and the sidecar mints nothing - worse than the 403 it
+    # was meant to fix, so it is off again.
+    #
+    # Two candidate explanations, NOT distinguished yet:
+    #   1. gost resolves remotely on CONNECT and may leave over the IPv6 exit,
+    #      while yt-dlp deliberately uses socks5:// with local DNS in a v4-only
+    #      container to get the IPv4 one (engine-notes section 8). Different
+    #      exit family would defeat the whole point AND could explain the 400.
+    #   2. The exit was measured heavily that afternoon, and section 8 warns
+    #      that a burnt exit answers oddly. The 400 may simply be that.
+    # Re-test on a cold exit before drawing any conclusion.
     expose:
       - "4416"
     restart: unless-stopped
