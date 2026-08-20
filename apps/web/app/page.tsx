@@ -472,12 +472,18 @@ export default function LandingPage() {
             >
               Sign in
             </Link>
-            <Link
-              href="/login"
-              className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-black transition-all hover:bg-neutral-200 active:scale-[0.97]"
+            {/* Telegram first: measured 2026-08-20, bot arrivals activate at 90.3% against
+                5.9% on the web signup, so the primary button sends people where the product
+                actually works. Sign in stays for people who want the web app. */}
+            <a
+              href="https://t.me/clipclapio_bot"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-black transition-all hover:bg-neutral-200 active:scale-[0.97]"
             >
-              Get Started
-            </Link>
+              <TelegramPlane className="w-3.5 h-3.5 fill-black" />
+              Start free
+            </a>
           </div>
         </div>
       </header>
@@ -540,6 +546,37 @@ export default function LandingPage() {
             Drop any stream, podcast, or VOD. AI finds the viral moments,
             cuts vertical clips with subtitles. Built for clippers.
           </motion.p>
+
+          {/* Hero CTA. There was none here before - visitors read the headline and scrolled.
+              Telegram leads because that is the path that converts (90.3% of bot arrivals run
+              a job, against 5.9% of web signups, measured 2026-08-20). */}
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5, delay: 0.16 }}
+            className="mt-7 flex flex-col items-center gap-3 sm:flex-row sm:justify-center"
+          >
+            <a
+              href="https://t.me/clipclapio_bot"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group inline-flex items-center gap-2.5 rounded-xl bg-[#2AABEE] px-6 py-3 text-sm font-semibold text-white transition-all hover:bg-[#229ED9] hover:scale-[1.02] active:scale-[0.98]"
+            >
+              <TelegramPlane className="w-4 h-4 fill-white" />
+              Start free in Telegram
+              <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
+            </a>
+            <Link
+              href="/login"
+              className="text-sm text-neutral-500 transition-colors hover:text-neutral-300"
+            >
+              or use the web app
+            </Link>
+          </motion.div>
+
+          <p className="mt-3 text-xs text-neutral-600">
+            First 60 minutes of source video are free - no card needed.
+          </p>
         </div>
 
         {/* ── Visual Pipeline ── */}
@@ -811,13 +848,15 @@ export default function LandingPage() {
                   </span>{" "}
                   are free - one-time, on a new account.
                 </p>
-                <Link
-                  href="/login"
+                <a
+                  href="https://t.me/clipclapio_bot"
+                  target="_blank"
+                  rel="noopener noreferrer"
                   className="group inline-flex flex-shrink-0 items-center gap-1.5 text-sm font-medium text-white transition-colors hover:text-neutral-300"
                 >
-                  Start free
+                  Start free in Telegram
                   <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-                </Link>
+                </a>
               </div>
             </div>
           </FadeIn>
