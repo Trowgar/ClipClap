@@ -30,4 +30,14 @@ describe("buildClipCaption", () => {
   it("works with title only (legacy clips without description)", () => {
     expect(buildClipCaption({ title: "Only title" })).toBe("Only title");
   });
+
+  it("appends the feedback prompt after the description when given", () => {
+    expect(
+      buildClipCaption({ title: "T", description: "D", feedbackPrompt: "Would you post this?" })
+    ).toBe("T\n\nD\n\nWould you post this?");
+  });
+
+  it("omits the feedback prompt entirely when not given (flag-off shape)", () => {
+    expect(buildClipCaption({ title: "T", description: "D" })).toBe("T\n\nD");
+  });
 });

@@ -32,8 +32,10 @@ import {
   markTelegramDeliveryFailureNotified,
   markTelegramDeliverySent,
   MAX_TELEGRAM_DELIVERY_ATTEMPTS,
+  isClipFeedbackEnabled,
   parseJobErrorCode,
   prisma,
+  recordClipFeedback,
   recordFunnelEvent,
   recordUploadRefusal,
   redeemLinkFromBot,
@@ -52,6 +54,12 @@ import type {
 import type { JobStatus, User } from "@prisma/client";
 import type { TelegramClient } from "./telegram-client";
 import { deliverClips, rearmDeliveryForResend } from "./clip-delivery";
+import {
+  parseFeedbackCallback,
+  reasonKeyboard,
+  reasonLabel,
+  verdictKeyboard,
+} from "./clip-feedback-keyboard";
 import { extractVideoUrl, isYouTubeUrl, probeVideoUrl } from "./url-probe";
 import {
   LOCALES,
@@ -1340,6 +1348,7 @@ export async function deliverReadyTelegramJobs(
       // TypeScript will not carry the narrowing of the mutable `dict` (which
       // the catch block needs to read as possibly null) across one.
       const strings = dict;
+      const feedbackOn = isClipFeedbackEnabled("bot");
       const outcome = await deliverClips(
         client,
         delivery.chatId,
@@ -1350,6 +1359,7 @@ export async function deliverReadyTelegramJobs(
             description: clip.description,
             lowQuality: clip.lowQuality,
             lowQualityNote: strings.lowQualityNote,
+            feedbackPrompt: feedbackOn ? strings.feedbackPrompt : undefined,
           }),
         {
           markSent: async (clipId, fileId, messageId) => {
@@ -1374,7 +1384,10 @@ export async function deliverReadyTelegramJobs(
               data: { telegramSendError: reason },
             });
           },
-        }
+        },
+        // Undefined, not an empty keyboard: Telegram renders an empty
+        // inline_keyboard as a stray blank row under the video.
+        feedbackOn ? (clip) => verdictKeyboard(clip.id, strings) : undefined
       );
 
       // Still owed, so the row is NOT settled: the next poll re-picks it and
@@ -1674,6 +1687,85 @@ async function handleStart(
   await sendMainMenu(client, message.chat.id, dict.welcomeBack, dict, from);
 }
 
+/** One tap on a feedback keyboard.
+ *
+ *  Exported for tests, and shaped around three constraints. The callback has
+ *  already been acknowledged by handleCallbackQuery, so nothing here may throw.
+ *  clipId comes off a button and is forgeable, so ownership is checked at the
+ *  row inside recordClipFeedback - a refusal changes nothing in the chat and is
+ *  logged rather than answered, because there is nothing honest to say to
+ *  someone pressing another user's button.
+ *
+ *  Deliberately NOT behind isClipFeedbackEnabled: keyboards already sitting in
+ *  people's chats cannot be recalled, and refusing them would turn those chats
+ *  into a graveyard of buttons that answer with an error. The flag gates
+ *  drawing new ones. */
+export async function handleFeedbackCallback(
+  client: TelegramClient,
+  press: { chatId: number | string; messageId: number; userId: string; data: string },
+  dict: Dict
+): Promise<void> {
+  const parsed = parseFeedbackCallback(press.data);
+  if (!parsed) return;
+
+  try {
+    const result =
+      parsed.kind === "verdict"
+        ? await recordClipFeedback({
+            clipId: parsed.clipId,
+            userId: press.userId,
+            surface: "bot",
+            verdict: parsed.verdict,
+          })
+        : await recordClipFeedback({
+            clipId: parsed.clipId,
+            userId: press.userId,
+            surface: "bot",
+            reason: parsed.reason,
+          });
+
+    if (!result.ok) {
+      console.warn(
+        `[feedback] refused ${press.data} for user ${press.userId}: ${result.code}`
+      );
+      return;
+    }
+
+    if (parsed.kind === "reason") {
+      await client
+        .editMessageReplyMarkup(press.chatId, press.messageId, undefined)
+        .catch(() => undefined);
+      await client
+        .sendMessage(press.chatId, dict.feedbackNoted(reasonLabel(parsed.reason, dict)))
+        .catch(() => undefined);
+      return;
+    }
+
+    // Praise costs one tap; a complaint costs two. The reason row only appears
+    // for the two verdicts that have something to explain.
+    if (parsed.verdict === "AS_IS") {
+      await client
+        .editMessageReplyMarkup(press.chatId, press.messageId, undefined)
+        .catch(() => undefined);
+      await client.sendMessage(press.chatId, dict.feedbackThanks).catch(() => undefined);
+      return;
+    }
+
+    await client
+      .editMessageReplyMarkup(
+        press.chatId,
+        press.messageId,
+        reasonKeyboard(parsed.clipId, dict)
+      )
+      .catch(() => undefined);
+  } catch (error) {
+    console.error(
+      `[feedback] callback ${press.data} failed:`,
+      error instanceof Error ? error.message : error
+    );
+  }
+}
+
 async function handleCallbackQuery(
   client: TelegramClient,
   query: TelegramCallbackQuery,
@@ -1712,6 +1804,23 @@ async function handleCallbackQuery(
     if (!rearmed) {
       console.warn(`[delivery] resend refused for job ${jobId}: not this user's`);
     }
+    return;
+  }
+
+  // Ahead of the switch below: feedback callbacks carry a clip id, so there is
+  // no finite set of literals to enumerate as cases.
+  if (query.data.startsWith("fb:") || query.data.startsWith("fr:")) {
+    const user = await resolveTelegramUser(query.from);
+    await handleFeedbackCallback(
+      client,
+      {
+        chatId: query.message.chat.id,
+        messageId: query.message.message_id,
+        userId: user.id,
+        data: query.data,
+      },
+      dict
+    );
     return;
   }
 
