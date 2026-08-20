@@ -1040,7 +1040,7 @@ async function relayToOwner(
   const chat = process.env.SUPPORT_CHAT_ID?.trim();
   if (!chat) return;
   const lines = [
-    `📝 Clip feedback (${input.surface})`,
+    `Clip feedback (${input.surface})`,
     `Clip: ${clipTitle}`,
     `Verdict: ${input.verdict ?? "-"}  Reason: ${input.reason ?? "-"}`,
     "",
@@ -1048,13 +1048,12 @@ async function relayToOwner(
     "",
     `clipId ${input.clipId} · feedbackId ${feedbackId}`,
   ];
-  try {
-    await sendTelegramMessage(chat, lines.join("\n"));
-  } catch (error) {
-    console.error(
-      `[feedback] could not relay note for ${input.clipId}:`,
-      error instanceof Error ? error.message : error
-    );
+  // sendTelegramMessage swallows its own failures and reports them as false, so
+  // there is nothing to catch here - only a boolean worth logging. A lost relay
+  // costs a notification, never the feedback row, which is already written.
+  const sent = await sendTelegramMessage(chat, lines.join("\n"));
+  if (!sent) {
+    console.warn(`[feedback] relay to the owner failed for ${input.clipId}`);
   }
 }
 ```
