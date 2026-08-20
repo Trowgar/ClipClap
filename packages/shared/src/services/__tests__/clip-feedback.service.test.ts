@@ -153,6 +153,34 @@ describe("recordClipFeedback write shape", () => {
     expect(arg.update).toMatchObject({ reason: "FRAMING" });
     expect(arg.update).not.toHaveProperty("verdict");
   });
+
+  // The verdict branch sets `reason: null` to clear a stale reason, and the
+  // reason branch runs after it - so a call that submits both in one tap must
+  // end with the NEW reason attached, not wiped by the clear it rides in on.
+  it("keeps the reason when verdict and reason are submitted together", async () => {
+    await recordClipFeedback({
+      clipId: "clip-1",
+      userId: "user-1",
+      surface: "bot",
+      verdict: "NO",
+      reason: "FRAMING",
+    });
+    const arg = feedbackUpsert.mock.calls[0][0];
+    expect(arg.update).toMatchObject({ verdict: "NO", reason: "FRAMING" });
+  });
+
+  // A reply or the web note field can arrive before any verdict tap. "NO"
+  // would be a lie and "AS_IS" flattery, so the first-touch row must carry the
+  // honest empty string, not a guessed verdict.
+  it("records an honest empty-string verdict on a note-only first touch", async () => {
+    await recordClipFeedback({
+      clipId: "clip-1",
+      userId: "user-1",
+      surface: "bot",
+      note: "left field text",
+    });
+    expect(feedbackUpsert.mock.calls[0][0].create.verdict).toBe("");
+  });
 });
 
 describe("snapshot", () => {
@@ -177,6 +205,41 @@ describe("snapshot", () => {
       cropPlan: { keyframes: 2, layout: "single" },
     });
     expect(snapshot.transcript).toBe("inside one inside two");
+  });
+
+  // A regression from strict `>`/`<` to `>=`/`<=` would silently start pulling
+  // in the neighbour segments that only touch the window edge. Built as a
+  // local fixture, not appended to the shared CLIP, so this does not disturb
+  // any test that reuses CLIP without caring about its transcript.
+  it("excludes segments that only touch the clip window boundary", async () => {
+    const boundaryClip = {
+      ...CLIP,
+      job: {
+        ...CLIP.job,
+        transcriptJson: {
+          segments: [
+            // Ends exactly at startTime (100): s.end > startTime is false.
+            { start: 90, end: 100, text: "ends-at-start" },
+            { start: 101, end: 120, text: "inside one" },
+            { start: 121, end: 141, text: "inside two" },
+            // Starts exactly at endTime (142): s.start < endTime is false.
+            { start: 142, end: 150, text: "starts-at-end" },
+          ],
+        },
+      },
+    };
+    clipFindFirst.mockResolvedValue(boundaryClip);
+
+    await recordClipFeedback({
+      clipId: "clip-1",
+      userId: "user-1",
+      surface: "bot",
+      verdict: "NO",
+    });
+    const snapshot = feedbackUpsert.mock.calls[0][0].create.snapshot;
+    expect(snapshot.transcript).toBe("inside one inside two");
+    expect(snapshot.transcript).not.toContain("ends-at-start");
+    expect(snapshot.transcript).not.toContain("starts-at-end");
   });
 });
 

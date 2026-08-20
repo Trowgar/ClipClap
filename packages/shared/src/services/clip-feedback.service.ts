@@ -126,7 +126,7 @@ export async function recordClipFeedback(
 
   const existing = await prisma.clipFeedback.findUnique({
     where: { clipId_userId: { clipId: clip.id, userId: input.userId } },
-    select: { id: true, evidenceKey: true, verdict: true },
+    select: { id: true, evidenceKey: true, verdict: true, reason: true },
   });
 
   let evidenceKey = existing?.evidenceKey ?? null;
@@ -212,12 +212,24 @@ export async function recordClipFeedback(
       `reason=${input.reason ?? "-"} note=${input.note ? "yes" : "no"}`
   );
 
+  // Skipped for `note: ""` on purpose: an empty note is still written to the
+  // row above, but relaying an empty message to the owner would be noise.
   if (input.note) await relayToOwner(clip.title, input, row.id);
 
   return {
     ok: true,
     verdict: input.verdict ?? existing?.verdict ?? null,
-    reason: input.reason ?? null,
+    // Symmetric with `verdict` above, but not a plain `?? existing?.reason`:
+    // a verdict-only call just cleared the stored reason (see the write
+    // above), so reporting the old `existing.reason` here would describe a
+    // value this very call erased. Only fall back to it when neither a
+    // reason nor a verdict was submitted at all.
+    reason:
+      input.reason !== undefined
+        ? input.reason
+        : input.verdict !== undefined
+          ? null
+          : (existing?.reason ?? null),
   };
 }
 
