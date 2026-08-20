@@ -606,6 +606,18 @@ model Clip {
   /// re-delivery after a chat id change all break that, and would force this
   /// state onto a (deliveryId, clipId, chatId) row instead.
   telegramFileId   String?
+  /// Telegram's message_id for the delivered video, so a user's reply to that
+  /// message maps back to this clip - which is the whole free-text channel.
+  ///
+  /// Nullable and expected to be null sometimes: the delivery path writes
+  /// `telegramFileId: fileId ?? "sent"` because Telegram sometimes confirms a
+  /// send without a parseable id, and the message id is lost in the same cases.
+  /// Feedback BUTTONS are unaffected - the keyboard travels in the send request
+  /// itself, not in a follow-up call.
+  ///
+  /// Never look this up on its own: message_id is unique per chat and is a
+  /// small integer, so the lookup key is the pair (userId, telegramMessageId).
+  telegramMessageId Int?
   /// Set when this clip can never be delivered - oversized, corrupt, refused on
   /// its own merits. Distinct from a null telegramFileId, which means "not sent
   /// yet, try again": without the distinction the loop retries a broken file
@@ -743,4 +755,51 @@ model FreeUsage {
   @@index([createdAt])
   @@index([jobId])
   @@map("free_usage")
+}
+
+/// One row per (clip, user) verdict on a delivered clip.
+///
+/// NO RELATIONS, ON PURPOSE - the same decision, for the same reason, as
+/// funnel_events and upload_refusals. deleteProject hard-deletes the Job and
+/// Clip cascades from it (project.service.ts), and clip.service deletes single
+/// clips outright behind the card's delete button. A relation with the usual
+/// onDelete: Cascade would therefore erase "I rejected this clip and then
+/// deleted it" - the single most informative event this table exists to hold.
+///
+/// The same fact is why `snapshot` exists. Job.transcriptJson, Clip.cropPlan
+/// and the timings are all reachable by clipId only WHILE the job is alive, and
+/// the source object is swept at 7 days, so the context is frozen at tap time
+/// rather than joined at read time.
+model ClipFeedback {
+  id     String @id @default(cuid())
+  clipId String
+  /// Denormalised: grouping answers by job is needed from day one and the Job
+  /// row may be gone by then.
+  jobId  String
+  userId String
+  /// "bot" | "web" - same convention as funnel_events.
+  surface String
+  /// FeedbackVerdict literal: "AS_IS" | "EDIT" | "NO". String, not enum, so a
+  /// new verdict is not a migration. See config/feedback.ts.
+  verdict String
+  /// FeedbackReason literal, or null when the user stopped after the verdict.
+  /// Cleared when the verdict changes - a reason belongs to the verdict it was
+  /// given under.
+  reason  String?
+  /// Free text. Telegram: a reply to the clip video. Web: the optional field.
+  note    String? @db.Text
+  /// Clip and job context frozen at tap time - see the note above.
+  snapshot    Json?
+  /// R2 key of the never-expiring copy of the clip, or null if the copy failed.
+  /// Never a reason to refuse the feedback itself.
+  evidenceKey String?
+  locale      String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([clipId, userId])
+  @@index([verdict, createdAt])
+  @@index([reason, createdAt])
+  @@index([jobId])
+  @@map("clip_feedback")
 }
