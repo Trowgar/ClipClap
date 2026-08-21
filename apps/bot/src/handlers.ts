@@ -38,7 +38,9 @@ import {
   prisma,
   recordClipFeedback,
   recordFunnelEvent,
+  recordSupportMessage,
   sanitiseCampaignSlug,
+  type SupportKind,
   recordUploadRefusal,
   redeemLinkFromBot,
   refusalHost,
@@ -352,6 +354,15 @@ export async function relaySupportMessage(
     .catch((e) => {
       console.error(`Failed to relay support message to ${chat}:`, e);
     });
+  // Recorded after the relay, never before: the operator's own visibility must
+  // not come at the cost of the owner seeing the ticket. Stored even when the
+  // relay above failed, because a message we could not forward is exactly the
+  // one nobody would otherwise ever see.
+  await recordSupportMessage({
+    telegramId: from.id,
+    direction: "in",
+    text,
+  });
 }
 
 export async function relaySupportMedia(
@@ -373,11 +384,26 @@ export async function relaySupportMedia(
     await client.copyMessage(chat, message.chat.id, message.message_id, {
       caption,
     });
+    await recordSupportMessage({
+      telegramId: from.id,
+      direction: "in",
+      text: message.caption ?? "",
+      kind: supportMediaKind(message),
+    });
     return true;
   } catch (e) {
     console.error(`Failed to relay support media to ${chat}:`, e);
     return false;
   }
+}
+
+/** What arrived, for the support log. The relay itself copies whatever it is. */
+export function supportMediaKind(message: TelegramMessage): SupportKind {
+  if (message.photo) return "photo";
+  if (message.video) return "video";
+  if (message.voice) return "voice";
+  if (message.document) return "document";
+  return "other";
 }
 
 export async function deliverSupportReply(
@@ -416,6 +442,10 @@ export async function deliverSupportReply(
   await prisma.user
     .update({ where: { telegramId: uid }, data: { supportOpen: true } })
     .catch(() => undefined);
+  // Only after a delivery that did not throw - the early return above covers
+  // the blocked-bot case, so this table never claims we said something the
+  // person did not receive.
+  await recordSupportMessage({ telegramId: uid, direction: "out", text });
 }
 
 function settingsKeyboard(dict: Dict): ReplyKeyboardMarkup {

@@ -311,6 +311,38 @@ model FunnelEvent {
   @@map("funnel_events")
 }
 
+/// One row per support message, in both directions.
+///
+/// Until 2026-08-21 a user's message was forwarded to the owner's Telegram DM
+/// and stored nowhere at all. That cost more than it looks: nobody could read a
+/// reply rate, a response time, or what a customer actually asked, and the
+/// business operator that sends the outreach was deaf to every answer its own
+/// messages provoked - 34 people were written to on 2026-08-20 and the single
+/// reply that came back reached the operator as a forwarded screenshot.
+///
+/// Deliberately not a relation to User: `telegramId` is the identity the relay
+/// itself works in, it exists before a User row does, and keeping this table
+/// standalone means a support write can never fail because of a foreign key.
+/// `userId` is filled when it is known and left null when it is not.
+model SupportMessage {
+  id         String   @id @default(cuid())
+  /// Telegram id of the USER side of the conversation, in both directions -
+  /// so one person's thread is one query, whoever spoke.
+  telegramId String
+  userId     String?
+  /// "in" = user wrote to us. "out" = we answered.
+  direction  String
+  /// Empty for media with no caption; `kind` says what arrived.
+  text       String
+  /// "text" | "photo" | "document" | "video" | "voice" | "other"
+  kind       String   @default("text")
+  createdAt  DateTime @default(now())
+
+  @@index([telegramId, createdAt])
+  @@index([createdAt])
+  @@map("support_messages")
+}
+
 /// One row per REFUSED submission, carrying the why. funnel_events answers
 /// "how many people hit code X" and by design cannot hold a per-event detail:
 /// its row is unique per (surface, subject, code), so sixteen people with 39

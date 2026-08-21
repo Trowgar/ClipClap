@@ -59,7 +59,30 @@ export interface TelegramMessage {
   caption?: string;
   video?: TelegramVideo;
   document?: TelegramDocument;
+  /// Added 2026-08-21 for the support log only. The relay itself has always
+  /// copied whatever arrived without inspecting it, but a screenshot is the
+  /// most common thing a person sends support and recording it as "other"
+  /// throws away the one detail that says what kind of help was being asked
+  /// for. Telegram sends photos as an array of sizes; we only ever count it.
+  photo?: TelegramPhotoSize[];
+  voice?: TelegramVoice;
   reply_to_message?: TelegramMessage;
+}
+
+export interface TelegramPhotoSize {
+  file_id: string;
+  file_unique_id: string;
+  width?: number;
+  height?: number;
+  file_size?: number;
+}
+
+export interface TelegramVoice {
+  file_id: string;
+  file_unique_id: string;
+  duration?: number;
+  mime_type?: string;
+  file_size?: number;
 }
 
 export interface TelegramUser {

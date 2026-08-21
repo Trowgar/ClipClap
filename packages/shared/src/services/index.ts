@@ -31,6 +31,7 @@ export * from "./tribute-shop.service";
 export * from "./subscription-reconcile.service";
 export * from "./referral.service";
 export * from "./funnel.service";
+export * from "./support-log.service";
 export * from "./site-visit.service";
 export * from "./mini-app.service";
 export * from "./analytics.service";
