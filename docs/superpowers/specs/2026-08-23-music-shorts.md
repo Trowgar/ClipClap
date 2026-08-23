@@ -16,6 +16,19 @@ forces stream/virtualCam OFF for music jobs (measured: virtual cam split
 Baby Shark's dance video into two tiles; the fixed render is a clean
 full-frame vertical crop). 1672 tests, 8 mutation checks.
 
+## DIRECTION v1 shipped same evening (commit 3258dcc, owner-requested)
+
+Owner review of the first demos named the defects; each fix measured:
+R2 luma envelope at TRANSCRIBE + dark-aware window shift/edge guard
+(Believer's window moved 53-77 with NINE near-black seconds to 61-75 with
+one); R1 constant-bar crop behind the 90%-agreement consistency rule
+(Believer 72px/side 8/8 exact; Baby Shark honestly 0/0 - transient class
+never cropped); R3 odd-shot 1.08x punch-in via the enable-gated overlay
+idiom (montage energy from the MV's own beat-cut edits, never continuous
+camera motion); R4 0.25s AV fades. All music-only, one musicDirection
+object in the render stage, no env knobs, frozen geometry oracles
+untouched. 1720 tests.
+
 Open seams, recorded: renderTrim (clip edit path) does not re-apply the M4
 override; letterboxed MVs keep their bars (the known director-audit item);
 'Hook N' copy is placeholder pending owner wording; corpus still n=3
