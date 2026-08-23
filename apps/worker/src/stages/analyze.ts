@@ -10,6 +10,7 @@ import { AnalyzeTechnicalError } from "../analyze-v2/critic";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { resolveEngine } from "../analyze-v2/dispatch";
 import { detectSong } from "../analyze-v2/song-gate";
+import { selectHookWindows, type HookWindow } from "../analyze-v2/music-hook";
 import { newUsage } from "../analyze-v2/llm";
 import type { V2Result } from "../analyze-v2/types";
 import { safeTagJobError } from "./job-error";
@@ -98,7 +99,67 @@ export async function runAnalyzeStage(
     const songGate = cfg.songGateEnabled
       ? detectSong(transcription.segments)
       : null;
-    const result: V2Result = songGate?.fired
+
+    // Music shorts (spec 2026-08-23-music-shorts, task M3): a firing song
+    // gate is not automatically a refusal any more. When the source is a
+    // single track (<= musicShortsMaxSec - the Леонтьев compilation case
+    // stays refused above that ceiling) the hook-window detector gets a
+    // shot BEFORE the refusal result below is built. `windows.length === 0`
+    // (computeRepSpans found nothing AND the envelope is empty) falls
+    // through to the existing refusal untouched - an honest zero, not a
+    // guessed window.
+    let musicShorts: { windows: HookWindow[]; envelopeLen: number } | null =
+      null;
+    if (
+      songGate?.fired &&
+      cfg.musicShortsEnabled &&
+      typeof job.sourceDurationSec === "number" &&
+      job.sourceDurationSec > 0 &&
+      job.sourceDurationSec <= cfg.musicShortsMaxSec
+    ) {
+      const energyEnvelope = await readEnergyEnvelope(payload.jobId);
+      const windows = selectHookWindows(
+        {
+          segments: transcription.segments,
+          energyEnvelope,
+          durationSec: job.sourceDurationSec,
+        },
+        cfg.musicShortsCount
+      );
+      if (windows.length > 0) {
+        musicShorts = { windows, envelopeLen: energyEnvelope.length };
+      }
+    }
+
+    const result: V2Result = musicShorts
+      ? {
+          highlights: musicShorts.windows.map((w, i) => ({
+            start: w.startSec,
+            end: w.endSec,
+            title: `Hook ${i + 1}`,
+            // Names the mechanism, not a guessed song title/chorus lyric -
+            // the detector never sees track metadata. Owner may rename this
+            // copy later (spec §2 leaves several music-shorts decisions
+            // owner-pending; this wording is not one of the settled ones).
+            description: "Chorus/hook segment of this track",
+            lowQuality: false,
+          })),
+          // No noClipsReason: this is a normal non-empty result, not a
+          // refusal - it must ride the SAME rails as any other >0-highlight
+          // V2Result below (job update, completeJobStep, render enqueue).
+          telemetry: {
+            path: "music-shorts",
+            songGate,
+            musicShorts: {
+              windows: musicShorts.windows,
+              envelopeLen: musicShorts.envelopeLen,
+            },
+          },
+          // Zero LLM calls: the detector (analyze-v2/music-hook.ts) is pure
+          // repetition/energy scoring, no scan, no critic, no finalizer.
+          usage: newUsage(),
+        }
+      : songGate?.fired
       ? {
           highlights: [],
           // Resolves exactly like NO_USABLE_SPEECH does today: an honest
@@ -149,6 +210,12 @@ export async function runAnalyzeStage(
         // finalize.ts prefers this column over the ANALYZE step's copy.
         analysisUsageByModel:
           result.usage.byModel as unknown as Prisma.InputJsonValue,
+        // Music shorts v1 decision (spec §2): subtitles OFF, in this SAME
+        // update - word timings on singing are unreliable, so burning a cue
+        // track under a chorus would show text the singer never said at that
+        // instant. Every other song-gate/refusal/normal path leaves
+        // job.subtitles at whatever DOWNLOAD/the user already set.
+        ...(musicShorts ? { subtitles: false } : {}),
       },
     });
     await jobStepService.completeJobStep(payload.jobId, "ANALYZE", {
@@ -188,6 +255,31 @@ export async function runAnalyzeStage(
     // the wrong call costs the user their video.
     throw error;
   }
+}
+
+/**
+ * The TRANSCRIBE step's own `energyEnvelope` (stages/transcribe.ts's
+ * `completeJobStep` call) - it lives on that JobStep row's outputJson, not
+ * on the Job row, so it is read the same way finalize.ts reads the ANALYZE
+ * step's `usage.byModel` back off its own JobStep row: a direct
+ * `prisma.jobStep.findUnique` on the `jobId_step` unique index, never a
+ * second copy threaded through the queue payload. Missing or malformed
+ * output (no row yet, a shape from before this field existed, a non-array,
+ * a non-number entry) degrades to `[]` rather than throwing -
+ * `selectHookWindows` already treats an empty envelope as "no energy
+ * signal" and scores on repetition alone, which is the correct behaviour
+ * here too, not a special case.
+ */
+async function readEnergyEnvelope(jobId: string): Promise<number[]> {
+  const step = await prisma.jobStep.findUnique({
+    where: { jobId_step: { jobId, step: "TRANSCRIBE" } },
+    select: { outputJson: true },
+  });
+  const raw = (step?.outputJson as Record<string, unknown> | null | undefined)
+    ?.energyEnvelope;
+  return Array.isArray(raw) && raw.every((n) => typeof n === "number")
+    ? (raw as number[])
+    : [];
 }
 
 async function markJobFailed(jobId: string, error: unknown) {

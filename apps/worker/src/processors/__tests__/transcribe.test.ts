@@ -82,6 +82,32 @@ describe("transcribeVideo", () => {
     expect(result.transcription.segments[0].words).toBeUndefined();
   });
 
+  it("includes an energy envelope key on both return paths", async () => {
+    const result = await transcribeVideo("/tmp/source.mp4");
+    // The suite's default execFile mock returns an empty stderr for every
+    // call, astats included, so there is nothing to bucket - but the key
+    // must be present and typed as an array either way.
+    expect(result.energyEnvelope).toEqual([]);
+  });
+
+  it("does not fail transcription when the astats pass fails", async () => {
+    // Only the astats call should fail; ffmpeg extract, ffprobe duration and
+    // the whisper call must all keep succeeding on their own mocked replies.
+    mocks.execFile.mockImplementation((_cmd, args, optsOrCb, maybeCb) => {
+      const callback = typeof optsOrCb === "function" ? optsOrCb : maybeCb;
+      const argv = args as string[];
+      if (argv.includes("astats=metadata=1:reset=1:length=1,ametadata=print:key=lavfi.astats.Overall.RMS_level")) {
+        return callback(new Error("ffmpeg astats exploded"));
+      }
+      return callback(null, { stdout: "12.5", stderr: "" });
+    });
+
+    const result = await transcribeVideo("/tmp/source.mp4");
+
+    expect(result.energyEnvelope).toEqual([]);
+    expect(result.transcription.text).toBe("hello world");
+  });
+
   it("extracts compressed audio before sending it to transcription", async () => {
     await transcribeVideo("/tmp/source.mp4");
 

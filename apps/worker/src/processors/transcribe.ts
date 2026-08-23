@@ -37,6 +37,10 @@ export interface TranscribeOutcome {
   coverage: number;
   partial: boolean;
   missingRanges: Array<{ start: number; end: number; reason: string }>;
+  /** Per-second mean RMS in dB of the whole extracted audio, or [] if the
+   *  astats pass failed (see rmsEnvelope). Consumed by the music-shorts
+   *  hook selector (spec 2026-08-23-music-shorts). */
+  energyEnvelope: number[];
 }
 
 interface RawWhisperResponse {
@@ -60,14 +64,22 @@ export async function transcribeVideo(
 
     const bytes = statSync(audioPath).size;
     const durationSec = await probeDurationSec(audioPath);
+    // One ffmpeg pass over the whole extracted audio, started here so it runs
+    // parallel to whisper on both paths below. rmsEnvelope never rejects - a
+    // failed pass must not fail transcription (see its own comment).
+    const envelopePromise = rmsEnvelope(audioPath);
 
     if (bytes <= CHUNK_BYTES_THRESHOLD && durationSec <= CHUNK_DURATION_THRESHOLD_SEC) {
-      const raw = await whisperCall(audioPath, undefined);
+      const [raw, energyEnvelope] = await Promise.all([
+        whisperCall(audioPath, undefined),
+        envelopePromise,
+      ]);
       return {
         transcription: toTranscription(raw, 0),
         coverage: 1,
         partial: false,
         missingRanges: [],
+        energyEnvelope,
       };
     }
 
@@ -140,6 +152,7 @@ export async function transcribeVideo(
       coverage: stitched.coverage,
       partial: missingRanges.length > 0,
       missingRanges,
+      energyEnvelope: await envelopePromise,
     };
   } finally {
     await Promise.all(tempFiles.map((f) => unlink(f).catch(() => {})));
@@ -193,6 +206,62 @@ async function probeDurationSec(audioPath: string): Promise<number> {
     "-of", "default=noprint_wrappers=1:nokey=1", audioPath,
   ], { maxBuffer: CHILD_MAX_BUFFER_BYTES });
   return Number(stdout.trim()) || 0;
+}
+
+/**
+ * Per-second mean RMS energy (dB) of the whole audio, via ffmpeg astats.
+ * Feeds the music-shorts hook selector (spec 2026-08-23-music-shorts), which
+ * needs an energy envelope at ANALYZE time when no media file exists on that
+ * container - this is computed once here, at TRANSCRIBE, from the same
+ * extracted audio whisper already gets.
+ *
+ * ffmpeg's ametadata print lands the metadata on STDERR, one pair of lines
+ * per audio FRAME (~43/s, not per second): a "pts_time:<seconds>" line
+ * followed by the "RMS_level=<value>" line for that frame. Bucket by
+ * int(pts_time) and average within each bucket - not the raw frame index,
+ * which would silently stretch or compress the envelope's time axis.
+ * "-inf" (true digital silence) maps to -90dB.
+ *
+ * Never rejects: an astats failure (bad input, maxBuffer overrun on a very
+ * long source, ffmpeg missing) must not fail transcription. The consumer
+ * treats [] as "no energy signal".
+ */
+export async function rmsEnvelope(audioPath: string): Promise<number[]> {
+  try {
+    const { stderr } = await execFileAsync("ffmpeg", [
+      "-nostdin", "-i", audioPath,
+      "-af", "astats=metadata=1:reset=1:length=1,ametadata=print:key=lavfi.astats.Overall.RMS_level",
+      "-f", "null", "-",
+    ], { maxBuffer: CHILD_MAX_BUFFER_BYTES });
+    return bucketRmsBySecond(stderr ?? "");
+  } catch (error) {
+    console.warn("rmsEnvelope: astats pass failed, continuing without an energy signal:", error);
+    return [];
+  }
+}
+
+function bucketRmsBySecond(stderr: string): number[] {
+  const buckets = new Map<number, number[]>();
+  let sec: number | null = null;
+  for (const line of stderr.split("\n")) {
+    const ptsMatch = line.match(/pts_time:([\d.]+)/);
+    if (ptsMatch) {
+      sec = Math.trunc(Number(ptsMatch[1]));
+      continue;
+    }
+    const rmsMatch = line.match(/RMS_level=(-?[\d.]+|-inf)/);
+    if (rmsMatch && sec !== null) {
+      const value = rmsMatch[1] === "-inf" ? -90 : Number(rmsMatch[1]);
+      const bucket = buckets.get(sec);
+      if (bucket) bucket.push(value);
+      else buckets.set(sec, [value]);
+    }
+  }
+  return [...buckets.keys()].sort((a, b) => a - b).map((key) => {
+    const values = buckets.get(key)!;
+    const mean = values.reduce((a, b) => a + b, 0) / values.length;
+    return Math.round(mean * 10) / 10;
+  });
 }
 
 async function runSilenceDetect(audioPath: string): Promise<string> {

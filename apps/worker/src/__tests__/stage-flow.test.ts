@@ -191,6 +191,7 @@ describe("stage handlers", () => {
       coverage: 1,
       partial: false,
       missingRanges: [],
+      energyEnvelope: [-30.1, -28.4, -90],
     });
 
     await runTranscribeStage({ jobId: "job1", userId: "u1" });
@@ -214,6 +215,14 @@ describe("stage handlers", () => {
       jobId: "job1",
       userId: "u1",
     });
+    // The music-shorts selector (spec 2026-08-23-music-shorts) reads this
+    // back off the TRANSCRIBE step in a different container - it has to be
+    // in the completed step's output, not just on the outcome object.
+    expect(mocks.completeJobStep).toHaveBeenCalledWith(
+      "job1",
+      "TRANSCRIBE",
+      expect.objectContaining({ energyEnvelope: [-30.1, -28.4, -90] })
+    );
   });
 
   it("analyze stores highlights and enqueues render", async () => {

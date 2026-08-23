@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   queueAdd: vi.fn(),
   computeClipExpiresAt: vi.fn(),
   createAssFilter: vi.fn(),
+  jobStepFindUnique: vi.fn(),
 }));
 
 vi.mock("@clipclap/shared", () => ({
@@ -43,6 +44,12 @@ vi.mock("@clipclap/shared", () => ({
     clip: {
       create: mocks.clipCreate,
     },
+    // renderClips now reads the ANALYZE step's telemetry to decide the
+    // music-shorts stream-layout override (task M4, stages/render.ts's
+    // loadReframeConfigForJob) - unmocked here resolves `undefined`,
+    // which that helper treats as "no override", same as a job without an
+    // ANALYZE row at all.
+    jobStep: { findUnique: mocks.jobStepFindUnique },
   },
   uploadFile: mocks.uploadFile,
   getStageQueue: vi.fn(() => ({ add: mocks.queueAdd })),

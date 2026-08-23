@@ -27,7 +27,7 @@ import {
   type RenderStagePayload,
 } from "./types";
 import { computeCropPlan } from "../reframe";
-import { loadReframeConfig } from "../reframe/config";
+import { loadReframeConfig, type ReframeConfig } from "../reframe/config";
 import { buildFiltergraph } from "../reframe/filtergraph";
 import { sliceCropPlan } from "../reframe/plan";
 import { buildReframeCheck, markEncodeFailed } from "../reframe/telemetry";
@@ -57,6 +57,55 @@ export async function runRenderStage(
     }
     throw error;
   }
+}
+
+/**
+ * The job's reframe config, with ONE override applied: a music-shorts job
+ * (spec 2026-08-23-music-shorts, task M4) always renders with the stream
+ * layouts forced off, regardless of the REFRAME_STREAM/REFRAME_STREAM_
+ * VIRTUAL_CAM env literals.
+ *
+ * Measured 2026-08-23: the corpus E2E render of the Baby Shark hook window
+ * (task M3's output, rendered through the real reframe engine) classified
+ * stream+virtualCam - cartoon faces sit at ~8% of frame width, well inside
+ * the stream classifier's small-face band - and shipped a TWO-TILE layout,
+ * a boy-face tile stacked over a girl tile. Wrong product: a music short's
+ * full performance frame IS the content, and the stream/virtual-cam layouts
+ * exist for gameplay-with-a-webcam, not for a music video. Face-crop itself
+ * (engine "faces", normal_face) is untouched by this override - the
+ * Believer corpus render proved normal_face already frames a music video
+ * well, so only the two stream-family knobs are forced off here, nothing
+ * else about crop planning.
+ *
+ * This is the ONE place the per-job reframe config is born (renderClips'
+ * only `loadReframeConfig()` call) rather than a condition sprinkled at
+ * each `reframeCfg.stream`/`reframeCfg.streamVirtualCam` read site - both
+ * reads downstream (computeCropPlan's own stream classification, and
+ * buildFiltergraph's tile layout) see the override transparently because
+ * they only ever see this one object.
+ *
+ * Reads the ANALYZE JobStep's own outputJson (stages/analyze.ts's
+ * `completeJobStep` call) the same way stages/analyze.ts itself reads the
+ * TRANSCRIBE step's row for `energyEnvelope` (task M3) - a direct
+ * `prisma.jobStep.findUnique` on the `jobId_step` unique index. A missing
+ * row, a missing `telemetry` key, or any path other than the exact literal
+ * "music-shorts" all fall through to the unmodified env-sourced config -
+ * the same "malformed degrades safely, never throws" discipline as that
+ * read.
+ */
+async function loadReframeConfigForJob(jobId: string): Promise<ReframeConfig> {
+  const cfg = loadReframeConfig();
+  const analyzeStep = await prisma.jobStep.findUnique({
+    where: { jobId_step: { jobId, step: "ANALYZE" } },
+    select: { outputJson: true },
+  });
+  const telemetry = (
+    analyzeStep?.outputJson as Record<string, unknown> | null | undefined
+  )?.telemetry as Record<string, unknown> | undefined;
+  if (telemetry?.path === "music-shorts") {
+    return { ...cfg, stream: false, streamVirtualCam: false };
+  }
+  return cfg;
 }
 
 async function renderClips(
@@ -95,7 +144,7 @@ async function renderClips(
       renderDurationErrorMs: number;
       renderAvStartSkewMs: number | null;
     }> = [];
-    const reframeCfg = loadReframeConfig();
+    const reframeCfg = await loadReframeConfigForJob(payload.jobId);
     const reframeChecks: ReframeCheck[] = [];
     // Telemetry for the dropped-word repair, summed over the job's clips.
     // `unresolved` growing is the signal that Whisper's output shape changed.

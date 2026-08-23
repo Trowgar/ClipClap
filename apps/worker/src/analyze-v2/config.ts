@@ -303,6 +303,26 @@ export interface AnalyzeConfig {
    *  Standard mode never reads this: merge's existing span guard is
    *  untouched there. */
   streamMinCandidateSec: number;
+  /** Master switch for music shorts (spec 2026-08-23-music-shorts, task M3) -
+   *  when the song gate fires (`songGateEnabled` + `detectSong`) AND the
+   *  source is a single track (<= `musicShortsMaxSec`), ship
+   *  `musicShortsCount` hook-window clips from `selectHookWindows`
+   *  (analyze-v2/music-hook.ts) instead of the NO_USABLE_SPEECH refusal. Off
+   *  until this task ships it, the same discipline as every other stage
+   *  switch in this file - a stray truthy env value must not silently swap a
+   *  real user's song refusal for a shipped result. */
+  musicShortsEnabled: boolean;
+  /** Ceiling (seconds) for the "single track" scope spec §2 draws: a source
+   *  over this stays refused even with the gate firing and the flag on.
+   *  480 (8 min) is the spec's own line - the detector was validated 3/3
+   *  against single tracks (spec §1), and the Леонтьев best-of compilation
+   *  (a real refused source, spec §0) is a multi-track source well past it,
+   *  so it keeps today's refusal on purpose, not by omission. */
+  musicShortsMaxSec: number;
+  /** Shorts cut per track when music-shorts ships - owner decision (spec §2
+   *  "how many shorts per track", answered 2). Passed straight through as
+   *  `selectHookWindows`'s `count` parameter. */
+  musicShortsCount: number;
 }
 
 type Env = Record<string, string | undefined>;
@@ -424,5 +444,11 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     streamDensityMax: num(env, "STREAM_DENSITY_MAX", 0.55),
     streamCriticMaxCandidates: num(env, "STREAM_CRITIC_MAX_CANDIDATES", 80),
     streamMinCandidateSec: num(env, "STREAM_MIN_CANDIDATE_SEC", 12),
+    // Exact literal "on", same discipline as every other stage switch in this
+    // file: a stray truthy env value must not swap a real song-gate refusal
+    // for a shipped result.
+    musicShortsEnabled: env.MUSIC_SHORTS === "on",
+    musicShortsMaxSec: num(env, "MUSIC_SHORTS_MAX_SEC", 480),
+    musicShortsCount: num(env, "MUSIC_SHORTS_COUNT", 2),
   };
 }

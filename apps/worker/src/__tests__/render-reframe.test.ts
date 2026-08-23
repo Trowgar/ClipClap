@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   queueAdd: vi.fn(),
   computeClipExpiresAt: vi.fn(),
   computeCropPlan: vi.fn(),
+  jobStepFindUnique: vi.fn(),
 }));
 
 vi.mock("@clipclap/shared", () => ({
@@ -38,6 +39,11 @@ vi.mock("@clipclap/shared", () => ({
     },
     user: { findUniqueOrThrow: mocks.userFindUniqueOrThrow },
     clip: { create: mocks.clipCreate },
+    // Unmocked calls (every test outside the music-shorts describe block
+    // below) resolve to plain `undefined` here - loadReframeConfigForJob's
+    // own optional chaining treats that exactly like "no row", the same
+    // degrade-safely discipline as a missing/malformed row.
+    jobStep: { findUnique: mocks.jobStepFindUnique },
   },
   uploadFile: mocks.uploadFile,
   getStageQueue: vi.fn(() => ({ add: mocks.queueAdd })),
@@ -61,6 +67,7 @@ vi.mock("../processors/thumbnail", () => ({
 vi.mock("../reframe", () => ({ computeCropPlan: mocks.computeCropPlan }));
 
 import { runRenderStage } from "../stages/render";
+import { loadReframeConfig } from "../reframe/config";
 import type { CropPlan } from "../reframe/types";
 
 const streamPlan: CropPlan = {
@@ -387,5 +394,94 @@ describe("renderClips subtitle telemetry", () => {
       unresolved: 2,
       merged: 4,
     });
+  });
+});
+
+// task M4 (spec 2026-08-23-music-shorts): a music-shorts job must never reach
+// the stream/virtual-cam layouts, even when REFRAME_STREAM(_VIRTUAL_CAM) is
+// "on" - the corpus E2E render of the Baby Shark hook window classified
+// stream+virtualCam (cartoon faces at ~8% frame width) and shipped a two-tile
+// boy/girl layout, wrong for a music short whose full performance frame IS
+// the content. computeCropPlan is mocked, so the object it actually receives
+// as its cfg argument is directly inspectable - the cleanest seam to prove
+// the override reached the real call, not just loadReframeConfigForJob in
+// isolation.
+describe("renderClips music-shorts stream override (task M4)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv("REFRAME_ENGINE", "faces");
+    // Both stream knobs explicitly "on" - the override must win over an
+    // operator-armed env, not merely agree with an already-off default.
+    vi.stubEnv("REFRAME_STREAM", "on");
+    vi.stubEnv("REFRAME_STREAM_VIRTUAL_CAM", "on");
+    mocks.userFindUniqueOrThrow.mockResolvedValue({
+      plan: "STARTER",
+      billingCycle: "MONTHLY",
+    });
+    mocks.jobFindUniqueOrThrow.mockResolvedValue(jobWith([highlight]));
+    mocks.downloadVideo.mockResolvedValue("/tmp/fake-source.mp4");
+    mocks.cutClips.mockImplementation(async (_src: string, hs: unknown[]) => [
+      { highlight: hs[0], clipPath: "/tmp/fake-clip.mp4" },
+    ]);
+    mocks.probeTimeline.mockResolvedValue({
+      formatStart: 0,
+      videoStart: 0,
+      audioStart: 0,
+      hasAudio: true,
+      hasVideo: true,
+    });
+    mocks.generateThumbnail.mockResolvedValue("/tmp/fake-thumb.jpg");
+    mocks.uploadFile.mockResolvedValue(undefined);
+    mocks.clipCreate.mockResolvedValue({ id: "clip1" });
+    mocks.jobUpdate.mockResolvedValue(undefined);
+    mocks.computeClipExpiresAt.mockReturnValue(undefined);
+    mocks.computeCropPlan.mockResolvedValue({
+      plan: null,
+      shotCount: 3,
+      detectMs: 120,
+      fallbackReason: "detector_failed",
+    });
+  });
+
+  it("a music-shorts job's ANALYZE telemetry forces stream/streamVirtualCam OFF on the cfg handed to computeCropPlan, even though the env literals are 'on'", async () => {
+    mocks.jobStepFindUnique.mockResolvedValue({
+      outputJson: { telemetry: { path: "music-shorts" } },
+    });
+
+    await runRenderStage({ mode: "clips", jobId: "job1", userId: "u1" });
+
+    expect(mocks.jobStepFindUnique).toHaveBeenCalledWith({
+      where: { jobId_step: { jobId: "job1", step: "ANALYZE" } },
+      select: { outputJson: true },
+    });
+    const cfg = mocks.computeCropPlan.mock.calls[0][3];
+    expect(cfg.stream).toBe(false);
+    expect(cfg.streamVirtualCam).toBe(false);
+    // face-crop itself is untouched - only the two stream-family knobs move
+    expect(cfg.engine).toBe("faces");
+  });
+
+  it("a normal (non-music-shorts) job passes the env-sourced cfg through untouched - byte-identical to loadReframeConfig()", async () => {
+    // No ANALYZE row at all (the common case: most jobs are checked before
+    // this telemetry key ever existed, or simply aren't music-shorts).
+    mocks.jobStepFindUnique.mockResolvedValue(null);
+
+    await runRenderStage({ mode: "clips", jobId: "job1", userId: "u1" });
+
+    const cfg = mocks.computeCropPlan.mock.calls[0][3];
+    expect(cfg).toEqual(loadReframeConfig());
+    expect(cfg.stream).toBe(true);
+    expect(cfg.streamVirtualCam).toBe(true);
+  });
+
+  it("an ANALYZE telemetry path other than 'music-shorts' also passes the env-sourced cfg through untouched", async () => {
+    mocks.jobStepFindUnique.mockResolvedValue({
+      outputJson: { telemetry: { path: "song-gate" } },
+    });
+
+    await runRenderStage({ mode: "clips", jobId: "job1", userId: "u1" });
+
+    const cfg = mocks.computeCropPlan.mock.calls[0][3];
+    expect(cfg).toEqual(loadReframeConfig());
   });
 });

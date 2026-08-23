@@ -70,6 +70,10 @@ export async function runTranscribeStage(
       language: transcription.language ?? null,
       coverage: outcome.coverage,
       missingRanges: outcome.missingRanges.length,
+      // Consumed by the music-shorts selector (spec 2026-08-23-music-shorts)
+      // and a future stream audio-energy track; ~1 float/sec, so a 3h source
+      // is ~60KB of jsonb here.
+      energyEnvelope: outcome.energyEnvelope,
     });
     await getStageQueue("analyze").add("analyze", payload);
   } catch (error) {
