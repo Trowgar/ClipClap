@@ -1,5 +1,26 @@
 # Music shorts: the hook window, measured (2026-08-23, MEASUREMENT PHASE DONE)
 
+## BUILD SHIPPED same day (commit 38cd68f, LIVE behind MUSIC_SHORTS=on)
+
+M1 TRANSCRIBE persists the per-second RMS envelope in its step output (a
+failed pass degrades to [], never a job failure; sources past ~35-40 min
+overflow the child buffer and degrade the same way - irrelevant under the
+8-min music cap). M2 music-hook.ts is the faithful TS port + energy-valley
+edge snapping (12s floor); full parity re-verified: all three labeled
+tracks keep the Apple hook inside the shipped windows through the
+production path (Believer ships 120-138 + 53-77; the latter overlaps the
+hook zone by 15s). M3 wires the stage: song gate fired + single track
+<= 480s -> 2 "Hook N" highlights on the normal render rails, job subtitles
+OFF, no-signal falls through to the old refusal byte-for-byte. M4 render
+forces stream/virtualCam OFF for music jobs (measured: virtual cam split
+Baby Shark's dance video into two tiles; the fixed render is a clean
+full-frame vertical crop). 1672 tests, 8 mutation checks.
+
+Open seams, recorded: renderTrim (clip edit path) does not re-apply the M4
+override; letterboxed MVs keep their bars (the known director-audit item);
+'Hook N' copy is placeholder pending owner wording; corpus still n=3
+labeled (Miyagi iTunes mismatch).
+
 ## 0. How the demand actually looks (reclassified 2026-08-23)
 
 The "45% music" reading of the song-gate population was half wrong. Real
