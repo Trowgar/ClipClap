@@ -136,3 +136,46 @@ describe("computeSongSignals - the same function eval-song-gate.ts imports", () 
     expect(signals.lineRepRate).toBe(0);
   });
 });
+
+/** Whisper's stutter shape, measured on a real production job 2026-08-23
+ *  (job of telegramId 6519253646, a 36-minute Hindi conversation from
+ *  YouTube): the transcript is complete - 688 segments, 11,041 characters,
+ *  coverage 1.000 - but 252 of those segments normalise to the single
+ *  character "3", plus 13 to "i" and a handful to one Devanagari letter.
+ *  That junk alone carried lineRepRate to 0.473 and the gate refused the
+ *  whole video as NO_USABLE_SPEECH. The user got zero clips from a
+ *  perfectly transcribed video, and then tried to buy a plan anyway.
+ *
+ *  A chorus is a PHRASE. One token repeated is noise - the same class of
+ *  no-textual-evidence line the empty-string rule already excludes. */
+function whisperStutterSegments(): WhisperSegment[] {
+  const segs: WhisperSegment[] = [];
+  let t = 0;
+  // 250 junk one-token segments, exactly the observed shape.
+  for (let i = 0; i < 250; i++) {
+    segs.push({ start: t, end: t + 1, text: "3" });
+    t += 1;
+  }
+  // 340 distinct sentences of real speech, none repeated.
+  for (let i = 0; i < 340; i++) {
+    segs.push({
+      start: t,
+      end: t + 3,
+      text: `यह एक अलग वाक्य है संख्या ${i} और यह दोहराया नहीं जाता`,
+      });
+    t += 3;
+  }
+  return segs;
+}
+
+describe("the repetition signal ignores lines too short to be a chorus", () => {
+  it("does not refuse a fully transcribed conversation padded with one-token junk", () => {
+    const signals = computeSongSignals(whisperStutterSegments());
+    expect(signals.lineRepRate).toBeLessThan(LINE_REP_RATE_THRESHOLD);
+    expect(detectSong(whisperStutterSegments()).fired).toBe(false);
+  });
+
+  it("still fires on a real chorus, whose lines are phrases", () => {
+    expect(detectSong(chorusSegments()).fired).toBe(true);
+  });
+});

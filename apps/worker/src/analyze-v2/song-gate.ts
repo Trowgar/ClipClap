@@ -113,6 +113,32 @@ function normalizeLine(text: string): string {
     .trim();
 }
 
+/** The fewest words a normalised line must have before a repeat of it counts
+ *  as chorus evidence.
+ *
+ *  Added 2026-08-23 after a production job was refused wrongly: a 36-minute
+ *  Hindi conversation from YouTube transcribed completely - 688 segments,
+ *  11,041 characters, coverage 1.000 - but 252 of those segments normalised to
+ *  the single character "3" and 13 more to "i". That junk alone put
+ *  `lineRepRate` at 0.473 against a 0.2 threshold, so the gate refused the
+ *  whole video as NO_USABLE_SPEECH and the person got nothing. Excluding
+ *  one-token lines takes the same transcript to 0.065, a three-fold margin
+ *  under the threshold, and the 22 repeats that remain are real repeated
+ *  phrases, which ordinary conversation contains.
+ *
+ *  Two words, not three: it is the smallest exclusion that fixes the measured
+ *  failure, and a genuine chorus line is a phrase, so nothing that the gate is
+ *  meant to catch lives at one token. It is the same reasoning the empty-line
+ *  rule already applies - a line with no textual evidence is evidence of
+ *  nothing, in either direction. */
+export const MIN_LINE_TOKENS = 2;
+
+/** Whether a normalised line carries enough text to count as chorus evidence. */
+function countsAsLine(normalized: string): boolean {
+  if (!normalized) return false;
+  return normalized.split(" ").length >= MIN_LINE_TOKENS;
+}
+
 export interface SongGateSignals {
   musicTokenShare: number;
   lineRepRate: number;
@@ -143,8 +169,8 @@ export function computeSongSignals(segments: WhisperSegment[]): SongGateSignals 
   const normPerSeg: string[] = [];
   for (const seg of segments) {
     const n = normalizeLine(seg.text);
-    normPerSeg.push(n);
-    if (n) normCounts.set(n, (normCounts.get(n) ?? 0) + 1);
+    normPerSeg.push(countsAsLine(n) ? n : "");
+    if (countsAsLine(n)) normCounts.set(n, (normCounts.get(n) ?? 0) + 1);
   }
   let repeatedSegs = 0;
   let normedSegs = 0;
