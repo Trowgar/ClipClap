@@ -803,7 +803,25 @@ export async function handleUpdate(
     return;
   }
 
+  // Somebody wrote a sentence to the bot with no support session open. Until
+  // 2026-08-23 this line was the end of it: they got the hint below and their
+  // words were gone. That is precisely where a reply to one of our own outbound
+  // messages lands - 34 people were written to on 2026-08-20, each invited to
+  // answer, and an answer sent this way would have been discarded unread.
+  //
+  // Recorded, not relayed: the owner's ticket inbox stays as quiet as it was,
+  // and the text becomes readable instead of lost. Sent after the reply, and
+  // recordSupportMessage cannot throw, so the person still gets their hint.
   await client.sendMessage(message.chat.id, dict.sendVideoHint);
+  if (text?.trim()) {
+    await recordSupportMessage({
+      telegramId: from.id,
+      direction: "in",
+      text,
+      kind: "loose_text",
+      userId: existing?.id ?? null,
+    });
+  }
 }
 
 function parseMenuCommand(text: string): MenuAction | null {

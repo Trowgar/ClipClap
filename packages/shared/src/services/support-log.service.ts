@@ -3,6 +3,13 @@ import { prisma } from "../lib/prisma";
 export type SupportDirection = "in" | "out";
 export type SupportKind =
   | "text"
+  /** Text sent with NO support session open - so it was never relayed to the
+   *  owner and nobody has read it. This is where a reply to one of our own
+   *  outbound messages lands: the bot answers "send me a video" and the
+   *  sentence a customer actually wrote used to vanish. Recorded separately
+   *  from "text" precisely so the two are never confused - one was seen by a
+   *  human, the other was not. */
+  | "loose_text"
   | "photo"
   | "document"
   | "video"
