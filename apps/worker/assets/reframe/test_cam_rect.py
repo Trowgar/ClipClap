@@ -336,5 +336,90 @@ class TestD1D2Selection(unittest.TestCase):
         self.assertEqual((rect["w"], rect["h"]), (175, 150))
 
 
+class TestSaliencyFromColumns(unittest.TestCase):
+    """Pure-function coverage for the v1.1 music-direction saliency math
+    (spec 2026-08-23-music-shorts). See saliency_from_columns's docstring:
+    x is the energy centroid column, spreadFrac is the fraction of columns
+    (taken highest-energy-first) needed to cover SALIENCY_COVERAGE_FRAC
+    (70%) of the total - small for a narrow bright cluster, and AT ITS
+    MATHEMATICAL MAXIMUM (exactly SALIENCY_COVERAGE_FRAC, whatever `n` is)
+    for perfectly uniform energy, since any concentration can only let fewer
+    top columns cover the same 70% share. That ceiling is the "large,
+    spread-across-the-frame" signal filtergraph.ts's SPREAD_PUNCH_MAX (0.55)
+    gates against - uniform sits well above it, a narrow cluster well below.
+    """
+
+    def test_a_bright_cluster_left_of_centre_has_a_left_centroid_and_small_spread(self):
+        cols = np.zeros(100)
+        cols[10:20] = 50.0  # a narrow, strong cluster near the left edge
+        result = df.saliency_from_columns(cols)
+        self.assertIsNotNone(result)
+        # Cluster spans columns 10..19, centroid 14.5, well left of centre (49.5).
+        self.assertLess(result["x"], 30.0)
+        self.assertAlmostEqual(result["x"], 14.5, delta=0.5)
+        # Only the cluster's own columns are needed to cover 70% of the
+        # (all-outside-the-cluster-is-zero) energy - a small fraction of 100.
+        self.assertLess(result["spreadFrac"], 0.15)
+
+    def test_uniform_energy_centres_and_hits_the_spread_ceiling(self):
+        cols = np.full(100, 3.0)
+        result = df.saliency_from_columns(cols)
+        self.assertIsNotNone(result)
+        self.assertAlmostEqual(result["x"], 49.5, delta=0.5)
+        # Every column contributes equally, so covering 70% of the total
+        # needs (up to the discrete ceil) 70% of the columns - the maximum
+        # spreadFrac this metric can ever report, achieved exactly here.
+        self.assertAlmostEqual(result["spreadFrac"], df.SALIENCY_COVERAGE_FRAC, places=2)
+        # And a narrow cluster (previous test) must sit far below that ceiling -
+        # the property the punch-in gate actually depends on.
+        cluster = np.zeros(100)
+        cluster[10:20] = 50.0
+        self.assertLess(df.saliency_from_columns(cluster)["spreadFrac"], result["spreadFrac"])
+
+    def test_returns_none_on_no_signal(self):
+        self.assertIsNone(df.saliency_from_columns(np.zeros(50)))
+        self.assertIsNone(df.saliency_from_columns(np.array([])))
+
+    def test_centroid_shifts_right_with_a_right_side_cluster(self):
+        cols = np.zeros(100)
+        cols[80:90] = 50.0
+        result = df.saliency_from_columns(cols)
+        self.assertIsNotNone(result)
+        self.assertGreater(result["x"], 70.0)
+
+
+class TestEvenSamplePositions(unittest.TestCase):
+    """The evenly-spaced frame-sampling budget saliency uses to pick which of
+    a shot's frames pay for the extra Sobel pass (v1.1)."""
+
+    def test_returns_everything_under_the_budget(self):
+        self.assertEqual(df._even_sample_positions(5, 8), [0, 1, 2, 3, 4])
+
+    def test_empty_shot_yields_no_samples(self):
+        self.assertEqual(df._even_sample_positions(0, 8), [])
+
+    def test_spans_the_full_range_including_both_ends(self):
+        positions = df._even_sample_positions(100, 8)
+        self.assertEqual(len(positions), 8)
+        self.assertEqual(positions[0], 0)
+        self.assertEqual(positions[-1], 99)
+        self.assertEqual(positions, sorted(set(positions)))
+
+
+class TestShotIndexForT(unittest.TestCase):
+    """Pure extraction of the per-frame shot lookup main() always ran inline -
+    pinned so the v1.1 pre-pass refactor cannot silently diverge from it."""
+
+    def test_finds_the_containing_shot(self):
+        shots = [{"start": 0, "end": 5}, {"start": 5, "end": 10}]
+        self.assertEqual(df.shot_index_for_t(0, shots), 0)
+        self.assertEqual(df.shot_index_for_t(4.999, shots), 0)
+        self.assertEqual(df.shot_index_for_t(5, shots), 1)
+
+    def test_a_time_past_every_shot_falls_into_the_last_one(self):
+        shots = [{"start": 0, "end": 5}, {"start": 5, "end": 10}]
+        self.assertEqual(df.shot_index_for_t(50, shots), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -516,7 +516,12 @@ describe("renderClips music direction (tasks R1/R3/R4, spec 2026-08-23-music-sho
     source: { width: 1920, height: 1080 },
     shots: [
       { start: 0, end: 5, layout: "single", x: 496 },
-      { start: 5, end: 10, layout: "single", x: 496 },
+      // spreadFrac < filtergraph's SPREAD_PUNCH_MAX (0.55, spec
+      // 2026-08-23-music-shorts v1.1) so R3's punch-in branch actually
+      // fires below - this suite's job is proving `musicDirection` reaches
+      // the real `buildFiltergraph`, not re-testing the spread gate itself
+      // (see reframe-filtergraph.test.ts for that).
+      { start: 5, end: 10, layout: "single", x: 496, spreadFrac: 0.3 },
     ],
   };
 
@@ -581,7 +586,8 @@ describe("renderClips music direction (tasks R1/R3/R4, spec 2026-08-23-music-sho
     const spec = mocks.cutClips.mock.calls[0][3];
     // No bars: the base crop keeps the legacy "ih" token...
     expect(spec.graph).toContain("h=ih");
-    // ...but R3's punch-in still fires (2 shots, one odd) - a complex overlay.
+    // ...but R3's punch-in still fires (shot 2 clears the spread gate) - a
+    // complex overlay.
     expect(spec.kind).toBe("complex");
     expect(mocks.cutClips.mock.calls[0][4]).toBe(true);
   });

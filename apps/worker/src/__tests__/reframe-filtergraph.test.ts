@@ -4,6 +4,7 @@ import {
   piecewiseX,
   planKeyframes,
   rampX,
+  SPREAD_PUNCH_MAX,
 } from "../reframe/filtergraph";
 import type { CropPlan, MusicDirectionOpts } from "../reframe/types";
 
@@ -519,16 +520,17 @@ describe("buildFiltergraph music direction (R3 punch-in)", () => {
     ...extra,
   });
 
-  it("pins the exact punch-in crop numbers on a 1920x1080 source (shot 1, odd)", () => {
+  it("pins the exact punch-in crop numbers on a 1920x1080 source", () => {
     // cropW=608, h0=1080 (no bars). Tightened by 1.08 and even-snapped DOWN:
     // 608/1.08 = 562.96... -> 562; 1080/1.08 floors to 999.999... in floating
     // point -> even-snaps down to 998, not the algebraic 1000 - pinned as
     // measured, not as assumed. Centring offsets follow from those: (608-562)/2
-    // = 23 -> even 22; (1080-998)/2 = 41 -> even 40.
+    // = 23 -> even 22; (1080-998)/2 = 41 -> even 40. This geometry is v1's own
+    // math, unchanged by v1.1's spread-gating - only WHICH shot reaches it moved.
     const spec = buildFiltergraph(
       base([
         { start: 0, end: 10, layout: "single", x: 496 },
-        { start: 10, end: 20, layout: "single", x: 496 },
+        { start: 10, end: 20, layout: "single", x: 496, spreadFrac: 0.3 },
       ]),
       undefined,
       punchOnly()
@@ -537,38 +539,51 @@ describe("buildFiltergraph music direction (R3 punch-in)", () => {
     expect(spec.graph).toContain("crop=w=562:h=998:x=22:y=40,scale=1080:1920,setsar=1[punch]");
   });
 
-  it("alternates by shot index: shot 0 (even) plays wide-only, shot 1 (odd) plays inside the punch enable window", () => {
+  it("punches only the shot whose spreadFrac clears SPREAD_PUNCH_MAX, never a shot without saliency", () => {
     const spec = buildFiltergraph(
       base([
-        { start: 0, end: 10, layout: "single", x: 496 },
-        { start: 10, end: 25, layout: "single", x: 496 },
-        { start: 25, end: 40, layout: "single", x: 496 },
+        { start: 0, end: 10, layout: "single", x: 496 }, // no saliency - never punched
+        { start: 10, end: 25, layout: "single", x: 496, spreadFrac: 0.3 }, // narrow mass - punched
+        { start: 25, end: 40, layout: "single", x: 496, spreadFrac: 0.7 }, // close-up - not punched
       ]),
       undefined,
       punchOnly()
     );
-    // Only shot 1 (10..25) is odd - the enable expression must name exactly
-    // that window and no other.
+    // Only the middle shot (10..25) qualifies - the enable expression must
+    // name exactly that window and no other.
     expect(spec.graph).toContain("enable='gte(t,10.00)*lt(t,25.00)'");
     expect(spec.graph).not.toContain("gte(t,0.00)*lt(t,10.00)");
     expect(spec.graph).not.toContain("gte(t,25.00)*lt(t,40.00)");
   });
 
+  it("skips the whole punch branch when no shot qualifies - byte-identical to punchIn absent", () => {
+    // Two shots, neither with a spreadFrac under the gate: one absent
+    // entirely, one at a close-up spread. v1's odd/even alternation would
+    // have punched shot 1 regardless; v1.1 must not.
+    const plan = base([
+      { start: 0, end: 10, layout: "single", x: 496 },
+      { start: 10, end: 20, layout: "single", x: 496, spreadFrac: 0.7 },
+    ]);
+    expect(buildFiltergraph(plan, undefined, punchOnly())).toEqual(
+      buildFiltergraph(plan)
+    );
+  });
+
   it("does nothing to a single-shot plan - no split, no overlay, no punch branch at all", () => {
     const spec = buildFiltergraph(
-      base([{ start: 0, end: 30, layout: "single", x: 496 }]),
+      base([{ start: 0, end: 30, layout: "single", x: 496, spreadFrac: 0.3 }]),
       undefined,
       punchOnly()
     );
     expect(spec).toEqual(
-      buildFiltergraph(base([{ start: 0, end: 30, layout: "single", x: 496 }]))
+      buildFiltergraph(base([{ start: 0, end: 30, layout: "single", x: 496, spreadFrac: 0.3 }]))
     );
   });
 
   it("composes with the ass snippet, appended after the punch overlay", () => {
     const spec = buildFiltergraph(
       base([
-        { start: 0, end: 10, layout: "single", x: 496 },
+        { start: 0, end: 10, layout: "single", x: 496, spreadFrac: 0.3 },
         { start: 10, end: 20, layout: "single", x: 496 },
       ]),
       "ass=filename=/tmp/x.ass",
@@ -580,7 +595,7 @@ describe("buildFiltergraph music direction (R3 punch-in)", () => {
   it("composes with R1 bars: the punch branch repeats the SAME bar-cut base crop before its own tighter crop", () => {
     const spec = buildFiltergraph(
       base([
-        { start: 0, end: 10, layout: "single", x: 496 },
+        { start: 0, end: 10, layout: "single", x: 496, spreadFrac: 0.3 },
         { start: 10, end: 20, layout: "single", x: 496 },
       ]),
       undefined,
@@ -592,12 +607,58 @@ describe("buildFiltergraph music direction (R3 punch-in)", () => {
 
   it("is skipped entirely when the plan already uses a split layout - out of scope for v1, byte-identical to punchIn absent", () => {
     const plan = base([
-      { start: 0, end: 12.4, layout: "single", x: 496 },
+      { start: 0, end: 12.4, layout: "single", x: 496, spreadFrac: 0.3 },
       { start: 12.4, end: 31, layout: "split", top: { x: 0 }, bottom: { x: 704 } },
       { start: 31, end: 57.5, layout: "center", x: 656 },
     ]);
     expect(buildFiltergraph(plan, undefined, punchOnly())).toEqual(
       buildFiltergraph(plan)
     );
+  });
+
+  it("a center layout shot punches on the same spreadFrac gate as single", () => {
+    const spec = buildFiltergraph(
+      base([
+        { start: 0, end: 10, layout: "center", x: 656, spreadFrac: 0.3 },
+        { start: 10, end: 20, layout: "single", x: 496 },
+      ]),
+      undefined,
+      punchOnly()
+    );
+    expect(spec.graph).toContain("enable='gte(t,0.00)*lt(t,10.00)'");
+  });
+});
+
+// spec 2026-08-23-music-shorts v1.1: SPREAD_PUNCH_MAX is the exact boundary
+// mutation testing pins - see the worker suite's mutation pass for the
+// apply/run/revert cycle this test is designed to catch.
+describe("SPREAD_PUNCH_MAX boundary", () => {
+  const punchOnly: MusicDirectionOpts = { topBar: 0, bottomBar: 0, punchIn: true, fades: false };
+
+  it("0.3 punches, 0.7 does not - the two reference values from the spec", () => {
+    const punched = buildFiltergraph(
+      base([
+        { start: 0, end: 10, layout: "single", x: 496, spreadFrac: 0.3 },
+        { start: 10, end: 20, layout: "single", x: 496, spreadFrac: 0.7 },
+      ]),
+      undefined,
+      punchOnly
+    );
+    expect(punched.graph).toContain("enable='gte(t,0.00)*lt(t,10.00)'");
+    expect(punched.graph).not.toContain("gte(t,10.00)*lt(t,20.00)");
+  });
+
+  it("a shot exactly at the threshold does not punch - the comparison is strict <", () => {
+    const spec = buildFiltergraph(
+      base([
+        { start: 0, end: 10, layout: "single", x: 496, spreadFrac: SPREAD_PUNCH_MAX },
+        { start: 10, end: 20, layout: "single", x: 496, spreadFrac: 0.3 },
+      ]),
+      undefined,
+      punchOnly
+    );
+    // Only the second shot (spread 0.3) qualifies.
+    expect(spec.graph).toContain("enable='gte(t,10.00)*lt(t,20.00)'");
+    expect(spec.graph).not.toContain("gte(t,0.00)*lt(t,10.00)");
   });
 });

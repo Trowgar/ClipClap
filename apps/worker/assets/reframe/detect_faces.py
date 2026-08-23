@@ -97,6 +97,89 @@ CAM_EDGE_MIN = 4.0
 # tens of percent) rather than catastrophic (50%+).
 NESTED_SCORE_DOMINANCE = 1.5
 
+# --- Saliency (spec 2026-08-23-music-shorts, v1.1) --------------------------
+# Per-shot visual-mass summary from column edge energy, consulted ONLY by the
+# music-direction path in the TS side (plan.ts anchors a faceless shot's
+# centre crop on it; filtergraph.ts gates the punch-in zoom on it). Computed
+# unconditionally below - it is cheap (up to SALIENCY_SAMPLE_MAX frames per
+# shot, the same Sobel already used by median_edge_map above) and the output
+# addition is backward-compatible: an older TS build that has never heard of
+# "saliency" simply never reads the key. Deliberately separate from
+# edge_frames/median_edge_map/find_cam_rect: this is a PER-SHOT statistic
+# (find_cam_rect's machinery is clip-wide), and mixing the two accumulators
+# would make one budget's cost depend on the other's.
+SALIENCY_SAMPLE_MAX = 8       # evenly-sampled frames per shot, at most
+SALIENCY_COVERAGE_FRAC = 0.7  # fraction of total column energy spreadFrac covers
+
+
+def saliency_from_columns(col_energy):
+    """Pure: a per-column energy array -> {"x", "spreadFrac"}, or None.
+
+    `col_energy` is a 1-D array, one entry per column, arbitrary non-negative
+    units (this file feeds it summed |Sobel-x| + |Sobel-y| magnitude, but the
+    function itself has no opinion on where the numbers came from).
+
+    `x`: the energy-weighted centroid column (float, same pixel space as the
+    input array - the caller scales it to SOURCE px).
+
+    `spreadFrac`: sort columns by energy descending, walk that order
+    accumulating a running sum, and take the SMALLEST prefix whose sum
+    reaches SALIENCY_COVERAGE_FRAC (70%) of the total - expressed as a
+    fraction of the column count. Small when the energy sits in a narrow
+    cluster (few columns needed), close to SALIENCY_COVERAGE_FRAC itself when
+    it is spread evenly across every column (every column contributes
+    equally, so ~70% of them are needed either way this near-tied order
+    breaks). A close-up's edge energy is scattered across most of the frame
+    width - high spreadFrac; a small subject against a plain background
+    concentrates it in a few columns - low spreadFrac.
+
+    None when there is nothing to summarize (`col_energy` empty or all-zero,
+    i.e. no signal) rather than dividing by zero or returning a meaningless
+    centroid.
+    """
+    n = len(col_energy)
+    total = float(np.sum(col_energy))
+    if n == 0 or total <= 1e-6:
+        return None
+    idx = np.arange(n, dtype=np.float64)
+    x = float(np.sum(idx * col_energy) / total)
+    order = np.argsort(-np.asarray(col_energy, dtype=np.float64))
+    cumulative = np.cumsum(np.asarray(col_energy, dtype=np.float64)[order])
+    needed = int(np.searchsorted(cumulative, SALIENCY_COVERAGE_FRAC * total) + 1)
+    return {"x": x, "spreadFrac": min(1.0, needed / n)}
+
+
+def shot_index_for_t(t, shots):
+    """Which shot (by index into `shots`) clip-relative time `t` falls in.
+
+    Pure extraction of the lookup `main()` already ran inline per frame - a
+    frame past every shot's end (the last shot's own trailing edge, or a
+    rounding straggler) falls into the LAST shot, matching the original
+    inline loop's `shot_i = len(shots) - 1` default exactly.
+    """
+    for i, s in enumerate(shots):
+        if s["start"] <= t < s["end"]:
+            return i
+    return len(shots) - 1
+
+
+def _even_sample_positions(n, max_samples):
+    """Up to `max_samples` positions evenly spaced across `range(n)`.
+
+    Returns every position when `n <= max_samples`. Otherwise picks
+    `max_samples` positions spanning the full range (including both ends),
+    de-duplicated (small `n` close to `max_samples` can round two picks onto
+    the same index) and sorted.
+    """
+    if n <= 0:
+        return []
+    if n <= max_samples:
+        return list(range(n))
+    if max_samples <= 1:
+        return [0]
+    step = (n - 1) / (max_samples - 1)
+    return sorted({round(i * step) for i in range(max_samples)})
+
 
 def median_edge_map(grays):
     """Per-pixel MEDIAN Sobel magnitude across frames.
@@ -363,13 +446,26 @@ def main():
     edge_frames = []  # grayscales fed to the median edge map, capped below
     edge_vx = edge_hy = None
 
+    # Saliency (v1.1): a lightweight pre-pass over frame TIMES ONLY (no image
+    # decode) so each shot's evenly-spaced sample budget can be chosen before
+    # any frame is read - `_even_sample_positions` needs the shot's total
+    # frame count up front, and frames arrive in one sequential pass below.
+    # `shot_of_frame[idx]` reproduces the exact per-frame lookup this loop
+    # always did inline; factored to a pure function so this pre-pass and the
+    # main loop cannot compute two different answers for the same frame.
+    shot_of_frame = [shot_index_for_t(idx / args.fps, shots) for idx in range(len(frames))]
+    shot_frame_positions = [[] for _ in shots]
+    for idx, si in enumerate(shot_of_frame):
+        shot_frame_positions[si].append(idx)
+    sample_frame_idxs = [
+        {pos[j] for j in _even_sample_positions(len(pos), SALIENCY_SAMPLE_MAX)}
+        for pos in shot_frame_positions
+    ]
+    shot_col_energy = [None] * len(shots)  # per-shot accumulated column energy
+
     for idx, name in enumerate(frames):
         t = idx / args.fps
-        shot_i = len(shots) - 1
-        for i, s in enumerate(shots):
-            if s["start"] <= t < s["end"]:
-                shot_i = i
-                break
+        shot_i = shot_of_frame[idx]
         img = cv2.imread(os.path.join(args.frames_dir, name))
         if img is None:
             continue
@@ -389,6 +485,20 @@ def main():
         # it is handed (44 MB and 240 ms at 24 frames) and has no bound itself.
         if len(edge_frames) < EDGE_SAMPLE_MAX:
             edge_frames.append(gray)
+        # Saliency (v1.1): only this shot's pre-chosen sample frames pay for
+        # the extra Sobel pass. SUMMED (not averaged) across sampled frames -
+        # `saliency_from_columns` only cares about the RELATIVE shape of the
+        # column energy, which a constant per-frame scale factor never
+        # changes, so there is nothing to gain from dividing by the count.
+        if idx in sample_frame_idxs[shot_i]:
+            sob_x = np.abs(cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3))
+            sob_y = np.abs(cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3))
+            col_energy = sob_x.sum(axis=0) + sob_y.sum(axis=0)
+            shot_col_energy[shot_i] = (
+                col_energy
+                if shot_col_energy[shot_i] is None
+                else shot_col_energy[shot_i] + col_energy
+            )
         tracks = states[shot_i]
         for det in dets:
             box = det[0:4]
@@ -466,7 +576,19 @@ def main():
                     rect = {"x": r["x"] * scale, "y": r["y"] * scale,
                             "w": r["w"] * scale, "h": r["h"] * scale,
                             "score": r["score"]}
-        out["shots"].append({"shotIndex": i, "tracks": rendered, "camRect": rect})
+        # Saliency (v1.1): null when this shot had no sampled frames (a
+        # zero-length shot at this fps's granularity) or when its accumulated
+        # energy was all-zero (a flat frame). `x` scales to SOURCE px exactly
+        # like every box above; `spreadFrac` is scale-invariant (a fraction of
+        # column count), so it is passed through unchanged.
+        saliency = None
+        if shot_col_energy[i] is not None:
+            raw = saliency_from_columns(shot_col_energy[i])
+            if raw is not None:
+                saliency = {"x": raw["x"] * scale, "spreadFrac": raw["spreadFrac"]}
+        out["shots"].append({
+            "shotIndex": i, "tracks": rendered, "camRect": rect, "saliency": saliency,
+        })
     json.dump(out, sys.stdout)
 
 

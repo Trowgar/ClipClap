@@ -112,7 +112,15 @@ async function loadReframeConfigForJob(
   )?.telemetry as Record<string, unknown> | undefined;
   const isMusicShorts = telemetry?.path === "music-shorts";
   if (isMusicShorts) {
-    return { cfg: { ...cfg, stream: false, streamVirtualCam: false }, isMusicShorts };
+    // musicMode (v1.1, spec 2026-08-23-music-shorts): reaches the planner via
+    // ReframeConfig -> PlanOptions (see reframe/index.ts's planDetected), so
+    // a faceless shot anchors on the detector's saliency centroid instead of
+    // the frame centre, and every shot carries its spreadFrac for
+    // filtergraph.ts's punch-in gate.
+    return {
+      cfg: { ...cfg, stream: false, streamVirtualCam: false, musicMode: true },
+      isMusicShorts,
+    };
   }
   return { cfg, isMusicShorts };
 }

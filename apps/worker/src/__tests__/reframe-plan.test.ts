@@ -5,6 +5,7 @@ import {
   buildCropPlan,
   buildTargetSamples,
   canAnchor,
+  centerXForShot,
   cropWidthFor,
   evenClamp,
   faceVisibility,
@@ -2377,5 +2378,72 @@ describe("buildCropPlan window placement", () => {
       H
     );
     expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 612 }]);
+  });
+});
+
+// spec 2026-08-23-music-shorts v1.1: owner diagnosis on the Believer corpus
+// render - a faceless (center) shot's geometric-centre crop put a
+// frame-edge silhouette (starfield subject) half out of the window. Every
+// test here passes `musicMode: true` explicitly, so the whole suite above
+// this point - every one of which omits it - is the proof that not passing
+// it leaves buildCropPlan byte-identical to before this task.
+describe("music-mode saliency anchoring (spec 2026-08-23-music-shorts v1.1)", () => {
+  const musicOpts = { ...DEFAULT_PLAN_OPTIONS, musicMode: true };
+
+  it("centerXForShot anchors on the saliency centroid, clamped and even-snapped like centerX", () => {
+    expect(centerXForShot({ x: 1000, spreadFrac: 0.2 }, 656, 608, W)).toBe(696);
+    expect(centerXForShot(null, 656, 608, W)).toBe(656);
+    expect(centerXForShot(undefined, 656, 608, W)).toBe(656);
+  });
+
+  it("a faceless shot anchors its centre crop on saliency.x, pinned numbers", () => {
+    // centerX for 1920x1080 is 656 (cropW 608); saliency.x=1000 moves the
+    // window's CENTRE there: 1000 - 304 = 696, already even, inside
+    // [0, 1312] - no clamping needed.
+    const tracks: ShotTracks[] = [
+      { shotIndex: 0, tracks: [], camRect: null, saliency: { x: 1000, spreadFrac: 0.2 } },
+    ];
+    const plan = buildCropPlan(oneShot, tracks, W, H, musicOpts, null);
+    expect(plan!.shots).toEqual([
+      { start: 0, end: 30, layout: "center", x: 696, spreadFrac: 0.2 },
+    ]);
+  });
+
+  it("without musicMode, the same saliency data changes nothing - byte-identical to today", () => {
+    const tracks: ShotTracks[] = [
+      { shotIndex: 0, tracks: [], camRect: null, saliency: { x: 1000, spreadFrac: 0.2 } },
+    ];
+    const withSaliency = buildCropPlan(oneShot, tracks, W, H, DEFAULT_PLAN_OPTIONS, null);
+    const withoutSaliency = buildCropPlan(oneShot, withTracks([]), W, H, DEFAULT_PLAN_OPTIONS, null);
+    expect(withSaliency).toEqual(withoutSaliency);
+    expect(withSaliency!.shots).toEqual([{ start: 0, end: 30, layout: "center", x: 656 }]);
+  });
+
+  it("a null saliency (shot had no sampled frames) falls back to centerX even under musicMode", () => {
+    const tracks: ShotTracks[] = [{ shotIndex: 0, tracks: [], camRect: null, saliency: null }];
+    const plan = buildCropPlan(oneShot, tracks, W, H, musicOpts, null);
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "center", x: 656 }]);
+  });
+
+  it("a shot with an anchorable face ignores saliency for x, but still carries spreadFrac", () => {
+    // Same face as "screenshot 1 regression" above (x: 496 unmoved) - the
+    // saliency centroid (50) sits nowhere near the face and must not be used.
+    const tracks: ShotTracks[] = [
+      {
+        shotIndex: 0,
+        tracks: [track(600, 400)],
+        camRect: null,
+        saliency: { x: 50, spreadFrac: 0.4 },
+      },
+    ];
+    const plan = buildCropPlan(oneShot, tracks, W, H, musicOpts, null);
+    expect(plan!.shots).toEqual([
+      { start: 0, end: 30, layout: "single", x: 496, spreadFrac: 0.4 },
+    ]);
+  });
+
+  it("a face shot with no saliency data carries no spreadFrac key even under musicMode", () => {
+    const plan = buildCropPlan(oneShot, withTracks([track(600, 400)]), W, H, musicOpts, null);
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 496 }]);
   });
 });

@@ -109,6 +109,23 @@ function snapEvenDown(n: number): number {
 }
 
 /**
+ * R3 v1.1 (spec 2026-08-23-music-shorts): a shot punches only when its
+ * saliency mass occupies UNDER this fraction of the frame's width. Owner
+ * diagnosis on the Believer corpus render: v1's odd/even alternation
+ * tightened MV close-ups that already fill the frame (a face filling the
+ * height at t=3) on top of the R1 letterbox-bar zoom, making them worse - a
+ * close-up's edge energy spreads across most of the frame width, so a high
+ * `spreadFrac` IS the close-up signal. A wide/empty scene (a silhouette
+ * against starfield) concentrates its energy in a narrow column cluster - low
+ * `spreadFrac` - and the 1.08x tightening helps there.
+ *
+ * n=1 Believer calibration: 0.55 sits between that clip's measured close-up
+ * spread and its wide-shot spread. Corpus renders decide whether it needs to
+ * move once more music-video shapes exist.
+ */
+export const SPREAD_PUNCH_MAX = 0.55;
+
+/**
  * R1 (spec 2026-08-23-music-shorts): re-centres one planned `x` on a NEW crop
  * width, music-bar jobs only. The planner computed every `x` against the
  * FULL-height crop width (`cropW0`); cutting a constant letterbox bar shrinks
@@ -250,24 +267,43 @@ export function buildFiltergraph(
   // enough on its own.
   const baseChain = `${baseCropOnly},scale=1080:1920,setsar=1`;
 
-  // R3 (spec 2026-08-23-music-shorts): a discrete per-shot punch-in, even
-  // shots at scale 1.0 and odd shots slightly tighter - a montage-energy
-  // device synced to the MV's own (beat-)cuts. Deliberately NOT a continuous
-  // zoom: the repo's camera-motion knobs (camera.ts) are measured-provisional
-  // and this must not touch them, so the alternation is built the same way
-  // the split/stream tiles already switch between two fixed states - two
-  // parallel crop branches, chosen per shot by a time-gated `overlay`, never
-  // a time-varying crop width/height (ffmpeg's `crop` filter only
-  // re-evaluates `x`/`y` per frame, not `w`/`h` - a discrete width change
-  // needs a real branch, not an expression). Scoped to the plain single/
-  // center path: split and stream shots don't reach here for a music job
-  // (task M4 forces stream off, and a duet split is out of scope for v1), and
-  // a plan with only one shot has no "alternation" to speak of.
+  // R3 (spec 2026-08-23-music-shorts): a discrete per-shot punch-in - a
+  // montage-energy device synced to the MV's own (beat-)cuts. Deliberately
+  // NOT a continuous zoom: the repo's camera-motion knobs (camera.ts) are
+  // measured-provisional and this must not touch them, so the choice is
+  // built the same way the split/stream tiles already switch between two
+  // fixed states - two parallel crop branches, chosen per shot by a
+  // time-gated `overlay`, never a time-varying crop width/height (ffmpeg's
+  // `crop` filter only re-evaluates `x`/`y` per frame, not `w`/`h` - a
+  // discrete width change needs a real branch, not an expression). Scoped to
+  // the plain single/center path: split and stream shots don't reach here
+  // for a music job (task M4 forces stream off, and a duet split is out of
+  // scope for v1), and a plan with only one shot has no "alternation" to
+  // speak of.
+  //
+  // v1.1: WHICH shots punch changed from odd/even alternation to
+  // SPREAD-GATED (see `SPREAD_PUNCH_MAX`) - a shot punches only when its
+  // saliency says its subject mass is narrow, never a shot with no saliency
+  // at all (an older sidecar, or a shot with no sampled frames) and never a
+  // shot spread across most of the frame (a close-up). `spreadFrac` lives on
+  // `workingPlan.shots` (plan.ts, MUSIC-ONLY), never on `split`/`stream`
+  // shots, so the type guard doubles as the layout filter.
+  const punchIndices = workingPlan.shots
+    .map((s, i) =>
+      (s.layout === "center" || s.layout === "single") &&
+      s.spreadFrac !== undefined &&
+      s.spreadFrac < SPREAD_PUNCH_MAX
+        ? i
+        : null
+    )
+    .filter((i): i is number => i !== null);
+
   const punchEligible =
     !!musicDirection?.punchIn &&
     workingPlan.shots.length > 1 &&
     splits.length === 0 &&
-    streams.length === 0;
+    streams.length === 0 &&
+    punchIndices.length > 0;
 
   if (punchEligible) {
     const PUNCH_FACTOR = 1.08;
@@ -275,8 +311,11 @@ export function buildFiltergraph(
     const punchH = Math.min(h0, snapEvenDown(h0 / PUNCH_FACTOR));
     const punchX = Math.max(0, snapEvenDown((cropW - punchW) / 2));
     const punchY = Math.max(0, snapEvenDown((h0 - punchH) / 2));
+    const punchIndexSet = new Set(punchIndices);
     const punchEnable = workingPlan.shots
-      .map((s, i) => (i % 2 === 1 ? `gte(t,${fmt(s.start)})*lt(t,${fmt(s.end)})` : null))
+      .map((s, i) =>
+        punchIndexSet.has(i) ? `gte(t,${fmt(s.start)})*lt(t,${fmt(s.end)})` : null
+      )
       .filter((e): e is string => e !== null)
       .join("+");
     const chains = [

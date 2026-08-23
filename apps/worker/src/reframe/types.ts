@@ -35,15 +35,42 @@ export interface Keyframe {
   x: number;
 }
 
+/** Per-shot visual-mass summary from the detector's column edge energy (spec
+ *  2026-08-23-music-shorts v1.1). `x` is the energy centroid column in SOURCE
+ *  px; `spreadFrac` is the fraction of columns needed to cover 70% of the
+ *  shot's total energy - small when the mass sits in a narrow cluster (a
+ *  subject against a plain background), large when it is spread across the
+ *  frame (a busy/close-up shot). Consulted ONLY under an explicit musicMode
+ *  (plan.ts anchors a faceless shot's centre crop on it; filtergraph.ts gates
+ *  the punch-in zoom on it) - see detect_faces.py's saliency_from_columns. */
+export interface Saliency {
+  x: number;
+  spreadFrac: number;
+}
+
 export interface ShotTracks {
   shotIndex: number;
   tracks: FaceTrack[];
   /** Null when the sidecar found no inset, or is an older build. */
   camRect: CamRect | null;
+  /** Absent on an older sidecar build (backward compatible); null when the
+   *  shot had no sampled frames. Both mean "no saliency data" to every
+   *  consumer - see `Saliency`. */
+  saliency?: Saliency | null;
 }
 
 export type ShotLayout =
-  | { start: number; end: number; layout: "center"; x: number }
+  | {
+      start: number;
+      end: number;
+      layout: "center";
+      x: number;
+      /** MUSIC-ONLY (spec 2026-08-23-music-shorts v1.1): this shot's
+       *  saliency.spreadFrac, carried onto the plan so filtergraph.ts can
+       *  gate the punch-in without re-deriving it. Absent off the music path
+       *  and on any shot with no saliency data. */
+      spreadFrac?: number;
+    }
   | {
       start: number;
       end: number;
@@ -54,6 +81,8 @@ export type ShotLayout =
       x: number;
       /** Trajectory, present only when the camera actually moves. */
       xs?: Keyframe[];
+      /** MUSIC-ONLY, same field and meaning as on the "center" variant above. */
+      spreadFrac?: number;
     }
   | {
       start: number;

@@ -121,3 +121,54 @@ describe("parseDetectorOutput path", () => {
     ).toThrow("detector_invalid_json");
   });
 });
+
+// spec 2026-08-23-music-shorts v1.1: saliency parsing is TOLERANT, unlike
+// camRect above - absent OR malformed both collapse to null and never throw,
+// because this is a music-only anchoring hint (plan.ts/filtergraph.ts) that
+// must not take down face detection for every other clip over a defect this
+// narrow.
+describe("saliency in the sidecar contract", () => {
+  const track = {
+    id: 0,
+    box: { x: 179, y: 110, w: 43, h: 56 },
+    score: 0.89,
+    samples: 111,
+    mouthActivity: 0.05,
+  };
+
+  it("parses a saliency object when present", () => {
+    const raw = JSON.stringify({
+      shots: [
+        { shotIndex: 0, tracks: [track], saliency: { x: 512.5, spreadFrac: 0.3 } },
+      ],
+    });
+    expect(parseDetectorOutput(raw, 1)[0].saliency).toEqual({ x: 512.5, spreadFrac: 0.3 });
+  });
+
+  it("treats an absent saliency key as null, not as a violation", () => {
+    const raw = JSON.stringify({ shots: [{ shotIndex: 0, tracks: [track] }] });
+    expect(parseDetectorOutput(raw, 1)[0].saliency).toBeNull();
+  });
+
+  it("treats an explicit null saliency (no sampled frames) as null", () => {
+    const raw = JSON.stringify({
+      shots: [{ shotIndex: 0, tracks: [track], saliency: null }],
+    });
+    expect(parseDetectorOutput(raw, 1)[0].saliency).toBeNull();
+  });
+
+  it("degrades a malformed saliency to null rather than throwing", () => {
+    const raw = JSON.stringify({
+      shots: [{ shotIndex: 0, tracks: [track], saliency: { x: "left", spreadFrac: 0.3 } }],
+    });
+    expect(() => parseDetectorOutput(raw, 1)).not.toThrow();
+    expect(parseDetectorOutput(raw, 1)[0].saliency).toBeNull();
+  });
+
+  it("degrades a saliency missing spreadFrac to null", () => {
+    const raw = JSON.stringify({
+      shots: [{ shotIndex: 0, tracks: [track], saliency: { x: 512.5 } }],
+    });
+    expect(parseDetectorOutput(raw, 1)[0].saliency).toBeNull();
+  });
+});

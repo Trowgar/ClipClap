@@ -5,6 +5,7 @@ import type {
   FaceTrack,
   Keyframe,
   PathSample,
+  Saliency,
   Shot,
   ShotLayout,
   ShotTracks,
@@ -123,6 +124,32 @@ export function windowXFor(
   const minX = Math.min(...group.map((t) => t.box.x));
   const maxX = Math.max(...group.map((t) => t.box.x + t.box.w));
   return evenClamp((minX + maxX) / 2 - cropW / 2, cropW, sourceWidth);
+}
+
+/**
+ * MUSIC-ONLY (spec 2026-08-23-music-shorts v1.1): where a FACELESS shot's
+ * centre crop goes. Owner-diagnosed defect on the Believer corpus render: a
+ * geometric centre crop on a shot with no anchorable face put the actual
+ * subject (a silhouette against starfield) at the frame edge, half the
+ * window showing empty background. The detector's per-shot saliency
+ * centroid (`detect_faces.py`'s `saliency_from_columns`) says where the
+ * visual mass actually sits, so a musicMode shot centres THERE instead -
+ * clamped into the valid crop range and even-snapped exactly like `centerX`
+ * itself, the same arithmetic `windowXFor` already uses for a face group.
+ *
+ * Falls back to `centerX` whenever `saliency` is null (no sampled frames, or
+ * an older sidecar build) - the frozen-geometry contract this function must
+ * not touch is "no saliency data in, no change in behaviour", not "musicMode
+ * on, geometry always moves".
+ */
+export function centerXForShot(
+  saliency: Saliency | null | undefined,
+  centerX: number,
+  cropW: number,
+  sourceWidth: number
+): number {
+  if (!saliency) return centerX;
+  return evenClamp(saliency.x - cropW / 2, cropW, sourceWidth);
 }
 
 /**
@@ -772,6 +799,14 @@ export function buildCropPlan(
   if (cropW >= sourceWidth) return null;
   const centerX = evenClamp((sourceWidth - cropW) / 2, cropW, sourceWidth);
   const byIndex = new Map(tracksByShot.map((s) => [s.shotIndex, s.tracks]));
+  // MUSIC-ONLY (spec 2026-08-23-music-shorts v1.1): per-shot saliency, read
+  // only when `opts.musicMode` is set - see `centerXForShot` and the
+  // `spreadFrac` attachment below. Building the map unconditionally is free
+  // (a lookup nobody performs); gating the READS on `opts.musicMode` is what
+  // keeps every non-music plan byte-identical.
+  const saliencyByIndex = new Map(
+    tracksByShot.map((s) => [s.shotIndex, s.saliency ?? null])
+  );
 
   // --- Source classification (spec §4, extended by D5 of
   // 2026-08-19-stream-reframe-v2 §3/§5B). One pass over the tracks the
@@ -926,12 +961,25 @@ export function buildCropPlan(
     // Keep only tracks that clear the noise floor AND are seen often enough
     // relative to the dominant track.
     const tracks = survivingTracks(byIndex.get(i) ?? []);
+    // MUSIC-ONLY: undefined off the music path, so every `...(shotSpreadFrac
+    // !== undefined ? { spreadFrac: shotSpreadFrac } : {})` below is a no-op
+    // there. Read once per shot rather than at each return site so a shot
+    // cannot carry two different answers depending which branch it takes.
+    const shotSpreadFrac = opts.musicMode
+      ? (saliencyByIndex.get(i) ?? null)?.spreadFrac
+      : undefined;
     if (streamGeom && effectiveCamRect) {
       // A shot only splits if it actually shows the streamer: advertisement
       // cards, intermissions and replays have no face inside the inset.
       const inInset = faceInInset(tracks, effectiveCamRect);
       if (!inInset) {
-        return { start: shot.start, end: shot.end, layout: "center", x: centerX };
+        return {
+          start: shot.start,
+          end: shot.end,
+          layout: "center",
+          x: centerX,
+          ...(shotSpreadFrac !== undefined ? { spreadFrac: shotSpreadFrac } : {}),
+        };
       }
       return {
         start: shot.start,
@@ -972,7 +1020,22 @@ export function buildCropPlan(
     // track" now run through both passes and still land on their original x.
     const group = selectGroupForShot(tracks, anchorPolicy, cropW, sourceWidth);
     if (!group) {
-      return { start: shot.start, end: shot.end, layout: "center", x: centerX };
+      // MUSIC-ONLY: the exact defect this task fixes. No anchorable face ->
+      // a geometric centre crop, which on a faceless shot puts whatever IS
+      // on screen wherever it happens to sit relative to the frame, not the
+      // window - see `centerXForShot`. Off the music path (`shotSpreadFrac`
+      // undefined implies `opts.musicMode` is falsy, since the two are read
+      // from the same guard) this is exactly `centerX`, byte-identical to v1.
+      const x = opts.musicMode
+        ? centerXForShot(saliencyByIndex.get(i), centerX, cropW, sourceWidth)
+        : centerX;
+      return {
+        start: shot.start,
+        end: shot.end,
+        layout: "center",
+        x,
+        ...(shotSpreadFrac !== undefined ? { spreadFrac: shotSpreadFrac } : {}),
+      };
     }
     // Everyone the window must not bisect: every surviving face this shot has
     // that the window is not anchored on. Derived from `tracks`, which is
@@ -992,7 +1055,13 @@ export function buildCropPlan(
       // definition of where a window goes, not two that have to agree.
       const x = placeWindow(group, others, cropW, sourceWidth);
       groupsByShot.set(i, group);
-      return { start: shot.start, end: shot.end, layout: "single", x };
+      return {
+        start: shot.start,
+        end: shot.end,
+        layout: "single",
+        x,
+        ...(shotSpreadFrac !== undefined ? { spreadFrac: shotSpreadFrac } : {}),
+      };
     }
     const split = trySplit(anchorable, tileW, sourceWidth, sourceHeight);
     if (split) return { start: shot.start, end: shot.end, ...split };
@@ -1008,6 +1077,7 @@ export function buildCropPlan(
       end: shot.end,
       layout: "single",
       x: placeWindow(group, others, cropW, sourceWidth),
+      ...(shotSpreadFrac !== undefined ? { spreadFrac: shotSpreadFrac } : {}),
     };
   });
 

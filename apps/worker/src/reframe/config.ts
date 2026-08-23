@@ -34,6 +34,12 @@ export interface ReframeConfig {
    *  candidates in the 0.15-0.30 band. */
   cutRecovery: boolean;
   camera: CameraConfig;
+  /** MUSIC-ONLY plan hint (spec 2026-08-23-music-shorts v1.1, PlanOptions.
+   *  musicMode). No env knob - render.ts's music branch is the only writer,
+   *  overriding this on the cfg object it builds per job (same idiom as its
+   *  `stream`/`streamVirtualCam` overrides beside it). loadReframeConfig
+   *  never sets it, so every env-sourced config leaves it undefined. */
+  musicMode?: boolean;
 }
 
 function positive(v: string | undefined, fallback: number): number {

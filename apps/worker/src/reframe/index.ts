@@ -170,6 +170,10 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
       streamVirtualCam: cfg.streamVirtualCam,
       motion: cfg.motion,
       camera: cfg.camera,
+      // Threaded so render.ts's music-branch override actually reaches the
+      // planner; omitting it would make ReframeConfig.musicMode readable but
+      // inert (spec 2026-08-23-music-shorts v1.1, mirrors streamFaceCeiling).
+      musicMode: cfg.musicMode,
     },
     cam
   );

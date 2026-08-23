@@ -5,7 +5,7 @@ import { join } from "path";
 import { tmpdir } from "os";
 import type { ReframeConfig } from "./config";
 import { DEFAULT_STREAM_FACE_CEILING } from "./options";
-import type { CamRect, FaceTrack, PathSample, Shot, ShotTracks } from "./types";
+import type { CamRect, FaceTrack, PathSample, Saliency, Shot, ShotTracks } from "./types";
 
 import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
 const execFileAsync = promisify(execFile);
@@ -93,7 +93,21 @@ export function parseDetectorOutput(raw: string, shotCount: number): ShotTracks[
       }
       camRect = { x: r.x, y: r.y, w: r.w, h: r.h, score: r.score };
     }
-    return { shotIndex: st.shotIndex, tracks, camRect };
+    // Saliency (spec 2026-08-23-music-shorts v1.1). Tolerant, NOT the strict
+    // throw-on-malformed rule camRect follows above: absent OR malformed both
+    // collapse to null and never fail detection - this is a music-only
+    // anchoring hint, consulted only under an explicit musicMode
+    // (plan.ts/filtergraph.ts), and a defect this narrow must not take down
+    // face detection for every other clip.
+    let saliency: Saliency | null = null;
+    const rawSaliency = (s as { saliency?: unknown }).saliency;
+    if (rawSaliency != null) {
+      const sal = rawSaliency as Record<string, unknown>;
+      if (num(sal.x) && num(sal.spreadFrac)) {
+        saliency = { x: sal.x, spreadFrac: sal.spreadFrac };
+      }
+    }
+    return { shotIndex: st.shotIndex, tracks, camRect, saliency };
   });
 }
 

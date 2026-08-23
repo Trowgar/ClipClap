@@ -63,6 +63,21 @@ export interface PlanOptions {
    *  Required for the same reason as `motion`: a caller that means DEFAULT_CAMERA
    *  should name it, since a wrong-but-plausible camera is invisible in a plan. */
   camera: CameraConfig;
+  /** MUSIC-ONLY (spec 2026-08-23-music-shorts v1.1): threaded from render.ts's
+   *  music branch through ReframeConfig, mirroring how `streamFaceCeiling` is
+   *  threaded. Gates two things, both scoped to a shot that would otherwise
+   *  be blind to the detector's saliency data: a faceless (no anchorable
+   *  face) shot anchors its centre crop on `saliency.x` instead of the frame
+   *  centre, and every non-split/non-stream shot carries its
+   *  `saliency.spreadFrac` onto the plan for filtergraph.ts's punch-in gate.
+   *
+   *  Optional and defaults to false/undefined for the same reason as
+   *  `streamFaceCeiling`/`streamVirtualCam`: a knob that did not exist when
+   *  the eval scripts' hand-built PlanOptions literals were written must not
+   *  force them to be edited. Every non-music caller - which is every caller
+   *  except render.ts's music branch - leaves this unset, and buildCropPlan
+   *  then never reads a shot's saliency at all: byte-identical to v1. */
+  musicMode?: boolean;
 }
 
 /** Default for `PlanOptions.streamFaceCeiling` and `ReframeConfig.streamFaceCeiling`
@@ -79,4 +94,5 @@ export const DEFAULT_PLAN_OPTIONS: Readonly<PlanOptions> = Object.freeze({
   streamVirtualCam: false,
   motion: false,
   camera: DEFAULT_CAMERA,
+  musicMode: false,
 });
