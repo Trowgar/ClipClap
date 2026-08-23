@@ -5,7 +5,7 @@ import {
   planKeyframes,
   rampX,
 } from "../reframe/filtergraph";
-import type { CropPlan } from "../reframe/types";
+import type { CropPlan, MusicDirectionOpts } from "../reframe/types";
 
 const base = (shots: CropPlan["shots"]): CropPlan => ({
   version: 1,
@@ -443,5 +443,161 @@ describe("buildFiltergraph motion selection", () => {
       shots: [{ ...planWithXs.shots[0], xs: [] }],
     };
     expect(buildFiltergraph(empty).graph).toBe(buildFiltergraph(planWithout).graph);
+  });
+});
+
+// spec 2026-08-23-music-shorts, tasks R1 (letterbox bars) and R3 (punch-in).
+// Every test in this describe block passes a `musicDirection` third argument
+// that does not exist on any pre-music call site, so it cannot move an
+// existing pin - the whole suite above this point is the proof that omitting
+// it (every existing test) still emits exactly what it always did.
+describe("buildFiltergraph music direction (R1 letterbox bars)", () => {
+  const noPunch: MusicDirectionOpts = {
+    topBar: 84,
+    bottomBar: 84,
+    punchIn: false,
+    fades: false,
+  };
+
+  it("recomputes the crop chain for a 1920x1080 source with 84/84 bars, re-centred on the planner's x", () => {
+    // Full-frame cropW is 608 (as everywhere else in this file); cutting an
+    // 84px bar off each side leaves a 912-tall band whose OWN 9:16 slice is
+    // 514 wide, not 608. Faces were detected on the full frame, so 496 and
+    // 656 - the planner's x values, computed against cropW=608 - are
+    // re-centred on the same point and reclamped into the new 514-wide
+    // window: 496+47=543 -> even 544, and 656+47=703 -> even 704.
+    const spec = buildFiltergraph(
+      base([
+        { start: 0, end: 12.4, layout: "single", x: 496 },
+        { start: 12.4, end: 30, layout: "center", x: 656 },
+      ]),
+      undefined,
+      noPunch
+    );
+    expect(spec).toEqual({
+      kind: "vf",
+      graph:
+        "crop=w=514:h=912:x='if(lt(t,12.40),544,704)':y=84,scale=1080:1920,setsar=1",
+    });
+  });
+
+  it("is byte-identical to the no-music-direction graph when both bars are 0", () => {
+    const plan = base([{ start: 0, end: 30, layout: "single", x: 496 }]);
+    const zeroBars: MusicDirectionOpts = {
+      topBar: 0,
+      bottomBar: 0,
+      punchIn: false,
+      fades: false,
+    };
+    expect(buildFiltergraph(plan, undefined, zeroBars)).toEqual(
+      buildFiltergraph(plan)
+    );
+  });
+
+  it("leaves a split shot's own tile geometry untouched - only the (invisible) base chain moves", () => {
+    // The base crop is never visible while a split tile is enabled (see the
+    // "Tiled layouts" comment in filtergraph.ts), so R1 does not need to -
+    // and per its own scope, does not - touch top.x/bottom.x.
+    const spec = buildFiltergraph(
+      base([
+        { start: 0, end: 20, layout: "split", top: { x: 100 }, bottom: { x: 600 } },
+      ]),
+      undefined,
+      noPunch
+    );
+    expect(spec.graph).toContain("x='100'");
+    expect(spec.graph).toContain("x='600'");
+  });
+});
+
+describe("buildFiltergraph music direction (R3 punch-in)", () => {
+  const punchOnly = (extra: Partial<MusicDirectionOpts> = {}): MusicDirectionOpts => ({
+    topBar: 0,
+    bottomBar: 0,
+    punchIn: true,
+    fades: false,
+    ...extra,
+  });
+
+  it("pins the exact punch-in crop numbers on a 1920x1080 source (shot 1, odd)", () => {
+    // cropW=608, h0=1080 (no bars). Tightened by 1.08 and even-snapped DOWN:
+    // 608/1.08 = 562.96... -> 562; 1080/1.08 floors to 999.999... in floating
+    // point -> even-snaps down to 998, not the algebraic 1000 - pinned as
+    // measured, not as assumed. Centring offsets follow from those: (608-562)/2
+    // = 23 -> even 22; (1080-998)/2 = 41 -> even 40.
+    const spec = buildFiltergraph(
+      base([
+        { start: 0, end: 10, layout: "single", x: 496 },
+        { start: 10, end: 20, layout: "single", x: 496 },
+      ]),
+      undefined,
+      punchOnly()
+    );
+    expect(spec.kind).toBe("complex");
+    expect(spec.graph).toContain("crop=w=562:h=998:x=22:y=40,scale=1080:1920,setsar=1[punch]");
+  });
+
+  it("alternates by shot index: shot 0 (even) plays wide-only, shot 1 (odd) plays inside the punch enable window", () => {
+    const spec = buildFiltergraph(
+      base([
+        { start: 0, end: 10, layout: "single", x: 496 },
+        { start: 10, end: 25, layout: "single", x: 496 },
+        { start: 25, end: 40, layout: "single", x: 496 },
+      ]),
+      undefined,
+      punchOnly()
+    );
+    // Only shot 1 (10..25) is odd - the enable expression must name exactly
+    // that window and no other.
+    expect(spec.graph).toContain("enable='gte(t,10.00)*lt(t,25.00)'");
+    expect(spec.graph).not.toContain("gte(t,0.00)*lt(t,10.00)");
+    expect(spec.graph).not.toContain("gte(t,25.00)*lt(t,40.00)");
+  });
+
+  it("does nothing to a single-shot plan - no split, no overlay, no punch branch at all", () => {
+    const spec = buildFiltergraph(
+      base([{ start: 0, end: 30, layout: "single", x: 496 }]),
+      undefined,
+      punchOnly()
+    );
+    expect(spec).toEqual(
+      buildFiltergraph(base([{ start: 0, end: 30, layout: "single", x: 496 }]))
+    );
+  });
+
+  it("composes with the ass snippet, appended after the punch overlay", () => {
+    const spec = buildFiltergraph(
+      base([
+        { start: 0, end: 10, layout: "single", x: 496 },
+        { start: 10, end: 20, layout: "single", x: 496 },
+      ]),
+      "ass=filename=/tmp/x.ass",
+      punchOnly()
+    );
+    expect(spec.graph.endsWith("[o1]ass=filename=/tmp/x.ass[vout]")).toBe(true);
+  });
+
+  it("composes with R1 bars: the punch branch repeats the SAME bar-cut base crop before its own tighter crop", () => {
+    const spec = buildFiltergraph(
+      base([
+        { start: 0, end: 10, layout: "single", x: 496 },
+        { start: 10, end: 20, layout: "single", x: 496 },
+      ]),
+      undefined,
+      punchOnly({ topBar: 84, bottomBar: 84 })
+    );
+    expect(spec.graph).toContain("[p0]crop=w=514:h=912:x=");
+    expect(spec.graph).toContain(":y=84,crop=w=");
+  });
+
+  it("is skipped entirely when the plan already uses a split layout - out of scope for v1, byte-identical to punchIn absent", () => {
+    const plan = base([
+      { start: 0, end: 12.4, layout: "single", x: 496 },
+      { start: 12.4, end: 31, layout: "split", top: { x: 0 }, bottom: { x: 704 } },
+      { start: 31, end: 57.5, layout: "center", x: 656 },
+    ]);
+    expect(buildFiltergraph(plan, undefined, punchOnly())).toEqual(
+      buildFiltergraph(plan)
+    );
   });
 });

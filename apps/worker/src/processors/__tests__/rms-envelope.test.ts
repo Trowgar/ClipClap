@@ -4,17 +4,20 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { promisify } from "util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { rmsEnvelope } from "../transcribe";
+import { lumaEnvelope, rmsEnvelope } from "../transcribe";
 
 const execFileAsync = promisify(execFile);
 
 // This file does NOT mock child_process - transcribe.test.ts does that for
-// the rest of the suite, but rmsEnvelope's actual job is to parse REAL
-// ffmpeg astats/ametadata output (see its comment for the measured format),
-// so a mock would test the parser against a shape nobody verified.
+// the rest of the suite, but rmsEnvelope's (and lumaEnvelope's) actual job
+// is to parse REAL ffmpeg astats/signalstats+ametadata output (see each
+// function's own comment for the measured format), so a mock would test
+// the parser against a shape nobody verified.
 
 let dir: string;
 let fixturePath: string;
+let videoFixturePath: string;
+let audioOnlyFixturePath: string;
 
 beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), "clipclap-rmstest-"));
@@ -29,6 +32,29 @@ beforeAll(async () => {
     "-filter_complex", "[0:a][1:a]concat=n=2:v=0:a=1[out]",
     "-map", "[out]",
     fixturePath,
+  ]);
+
+  videoFixturePath = join(dir, "black-then-white.mp4");
+  // 2s of solid black followed by 2s of solid white, concatenated into one
+  // 4s video at 1fps - the dark/bright split lumaEnvelope needs to
+  // distinguish, sized one frame per second so the fixture's own buckets
+  // are unambiguous.
+  await execFileAsync("ffmpeg", [
+    "-y", "-v", "error",
+    "-f", "lavfi", "-i", "color=black:s=64x64:d=2:r=1",
+    "-f", "lavfi", "-i", "color=white:s=64x64:d=2:r=1",
+    "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[out]",
+    "-map", "[out]",
+    videoFixturePath,
+  ]);
+
+  // The corpus's real degenerate case: an audio-only file handed to a
+  // function that reads a video stream.
+  audioOnlyFixturePath = join(dir, "audio-only.m4a");
+  await execFileAsync("ffmpeg", [
+    "-y", "-v", "error",
+    "-f", "lavfi", "-i", "sine=frequency=440:duration=2",
+    audioOnlyFixturePath,
   ]);
 });
 
@@ -65,5 +91,36 @@ describe("rmsEnvelope", () => {
     const silenceDb = envelope[envelope.length - 1];
     expect(silenceDb).toBeGreaterThanOrEqual(-91);
     expect(silenceDb).toBeLessThanOrEqual(-85);
+  });
+});
+
+describe("lumaEnvelope", () => {
+  it("buckets a 4s black-then-white clip into ~4 per-second values", async () => {
+    const envelope = await lumaEnvelope(videoFixturePath);
+    expect(envelope.length).toBeGreaterThanOrEqual(3);
+    expect(envelope.length).toBeLessThanOrEqual(5);
+  });
+
+  it("separates near-black from near-white seconds (~16 vs ~235)", async () => {
+    const envelope = await lumaEnvelope(videoFixturePath);
+    // First bucket is unambiguously inside the 2s black half, last bucket
+    // unambiguously inside the 2s white half - true regardless of exactly
+    // how many one-second buckets the 4s clip lands as.
+    const blackLuma = envelope[0];
+    const whiteLuma = envelope[envelope.length - 1];
+    expect(blackLuma).toBeGreaterThanOrEqual(0);
+    expect(blackLuma).toBeLessThan(40);
+    expect(whiteLuma).toBeGreaterThan(200);
+    expect(whiteLuma).toBeLessThanOrEqual(255);
+  });
+
+  it("returns [] for an audio-only source (no video stream to read)", async () => {
+    const envelope = await lumaEnvelope(audioOnlyFixturePath);
+    expect(envelope).toEqual([]);
+  });
+
+  it("returns [] for a source ffmpeg cannot open at all", async () => {
+    const envelope = await lumaEnvelope(join(dir, "does-not-exist.mp4"));
+    expect(envelope).toEqual([]);
   });
 });

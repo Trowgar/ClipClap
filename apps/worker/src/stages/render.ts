@@ -29,10 +29,11 @@ import {
 import { computeCropPlan } from "../reframe";
 import { loadReframeConfig, type ReframeConfig } from "../reframe/config";
 import { buildFiltergraph } from "../reframe/filtergraph";
+import { detectLetterboxBars } from "../reframe/letterbox";
 import { sliceCropPlan } from "../reframe/plan";
 import { buildReframeCheck, markEncodeFailed } from "../reframe/telemetry";
 import type { ReframeCheck } from "../reframe/telemetry";
-import type { CropPlan, FilterSpec } from "../reframe/types";
+import type { CropPlan, FilterSpec, MusicDirectionOpts } from "../reframe/types";
 
 export async function runRenderStage(
   payload: RenderStagePayload
@@ -92,8 +93,15 @@ export async function runRenderStage(
  * "music-shorts" all fall through to the unmodified env-sourced config -
  * the same "malformed degrades safely, never throws" discipline as that
  * read.
+ *
+ * Also returns `isMusicShorts` (tasks R1/R3/R4, spec 2026-08-23-music-shorts)
+ * so `renderClips` can gate the letterbox-bar/punch-in/fade additions on the
+ * SAME telemetry read that already gates the M4 stream override, rather than
+ * querying the ANALYZE step a second time.
  */
-async function loadReframeConfigForJob(jobId: string): Promise<ReframeConfig> {
+async function loadReframeConfigForJob(
+  jobId: string
+): Promise<{ cfg: ReframeConfig; isMusicShorts: boolean }> {
   const cfg = loadReframeConfig();
   const analyzeStep = await prisma.jobStep.findUnique({
     where: { jobId_step: { jobId, step: "ANALYZE" } },
@@ -102,10 +110,34 @@ async function loadReframeConfigForJob(jobId: string): Promise<ReframeConfig> {
   const telemetry = (
     analyzeStep?.outputJson as Record<string, unknown> | null | undefined
   )?.telemetry as Record<string, unknown> | undefined;
-  if (telemetry?.path === "music-shorts") {
-    return { ...cfg, stream: false, streamVirtualCam: false };
+  const isMusicShorts = telemetry?.path === "music-shorts";
+  if (isMusicShorts) {
+    return { cfg: { ...cfg, stream: false, streamVirtualCam: false }, isMusicShorts };
   }
-  return cfg;
+  return { cfg, isMusicShorts };
+}
+
+/**
+ * Builds the ONE `musicDirection` object (tasks R1/R3/R4, spec
+ * 2026-08-23-music-shorts) threaded explicitly into `buildFiltergraph` and
+ * `cutClips` for a music-shorts job - never an env knob, because none of it
+ * is operator-tunable. Bar detection runs ONCE per job (not per highlight),
+ * sampled across the union of the job's own highlight windows; a failure or
+ * a "no constant bar" verdict degrades to the zero pair, never to skipping
+ * the render or throwing - punch-in and fades still apply on a source with
+ * no letterbox at all, which is the common case.
+ */
+async function buildMusicDirection(
+  sourcePath: string,
+  highlights: Array<{ start: number; end: number }>
+): Promise<MusicDirectionOpts> {
+  const bars = await detectLetterboxBars(sourcePath, highlights);
+  return {
+    topBar: bars?.topBar ?? 0,
+    bottomBar: bars?.bottomBar ?? 0,
+    punchIn: true,
+    fades: true,
+  };
 }
 
 async function renderClips(
@@ -144,7 +176,16 @@ async function renderClips(
       renderDurationErrorMs: number;
       renderAvStartSkewMs: number | null;
     }> = [];
-    const reframeCfg = await loadReframeConfigForJob(payload.jobId);
+    const { cfg: reframeCfg, isMusicShorts } = await loadReframeConfigForJob(
+      payload.jobId
+    );
+    // R1/R3/R4 (spec 2026-08-23-music-shorts): built ONCE for the whole job,
+    // from the source file and the union of its highlight windows - never
+    // per-highlight, and never for a non-music job (undefined there, which
+    // keeps every downstream call byte-identical to today).
+    const musicDirection = isMusicShorts
+      ? await buildMusicDirection(sourcePath, highlights)
+      : undefined;
     const reframeChecks: ReframeCheck[] = [];
     // Telemetry for the dropped-word repair, summed over the job's clips.
     // `unresolved` growing is the signal that Whisper's output shape changed.
@@ -218,7 +259,11 @@ async function renderClips(
           );
           cropPlan = reframe.plan;
           if (reframe.plan) {
-            filterSpec = buildFiltergraph(reframe.plan, assFilter?.filter);
+            filterSpec = buildFiltergraph(
+              reframe.plan,
+              assFilter?.filter,
+              musicDirection
+            );
           } else {
             console.warn(
               `[render] reframe fallback on job ${payload.jobId}: ${reframe.fallbackReason}`
@@ -248,7 +293,8 @@ async function renderClips(
           sourcePath,
           [highlight],
           assFilter?.filter,
-          filterSpec
+          filterSpec,
+          musicDirection?.fades
         );
       } catch (error) {
         if (!filterSpec) throw error;
@@ -264,7 +310,8 @@ async function renderClips(
           sourcePath,
           [highlight],
           assFilter?.filter,
-          null
+          null,
+          musicDirection?.fades
         );
       }
       tempFiles.push(cutResult.clipPath);

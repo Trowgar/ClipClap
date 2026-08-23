@@ -26,6 +26,13 @@ export interface MusicHookInput {
    *  the 12th second's average level). May be [] - no audio signal
    *  available, every window then scores on repetition alone. */
   energyEnvelope: number[];
+  /** Per-second mean luma 0-255, index = second offset from 0, captured at
+   *  TRANSCRIBE from the source VIDEO (spec 2026-08-23-music-shorts, task
+   *  R2 - see processors/transcribe.ts's lumaEnvelope). Absent or [] -
+   *  no video signal available (e.g. the corpus's audio-only .m4a case, or
+   *  a job predating this field) - WINDOW SHIFT and the edge dark-guard
+   *  both no-op, byte-identical to the pre-R2 selector. */
+  lumaEnvelope?: number[];
   durationSec: number;
 }
 
@@ -38,6 +45,13 @@ export interface HookWindow {
    *  (pre-snap; snapping only moves edges, it never rescoves the window). */
   energyZ: number;
   score: number;
+  /** Dark (luma < DARK_LUMA_THRESHOLD) seconds remaining INSIDE the final
+   *  window, after WINDOW SHIFT + energy-valley snap + the edge dark-guard
+   *  have all run - a diagnostic of how well those steps did, not an input
+   *  to anything downstream. Present only when a non-empty lumaEnvelope was
+   *  supplied, so a caller with no luma signal gets the exact pre-R2 shape
+   *  back (task R2's "byte-identical" requirement). */
+  darkSeconds?: number;
 }
 
 /** Window length the detector scores over. chorus-detect.py WINDOW_SEC:
@@ -91,6 +105,30 @@ const EDGE_SNAP_RADIUS_SEC = 3;
  *  directly against `snapWindowEdges` in the test suite instead, as
  *  insurance for whenever those two numbers move. */
 const MIN_WINDOW_SEC_AFTER_SNAP = 12;
+
+/** NEW in task R2 (spec 2026-08-23-music-shorts): a second this dark reads
+ *  as visually dead on a scrolling feed. Measured against Believer's
+ *  shipped 53-77s hook window (commit 38cd68f): its ~4-5s near-black MV
+ *  transition (56-60s) sits at luma 30.3-39.8, while every other second in
+ *  that same window sits at 35+ only during the transition itself and
+ *  50-175 everywhere else - 40 cleanly separates the transition from the
+ *  rest of the corpus without being measured against a second track (n=1
+ *  for this specific constant; the rest of the file's constants are 3/3
+ *  corpus-validated, this one is not yet). */
+const DARK_LUMA_THRESHOLD = 40;
+
+/** WINDOW SHIFT search radius, task R2: try every 1s offset in
+ *  [-5, +5] before falling back to energy-valley snapping/the edge guard -
+ *  wide enough to clear Believer's dark run (5s) without the window
+ *  drifting a full STEP_SEC(5) into neighbouring, already-scored
+ *  territory. */
+const WINDOW_SHIFT_RADIUS_SEC = 5;
+
+/** EDGE GUARD max inward nudge, task R2 - same idea as EDGE_SNAP_RADIUS_SEC
+ *  above but a separate step and a separate constant: this fires AFTER
+ *  shifting and energy-valley snapping, only when an edge still lands on a
+ *  dark second, and only ever moves inward (never widens the window). */
+const EDGE_GUARD_MAX_NUDGE_SEC = 3;
 
 /** lowercase, strip non-letter/digit/space (unicode), collapse whitespace.
  *  Same normalization as song-gate.ts's normalizeLine, kept as a private
@@ -297,6 +335,136 @@ export function snapWindowEdges(
   return { startSec: start, endSec: end };
 }
 
+/** Count of seconds in [start, end) with luma < DARK_LUMA_THRESHOLD. A
+ *  second outside the envelope's range is simply not counted either way
+ *  (neither dark nor bright) - the envelope covers the whole source, so
+ *  running past its end only happens if durationSec and lumaEnvelope.length
+ *  disagree, and this must not manufacture false darkness out of that. */
+function countDarkSeconds(start: number, end: number, luma: number[]): number {
+  let count = 0;
+  for (let s = start; s < end; s++) {
+    if (s >= 0 && s < luma.length && luma[s] < DARK_LUMA_THRESHOLD) count++;
+  }
+  return count;
+}
+
+/**
+ * WINDOW SHIFT (task R2, spec 2026-08-23-music-shorts, applied to a chosen
+ * window BEFORE energy-valley edge snapping): tries every 1s offset in
+ * [-WINDOW_SHIFT_RADIUS_SEC, +WINDOW_SHIFT_RADIUS_SEC] and keeps whichever
+ * shifted window (same span, just moved) contains the fewest dark seconds.
+ * Offsets are visited in the order [0, -1, +1, -2, +2, ...]: smaller
+ * |shift| is always visited before larger, and a strict `<` comparison
+ * means the first-visited minimum wins - so ties naturally resolve to the
+ * smallest |shift|, and a further tie between -d/+d at the same |shift|
+ * resolves to the negative one (an arbitrary but deterministic pick, same
+ * spirit as quietestSecondNear's own tie-break above). Offset 0 (today's
+ * unshifted position) is always a legal candidate and the starting `best`,
+ * so this can never fail to return something, and - since
+ * countDarkSeconds(..., []) is always 0 for any window - it is a
+ * mathematical no-op whenever lumaEnvelope is empty: no candidate can ever
+ * beat a tied 0 with a strict `<`, so `best` never changes from offset 0.
+ * That is what makes "empty/absent lumaEnvelope -> no-op" true by
+ * construction rather than a separate early-return to keep in sync.
+ *
+ * A shift that would leave [0, durationSec] or bring the window within
+ * DISTINCT_REGION_MIN_OVERLAP_SEC of an already-finalized window (the same
+ * threshold pickDistinctTop uses to keep top-ranked windows apart) is
+ * never a candidate - a window-shift step must not undo the distinct-
+ * region guarantee count>1 callers rely on.
+ *
+ * Exported (like snapWindowEdges below) so WINDOW_SHIFT_RADIUS_SEC has a
+ * direct unit-level seam - a future change to that constant, or to
+ * DARK_LUMA_THRESHOLD, should be verifiable without depending on the rest
+ * of the pipeline's scoring happening to produce a specific starting window.
+ */
+export function shiftWindowAwayFromDark(
+  window: { startSec: number; endSec: number },
+  luma: number[],
+  durationSec: number,
+  finalized: Array<{ startSec: number; endSec: number }>
+): { startSec: number; endSec: number } {
+  const span = window.endSec - window.startSec;
+  const tooCloseToFinalized = (start: number, end: number) =>
+    finalized.some(
+      (f) =>
+        Math.min(end, f.endSec) - Math.max(start, f.startSec) >=
+        DISTINCT_REGION_MIN_OVERLAP_SEC
+    );
+
+  const offsets: number[] = [0];
+  for (let d = 1; d <= WINDOW_SHIFT_RADIUS_SEC; d++) offsets.push(-d, d);
+
+  let best = { startSec: window.startSec, endSec: window.endSec };
+  let bestDark = countDarkSeconds(best.startSec, best.endSec, luma);
+
+  for (const shift of offsets) {
+    if (shift === 0) continue; // already `best` above
+    const start = window.startSec + shift;
+    const end = start + span;
+    if (start < 0 || end > durationSec) continue;
+    if (tooCloseToFinalized(start, end)) continue;
+    const dark = countDarkSeconds(start, end, luma);
+    if (dark < bestDark) {
+      best = { startSec: start, endSec: end };
+      bestDark = dark;
+    }
+  }
+  return best;
+}
+
+/**
+ * EDGE GUARD (task R2, applied AFTER shifting AND energy-valley snapping):
+ * if the window still opens or closes on a dark second, nudges that edge
+ * inward one second at a time - stopping at the first non-dark second,
+ * after EDGE_GUARD_MAX_NUDGE_SEC seconds, or at the MIN_WINDOW_SEC_AFTER_
+ * SNAP floor, whichever comes first (each check re-evaluated every step,
+ * so a floor that would be violated on the NEXT second stops the nudge
+ * exactly there rather than overshooting it). A no-op when the envelope is
+ * empty: `luma[edge] < DARK_LUMA_THRESHOLD` can never be true against an
+ * empty array, so the while loop's condition is false on its first check -
+ * same "no signal, do nothing" guarantee as WINDOW SHIFT and
+ * snapWindowEdges above, by the same construction (nothing to special-case
+ * for the empty-envelope path).
+ *
+ * Exported for the same reason as shiftWindowAwayFromDark and
+ * snapWindowEdges: EDGE_GUARD_MAX_NUDGE_SEC and the MIN_WINDOW_SEC_AFTER_
+ * SNAP floor both need a seam that does not depend on getting a specific
+ * window out of the scoring pipeline first.
+ */
+export function guardDarkEdges(
+  window: { startSec: number; endSec: number },
+  luma: number[]
+): { startSec: number; endSec: number } {
+  let start = window.startSec;
+  let end = window.endSec;
+
+  for (
+    let nudged = 0;
+    nudged < EDGE_GUARD_MAX_NUDGE_SEC &&
+    start < luma.length &&
+    luma[start] < DARK_LUMA_THRESHOLD &&
+    end - (start + 1) >= MIN_WINDOW_SEC_AFTER_SNAP;
+    nudged++
+  ) {
+    start += 1;
+  }
+
+  for (
+    let nudged = 0;
+    nudged < EDGE_GUARD_MAX_NUDGE_SEC &&
+    end - 1 >= 0 &&
+    end - 1 < luma.length &&
+    luma[end - 1] < DARK_LUMA_THRESHOLD &&
+    end - 1 - start >= MIN_WINDOW_SEC_AFTER_SNAP;
+    nudged++
+  ) {
+    end -= 1;
+  }
+
+  return { startSec: start, endSec: end };
+}
+
 /**
  * Ranked hook windows for a source. Pure, deterministic: same input always
  * produces the same output, no I/O.
@@ -313,18 +481,29 @@ export function selectHookWindows(input: MusicHookInput, count = 2): HookWindow[
 
   const scored = scoreWindows(repSpans, input.energyEnvelope, input.durationSec);
   const chosen = pickDistinctTop(scored, count);
+  const luma = input.lumaEnvelope ?? [];
 
   const finalized: Array<{ startSec: number; endSec: number }> = [];
   const result: HookWindow[] = [];
   for (const w of chosen) {
-    const snapped = snapWindowEdges(w, input.energyEnvelope, finalized);
-    finalized.push(snapped);
+    // Order per spec task R2: WINDOW SHIFT, then the existing energy-valley
+    // edge snap, then the EDGE GUARD - each stage handed the previous
+    // stage's output, and `finalized` (this window's own prior siblings,
+    // fully processed) gating both the shift and the snap against the same
+    // distinct-region rule.
+    const shifted = shiftWindowAwayFromDark(w, luma, input.durationSec, finalized);
+    const snapped = snapWindowEdges(shifted, input.energyEnvelope, finalized);
+    const guarded = guardDarkEdges(snapped, luma);
+    finalized.push(guarded);
     result.push({
-      startSec: snapped.startSec,
-      endSec: snapped.endSec,
+      startSec: guarded.startSec,
+      endSec: guarded.endSec,
       rep: w.rep,
       energyZ: w.energyZ,
       score: w.score,
+      ...(luma.length > 0
+        ? { darkSeconds: countDarkSeconds(guarded.startSec, guarded.endSec, luma) }
+        : {}),
     });
   }
   return result;

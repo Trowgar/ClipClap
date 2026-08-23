@@ -74,6 +74,11 @@ export async function runTranscribeStage(
       // and a future stream audio-energy track; ~1 float/sec, so a 3h source
       // is ~60KB of jsonb here.
       energyEnvelope: outcome.energyEnvelope,
+      // music-shorts direction R2: per-second luma (0-255) of the source
+      // video, same ~1 float/sec sizing as energyEnvelope above. Consumed
+      // by the hook selector to shift/guard windows off sustained-black MV
+      // stretches.
+      lumaEnvelope: outcome.lumaEnvelope,
     });
     await getStageQueue("analyze").add("analyze", payload);
   } catch (error) {

@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   computeClipExpiresAt: vi.fn(),
   computeCropPlan: vi.fn(),
   jobStepFindUnique: vi.fn(),
+  detectLetterboxBars: vi.fn(),
 }));
 
 vi.mock("@clipclap/shared", () => ({
@@ -66,8 +67,22 @@ vi.mock("../processors/thumbnail", () => ({
 
 vi.mock("../reframe", () => ({ computeCropPlan: mocks.computeCropPlan }));
 
+// R1's bar-detection spawns real ffmpeg/ffprobe - mocked here so the render
+// stage's WIRING is what this file tests, not a real subprocess. The pure
+// consistency/cap/sampling helpers are re-exported from the REAL module
+// (importOriginal) so they can still be unit-tested directly, unmocked.
+vi.mock("../reframe/letterbox", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../reframe/letterbox")>();
+  return { ...actual, detectLetterboxBars: mocks.detectLetterboxBars };
+});
+
 import { runRenderStage } from "../stages/render";
 import { loadReframeConfig } from "../reframe/config";
+import {
+  capBarHeight,
+  consistentBarHeight,
+  sampleTimestamps,
+} from "../reframe/letterbox";
 import type { CropPlan } from "../reframe/types";
 
 const streamPlan: CropPlan = {
@@ -441,6 +456,7 @@ describe("renderClips music-shorts stream override (task M4)", () => {
       detectMs: 120,
       fallbackReason: "detector_failed",
     });
+    mocks.detectLetterboxBars.mockResolvedValue({ topBar: 0, bottomBar: 0 });
   });
 
   it("a music-shorts job's ANALYZE telemetry forces stream/streamVirtualCam OFF on the cfg handed to computeCropPlan, even though the env literals are 'on'", async () => {
@@ -483,5 +499,199 @@ describe("renderClips music-shorts stream override (task M4)", () => {
 
     const cfg = mocks.computeCropPlan.mock.calls[0][3];
     expect(cfg).toEqual(loadReframeConfig());
+  });
+});
+
+// Tasks R1/R3/R4 (spec 2026-08-23-music-shorts). `computeCropPlan` returns a
+// REAL plan here (unlike the M4 describe block above, which never reaches
+// `buildFiltergraph` at all) specifically so the REAL, unmocked
+// `buildFiltergraph`/`buildCutArgs` output can be inspected through
+// `cutClips`'s received arguments - proof the `musicDirection` object born in
+// `renderClips` actually reaches both of them, not just a unit that claims to
+// build it.
+describe("renderClips music direction (tasks R1/R3/R4, spec 2026-08-23-music-shorts)", () => {
+  const musicPlan: CropPlan = {
+    version: 1,
+    engine: "faces",
+    source: { width: 1920, height: 1080 },
+    shots: [
+      { start: 0, end: 5, layout: "single", x: 496 },
+      { start: 5, end: 10, layout: "single", x: 496 },
+    ],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv("REFRAME_ENGINE", "faces");
+    mocks.userFindUniqueOrThrow.mockResolvedValue({
+      plan: "STARTER",
+      billingCycle: "MONTHLY",
+    });
+    mocks.jobFindUniqueOrThrow.mockResolvedValue(jobWith([highlight]));
+    mocks.downloadVideo.mockResolvedValue("/tmp/fake-source.mp4");
+    mocks.cutClips.mockImplementation(async (_src: string, hs: unknown[]) => [
+      { highlight: hs[0], clipPath: "/tmp/fake-clip.mp4" },
+    ]);
+    mocks.probeTimeline.mockResolvedValue({
+      formatStart: 0,
+      videoStart: 0,
+      audioStart: 0,
+      hasAudio: true,
+      hasVideo: true,
+    });
+    mocks.generateThumbnail.mockResolvedValue("/tmp/fake-thumb.jpg");
+    mocks.uploadFile.mockResolvedValue(undefined);
+    mocks.clipCreate.mockResolvedValue({ id: "clip1" });
+    mocks.jobUpdate.mockResolvedValue(undefined);
+    mocks.computeClipExpiresAt.mockReturnValue(undefined);
+    mocks.jobStepFindUnique.mockResolvedValue({
+      outputJson: { telemetry: { path: "music-shorts" } },
+    });
+    mocks.computeCropPlan.mockResolvedValue({
+      plan: musicPlan,
+      shotCount: 2,
+      detectMs: 500,
+    });
+  });
+
+  it("detects bars once per job over the highlight windows, and threads musicDirection into the REAL buildFiltergraph call reaching cutClips", async () => {
+    mocks.detectLetterboxBars.mockResolvedValue({ topBar: 84, bottomBar: 84 });
+
+    await runRenderStage({ mode: "clips", jobId: "job1", userId: "u1" });
+
+    expect(mocks.detectLetterboxBars).toHaveBeenCalledTimes(1);
+    expect(mocks.detectLetterboxBars).toHaveBeenCalledWith(
+      "/tmp/fake-source.mp4",
+      [highlight]
+    );
+    const spec = mocks.cutClips.mock.calls[0][3];
+    // 1920x1080 with 84/84 bars: the pinned R1 geometry from the filtergraph
+    // suite (h=912, y=84) - proof this render call actually produced it.
+    expect(spec.graph).toContain("h=912");
+    expect(spec.graph).toContain("y=84");
+    // R4: fades is the 5th argument to cutClips.
+    expect(mocks.cutClips.mock.calls[0][4]).toBe(true);
+  });
+
+  it("degrades to a zero bar pair (no crop, punch-in/fades still apply) when detection finds no constant bar", async () => {
+    mocks.detectLetterboxBars.mockResolvedValue({ topBar: 0, bottomBar: 0 });
+
+    await runRenderStage({ mode: "clips", jobId: "job1", userId: "u1" });
+
+    const spec = mocks.cutClips.mock.calls[0][3];
+    // No bars: the base crop keeps the legacy "ih" token...
+    expect(spec.graph).toContain("h=ih");
+    // ...but R3's punch-in still fires (2 shots, one odd) - a complex overlay.
+    expect(spec.kind).toBe("complex");
+    expect(mocks.cutClips.mock.calls[0][4]).toBe(true);
+  });
+
+  it("degrades to a zero bar pair and never throws when bar detection itself fails", async () => {
+    mocks.detectLetterboxBars.mockResolvedValue(null);
+
+    await runRenderStage({ mode: "clips", jobId: "job1", userId: "u1" });
+
+    const spec = mocks.cutClips.mock.calls[0][3];
+    expect(spec.graph).toContain("h=ih");
+    expect(mocks.cutClips.mock.calls[0][4]).toBe(true);
+  });
+
+  it("never calls detectLetterboxBars and never threads fades for a non-music job", async () => {
+    mocks.jobStepFindUnique.mockResolvedValue(null);
+
+    await runRenderStage({ mode: "clips", jobId: "job1", userId: "u1" });
+
+    expect(mocks.detectLetterboxBars).not.toHaveBeenCalled();
+    expect(mocks.cutClips.mock.calls[0][4]).toBeUndefined();
+  });
+
+  it("threads the SAME fades bit to the encode-failure fallback cutClips call too", async () => {
+    mocks.detectLetterboxBars.mockResolvedValue({ topBar: 0, bottomBar: 0 });
+    mocks.cutClips
+      .mockRejectedValueOnce(new Error("ffmpeg error -22"))
+      .mockResolvedValueOnce([{ highlight, clipPath: "/tmp/fake-clip.mp4" }]);
+
+    await runRenderStage({ mode: "clips", jobId: "job1", userId: "u1" });
+
+    expect(mocks.cutClips).toHaveBeenCalledTimes(2);
+    expect(mocks.cutClips.mock.calls[1][4]).toBe(true);
+  });
+});
+
+// Pure functions from reframe/letterbox.ts (task R1's detection half) - the
+// SAFETY RULE itself: `.corpus/letterbox/measurement-2026-08-19.md` measured
+// exactly 1 of 11 real sources as a genuine constant bar and 1 of 11 as a
+// TRANSIENT bar that a naive single-sample cropdetect would have wrongly
+// cropped. These are unmocked (see the importOriginal spread above) so they
+// exercise the REAL consistency/cap logic, not a stand-in.
+describe("reframe/letterbox pure helpers (task R1)", () => {
+  describe("consistentBarHeight", () => {
+    it("accepts the bar when all 8 of 8 samples agree within tolerance", () => {
+      const samples = [72, 72, 71, 73, 72, 72, 74, 71];
+      expect(consistentBarHeight(samples)).toBe(72);
+    });
+
+    it("rejects as transient when only 5 of 8 samples agree - the measured false-positive shape", () => {
+      const samples = [72, 72, 71, 73, 72, 0, 0, 0];
+      expect(consistentBarHeight(samples)).toBe(0);
+    });
+
+    it("returns 0 for no samples at all", () => {
+      expect(consistentBarHeight([])).toBe(0);
+    });
+  });
+
+  describe("capBarHeight", () => {
+    it("passes a bar under the 20% cap through, even-snapped", () => {
+      expect(capBarHeight(72, 720)).toBe(72);
+    });
+
+    it("caps a bar at 20% of source height", () => {
+      // 20% of 1080 is 216 - a 300px "bar" must never crop more than that.
+      expect(capBarHeight(300, 1080)).toBe(216);
+    });
+
+    it("never snaps a capped value back over the cap, even when the cap itself is odd", () => {
+      // 20% of 735 is exactly 147 (odd). A naive round-to-even on a raw value
+      // above the cap would give 148 - over the cap. Snapping DOWN from the
+      // odd cap lands at 146, never over it.
+      expect(capBarHeight(200, 735)).toBe(146);
+    });
+
+    it("floors a negative input at 0", () => {
+      expect(capBarHeight(-4, 1080)).toBe(0);
+    });
+  });
+
+  describe("sampleTimestamps", () => {
+    it("returns 8 timestamps spread across a single window, none on its edges", () => {
+      const times = sampleTimestamps([{ start: 53, end: 77 }]);
+      expect(times).toHaveLength(8);
+      for (const t of times) {
+        expect(t).toBeGreaterThan(53);
+        expect(t).toBeLessThan(77);
+      }
+      // Strictly increasing - evenly spread, not bunched.
+      expect([...times].sort((a, b) => a - b)).toEqual(times);
+    });
+
+    it("allocates samples across the UNION of two disjoint windows, proportional to duration", () => {
+      const times = sampleTimestamps([
+        { start: 0, end: 4 },
+        { start: 100, end: 116 },
+      ]);
+      expect(times).toHaveLength(8);
+      const inFirst = times.filter((t) => t > 0 && t < 4).length;
+      const inSecond = times.filter((t) => t > 100 && t < 116).length;
+      expect(inFirst + inSecond).toBe(8);
+      // The second window is 4x longer - it must get more samples, not an
+      // even split that ignores duration.
+      expect(inSecond).toBeGreaterThan(inFirst);
+    });
+
+    it("returns an empty array for no windows or zero total duration", () => {
+      expect(sampleTimestamps([])).toEqual([]);
+      expect(sampleTimestamps([{ start: 10, end: 10 }])).toEqual([]);
+    });
   });
 });

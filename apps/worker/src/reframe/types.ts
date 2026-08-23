@@ -109,6 +109,28 @@ export interface StreamGeometry {
   outContentH: number;
 }
 
+/**
+ * Music-only render-direction options (spec 2026-08-23-music-shorts, tasks
+ * R1/R3/R4). Born ONCE in the render stage's music branch (where task M4's
+ * `loadReframeConfigForJob` already fires) and threaded explicitly into
+ * `buildFiltergraph` and `buildCutArgs` - not an env knob, because none of
+ * this is operator-tunable: it always follows the music path, never anything
+ * an operator flips independently of it.
+ *
+ * `topBar`/`bottomBar` are 0 when no CONSTANT letterbox bar was detected on
+ * the source (transient bars, e.g. one dark scene, must never be cropped -
+ * see `reframe/letterbox.ts`); a zero pair is a valid, common value, not an
+ * error state. `punchIn`/`fades` are flat feature bits rather than the mere
+ * presence of this object, so a test (or a mutation) can disable one without
+ * touching the other.
+ */
+export interface MusicDirectionOpts {
+  topBar: number;
+  bottomBar: number;
+  punchIn: boolean;
+  fades: boolean;
+}
+
 export interface SourceProfile {
   class: SourceClass;
   /** Widest surviving face box width as a fraction of source width. */

@@ -108,8 +108,11 @@ export async function runAnalyzeStage(
     // (computeRepSpans found nothing AND the envelope is empty) falls
     // through to the existing refusal untouched - an honest zero, not a
     // guessed window.
-    let musicShorts: { windows: HookWindow[]; envelopeLen: number } | null =
-      null;
+    let musicShorts: {
+      windows: HookWindow[];
+      envelopeLen: number;
+      lumaLen: number;
+    } | null = null;
     if (
       songGate?.fired &&
       cfg.musicShortsEnabled &&
@@ -117,17 +120,24 @@ export async function runAnalyzeStage(
       job.sourceDurationSec > 0 &&
       job.sourceDurationSec <= cfg.musicShortsMaxSec
     ) {
-      const energyEnvelope = await readEnergyEnvelope(payload.jobId);
+      const { energyEnvelope, lumaEnvelope } = await readTranscribeEnvelopes(
+        payload.jobId
+      );
       const windows = selectHookWindows(
         {
           segments: transcription.segments,
           energyEnvelope,
+          lumaEnvelope,
           durationSec: job.sourceDurationSec,
         },
         cfg.musicShortsCount
       );
       if (windows.length > 0) {
-        musicShorts = { windows, envelopeLen: energyEnvelope.length };
+        musicShorts = {
+          windows,
+          envelopeLen: energyEnvelope.length,
+          lumaLen: lumaEnvelope.length,
+        };
       }
     }
 
@@ -153,6 +163,11 @@ export async function runAnalyzeStage(
             musicShorts: {
               windows: musicShorts.windows,
               envelopeLen: musicShorts.envelopeLen,
+              // music-shorts direction R2: luma envelope length alongside
+              // envelopeLen (energy) above - each window's own darkSeconds
+              // (see analyze-v2/music-hook.ts's HookWindow) already rides
+              // along inside `windows` itself.
+              lumaLen: musicShorts.lumaLen,
             },
           },
           // Zero LLM calls: the detector (analyze-v2/music-hook.ts) is pure
@@ -258,25 +273,37 @@ export async function runAnalyzeStage(
 }
 
 /**
- * The TRANSCRIBE step's own `energyEnvelope` (stages/transcribe.ts's
- * `completeJobStep` call) - it lives on that JobStep row's outputJson, not
- * on the Job row, so it is read the same way finalize.ts reads the ANALYZE
- * step's `usage.byModel` back off its own JobStep row: a direct
- * `prisma.jobStep.findUnique` on the `jobId_step` unique index, never a
- * second copy threaded through the queue payload. Missing or malformed
- * output (no row yet, a shape from before this field existed, a non-array,
- * a non-number entry) degrades to `[]` rather than throwing -
- * `selectHookWindows` already treats an empty envelope as "no energy
- * signal" and scores on repetition alone, which is the correct behaviour
- * here too, not a special case.
+ * The TRANSCRIBE step's own `energyEnvelope` and `lumaEnvelope`
+ * (stages/transcribe.ts's `completeJobStep` call; lumaEnvelope added by
+ * spec 2026-08-23-music-shorts task R2) - both live on that JobStep row's
+ * outputJson, not on the Job row, so they are read the same way
+ * finalize.ts reads the ANALYZE step's `usage.byModel` back off its own
+ * JobStep row: ONE direct `prisma.jobStep.findUnique` on the `jobId_step`
+ * unique index for both, never a second query for the second envelope and
+ * never either one threaded through the queue payload. Each envelope
+ * degrades to `[]` independently on a missing/malformed shape (no row yet,
+ * a shape from before that field existed, a non-array, a non-number
+ * entry) rather than throwing - one envelope being malformed or absent
+ * (e.g. an old job predating lumaEnvelope) must not poison the other, and
+ * `selectHookWindows` already treats an empty envelope of either kind as
+ * "no signal for that dimension," which is the correct behaviour here too,
+ * not a special case.
  */
-async function readEnergyEnvelope(jobId: string): Promise<number[]> {
+async function readTranscribeEnvelopes(
+  jobId: string
+): Promise<{ energyEnvelope: number[]; lumaEnvelope: number[] }> {
   const step = await prisma.jobStep.findUnique({
     where: { jobId_step: { jobId, step: "TRANSCRIBE" } },
     select: { outputJson: true },
   });
-  const raw = (step?.outputJson as Record<string, unknown> | null | undefined)
-    ?.energyEnvelope;
+  const output = step?.outputJson as Record<string, unknown> | null | undefined;
+  return {
+    energyEnvelope: asNumberArray(output?.energyEnvelope),
+    lumaEnvelope: asNumberArray(output?.lumaEnvelope),
+  };
+}
+
+function asNumberArray(raw: unknown): number[] {
   return Array.isArray(raw) && raw.every((n) => typeof n === "number")
     ? (raw as number[])
     : [];

@@ -37,6 +37,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 //   - A stray truthy MUSIC_SHORTS value ('true') does not arm the branch -
 //     exact-literal 'on' only, the same discipline every other flag in
 //     analyze-v2/config.ts uses.
+//
+// task R2 (spec 2026-08-23-music-shorts) adds, below the M3 suite above:
+//   - the SAME TRANSCRIBE step row also carries lumaEnvelope, read off the
+//     SAME single prisma round-trip (never a second query), and threaded
+//     into selectHookWindows alongside energyEnvelope.
+//   - telemetry.musicShorts gains lumaLen next to envelopeLen.
+//   - a missing lumaEnvelope key on that row (an old job, or the M3-era
+//     shape before this task existed) degrades to lumaLen 0, not a throw -
+//     independently of whatever energyEnvelope on that same row looks like.
 // ---------------------------------------------------------------------------
 
 const mocks = vi.hoisted(() => ({
@@ -282,6 +291,72 @@ describe("music shorts wiring (stages/analyze.ts)", () => {
       mode: "clips",
     });
     expect(mocks.queueAdd).not.toHaveBeenCalledWith("finalize", expect.anything());
+  });
+
+  it("task R2: reads lumaEnvelope off the SAME TRANSCRIBE row and threads it into selectHookWindows - a window shifts off a dark stretch end to end", async () => {
+    stubBaseEnv();
+    vi.stubEnv("MUSIC_SHORTS", "on");
+    vi.stubEnv("MUSIC_SHORTS_COUNT", "1");
+    mocks.jobFind.mockResolvedValue({
+      id: "job-luma",
+      transcriptJson: pureMusicTranscript(),
+      transcriptPartial: false,
+      sourceDurationSec: 200,
+    });
+    // One 20s loud plateau at [30,50) (a single grid-aligned window, so
+    // count=1 picks exactly it pre-shift) with a 3s dark band [45,48)
+    // sitting inside it near the end - verified (see task R2's own
+    // scratch check) to shift the window to [25,45) end to end: the ONLY
+    // way this specific final position can appear is if lumaEnvelope
+    // actually made it from this mocked row into selectHookWindows.
+    const energyEnvelope = new Array(200).fill(-40);
+    for (let i = 30; i < 50; i++) energyEnvelope[i] = -5;
+    const lumaEnvelope = new Array(200).fill(200);
+    for (let s = 45; s < 48; s++) lumaEnvelope[s] = 10;
+    mocks.jobStepFindUnique.mockResolvedValue({
+      outputJson: { energyEnvelope, lumaEnvelope },
+    });
+
+    await runAnalyzeStage({ jobId: "job-luma", userId: "u1" });
+
+    const update = findAnalyzeResultUpdate();
+    const highlights = update.data.highlights as Array<{ start: number; end: number }>;
+    expect(highlights).toHaveLength(1);
+    expect(highlights[0].start).toBe(25);
+    expect(highlights[0].end).toBe(45);
+
+    const complete = mocks.completeJobStep.mock.calls[0][2];
+    expect(complete.telemetry.musicShorts.lumaLen).toBe(200);
+    expect(complete.telemetry.musicShorts.windows[0].darkSeconds).toBe(0);
+  });
+
+  it("task R2: a TRANSCRIBE row with energyEnvelope but no lumaEnvelope key at all degrades lumaLen to 0, not a throw", async () => {
+    stubBaseEnv();
+    vi.stubEnv("MUSIC_SHORTS", "on");
+    mocks.jobFind.mockResolvedValue({
+      id: "job-no-luma-key",
+      transcriptJson: pureMusicTranscript(),
+      transcriptPartial: false,
+      sourceDurationSec: 200,
+    });
+    // The exact M3-era row shape, before lumaEnvelope existed at all.
+    mocks.jobStepFindUnique.mockResolvedValue({
+      outputJson: { energyEnvelope: twoPeakEnvelope() },
+    });
+
+    await runAnalyzeStage({ jobId: "job-no-luma-key", userId: "u1" });
+
+    const update = findAnalyzeResultUpdate();
+    expect((update.data.highlights as unknown[]).length).toBe(2);
+    const complete = mocks.completeJobStep.mock.calls[0][2];
+    expect(complete.telemetry.musicShorts.envelopeLen).toBe(200);
+    expect(complete.telemetry.musicShorts.lumaLen).toBe(0);
+    // no luma signal -> no darkSeconds key on either window (byte-identical
+    // to the pre-R2 window shape - see music-hook.test.ts for the direct
+    // unit-level version of this same guarantee)
+    for (const w of complete.telemetry.musicShorts.windows) {
+      expect(Object.prototype.hasOwnProperty.call(w, "darkSeconds")).toBe(false);
+    }
   });
 
   it("source AT musicShortsMaxSec (480s, the boundary itself) still ships - pins <= over <", async () => {

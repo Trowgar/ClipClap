@@ -108,6 +108,45 @@ describe("transcribeVideo", () => {
     expect(result.transcription.text).toBe("hello world");
   });
 
+  it("includes a luma envelope key on both return paths", async () => {
+    const result = await transcribeVideo("/tmp/source.mp4");
+    // Same reasoning as the energy envelope test above: the default mock's
+    // stderr is empty for every call, signalstats included, so there is
+    // nothing to bucket - the key must still be present and array-typed.
+    expect(result.lumaEnvelope).toEqual([]);
+  });
+
+  it("runs the signalstats pass against the ORIGINAL video path, not the extracted audio", async () => {
+    await transcribeVideo("/tmp/source.mp4");
+    const signalstatsCall = mocks.execFile.mock.calls.find((call) =>
+      (call[1] as string[]).includes(
+        "fps=1,signalstats,metadata=print:key=lavfi.signalstats.YAVG"
+      )
+    );
+    expect(signalstatsCall).toBeDefined();
+    const argv = signalstatsCall![1] as string[];
+    expect(argv[argv.indexOf("-i") + 1]).toBe("/tmp/source.mp4");
+  });
+
+  it("does not fail transcription when the signalstats pass fails", async () => {
+    // Only the signalstats call should fail; ffmpeg extract, ffprobe
+    // duration, astats and the whisper call must all keep succeeding on
+    // their own mocked replies.
+    mocks.execFile.mockImplementation((_cmd, args, optsOrCb, maybeCb) => {
+      const callback = typeof optsOrCb === "function" ? optsOrCb : maybeCb;
+      const argv = args as string[];
+      if (argv.includes("fps=1,signalstats,metadata=print:key=lavfi.signalstats.YAVG")) {
+        return callback(new Error("ffmpeg signalstats exploded"));
+      }
+      return callback(null, { stdout: "12.5", stderr: "" });
+    });
+
+    const result = await transcribeVideo("/tmp/source.mp4");
+
+    expect(result.lumaEnvelope).toEqual([]);
+    expect(result.transcription.text).toBe("hello world");
+  });
+
   it("extracts compressed audio before sending it to transcription", async () => {
     await transcribeVideo("/tmp/source.mp4");
 

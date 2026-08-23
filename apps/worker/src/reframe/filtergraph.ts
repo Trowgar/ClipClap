@@ -1,4 +1,10 @@
-import type { CropPlan, FilterSpec, Keyframe, ShotLayout } from "./types";
+import type {
+  CropPlan,
+  FilterSpec,
+  Keyframe,
+  MusicDirectionOpts,
+  ShotLayout,
+} from "./types";
 import { cropWidthFor, evenClamp, tileWidthFor } from "./plan";
 
 type SplitLayout = Extract<ShotLayout, { layout: "split" }>;
@@ -95,25 +101,118 @@ export function planKeyframes(plan: CropPlan, centerX: number): Keyframe[] {
   return keys;
 }
 
+/** Even-snaps `n` DOWN (never up) - used for the R1/R3 music-only geometry
+ *  below, where a snap-up could push a bar or a punch-in crop back over the
+ *  bound it was just computed to respect. */
+function snapEvenDown(n: number): number {
+  return 2 * Math.floor(n / 2);
+}
+
+/**
+ * R1 (spec 2026-08-23-music-shorts): re-centres one planned `x` on a NEW crop
+ * width, music-bar jobs only. The planner computed every `x` against the
+ * FULL-height crop width (`cropW0`); cutting a constant letterbox bar shrinks
+ * the crop's height and therefore its 9:16-matching width (`cropW`), so the
+ * old `x` would no longer sit where the plan intended, or could even hang
+ * part-way off the frame. Faces were detected on the full frame, so the
+ * horizontal CENTRE `x + cropW0/2` is still exactly right - only the window's
+ * width changed - so the fix is to re-centre on that same point and reclamp
+ * into the narrower frame, not to re-run any face logic.
+ */
+function remapXForBars(
+  x: number,
+  cropW0: number,
+  cropW: number,
+  sourceWidth: number
+): number {
+  if (cropW === cropW0) return x;
+  return evenClamp(x + (cropW0 - cropW) / 2, cropW, sourceWidth);
+}
+
+/** Applies `remapXForBars` to a shot's own x-bearing field(s). Split/stream
+ *  tiles are left untouched: their tile geometry is a separate crop entirely
+ *  (`tileW`/`stream` geometry, not `cropW`), and R1 is scoped to the base
+ *  chain only - the base crop is never even visible while a tile is enabled
+ *  (see the "Tiled layouts" comment below), so there is nothing for a bar
+ *  crop to fix there. Never mutates `shot`. */
+function remapShotForBars(
+  shot: ShotLayout,
+  cropW0: number,
+  cropW: number,
+  sourceWidth: number
+): ShotLayout {
+  if (shot.layout === "single") {
+    return {
+      ...shot,
+      x: remapXForBars(shot.x, cropW0, cropW, sourceWidth),
+      ...(shot.xs
+        ? {
+            xs: shot.xs.map((k) => ({
+              t: k.t,
+              x: remapXForBars(k.x, cropW0, cropW, sourceWidth),
+            })),
+          }
+        : {}),
+    };
+  }
+  if (shot.layout === "center") {
+    return { ...shot, x: remapXForBars(shot.x, cropW0, cropW, sourceWidth) };
+  }
+  return shot;
+}
+
 /**
  * Compiles a CropPlan (+ optional ass snippet) into a single-pass filter.
  * No tiled shots -> plain -vf chain. Any stream shot (webcam over content) or
  * split shot (two faces) -> -filter_complex with two time-enabled overlay
  * tiles; the caller must map "[vout]" + audio. A plan holding both is not
  * emitted by the planner (spec §9.6); stream wins if one ever appears.
+ *
+ * `musicDirection` (spec 2026-08-23-music-shorts) is undefined on every path
+ * except a music-shorts job's render, so every branch below that reads it is
+ * a MUSIC-ONLY addition: with it absent, `hasBars`/`punchEligible` are both
+ * false and every computation collapses to exactly what this function already
+ * emitted, byte for byte.
  */
-export function buildFiltergraph(plan: CropPlan, assSnippet?: string): FilterSpec {
-  const cropW = cropWidthFor(plan.source.height);
+export function buildFiltergraph(
+  plan: CropPlan,
+  assSnippet?: string,
+  musicDirection?: MusicDirectionOpts
+): FilterSpec {
+  const cropW0 = cropWidthFor(plan.source.height);
+  // R1: a constant letterbox bar (0/0 is the common case - most sources have
+  // none) shrinks the crop height and recomputes the 9:16 width from it.
+  const hasBars =
+    !!musicDirection &&
+    (musicDirection.topBar > 0 || musicDirection.bottomBar > 0);
+  const croppedH = hasBars
+    ? plan.source.height - musicDirection!.topBar - musicDirection!.bottomBar
+    : plan.source.height;
+  const cropW = hasBars ? cropWidthFor(croppedH) : cropW0;
+  // A NEW plan object with only the x-bearing fields re-centred (see
+  // `remapShotForBars`) - `plan` itself is never mutated, which matters
+  // because `render.ts` persists this SAME object to `Clip.cropPlan`
+  // afterwards (see the "never mutates the plan" test in this file's suite).
+  const workingPlan: CropPlan = hasBars
+    ? {
+        ...plan,
+        shots: plan.shots.map((s) => remapShotForBars(s, cropW0, cropW, plan.source.width)),
+      }
+    : plan;
+
   const tileW = tileWidthFor(plan.source.height);
   const centerX = evenClamp(
-    (plan.source.width - cropW) / 2,
+    (workingPlan.source.width - cropW) / 2,
     cropW,
-    plan.source.width
+    workingPlan.source.width
   );
   // Type-guard filter: plain .filter() would not narrow ShotLayout, and the
   // tile-geometry reads below need the split variant.
-  const splits = plan.shots.filter(
+  const splits = workingPlan.shots.filter(
     (s): s is SplitLayout => s.layout === "split"
+  );
+  const streams = workingPlan.shots.filter(
+    (s): s is StreamLayout => s.layout === "stream"
   );
 
   // Tiled layouts cover the whole frame while they are enabled, so the base
@@ -123,17 +222,24 @@ export function buildFiltergraph(plan: CropPlan, assSnippet?: string): FilterSpe
   // where the camera never moves is byte-identical to legacy whatever the flag
   // says - which is what makes the rollback story testable rather than
   // promised.
-  const hasTrajectory = plan.shots.some(
+  const hasTrajectory = workingPlan.shots.some(
     (s) => s.layout === "single" && s.xs && s.xs.length > 0
   );
   const baseX = hasTrajectory
-    ? rampX(planKeyframes(plan, centerX))
+    ? rampX(planKeyframes(workingPlan, centerX))
     : piecewiseX(
-        plan.shots.map((s) => ({
+        workingPlan.shots.map((s) => ({
           end: s.end,
           x: s.layout === "split" || s.layout === "stream" ? centerX : s.x,
         }))
       );
+  // R1: h/y stay the legacy "ih"/"0" tokens off the music path (byte-identical
+  // string), and become the bar-cut numbers on it. `h0` is the same height as
+  // a NUMBER either way - needed below for the R3 punch-in geometry, which has
+  // to know the base crop's actual pixel height regardless of which token this
+  // string carries.
+  const h0 = hasBars ? croppedH : plan.source.height;
+  const baseCropOnly = `crop=w=${cropW}:h=${hasBars ? croppedH : "ih"}:x='${baseX}':y=${hasBars ? musicDirection!.topBar : 0}`;
   // setsar=1 is not decoration and it is not only for the tiled layouts. A 9:16
   // slice of a 1080-tall frame is 607.5px, `cropWidthFor` rounds it to an even
   // 608, and `scale` PRESERVES display aspect rather than stretching - so
@@ -142,15 +248,56 @@ export function buildFiltergraph(plan: CropPlan, assSnippet?: string): FilterSpe
   // (engine-notes §7h). This base chain is also what tags the FINAL file under
   // both composite layouts, so the tiles declaring square pixels was never
   // enough on its own.
-  const baseChain = `crop=w=${cropW}:h=ih:x='${baseX}':y=0,scale=1080:1920,setsar=1`;
+  const baseChain = `${baseCropOnly},scale=1080:1920,setsar=1`;
 
-  // Must stay BELOW baseChain: the branch reads it, and `const` is not hoisted
-  // in a usable state - declared beside `splits` this would throw
-  // "Cannot access 'baseChain' before initialization" at render time, past
-  // every test that only inspects the returned string.
-  const streams = plan.shots.filter(
-    (s): s is StreamLayout => s.layout === "stream"
-  );
+  // R3 (spec 2026-08-23-music-shorts): a discrete per-shot punch-in, even
+  // shots at scale 1.0 and odd shots slightly tighter - a montage-energy
+  // device synced to the MV's own (beat-)cuts. Deliberately NOT a continuous
+  // zoom: the repo's camera-motion knobs (camera.ts) are measured-provisional
+  // and this must not touch them, so the alternation is built the same way
+  // the split/stream tiles already switch between two fixed states - two
+  // parallel crop branches, chosen per shot by a time-gated `overlay`, never
+  // a time-varying crop width/height (ffmpeg's `crop` filter only
+  // re-evaluates `x`/`y` per frame, not `w`/`h` - a discrete width change
+  // needs a real branch, not an expression). Scoped to the plain single/
+  // center path: split and stream shots don't reach here for a music job
+  // (task M4 forces stream off, and a duet split is out of scope for v1), and
+  // a plan with only one shot has no "alternation" to speak of.
+  const punchEligible =
+    !!musicDirection?.punchIn &&
+    workingPlan.shots.length > 1 &&
+    splits.length === 0 &&
+    streams.length === 0;
+
+  if (punchEligible) {
+    const PUNCH_FACTOR = 1.08;
+    const punchW = Math.min(cropW, snapEvenDown(cropW / PUNCH_FACTOR));
+    const punchH = Math.min(h0, snapEvenDown(h0 / PUNCH_FACTOR));
+    const punchX = Math.max(0, snapEvenDown((cropW - punchW) / 2));
+    const punchY = Math.max(0, snapEvenDown((h0 - punchH) / 2));
+    const punchEnable = workingPlan.shots
+      .map((s, i) => (i % 2 === 1 ? `gte(t,${fmt(s.start)})*lt(t,${fmt(s.end)})` : null))
+      .filter((e): e is string => e !== null)
+      .join("+");
+    const chains = [
+      `[0:v]split=2[b0][p0]`,
+      `[b0]${baseChain}[wide]`,
+      // Same base crop as [wide] (same tracked x, same bar-cut h/y), then one
+      // more constant, NON-time-varying crop tightened by PUNCH_FACTOR and
+      // centred in the (now fixed-size) intermediate frame - "before the
+      // common scale", per spec. setsar=1 for the same reason as every other
+      // scale in this file: this branch's own scale would otherwise tag a
+      // slightly different SAR than [wide]'s, and the two must match to
+      // overlay cleanly.
+      `[p0]${baseCropOnly},crop=w=${punchW}:h=${punchH}:x=${punchX}:y=${punchY},scale=1080:1920,setsar=1[punch]`,
+      assSnippet
+        ? `[wide][punch]overlay=x=0:y=0:enable='${punchEnable}'[o1]`
+        : `[wide][punch]overlay=x=0:y=0:enable='${punchEnable}'[vout]`,
+    ];
+    if (assSnippet) chains.push(`[o1]${assSnippet}[vout]`);
+    return { kind: "complex", graph: chains.join(";") };
+  }
+
   if (streams.length > 0) {
     // plan.stream is optional on the type while a stream shot can exist, so the
     // pairing is checked ONCE here instead of with ! assertions through the tile

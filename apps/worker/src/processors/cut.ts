@@ -14,11 +14,21 @@ export interface CutResult {
   clipPath: string;
 }
 
+// R4 (spec 2026-08-23-music-shorts): fade-in/out length for a music clip.
+const MUSIC_FADE_SEC = 0.25;
+
 /**
  * Pure argv builder so the filter wiring is unit-testable. When a FilterSpec
  * is present it wins outright - its graph already contains the subtitle
  * snippet, so extraFilter is ignored. Complex specs must label their video
  * output [vout].
+ *
+ * `musicFades` (spec 2026-08-23-music-shorts, task R4) is the same
+ * `musicDirection.fades` bit R1/R3 use, threaded down from the render stage's
+ * music branch - never an env knob. Undefined/false reproduces every
+ * existing call site byte for byte: the fade-out timing is derived from THIS
+ * call's own `start`/`end`, the clip window the render stage already knows,
+ * not re-probed from the rendered file.
  */
 export function buildCutArgs(
   videoPath: string,
@@ -26,7 +36,8 @@ export function buildCutArgs(
   end: number,
   outPath: string,
   extraFilter?: string,
-  filterSpec?: FilterSpec | null
+  filterSpec?: FilterSpec | null,
+  musicFades?: boolean
 ): string[] {
   const head = ["-nostdin", "-ss", String(start), "-to", String(end), "-i", videoPath];
   const encode = [
@@ -37,30 +48,51 @@ export function buildCutArgs(
     "-b:a", "128k",
     "-movflags", "+faststart",
   ];
+  const duration = Math.max(0, end - start);
+  const fadeOutAt = Math.max(0, duration - MUSIC_FADE_SEC).toFixed(3);
+  const videoFade = musicFades
+    ? `fade=t=in:st=0:d=${MUSIC_FADE_SEC},fade=t=out:st=${fadeOutAt}:d=${MUSIC_FADE_SEC}`
+    : null;
+  const audioFade = musicFades
+    ? `afade=t=in:st=0:d=${MUSIC_FADE_SEC},afade=t=out:st=${fadeOutAt}:d=${MUSIC_FADE_SEC}`
+    : null;
+
   if (filterSpec?.kind === "complex") {
+    // The graph's own convention (see the docstring above) is a final video
+    // pad literally named [vout] - appending one more labelled stage after it
+    // composes with every existing complex graph (split/stream layouts,
+    // and R3's punch-in) without knowing anything about their insides.
+    const graph = videoFade
+      ? `${filterSpec.graph};[vout]${videoFade}[voutfaded];[0:a]${audioFade}[aoutfaded]`
+      : filterSpec.graph;
     return [
       ...head,
-      "-filter_complex", filterSpec.graph,
-      "-map", "[vout]",
-      "-map", "0:a:0?",
+      "-filter_complex", graph,
+      "-map", videoFade ? "[voutfaded]" : "[vout]",
+      "-map", videoFade ? "[aoutfaded]" : "0:a:0?",
       ...encode,
       outPath,
       "-y",
     ];
   }
-  const vf = filterSpec
+  const baseVf = filterSpec
     ? filterSpec.graph
     : extraFilter
       ? `${buildCropFilter()},${extraFilter}`
       : buildCropFilter();
-  return [...head, "-vf", vf, ...encode, outPath, "-y"];
+  const vf = videoFade ? `${baseVf},${videoFade}` : baseVf;
+  const args = [...head, "-vf", vf];
+  if (audioFade) args.push("-af", audioFade);
+  args.push(...encode, outPath, "-y");
+  return args;
 }
 
 export async function cutClips(
   videoPath: string,
   highlights: Highlight[],
   extraFilter?: string,
-  filterSpec?: FilterSpec | null
+  filterSpec?: FilterSpec | null,
+  musicFades?: boolean
 ): Promise<CutResult[]> {
   const results: CutResult[] = [];
 
@@ -68,7 +100,15 @@ export async function cutClips(
     const clipPath = join(tmpdir(), `clipclap-clip-${randomUUID()}.mp4`);
     await execFileAsync(
       "ffmpeg",
-      buildCutArgs(videoPath, highlight.start, highlight.end, clipPath, extraFilter, filterSpec),
+      buildCutArgs(
+        videoPath,
+        highlight.start,
+        highlight.end,
+        clipPath,
+        extraFilter,
+        filterSpec,
+        musicFades
+      ),
       { maxBuffer: CHILD_MAX_BUFFER_BYTES }
     );
     results.push({ highlight, clipPath });

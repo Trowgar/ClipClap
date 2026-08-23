@@ -192,6 +192,7 @@ describe("stage handlers", () => {
       partial: false,
       missingRanges: [],
       energyEnvelope: [-30.1, -28.4, -90],
+      lumaEnvelope: [16, 16, 235],
     });
 
     await runTranscribeStage({ jobId: "job1", userId: "u1" });
@@ -222,6 +223,14 @@ describe("stage handlers", () => {
       "job1",
       "TRANSCRIBE",
       expect.objectContaining({ energyEnvelope: [-30.1, -28.4, -90] })
+    );
+    // music-shorts direction R2: the luma envelope rides along the same
+    // step output, next to energyEnvelope, for the same cross-container
+    // reason.
+    expect(mocks.completeJobStep).toHaveBeenCalledWith(
+      "job1",
+      "TRANSCRIBE",
+      expect.objectContaining({ lumaEnvelope: [16, 16, 235] })
     );
   });
 

@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { selectHookWindows, snapWindowEdges } from "../analyze-v2/music-hook";
+import {
+  guardDarkEdges,
+  selectHookWindows,
+  shiftWindowAwayFromDark,
+  snapWindowEdges,
+} from "../analyze-v2/music-hook";
 
 function seg(text: string, start: number, end: number) {
   return { text, start, end };
@@ -182,5 +187,148 @@ describe("selectHookWindows - no signal at all", () => {
     expect(
       selectHookWindows({ segments: [], energyEnvelope: [], durationSec: 300 }, 2)
     ).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// task R2 (spec 2026-08-23-music-shorts): WINDOW SHIFT + EDGE GUARD, both
+// driven by a per-second luma envelope, both applied around the existing
+// energy-valley snap (WINDOW SHIFT before it, EDGE GUARD after it).
+// ---------------------------------------------------------------------------
+
+describe("selectHookWindows - WINDOW SHIFT (dark-luma avoidance)", () => {
+  it("shifts the window off an interior dark band onto the one +-5s offset that fully clears it", () => {
+    const durationSec = 60;
+    const energyEnvelope = new Array(durationSec).fill(-20);
+    for (let s = 20; s < 40; s++) energyEnvelope[s] = -5; // loud plateau -> top window [20,40)
+
+    const lumaEnvelope = new Array(durationSec).fill(200); // bright everywhere...
+    for (let s = 22; s < 25; s++) lumaEnvelope[s] = 10; // ...except a 3s dark band near the window's own start
+
+    // Without luma the window sits at [20,40), straddling the dark band -
+    // the plain valley-edge-snap test elsewhere in this file confirms
+    // [20,40) is exactly where the energy envelope alone would place it.
+    // Every offset in [-5,+4] still overlaps the band by 1-8s; +5 is the
+    // ONLY offset in range that clears it entirely (window becomes
+    // [25,45), band [22,25) now falls entirely before it).
+    const [top] = selectHookWindows(
+      { segments: [], energyEnvelope, lumaEnvelope, durationSec },
+      1
+    );
+
+    expect(top.startSec).toBe(25);
+    expect(top.endSec).toBe(45);
+    expect(top.darkSeconds).toBe(0);
+  });
+
+  it("is a no-op when lumaEnvelope is empty or absent - byte-identical to the pre-R2 window", () => {
+    const durationSec = 60;
+    const energyEnvelope = new Array(durationSec).fill(-20);
+    for (let s = 20; s < 40; s++) energyEnvelope[s] = -5;
+
+    const noLumaKey = selectHookWindows({ segments: [], energyEnvelope, durationSec }, 1);
+    const emptyLuma = selectHookWindows(
+      { segments: [], energyEnvelope, lumaEnvelope: [], durationSec },
+      1
+    );
+
+    expect(emptyLuma).toEqual(noLumaKey);
+    // The pre-R2 energy-valley snap ALREADY nudges startSec from the raw
+    // 20 to 19 here (index 19 is baseline -20dB, quieter than the -5dB
+    // plateau at 20-39, and nearer to the edge than any other -20 second
+    // in range) - not a task R2 behaviour, just what snapWindowEdges was
+    // already doing; asserted here as the concrete "today" baseline this
+    // no-op test is pinned against.
+    expect(noLumaKey[0].startSec).toBe(19);
+    expect(noLumaKey[0].endSec).toBe(40);
+    // no darkSeconds key at all - not even `undefined` spelled out - so a
+    // caller that never heard of task R2 sees the exact pre-R2 shape.
+    expect(Object.prototype.hasOwnProperty.call(noLumaKey[0], "darkSeconds")).toBe(false);
+  });
+
+  it("shiftWindowAwayFromDark never proposes a shift outside [0, durationSec]", () => {
+    const luma = new Array(30).fill(10); // dark everywhere, so every in-range shift ties at 0 dark headroom... actually all equally dark
+    const window = { startSec: 0, endSec: 20 };
+    const shifted = shiftWindowAwayFromDark(window, luma, 20, []);
+    // durationSec == the window's own end: no positive shift is legal
+    // (would exceed 20), no negative shift is legal (would go below 0) -
+    // offset 0 is the only legal candidate, dark or not.
+    expect(shifted).toEqual({ startSec: 0, endSec: 20 });
+  });
+
+  it("shiftWindowAwayFromDark never proposes a shift that crowds an already-finalized window", () => {
+    // Dark band [20,23) at the window's own start; shifts +3/+4/+5 would
+    // each clear it completely (dark=0) but each also lands within
+    // DISTINCT_REGION_MIN_OVERLAP_SEC(10s) of the finalized window at
+    // [33,53) - all three rejected. The best LEGAL candidate is +2
+    // (dark=1, not fully clean, but the closest legal offset gets there
+    // before the crowding boundary at +3).
+    const luma = new Array(80).fill(200);
+    for (let s = 20; s < 23; s++) luma[s] = 10;
+    const window = { startSec: 20, endSec: 40 };
+    const finalized = [{ startSec: 33, endSec: 53 }];
+    const shifted = shiftWindowAwayFromDark(window, luma, 80, finalized);
+    expect(shifted).toEqual({ startSec: 22, endSec: 42 });
+  });
+});
+
+describe("guardDarkEdges (EDGE GUARD, applied after shift + energy-valley snap)", () => {
+  it("nudges an opening AND closing dark edge inward, up to the 3s cap", () => {
+    const luma = new Array(50).fill(10); // dark throughout
+    const guarded = guardDarkEdges({ startSec: 20, endSec: 40 }, luma);
+    // 20s span, floor is 12s - three 1s nudges on each edge only shrinks it
+    // to 14s, well clear of the floor, so the 3s CAP is what stops it here,
+    // not the floor (that is the next test's job).
+    expect(guarded).toEqual({ startSec: 23, endSec: 37 });
+  });
+
+  it("stops a nudge at the 12s floor even though the 3s cap would allow more", () => {
+    const luma = new Array(40).fill(10);
+    for (let s = 15; s < 40; s++) luma[s] = 200; // bright from 15 on - only the OPENING edge is dark
+    // 13s window: one nudge (10 -> 11) leaves 12s (the floor, still legal);
+    // a second nudge (11 -> 12) would leave 11s, under the floor, so the
+    // guard must stop after exactly one step despite the 3s cap allowing
+    // up to three.
+    const guarded = guardDarkEdges({ startSec: 10, endSec: 23 }, luma);
+    expect(guarded).toEqual({ startSec: 11, endSec: 23 });
+  });
+
+  it("does nothing when the edge is already bright", () => {
+    const luma = new Array(40).fill(200);
+    const guarded = guardDarkEdges({ startSec: 10, endSec: 30 }, luma);
+    expect(guarded).toEqual({ startSec: 10, endSec: 30 });
+  });
+
+  it("is a no-op against an empty envelope", () => {
+    const guarded = guardDarkEdges({ startSec: 10, endSec: 30 }, []);
+    expect(guarded).toEqual({ startSec: 10, endSec: 30 });
+  });
+});
+
+describe("selectHookWindows - EDGE GUARD integration", () => {
+  it("cleans up a dark opening edge that WINDOW SHIFT alone could not fully clear", () => {
+    const durationSec = 60;
+    // Flat energy, no rep evidence anywhere: every STEP_SEC grid window
+    // ties at score 0, so the stable sort keeps window [0,20) (w0=0) as
+    // the chosen top window - a fixed, known starting point for this test.
+    const energyEnvelope = new Array(durationSec).fill(-20);
+    // An 8s dark band at the very start (0-7): WINDOW SHIFT can only move
+    // this window POSITIVELY (it already starts at 0), and within its
+    // +-5s radius the least-dark achievable offset is +5 (window [5,25)),
+    // which still leaves 3 dark seconds (5,6,7) sitting right at the new
+    // opening edge - too wide for the shift alone, but exactly within
+    // EDGE_GUARD_MAX_NUDGE_SEC(3), so only the guard (applied after the
+    // shift) can finish the job.
+    const lumaEnvelope = new Array(durationSec).fill(200);
+    for (let s = 0; s < 8; s++) lumaEnvelope[s] = 10;
+
+    const [top] = selectHookWindows(
+      { segments: [], energyEnvelope, lumaEnvelope, durationSec },
+      1
+    );
+
+    expect(top.startSec).toBe(8);
+    expect(top.endSec).toBe(25);
+    expect(top.darkSeconds).toBe(0);
   });
 });
