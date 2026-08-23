@@ -35,6 +35,31 @@ export const FUNNEL_EVENTS = {
    *  a count of taps is evidence about whether to build the brokerage at all,
    *  which is cheaper to collect than the brokerage is to write. */
   EARN_ADVERTISERS: "earn_advertisers_tapped",
+  /** Bot: the plans-and-prices screen was shown to somebody.
+   *
+   *  Added 2026-08-23 because the whole revenue question sat in an unlit gap.
+   *  Twelve checkouts had been opened and none completed, and nothing recorded
+   *  what happened before the order row: a person who looked at the prices and
+   *  walked away and a person who never saw them at all were the same absence
+   *  of data. With this, PLANS_OPENED -> CHECKOUT_STARTED is the price
+   *  question, and CHECKOUT_STARTED -> a paid order is the Tribute-page
+   *  question. Five people were asked what stopped them and none answered, so
+   *  the answer has to be recorded rather than requested. */
+  PLANS_OPENED: "plans_opened",
+  /** Bot: a plan button was tapped, an order exists, and the pay link has been
+   *  handed over. `tribute_orders` already holds the row; this is here so the
+   *  step is readable in the same table as the ones on either side of it, and
+   *  so the reused-fresh-order path (a second tap within 15 minutes) counts as
+   *  the intent it is rather than vanishing for want of a new row. */
+  CHECKOUT_STARTED: "checkout_started",
+  /** Bot: creating the order at Tribute threw, and the person was shown an
+   *  error instead of a pay link.
+   *
+   *  Until 2026-08-23 this went to console.error and nowhere else, which means
+   *  a failure on OUR side of the checkout was indistinguishable from a person
+   *  changing their mind - the two possibilities the whole revenue diagnosis
+   *  hangs on. */
+  CHECKOUT_ERROR: "checkout_error",
   /** Both: a User row was created for this person.
    *
    *  Not the same question as FIRST_SCREEN, which is about one

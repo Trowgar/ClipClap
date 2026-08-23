@@ -889,6 +889,14 @@ async function handleMenuAction(
     }
     case "plans": {
       await sendPlansView(client, message, dict, config, existing);
+      // After the screen is out, and recordFunnelEvent cannot throw - the same
+      // ordering every other funnel write in this file uses.
+      await recordFunnelEvent(
+        "bot",
+        message.from!.id,
+        FUNNEL_EVENTS.PLANS_OPENED,
+        message.from!.language_code
+      );
       return;
     }
   }
@@ -2155,6 +2163,10 @@ export async function handleSubscribeCallback(
       } catch (err) {
         console.error("[tribute] createShopOrder failed", { telegramId, checkoutIntentId, err });
         await client.sendMessage(chatId, dict.checkoutError).catch(() => undefined);
+        // A failure on OUR side, recorded where it can be counted. In a console
+        // line it was indistinguishable from somebody changing their mind, and
+        // those are the two possibilities the revenue question turns on.
+        await recordFunnelEvent("bot", telegramId, FUNNEL_EVENTS.CHECKOUT_ERROR);
         return;
       }
 
@@ -2195,6 +2207,10 @@ export async function handleSubscribeCallback(
         replyMarkup: { inline_keyboard: [[{ text: dict.payBtn, url: payUrl }]] },
       })
       .catch(() => undefined);
+    // The pay link is now in their hands. Recorded here rather than at the
+    // order insert so the reused-fresh-order path counts too - a second tap
+    // within fifteen minutes is the same intent and creates no new row.
+    await recordFunnelEvent("bot", telegramId, FUNNEL_EVENTS.CHECKOUT_STARTED);
   } finally {
     subscribeLocks.delete(telegramId);
   }
