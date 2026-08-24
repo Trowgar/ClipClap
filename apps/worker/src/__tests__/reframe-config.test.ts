@@ -27,6 +27,7 @@ describe("loadReframeConfig", () => {
       pipEdgeMin: 4.0,
       motion: false,
       cutRecovery: false,
+      tailKeep: false,
       camera: DEFAULT_CAMERA,
     });
   });
@@ -36,6 +37,17 @@ describe("loadReframeConfig", () => {
     expect(loadReframeConfig({ REFRAME_CUT_RECOVERY: "true" }).cutRecovery).toBe(false);
     expect(loadReframeConfig({ REFRAME_CUT_RECOVERY: "1" }).cutRecovery).toBe(false);
     expect(loadReframeConfig({}).cutRecovery).toBe(false);
+  });
+
+  // spec 2026-08-24-camera-visual-anchoring mechanism C. Same rule as
+  // REFRAME_STREAM/REFRAME_CUT_RECOVERY: a stray truthy value must not change
+  // a shipped clip's geometry.
+  it("turns tail keep on only for the exact literal 'on'", () => {
+    expect(loadReframeConfig({ REFRAME_TAIL_KEEP: "on" }).tailKeep).toBe(true);
+    expect(loadReframeConfig({ REFRAME_TAIL_KEEP: "ON" }).tailKeep).toBe(false);
+    expect(loadReframeConfig({ REFRAME_TAIL_KEEP: "true" }).tailKeep).toBe(false);
+    expect(loadReframeConfig({ REFRAME_TAIL_KEEP: "1" }).tailKeep).toBe(false);
+    expect(loadReframeConfig({}).tailKeep).toBe(false);
   });
 
   it("reads env overrides and only accepts the literal 'faces' engine", () => {

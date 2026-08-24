@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { classifyCuts, cutsToShots, parseSceneScores, CANDIDATE_FLOOR } from "../reframe/shots";
+import {
+  classifyCuts,
+  cutsToShots,
+  parseSceneScores,
+  CANDIDATE_FLOOR,
+  TAIL_KEEP_MIN_SEC,
+} from "../reframe/shots";
 
 describe("cutsToShots", () => {
   it("splits the clip at scene cuts", () => {
@@ -39,6 +45,97 @@ describe("cutsToShots", () => {
 
   it("returns empty for a non-positive duration", () => {
     expect(cutsToShots([], 0, 1.0)).toEqual([]);
+  });
+});
+
+// spec 2026-08-24-camera-visual-anchoring, mechanism C. The cops clip (job
+// cmt5z9nfr): scdet found a real hard cut at 31.5315s (score 0.493, above the
+// 0.3 auto-split threshold) inside the rendered window 0-32.3s, but the 0.77s
+// tail was shorter than minShotSec 1.0 and got merged backward into the
+// previous shot - which then took its face anchor from the wrong scene.
+describe("cutsToShots tail keep (REFRAME_TAIL_KEEP mechanism C, 4th param)", () => {
+  // Reproduces the exact scdet cut list from the shipped cops clip.
+  const copsCuts = [
+    1.668, 8.642, 9.81, 12.813, 15.282, 17.017, 24.458, 31.5315,
+  ];
+  const copsWindowEnd = 32.3;
+
+  it("flag OFF (default, param omitted): byte-identical to today - tail merges backward", () => {
+    // Captured by running the pre-mechanism-C cutsToShots on this exact input
+    // (docs/superpowers/specs/2026-08-24-camera-visual-anchoring.md line 101-103).
+    expect(cutsToShots(copsCuts, copsWindowEnd, 1.0)).toEqual([
+      { start: 0, end: 1.668 },
+      { start: 1.668, end: 8.642 },
+      { start: 8.642, end: 9.81 },
+      { start: 9.81, end: 12.813 },
+      { start: 12.813, end: 15.282 },
+      { start: 15.282, end: 17.017 },
+      { start: 17.017, end: 24.458 },
+      { start: 24.458, end: 32.3 }, // merged tail - the shipped defect
+    ]);
+  });
+
+  it("flag OFF explicit false: identical to the omitted-param case", () => {
+    expect(cutsToShots(copsCuts, copsWindowEnd, 1.0, false)).toEqual(
+      cutsToShots(copsCuts, copsWindowEnd, 1.0)
+    );
+  });
+
+  it("flag ON: the real 0.77s hard-cut tail survives as its own shot", () => {
+    expect(cutsToShots(copsCuts, copsWindowEnd, 1.0, true)).toEqual([
+      { start: 0, end: 1.668 },
+      { start: 1.668, end: 8.642 },
+      { start: 8.642, end: 9.81 },
+      { start: 9.81, end: 12.813 },
+      { start: 12.813, end: 15.282 },
+      { start: 15.282, end: 17.017 },
+      { start: 17.017, end: 24.458 },
+      { start: 24.458, end: 31.5315 }, // previous shot ends here now, not 32.3
+      { start: 31.5315, end: 32.3 }, // kept as its own shot
+    ]);
+  });
+
+  it("flag ON but tail under TAIL_KEEP_MIN_SEC (flicker, not a cut): still merges backward", () => {
+    // Tail is 5.4 - 5.0 = 0.4s, below the 0.5s TAIL_KEEP_MIN_SEC floor.
+    expect(cutsToShots([5.0], 5.4, 1.0, true)).toEqual([
+      { start: 0, end: 5.4 },
+    ]);
+  });
+
+  it("flag ON, tail exactly at TAIL_KEEP_MIN_SEC (0.5s): kept as its own shot", () => {
+    expect(TAIL_KEEP_MIN_SEC).toBe(0.5);
+    expect(cutsToShots([5.0], 5.5, 1.0, true)).toEqual([
+      { start: 0, end: 5.0 },
+      { start: 5.0, end: 5.5 },
+    ]);
+  });
+
+  it("flag ON, tail just under TAIL_KEEP_MIN_SEC (0.49s): still merges backward", () => {
+    expect(cutsToShots([5.0], 5.49, 1.0, true)).toEqual([
+      { start: 0, end: 5.49 },
+    ]);
+  });
+
+  it("flag ON: non-tail (middle) short segments are unaffected - still merge forward", () => {
+    // Same case as "merges micro-shots forward into the next segment" above,
+    // just with tailKeep=true: the 0.4s middle segment is not the FINAL
+    // segment, so the tail-keep branch never runs.
+    expect(cutsToShots([5.0, 5.4], 9.0, 1.0, true)).toEqual([
+      { start: 0, end: 5.0 },
+      { start: 5.0, end: 9.0 },
+    ]);
+  });
+
+  it("flag ON: an ordinary cut list with no short tail is unaffected", () => {
+    expect(cutsToShots([12.4, 31.0], 57.5, 1.0, true)).toEqual([
+      { start: 0, end: 12.4 },
+      { start: 12.4, end: 31.0 },
+      { start: 31.0, end: 57.5 },
+    ]);
+  });
+
+  it("flag ON: a clip shorter than minShotSec with no prior shots stays one shot (nothing to split from)", () => {
+    expect(cutsToShots([], 0.8, 1.0, true)).toEqual([{ start: 0, end: 0.8 }]);
   });
 });
 

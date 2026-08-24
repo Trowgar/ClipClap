@@ -33,6 +33,11 @@ export interface ReframeConfig {
    *  today's plan byte for byte; on lets face-track turnover confirm scdet
    *  candidates in the 0.15-0.30 band. */
   cutRecovery: boolean;
+  /** Tail-keep killswitch (spec 2026-08-24-camera-visual-anchoring, mechanism
+   *  C). Off is today's cutsToShots byte for byte; on keeps a too-short FINAL
+   *  segment as its own shot (>= shots.TAIL_KEEP_MIN_SEC) instead of merging
+   *  it backward into the previous shot's wrong-scene anchor. */
+  tailKeep: boolean;
   camera: CameraConfig;
   /** MUSIC-ONLY plan hint (spec 2026-08-23-music-shorts v1.1, PlanOptions.
    *  musicMode). No env knob - render.ts's music branch is the only writer,
@@ -84,6 +89,8 @@ export function loadReframeConfig(
     motion: env.REFRAME_MOTION === "on",
     // Exact literal, the REFRAME_STREAM rule.
     cutRecovery: env.REFRAME_CUT_RECOVERY === "on",
+    // Exact literal, the REFRAME_STREAM rule.
+    tailKeep: env.REFRAME_TAIL_KEEP === "on",
     camera: {
       deadzoneFrac: positive(env.REFRAME_CAM_DEADZONE, DEFAULT_CAMERA.deadzoneFrac),
       settleFrac: positive(env.REFRAME_CAM_SETTLE, DEFAULT_CAMERA.settleFrac),

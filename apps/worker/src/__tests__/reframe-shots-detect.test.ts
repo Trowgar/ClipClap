@@ -58,6 +58,7 @@ const cfg: ReframeConfig = {
   faceLargeFrac: 0.1,
   motion: false,
   cutRecovery: false,
+  tailKeep: false,
   streamVirtualCam: false,
   camera: DEFAULT_CAMERA,
   pipMaxFrac: 0.5,
@@ -183,5 +184,47 @@ describe("detectShots single pass", () => {
     await expect(detectShots("/x.mp4", 0, 40, cfg, 5000)).rejects.toThrow(
       /scdet_score_missing/
     );
+  });
+
+  // spec 2026-08-24-camera-visual-anchoring mechanism C, cops reproduction:
+  // a hard cut at 31.53s (score 0.493, above sceneThreshold) leaves a 0.77s
+  // tail before the 32.3s window end - too short for minShotSec 1.0.
+  it("threads cfg.tailKeep into cutsToShots: a real hard-cut tail survives as its own shot", async () => {
+    h.stderrQueue = [
+      scored([
+        [1.668, 0.6],
+        [8.642, 0.6],
+        [9.81, 0.6],
+        [12.813, 0.6],
+        [15.282, 0.6],
+        [17.017, 0.6],
+        [24.458, 0.6],
+        [31.5315, 0.493],
+      ]),
+    ];
+
+    const r = await detectShots("/x.mp4", 0, 32.3, { ...cfg, tailKeep: true }, 5000);
+
+    expect(r.shots[r.shots.length - 2]).toEqual({ start: 24.458, end: 31.5315 });
+    expect(r.shots[r.shots.length - 1]).toEqual({ start: 31.5315, end: 32.3 });
+  });
+
+  it("cfg.tailKeep false (the default) keeps merging the tail backward", async () => {
+    h.stderrQueue = [
+      scored([
+        [1.668, 0.6],
+        [8.642, 0.6],
+        [9.81, 0.6],
+        [12.813, 0.6],
+        [15.282, 0.6],
+        [17.017, 0.6],
+        [24.458, 0.6],
+        [31.5315, 0.493],
+      ]),
+    ];
+
+    const r = await detectShots("/x.mp4", 0, 32.3, cfg, 5000);
+
+    expect(r.shots[r.shots.length - 1]).toEqual({ start: 24.458, end: 32.3 });
   });
 });

@@ -57,6 +57,7 @@ const baseCfg: ReframeConfig = {
   faceLargeFrac: 0.1,
   motion: false,
   cutRecovery: false,
+  tailKeep: false,
   streamVirtualCam: false,
   camera: DEFAULT_CAMERA,
   pipMaxFrac: 0.5,

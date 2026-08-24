@@ -6,16 +6,30 @@ import type { Shot } from "./types";
 import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
 const execFileAsync = promisify(execFile);
 
+/** Below this, a too-short final segment is flicker and still merges backward
+ *  even with REFRAME_TAIL_KEEP=on (spec 2026-08-24-camera-visual-anchoring,
+ *  mechanism C - measured on the cops clip: the real 0.77s hard-cut tail at
+ *  31.53s must survive, but a sub-frame scdet stutter must not). */
+export const TAIL_KEEP_MIN_SEC = 0.5;
+
 /**
  * Pure: scene-cut times (clip-relative) -> shot list covering [0, duration].
  * Segments shorter than minShotSec merge forward into the next segment
  * (the cut is simply dropped); a too-short tail merges backward into the
  * last shot. Anti-flicker per spec §5.1.
+ *
+ * `tailKeep` (REFRAME_TAIL_KEEP=on): a too-short FINAL segment is kept as its
+ * own shot instead of merging backward, provided it is >= TAIL_KEEP_MIN_SEC.
+ * Off (the default) is byte-identical to the merge-backward behavior above.
+ * There is no symmetric case for a too-short FIRST segment: it already merges
+ * FORWARD via the same generic "drop the cut" branch every too-short middle
+ * segment takes, so there is nothing to mirror on the head side.
  */
 export function cutsToShots(
   cutTimes: number[],
   duration: number,
-  minShotSec: number
+  minShotSec: number,
+  tailKeep = false
 ): Shot[] {
   if (!(duration > 0)) return [];
   const cuts = [...new Set(cutTimes)]
@@ -26,8 +40,14 @@ export function cutsToShots(
   for (const t of [...cuts, duration]) {
     if (t - pendingStart < minShotSec) {
       if (t === duration) {
-        if (shots.length > 0) shots[shots.length - 1].end = duration;
-        else shots.push({ start: pendingStart, end: duration });
+        const tailDur = t - pendingStart;
+        if (tailKeep && tailDur >= TAIL_KEEP_MIN_SEC && shots.length > 0) {
+          shots.push({ start: pendingStart, end: duration });
+        } else if (shots.length > 0) {
+          shots[shots.length - 1].end = duration;
+        } else {
+          shots.push({ start: pendingStart, end: duration });
+        }
       }
       continue; // drop the cut - segment keeps growing into the next one
     }
@@ -140,7 +160,10 @@ export async function detectShots(
   );
   const duration = endSec - startSec;
   const { cuts, candidates } = classifyCuts(scored, duration, cfg.sceneThreshold);
-  return { shots: cutsToShots(cuts, duration, cfg.minShotSec), candidates };
+  return {
+    shots: cutsToShots(cuts, duration, cfg.minShotSec, cfg.tailKeep),
+    candidates,
+  };
 }
 
 /**
