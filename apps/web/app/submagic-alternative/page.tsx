@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { RelatedComparisons } from "@/components/related-comparisons";
 
 /**
  * Second comparison page, written to the same two rules as /opus-clip-alternative:
@@ -268,27 +269,7 @@ export default function SubmagicAlternativePage() {
           </a>
         </section>
 
-        <nav className="mt-10 border-t border-white/[0.06] pt-6 text-sm">
-          <p className="text-neutral-500">Related comparisons</p>
-          <ul className="mt-2 space-y-1">
-            <li>
-              <Link
-                href="/opus-clip-alternative"
-                className="text-neutral-300 underline-offset-4 hover:text-white hover:underline"
-              >
-                ClipClap compared with Opus Clip
-              </Link>
-            </li>
-            <li>
-              <Link
-                href="/eklipse-alternative"
-                className="text-neutral-300 underline-offset-4 hover:text-white hover:underline"
-              >
-                ClipClap compared with Eklipse
-              </Link>
-            </li>
-          </ul>
-        </nav>
+        <RelatedComparisons current="submagic-alternative" />
       </main>
     </div>
   );

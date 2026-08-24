@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { RelatedComparisons } from "@/components/related-comparisons";
 
 /**
  * A comparison page that names a competitor, written to two rules that are not negotiable:
@@ -260,27 +261,7 @@ export default function OpusClipAlternativePage() {
           </div>
         </section>
 
-        <nav className="mt-10 border-t border-white/[0.06] pt-6 text-sm">
-          <p className="text-neutral-500">Related comparisons</p>
-          <ul className="mt-2 space-y-1">
-            <li>
-              <Link
-                href="/submagic-alternative"
-                className="text-neutral-300 underline-offset-4 hover:text-white hover:underline"
-              >
-                ClipClap compared with Submagic
-              </Link>
-            </li>
-            <li>
-              <Link
-                href="/eklipse-alternative"
-                className="text-neutral-300 underline-offset-4 hover:text-white hover:underline"
-              >
-                ClipClap compared with Eklipse
-              </Link>
-            </li>
-          </ul>
-        </nav>
+        <RelatedComparisons current="opus-clip-alternative" />
 
         <p className="mt-10 text-xs leading-relaxed text-neutral-600">
           Opus Clip is a product of its respective owner and is named here only to
