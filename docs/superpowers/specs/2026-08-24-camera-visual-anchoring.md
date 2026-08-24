@@ -188,6 +188,34 @@ spike ratio = delta(boundary pair) / median(inter-frame deltas, ~+-1s at
 sampled fps). Calibrating on the same 17 cases; if it fails, mechanism A is
 recorded as a measured dead end and the campaign ships C (+ B shadow) only.
 
+### Mechanism A calibration, round 2: spike ratio ALSO REFUTED - A is CLOSED
+
+Best joint rule (spike_ratio AND boundary_delta floor): 16/17 on every
+fps/scale combo, never 17/17. The one error is ALWAYS camera shake (15.282) -
+structurally identical to a cut under this signal (a sharp shake against a
+still shot IS "quiet baseline + one big frame jump"); its (baseline, delta)
+sits inside the TRUE cluster in all combos. Second knife-edge riding along:
+flicker 19.686's boundary_delta lands 0.001-0.0023 from whatever floor fits.
+Thresholds are non-portable (ratio_thr 2.14 at 12fps/160 vs 3.55 at
+native/160 - native fps inflates ratios 1.5-3x). The only robust half is
+NEG-vs-TRUE (mid-shot quiet cases separate cleanly, max NEG 1.85 vs min TRUE
+3.39) - i.e. the signal re-derives what scdet already knows. Honest caveats
+recorded: the labeled set is one video (n=17); the shake exemplar is
+auto-split today (0.371) so it is a robustness proxy for shake-on-faceless
+rather than a literal member of A's oneSideEmpty population; a false-positive
+cost asymmetry exists (faceless-both-sides false splits are healed downstream
+by mergeAdjacentLayouts' same-x merge; mixed face/no-face false splits are
+visible regressions - and 26.06-class true cuts live in that same mixed
+class, so the populations do not separate). Artifacts:
+.corpus/feedback-audit/spike-ratio-discriminator.py + results/analysis JSON +
+_frame_cache_v2/. Runtime ~0.5-0.65s per candidate (single window decode).
+
+**VERDICT: mechanism A does not ship.** Two independent signals (correlation
+structure, temporal spike ratio) measured dead on the labeled set. The
+campaign ships C + B-shadow. A returns only with a multi-video labeled
+boundary corpus AND a signal that beats shake and flicker with real margin -
+do not re-propose either measured signal without new evidence.
+
 **Do-not-fix list carried over** (2026-08-17 spec, still binding): no
 CANDIDATE_FLOOR lowering (92% of the 0.15-0.30 band are non-cuts); no touching
 tracker/buildCropPlan/mergeAdjacentLayouts/layout rules; merge-blindness and
