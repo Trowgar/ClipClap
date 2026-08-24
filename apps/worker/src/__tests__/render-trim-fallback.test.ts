@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   failJobStep: vi.fn(),
   clipUpdate: vi.fn(),
   clipFindUnique: vi.fn(),
+  clipUpdateMany: vi.fn(),
   uploadFile: vi.fn(),
   downloadVideo: vi.fn(),
   cutClips: vi.fn(),
@@ -23,6 +24,12 @@ vi.mock("@clipclap/shared", () => ({
     clip: {
       update: mocks.clipUpdate,
       findUnique: mocks.clipFindUnique,
+      // Deliberately defined (not left undefined): the render-retry cleanup
+      // (spec 2026-08-24-render-retry-and-stream-gate §1) must run ONLY on
+      // the full-job render path. Defining this here means a regression that
+      // makes renderTrim call it fails loudly on a real assertion below,
+      // rather than the call silently no-oping against an absent mock.
+      updateMany: mocks.clipUpdateMany,
     },
   },
   uploadFile: mocks.uploadFile,
@@ -102,6 +109,10 @@ describe("renderTrim degrades when the clean source artifact is gone", () => {
     expect(mocks.clipUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: "clip1" } })
     );
+    // Scope proof for the render-retry cleanup (spec
+    // 2026-08-24-render-retry-and-stream-gate §1): it must fire ONLY on the
+    // full-job render path, never here on the single-clip trim/re-render path.
+    expect(mocks.clipUpdateMany).not.toHaveBeenCalled();
     // The stage must not be reported as failed - a degraded trim still succeeds.
     expect(mocks.failJobStep).not.toHaveBeenCalled();
     expect(
@@ -317,6 +328,10 @@ describe("renderTrim clean-source branch still burns subtitles as before", () =>
       "/tmp/cut-clip.mp4",
       "video/mp4"
     );
+    // Scope proof for the render-retry cleanup (spec
+    // 2026-08-24-render-retry-and-stream-gate §1): the clean-source trim
+    // branch must not touch it either.
+    expect(mocks.clipUpdateMany).not.toHaveBeenCalled();
   });
 
   it("stores subtitles: true because this render actually burned them", async () => {

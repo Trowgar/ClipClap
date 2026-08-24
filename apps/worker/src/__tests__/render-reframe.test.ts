@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   userFindUniqueOrThrow: vi.fn(),
   jobUpdate: vi.fn(),
   clipCreate: vi.fn(),
+  clipUpdateMany: vi.fn(),
   uploadFile: vi.fn(),
   downloadVideo: vi.fn(),
   cutClips: vi.fn(),
@@ -39,7 +40,11 @@ vi.mock("@clipclap/shared", () => ({
       update: mocks.jobUpdate,
     },
     user: { findUniqueOrThrow: mocks.userFindUniqueOrThrow },
-    clip: { create: mocks.clipCreate },
+    // updateMany is the render-retry cleanup (spec
+    // 2026-08-24-render-retry-and-stream-gate §1) that now runs at the start
+    // of every renderClips call - unrelated to what this file tests, so it's
+    // given a default resolved value below and otherwise ignored here.
+    clip: { create: mocks.clipCreate, updateMany: mocks.clipUpdateMany },
     // Unmocked calls (every test outside the music-shorts describe block
     // below) resolve to plain `undefined` here - loadReframeConfigForJob's
     // own optional chaining treats that exactly like "no row", the same
@@ -148,6 +153,7 @@ describe("renderClips reframe branch", () => {
     mocks.generateThumbnail.mockResolvedValue("/tmp/fake-thumb.jpg");
     mocks.uploadFile.mockResolvedValue(undefined);
     mocks.clipCreate.mockResolvedValue({ id: "clip1" });
+    mocks.clipUpdateMany.mockResolvedValue({ count: 0 });
     mocks.jobUpdate.mockResolvedValue(undefined);
     mocks.computeClipExpiresAt.mockReturnValue(undefined);
   });
@@ -368,6 +374,7 @@ describe("renderClips subtitle telemetry", () => {
     mocks.generateThumbnail.mockResolvedValue("/tmp/fake-thumb.jpg");
     mocks.uploadFile.mockResolvedValue(undefined);
     mocks.clipCreate.mockResolvedValue({ id: "clip1" });
+    mocks.clipUpdateMany.mockResolvedValue({ count: 0 });
     mocks.jobUpdate.mockResolvedValue(undefined);
     mocks.computeClipExpiresAt.mockReturnValue(undefined);
   });
@@ -448,6 +455,7 @@ describe("renderClips music-shorts stream override (task M4)", () => {
     mocks.generateThumbnail.mockResolvedValue("/tmp/fake-thumb.jpg");
     mocks.uploadFile.mockResolvedValue(undefined);
     mocks.clipCreate.mockResolvedValue({ id: "clip1" });
+    mocks.clipUpdateMany.mockResolvedValue({ count: 0 });
     mocks.jobUpdate.mockResolvedValue(undefined);
     mocks.computeClipExpiresAt.mockReturnValue(undefined);
     mocks.computeCropPlan.mockResolvedValue({
@@ -547,6 +555,7 @@ describe("renderClips music direction (tasks R1/R3/R4, spec 2026-08-23-music-sho
     mocks.generateThumbnail.mockResolvedValue("/tmp/fake-thumb.jpg");
     mocks.uploadFile.mockResolvedValue(undefined);
     mocks.clipCreate.mockResolvedValue({ id: "clip1" });
+    mocks.clipUpdateMany.mockResolvedValue({ count: 0 });
     mocks.jobUpdate.mockResolvedValue(undefined);
     mocks.computeClipExpiresAt.mockReturnValue(undefined);
     mocks.jobStepFindUnique.mockResolvedValue({

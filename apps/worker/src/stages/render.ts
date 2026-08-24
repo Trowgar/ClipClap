@@ -172,6 +172,36 @@ async function renderClips(
     );
     const transcription = asTranscription(job.transcriptJson);
     const highlights = asHighlights(job.highlights);
+
+    // Retry idempotency (spec 2026-08-24-render-retry-and-stream-gate §1,
+    // incident job cmt6ag9q8): a stall-recovery retry re-runs this FULL-JOB
+    // path from scratch. Attempt 1 died silently mid-loop after creating 4
+    // of 7 clip rows; attempt 2 re-created all 7 on top of the 4 orphans,
+    // and delivery (which only filters deletedAt, never dedups by highlight
+    // identity) sent all 11, 4 of them twice. Soft-delete any live leftovers
+    // of a prior attempt before this attempt creates a single row per
+    // highlight - delivery already excludes deletedAt rows in its own read
+    // path, so the orphans become invisible there without touching anything
+    // already sent (a row can only carry a telegramFileId after FINALIZE,
+    // which never runs until this stage completes, so nothing delivered is
+    // ever soft-deleted here). Scoped to THIS render path only - renderTrim's
+    // single-clip re-render never reaches this function.
+    //
+    // telegramFileId: null is a second, independent guard on top of the
+    // deletedAt: null scope above: under the narrow stall-reclaim race where
+    // a prior attempt actually finished AND got delivered before this
+    // retry's cleanup runs, the plain deletedAt: null clause would soft-
+    // delete already-delivered rows, and the web dashboard (job.service's
+    // getJob/getUserJobs, which reads clips with no deletedAt filter at all)
+    // would then read them as expired. Excluding telegramFileId-carrying
+    // rows protects them from that, and it can never let a duplicate slip
+    // through either way - deliverClips already skips any row that already
+    // carries a telegramFileId.
+    await prisma.clip.updateMany({
+      where: { jobId: payload.jobId, deletedAt: null, telegramFileId: null },
+      data: { deletedAt: new Date() },
+    });
+
     const clipExpiresAt = computeClipExpiresAt(user.plan, user.billingCycle);
 
     const sourcePath = await downloadVideo(undefined, sourceArtifactKey);

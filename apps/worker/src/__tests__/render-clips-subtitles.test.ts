@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   userFindUniqueOrThrow: vi.fn(),
   jobUpdate: vi.fn(),
   clipCreate: vi.fn(),
+  clipUpdateMany: vi.fn(),
   uploadFile: vi.fn(),
   downloadVideo: vi.fn(),
   cutClips: vi.fn(),
@@ -43,6 +44,10 @@ vi.mock("@clipclap/shared", () => ({
     },
     clip: {
       create: mocks.clipCreate,
+      // The render-retry cleanup (spec
+      // 2026-08-24-render-retry-and-stream-gate §1) now runs at the start of
+      // every renderClips call - unrelated to what this file tests.
+      updateMany: mocks.clipUpdateMany,
     },
     // renderClips now reads the ANALYZE step's telemetry to decide the
     // music-shorts stream-layout override (task M4, stages/render.ts's
@@ -111,6 +116,7 @@ describe("renderClips stores what it actually burned, not the job's subtitles fl
     mocks.generateThumbnail.mockResolvedValue("/tmp/fake-thumb.jpg");
     mocks.uploadFile.mockResolvedValue(undefined);
     mocks.clipCreate.mockResolvedValue({ id: "clip1" });
+    mocks.clipUpdateMany.mockResolvedValue({ count: 0 });
     mocks.jobUpdate.mockResolvedValue(undefined);
     mocks.computeClipExpiresAt.mockReturnValue(undefined);
     mocks.createAssFilter.mockResolvedValue({
