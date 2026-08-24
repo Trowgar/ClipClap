@@ -3,7 +3,7 @@ import type { MetadataRoute } from "next";
 const SITE = process.env.NEXT_PUBLIC_APP_URL ?? "https://clipclap.io";
 
 /**
- * The public surface is three pages today, so this sitemap is short by honesty rather than by
+ * The public surface is four pages today, so this sitemap is short by honesty rather than by
  * oversight - /pricing, /faq and /blog do not exist yet and listing them would hand crawlers a
  * set of 404s. Add entries here as real pages ship.
  *
@@ -19,6 +19,7 @@ const LAST_MODIFIED = {
   home: "2026-08-24",
   opusClipAlternative: "2026-08-24",
   submagicAlternative: "2026-08-24",
+  eklipseAlternative: "2026-08-24",
 } as const;
 
 export default function sitemap(): MetadataRoute.Sitemap {
@@ -38,6 +39,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
     {
       url: `${SITE}/submagic-alternative`,
       lastModified: new Date(LAST_MODIFIED.submagicAlternative),
+      changeFrequency: "monthly",
+      priority: 0.8,
+    },
+    {
+      url: `${SITE}/eklipse-alternative`,
+      lastModified: new Date(LAST_MODIFIED.eklipseAlternative),
       changeFrequency: "monthly",
       priority: 0.8,
     },

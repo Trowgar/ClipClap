@@ -271,6 +271,14 @@ export default function OpusClipAlternativePage() {
                 ClipClap compared with Submagic
               </Link>
             </li>
+            <li>
+              <Link
+                href="/eklipse-alternative"
+                className="text-neutral-300 underline-offset-4 hover:text-white hover:underline"
+              >
+                ClipClap compared with Eklipse
+              </Link>
+            </li>
           </ul>
         </nav>
 
