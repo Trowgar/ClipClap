@@ -174,6 +174,11 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
       // planner; omitting it would make ReframeConfig.musicMode readable but
       // inert (spec 2026-08-23-music-shorts v1.1, mirrors streamFaceCeiling).
       musicMode: cfg.musicMode,
+      // Threaded so REFRAME_SALIENCY_SHADOW actually reaches the planner in
+      // production; omitting it would make the knob readable from config but
+      // inert (spec 2026-08-24-camera-visual-anchoring mechanism B, mirrors
+      // musicMode/streamFaceCeiling threading above).
+      saliencyShadow: cfg.saliencyShadow,
     },
     cam
   );

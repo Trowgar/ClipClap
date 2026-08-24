@@ -38,6 +38,15 @@ export interface ReframeConfig {
    *  segment as its own shot (>= shots.TAIL_KEEP_MIN_SEC) instead of merging
    *  it backward into the previous shot's wrong-scene anchor. */
   tailKeep: boolean;
+  /** Saliency-shadow telemetry killswitch (spec
+   *  2026-08-24-camera-visual-anchoring, mechanism B). Off is today's
+   *  cropPlan byte for byte. On, a faceless (center-fallback) shot OUTSIDE
+   *  music mode records what an ACTIVE saliency anchor would have computed
+   *  as a `saliencyShadow` field on that shot - never applied, the shot's
+   *  real `x` is unchanged. Music mode already applies saliency actively
+   *  (spec 2026-08-23-music-shorts v1.1), so this flag never fires there
+   *  regardless of its own value - see plan.ts's `saliencyShadowFor`. */
+  saliencyShadow: boolean;
   camera: CameraConfig;
   /** MUSIC-ONLY plan hint (spec 2026-08-23-music-shorts v1.1, PlanOptions.
    *  musicMode). No env knob - render.ts's music branch is the only writer,
@@ -91,6 +100,10 @@ export function loadReframeConfig(
     cutRecovery: env.REFRAME_CUT_RECOVERY === "on",
     // Exact literal, the REFRAME_STREAM rule.
     tailKeep: env.REFRAME_TAIL_KEEP === "on",
+    // Exact literal, the REFRAME_STREAM rule: telemetry nobody asked for is
+    // still a behaviour change (extra data written to Clip.cropPlan) and
+    // must not turn on from a stray truthy value either.
+    saliencyShadow: env.REFRAME_SALIENCY_SHADOW === "on",
     camera: {
       deadzoneFrac: positive(env.REFRAME_CAM_DEADZONE, DEFAULT_CAMERA.deadzoneFrac),
       settleFrac: positive(env.REFRAME_CAM_SETTLE, DEFAULT_CAMERA.settleFrac),

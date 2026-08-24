@@ -51,6 +51,7 @@ const cfg: ReframeConfig = {
   motion: false,
   cutRecovery: false,
   tailKeep: false,
+  saliencyShadow: false,
   streamVirtualCam: false,
   camera: DEFAULT_CAMERA,
   pipMaxFrac: 0.5,

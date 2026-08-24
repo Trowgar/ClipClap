@@ -13,6 +13,7 @@ import {
   isInsideInset,
   placeWindow,
   planLayoutCounts,
+  saliencyShadowFor,
   selectGroupForShot,
   sliceCropPlan,
   synthesizeVirtualCamRect,
@@ -2445,5 +2446,96 @@ describe("music-mode saliency anchoring (spec 2026-08-23-music-shorts v1.1)", ()
   it("a face shot with no saliency data carries no spreadFrac key even under musicMode", () => {
     const plan = buildCropPlan(oneShot, withTracks([track(600, 400)]), W, H, musicOpts, null);
     expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 496 }]);
+  });
+});
+
+// spec 2026-08-24-camera-visual-anchoring, mechanism B: SHADOW TELEMETRY
+// ONLY, gated by `opts.saliencyShadow` (threaded from ReframeConfig's
+// REFRAME_SALIENCY_SHADOW). Never changes a shot's `x`/`layout`/`start`/
+// `end` - it only ever ADDS a `saliencyShadow` field recording what an
+// ACTIVE anchor would have computed. Every test in the two music-mode
+// describe blocks above passes `saliencyShadow` unset (falsy), so those are
+// the "flag off means nothing changed" proof for this mechanism too.
+describe("saliency shadow telemetry (spec 2026-08-24-camera-visual-anchoring mechanism B)", () => {
+  const shadowOpts = { ...DEFAULT_PLAN_OPTIONS, saliencyShadow: true };
+  const shadowMusicOpts = {
+    ...DEFAULT_PLAN_OPTIONS,
+    saliencyShadow: true,
+    musicMode: true,
+  };
+  const salientTracks: ShotTracks[] = [
+    { shotIndex: 0, tracks: [], camRect: null, saliency: { x: 1000, spreadFrac: 0.2 } },
+  ];
+
+  it("saliencyShadowFor packages the raw centroid/spreadFrac plus what centerXForShot would have returned; null when saliency is null or absent", () => {
+    expect(saliencyShadowFor({ x: 1000, spreadFrac: 0.2 }, 656, 608, W)).toEqual({
+      centroidX: 1000,
+      spreadFrac: 0.2,
+      suggestedX: 696,
+      deltaPx: 40,
+    });
+    expect(saliencyShadowFor(null, 656, 608, W)).toBeNull();
+    expect(saliencyShadowFor(undefined, 656, 608, W)).toBeNull();
+  });
+
+  it("(a) flag ON, standard mode: a faceless shot's x/layout/start/end stay exactly what flag-off produces, plus a correct saliencyShadow field", () => {
+    const withShadow = buildCropPlan(oneShot, salientTracks, W, H, shadowOpts, null);
+    const flagOff = buildCropPlan(oneShot, salientTracks, W, H, DEFAULT_PLAN_OPTIONS, null);
+    // Geometry identity: strip the shadow field and the two plans must match.
+    const { saliencyShadow, ...withoutShadow } = withShadow!.shots[0] as any;
+    expect(withoutShadow).toEqual(flagOff!.shots[0]);
+    expect(withShadow!.shots).toEqual([
+      {
+        start: 0,
+        end: 30,
+        layout: "center",
+        x: 656,
+        saliencyShadow: { centroidX: 1000, spreadFrac: 0.2, suggestedX: 696, deltaPx: 40 },
+      },
+    ]);
+  });
+
+  it("a faceless shot with null saliency (no sampled frames) gets no saliencyShadow field even with the flag on", () => {
+    const tracks: ShotTracks[] = [{ shotIndex: 0, tracks: [], camRect: null, saliency: null }];
+    const plan = buildCropPlan(oneShot, tracks, W, H, shadowOpts, null);
+    expect(plan!.shots).toEqual([{ start: 0, end: 30, layout: "center", x: 656 }]);
+  });
+
+  it("(b) a face-anchored (non-center) shot never carries a saliencyShadow field, flag on or off", () => {
+    const tracks: ShotTracks[] = [
+      {
+        shotIndex: 0,
+        tracks: [track(600, 400)],
+        camRect: null,
+        saliency: { x: 1000, spreadFrac: 0.2 },
+      },
+    ];
+    const withFlag = buildCropPlan(oneShot, tracks, W, H, shadowOpts, null);
+    const withoutFlag = buildCropPlan(oneShot, tracks, W, H, DEFAULT_PLAN_OPTIONS, null);
+    expect(withFlag!.shots).toEqual([{ start: 0, end: 30, layout: "single", x: 496 }]);
+    expect(withFlag).toEqual(withoutFlag);
+  });
+
+  it("(c) flag ON + musicMode: music behaviour is unchanged and no shadow field appears anywhere", () => {
+    const withShadowFlag = buildCropPlan(oneShot, salientTracks, W, H, shadowMusicOpts, null);
+    const musicOnly = buildCropPlan(
+      oneShot,
+      salientTracks,
+      W,
+      H,
+      { ...DEFAULT_PLAN_OPTIONS, musicMode: true },
+      null
+    );
+    expect(withShadowFlag).toEqual(musicOnly);
+    expect(withShadowFlag!.shots).toEqual([
+      { start: 0, end: 30, layout: "center", x: 696, spreadFrac: 0.2 },
+    ]);
+    expect(withShadowFlag!.shots[0]).not.toHaveProperty("saliencyShadow");
+  });
+
+  it("(d) flag OFF: no saliencyShadow field anywhere, plan deep-equal to the pre-mechanism-B plan", () => {
+    const flagOff = buildCropPlan(oneShot, salientTracks, W, H, DEFAULT_PLAN_OPTIONS, null);
+    expect(flagOff!.shots).toEqual([{ start: 0, end: 30, layout: "center", x: 656 }]);
+    expect(flagOff!.shots[0]).not.toHaveProperty("saliencyShadow");
   });
 });

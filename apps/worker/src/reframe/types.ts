@@ -48,6 +48,23 @@ export interface Saliency {
   spreadFrac: number;
 }
 
+/**
+ * SHADOW TELEMETRY ONLY (spec 2026-08-24-camera-visual-anchoring, mechanism
+ * B). What an ACTIVE saliency anchor would have computed for a faceless
+ * (center-fallback) shot OUTSIDE music mode - recorded, never applied. The
+ * shot's real `x` stays plain `centerX` regardless of this field's presence;
+ * see `ShotLayout`'s "center" variant and `plan.ts`'s `saliencyShadowFor`.
+ * `centroidX`/`spreadFrac` are the raw sidecar `Saliency` values for this
+ * shot; `suggestedX` is what `centerXForShot` would have returned;
+ * `deltaPx` is `suggestedX - centerX` (source px, can be negative).
+ */
+export interface SaliencyShadow {
+  centroidX: number;
+  spreadFrac: number;
+  suggestedX: number;
+  deltaPx: number;
+}
+
 export interface ShotTracks {
   shotIndex: number;
   tracks: FaceTrack[];
@@ -70,6 +87,13 @@ export type ShotLayout =
        *  gate the punch-in without re-deriving it. Absent off the music path
        *  and on any shot with no saliency data. */
       spreadFrac?: number;
+      /** SHADOW TELEMETRY ONLY (spec 2026-08-24-camera-visual-anchoring,
+       *  mechanism B). Present only when REFRAME_SALIENCY_SHADOW=on AND
+       *  musicMode is false AND the sidecar had saliency data for this shot.
+       *  Never applied to `x` above - see `SaliencyShadow`. Absent on every
+       *  other shot, including every music-mode shot (which already applies
+       *  saliency actively via `spreadFrac`/`x` instead). */
+      saliencyShadow?: SaliencyShadow;
     }
   | {
       start: number;

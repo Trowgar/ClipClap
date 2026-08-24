@@ -107,6 +107,32 @@ describe("buildFiltergraph", () => {
       "enable='gte(t,0.00)*lt(t,10.00)+gte(t,20.00)*lt(t,30.00)'"
     );
   });
+
+  // spec 2026-08-24-camera-visual-anchoring, mechanism B: renderer safety net.
+  // `saliencyShadow` is a plan.ts-only telemetry field - buildFiltergraph must
+  // ignore it exactly like it ignores any other unknown key, because this
+  // field ships on the SAME cropPlan object render.ts persists to
+  // Clip.cropPlan and compiles today. Proven by construction (buildFiltergraph
+  // only ever reads `x`/`layout`/`start`/`end`/`spreadFrac`/`xs`/tile fields
+  // by name, never spreads a shot into the graph string), and pinned here so
+  // a future change to this file cannot regress it silently.
+  it("a saliencyShadow field on a center shot changes nothing in the compiled graph", () => {
+    const withShadow = buildFiltergraph(
+      base([
+        {
+          start: 0,
+          end: 30,
+          layout: "center",
+          x: 656,
+          saliencyShadow: { centroidX: 1000, spreadFrac: 0.2, suggestedX: 696, deltaPx: 40 },
+        } as CropPlan["shots"][number],
+      ])
+    );
+    const withoutShadow = buildFiltergraph(
+      base([{ start: 0, end: 30, layout: "center", x: 656 }])
+    );
+    expect(withShadow).toEqual(withoutShadow);
+  });
 });
 
 describe("stream filtergraph", () => {

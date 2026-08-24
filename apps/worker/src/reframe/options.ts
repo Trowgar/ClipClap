@@ -78,6 +78,20 @@ export interface PlanOptions {
    *  except render.ts's music branch - leaves this unset, and buildCropPlan
    *  then never reads a shot's saliency at all: byte-identical to v1. */
   musicMode?: boolean;
+  /** SHADOW TELEMETRY ONLY (spec 2026-08-24-camera-visual-anchoring,
+   *  mechanism B): threaded from render.ts's cfg through
+   *  ReframeConfig.saliencyShadow, mirroring how `musicMode` is threaded.
+   *  Never changes a shot's geometry - gates only whether a faceless
+   *  (center-fallback) shot OUTSIDE music mode carries an extra
+   *  `saliencyShadow` field recording what an ACTIVE anchor would have
+   *  computed for it. See `plan.ts`'s `saliencyShadowFor`.
+   *
+   *  Optional and defaults to false for the same reason as `musicMode`: a
+   *  knob that did not exist when the eval scripts' hand-built PlanOptions
+   *  literals were written must not force them to be edited. Every caller
+   *  that leaves this unset gets a cropPlan with no `saliencyShadow` field
+   *  anywhere: byte-identical to today. */
+  saliencyShadow?: boolean;
 }
 
 /** Default for `PlanOptions.streamFaceCeiling` and `ReframeConfig.streamFaceCeiling`
@@ -95,4 +109,5 @@ export const DEFAULT_PLAN_OPTIONS: Readonly<PlanOptions> = Object.freeze({
   motion: false,
   camera: DEFAULT_CAMERA,
   musicMode: false,
+  saliencyShadow: false,
 });

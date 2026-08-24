@@ -28,6 +28,7 @@ describe("loadReframeConfig", () => {
       motion: false,
       cutRecovery: false,
       tailKeep: false,
+      saliencyShadow: false,
       camera: DEFAULT_CAMERA,
     });
   });
@@ -48,6 +49,17 @@ describe("loadReframeConfig", () => {
     expect(loadReframeConfig({ REFRAME_TAIL_KEEP: "true" }).tailKeep).toBe(false);
     expect(loadReframeConfig({ REFRAME_TAIL_KEEP: "1" }).tailKeep).toBe(false);
     expect(loadReframeConfig({}).tailKeep).toBe(false);
+  });
+
+  // spec 2026-08-24-camera-visual-anchoring mechanism B (shadow telemetry).
+  // Same rule as REFRAME_STREAM/REFRAME_CUT_RECOVERY/REFRAME_TAIL_KEEP: a
+  // stray truthy value must not turn on telemetry nobody asked for.
+  it("turns saliency shadow telemetry on only for the exact literal 'on'", () => {
+    expect(loadReframeConfig({ REFRAME_SALIENCY_SHADOW: "on" }).saliencyShadow).toBe(true);
+    expect(loadReframeConfig({ REFRAME_SALIENCY_SHADOW: "ON" }).saliencyShadow).toBe(false);
+    expect(loadReframeConfig({ REFRAME_SALIENCY_SHADOW: "true" }).saliencyShadow).toBe(false);
+    expect(loadReframeConfig({ REFRAME_SALIENCY_SHADOW: "1" }).saliencyShadow).toBe(false);
+    expect(loadReframeConfig({}).saliencyShadow).toBe(false);
   });
 
   it("reads env overrides and only accepts the literal 'faces' engine", () => {

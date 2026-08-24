@@ -6,6 +6,7 @@ import type {
   Keyframe,
   PathSample,
   Saliency,
+  SaliencyShadow,
   Shot,
   ShotLayout,
   ShotTracks,
@@ -150,6 +151,35 @@ export function centerXForShot(
 ): number {
   if (!saliency) return centerX;
   return evenClamp(saliency.x - cropW / 2, cropW, sourceWidth);
+}
+
+/**
+ * SHADOW TELEMETRY ONLY (spec 2026-08-24-camera-visual-anchoring, mechanism
+ * B). Packages what `centerXForShot` WOULD have returned for a faceless
+ * shot, without ever touching the shot's real `x`. Null exactly when
+ * `saliency` is null - no data, no shadow, mirroring `centerXForShot`'s own
+ * fallback so "shadow present" and "an active anchor would have moved the
+ * window" are the same fact.
+ *
+ * Deliberately calls `centerXForShot` rather than re-deriving its arithmetic:
+ * this function's whole job is "what would the ACTIVE anchor have said",
+ * which only means something if it is asking the same question the active
+ * anchor asks.
+ */
+export function saliencyShadowFor(
+  saliency: Saliency | null | undefined,
+  centerX: number,
+  cropW: number,
+  sourceWidth: number
+): SaliencyShadow | null {
+  if (!saliency) return null;
+  const suggestedX = centerXForShot(saliency, centerX, cropW, sourceWidth);
+  return {
+    centroidX: saliency.x,
+    spreadFrac: saliency.spreadFrac,
+    suggestedX,
+    deltaPx: suggestedX - centerX,
+  };
 }
 
 /**
@@ -1029,12 +1059,25 @@ export function buildCropPlan(
       const x = opts.musicMode
         ? centerXForShot(saliencyByIndex.get(i), centerX, cropW, sourceWidth)
         : centerX;
+      // SHADOW TELEMETRY ONLY (spec 2026-08-24-camera-visual-anchoring,
+      // mechanism B). Off the music path (musicMode already applies saliency
+      // actively above, so the shadow must never fire there too - it would
+      // record what the ACTIVE anchor "would have done" while it is already
+      // doing it) and only when the flag is on: what an active anchor WOULD
+      // suggest for this shot, recorded but never applied to `x` above. Null
+      // whenever `saliencyShadowFor` has no data, which then makes the
+      // spread below a no-op exactly like `shotSpreadFrac` does.
+      const saliencyShadow =
+        opts.saliencyShadow && !opts.musicMode
+          ? saliencyShadowFor(saliencyByIndex.get(i), centerX, cropW, sourceWidth)
+          : null;
       return {
         start: shot.start,
         end: shot.end,
         layout: "center",
         x,
         ...(shotSpreadFrac !== undefined ? { spreadFrac: shotSpreadFrac } : {}),
+        ...(saliencyShadow ? { saliencyShadow } : {}),
       };
     }
     // Everyone the window must not bisect: every surviving face this shot has
