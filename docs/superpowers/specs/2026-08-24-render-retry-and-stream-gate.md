@@ -1,4 +1,14 @@
-# Render-retry idempotency + stream-layout false-positive gate (2026-08-24)
+# Render-retry idempotency + stream-layout false-positive gate (2026-08-24, BOTH SHIPPED)
+
+SHIPPED same day: fix 1 commit 4b0fb99 (no flag, live on next render);
+fix 2 commit 47d4354, REFRAME_STREAM_COVERAGE_GATE=on in .env, worker-render
+recreated 2026-08-24 ~22:54 UTC. Acceptance for the gate ran on real data
+via the autopsy harness: majd118 stream->normal_face (zero stream shots),
+amine12 stream->small_face, Ke4ts (true stream) byte-identical, flag off
+byte-identical; demotions stamped in cropPlan.profile
+(reason=stream_coverage_gated + gatedCoverage). The retry fix hardening:
+cleanup where-clause also excludes telegramFileId-carrying rows, so the
+narrow stall-race cannot soft-delete delivered clips.
 
 Two defects from the 49-clip survey of real traffic 2026-08-19..23, owner
 approved "давай делаем" 2026-08-24.
