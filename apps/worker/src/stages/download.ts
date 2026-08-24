@@ -59,6 +59,12 @@ export async function runDownloadStage(
 ): Promise<void> {
   let localPath: string | undefined;
   let tempNormalizedPath: string | undefined;
+  // The pre-trim download, kept only so the finally can delete it. A free
+  // account whose allowance is shorter than its source has the file cut in
+  // recheckSourceDuration, and the cut is written beside the original rather
+  // than over it - so without this the untrimmed file would be left on disk for
+  // nothing to collect.
+  let tempUntrimmedPath: string | undefined;
 
   try {
     await jobStepService.startJobStep(payload.jobId, "DOWNLOAD", payload);
@@ -80,11 +86,19 @@ export async function runDownloadStage(
     // happens to a downloaded file: a job that is about to be refused should
     // not first be copied into object storage, normalized by ffmpeg and left
     // for the retention sweep to collect.
-    await recheckSourceDuration({
+    const settledPath = await recheckSourceDuration({
       jobId: payload.jobId,
       userId: payload.userId,
       localPath,
     });
+    // Everything downstream - the R2 copy, normalize, transcribe - has to work
+    // on the file the ledger was settled against, not the one that was
+    // downloaded. They are the same path unless the source was trimmed to fit a
+    // free allowance.
+    if (settledPath !== localPath) {
+      tempUntrimmedPath = localPath;
+      localPath = settledPath;
+    }
 
     const sourceArtifactKey = buildSourceArtifactKey(payload.userId, payload.jobId);
     await uploadFile(sourceArtifactKey, localPath, "video/mp4");
@@ -189,6 +203,7 @@ export async function runDownloadStage(
   } finally {
     if (localPath) await unlink(localPath).catch(() => {});
     if (tempNormalizedPath) await unlink(tempNormalizedPath).catch(() => {});
+    if (tempUntrimmedPath) await unlink(tempUntrimmedPath).catch(() => {});
   }
 }
 

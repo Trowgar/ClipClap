@@ -22,7 +22,7 @@ const BOT = "https://t.me/clipclapio_bot";
 export const metadata: Metadata = {
   title: "Opus Clip alternative: an honest comparison with ClipClap",
   description:
-    "A side-by-side comparison of ClipClap and Opus Clip, checked on their own pricing pages. ClipClap starts at $3 a week for 75 source minutes with 60 minutes free; Opus Clip's Starter is $15 a month and its free plan watermarks clips. Includes what ClipClap does worse.",
+    "A side-by-side comparison of ClipClap and Opus Clip, checked on their own pricing pages. ClipClap starts at $3 a week for 75 source minutes with 15 minutes free; Opus Clip's Starter is $15 a month and its free plan watermarks clips. Includes what ClipClap does worse.",
   alternates: { canonical: "/opus-clip-alternative" },
   openGraph: {
     type: "article",
@@ -36,7 +36,7 @@ export const metadata: Metadata = {
 const faq = [
   {
     q: "Is ClipClap a free Opus Clip alternative?",
-    a: "ClipClap gives 60 minutes of source video free, once per account, with no card required and no watermark on the clips. It is not free forever - after that allowance a plan starts at $3 a week for 75 source minutes. Opus Clip has a free plan that renews, but its free exports carry a watermark and expire after three days.",
+    a: "ClipClap gives 15 minutes of source video free, once per account, with no card required and no watermark on the clips. It is not free forever - after that allowance a plan starts at $3 a week for 75 source minutes. Opus Clip has a free plan that renews, but its free exports carry a watermark and expire after three days.",
   },
   {
     q: "What does ClipClap cost compared with Opus Clip?",
@@ -112,7 +112,7 @@ export default function OpusClipAlternativePage() {
             <strong className="text-white">ClipClap costs $3 a week for 75 minutes of source video</strong>, or
             $9 a month for 270 minutes, $29 a month for 1000, and $89 a month for 3500.
             Before paying anything you get{" "}
-            <strong className="text-white">60 minutes of source video free, once, with no card and no watermark</strong>.
+            <strong className="text-white">15 minutes of source video free, once, with no card and no watermark</strong>.
             The whole product also runs inside a Telegram bot, which is unusual in this
             category.
           </p>
@@ -195,7 +195,7 @@ export default function OpusClipAlternativePage() {
           </p>
           <p>
             ClipClap is also young. It has no public review footprint to check, which is
-            a real reason to spend the free 60 minutes on your own footage before paying
+            a real reason to spend the free 15 minutes on your own footage before paying
             for anything. And YouTube links are the one input that sometimes fails,
             because they are fetched through a proxy - uploading the file directly, or
             using a Twitch or TikTok link, avoids it entirely.
@@ -218,7 +218,7 @@ export default function OpusClipAlternativePage() {
             Russian, Ukrainian, Spanish, Portuguese, Indonesian and Arabic.
           </p>
           <p>
-            The third is that the free 60 minutes produce clips with no watermark, so what
+            The third is that the free 15 minutes produce clips with no watermark, so what
             you get during the trial is what you would actually post.
           </p>
         </section>
@@ -239,7 +239,7 @@ export default function OpusClipAlternativePage() {
 
         <section className="mt-12 rounded-xl border border-white/10 p-6">
           <p className="text-[15px] text-neutral-300">
-            Try it on your own footage before deciding - 60 minutes of source video, no
+            Try it on your own footage before deciding - 15 minutes of source video, no
             card, no watermark.
           </p>
           <div className="mt-4 flex flex-wrap items-center gap-4">

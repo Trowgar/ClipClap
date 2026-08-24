@@ -28,7 +28,7 @@ const id: Dict = {
   welcomeBack: "Senang kamu kembali! Kirim video dan aku buatkan klipnya.",
   menuTitle: "Menu utama",
   welcomeNeedsPlan:
-    "Kirim video dan aku buatkan klipnya. Akun baru dapat satu percobaan gratis: tanpa kartu, sampai 60 menit video.",
+    "Kirim video dan aku buatkan klipnya. Akun baru dapat satu percobaan gratis: tanpa kartu, sampai 15 menit video.",
   // Appended by the handler to the onboarding screens, and only while
   // freeBudgetStatus() reports the month's ceiling closed. See the note on
   // freeRunsPausedNote in types.ts for why the promise above is left intact
@@ -65,6 +65,8 @@ const id: Dict = {
   fileTooLarge: (url) =>
     `Video ini lebih dari 20 MB, batas Bot API Telegram. Untuk sekarang, unggah video panjang lewat situs: ${url}/dashboard. Kami sedang berusaha menghapus batas ini.`,
   processingFailed: (code) => (code && idFailure[code]) || idFailureGeneric,
+  freeTrimNote: (clippedMinutes, sentMinutes) =>
+    `Menit gratismu menutupi ${clippedMinutes} menit pertama dari ${sentMinutes} menit yang kamu kirim, jadi klip di atas berasal dari bagian itu saja. Jatah gratismu habis di situ. Untuk memproses sisanya, buka 💳 Paket.`,
   done: (n) => `Selesai. ${n} klip sudah siap.`,
   donePartial: (sent, total) =>
     `Terkirim ${sent} dari ${total} klip: sisanya tidak lolos. Tekan tombol di bawah, nanti aku coba lagi.`,

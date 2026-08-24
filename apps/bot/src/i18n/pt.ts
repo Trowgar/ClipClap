@@ -31,7 +31,7 @@ const pt: Dict = {
   welcomeBack: "Bom te ver de novo! Manda um vídeo que eu gero os clipes.",
   menuTitle: "Menu principal",
   welcomeNeedsPlan:
-    "Manda um vídeo que eu gero os clipes. Conta nova ganha um teste grátis: sem cartão, até 60 minutos de vídeo.",
+    "Manda um vídeo que eu gero os clipes. Conta nova ganha um teste grátis: sem cartão, até 15 minutos de vídeo.",
   // Appended by the handler to the onboarding screens, and only while
   // freeBudgetStatus() reports the month's ceiling closed. See the note on
   // freeRunsPausedNote in types.ts for why the promise above is left intact
@@ -68,6 +68,8 @@ const pt: Dict = {
   fileTooLarge: (url) =>
     `Este vídeo passa de 20 MB, o limite da Bot API do Telegram. Por enquanto, envie vídeos longos pelo site: ${url}/dashboard. Estamos trabalhando para remover esse limite em breve.`,
   processingFailed: (code) => (code && ptFailure[code]) || ptFailureGeneric,
+  freeTrimNote: (clippedMinutes, sentMinutes) =>
+    `Seus minutos grátis cobriram os primeiros ${clippedMinutes} dos ${sentMinutes} minutos que você mandou, então os clipes acima vêm dessa parte do vídeo. Com isso seu teste grátis acabou. Para processar o resto, abra 💳 Planos.`,
   done: (n) =>
     `Pronto. ${n} ${pluralPt(n, "clipe", "clipes")} ${n === 1 ? "está pronto" : "estão prontos"}.`,
   donePartial: (sent, total) =>

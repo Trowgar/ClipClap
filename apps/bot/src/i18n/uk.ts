@@ -37,7 +37,7 @@ const uk: Dict = {
   welcomeBack: "Радий бачити знову! Надішли відео, і я зроблю кліпи.",
   menuTitle: "Головне меню",
   welcomeNeedsPlan:
-    "Надішли відео, і я зроблю кліпи. Новий акаунт отримує один безкоштовний запуск: без картки, до 60 хвилин відео.",
+    "Надішли відео, і я зроблю кліпи. Новий акаунт отримує один безкоштовний запуск: без картки, до 15 хвилин відео.",
   // Appended by the handler to the onboarding screens, and only while
   // freeBudgetStatus() reports the month's ceiling closed. See the note on
   // freeRunsPausedNote in types.ts for why the promise above is left intact
@@ -74,6 +74,8 @@ const uk: Dict = {
   fileTooLarge: (url) =>
     `Це відео більше за 20 МБ - це ліміт Bot API Telegram. Поки що завантажуй довгі відео на сайті: ${url}/dashboard. Ми працюємо над тим, щоб зняти це обмеження.`,
   processingFailed: (code) => (code && ukFailure[code]) || ukFailureGeneric,
+  freeTrimNote: (clippedMinutes, sentMinutes) =>
+    `Безкоштовних хвилин вистачило на перші ${clippedMinutes} із ${sentMinutes} хвилин, які ти надіслав - кліпи вище зроблено саме з цієї частини відео. На цьому безкоштовний ліміт вичерпано. Щоб обробити решту, відкрий 💳 Тарифи.`,
   done: (n) =>
     `Готово. ${n} ${pluralizeUk(n, "кліп", "кліпи", "кліпів")} ${pluralizeUk(n, "готовий", "готові", "готові")}.`,
   donePartial: (sent, total) =>

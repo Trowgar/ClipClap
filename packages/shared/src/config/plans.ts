@@ -97,21 +97,46 @@ export const PLAN_LIMITS: Record<
  *  Denominated in SECONDS OF SOURCE, because that is what the money is
  *  denominated in: 0.012 USD per source minute plus 0.030 per run, fitted over
  *  every prod job that carries cost telemetry (see estimatedUsdPerRun for the
- *  query and its output). A full 3600-second allowance spent in one run
- *  reserves 0.75 USD, and 0.03 more for each extra run it is split across.
+ *  query and its output). A full 900-second allowance spent in one run
+ *  reserves 0.21 USD, and 0.03 more for each extra run it is split across.
  *
- *  Sixty minutes rather than thirty: the audience clips 3-8 hour VODs, and a
- *  half-hour ceiling forces them to hand-trim a segment first, which is the
- *  exact work they came here to avoid. Sixty rather than a hundred and twenty:
- *  Starter gives 75 minutes PER WEEK for 3 USD, and a lifetime free allowance
- *  has to stay clearly under one week of the entry tier or it competes with the
- *  cheapest paid plan. That constraint, not cost, is what caps generosity.
+ *  The argument that used to sit here - that a clipper with a 3-8 hour VOD
+ *  needs sixty minutes or they must hand-trim first - was reasoning about an
+ *  audience we do not have. Measured on 2026-08-23 the median free source is
+ *  229 seconds; the people actually using this send short videos, not VODs.
+ *  The per-source ceiling below still permits a long one on its own terms; the
+ *  allowance is not what makes long footage workable, a plan is.
+ *
+ *  The remaining ceiling on generosity is the entry tier, not cost: Starter
+ *  gives 75 minutes PER WEEK for 3 USD, and a lifetime free allowance that
+ *  approaches one paid week competes with the cheapest plan instead of selling
+ *  it. Sixty minutes was four fifths of that week.
  *
  *  `zeroClipRefunds` is the backstop that keeps the minute accounting honest.
  *  A run that transcribes but finds nothing has cost us money while showing the
  *  user nothing, so the first one is forgiven and later ones are not. */
 export const FREE_TIER = {
-  lifetimeSeconds: 3600,
+  /** 900, not 3600, since 2026-08-23. The old number was not generous, it was
+   *  inert: in the whole history of the product NOBODY reached it. Measured on
+   *  the ledger the day it was cut - 42 accounts have ever spent a free second,
+   *  the largest balance ever consumed was 3,482 of 3,600, and the count that
+   *  reached the wall was zero. A limit nobody meets never asks anyone to buy,
+   *  so the trial had produced exactly no purchase decisions.
+   *
+   *  Fifteen minutes is chosen off that same distribution rather than picked:
+   *  users at >=5min 19, >=10min 16, >=15min 16, >=20min 11, >=30min 8,
+   *  >=45min 4, >=60min 0. Between ten and fifteen minutes there is no one at
+   *  all, so 15 walls the same 16 accounts that 10 would while leaving five
+   *  more minutes on the table - the most generous number that costs nothing.
+   *
+   *  It does not move the wall in front of the value, which was the real risk.
+   *  The median free source is 229 seconds and the 75th percentile is 1,144, so
+   *  fifteen minutes still admits 54 of the 83 free jobs ever run at full
+   *  length and lets a median user clip about four videos before deciding.
+   *
+   *  The one-week constraint below now holds with room to spare: 15 against
+   *  Starter's 75 per week is a fifth, where 60 was four fifths. */
+  lifetimeSeconds: 900,
   zeroClipRefunds: 1,
   /** The part of a free run's cash cost that scales with length: 0.0060 for
    *  whisper-1, which is billed per minute of audio and is exact (every prod

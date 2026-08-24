@@ -325,3 +325,91 @@ export function probeLocalFile(path: string): Promise<ProbeResult> {
     );
   });
 }
+
+export type TrimResult =
+  | { ok: true; path: string; durationSec: number }
+  | { ok: false; reason: "trim-unavailable" | "trim-error"; error?: string };
+
+/**
+ * Cuts the first `seconds` of a local file into a new file beside it.
+ *
+ * WHY THIS EXISTS. A free account whose remaining allowance is shorter than the
+ * video it just sent used to be refused outright, and the refusal was measured
+ * to be the wrong trade: the median FIRST source on this product is 966 seconds
+ * against a 900-second allowance, so refusing turns away 23 of 42 accounts
+ * before a single clip exists. Cutting instead delivers real clips and lets the
+ * allowance run out while the user is holding them, which is the only moment
+ * this product has ever had that asks somebody to decide.
+ *
+ * STREAM COPY, NEVER RE-ENCODE. `-c copy` is seconds on a two-hour source; a
+ * re-encode would be minutes of CPU on the one path that exists to save money.
+ * The cost is that the cut lands on a packet boundary rather than exactly on
+ * the mark, so the output is off by up to a group of pictures IN EITHER
+ * DIRECTION - measured at +0.104s on a 12-second cut of a 40-second h264/aac
+ * file, not the "always a little shorter" that reasoning about keyframes
+ * suggests. Which is why the caller charges the probed duration of the OUTPUT
+ * rather than the number it asked for: the ledger records what was really
+ * processed, and a fraction of a second either way cannot accumulate into a
+ * free run nobody paid for.
+ *
+ * NEVER THROWS. Every failure resolves to ok:false and the caller falls back to
+ * the refusal it would have given anyway. A trim that cannot be made must not
+ * turn a "your free minutes are spent" into a crashed job.
+ */
+export function trimLocalFile(
+  path: string,
+  seconds: number
+): Promise<TrimResult> {
+  const outputPath = `${path}.trim.mp4`;
+  return new Promise((resolve) => {
+    execFile(
+      "ffmpeg",
+      [
+        "-v",
+        "error",
+        "-y",
+        "-i",
+        path,
+        "-t",
+        String(seconds),
+        "-c",
+        "copy",
+        // A source whose first packets carry negative timestamps (common in
+        // transport streams pulled from a live edge) otherwise produces an
+        // output the downstream normalize step reads as starting mid-air.
+        "-avoid_negative_ts",
+        "make_zero",
+        outputPath,
+      ],
+      { timeout: 120_000, maxBuffer: PROBE_MAX_BUFFER_BYTES },
+      async (err, _stdout, stderr) => {
+        if (err) {
+          if (isMissingBinary(err)) {
+            console.error(
+              "[source-probe] ffmpeg is not on PATH in this container; " +
+                "free-allowance trimming is unavailable"
+            );
+            resolve({ ok: false, reason: "trim-unavailable" });
+            return;
+          }
+          resolve({
+            ok: false,
+            reason: "trim-error",
+            error: lastErrorLine(stderr) ?? lastErrorLine(err.message),
+          });
+          return;
+        }
+        // The output is measured rather than assumed, for the keyframe reason
+        // above and because a `-c copy` that "succeeds" on an exotic container
+        // can still write a file nothing downstream can read. A probe failure
+        // here is a failed trim, not a zero-second video.
+        const probe = await probeLocalFile(outputPath);
+        if (!probe.ok) {
+          resolve({ ok: false, reason: "trim-error", error: probe.reason });
+          return;
+        }
+        resolve({ ok: true, path: outputPath, durationSec: probe.durationSec });
+      }
+    );
+  });
+}

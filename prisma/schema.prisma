@@ -464,6 +464,16 @@ model Job {
   status                        JobStatus @default(PENDING)
   error                         String?
   sourceDurationSec             Int?
+  /// The duration of the source BEFORE a free-allowance trim, in seconds, and
+  /// null on every job that was not trimmed - which is every paid job and most
+  /// free ones.
+  ///
+  /// It exists because sourceDurationSec is overwritten with the trimmed length
+  /// (deliberately: the ledger, the cost telemetry and the analyzer must all
+  /// agree on what was actually processed), and once that write lands nothing
+  /// else remembers that the user sent more than we clipped. The bot needs it
+  /// to say so, and it is the only way to count how often the trim fires.
+  sourceTrimmedFromSec          Int?
   processingStartedAt           DateTime?
   processingEndedAt             DateTime?
   processingMs                  Int?

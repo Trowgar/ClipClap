@@ -1,5 +1,5 @@
 import { prisma } from "../lib/prisma";
-import { getPlanLimits, FREE_TIER } from "../config/plans";
+import { getPlanLimits, FREE_TIER, SOURCE_FLOOR } from "../config/plans";
 import {
   getSubscriptionState,
   type SubscriptionState,
@@ -350,7 +350,26 @@ async function checkFreeTrial(
   // Task 12 will make submissions carry a real duration, and this clause still
   // stays: an upload reserves provisionally and a probe can fail, so the gate
   // must not depend on its caller having measured anything.
-  if (trial.exhausted || trial.remainingSeconds < neededSeconds) {
+  // NOT ENOUGH LEFT FOR THE WHOLE VIDEO IS NO LONGER A REFUSAL.
+  //
+  // It was, until 2026-08-24, and the measurement that ended it is this: the
+  // median FIRST source sent to this product is 966 seconds against a
+  // 900-second allowance, so `remainingSeconds < neededSeconds` turned away 23
+  // of 42 accounts before they had seen a single clip. What happens instead is
+  // in stages/source-recheck.ts - the source is cut to what the allowance
+  // covers, the user gets real clips, and the balance lands on zero while they
+  // are holding them.
+  //
+  // So the question here is no longer "does it fit" but "is there enough left
+  // to make anything at all", and SOURCE_FLOOR.minDurationSec is the honest
+  // line: below it this source would have been refused for its own length even
+  // on a full allowance, and cutting a video down to less than the shortest
+  // source we accept is a worse answer than saying the minutes are spent.
+  //
+  // `trial.exhausted` still leads, for the reason above it: neededSeconds is 0
+  // on any unprobed submission, and the flag is what refuses a spent account
+  // that the arithmetic would wave through.
+  if (trial.exhausted || trial.remainingSeconds < SOURCE_FLOOR.minDurationSec) {
     return {
       allowed: false,
       code: "FREE_EXHAUSTED",

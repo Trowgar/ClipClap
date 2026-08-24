@@ -49,10 +49,15 @@ describe("Plan Limits", () => {
     expect(limits.retentionDays).toBe(3);
     expect(limits.concurrentJobsLimit).toBe(1);
     expect(limits.priorityQueue).toBe(false);
-    // 60 since 2026-08-18: at the 60s floor and 3600 lifetime seconds it is
-    // the most jobs a free account can EVER create, so the day cap can no
-    // longer bind before the ledger does (it had refused only good accounts).
-    expect(limits.maxJobsPerDay).toBe(
+    // 60 since 2026-08-18, and what matters is the RELATION, not the number:
+    // at the 60s floor, lifetimeSeconds / minDurationSec is the most jobs a
+    // free account can EVER create, so the day cap must sit at or above it and
+    // therefore never bind before the ledger does (it had refused only good
+    // accounts). It was an equality until 2026-08-24, when the allowance was
+    // cut to 900s and the cap was deliberately left where it was - a cap with
+    // slack is the point, and an equality would have forced it down with the
+    // allowance for no reason.
+    expect(limits.maxJobsPerDay).toBeGreaterThanOrEqual(
       FREE_TIER.lifetimeSeconds / SOURCE_FLOOR.minDurationSec
     );
   });
@@ -115,7 +120,10 @@ describe("Plan Limits", () => {
 
   describe("free tier", () => {
     it("is a lifetime allowance measured in seconds of source", () => {
-      expect(FREE_TIER.lifetimeSeconds).toBe(3600);
+      // 900 since 2026-08-24. Nobody had ever reached 3600 - the largest
+      // balance ever consumed was 3,482 of it, and the count at the wall was
+      // zero - so the allowance had never once asked anybody to decide.
+      expect(FREE_TIER.lifetimeSeconds).toBe(900);
     });
 
     // The whole design rests on this: a free allowance that renews is farmable
@@ -191,7 +199,8 @@ describe("Plan Limits", () => {
     // bounding the free tier.
     it("puts a whole free allowance well under a dollar", () => {
       const worstCaseUsd = estimatedFreeCostUsd(FREE_TIER.lifetimeSeconds);
-      expect(worstCaseUsd).toBeCloseTo(0.75, 5);
+      // 0.21 since the allowance was cut to 900s; it was 0.75 at 3600.
+      expect(worstCaseUsd).toBeCloseTo(0.21, 5);
       expect(worstCaseUsd).toBeLessThan(1);
     });
 
@@ -219,9 +228,21 @@ describe("Plan Limits", () => {
       expect(FREE_TIER.lifetimeSeconds / 60).toBeLessThan(starterWeekly);
     });
 
-    it("caps a single free source at the whole allowance, not more", () => {
-      expect(getPlanLimits("NONE").maxSourceDurationMinutes).toBe(
-        FREE_TIER.lifetimeSeconds / 60
+    // DELIBERATELY NOT AN EQUALITY, since 2026-08-24. The per-source cap is
+    // 60 minutes against a 15-minute allowance, and that gap is the design: a
+    // source longer than what is left is no longer refused, it is CUT to fit in
+    // stages/source-recheck.ts, so the cap stops being "what you may spend" and
+    // becomes only "how long a file I will take at all". Forcing them equal
+    // again would refuse 23 of 42 accounts on their first submission - the
+    // median first source measured 966 seconds - which is exactly what the trim
+    // exists to stop. What still has to hold is that the cap is not a way to
+    // get MORE free processing than the allowance grants, and it is not: the
+    // ledger is what bounds the spend, not this number.
+    it("does not let the per-source cap outspend the whole allowance", () => {
+      const capSeconds = getPlanLimits("NONE").maxSourceDurationMinutes * 60;
+      expect(capSeconds).toBeGreaterThan(FREE_TIER.lifetimeSeconds);
+      expect(estimatedFreeCostUsd(FREE_TIER.lifetimeSeconds)).toBeLessThan(
+        estimatedFreeCostUsd(capSeconds)
       );
     });
 

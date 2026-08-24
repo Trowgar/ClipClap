@@ -77,6 +77,59 @@ export async function freeBalanceSeconds(userId: string): Promise<number> {
 }
 
 /**
+ * What this job may actually spend: the allowance with its OWN reservation
+ * taken back out, and NOT clamped at zero.
+ *
+ * WHY IT IS NOT freeBalanceSeconds(userId) + charge.seconds. That expression was
+ * correct only while the submit gate guaranteed the reservation could never
+ * exceed the balance. Since 2026-08-24 it does not: a source longer than what is
+ * left is admitted on purpose so the download stage can trim it to fit, and its
+ * reservation is the full metadata duration. freeBalanceSeconds clamps at zero,
+ * so an over-reservation of 1,800 seconds against 900 left reads back as
+ * 0 + 1,800 = 1,800 - the overrun vanishes into the clamp and the job is judged
+ * to fit exactly the length it should have been cut down to. It would have run
+ * the whole video free.
+ *
+ * Computed from the ledger totals instead, with this job's charge subtracted
+ * before the clamp, so the answer is the truth whatever was reserved.
+ *
+ * Clamped at zero at the END, once. A negative result means the account is
+ * already overspent by earlier jobs, and the caller's question - "how much of
+ * this source may I process?" - has the answer "none" in that case, not a
+ * negative length.
+ */
+export async function freeHeadroomSeconds(
+  userId: string,
+  jobId: string
+): Promise<number> {
+  const [rows, ownCharge] = await Promise.all([
+    prisma.freeUsage.groupBy({
+      by: ["kind"],
+      where: { userId },
+      _sum: { seconds: true },
+    }),
+    prisma.freeUsage.findFirst({
+      where: { userId, jobId, kind: "CHARGE" },
+      select: { seconds: true },
+    }),
+  ]);
+
+  // Same shape and the same reason as freeBalanceSeconds: Postgres omits a kind
+  // with no rows, so both initialisers carry the common case.
+  let charged = 0;
+  let refunded = 0;
+  for (const row of rows) {
+    if (row.kind === "CHARGE") charged = row._sum.seconds ?? 0;
+    if (row.kind === "REFUND") refunded = row._sum.seconds ?? 0;
+  }
+
+  return Math.max(
+    0,
+    FREE_TIER.lifetimeSeconds - (charged - (ownCharge?.seconds ?? 0)) + refunded
+  );
+}
+
+/**
  * Reserves seconds before the job is enqueued.
  *
  * Reservation, not post-hoc charging: ten videos submitted at once would each

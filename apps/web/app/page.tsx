@@ -581,7 +581,7 @@ export default function LandingPage() {
           </motion.div>
 
           <p className="mt-3.5 text-xs text-neutral-400">
-            First 60 minutes of source video are free - no card needed.
+            First 15 minutes of source video are free - no card needed.
           </p>
         </div>
 
@@ -850,7 +850,7 @@ export default function LandingPage() {
                 <p className="text-sm leading-relaxed text-neutral-400">
                   Your first{" "}
                   <span className="font-medium text-white">
-                    60 minutes of source video
+                    15 minutes of source video
                   </span>{" "}
                   are free - one-time, on a new account.
                 </p>
@@ -990,6 +990,16 @@ export default function LandingPage() {
             <Logo className="h-4 opacity-60" />
           </div>
           <div className="flex items-center gap-6">
+            {/* /opus-clip-alternative was reachable only through sitemap.xml until 2026-08-24 -
+                the homepage's only internal links were / and /login, so the one commercial-intent
+                page on the site received no internal links at all. Every marketing page added
+                later belongs in this row for the same reason. */}
+            <Link
+              href="/opus-clip-alternative"
+              className="text-xs text-neutral-600 hover:text-neutral-400 transition-colors"
+            >
+              Opus Clip alternative
+            </Link>
             <a
               href="https://t.me/clipclapio_bot"
               target="_blank"
