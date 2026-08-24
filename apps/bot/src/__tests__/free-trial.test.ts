@@ -492,29 +492,23 @@ describe("what the create screen may promise about the free run", () => {
   });
 
   it("offers what is LEFT, not the per-source cap", async () => {
-    ledger(5 * 60);
+    ledger(15 * 60);
 
-    await expect(freeRunCapMinutes({ id: "u1" })).resolves.toBe(10);
+    await expect(freeRunCapMinutes({ id: "u1" })).resolves.toBe(25);
   });
 
-  // The per-source cap still applies on top, and since the allowance was cut to
-  // 900s on 2026-08-24 it is the allowance that binds on EVERY account - even a
-  // fresh one, which now has 15 minutes against a 60-minute per-source ceiling.
-  // The cap has not stopped mattering: it is what a job is refused by outright,
-  // above an hour, where anything shorter is cut down instead of refused. What
-  // this asserts is that the screen never promises more than either allows.
+  // The per-source cap still applies on top: a fresh account has 60 minutes of
+  // allowance AND a 60-minute ceiling on one video, and neither may be exceeded.
   it("never offers more than one source may be", async () => {
     ledger(0);
 
-    const offered = await freeRunCapMinutes({ id: "u1" });
-    expect(offered).toBe(FREE_TIER.lifetimeSeconds / 60);
-    expect(offered).toBeLessThanOrEqual(SOURCE_CAP);
+    await expect(freeRunCapMinutes({ id: "u1" })).resolves.toBe(SOURCE_CAP);
   });
 
   it("counts a refund back into what is left", async () => {
-    ledger(10 * 60, 5 * 60);
+    ledger(20 * 60, 15 * 60);
 
-    await expect(freeRunCapMinutes({ id: "u1" })).resolves.toBe(10);
+    await expect(freeRunCapMinutes({ id: "u1" })).resolves.toBe(35);
   });
 
   // Null, not 0: "on the free run: up to 0 minutes" is worse than no line.

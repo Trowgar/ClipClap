@@ -33,7 +33,6 @@ vi.mock("../../lib/prisma", () => ({
 import { prisma } from "../../lib/prisma";
 import {
   freeBalanceSeconds,
-  freeHeadroomSeconds,
   chargeFreeSeconds,
   refundFailedJob,
   refundZeroClipJob,
@@ -62,13 +61,9 @@ describe("free-tier.service", () => {
   });
 
   it("subtracts charges and adds refunds back", async () => {
-    // Both figures stay under the allowance on purpose: this test is about the
-    // arithmetic, and the clamp at zero is the test below it. They were 1800
-    // and 600 until the allowance was cut to 900s, at which point the sum went
-    // negative and this test started measuring the clamp instead.
-    ledger(600, 200);
+    ledger(1800, 600);
     expect(await freeBalanceSeconds("u1")).toBe(
-      FREE_TIER.lifetimeSeconds - 600 + 200
+      FREE_TIER.lifetimeSeconds - 1800 + 600
     );
   });
 
@@ -86,63 +81,11 @@ describe("free-tier.service", () => {
   // balance test feeds both kinds and so has never exercised this.
   it("handles a ledger with charges and no refunds at all", async () => {
     (prisma.freeUsage.groupBy as any).mockResolvedValue([
-      { kind: "CHARGE", _sum: { seconds: 400 } },
+      { kind: "CHARGE", _sum: { seconds: 1200 } },
     ]);
     expect(await freeBalanceSeconds("u1")).toBe(
-      FREE_TIER.lifetimeSeconds - 400
+      FREE_TIER.lifetimeSeconds - 1200
     );
-  });
-
-  describe("freeHeadroomSeconds", () => {
-    // What this function exists for, stated as a test: the clamp in
-    // freeBalanceSeconds hides an over-reservation, and since the submit gate
-    // started admitting sources longer than the balance so the download stage
-    // can trim them, over-reservations are routine rather than impossible.
-    it("sees an over-reservation that the clamped balance cannot", async () => {
-      // Reserved 1,800s against an allowance of 900. freeBalanceSeconds reads
-      // 0, and the old expression - balance + own charge - would answer 1,800:
-      // the exact length the source should have been CUT DOWN to, judged as
-      // fitting. The whole video would have run free.
-      ledger(1800, 0);
-      (prisma.freeUsage.findFirst as any).mockResolvedValue({ seconds: 1800 });
-
-      expect(await freeBalanceSeconds("u1")).toBe(
-        Math.max(0, FREE_TIER.lifetimeSeconds - 1800)
-      );
-      expect(await freeHeadroomSeconds("u1", "job1")).toBe(
-        FREE_TIER.lifetimeSeconds
-      );
-    });
-
-    it("excludes only THIS job's reservation, not everybody else's", async () => {
-      // 2,400 charged across the account, 900 of it this job's.
-      ledger(2400, 0);
-      (prisma.freeUsage.findFirst as any).mockResolvedValue({ seconds: 900 });
-
-      expect(await freeHeadroomSeconds("u1", "job1")).toBe(
-        Math.max(0, FREE_TIER.lifetimeSeconds - 1500)
-      );
-    });
-
-    it("counts refunds back, and clamps a genuinely overspent account at zero", async () => {
-      ledger(FREE_TIER.lifetimeSeconds + 5000, 500);
-      (prisma.freeUsage.findFirst as any).mockResolvedValue(null);
-
-      expect(await freeHeadroomSeconds("u1", "job1")).toBe(0);
-    });
-
-    it("treats a job with no reservation as reserving nothing", async () => {
-      // findFirst returns null for a paying account or a job whose row has not
-      // been written. Reading `.seconds` off it would be NaN, and NaN fails
-      // every comparison the caller makes - so the source would be judged not
-      // to fit AND not to be trimmable.
-      ledger(300, 0);
-      (prisma.freeUsage.findFirst as any).mockResolvedValue(null);
-
-      expect(await freeHeadroomSeconds("u1", "job1")).toBe(
-        FREE_TIER.lifetimeSeconds - 300
-      );
-    });
   });
 
   // The mirror case, and the one that would silently grant a second allowance:

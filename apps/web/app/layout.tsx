@@ -17,7 +17,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(SITE),
   title: "ClipClap - AI clipper for streams, podcasts and VODs",
   description:
-    "Turn a long stream, podcast or VOD into vertical clips with burned-in subtitles. First 15 minutes of source video are free, no card needed; paid plans start at $3 a week for 75 minutes. Works in Telegram or in the browser.",
+    "Turn a long stream, podcast or VOD into vertical clips with burned-in subtitles. First 40 minutes of source video are free, no card needed; paid plans start at $3 a week for 75 minutes. Works in Telegram or in the browser.",
   alternates: { canonical: "/" },
   openGraph: {
     type: "website",
@@ -86,7 +86,7 @@ export default function RootLayout({
                   price: "0",
                   priceCurrency: "USD",
                   description:
-                    "15 minutes of source video, one-time, no card required.",
+                    "40 minutes of source video, one-time, no card required.",
                 },
                 {
                   "@type": "Offer",
@@ -118,35 +118,6 @@ export default function RootLayout({
                 },
               ],
             }),
-          }}
-        />
-        {/* Organization and WebSite name the entity behind the product. SoftwareApplication above
-            describes what ClipClap does; neither of these two says who publishes it, and an answer
-            engine asked "who makes ClipClap" had nothing to read before 2026-08-24. `sameAs` lists
-            only profiles that actually exist - add directory and review listings here as they go
-            live, and never list one that does not. */}
-        <script
-          type="application/ld+json"
-          dangerouslySetInnerHTML={{
-            __html: JSON.stringify([
-              {
-                "@context": "https://schema.org",
-                "@type": "Organization",
-                name: "ClipClap",
-                url: SITE,
-                logo: `${SITE}/icon-512.png`,
-                description:
-                  "ClipClap turns long streams, podcasts and VODs into short vertical clips with burned-in subtitles, in the browser or through a Telegram bot.",
-                sameAs: ["https://t.me/clipclapio_bot"],
-              },
-              {
-                "@context": "https://schema.org",
-                "@type": "WebSite",
-                name: "ClipClap",
-                url: SITE,
-                inLanguage: "en",
-              },
-            ]),
           }}
         />
         <IconProvider>{children}</IconProvider>

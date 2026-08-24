@@ -49,7 +49,7 @@ const ru: Dict = {
   welcomeBack: "С возвращением! Пришли видео - сделаю клипы.",
   menuTitle: "Главное меню",
   welcomeNeedsPlan:
-    "Пришли видео - сделаю клипы. Новому аккаунту даю один бесплатный запуск - карта не нужна, видео до 15 минут.",
+    "Пришли видео - сделаю клипы. Новому аккаунту даю один бесплатный запуск - карта не нужна, видео до 40 минут.",
   // Appended by the handler to the onboarding screens, and only while
   // freeBudgetStatus() reports the month's ceiling closed. See the note on
   // freeRunsPausedNote in types.ts for why the promise above is left intact
@@ -86,8 +86,6 @@ const ru: Dict = {
   fileTooLarge: (url) =>
     `Видео больше 20 МБ - это лимит Telegram Bot API. Пока что для длинных видео используй сайт: ${url}/dashboard. Скоро снимем это ограничение.`,
   processingFailed: (code) => (code && ruFailure[code]) || ruFailureGeneric,
-  freeTrimNote: (clippedMinutes, sentMinutes) =>
-    `Бесплатных минут хватило на первые ${clippedMinutes} из ${sentMinutes} минут, которые ты прислал - клипы выше сделаны из этой части видео. На этом бесплатный лимит закончился. Чтобы обработать остальное, открой 💳 Тарифы.`,
   done: (n) =>
     `Готово. ${n} ${pluralizeRu(n, "клип", "клипа", "клипов")} ${pluralizeRu(n, "готов", "готовы", "готовы")}.`,
   donePartial: (sent, total) =>

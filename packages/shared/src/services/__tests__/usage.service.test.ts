@@ -23,12 +23,7 @@ import {
   canSubmitJob,
   getFreeTrialStatus,
 } from "../usage.service";
-import {
-  FREE_TIER,
-  FREE_TRIM_FLOOR_SEC,
-  SOURCE_FLOOR,
-  getPlanLimits,
-} from "../../config/plans";
+import { FREE_TIER, getPlanLimits } from "../../config/plans";
 
 // NONE_LIMITS carries real numbers again as of 2026-07-29, so every case below
 // runs for real. One switch still holds the free plan shut in production:
@@ -614,62 +609,9 @@ describe("the free-tier gate", () => {
     expect((prisma.freeUsage.groupBy as any).mock.calls).toHaveLength(0);
   });
 
-  it("ADMITS a video longer than the balance, so it can be cut to fit", async () => {
-    // The refusal this replaced was measured wrong on 2026-08-24: the median
-    // first source sent to this product is 966 seconds against a 900-second
-    // allowance, so "does it fit" turned away 23 of 42 accounts before they had
-    // seen a clip. stages/source-recheck.ts cuts the source to the balance
-    // instead, and the gate's job is only to check there is enough left to make
-    // something at all.
+  it("refuses when the remaining balance is smaller than the video", async () => {
     freeUser();
-    ledgerCharged(FREE_TIER.lifetimeSeconds - 600);
-
-    const res = await canSubmitJob("u1", FREE_CAP);
-
-    expect(res).toMatchObject({ allowed: true });
-  });
-
-  it("refuses a KNOWN over-long source once what is left cannot be cut usefully", async () => {
-    // 300 seconds left, and a 40-minute video. Trimming to five minutes would
-    // spend this account's last minutes on a run that comes back empty 44% of
-    // the time - measured - so the refusal is the better answer, and it is the
-    // one refusal that has ever sent anybody to the plans screen.
-    freeUser();
-    ledgerCharged(FREE_TIER.lifetimeSeconds - 300);
-
-    const res = await canSubmitJob("u1", 40);
-
-    expect(res).toMatchObject({ allowed: false, code: "FREE_EXHAUSTED" });
-  });
-
-  it("admits the same source when there IS enough left to cut", async () => {
-    freeUser();
-    ledgerCharged(FREE_TIER.lifetimeSeconds - FREE_TRIM_FLOOR_SEC);
-
-    const res = await canSubmitJob("u1", 40);
-
-    expect(res).toMatchObject({ allowed: true });
-  });
-
-  it("still admits an UNPROBED submission with a small balance", async () => {
-    // Duration 0 is every upload: the web route does not probe them. Treating
-    // an unknown length as over-long would refuse at submit the very jobs the
-    // download stage can measure and settle honestly a minute later - and the
-    // 300 seconds here are enough for a short upload to fit outright.
-    freeUser();
-    ledgerCharged(FREE_TIER.lifetimeSeconds - 300);
-
-    const res = await canSubmitJob("u1", 0);
-
-    expect(res).toMatchObject({ allowed: true });
-  });
-
-  it("refuses when what is left cannot make even the shortest source", async () => {
-    // One second under SOURCE_FLOOR.minDurationSec. Cutting a video down to
-    // less than the shortest source the submit path accepts hands the user a
-    // worse answer than saying the free minutes are spent.
-    freeUser();
-    ledgerCharged(FREE_TIER.lifetimeSeconds - (SOURCE_FLOOR.minDurationSec - 1));
+    ledgerCharged(FREE_TIER.lifetimeSeconds - 60);
 
     const res = await canSubmitJob("u1", FREE_CAP);
 
@@ -678,7 +620,7 @@ describe("the free-tier gate", () => {
     // The numbers travel structurally, so a surface can say them in its own
     // language instead of reprinting the English `reason`.
     expect(res.trial).toMatchObject({
-      remainingSeconds: SOURCE_FLOOR.minDurationSec - 1,
+      remainingSeconds: 60,
       lifetimeSeconds: FREE_TIER.lifetimeSeconds,
     });
     // Their own allowance is the personal reason, and it wins: the global

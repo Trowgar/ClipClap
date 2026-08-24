@@ -97,46 +97,32 @@ export const PLAN_LIMITS: Record<
  *  Denominated in SECONDS OF SOURCE, because that is what the money is
  *  denominated in: 0.012 USD per source minute plus 0.030 per run, fitted over
  *  every prod job that carries cost telemetry (see estimatedUsdPerRun for the
- *  query and its output). A full 900-second allowance spent in one run
- *  reserves 0.21 USD, and 0.03 more for each extra run it is split across.
+ *  query and its output). A full 2400-second allowance spent in one run
+ *  reserves 0.51 USD, and 0.03 more for each extra run it is split across.
  *
- *  The argument that used to sit here - that a clipper with a 3-8 hour VOD
- *  needs sixty minutes or they must hand-trim first - was reasoning about an
- *  audience we do not have. Measured on 2026-08-23 the median free source is
- *  229 seconds; the people actually using this send short videos, not VODs.
- *  The per-source ceiling below still permits a long one on its own terms; the
- *  allowance is not what makes long footage workable, a plan is.
+ *  FORTY minutes since 2026-08-24, down from sixty. Sixty was never reached by
+ *  anybody: across the 42 accounts that have ever spent a free second, the
+ *  largest balance ever consumed was 3,482 seconds of it and the count that hit
+ *  the wall was zero, so the allowance had not once asked a single person to
+ *  decide about paying. Four of those accounts had passed 2,400.
  *
- *  The remaining ceiling on generosity is the entry tier, not cost: Starter
- *  gives 75 minutes PER WEEK for 3 USD, and a lifetime free allowance that
- *  approaches one paid week competes with the cheapest plan instead of selling
- *  it. Sixty minutes was four fifths of that week.
+ *  Forty rather than fifteen, which the same measurement argues for and which
+ *  was tried and reverted on the day: at fifteen the median FIRST source (966
+ *  seconds) no longer fits, so more than half of all newcomers would meet a
+ *  wall before a single clip existed. Keeping the allowance above the size of
+ *  a real first video is what makes it a trial rather than a toll.
+ *
+ *  Still under the two ceilings that have always bounded it. The audience clips
+ *  3-8 hour VODs and a ceiling that forces them to hand-trim a segment first is
+ *  the exact work they came here to avoid; and Starter gives 75 minutes PER
+ *  WEEK for 3 USD, so a lifetime free allowance has to stay clearly under one
+ *  week of the entry tier or it competes with the cheapest paid plan.
  *
  *  `zeroClipRefunds` is the backstop that keeps the minute accounting honest.
  *  A run that transcribes but finds nothing has cost us money while showing the
  *  user nothing, so the first one is forgiven and later ones are not. */
 export const FREE_TIER = {
-  /** 900, not 3600, since 2026-08-23. The old number was not generous, it was
-   *  inert: in the whole history of the product NOBODY reached it. Measured on
-   *  the ledger the day it was cut - 42 accounts have ever spent a free second,
-   *  the largest balance ever consumed was 3,482 of 3,600, and the count that
-   *  reached the wall was zero. A limit nobody meets never asks anyone to buy,
-   *  so the trial had produced exactly no purchase decisions.
-   *
-   *  Fifteen minutes is chosen off that same distribution rather than picked:
-   *  users at >=5min 19, >=10min 16, >=15min 16, >=20min 11, >=30min 8,
-   *  >=45min 4, >=60min 0. Between ten and fifteen minutes there is no one at
-   *  all, so 15 walls the same 16 accounts that 10 would while leaving five
-   *  more minutes on the table - the most generous number that costs nothing.
-   *
-   *  It does not move the wall in front of the value, which was the real risk.
-   *  The median free source is 229 seconds and the 75th percentile is 1,144, so
-   *  fifteen minutes still admits 54 of the 83 free jobs ever run at full
-   *  length and lets a median user clip about four videos before deciding.
-   *
-   *  The one-week constraint below now holds with room to spare: 15 against
-   *  Starter's 75 per week is a fifth, where 60 was four fifths. */
-  lifetimeSeconds: 900,
+  lifetimeSeconds: 2400,
   zeroClipRefunds: 1,
   /** The part of a free run's cash cost that scales with length: 0.0060 for
    *  whisper-1, which is billed per minute of audio and is exact (every prod
@@ -286,16 +272,17 @@ const NONE_LIMITS: PlanLimits = {
   // it inside its transaction under a per-user advisory lock. Everything above
   // rests on that, so do not move the check back out to a caller.
   concurrentJobsLimit: 1,
-  maxSourceDurationMinutes: 60,
+  maxSourceDurationMinutes: 40,
   maxFileSizeBytes: ABUSE_CAPS.maxFileSizeBytes,
   // Was 5 until 2026-08-18. In three weeks it refused four submissions from
   // three people - and they were the best accounts we had (one with 15 free
   // minutes still unspent). It protected nothing the ledger does not: with the
-  // 60-second floor (SOURCE_FLOOR) and 3600 lifetime seconds, sixty jobs is the
-  // most a free account can EVER create, so a day cap of sixty binds after the
-  // ledger does, never before. Kept as a number rather than deleted so a bug
+  // 60-second floor (SOURCE_FLOOR) and 2400 lifetime seconds, forty jobs is the
+  // most a free account can EVER create, so a day cap of forty binds after the
+  // ledger does, never before. It tracks the allowance - it was sixty while the
+  // allowance was 3600 - and is kept as a number rather than deleted so a bug
   // that made jobs free would still hit a wall.
-  maxJobsPerDay: 60,
+  maxJobsPerDay: 40,
   priceUsd: 0,
 };
 
@@ -312,33 +299,6 @@ const NONE_LIMITS: PlanLimits = {
  *
  *  `shortNoticeSec` is not a refusal: below it the source is accepted with a
  *  one-line heads-up that short sources usually give 0-2 clips. */
-/** The shortest CUT worth making, in seconds of source.
- *
- *  Not the same question as SOURCE_FLOOR.minDurationSec below, which asks "is
- *  this a video at all". This one asks "will cutting a long source down to what
- *  is left produce anything a person would rather have than their minutes
- *  back", and the two have very different answers.
- *
- *  Measured on every DONE job with a known duration on 2026-08-24:
- *
- *      source      jobs   avg clips   EMPTY
- *      1-3 min      33       0.3       82%
- *      3-5 min       9       0.8       44%
- *      5-10 min      5       1.4       40%
- *      10-15 min     5       3.4        0%
- *      15+ min      49       6.5       10%
- *
- *  Below ten minutes the run is a coin flip that mostly loses, and a trim into
- *  that range is strictly worse than the refusal it replaced: the refusal keeps
- *  the user's remaining minutes and shows them the plans, while the trim spends
- *  those minutes on a near-certain empty result. Above it the yield is
- *  reliable - the 10-15 bucket has never produced an empty run.
- *
- *  600, not 900, because 900 would mean the trim only ever fires on a brand-new
- *  account. 40% empty at the bottom of the band is a real cost, and it is the
- *  one FREE_TIER.zeroClipRefunds insures: the first empty run is forgiven. */
-export const FREE_TRIM_FLOOR_SEC = 600;
-
 export const SOURCE_FLOOR = {
   minDurationSec: 60,
   shortNoticeSec: 300,

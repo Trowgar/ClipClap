@@ -15,8 +15,7 @@ const mocks = vi.hoisted(() => ({
   jobStepFindUnique: vi.fn(),
   probeLocalFile: vi.fn(),
   findFreeCharge: vi.fn(),
-  freeHeadroomSeconds: vi.fn(),
-  trimLocalFile: vi.fn(),
+  freeBalanceSeconds: vi.fn(),
   reviseFreeChargeSeconds: vi.fn(),
   refundFailedJob: vi.fn(),
   refundZeroClipJob: vi.fn(),
@@ -52,13 +51,7 @@ vi.mock("@clipclap/shared", async () => ({
   // spread above, so keep it below.
   loadModelPrices: () => ({ tokensPerMillionUsd: {}, audioPerMinuteUsd: {} }),
   findFreeCharge: mocks.findFreeCharge,
-  freeHeadroomSeconds: mocks.freeHeadroomSeconds,
-  trimLocalFile: mocks.trimLocalFile,
-  // The REAL floor, not a number invented here. It is the line the trim branch
-  // decides on, and a stubbed 60 would keep passing if the real one moved.
-  ...(await vi.importActual<typeof import("@clipclap/shared/config/plans")>(
-    "@clipclap/shared/config/plans"
-  )),
+  freeBalanceSeconds: mocks.freeBalanceSeconds,
   reviseFreeChargeSeconds: mocks.reviseFreeChargeSeconds,
   refundFailedJob: mocks.refundFailedJob,
   refundZeroClipJob: mocks.refundZeroClipJob,
@@ -123,14 +116,14 @@ describe("download-stage source re-check", () => {
 
     await recheckSourceDuration(RECHECK);
 
-    expect(mocks.freeHeadroomSeconds).not.toHaveBeenCalled();
+    expect(mocks.freeBalanceSeconds).not.toHaveBeenCalled();
     expect(mocks.reviseFreeChargeSeconds).not.toHaveBeenCalled();
     expect(mocks.refundFailedJob).not.toHaveBeenCalled();
   });
 
   it("corrects an upload's zero-second reservation to the measured length", async () => {
     mocks.findFreeCharge.mockResolvedValue({ seconds: 0, estimatedCostUsd: 0 });
-    mocks.freeHeadroomSeconds.mockResolvedValue(3600);
+    mocks.freeBalanceSeconds.mockResolvedValue(3600);
 
     await recheckSourceDuration(RECHECK);
 
@@ -138,73 +131,32 @@ describe("download-stage source re-check", () => {
     expect(mocks.refundFailedJob).not.toHaveBeenCalled();
   });
 
-  it("asks for headroom BY JOB and never adds the reservation back itself", async () => {
-    // This job's own 1200s reservation is excluded by freeHeadroomSeconds, on
-    // the ledger totals and before any clamp - see its doc comment. The stage
-    // adding `charge.seconds` on top of the answer, which is what it used to do
-    // against a clamped balance, would now count the reservation back twice and
-    // let a source through at nearly double the allowance.
+  it("measures against the balance WITH this job's own reservation added back", async () => {
+    // The 1200s already sitting on this job's CHARGE row (a URL probed at
+    // submit) has been subtracted from the balance. Comparing the measured
+    // duration against the bare balance would charge the job twice: 612s
+    // against 100s left would fail a job that fits perfectly well, because the
+    // 1200 it is replacing is still being counted against it.
     mocks.findFreeCharge.mockResolvedValue({
       seconds: 1200,
       estimatedCostUsd: 0.19,
     });
-    mocks.freeHeadroomSeconds.mockResolvedValue(700);
+    mocks.freeBalanceSeconds.mockResolvedValue(100);
 
     await recheckSourceDuration(RECHECK);
 
-    expect(mocks.freeHeadroomSeconds).toHaveBeenCalledWith("u1", "job1");
     expect(mocks.reviseFreeChargeSeconds).toHaveBeenCalledWith("u1", "job1", 612);
-    expect(mocks.trimLocalFile).not.toHaveBeenCalled();
     expect(mocks.refundFailedJob).not.toHaveBeenCalled();
   });
 
-  it("CUTS a source that overruns the headroom instead of refusing it", async () => {
-    // A 40-minute source against 700 seconds of allowance - the shape this
-    // branch exists for, and the shape 23 of 42 accounts arrive with.
-    mocks.probeLocalFile.mockResolvedValue({
-      ok: true,
-      durationSec: 2400,
-      title: "Upload",
-    });
+  it("refuses and refunds when the measured length overruns the headroom", async () => {
     mocks.findFreeCharge.mockResolvedValue({ seconds: 0, estimatedCostUsd: 0 });
-    mocks.freeHeadroomSeconds.mockResolvedValue(700);
-    mocks.trimLocalFile.mockResolvedValue({
-      ok: true,
-      path: "/tmp/source.mp4.trim.mp4",
-      // Deliberately NOT 700: `-c copy` lands on a packet boundary, so the
-      // output is off the mark by up to a group of pictures either way.
-      durationSec: 688.6,
-    });
-
-    await expect(recheckSourceDuration(RECHECK)).resolves.toBe(
-      "/tmp/source.mp4.trim.mp4"
-    );
-
-    expect(mocks.trimLocalFile).toHaveBeenCalledWith("/tmp/source.mp4", 700);
-    // The PROBED length of the cut, never the 300 that was asked for: the
-    // ledger and the cost telemetry have to record what was really processed.
-    expect(mocks.reviseFreeChargeSeconds).toHaveBeenCalledWith("u1", "job1", 689);
-    expect(mocks.jobUpdate).toHaveBeenCalledWith({
-      where: { id: "job1" },
-      data: { sourceDurationSec: 689, sourceTrimmedFromSec: 2400 },
-    });
-    expect(mocks.refundFailedJob).not.toHaveBeenCalled();
-  });
-
-  it("refuses rather than cutting into the range that mostly returns nothing", async () => {
-    // 300 seconds is above the 60s source floor and well under
-    // FREE_TRIM_FLOOR_SEC. A five-minute source comes back empty 44% of the
-    // time, so cutting to it would spend this account's last minutes on a run
-    // that probably produces nothing - worse than saying they are spent, which
-    // at least leaves the minutes and points at a plan.
-    mocks.findFreeCharge.mockResolvedValue({ seconds: 0, estimatedCostUsd: 0 });
-    mocks.freeHeadroomSeconds.mockResolvedValue(300);
+    mocks.freeBalanceSeconds.mockResolvedValue(300);
 
     await expect(recheckSourceDuration(RECHECK)).rejects.toThrow(
       FreeAllowanceExceededError
     );
 
-    expect(mocks.trimLocalFile).not.toHaveBeenCalled();
     expect(mocks.refundFailedJob).toHaveBeenCalledWith("u1", "job1");
     // The reservation is NOT corrected on the way out. Writing the real seconds
     // first would floor the balance at zero and lose how far over the source
@@ -213,37 +165,9 @@ describe("download-stage source re-check", () => {
     expect(mocks.reviseFreeChargeSeconds).not.toHaveBeenCalled();
   });
 
-  it("falls back to the refusal when the cut itself fails", async () => {
-    // ffmpeg missing from the image, a container it will not stream-copy, an
-    // output that will not probe. None of those may become a crashed job, and
-    // none of them may become a free full-length run either.
-    mocks.probeLocalFile.mockResolvedValue({
-      ok: true,
-      durationSec: 2400,
-      title: "Upload",
-    });
-    mocks.findFreeCharge.mockResolvedValue({ seconds: 0, estimatedCostUsd: 0 });
-    mocks.freeHeadroomSeconds.mockResolvedValue(700);
-    mocks.trimLocalFile.mockResolvedValue({
-      ok: false,
-      reason: "trim-error",
-      error: "Invalid data found when processing input",
-    });
-    const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    await expect(recheckSourceDuration(RECHECK)).rejects.toThrow(
-      FreeAllowanceExceededError
-    );
-
-    expect(mocks.refundFailedJob).toHaveBeenCalledWith("u1", "job1");
-    expect(mocks.reviseFreeChargeSeconds).not.toHaveBeenCalled();
-    warns.mockRestore();
-  });
-
   it("refunds before it throws, so a lost stage still leaves the allowance back", async () => {
-    // Headroom under both floors, so this is still one of the paths that refuses.
     mocks.findFreeCharge.mockResolvedValue({ seconds: 0, estimatedCostUsd: 0 });
-    mocks.freeHeadroomSeconds.mockResolvedValue(40);
+    mocks.freeBalanceSeconds.mockResolvedValue(300);
     const order: string[] = [];
     mocks.refundFailedJob.mockImplementation(async () => {
       order.push("refund");
@@ -263,12 +187,10 @@ describe("download-stage source re-check", () => {
       reason: "probe-unavailable",
     });
     mocks.findFreeCharge.mockResolvedValue({ seconds: 0, estimatedCostUsd: 0 });
-    mocks.freeHeadroomSeconds.mockResolvedValue(0);
+    mocks.freeBalanceSeconds.mockResolvedValue(0);
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await expect(recheckSourceDuration(RECHECK)).resolves.toBe(
-      "/tmp/source.mp4"
-    );
+    await expect(recheckSourceDuration(RECHECK)).resolves.toBeUndefined();
 
     expect(mocks.jobUpdate).not.toHaveBeenCalled();
     expect(mocks.refundFailedJob).not.toHaveBeenCalled();
@@ -280,12 +202,10 @@ describe("download-stage source re-check", () => {
   it("lets the job through when ffprobe ran but could not read the file", async () => {
     mocks.probeLocalFile.mockResolvedValue({ ok: false, reason: "no-duration" });
     mocks.findFreeCharge.mockResolvedValue({ seconds: 0, estimatedCostUsd: 0 });
-    mocks.freeHeadroomSeconds.mockResolvedValue(0);
+    mocks.freeBalanceSeconds.mockResolvedValue(0);
     const warns = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    await expect(recheckSourceDuration(RECHECK)).resolves.toBe(
-      "/tmp/source.mp4"
-    );
+    await expect(recheckSourceDuration(RECHECK)).resolves.toBeUndefined();
 
     expect(mocks.refundFailedJob).not.toHaveBeenCalled();
     warns.mockRestore();
@@ -319,10 +239,8 @@ describe("download stage wiring", () => {
   });
 
   it("fails the job with an actionable code and never reaches transcribe", async () => {
-    // Under SOURCE_FLOOR.minDurationSec of headroom, so there is nothing worth
-    // cutting this 4000-second source down to.
     mocks.findFreeCharge.mockResolvedValue({ seconds: 0, estimatedCostUsd: 0 });
-    mocks.freeHeadroomSeconds.mockResolvedValue(40);
+    mocks.freeBalanceSeconds.mockResolvedValue(600);
 
     await expect(
       runDownloadStage({ jobId: "job1", userId: "u1" })
@@ -334,39 +252,13 @@ describe("download stage wiring", () => {
         status: "FAILED",
         error:
           "[FREE_ALLOWANCE_EXCEEDED] free allowance exceeded: source measured " +
-          "4000s, account has 40s of free allowance left (reservation of 0s refunded)",
+          "4000s, account has 600s of free allowance left (reservation of 0s refunded)",
       },
     });
     // TRANSCRIBE is where the money leaves the account, and it is never queued.
     expect(mocks.queueAdd).not.toHaveBeenCalled();
     // Nor is the refused source copied into R2 first.
     expect(mocks.uploadFile).not.toHaveBeenCalled();
-  });
-
-  it("carries the CUT file downstream, not the file that was downloaded", async () => {
-    // The whole point of the trim is undone if R2, normalize and transcribe go
-    // on working from the original: the ledger would be settled against 600
-    // seconds and the pipeline would process 4000 of them.
-    mocks.findFreeCharge.mockResolvedValue({ seconds: 0, estimatedCostUsd: 0 });
-    mocks.freeHeadroomSeconds.mockResolvedValue(600);
-    mocks.trimLocalFile.mockResolvedValue({
-      ok: true,
-      path: "/tmp/source.mp4.trim.mp4",
-      durationSec: 590,
-    });
-
-    await runDownloadStage({ jobId: "job1", userId: "u1" });
-
-    expect(mocks.uploadFile).toHaveBeenCalledWith(
-      expect.any(String),
-      "/tmp/source.mp4.trim.mp4",
-      "video/mp4"
-    );
-    expect(mocks.normalizeSource).toHaveBeenCalledWith("/tmp/source.mp4.trim.mp4");
-    expect(mocks.queueAdd).toHaveBeenCalledWith("transcribe", {
-      jobId: "job1",
-      userId: "u1",
-    });
   });
 
   it("measures before it uploads, so a refused source is never stored", async () => {

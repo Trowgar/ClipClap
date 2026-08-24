@@ -78,7 +78,7 @@ const en: Dict = {
   welcomeBack: "Welcome back! Send a video and I'll generate clips.",
   menuTitle: "Main menu",
   welcomeNeedsPlan:
-    "Send a video and I'll generate clips. A new account gets one free run - no card needed, up to 15 minutes of video.",
+    "Send a video and I'll generate clips. A new account gets one free run - no card needed, up to 40 minutes of video.",
   // Appended by the handler to the onboarding screens, and only while
   // freeBudgetStatus() reports the month's ceiling closed. See the note on
   // freeRunsPausedNote in types.ts for why the promise above is left intact
@@ -114,8 +114,6 @@ const en: Dict = {
   fileTooLarge: (url) =>
     `This video is over 20 MB - Telegram's Bot API limit. For now, upload longer videos on the website: ${url}/dashboard. We're working on lifting this limit soon.`,
   processingFailed: (code) => (code && enFailure[code]) || enFailureGeneric,
-  freeTrimNote: (clippedMinutes, sentMinutes) =>
-    `Your free minutes covered the first ${clippedMinutes} of the ${sentMinutes} minutes you sent, so the clips above come from that part of the video. That is your free allowance spent. To clip the rest, open 💳 Plans.`,
   done: (n) => `Done. ${n} clip${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} ready.`,
   donePartial: (sent, total) =>
     `Sent ${sent} of ${total} clip${total === 1 ? "" : "s"} - the rest did not go through. Tap below and I will try again.`,
@@ -292,7 +290,7 @@ const en: Dict = {
   // welcomeFirstScreen one tap later.
   //
   // No plan, no price and no limits here on purpose. "Up to 3 hours" was the
-  // PAID ceiling quoted to someone whose free run caps at 15 minutes, and a
+  // PAID ceiling quoted to someone whose free run caps at 40 minutes, and a
   // third number - the 2 GB file cap - lived only in helpText. Those belong in
   // the submit flow, where they are an answer to "what may I send", not a wall
   // in front of a stranger.
@@ -316,10 +314,10 @@ const en: Dict = {
   // copy until the ceiling was set for exactly that reason. If the free tier is
   // ever rolled back, this line comes out in the same commit.
   //
-  // "First video" rather than "15 free minutes" is a deliberate simplification:
-  // the ledger grants FREE_TIER.lifetimeSeconds = 900 in total, not per video,
-  // so someone who sends a four-minute source still has eleven minutes left.
-  // The phrasing therefore under-promises, which is the safe direction, and it
+  // "First video" rather than "40 free minutes" is a deliberate simplification:
+  // the ledger grants FREE_TIER.lifetimeSeconds = 2400 in total, not per video,
+  // so someone who sends a 15-minute source still has 25 minutes left. The
+  // phrasing therefore under-promises, which is the safe direction, and it
   // matches welcomeFirstScreen one screen later.
   botDescription:
     "Turn any long video into short viral clips with subtitles - ready for TikTok, Reels and Shorts!\n\nWorks with podcasts, Twitch streams, interviews, webinars and reviews.\n\n1. Send a video or paste a link\n2. AI finds the best moments and creates clips\n3. Get ready-to-post videos right here in Telegram\n\nYour first video is free - no card needed.",

@@ -137,7 +137,7 @@ const ar: Dict = {
   welcomeBack: "أهلًا بعودتك! أرسل فيديو وسأصنع منه مقاطع.",
   menuTitle: "القائمة الرئيسية",
   welcomeNeedsPlan:
-    "أرسل فيديو وسأصنع منه مقاطع. كل حساب جديد يحصل على تشغيل مجاني واحد - بلا بطاقة، وحتى 15 دقيقة من الفيديو.",
+    "أرسل فيديو وسأصنع منه مقاطع. كل حساب جديد يحصل على تشغيل مجاني واحد - بلا بطاقة، وحتى 40 دقيقة من الفيديو.",
   // Appended by the handler to the onboarding screens, and only while
   // freeBudgetStatus() reports the month's ceiling closed. See the note on
   // freeRunsPausedNote in types.ts for why the promise above is left intact
@@ -188,8 +188,6 @@ const ar: Dict = {
       `${url}/dashboard`
     )}\nنعمل على رفع هذا الحدّ قريبًا.`,
   processingFailed: (code) => (code && arFailure[code]) || arFailureGeneric,
-  freeTrimNote: (clippedMinutes, sentMinutes) =>
-    `غطّت دقائقك المجانية أول ${clippedMinutes} دقيقة من ${sentMinutes} دقيقة أرسلتها، فالمقاطع أعلاه من هذا الجزء وحده. وبذلك انتهى رصيدك المجاني. لمعالجة الباقي، افتح 💳 الباقات.`,
   done: (n) =>
     pluralizeAr(
       n,

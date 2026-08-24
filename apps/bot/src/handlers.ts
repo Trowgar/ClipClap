@@ -860,7 +860,7 @@ async function handleMenuAction(
     // six locales cannot drift from ABUSE_CAPS between them.
     case "create": {
       // The free cap is quoted only to somebody it applies to. A subscriber
-      // reading "on the free run: up to 15 minutes" is being told about an
+      // reading "on the free run: up to 40 minutes" is being told about an
       // allowance that is not theirs, on the one screen whose whole job is to
       // answer "what may I send?".
       //
@@ -906,17 +906,12 @@ async function handleMenuAction(
  * The longest video this person can actually send on the free run right now, or
  * null when the free run is not a thing they can use.
  *
- * TWO DIFFERENT NUMBERS live behind "how long may it be" and the 🎬 screen used
- * to quote the wrong one. `maxSourceDurationMinutes` caps a single source and is
- * still 60; `FREE_TIER.lifetimeSeconds` is the whole allowance, ever, and is 15
- * minutes since 2026-08-23. Someone who has already spent 9 of their 15 minutes
- * cannot send a half-hour video - they can send 6 minutes - and a screen that
- * answers "what may I send?" with the static cap is telling them to try
- * something that will be refused on submit.
- *
- * Since the cut the allowance is the binding number for almost everyone, so this
- * function now returns the remaining balance in nearly every call; the per-source
- * cap only binds on a brand-new account whose first video runs over an hour.
+ * TWO DIFFERENT NUMBERS live behind "40 minutes" and the 🎬 screen used to quote
+ * the wrong one. `maxSourceDurationMinutes` caps a single source;
+ * `FREE_TIER.lifetimeSeconds` is the whole allowance, ever. Someone who has
+ * already spent 25 of their 40 minutes cannot send a half-hour video - they can
+ * send 15 minutes - and a screen that answers "what may I send?" with the static
+ * cap is telling them to try something that will be refused on submit.
  *
  * So: the smaller of what is left and what one source may be. Floored, matching
  * freeExhausted, so anyone with under a minute reads 0 rather than a rounded-up
@@ -1541,30 +1536,6 @@ export async function deliverReadyTelegramJobs(
         await client.sendMessage(
           delivery.chatId,
           strings.deliveryGivenUp(appUrl, total)
-        );
-      }
-
-      // AFTER the summary, never before it, and never instead of clips.
-      //
-      // This is the free allowance running out, and the whole reason it is
-      // worth anything is that the user reads it holding the clips it paid for.
-      // The same sentence sent before the videos - or on a delivery that landed
-      // nothing - is just a refusal with extra steps, which is exactly the
-      // behaviour the trim replaced. The zero-clip path above returns long
-      // before here, and `inChat` covers the rest.
-      //
-      // Floor for what was clipped and ceil for what was sent, so the two
-      // numbers can never round to the same value and say "the first 15 of the
-      // 15 minutes you sent".
-      const trimmedFromSec = delivery.job.sourceTrimmedFromSec;
-      const clippedSec = delivery.job.sourceDurationSec;
-      if (trimmedFromSec && clippedSec && inChat > 0) {
-        await client.sendMessage(
-          delivery.chatId,
-          strings.freeTrimNote(
-            Math.max(1, Math.floor(clippedSec / 60)),
-            Math.ceil(trimmedFromSec / 60)
-          )
         );
       }
 

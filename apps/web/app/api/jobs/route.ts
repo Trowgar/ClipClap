@@ -205,7 +205,7 @@ export async function POST(req: NextRequest) {
 
   // Skipped for the free tier, and only for the free tier.
   //
-  // checkFreeTrial already checks length, against the same 60 minutes this line
+  // checkFreeTrial already checks length, against the same 40 minutes this line
   // would read, and it says something better: it names the free allowance and
   // points at Starter's 180-minute cap, which is the one sentence in a refusal
   // that gives someone a reason to pay. This check firing first replaced that

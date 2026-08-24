@@ -1,12 +1,10 @@
 import {
-  FREE_TRIM_FLOOR_SEC,
   findFreeCharge,
-  freeHeadroomSeconds,
+  freeBalanceSeconds,
   prisma,
   probeLocalFile,
   refundFailedJob,
   reviseFreeChargeSeconds,
-  trimLocalFile,
 } from "@clipclap/shared";
 import { FreeAllowanceExceededError } from "../processors/errors";
 
@@ -54,19 +52,11 @@ export interface SourceRecheckInput {
  * seconds and downloads six hours is charged for one minute and transcribed for
  * six hours.
  *
- * WHAT IT RETURNS. The path the rest of the pipeline must use. Normally that is
- * the path it was given; when a free account's remaining allowance is shorter
- * than the source, this is where the file is CUT to what the allowance covers
- * and the caller gets the trimmed file instead. Returning the path rather than
- * mutating the caller's variable is what keeps the original around to delete -
- * the caller unlinks both.
- *
- * @throws FreeAllowanceExceededError when the duration does not fit and cutting
- *         it to fit is not possible.
+ * @throws FreeAllowanceExceededError when the measured duration does not fit.
  */
 export async function recheckSourceDuration(
   input: SourceRecheckInput
-): Promise<string> {
+): Promise<void> {
   // The stale-dist guard, same hazard safeTagJobError exists for. The worker
   // resolves @clipclap/shared to packages/shared/dist, dist is gitignored, and
   // a deploy that restarts a worker before `npm run build -w @clipclap/shared`
@@ -83,7 +73,7 @@ export async function recheckSourceDuration(
         `running a stale packages/shared/dist. Job ${input.jobId} runs ` +
         `unmeasured; run npm run build -w @clipclap/shared.`
     );
-    return input.localPath;
+    return;
   }
 
   const probe = await probeLocalFile(input.localPath);
@@ -113,7 +103,7 @@ export async function recheckSourceDuration(
           `${input.jobId} (${probe.reason}); keeping the submitted duration`
       );
     }
-    return input.localPath;
+    return;
   }
 
   // Int? column, float from the probe. Rounded rather than ceiled, to match
@@ -130,7 +120,7 @@ export async function recheckSourceDuration(
   // allowance - see findFreeCharge. Null here means a paying account, and there
   // is nothing to check or correct.
   const charge = await findFreeCharge(input.userId, input.jobId);
-  if (!charge) return input.localPath;
+  if (!charge) return;
 
   // CHECK FIRST, CORRECT AFTER - not the other way round.
   //
@@ -154,82 +144,9 @@ export async function recheckSourceDuration(
   // over-length correction is written the overrun is unrecoverable: the balance
   // reads 0 whether the video was one minute over or five hours over, and the
   // diagnostic below could not say by how much.
-  //
-  // freeHeadroomSeconds does that arithmetic on the ledger totals rather than
-  // through freeBalanceSeconds, which clamps at zero: since the submit gate
-  // started admitting sources longer than the balance so they can be trimmed
-  // here, the reservation may legitimately exceed what is left, and the clamp
-  // would swallow exactly that overrun. See its doc comment.
-  const headroomSeconds = await freeHeadroomSeconds(input.userId, input.jobId);
+  const headroomSeconds = (await freeBalanceSeconds(input.userId)) + charge.seconds;
 
   if (measuredSeconds > headroomSeconds) {
-    // CUT IT DOWN BEFORE REFUSING IT.
-    //
-    // The refusal below is what this branch used to do unconditionally, and it
-    // was measured to be the wrong default on 2026-08-24: the median FIRST
-    // source sent to this product is 966 seconds against a 900-second
-    // allowance, so refusing sends 23 of 42 accounts away before a single clip
-    // exists. Cutting the source to what the allowance covers delivers real
-    // clips and leaves the balance at zero in the same breath, which is the
-    // only moment this product has that asks anyone to decide about paying.
-    //
-    // Two conditions have to hold, and when either fails the original refusal
-    // is exactly right:
-    //
-    //   - There must be enough headroom to make something worth watching, and
-    //     FREE_TRIM_FLOOR_SEC is where that stops being a coin flip: below ten
-    //     minutes of source the measured empty rate runs from 40% to 82%, so a
-    //     cut into that range spends the user's last minutes on a run that
-    //     probably returns nothing - strictly worse than the refusal it
-    //     replaced, which at least leaves them their minutes and the plans.
-    //
-    //   - The cut has to actually work. trimLocalFile never throws and reports
-    //     ok:false for a missing ffmpeg, an exotic container, or an output that
-    //     will not probe - and the honest response to any of those is the
-    //     refusal we would have given anyway, not a crashed job.
-    //
-    // The stale-dist guard from the top of this function applies to
-    // trimLocalFile for the same reason it applies to probeLocalFile: a worker
-    // restarted before `npm run build -w @clipclap/shared` sees it as
-    // undefined, and calling it raw would throw a TypeError that fails the job
-    // instead of degrading to the refusal.
-    const trimmed =
-      headroomSeconds >= FREE_TRIM_FLOOR_SEC &&
-      typeof trimLocalFile === "function"
-        ? await trimLocalFile(input.localPath, headroomSeconds)
-        : null;
-
-    if (trimmed?.ok) {
-      // The PROBED length of the output, never headroomSeconds: `-c copy` cuts
-      // on a keyframe, so the file is usually a little shorter than asked. The
-      // ledger has to record what was really processed, and rounding matches
-      // the write above so a trimmed row cannot differ from an untrimmed one
-      // for reasons nobody can reconstruct later.
-      const trimmedSeconds = Math.round(trimmed.durationSec);
-      await prisma.job.update({
-        where: { id: input.jobId },
-        data: {
-          sourceDurationSec: trimmedSeconds,
-          sourceTrimmedFromSec: measuredSeconds,
-        },
-      });
-      await reviseFreeChargeSeconds(input.userId, input.jobId, trimmedSeconds);
-      console.log(
-        `[free-tier] job ${input.jobId}: source ${measuredSeconds}s exceeds ` +
-          `${headroomSeconds}s of allowance - trimmed to ${trimmedSeconds}s ` +
-          `instead of refusing`
-      );
-      return trimmed.path;
-    }
-
-    if (trimmed && !trimmed.ok) {
-      console.warn(
-        `[free-tier] job ${input.jobId}: could not trim to ${headroomSeconds}s ` +
-          `(${trimmed.reason}${trimmed.error ? `: ${trimmed.error}` : ""}); ` +
-          `refusing instead`
-      );
-    }
-
     // Refund BEFORE the throw, so the allowance is back whatever happens to the
     // stage afterwards. The order is safe in both directions: refundFailedJob
     // is idempotent through the unique index, and this verdict is deterministic
@@ -248,5 +165,4 @@ export async function recheckSourceDuration(
   // It fits. Now the row can say what will really be processed, in seconds and
   // in dollars, so the monthly ceiling stops counting an upload as free.
   await reviseFreeChargeSeconds(input.userId, input.jobId, measuredSeconds);
-  return input.localPath;
 }

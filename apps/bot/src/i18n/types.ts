@@ -89,19 +89,6 @@ export interface Dict {
    *  text is engineer prose in English and must not reach a user. Unknown or
    *  untagged (null) falls back to the generic line. */
   processingFailed: (code: JobErrorCode | null) => string;
-  /** Sent AFTER the clips and after `done`, and only when a free account's
-   *  remaining allowance was shorter than the source it sent - the video was
-   *  cut to what the allowance covered rather than refused.
-   *
-   *  Two numbers, both in whole minutes: what was actually clipped, and what
-   *  the user sent. It reads as an explanation of the clips they are holding,
-   *  which is the only reason it lands after them and not instead of them.
-   *
-   *  Each locale names its own 💳 Plans button verbatim, exactly as the reply
-   *  keyboard renders it - the label is matched as TEXT (see toIntent), so a
-   *  paraphrase here would tell somebody to press a button that does not
-   *  exist. */
-  freeTrimNote: (clippedMinutes: number, sentMinutes: number) => string;
   done: (n: number) => string;
   donePartial: (sent: number, total: number) => string;
   /** Label of the inline button attached to a partial delivery summary. */
@@ -220,7 +207,7 @@ export interface Dict {
     /** The free cap, or null for somebody who is not on the free tier.
      *
      *  Null omits the line entirely rather than printing a zero: a subscriber
-     *  reading "on the free run: up to 15 minutes" is being told about an
+     *  reading "on the free run: up to 40 minutes" is being told about an
      *  allowance that is not theirs and a limit that does not apply to them,
      *  which is noise on the one screen that exists to answer "what may I
      *  send?". */
