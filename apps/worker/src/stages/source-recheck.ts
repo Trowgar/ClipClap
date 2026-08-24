@@ -1,5 +1,5 @@
 import {
-  SOURCE_FLOOR,
+  FREE_TRIM_FLOOR_SEC,
   findFreeCharge,
   freeHeadroomSeconds,
   prisma,
@@ -176,11 +176,12 @@ export async function recheckSourceDuration(
     // Two conditions have to hold, and when either fails the original refusal
     // is exactly right:
     //
-    //   - There must be enough headroom to make something worth watching.
-    //     Under SOURCE_FLOOR.minDurationSec the submit gate would have refused
-    //     this source outright had it been sent at that length, and cutting a
-    //     video down to less than the shortest source we accept would hand
-    //     somebody a worse answer than "your free minutes are spent".
+    //   - There must be enough headroom to make something worth watching, and
+    //     FREE_TRIM_FLOOR_SEC is where that stops being a coin flip: below ten
+    //     minutes of source the measured empty rate runs from 40% to 82%, so a
+    //     cut into that range spends the user's last minutes on a run that
+    //     probably returns nothing - strictly worse than the refusal it
+    //     replaced, which at least leaves them their minutes and the plans.
     //
     //   - The cut has to actually work. trimLocalFile never throws and reports
     //     ok:false for a missing ffmpeg, an exotic container, or an output that
@@ -193,7 +194,7 @@ export async function recheckSourceDuration(
     // undefined, and calling it raw would throw a TypeError that fails the job
     // instead of degrading to the refusal.
     const trimmed =
-      headroomSeconds >= SOURCE_FLOOR.minDurationSec &&
+      headroomSeconds >= FREE_TRIM_FLOOR_SEC &&
       typeof trimLocalFile === "function"
         ? await trimLocalFile(input.localPath, headroomSeconds)
         : null;

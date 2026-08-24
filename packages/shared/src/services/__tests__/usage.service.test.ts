@@ -23,7 +23,12 @@ import {
   canSubmitJob,
   getFreeTrialStatus,
 } from "../usage.service";
-import { FREE_TIER, SOURCE_FLOOR, getPlanLimits } from "../../config/plans";
+import {
+  FREE_TIER,
+  FREE_TRIM_FLOOR_SEC,
+  SOURCE_FLOOR,
+  getPlanLimits,
+} from "../../config/plans";
 
 // NONE_LIMITS carries real numbers again as of 2026-07-29, so every case below
 // runs for real. One switch still holds the free plan shut in production:
@@ -620,6 +625,41 @@ describe("the free-tier gate", () => {
     ledgerCharged(FREE_TIER.lifetimeSeconds - 600);
 
     const res = await canSubmitJob("u1", FREE_CAP);
+
+    expect(res).toMatchObject({ allowed: true });
+  });
+
+  it("refuses a KNOWN over-long source once what is left cannot be cut usefully", async () => {
+    // 300 seconds left, and a 40-minute video. Trimming to five minutes would
+    // spend this account's last minutes on a run that comes back empty 44% of
+    // the time - measured - so the refusal is the better answer, and it is the
+    // one refusal that has ever sent anybody to the plans screen.
+    freeUser();
+    ledgerCharged(FREE_TIER.lifetimeSeconds - 300);
+
+    const res = await canSubmitJob("u1", 40);
+
+    expect(res).toMatchObject({ allowed: false, code: "FREE_EXHAUSTED" });
+  });
+
+  it("admits the same source when there IS enough left to cut", async () => {
+    freeUser();
+    ledgerCharged(FREE_TIER.lifetimeSeconds - FREE_TRIM_FLOOR_SEC);
+
+    const res = await canSubmitJob("u1", 40);
+
+    expect(res).toMatchObject({ allowed: true });
+  });
+
+  it("still admits an UNPROBED submission with a small balance", async () => {
+    // Duration 0 is every upload: the web route does not probe them. Treating
+    // an unknown length as over-long would refuse at submit the very jobs the
+    // download stage can measure and settle honestly a minute later - and the
+    // 300 seconds here are enough for a short upload to fit outright.
+    freeUser();
+    ledgerCharged(FREE_TIER.lifetimeSeconds - 300);
+
+    const res = await canSubmitJob("u1", 0);
 
     expect(res).toMatchObject({ allowed: true });
   });

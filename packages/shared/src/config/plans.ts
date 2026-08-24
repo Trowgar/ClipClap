@@ -312,6 +312,33 @@ const NONE_LIMITS: PlanLimits = {
  *
  *  `shortNoticeSec` is not a refusal: below it the source is accepted with a
  *  one-line heads-up that short sources usually give 0-2 clips. */
+/** The shortest CUT worth making, in seconds of source.
+ *
+ *  Not the same question as SOURCE_FLOOR.minDurationSec below, which asks "is
+ *  this a video at all". This one asks "will cutting a long source down to what
+ *  is left produce anything a person would rather have than their minutes
+ *  back", and the two have very different answers.
+ *
+ *  Measured on every DONE job with a known duration on 2026-08-24:
+ *
+ *      source      jobs   avg clips   EMPTY
+ *      1-3 min      33       0.3       82%
+ *      3-5 min       9       0.8       44%
+ *      5-10 min      5       1.4       40%
+ *      10-15 min     5       3.4        0%
+ *      15+ min      49       6.5       10%
+ *
+ *  Below ten minutes the run is a coin flip that mostly loses, and a trim into
+ *  that range is strictly worse than the refusal it replaced: the refusal keeps
+ *  the user's remaining minutes and shows them the plans, while the trim spends
+ *  those minutes on a near-certain empty result. Above it the yield is
+ *  reliable - the 10-15 bucket has never produced an empty run.
+ *
+ *  600, not 900, because 900 would mean the trim only ever fires on a brand-new
+ *  account. 40% empty at the bottom of the band is a real cost, and it is the
+ *  one FREE_TIER.zeroClipRefunds insures: the first empty run is forgiven. */
+export const FREE_TRIM_FLOOR_SEC = 600;
+
 export const SOURCE_FLOOR = {
   minDurationSec: 60,
   shortNoticeSec: 300,

@@ -159,38 +159,46 @@ describe("download-stage source re-check", () => {
   });
 
   it("CUTS a source that overruns the headroom instead of refusing it", async () => {
+    // A 40-minute source against 700 seconds of allowance - the shape this
+    // branch exists for, and the shape 23 of 42 accounts arrive with.
+    mocks.probeLocalFile.mockResolvedValue({
+      ok: true,
+      durationSec: 2400,
+      title: "Upload",
+    });
     mocks.findFreeCharge.mockResolvedValue({ seconds: 0, estimatedCostUsd: 0 });
-    mocks.freeHeadroomSeconds.mockResolvedValue(300);
+    mocks.freeHeadroomSeconds.mockResolvedValue(700);
     mocks.trimLocalFile.mockResolvedValue({
       ok: true,
       path: "/tmp/source.mp4.trim.mp4",
-      // Deliberately NOT 300: `-c copy` lands on a keyframe, so the output is
-      // usually a little short of what was asked for.
-      durationSec: 288.6,
+      // Deliberately NOT 700: `-c copy` lands on a packet boundary, so the
+      // output is off the mark by up to a group of pictures either way.
+      durationSec: 688.6,
     });
 
     await expect(recheckSourceDuration(RECHECK)).resolves.toBe(
       "/tmp/source.mp4.trim.mp4"
     );
 
-    expect(mocks.trimLocalFile).toHaveBeenCalledWith("/tmp/source.mp4", 300);
+    expect(mocks.trimLocalFile).toHaveBeenCalledWith("/tmp/source.mp4", 700);
     // The PROBED length of the cut, never the 300 that was asked for: the
     // ledger and the cost telemetry have to record what was really processed.
-    expect(mocks.reviseFreeChargeSeconds).toHaveBeenCalledWith("u1", "job1", 289);
+    expect(mocks.reviseFreeChargeSeconds).toHaveBeenCalledWith("u1", "job1", 689);
     expect(mocks.jobUpdate).toHaveBeenCalledWith({
       where: { id: "job1" },
-      data: { sourceDurationSec: 289, sourceTrimmedFromSec: 612 },
+      data: { sourceDurationSec: 689, sourceTrimmedFromSec: 2400 },
     });
     expect(mocks.refundFailedJob).not.toHaveBeenCalled();
   });
 
-  it("refuses rather than cutting below the shortest source we accept", async () => {
-    // 40 seconds of headroom is under SOURCE_FLOOR.minDurationSec. A source
-    // this short would have been refused for its own length even on a full
-    // allowance, so handing one back is a worse answer than saying the free
-    // minutes are spent.
+  it("refuses rather than cutting into the range that mostly returns nothing", async () => {
+    // 300 seconds is above the 60s source floor and well under
+    // FREE_TRIM_FLOOR_SEC. A five-minute source comes back empty 44% of the
+    // time, so cutting to it would spend this account's last minutes on a run
+    // that probably produces nothing - worse than saying they are spent, which
+    // at least leaves the minutes and points at a plan.
     mocks.findFreeCharge.mockResolvedValue({ seconds: 0, estimatedCostUsd: 0 });
-    mocks.freeHeadroomSeconds.mockResolvedValue(40);
+    mocks.freeHeadroomSeconds.mockResolvedValue(300);
 
     await expect(recheckSourceDuration(RECHECK)).rejects.toThrow(
       FreeAllowanceExceededError
@@ -209,8 +217,13 @@ describe("download-stage source re-check", () => {
     // ffmpeg missing from the image, a container it will not stream-copy, an
     // output that will not probe. None of those may become a crashed job, and
     // none of them may become a free full-length run either.
+    mocks.probeLocalFile.mockResolvedValue({
+      ok: true,
+      durationSec: 2400,
+      title: "Upload",
+    });
     mocks.findFreeCharge.mockResolvedValue({ seconds: 0, estimatedCostUsd: 0 });
-    mocks.freeHeadroomSeconds.mockResolvedValue(300);
+    mocks.freeHeadroomSeconds.mockResolvedValue(700);
     mocks.trimLocalFile.mockResolvedValue({
       ok: false,
       reason: "trim-error",
@@ -228,7 +241,7 @@ describe("download-stage source re-check", () => {
   });
 
   it("refunds before it throws, so a lost stage still leaves the allowance back", async () => {
-    // Headroom under the floor, so this is still one of the paths that refuses.
+    // Headroom under both floors, so this is still one of the paths that refuses.
     mocks.findFreeCharge.mockResolvedValue({ seconds: 0, estimatedCostUsd: 0 });
     mocks.freeHeadroomSeconds.mockResolvedValue(40);
     const order: string[] = [];

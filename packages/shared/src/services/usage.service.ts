@@ -1,5 +1,10 @@
 import { prisma } from "../lib/prisma";
-import { getPlanLimits, FREE_TIER, SOURCE_FLOOR } from "../config/plans";
+import {
+  getPlanLimits,
+  FREE_TIER,
+  FREE_TRIM_FLOOR_SEC,
+  SOURCE_FLOOR,
+} from "../config/plans";
 import {
   getSubscriptionState,
   type SubscriptionState,
@@ -360,16 +365,32 @@ async function checkFreeTrial(
   // covers, the user gets real clips, and the balance lands on zero while they
   // are holding them.
   //
-  // So the question here is no longer "does it fit" but "is there enough left
-  // to make anything at all", and SOURCE_FLOOR.minDurationSec is the honest
-  // line: below it this source would have been refused for its own length even
-  // on a full allowance, and cutting a video down to less than the shortest
-  // source we accept is a worse answer than saying the minutes are spent.
+  // So the question here is no longer "does it fit" but "is there anything
+  // useful this submission can still produce", and it is refused on three
+  // grounds only:
   //
-  // `trial.exhausted` still leads, for the reason above it: neededSeconds is 0
-  // on any unprobed submission, and the flag is what refuses a spent account
-  // that the arithmetic would wave through.
-  if (trial.exhausted || trial.remainingSeconds < SOURCE_FLOOR.minDurationSec) {
+  //   - `trial.exhausted`, which still leads for the reason above it:
+  //     neededSeconds is 0 on any unprobed submission, and the flag is what
+  //     refuses a spent account that the arithmetic would wave through.
+  //   - Less left than the shortest source we accept at all.
+  //   - A source we KNOW is too long, against a balance too small to cut it
+  //     into anything worth having. FREE_TRIM_FLOOR_SEC is that line, and it is
+  //     measured: below ten minutes of source the empty rate runs 40% to 82%,
+  //     so trimming there would spend the user's last minutes on a run that
+  //     probably returns nothing. Refusing keeps their minutes AND is the one
+  //     refusal that has ever sent anybody to the plans screen.
+  //
+  // Only when the duration is KNOWN, and that condition is load-bearing rather
+  // than defensive: neededSeconds is 0 for every unprobed upload, and treating
+  // an unknown length as over-long would refuse uploads at submit that the
+  // download stage can measure and settle honestly a minute later. It also
+  // saves the wasted download in the case we can already decide.
+  if (
+    trial.exhausted ||
+    trial.remainingSeconds < SOURCE_FLOOR.minDurationSec ||
+    (neededSeconds > trial.remainingSeconds &&
+      trial.remainingSeconds < FREE_TRIM_FLOOR_SEC)
+  ) {
     return {
       allowed: false,
       code: "FREE_EXHAUSTED",
