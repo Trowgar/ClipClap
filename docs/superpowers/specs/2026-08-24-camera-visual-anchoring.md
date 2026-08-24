@@ -1,4 +1,38 @@
-# Camera visual anchoring: cut confirmation without faces + saliency anchor beyond music mode (2026-08-24, MEASUREMENT IN PROGRESS)
+# Camera visual anchoring: cut confirmation without faces + saliency anchor beyond music mode (2026-08-24, SHIPPED: C + B-shadow; A closed as measured dead end)
+
+## ACCEPTANCE (2026-08-24, E2E + corpus)
+
+Sanity gate: the e2e harness's OFF plan reproduces the shipped prod plan
+shot-for-shot (times/x/layout exact) - no drift, no detector nondeterminism.
+Corpus regression: 8/8 local sources (stream-v2 x3, music x2, podcast,
+sitcom, vlog) - zero OFF-vs-ON differences at detector and plan level, as
+expected (tail-keep needs a hard cut <1s before the window end).
+
+Cops case, measured outcome - and an honest correction to this spec's own
+narrative: the tail DOES split at 31.532s at the detector level (8->9 raw
+shots), but BOTH sub-shots' faces are far under faceSmallFrac (23-77px vs
+115px needed), both fall back to center, and mergeAdjacentLayouts re-merges
+adjacent center shots unconditionally - so the split is invisible in
+plan.shots.length. The fix lands anyway, via anchor displacement: the bad
+face anchor (leftmost tiny runner pooled across the merged span, clamped to
+x=0) can no longer form, and the whole tail goes center x=656. Verified
+frames: t=28.5 OFF = empty trees, ON = full explosion fireball over the road
++ runner sliver; t=31.9 ON = MrBeast centered against the burning van.
+NOTE for future readers diffing shot counts: a tail-keep split between two
+faceless shots is a NO-OP in the final shot list by design - judge the flag
+by geometry (anchor x), not by plan.shots.length. REFRAME_TAIL_KEEP is also
+not planning-only: cfg.tailKeep is baked into detectShots' cutsToShots call,
+so OFF/ON need separate detection passes in any harness.
+
+saliencyShadow attached to all three center shots with real values
+(centroids 863-981, deltas -96..+22px - all small, consistent with the
+"saliency adds little once boundaries are right" measurement); geometry
+byte-identical to shadow-off, confirmed programmatically.
+
+Flags armed in .env 2026-08-24: REFRAME_TAIL_KEEP=on,
+REFRAME_SALIENCY_SHADOW=on (worker-render recreated). Rollback: delete the
+line(s) and `docker compose up -d worker-render`. Artifacts:
+.corpus/feedback-audit/ (e2e-cops.ts, e2e-corpus-regression.ts, e2e/*.jpg).
 
 ## Why now: first real-user feedback with a diagnosed camera defect
 
