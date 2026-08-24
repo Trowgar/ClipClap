@@ -25,14 +25,14 @@ export const metadata: Metadata = {
     siteName: "ClipClap",
     title: "ClipClap - AI clipper for streams, podcasts and VODs",
     description:
-      "Long video in, vertical subtitled clips out. 60 source minutes free, no card. Plans from $3 a week.",
+      "Long video in, vertical subtitled clips out. 40 source minutes free, no card. Plans from $3 a week.",
     images: [{ url: "/icon-512.png", width: 512, height: 512, alt: "ClipClap" }],
   },
   twitter: {
     card: "summary",
     title: "ClipClap - AI clipper for streams, podcasts and VODs",
     description:
-      "Long video in, vertical subtitled clips out. 60 source minutes free, no card. Plans from $3 a week.",
+      "Long video in, vertical subtitled clips out. 40 source minutes free, no card. Plans from $3 a week.",
     images: ["/icon-512.png"],
   },
   // Order matters: the .ico carries sizes="32x32" so SVG-capable browsers
