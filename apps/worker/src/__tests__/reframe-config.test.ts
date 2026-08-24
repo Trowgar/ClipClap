@@ -29,6 +29,7 @@ describe("loadReframeConfig", () => {
       cutRecovery: false,
       tailKeep: false,
       saliencyShadow: false,
+      streamCoverageGate: false,
       camera: DEFAULT_CAMERA,
     });
   });
@@ -60,6 +61,25 @@ describe("loadReframeConfig", () => {
     expect(loadReframeConfig({ REFRAME_SALIENCY_SHADOW: "true" }).saliencyShadow).toBe(false);
     expect(loadReframeConfig({ REFRAME_SALIENCY_SHADOW: "1" }).saliencyShadow).toBe(false);
     expect(loadReframeConfig({}).saliencyShadow).toBe(false);
+  });
+
+  // spec 2026-08-24-render-retry-and-stream-gate §2. Same rule as
+  // REFRAME_STREAM/REFRAME_TAIL_KEEP/REFRAME_SALIENCY_SHADOW: a stray truthy
+  // value must not silently re-plan someone's clip.
+  it("turns the stream coverage gate on only for the exact literal 'on'", () => {
+    expect(loadReframeConfig({ REFRAME_STREAM_COVERAGE_GATE: "on" }).streamCoverageGate).toBe(
+      true
+    );
+    expect(loadReframeConfig({ REFRAME_STREAM_COVERAGE_GATE: "ON" }).streamCoverageGate).toBe(
+      false
+    );
+    expect(loadReframeConfig({ REFRAME_STREAM_COVERAGE_GATE: "true" }).streamCoverageGate).toBe(
+      false
+    );
+    expect(loadReframeConfig({ REFRAME_STREAM_COVERAGE_GATE: "1" }).streamCoverageGate).toBe(
+      false
+    );
+    expect(loadReframeConfig({}).streamCoverageGate).toBe(false);
   });
 
   it("reads env overrides and only accepts the literal 'faces' engine", () => {

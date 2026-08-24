@@ -33,9 +33,10 @@ vi.mock("child_process", () => ({
   },
 }));
 
-import { computeCropPlan } from "../reframe";
+import { computeCropPlan, planDetected, STREAM_SHOT_COVERAGE_MIN, type Detection } from "../reframe";
 import type { ReframeConfig } from "../reframe/config";
 import { DEFAULT_CAMERA } from "../reframe/camera";
+import type { FaceTrack } from "../reframe/types";
 
 const cfg: ReframeConfig = {
   engine: "faces",
@@ -52,6 +53,7 @@ const cfg: ReframeConfig = {
   cutRecovery: false,
   tailKeep: false,
   saliencyShadow: false,
+  streamCoverageGate: false,
   streamVirtualCam: false,
   camera: DEFAULT_CAMERA,
   pipMaxFrac: 0.5,
@@ -379,5 +381,139 @@ describe("computeCropPlan cut recovery", () => {
       class: "small_face",
       reason: "stream_rect_unstable",
     });
+  });
+});
+
+// spec 2026-08-24-render-retry-and-stream-gate §2. planDetected is a pure
+// function of a Detection - these tests build one directly, bypassing the
+// child_process mocking above entirely (detectRange/the sidecar are never
+// involved once a Detection exists).
+describe("planDetected: stream-layout coverage gate", () => {
+  const SW = 640;
+  const SH = 360;
+  // Real tox_4X88jJU.mp4 GT face box (.corpus/stream-v2/README.md), same
+  // fixture reframe-plan.test.ts's D4 suite uses: 49/640 = 0.0765625, well
+  // under the default 0.15 streamFaceCeiling.
+  const toxFace: FaceTrack = {
+    id: 0,
+    box: { x: 575, y: 285, w: 49, h: 55 },
+    score: 0.89,
+    samples: 111,
+    mouthActivity: 0.05,
+  };
+  // Same geometry as reframe-plan.test.ts's "a real, resolvable camRect wins
+  // via D5" fixture: contains toxFace, solves, and (unlike a synthesized
+  // rect) carries a nonzero score - a genuinely DETECTED inset.
+  const realCamRect = { x: 520, y: 254, w: 120, h: 90, score: 5.2 };
+
+  const gateOn: ReframeConfig = {
+    ...cfg,
+    stream: true,
+    streamVirtualCam: true,
+    streamCoverageGate: true,
+  };
+
+  /** One shot showing the streamer (duration `onSec`), one shot showing
+   *  nothing at all (duration `offSec`) - the shape every measured FP had:
+   *  a synthesized rect that is only sometimes actually on screen. */
+  function lowHighDetection(onSec: number, offSec: number, camRect: null | typeof realCamRect): Detection {
+    return {
+      width: SW,
+      height: SH,
+      candidates: [],
+      shots: [
+        { start: 0, end: onSec },
+        { start: onSec, end: onSec + offSec },
+      ],
+      tracksByShot: [
+        { shotIndex: 0, tracks: [toxFace], camRect },
+        { shotIndex: 1, tracks: [], camRect },
+      ],
+    };
+  }
+
+  it("(a) virtualCam plan at ~10% coverage re-plans to zero stream shots, stamped and otherwise equal to an explicit stream:false plan", () => {
+    const detection = lowHighDetection(1, 9, null);
+
+    // Baseline: prove the fixture is actually the FP shape the gate targets
+    // before asserting the gate's effect on it.
+    const ungated = planDetected(detection, { ...gateOn, streamCoverageGate: false });
+    expect(ungated.plan?.profile?.virtualCam).toBe(true);
+    expect(ungated.plan?.shots.some((s) => s.layout === "stream")).toBe(true);
+
+    const gated = planDetected(detection, gateOn);
+    const streamOff = planDetected(detection, { ...gateOn, stream: false });
+
+    expect(gated.plan?.shots.some((s) => s.layout === "stream")).toBe(false);
+    // Persisted stamp (spec 2026-08-24-render-retry-and-stream-gate §2):
+    // without it the re-planned profile is indistinguishable from a source
+    // that never had stream signal, so the gate's first live firing would be
+    // unfindable. Geometry-wise the plan is exactly the stream:false plan -
+    // only `profile.reason`/`gatedCoverage` differ, on purpose.
+    expect(gated.plan?.profile?.reason).toBe("stream_coverage_gated");
+    expect(gated.plan?.profile?.gatedCoverage).toBeCloseTo(0.1, 5);
+    expect(gated.plan).toEqual({
+      ...streamOff.plan,
+      profile: { ...streamOff.plan?.profile, reason: "stream_coverage_gated", gatedCoverage: 0.1 },
+    });
+  });
+
+  it("(b) virtualCam plan at 90% coverage is byte-identical to the gate-off plan, no stamp", () => {
+    const detection = lowHighDetection(9, 1, null);
+
+    const gated = planDetected(detection, gateOn);
+    expect(gated.plan?.profile?.virtualCam).toBe(true);
+
+    const gateOff = planDetected(detection, { ...gateOn, streamCoverageGate: false });
+    expect(JSON.stringify(gated.plan)).toBe(JSON.stringify(gateOff.plan));
+    expect(gated.plan?.shots.some((s) => s.layout === "stream")).toBe(true);
+    expect(gated.plan?.profile?.gatedCoverage).toBeUndefined();
+  });
+
+  it("(c) a DETECTED cam rect at ~10% coverage bypasses the gate untouched, no stamp", () => {
+    const detection = lowHighDetection(1, 9, realCamRect);
+
+    const gated = planDetected(detection, gateOn);
+    expect(gated.plan?.profile?.class).toBe("stream");
+    expect(gated.plan?.profile?.virtualCam).toBeUndefined(); // genuinely detected, not synthesized
+
+    const gateOff = planDetected(detection, { ...gateOn, streamCoverageGate: false });
+    expect(JSON.stringify(gated.plan)).toBe(JSON.stringify(gateOff.plan));
+    expect(gated.plan?.shots.some((s) => s.layout === "stream")).toBe(true);
+    expect(gated.plan?.profile?.gatedCoverage).toBeUndefined();
+  });
+
+  it("(d) flag OFF leaves a low-coverage virtualCam plan untouched, no stamp", () => {
+    const detection = lowHighDetection(1, 9, null);
+
+    const off = planDetected(detection, { ...gateOn, streamCoverageGate: false });
+    expect(off.plan?.profile?.virtualCam).toBe(true);
+    expect(off.plan?.shots.some((s) => s.layout === "stream")).toBe(true);
+    expect(off.plan?.profile?.gatedCoverage).toBeUndefined();
+  });
+
+  it("(e) boundary: coverage just below 0.75 (~0.74) re-plans to zero stream shots", () => {
+    // 74s stream + 26s off, of 100s total = 0.74 - the complement of (f)'s
+    // exact-boundary pass, tuned to sit just under the floor.
+    const detection = lowHighDetection(74, 26, null);
+
+    const gated = planDetected(detection, gateOn);
+    expect(gated.plan?.shots.some((s) => s.layout === "stream")).toBe(false);
+    expect(gated.plan?.profile?.reason).toBe("stream_coverage_gated");
+    expect(gated.plan?.profile?.gatedCoverage).toBeCloseTo(0.74, 5);
+  });
+
+  it("(f) boundary: coverage exactly 0.75 passes untouched, no stamp (>= keeps, < re-plans)", () => {
+    expect(STREAM_SHOT_COVERAGE_MIN).toBe(0.75);
+    // 3s stream + 1s off, of 4s total = exactly 0.75.
+    const detection = lowHighDetection(3, 1, null);
+
+    const gated = planDetected(detection, gateOn);
+    expect(gated.plan?.profile?.virtualCam).toBe(true);
+    expect(gated.plan?.shots.some((s) => s.layout === "stream")).toBe(true);
+    expect(gated.plan?.profile?.gatedCoverage).toBeUndefined();
+
+    const gateOff = planDetected(detection, { ...gateOn, streamCoverageGate: false });
+    expect(gated.plan).toEqual(gateOff.plan);
   });
 });

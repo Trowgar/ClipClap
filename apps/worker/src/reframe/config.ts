@@ -47,6 +47,17 @@ export interface ReframeConfig {
    *  (spec 2026-08-23-music-shorts v1.1), so this flag never fires there
    *  regardless of its own value - see plan.ts's `saliencyShadowFor`. */
   saliencyShadow: boolean;
+  /** Stream-layout coverage-gate killswitch (spec
+   *  2026-08-24-render-retry-and-stream-gate §2). Off is today's virtualCam
+   *  plan byte for byte. On, a plan whose `profile.virtualCam` is `true`
+   *  (the rect was SYNTHESIZED from a junk face track, not detected - see
+   *  `SourceProfile.virtualCam`) gets re-planned with `stream: false` when
+   *  its stream-layout shots cover under `STREAM_SHOT_COVERAGE_MIN` of the
+   *  plan's total duration (index.ts's `planDetected`/`streamShotFrac`) - a
+   *  plan with a genuinely DETECTED rect (`virtualCam` false/absent) always
+   *  bypasses this, since the measured failure mode is synthesis-from-junk-
+   *  face specifically, not low coverage on its own. */
+  streamCoverageGate: boolean;
   camera: CameraConfig;
   /** MUSIC-ONLY plan hint (spec 2026-08-23-music-shorts v1.1, PlanOptions.
    *  musicMode). No env knob - render.ts's music branch is the only writer,
@@ -104,6 +115,9 @@ export function loadReframeConfig(
     // still a behaviour change (extra data written to Clip.cropPlan) and
     // must not turn on from a stray truthy value either.
     saliencyShadow: env.REFRAME_SALIENCY_SHADOW === "on",
+    // Exact literal, the REFRAME_STREAM rule: a killswitch that can be
+    // flipped by accident is not one.
+    streamCoverageGate: env.REFRAME_STREAM_COVERAGE_GATE === "on",
     camera: {
       deadzoneFrac: positive(env.REFRAME_CAM_DEADZONE, DEFAULT_CAMERA.deadzoneFrac),
       settleFrac: positive(env.REFRAME_CAM_SETTLE, DEFAULT_CAMERA.settleFrac),

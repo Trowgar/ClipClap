@@ -200,4 +200,9 @@ export interface SourceProfile {
    * can tell virtual from real by presence alone.
    */
   virtualCam?: true;
+  /** Persisted evidence that the stream-layout coverage gate (spec
+   *  2026-08-24-render-retry-and-stream-gate §2) demoted a virtualCam plan:
+   *  the demoted plan's stream-shot coverage fraction, rounded to 3
+   *  decimals. Present only alongside `reason: "stream_coverage_gated"`. */
+  gatedCoverage?: number;
 }
