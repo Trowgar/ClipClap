@@ -252,12 +252,18 @@ export default function OpusClipAlternativePage() {
             >
               Start free in Telegram
             </a>
-            {/* The web-app alternative is gone from every CTA on the site as of
-                2026-08-25: Telegram accounts activate at 36.7% and hold 112 of 116 jobs,
-                web-only accounts at 7.3% and 4. Offering both here split the decision in
-                favour of the surface that does not work. Sign-in still exists for people
-                who already have a web account; it is just not a competing call to
-                action. */}
+            {/* Telegram leads because it converts 5x better - 36.7% of Telegram accounts
+                run a job against 7.3% of web-only ones, and 112 of 116 jobs are theirs.
+                The browser link stays anyway, and secondary: this is a page people reach
+                from a search engine, and some of them do not use Telegram at all. For
+                those, a Telegram-only call to action is not a weaker conversion, it is
+                none. */}
+            <Link
+              href="/login"
+              className="text-sm text-neutral-500 transition-colors hover:text-neutral-300"
+            >
+              or use it in your browser
+            </Link>
           </div>
         </section>
 

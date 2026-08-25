@@ -283,6 +283,16 @@ export default function CrayoAlternativePage() {
           >
             Open the bot
           </a>
+          <p className="mt-3 text-xs text-neutral-500">
+            No Telegram?{" "}
+            <Link
+              href="/login"
+              className="text-neutral-400 underline underline-offset-4 transition-colors hover:text-white"
+            >
+              Use it in your browser
+            </Link>{" "}
+            - same clips, same free allowance.
+          </p>
         </section>
 
         <RelatedComparisons current="crayo-alternative" />

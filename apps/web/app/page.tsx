@@ -628,11 +628,17 @@ export default function LandingPage() {
               Start free in Telegram
               <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
             </a>
-            {/* No "or use the web app" here any more. It sat directly under the primary
-                CTA and split the one decision this page asks for, in favour of the surface
-                that activates at 7.3%. Sign in stays in the header and the footer, because
-                people who already have a web account must still be able to reach it - it
-                just no longer competes with the button that works. */}
+            {/* The browser path, kept as a real second option rather than removed.
+                Telegram leads because it converts 5x better, but a Telegram-ONLY page
+                throws away everybody who does not use Telegram - and the comparison pages
+                now bringing people from search are exactly where those people arrive. The
+                hierarchy does the work: one button, one quiet link beside it. */}
+            <Link
+              href="/login"
+              className="text-sm text-neutral-500 transition-colors hover:text-neutral-300"
+            >
+              or use it in your browser
+            </Link>
           </motion.div>
 
           <p className="mt-3.5 text-xs text-neutral-400">
@@ -929,6 +935,21 @@ export default function LandingPage() {
               </FadeIn>
             ))}
           </div>
+
+          {/* The plan buttons open the bot, because that is where a checkout has actually
+              completed. This line is for the other person: somebody who wants the same
+              plan without Telegram at all. One line, under the grid, so it is findable
+              without competing with three buttons. */}
+          <p className="mt-6 text-center text-xs text-neutral-500">
+            Prefer the browser?{" "}
+            <Link
+              href="/login"
+              className="text-neutral-400 underline underline-offset-4 transition-colors hover:text-white"
+            >
+              Create a web account
+            </Link>{" "}
+            - same plans, same clips.
+          </p>
         </div>
       </section>
 

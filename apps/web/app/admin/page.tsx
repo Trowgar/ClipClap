@@ -8,6 +8,7 @@ import {
   getFunnel,
   getPulse,
   getRefusals,
+  getSideActions,
   getTotals,
   getTraffic,
   getWebGuests,
@@ -106,6 +107,7 @@ export default async function AdminAnalyticsPage({
   const [
     pulse,
     funnel,
+    sideActions,
     refusals,
     totals,
     traffic,
@@ -116,6 +118,7 @@ export default async function AdminAnalyticsPage({
   ] = await Promise.all([
     getPulse(surface, ownAccounts),
     getFunnel(surface),
+    getSideActions(surface),
     getRefusals(surface),
     getTotals(surface, ownAccounts),
     surface === "bot" ? Promise.resolve(null) : getTraffic(30),
@@ -159,7 +162,16 @@ export default async function AdminAnalyticsPage({
 
       {/* 1. Pulse - the headline. Today is what he actually asks about. */}
       <section>
-        <h2 className="mb-3 font-semibold">Pulse</h2>
+        <h2 className="mb-1 font-semibold">Pulse</h2>
+        {/* Said once, at the top, because every window and every timestamp
+            below depends on it: the page reasons in ANALYTICS_TIMEZONE
+            (Europe/Riga), not in UTC and not in the viewer's browser zone. So
+            "Today" begins at local midnight - 21:00 UTC in summer, 22:00 in
+            winter - and a signup at 00:10 local counts here, not tomorrow. */}
+        <p className="mb-3 text-xs opacity-60">
+          All dates and times on this page are Europe/Riga. Today starts at
+          local midnight - the one exception is the UTC-marked date in Guests.
+        </p>
         <div className="flex flex-col gap-3 sm:flex-row">
           <PulseColumn title="Today" dominant {...pulse.today} />
           <PulseColumn title="7 days" {...pulse.last7} />
@@ -249,6 +261,38 @@ export default async function AdminAnalyticsPage({
           </div>
         )}
       </section>
+
+      {/* 3b. Side actions - recorded, but nobody passes through them on the way
+          to anything, so they get a count and no percentage. They were invisible
+          here until 2026-08-24: the money steps were written to the table and
+          rendered nowhere, and the account link was drawn as funnel step two,
+          where it was permanently the "biggest drop" and made the step below it
+          read 971%. */}
+      {sideActions.length > 0 && (
+        <section>
+          <h2 className="mb-1 font-semibold">Side actions</h2>
+          <p className="mb-2 text-xs opacity-60">
+            Recorded, but not stages - nobody has to pass them, so there is no
+            drop-off to read.
+          </p>
+          <div className="space-y-1">
+            {sideActions.map((a) => (
+              <div
+                key={a.event}
+                className="flex items-baseline justify-between gap-2 text-sm"
+              >
+                <span className="opacity-80">{a.label}</span>
+                <span className="flex items-baseline gap-2">
+                  {a.repeats > 0 && (
+                    <span className="text-xs opacity-50">+{a.repeats} repeats</span>
+                  )}
+                  <span className="font-semibold tabular-nums">{a.people}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* 4. Refusals - people who tried and were turned away, only shown when it happened. */}
       {refusals.length > 0 && (
