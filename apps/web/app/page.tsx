@@ -532,7 +532,7 @@ export default function LandingPage() {
                 5.9% on the web signup, so the primary button sends people where the product
                 actually works. Sign in stays for people who want the web app. */}
             <a
-              href="https://t.me/clipclapio_bot"
+              href="https://t.me/clipclapio_bot?start=src_web_header"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-black transition-all hover:bg-neutral-200 active:scale-[0.97]"
@@ -613,7 +613,7 @@ export default function LandingPage() {
             className="mt-7 flex flex-col items-center gap-3 sm:flex-row sm:justify-center"
           >
             <a
-              href="https://t.me/clipclapio_bot"
+              href="https://t.me/clipclapio_bot?start=src_web_hero"
               target="_blank"
               rel="noopener noreferrer"
               // White, not Telegram blue: the same action is already a white button in the
@@ -837,7 +837,7 @@ export default function LandingPage() {
                 </div>
 
                 <a
-                  href="https://t.me/clipclapio_bot"
+                  href="https://t.me/clipclapio_bot?start=src_web_free"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="group mt-8 inline-flex items-center gap-2.5 rounded-xl bg-[#2AABEE] px-6 py-3 text-sm font-semibold text-white transition-all hover:bg-[#229ED9] hover:scale-[1.02] active:scale-[0.98]"
@@ -916,7 +916,7 @@ export default function LandingPage() {
                   are free - one-time, on a new account.
                 </p>
                 <a
-                  href="https://t.me/clipclapio_bot"
+                  href="https://t.me/clipclapio_bot?start=src_web_section"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="group inline-flex flex-shrink-0 items-center gap-1.5 text-sm font-medium text-white transition-colors hover:text-neutral-300"
@@ -1077,7 +1077,7 @@ export default function LandingPage() {
               Compare tools
             </Link>
             <a
-              href="https://t.me/clipclapio_bot"
+              href="https://t.me/clipclapio_bot?start=src_web_footer"
               target="_blank"
               rel="noopener noreferrer"
               className="text-xs text-neutral-600 hover:text-neutral-400 transition-colors"

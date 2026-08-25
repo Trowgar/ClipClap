@@ -26,7 +26,10 @@ import { RelatedComparisons } from "@/components/related-comparisons";
 
 const CHECKED = "19 August 2026";
 const SITE = process.env.NEXT_PUBLIC_APP_URL ?? "https://clipclap.io";
-const BOT = "https://t.me/clipclapio_bot";
+/** Tagged per page, so "did SEO send anybody into the bot" is a number rather than
+ *  a guess about signup spikes. The bot records a bot_start_src_<slug> funnel event
+ *  for a stranger arriving on this payload; slugs are lowercase [a-z0-9_-], 32 max. */
+const BOT = "https://t.me/clipclapio_bot?start=src_cmp_tgbots";
 
 export const metadata: Metadata = {
   title: "Telegram bots that clip long video into shorts, compared",
