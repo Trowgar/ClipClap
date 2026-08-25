@@ -221,7 +221,7 @@ describe("short-source rescue wiring", () => {
     });
     expect(r.highlights).toHaveLength(0);
     expect(r.noClipsReason).toBe("PARTIAL_TRANSCRIPT");
-    expect(r.telemetry.rescue).toEqual({ attempted: 1, snapFailures: 1, compressFailures: 0, shipped: false });
+    expect(r.telemetry.rescue).toEqual({ attempted: 1, snapFailures: 1, compressFailures: 0, shipped: false, tier: "short" });
   });
 
   it("replaces script-mismatched copy with the verbatim snippet, still without an LLM call", async () => {

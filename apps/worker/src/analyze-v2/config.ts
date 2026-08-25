@@ -271,6 +271,22 @@ export interface AnalyzeConfig {
    *  short-source notice fires under, imported rather than copied so the
    *  product copy and the engine can never disagree about what "short" is. */
   shortSourceRescueMaxSec: number;
+  /** MID-SOURCE RESCUE (spec 2026-08-25-mid-rescue-and-stream-resolver-v2,
+   *  part 1): extends the same empty-exit rescue to sources in
+   *  [`shortSourceRescueMaxSec`, `rescueMidMaxSourceSec`) - independently
+   *  switchable from `shortSourceRescueEnabled` so the two ceilings can be
+   *  armed on separate schedules. SAME candidate rules, SAME lowQuality mark,
+   *  SAME bot copy as the short rescue - rescue.ts itself is untouched by
+   *  this flag; only the eligibility window at the call site widens. Off
+   *  until measured, the same discipline as every other stage switch in this
+   *  file. Trigger: "Ben trades" (tg 6987955255), 795s source, judged and
+   *  fully rejected, 0 clips on a newcomer's second submission. */
+  rescueMidSourceEnabled: boolean;
+  /** Ceiling in seconds for the mid rescue window - sources at or above this
+   *  are NOT rescue-eligible (matches the short rescue's own strict-under
+   *  discipline at its own ceiling). 1200 = 20 minutes, the spec's own
+   *  number, not re-derived here. */
+  rescueMidMaxSourceSec: number;
   /** Master switch for stream analyze mode (spec 2026-08-19-stream-analyze-
    *  mode, S1) - the door `resolveAnalysisMode` (mode.ts) checks before any
    *  URL or density logic runs, so every consumer of `AnalysisMode` is dark
@@ -452,3 +468,8 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     musicShortsCount: num(env, "MUSIC_SHORTS_COUNT", 2),
   };
 }
+    // file: a stray truthy env value must not widen the rescue window to a
+    // real user's mid-length source by accident.
+    rescueMidSourceEnabled: env.RESCUE_MID_SOURCE === "on",
+    rescueMidMaxSourceSec: num(env, "RESCUE_MID_MAX_SOURCE_SEC", 1200),
+    // Exact literal "on", same discipline as every other stage switch in this

@@ -999,27 +999,32 @@ export async function analyzeHighlightsV2(
       );
     }
 
-    // SHORT-SOURCE RESCUE (spec 2026-08-19-short-source-rescue). Every
-    // candidate was really judged (the guard above) and really rejected - for
-    // a normal source that honest "no" ships below, unchanged. For a SHORT
-    // source that "no" is usually the user's first impression of the product
-    // (half of all first submissions are under 5 minutes, 0.2 clips on
-    // average, 2 of 16 returned), and the measured population died entirely
-    // downstream of the critic - so the best snappable verdict ships as ONE
-    // lowQuality clip instead. Deliberately AFTER the unjudged throw: a
-    // technical failure must keep failing - its retries are free to the user
-    // and genuinely re-roll the critic - and a rescue there would bill for an
-    // answer that was never obtained. `sourceDurationSec` comes only from the
-    // stage; eval scripts never pass it, so the corpus never sees this path.
-    // STRICTLY under, matching isShortSource in shared plans.ts exactly: the
-    // bot's notice and this rescue must describe the same population, and the
-    // bot's is `durationSec < shortNoticeSec`. A 300s source gets neither.
+    // SHORT-SOURCE RESCUE (spec 2026-08-19-short-source-rescue), extended by
+    // MID-SOURCE RESCUE (spec 2026-08-25-mid-rescue-and-stream-resolver-v2,
+    // part 1). Every candidate was really judged (the guard above) and
+    // really rejected - for a normal source that honest "no" ships below,
+    // unchanged. For a SHORT source that "no" is usually the user's first
+    // impression of the product (half of all first submissions are under 5
+    // minutes, 0.2 clips on average, 2 of 16 returned), and the measured
+    // population died entirely downstream of the critic - so the best
+    // snappable verdict ships as ONE lowQuality clip instead. Deliberately
+    // AFTER the unjudged throw: a technical failure must keep failing - its
+    // retries are free to the user and genuinely re-roll the critic - and a
+    // rescue there would bill for an answer that was never obtained.
+    // `sourceDurationSec` comes only from the stage; eval scripts never pass
+    // it, so the corpus never sees this path. STRICTLY under, matching
+    // isShortSource in shared plans.ts exactly: the bot's notice and this
+    // rescue must describe the same population, and the bot's is
+    // `durationSec < shortNoticeSec`. A 300s source gets neither.
     const shortSource =
       typeof options.sourceDurationSec === "number" &&
       options.sourceDurationSec > 0 &&
       options.sourceDurationSec < cfg.shortSourceRescueMaxSec;
     let rescueTelemetry: RescueTelemetry | undefined;
-    if (cfg.shortSourceRescueEnabled && shortSource) {
+    if (
+      (cfg.shortSourceRescueEnabled && shortSource) ||
+      (cfg.rescueMidSourceEnabled && midSource)
+    ) {
       const rescue = rescueShortSource(critic.verdicts, nodes, cfg);
       rescueTelemetry = rescue.telemetry;
       if (rescue.clip) {
@@ -1041,13 +1046,26 @@ export async function analyzeHighlightsV2(
           // finalizerSurvivors, meanLexicalOverlap, snippetFallbacks - keep
           // their selection-path values deliberately: they describe the
           // selection that found nothing (kept > finalizerSurvivors is the
+    // MID window: [shortSourceRescueMaxSec, rescueMidMaxSourceSec) - the same
+    // strict-under discipline at its own ceiling, disjoint from shortSource
+    // above so a duration is eligible for at most one tier. Independently
+    // switchable (rescueMidSourceEnabled) so the two ceilings can be armed on
+    // separate schedules; the candidate rules, lowQuality mark and bot copy
+    // inside rescueShortSource are untouched by this widening.
+    const midSource =
+      typeof options.sourceDurationSec === "number" &&
+      options.sourceDurationSec >= cfg.shortSourceRescueMaxSec &&
+      options.sourceDurationSec < cfg.rescueMidMaxSourceSec;
           // rescue's signature in a job record, not a bug), and the rescue's
-          // own copy provenance lives in rescue.copySource.
+          // own copy provenance lives in rescue.copySource. `rescue.tier`
+          // ("short" | "mid") records which ceiling made this job eligible,
+          // additive only on the shipped path, so the 2026-09 checkpoint can
+          // tell the two populations apart.
           telemetry: {
             ...telemetry,
             kept: 1,
             durations: [Math.round((h.end - h.start) * 10) / 10],
-            rescue: rescueTelemetry,
+            rescue: { ...rescueTelemetry, tier: shortSource ? "short" : "mid" },
           },
           usage,
         };
@@ -1065,7 +1083,9 @@ export async function analyzeHighlightsV2(
       // The rescue key is present iff the stage RAN (same not-a-key promise
       // as arcAudit) - here that is "ran and could not realize any verdict",
       // which the 2026-09 checkpoint needs to see as clearly as a success.
-      telemetry: rescueTelemetry ? { ...telemetry, rescue: rescueTelemetry } : telemetry,
+      telemetry: rescueTelemetry
+        ? { ...telemetry, rescue: { ...rescueTelemetry, tier: shortSource ? "short" : "mid" } }
+        : telemetry,
       usage,
     };
   }
