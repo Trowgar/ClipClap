@@ -21,6 +21,20 @@ const execFileAsync = promisify(execFile);
 const WORD_A = "التركي";
 const WORD_B = "مواجهة";
 
+/** Two Japanese strings, three characters each, no spaces - same reasoning as
+ *  WORD_A/WORD_B above. "だめか" is the real defect string from the spec
+ *  (job cmt8gxsx4: "だめか" rendered as three .notdef boxes under Montserrat). */
+const JA_WORD_A = "だめか";
+const JA_WORD_B = "今日は";
+
+/** One Hindi word. Real running text (with a virama and a vowel matra, not
+ *  bare consonants), from the second job in the spec's blast radius
+ *  (cmt7e24cl). Only one word is needed here - the two-different-words half
+ *  of the guard is already covered by Arabic and Japanese above; this one
+ *  exists to prove Devanagari specifically isn't still landing on Montserrat
+ *  tofu. */
+const HI_WORD = "नमस्ते";
+
 let dir: string;
 
 beforeAll(async () => {
@@ -82,5 +96,53 @@ describe("burned Arabic is glyphs, not boxes", () => {
       renderHash(WORD_B, "en"),
     ]);
     expect(a).toBe(b);
+  });
+});
+
+describe("burned Japanese is glyphs, not boxes (spec 2026-08-25-cjk-subtitles)", () => {
+  // The mechanism-overcomes-default guard from the spec: a Japanese string
+  // burned with the JP face must differ from the SAME string under
+  // Montserrat - proof the face fix actually changes the raster, not just
+  // the ASS Fontname field.
+  it("draws a Japanese word differently under the JP face than under Montserrat", async () => {
+    const [ja, latin] = await Promise.all([
+      renderHash(JA_WORD_A, "ja"),
+      renderHash(JA_WORD_A, "en"),
+    ]);
+    expect(ja).not.toBe(latin);
+  });
+
+  // Two DIFFERENT Japanese strings under the JP face must themselves produce
+  // different rasters - proof the face is drawing real glyphs (kana/kanji),
+  // not one uniform substitute box per character the way Montserrat did.
+  it("draws two different Japanese words differently under the JP face", async () => {
+    const [a, b] = await Promise.all([
+      renderHash(JA_WORD_A, "ja"),
+      renderHash(JA_WORD_B, "ja"),
+    ]);
+    expect(a).not.toBe(b);
+  });
+
+  // The negative control for the pair above: same two words, Montserrat has
+  // no CJK glyphs at all, so if the JP-face comparison above were passing by
+  // accident (e.g. both strings quietly rendering as nothing) this would
+  // catch it by demonstrating the collapse actually happens under a face
+  // that truly lacks the glyphs.
+  it("collapses those same two Japanese words to one raster under the Latin face", async () => {
+    const [a, b] = await Promise.all([
+      renderHash(JA_WORD_A, "en"),
+      renderHash(JA_WORD_B, "en"),
+    ]);
+    expect(a).toBe(b);
+  });
+});
+
+describe("burned Hindi is glyphs, not boxes (spec 2026-08-25-cjk-subtitles)", () => {
+  it("draws a Hindi word differently under the Devanagari face than under Montserrat", async () => {
+    const [hi, latin] = await Promise.all([
+      renderHash(HI_WORD, "hi"),
+      renderHash(HI_WORD, "en"),
+    ]);
+    expect(hi).not.toBe(latin);
   });
 });

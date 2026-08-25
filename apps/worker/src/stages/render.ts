@@ -245,11 +245,17 @@ async function renderClips(
       // switch language partway through and the job carries only the dominant
       // one; both are nullable and an absent value keeps the Latin face.
       const clipLanguage = highlight.language ?? job.language;
-      // Derived even when subtitles are off so the editor can enable them later
+      // Derived even when subtitles are off so the editor can enable them later.
+      // clipLanguage passed through so CJK gets its own chunking budget
+      // (subtitles.ts chunkParamsForLanguage) - without it every ja/zh/ko cue
+      // would still chunk under the 3-word Latin cap, three single-character
+      // Whisper "words" at a time, even after the face fix stops them
+      // rendering as tofu (spec 2026-08-25-cjk-subtitles.md).
       const cues = segmentsToCues(
         transcription.segments,
         highlight.start,
-        highlight.end
+        highlight.end,
+        clipLanguage
       );
       // Same segments, same window, same repair as the cues above - counted
       // rather than re-derived, so the manifest describes what was drawn.

@@ -6,7 +6,7 @@ import { tmpdir } from "os";
 import { randomUUID } from "crypto";
 import type { SubtitleCue, SubtitleWord, WhisperSegment } from "@clipclap/shared";
 import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
-import { fontForLanguage } from "./subtitle-script";
+import { fontForLanguage, isCjkLanguage } from "./subtitle-script";
 
 const execFileAsync = promisify(execFile);
 
@@ -57,6 +57,101 @@ const DEFAULT_STYLE = {
 // do not add one back without a measurement that disagrees with this one.
 const MAX_CHUNK_WORDS = 3;
 const MAX_CHUNK_CHARS = 18;
+
+// CJK (ja/zh*/ko, see isCjkLanguage in subtitle-script.ts) is where the
+// "one budget for every script" story above finally breaks, for two
+// independent reasons (spec docs/superpowers/specs/2026-08-25-cjk-subtitles.md):
+//
+// 1. Whisper hands back single-character "words" for Japanese - a real
+//    transcriptJson example: "今だ" -> ["今","だ"] - so MAX_CHUNK_WORDS=3
+//    would cap a CJK cue at three GLYPHS, most of a spoken clause, flashing
+//    on and off far faster than the pacing this chunker exists to produce.
+//    The word cap has to be raised high enough that it never binds and the
+//    character cap governs instead, same as it already does for every
+//    3-word-or-fewer chunk today.
+// 2. Full-width glyphs are roughly twice as wide as a Latin/Cyrillic
+//    character at the same font size, so 18 (tuned on those scripts) would
+//    be tight rather than safe here.
+//
+// A THIRD reason changes what the cap has to guarantee, not just its size.
+// Every other script's cue text is built by segmentsToCues joining a chunk's
+// words with a literal ASCII space (`chunk.map(w => w.text).join(" ")`).
+// CJK words are NOT: Japanese (and Chinese, Korean) do not write spaces
+// between words at all, so cueJoinSeparator below returns "" for CJK and
+// segmentsToCues burns the words run together, same as real running text.
+// That has a consequence for wrapping: libass's default smart WrapStyle can
+// only break a line at whitespace, so a Latin/Cyrillic/Arabic cue that
+// overshoots the frame just wraps to a second line - "31 characters wrap to
+// two lines, which reads fine" per the derivation above - but a CJK cue with
+// no separator has NO break point at all. Measured directly (below): a
+// too-long contiguous CJK string does not wrap, it overflows off-canvas,
+// clipped at the frame edges. So MAX_CHUNK_CHARS_CJK cannot be "safe not
+// tight" the way 18 is - it has to be a hard ceiling nothing ever crosses,
+// and it is spent in pure GLYPH count now (no separator budget to account
+// for, since there is no separator).
+//
+// Measured (not guessed) by replicating the derivation above: the real
+// generateAss()+ass-filter path, language "ja" (Noto Sans JP, the face wired
+// in subtitle-script.ts), same 1080x1920 canvas and font size 100, burning
+// `"国".repeat(n)` - CONTIGUOUS, no separator, exactly the shape
+// segmentsToCues now produces for n one-character words - and reading the
+// rendered frame's own pixel bounding box (script:
+// apps/worker/.corpus/cjk-cap-measurement/measure-cjk-cap.ts):
+//
+//   n    rendered
+//   15   single line, x:[26,1053] - inside the [MarginL, PlayResX-MarginR] =
+//        [20,1060] safe area with room to spare
+//   16   x:[0,1079] - clipped at BOTH frame edges (0 and 1079, PlayResX-1),
+//        i.e. cut off by the canvas boundary, not wrapped - there is no
+//        space in the string for libass to break on
+//
+// So 15 is the largest glyph count that still renders as one line fully
+// inside the frame, and 16 is the first that gets clipped instead. A 10%
+// safety margin off that fitting boundary (15 * 0.9 = 13.5, floored) sets
+// the cap at 13.
+//
+// (An earlier version of this derivation measured 12 words / budget 23 -> 20
+// when CJK cues were still space-joined like every other script. Superseded
+// once the join changed to "" - the two numbers are not comparable, because
+// a "budget unit" used to mean "glyph or separator" and now means "glyph".)
+//
+// Mixed cues: a CJK segment can carry a non-CJK token too (a Latin brand
+// name inside otherwise-Japanese speech, say) - joined with the same ""
+// separator as everything else in a CJK cue, so it can end up glued directly
+// against the kana beside it with no space. Accepted for v1, not
+// special-cased: the alternative is per-word script detection inside the
+// join itself, which is real complexity for a case that has not been seen in
+// this product's corpus yet.
+//
+// MAX_CHUNK_WORDS_CJK is set well above anything a real segment reaches so
+// it never binds - the character cap is what governs, same intent as the
+// hard-limit note above.
+const MAX_CHUNK_WORDS_CJK = 24;
+const MAX_CHUNK_CHARS_CJK = 13;
+
+// Devanagari (hi/mr/ne/sa) is NOT part of isCjkLanguage: its words are
+// space-delimited and multi-character like Latin and Cyrillic, so nothing
+// about the reasons above applies to it. It keeps MAX_CHUNK_WORDS /
+// MAX_CHUNK_CHARS and the " " join separator - the Latin/Cyrillic/Arabic
+// budget - unchanged, same as Arabic already does.
+//
+// The single source of truth for "does this language's cue text get a space
+// between its words": both segmentsToCues (building the burned text) and
+// chunkWords' width() (costing the character budget that text has to fit)
+// call this, so the two can never disagree about what a chunk will actually
+// render as.
+function cueJoinSeparator(language?: string | null): string {
+  return isCjkLanguage(language) ? "" : " ";
+}
+
+function chunkParamsForLanguage(
+  language?: string | null
+): { maxWords: number; maxChars: number; joinSeparator: string } {
+  const joinSeparator = cueJoinSeparator(language);
+  return isCjkLanguage(language)
+    ? { maxWords: MAX_CHUNK_WORDS_CJK, maxChars: MAX_CHUNK_CHARS_CJK, joinSeparator }
+    : { maxWords: MAX_CHUNK_WORDS, maxChars: MAX_CHUNK_CHARS, joinSeparator };
+}
 
 // Below this, a cue is a flash rather than a line anyone reads. Not a hard
 // floor - the chunker cannot make a cue last longer than the words in it are
@@ -511,7 +606,14 @@ export function summariseRestores(
 export function segmentsToCues(
   segments: WhisperSegment[],
   clipStart: number,
-  clipEnd: number
+  clipEnd: number,
+  // The clip's spoken language, mirroring generateAss's own trailing,
+  // optional `language` param below - same reasoning: appended at the end so
+  // every existing caller (including the eval scripts and the fixtures in
+  // subtitles.test.ts) keeps compiling and keeps today's Latin/Cyrillic/
+  // Arabic/Devanagari chunking exactly as it was. Only CJK reads it
+  // differently (chunkParamsForLanguage above).
+  language?: string | null
 ): SubtitleCue[] {
   return segments
     .filter((s) => s.end > clipStart && s.start < clipEnd)
@@ -534,7 +636,13 @@ export function segmentsToCues(
       }
 
       // Word timings let us chunk the segment into short punchy cues.
-      const chunks = chunkWords(words, segStart, segEnd);
+      const chunks = chunkWords(words, segStart, segEnd, language);
+      // CJK words join with nothing - Japanese/Chinese/Korean do not write
+      // spaces between words - every other script keeps the space this join
+      // has always used. See cueJoinSeparator above; chunkWords' own width()
+      // budget charges the identical separator so the two can never disagree
+      // about what gets burned.
+      const separator = cueJoinSeparator(language);
       return chunks.map((chunk, i) => {
         const next = chunks[i + 1];
         return {
@@ -543,7 +651,7 @@ export function segmentsToCues(
           // Hold each chunk until the next one starts so text never flickers
           // off mid-sentence; the last chunk runs to the segment end.
           end: next ? next[0].start : segEnd,
-          text: chunk.map((w) => w.text).join(" "),
+          text: chunk.map((w) => w.text).join(separator),
           words: chunk,
         };
       });
@@ -593,7 +701,7 @@ function wordWeight(text: string): number {
  * put on the first and last cue, so the durations costed here are the ones the
  * viewer gets rather than the raw word timings.
  *
- * O(cues x words x MAX_CHUNK_WORDS). The corpus has 13845 segments, a median of
+ * O(cues x words x maxWords). The corpus has 13845 segments, a median of
  * 5 words and a maximum of 42, so the worst real segment costs under 2000
  * operations. Stated rather than capped: a cap would change the output on
  * exactly the input nobody has seen, which is the wrong place to be surprised.
@@ -601,33 +709,46 @@ function wordWeight(text: string): number {
  * Exported for its own tests. The cost model has three terms that can each
  * dominate the other two, and a test that could only reach them through
  * `segmentsToCues` would have to build a whole segment to move one weight.
+ *
+ * `language` selects the (maxWords, maxChars) pair via
+ * chunkParamsForLanguage - CJK gets its own budget, every other script keeps
+ * the MAX_CHUNK_WORDS/MAX_CHUNK_CHARS pair this file always had. Trailing and
+ * optional so every existing caller (including subtitles.test.ts's synthetic
+ * fixtures) keeps compiling and keeps today's output.
  */
 export function chunkWords(
   words: SubtitleWord[],
   segStart: number,
-  segEnd: number
+  segEnd: number,
+  language?: string | null
 ): SubtitleWord[][] {
   const n = words.length;
   if (n === 0) return [];
 
-  // Width of words [i, j) as one line, spaces included.
+  const { maxWords, maxChars, joinSeparator } = chunkParamsForLanguage(language);
+
+  // Width of words [i, j) as one line, separators included - the SAME
+  // separator segmentsToCues will actually join them with (joinSeparator: a
+  // space for every script but CJK, nothing for CJK), so this never charges
+  // for a character the burned text doesn't have.
   const width = (i: number, j: number) => {
     let chars = 0;
-    for (let k = i; k < j; k += 1) chars += words[k].text.length + (k > i ? 1 : 0);
+    for (let k = i; k < j; k += 1)
+      chars += words[k].text.length + (k > i ? joinSeparator.length : 0);
     return chars;
   };
   // A single word is always legal however long it is: there is nothing to
   // split it with, and refusing it would leave the segment with no split at
-  // all. This is the one place a cue may exceed MAX_CHUNK_CHARS, and it is the
+  // all. This is the one place a cue may exceed maxChars, and it is the
   // same escape the greedy fill had.
   const legal = (i: number, j: number) =>
-    j - i === 1 || (j - i <= MAX_CHUNK_WORDS && width(i, j) <= MAX_CHUNK_CHARS);
+    j - i === 1 || (j - i <= maxWords && width(i, j) <= maxChars);
 
   // Fewest cues that cover every word legally.
   const fewest = new Array<number>(n + 1).fill(Infinity);
   fewest[0] = 0;
   for (let j = 1; j <= n; j += 1) {
-    for (let i = Math.max(0, j - MAX_CHUNK_WORDS); i < j; i += 1) {
+    for (let i = Math.max(0, j - maxWords); i < j; i += 1) {
       if (legal(i, j)) fewest[j] = Math.min(fewest[j], fewest[i] + 1);
     }
   }
@@ -648,7 +769,7 @@ export function chunkWords(
 
   for (let k = 1; k <= cueCount; k += 1) {
     for (let j = 1; j <= n; j += 1) {
-      for (let i = Math.max(0, j - MAX_CHUNK_WORDS); i < j; i += 1) {
+      for (let i = Math.max(0, j - maxWords); i < j; i += 1) {
         if (!legal(i, j) || !Number.isFinite(cost[k - 1][i])) continue;
         let c = cost[k - 1][i];
 
@@ -762,7 +883,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`
     .filter((c) => c.end > c.start)
     .map((c) => {
       const text =
-        c.words && c.words.length > 0 ? karaokeText(c) : escapeAssText(c.text);
+        c.words && c.words.length > 0
+          ? karaokeText(c, language)
+          : escapeAssText(c.text);
       return `Dialogue: 0,${formatAssTime(c.start)},${formatAssTime(c.end)},Default,,0,0,0,,${text}`;
     })
     .join("\n");
@@ -774,8 +897,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text`
 // text shows SecondaryColour. The line-level \1c override turns the primary
 // yellow, so spoken words highlight while unspoken ones stay white (the
 // style's secondary colour).
-function karaokeText(cue: SubtitleCue): string {
+//
+// This is the path that actually burns for almost every cue: chunkWords
+// always hands segmentsToCues a `words` array, so generateAss's plain-text
+// branch (escapeAssText(c.text), joined by cueJoinSeparator in
+// segmentsToCues) only fires for the wordless-segment fallback. The literal
+// space used to be hardcoded here regardless of language - fixing the join
+// in segmentsToCues alone would have left every real Japanese cue still
+// space-separated in the actual burn, because this function never read
+// `cue.text` at all. `\k` durations are per-word and untouched either way;
+// only the separator BETWEEN each `{\k}word` span changes.
+function karaokeText(cue: SubtitleCue, language?: string | null): string {
   const words = cue.words!;
+  const separator = cueJoinSeparator(language);
   const parts: string[] = [`{\\1c${DEFAULT_STYLE.karaokeFillColor}}`];
   let cursor = cue.start;
   for (const w of words) {
@@ -785,7 +919,7 @@ function karaokeText(cue: SubtitleCue): string {
       1,
       Math.round((Math.max(w.end, cursor) - cursor) * 100)
     );
-    parts.push(`{\\k${durationCs}}${escapeAssText(w.text)} `);
+    parts.push(`{\\k${durationCs}}${escapeAssText(w.text)}${separator}`);
     cursor = Math.max(w.end, cursor);
   }
   return parts.join("").trimEnd();

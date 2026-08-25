@@ -102,3 +102,25 @@ face because fontconfig has no font database inside the worker image, so the
 Arabic face has to be named explicitly. See
 docs/superpowers/specs/2026-08-13-arabic-locale-design.md §2.2.
 ================================================================================
+Noto Sans JP, Noto Sans SC, Noto Sans KR -
+Copyright 2014-2021 Adobe (http://www.adobe.com/). Noto is a trademark of
+Google Inc.
+(https://github.com/notofonts/noto-cjk)
+
+Licensed under the SIL Open Font License, Version 1.1, reproduced above.
+Vendored as the language-specific Bold subset OTFs (Sans/SubsetOTF/<JP|SC|KR>)
+for burned-in Japanese, (Simplified) Chinese and Korean subtitles, for the
+same reason as Tajawal above: no fontconfig database inside the worker image,
+so each script's face has to be named explicitly. Traditional Chinese and
+Cantonese route to the SC face too (glyph forms read as Simplified) - a
+recorded v1 compromise, not an oversight. See
+docs/superpowers/specs/2026-08-25-cjk-subtitles.md.
+================================================================================
+Noto Sans Devanagari - Copyright 2022 The Noto Project Authors
+(https://github.com/notofonts/devanagari)
+
+Licensed under the SIL Open Font License, Version 1.1, reproduced above.
+Vendored (hinted/ttf Bold build from the v2.006 release) for burned-in Hindi,
+Marathi, Nepali and Sanskrit subtitles, for the same reason as Tajawal above.
+See docs/superpowers/specs/2026-08-25-cjk-subtitles.md.
+================================================================================

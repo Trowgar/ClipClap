@@ -211,6 +211,135 @@ describe("chunkWords", () => {
   });
 });
 
+describe("chunkWords / segmentsToCues - CJK per-script params (spec 2026-08-25-cjk-subtitles)", () => {
+  const evenly = (texts: string[], step = 1): SubtitleWord[] =>
+    texts.map((text, i) => ({ text, start: i * step, end: (i + 1) * step }));
+
+  // Whisper's real shape for Japanese: one character per "word" (verified on
+  // a real transcriptJson: "今だ" -> ["今","だ"]). Twelve of them, evenly
+  // spoken so timing never decides the split, same as the Latin fixtures
+  // above. Under the 13-glyph CJK cap this whole segment fits ONE cue.
+  const jaWords12 = evenly([
+    "今", "だ", "そ", "れ", "は", "違", "う", "と", "思", "い", "ま", "す",
+  ]);
+
+  // Twenty single-char words - more than the 13-glyph CJK cap - so a split
+  // is forced and the tests below can show what caps it (13 glyphs) and
+  // what doesn't (the 3-word Latin cap).
+  const jaWords20 = evenly([
+    "今", "だ", "そ", "れ", "は", "違", "う", "と", "思", "い",
+    "ま", "す", "消", "防", "隊", "火", "強", "す", "ぎ", "る",
+  ]);
+
+  it("a 12-word Japanese segment stays in ONE cue under the 13-glyph CJK cap", () => {
+    // Under the Latin word cap this would be 4 cues (12 words / 3 per cue).
+    // The measured CJK cap (13 glyphs, no separator - see the derivation in
+    // subtitles.ts) is wide enough that all 12 single-character words fit
+    // one cue without fragmenting.
+    const chunks = chunkWords(jaWords12, 0, 12, "ja");
+    expect(chunks.length).toBe(1);
+  });
+
+  it("a 20-word Japanese segment chunks by the 13-glyph CJK cap, not the 3-word Latin cap", () => {
+    const chunks = chunkWords(jaWords20, 0, 20, "ja");
+    // Under the Latin word cap every chunk would hold at most 3 words (7
+    // cues for 20 words). The CJK cap is wide enough that at least one cue
+    // holds more than 3 words - proof the 3-word ceiling is not what is
+    // binding here.
+    expect(chunks.some((c) => c.length > 3)).toBe(true);
+    // And it is still bounded by something: no chunk exceeds the 13-glyph
+    // cap (each word here is exactly one glyph and CJK words carry no
+    // separator budget, so a chunk's word count IS its glyph count), and
+    // covering 20 of them needs exactly ceil(20/13) = 2 cues.
+    expect(chunks.every((c) => c.length <= 13)).toBe(true);
+    expect(chunks.length).toBe(2);
+  });
+
+  it("segmentsToCues joins a CJK cue's words with no separator - Japanese does not write spaces between words", () => {
+    const seg: WhisperSegment[] = [
+      {
+        start: 0,
+        end: 20,
+        text: jaWords20.map((w) => w.text).join(""),
+        words: jaWords20,
+      },
+    ];
+    const cues = segmentsToCues(seg, 0, 20, "ja");
+    expect(cues.length).toBeGreaterThan(0);
+    for (const c of cues) {
+      expect(c.text).not.toMatch(/\s/);
+    }
+    // The concatenation of every cue's text reconstructs the segment exactly
+    // - the join change drops or duplicates no character.
+    expect(cues.map((c) => c.text).join("")).toBe(
+      jaWords20.map((w) => w.text).join("")
+    );
+  });
+
+  it("the same-shape 20-word segment in English still joins with a space and obeys the 3-word cap", () => {
+    const enWords = evenly([
+      "one", "two", "three", "four", "five", "six", "seven", "eight",
+      "nine", "ten", "eleven", "twelve", "thirteen", "fourteen", "fifteen",
+      "sixteen", "seventeen", "eighteen", "nineteen", "twenty",
+    ]);
+    const chunks = chunkWords(enWords, 0, 20, "en");
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(3);
+
+    const seg: WhisperSegment[] = [
+      {
+        start: 0,
+        end: 20,
+        text: enWords.map((w) => w.text).join(" "),
+        words: enWords,
+      },
+    ];
+    const cues = segmentsToCues(seg, 0, 20, "en");
+    for (const c of cues) expect(c.text).toMatch(/\s/);
+  });
+
+  it("a Devanagari segment still obeys the 3-word Latin cap and joins with a space", () => {
+    // Real Hindi words (from the spec's second affected job, cmt7e24cl):
+    // space-delimited and multi-character, unlike Japanese's single-char
+    // "words" - so nothing about the CJK budget or the "" join applies here.
+    const hiWords = evenly([
+      "नमस्ते", "आप", "कैसे", "हैं", "आज", "मौसम",
+      "बहुत", "अच्छा", "है", "चलिए", "चलते", "हैं",
+    ]);
+    const chunks = chunkWords(hiWords, 0, 12, "hi");
+    for (const c of chunks) expect(c.length).toBeLessThanOrEqual(3);
+    expect(chunks.length).toBe(4);
+
+    const seg: WhisperSegment[] = [
+      {
+        start: 0,
+        end: 12,
+        text: hiWords.map((w) => w.text).join(" "),
+        words: hiWords,
+      },
+    ];
+    const cues = segmentsToCues(seg, 0, 12, "hi");
+    for (const c of cues) expect(c.text).toMatch(/\s/);
+  });
+
+  it("segmentsToCues threads the clip language through to the chunker", () => {
+    const seg: WhisperSegment[] = [
+      {
+        start: 0,
+        end: 20,
+        text: jaWords20.map((w) => w.text).join(""),
+        words: jaWords20,
+      },
+    ];
+    // No language passed: must reproduce today's pre-CJK behaviour exactly
+    // (an absent value keeps the Latin budget, same contract as
+    // fontForLanguage's own default).
+    const withoutLanguage = segmentsToCues(seg, 0, 20);
+    const withJapanese = segmentsToCues(seg, 0, 20, "ja");
+    expect(withoutLanguage.length).toBe(7); // 20 words / 3-word Latin cap
+    expect(withJapanese.length).toBeLessThan(withoutLanguage.length);
+  });
+});
+
 describe("sliceCues", () => {
   const cues: SubtitleCue[] = [
     { id: "a", start: 0, end: 3, text: "one" },
@@ -272,6 +401,51 @@ describe("generateAss", () => {
       .find((l) => l.startsWith("Dialogue:") && l.includes("Welcome"));
     expect(karaokeLine).toContain("\\k70}Welcome");
     expect(karaokeLine).toContain("{\\1c&H00FFFF&}"); // active-word highlight colour
+  });
+
+  // karaokeText builds the Dialogue line directly from cue.words - it never
+  // reads cue.text - so fixing the join in segmentsToCues alone would not
+  // have touched the actual burn. This is the path almost every real cue
+  // takes (chunkWords always hands segmentsToCues a `words` array), so this
+  // is the test that would have caught that gap.
+  it("emits karaoke word spans with NO separator for a CJK language - Japanese does not write spaces between words", () => {
+    const jaCue: SubtitleCue = {
+      id: "ja1",
+      start: 0,
+      end: 1,
+      text: "だめか",
+      words: [
+        { text: "だ", start: 0, end: 0.2 },
+        { text: "め", start: 0.2, end: 0.4 },
+        { text: "か", start: 0.4, end: 0.6 },
+      ],
+    };
+    const ass = generateAss([jaCue], "ja");
+    const line = ass.split("\n").find((l) => l.startsWith("Dialogue:"))!;
+    expect(line).toBeDefined();
+    // Each word sits directly against the next {\k...} tag, no space between.
+    expect(line).toContain("}だ{\\k");
+    expect(line).toContain("}め{\\k");
+    expect(line.endsWith("}か")).toBe(true);
+    expect(line).not.toMatch(/[だめか] [だめか]/);
+  });
+
+  // The mirror of the test above: a non-CJK karaoke cue must keep the space
+  // it has always had between \k word spans.
+  it("still emits a separator between karaoke word spans for a non-CJK language", () => {
+    const ruCue: SubtitleCue = {
+      id: "ru1",
+      start: 0,
+      end: 1,
+      text: "всё ясно",
+      words: [
+        { text: "всё", start: 0, end: 0.3 },
+        { text: "ясно", start: 0.3, end: 0.6 },
+      ],
+    };
+    const ass = generateAss([ruCue], "ru");
+    const line = ass.split("\n").find((l) => l.startsWith("Dialogue:"))!;
+    expect(line).toContain("всё {\\k");
   });
 
   it("falls back to plain text when a cue has no words", () => {
