@@ -1,4 +1,4 @@
-# CJK + Devanagari subtitles: tofu boxes on every non-Latin/Arabic job (2026-08-25)
+# CJK + Devanagari subtitles: tofu boxes on every non-Latin/Arabic job (2026-08-25, SHIPPED: fonts+chunking 80860a7, black-tail trim 586fe7d)
 
 Owner approved "делаем" 2026-08-25 after the round-2 feedback audit.
 
@@ -106,3 +106,28 @@ snapping (A) rejected: 1s granularity would delete up to 1s of good
 content to dodge a 0.2s flash, and it is blind where the envelope degrades.
 Head trim skipped (0/10, YAGNI). Behind exact-literal flag
 RENDER_BLACK_TAIL_TRIM=on; off byte-identical; mutation-tested.
+
+## SHIP NOTE (2026-08-25)
+
+- CJK/Devanagari fix: commit 80860a7, live on the next render (bind-mounted
+  fonts + hot-reloaded code, no flag). Reviews: spec compliant (reviewer
+  reproduced the 15/16 glyph measurement), quality approved. Refinement
+  after first pass: CJK cues joined WITHOUT spaces on both the text and the
+  karaoke path, cap counted in glyphs (13; 15 fit, 16 clip). Goodwill
+  re-render of the ja + hi jobs executed per the runbook in
+  .corpus/feedback-audit/goodwill/ (old tofu rows soft-deleted by hand,
+  delivery re-armed).
+- Black-tail trim: commit 586fe7d, RENDER_BLACK_TAIL_TRIM=on armed in .env,
+  worker-render recreated. Spec review found and the implementer fixed four
+  issues: applied-trim cap (was reachable 1.54s), tolerance 0.15 -> 0.08
+  (ffmpeg 8.0.1 always flushes black_end - the null branch was dead and the
+  tolerance IS the decision; adversarial 0.13s case now refuses), probe
+  timeout 5s, realistic fixtures + probe argv shape test.
+- Process finding: worker-render crash-restarted 4x on implementers'
+  intermediate file states (TransformError). No render in flight - no harm.
+  Rule recorded in memory: implementers land complete transpile-checked
+  files atomically.
+- Stream resolver density fallback: measured precision 11% (3/27) on the
+  54-job corpus; candidate v2 rule density<0.45 AND median segment<2.8s AND
+  reliable-word floor -> 75% precision, 3/3 recall, n=3 true streams.
+  Awaiting owner decision as a separate item.
