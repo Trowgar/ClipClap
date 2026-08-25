@@ -990,6 +990,16 @@ export default function LandingPage() {
             <Logo className="h-4 opacity-60" />
           </div>
           <div className="flex items-center gap-6">
+            {/* The comparison pages' only link from the home page, and their strongest
+                one: until this existed a crawler reached all seven through the sitemap
+                alone, which is the weakest way in. The hub is linked rather than all
+                seven, because it links onward to every other one. */}
+            <Link
+              href="/ai-clipping-tools-compared"
+              className="text-xs text-neutral-600 hover:text-neutral-400 transition-colors"
+            >
+              Compare tools
+            </Link>
             <a
               href="https://t.me/clipclapio_bot"
               target="_blank"

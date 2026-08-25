@@ -11,13 +11,26 @@ import Link from "next/link";
  *
  * Adding a comparison page: add one row here and nothing else. `current` is the slug of the
  * page doing the rendering, and it is filtered out so no page links to itself.
+ *
+ * `linkText` is written out per row rather than assembled from a product name, because not
+ * every page in this set is a head-to-head. The category pages read wrongly under a
+ * "ClipClap compared with X" template, and a list that cannot hold them would push them
+ * outside the link graph - which is the failure this file exists to prevent.
  */
 export const COMPARISON_PAGES = [
-  { slug: "opus-clip-alternative", name: "Opus Clip" },
-  { slug: "submagic-alternative", name: "Submagic" },
-  { slug: "eklipse-alternative", name: "Eklipse" },
-  { slug: "klap-alternative", name: "Klap" },
-  { slug: "crayo-alternative", name: "Crayo" },
+  { slug: "opus-clip-alternative", linkText: "ClipClap compared with Opus Clip" },
+  { slug: "submagic-alternative", linkText: "ClipClap compared with Submagic" },
+  { slug: "eklipse-alternative", linkText: "ClipClap compared with Eklipse" },
+  { slug: "klap-alternative", linkText: "ClipClap compared with Klap" },
+  { slug: "crayo-alternative", linkText: "ClipClap compared with Crayo" },
+  {
+    slug: "telegram-video-clipper-bots",
+    linkText: "Every Telegram bot that clips video, compared",
+  },
+  {
+    slug: "ai-clipping-tools-compared",
+    linkText: "All 18 AI clipping tools: prices, units and free tiers",
+  },
 ] as const;
 
 export function RelatedComparisons({ current }: { current: string }) {
@@ -34,7 +47,7 @@ export function RelatedComparisons({ current }: { current: string }) {
               href={`/${p.slug}`}
               className="text-neutral-300 underline-offset-4 hover:text-white hover:underline"
             >
-              ClipClap compared with {p.name}
+              {p.linkText}
             </Link>
           </li>
         ))}

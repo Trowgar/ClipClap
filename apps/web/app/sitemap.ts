@@ -32,6 +32,8 @@ const COMPARISON_LAST_MODIFIED: Record<
   "eklipse-alternative": "2026-08-24",
   "klap-alternative": "2026-08-24",
   "crayo-alternative": "2026-08-24",
+  "telegram-video-clipper-bots": "2026-08-25",
+  "ai-clipping-tools-compared": "2026-08-25",
 };
 
 export default function sitemap(): MetadataRoute.Sitemap {
