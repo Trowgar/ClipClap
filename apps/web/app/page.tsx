@@ -8,7 +8,7 @@ import { Logo } from "@/components/logo";
 // The config module directly, NOT the package root: this is a client component and the
 // shared barrel is eager - it pulls prisma, redis and bullmq in with it. config/plans has
 // no runtime imports at all (its only import is a type), so it is safe to bundle.
-import { FREE_TIER } from "@clipclap/shared/config/plans";
+import { FREE_TIER, PLAN_LIMITS } from "@clipclap/shared/config/plans";
 
 /** The free allowance as the timeline readout renders it: mm:ss.
  *
@@ -32,36 +32,66 @@ const outputClips = [
   { img: "/clips/clip-4.png", subtitle: "That's the\ncraziest part", time: "2:03", rotation: 8, offset: 24 },
 ];
 
-const plans = [
-  {
-    name: "Starter",
-    cycles: [
-      { key: "weekly", label: "Weekly", price: "$3", period: "/week", minutes: "75 min / week" },
-      { key: "monthly", label: "Monthly", price: "$9", period: "/month", minutes: "270 min / month" },
+/** What a plan card says that is NOT a number in plans.ts: the button wording, which card
+ *  wears the "popular" ring, and any selling point that is a product feature rather than a
+ *  limit. Everything else on the card is derived below. */
+const PLAN_PRESENTATION = {
+  STARTER: { cta: "Get Starter", popular: false, extraFeatures: ["TikTok subtitles"] },
+  PLUS: { cta: "Get Plus", popular: true, extraFeatures: [] as string[] },
+  MAX: { cta: "Get Max", popular: false, extraFeatures: [] as string[] },
+} as const;
+
+/** The pricing cards, built from PLAN_LIMITS rather than written out.
+ *
+ *  Every figure here was correct when it was typed and every one of them was a hostage: the
+ *  free allowance changed on 2026-08-24 and a readout on this same page went on advertising
+ *  the old number for a day, because a person updated the sentences and not the graphic.
+ *  Prices, minutes, clip storage, retention and concurrency now have exactly one source.
+ *
+ *  A cycle that does not exist produces no tab - Plus and Max have WEEKLY: null - and a
+ *  plan added to PLAN_LIMITS later appears here on its own, needing only a row in
+ *  PLAN_PRESENTATION, which the type below makes a compile error to forget.
+ *
+ *  toLocaleString is pinned to en-US deliberately: this is a client component, and an
+ *  unpinned locale formats differently on the server and in the browser, which React
+ *  reports as a hydration mismatch.
+ */
+const plans = (
+  Object.keys(PLAN_PRESENTATION) as Array<keyof typeof PLAN_PRESENTATION>
+).map((plan) => {
+  const cycles = PLAN_LIMITS[plan];
+  const headline = cycles.MONTHLY ?? cycles.WEEKLY!;
+  const presentation = PLAN_PRESENTATION[plan];
+
+  return {
+    name: plan.charAt(0) + plan.slice(1).toLowerCase(),
+    cycles: (["WEEKLY", "MONTHLY"] as const).flatMap((cycle) => {
+      const limits = cycles[cycle];
+      if (!limits) return [];
+      const word = cycle === "WEEKLY" ? "week" : "month";
+      return [
+        {
+          key: cycle.toLowerCase(),
+          label: cycle.charAt(0) + cycle.slice(1).toLowerCase(),
+          price: `$${limits.priceUsd}`,
+          period: `/${word}`,
+          minutes: `${limits.minutesPerPeriod.toLocaleString("en-US")} min / ${word}`,
+        },
+      ];
+    }),
+    features: [
+      `${headline.storageClips.toLocaleString("en-US")} clips stored`,
+      `${headline.retentionDays}-day retention`,
+      ...(headline.concurrentJobsLimit > 1
+        ? [`${headline.concurrentJobsLimit} jobs at once`]
+        : []),
+      ...(headline.priorityQueue ? ["Priority processing"] : []),
+      ...presentation.extraFeatures,
     ],
-    features: ["20 clips stored", "7-day retention", "TikTok subtitles"],
-    cta: "Get Starter",
-    popular: false,
-  },
-  {
-    name: "Plus",
-    cycles: [
-      { key: "monthly", label: "Monthly", price: "$29", period: "/month", minutes: "1,000 min / month" },
-    ],
-    features: ["150 clips stored", "30-day retention", "2 jobs at once"],
-    cta: "Get Plus",
-    popular: true,
-  },
-  {
-    name: "Max",
-    cycles: [
-      { key: "monthly", label: "Monthly", price: "$89", period: "/month", minutes: "3,500 min / month" },
-    ],
-    features: ["1,000 clips stored", "90-day retention", "3 jobs at once", "Priority processing"],
-    cta: "Get Max",
-    popular: false,
-  },
-];
+    cta: presentation.cta,
+    popular: presentation.popular,
+  };
+});
 
 /* ────────────────────────────────────────────
    Telegram chat messages
