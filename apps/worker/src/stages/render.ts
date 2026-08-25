@@ -239,7 +239,7 @@ async function renderClips(
     // job after two timeouts in a row (reset on any non-timeout result).
     let consecutiveTimeouts = 0;
 
-    for (const highlight of highlights) {
+    for (const [clipIndex, highlight] of highlights.entries()) {
       // The face is chosen from the language actually SPOKEN in this clip.
       // The highlight's own language wins over the job's because a source can
       // switch language partway through and the job carries only the dominant
@@ -338,7 +338,8 @@ async function renderClips(
           [highlight],
           assFilter?.filter,
           filterSpec,
-          musicDirection?.fades
+          musicDirection?.fades,
+          { jobId: payload.jobId, clipIndex }
         );
       } catch (error) {
         if (!filterSpec) throw error;
@@ -355,17 +356,25 @@ async function renderClips(
           [highlight],
           assFilter?.filter,
           null,
-          musicDirection?.fades
+          musicDirection?.fades,
+          { jobId: payload.jobId, clipIndex }
         );
       }
       tempFiles.push(cutResult.clipPath);
+      // Black-tail trim (spec 2026-08-25-cjk-subtitles §Black-tail trim):
+      // cutClips pulls the end back off a source that goes black right at the
+      // nominal exit (RENDER_BLACK_TAIL_TRIM only) - undefined/equal to
+      // highlight.end otherwise, so every downstream read of "the end" must
+      // use this, not highlight.end, or the stored/measured clip would
+      // describe a window longer than what was actually cut.
+      const effectiveEnd = cutResult.effectiveEnd ?? highlight.end;
       // duration error and A/V start skew are DIFFERENT failures: a clip can
       // have perfect duration and 400ms lip-sync offset (spec §10)
       try {
         const probe = await probeTimeline(cutResult.clipPath);
         const actualDuration = await probeDuration(cutResult.clipPath);
         const renderDurationErrorMs = Math.round(
-          Math.abs(actualDuration - (highlight.end - highlight.start)) * 1000
+          Math.abs(actualDuration - (effectiveEnd - highlight.start)) * 1000
         );
         const renderAvStartSkewMs =
           probe.videoStart !== null && probe.audioStart !== null
@@ -408,9 +417,9 @@ async function renderClips(
           payoffAt: highlight.payoffAt ?? null,
           clipKind: highlight.kind ?? null,
           storageKey,
-          duration: Math.round(highlight.end - highlight.start),
+          duration: Math.round(effectiveEnd - highlight.start),
           startTime: highlight.start,
-          endTime: highlight.end,
+          endTime: effectiveEnd,
           // What was actually burned, not the job-level request: assFilter is
           // only set when job.subtitles is on AND this highlight has cues in
           // range, so a dialogue-free highlight burns nothing even when the
