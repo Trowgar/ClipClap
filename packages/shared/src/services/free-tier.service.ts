@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import type { JobStatus } from "@prisma/client";
 import { prisma } from "../lib/prisma";
-import { FREE_TIER, estimatedFreeCostUsd } from "../config/plans";
+import { FREE_TIER, estimatedFreeCostUsd, isShortSource } from "../config/plans";
 
 /**
  * Has this account proven an identity worth a free allowance?
@@ -301,11 +301,49 @@ export async function refundUnstartedJob(
  */
 export async function refundZeroClipJob(
   userId: string,
-  jobId: string
+  jobId: string,
+  sourceDurationSec?: number | null
 ): Promise<boolean> {
   const charge = await findFreeCharge(userId, jobId);
   if (!charge) return false;
   if (await alreadyRefunded(userId, jobId)) return false;
+
+  // A SOURCE WE ALREADY WARNED WOULD NOT WORK IS ALWAYS REFUNDED.
+  //
+  // Under SOURCE_FLOOR.shortNoticeSec the bot tells the user, in their own
+  // language, that short sources usually give 0-2 clips. Measured on 2026-08-24
+  // it is worse than "usually": 1-3 minutes comes back empty 82% of the time and
+  // 3-5 minutes 44%, against 0% at 10-15 minutes. Charging for the outcome we
+  // predicted out loud is not a cap doing its job - it is billing somebody for
+  // our own warning, and it spends the ONE forgiveness that exists for the case
+  // where we genuinely could not tell.
+  //
+  // This branch takes NO account-wide count, which is what makes uncapped safe
+  // here where raising zeroClipRefunds is not: the read-then-write race
+  // documented below cannot apply to a decision made entirely from this job's
+  // own duration. The exposure is bounded by the source length - under five
+  // minutes is about 0.09 USD.
+  //
+  // Its own reason, so it can neither consume the ZERO_CLIPS forgiveness nor be
+  // consumed by it. Same argument as DELETED_BEFORE_SPEND.
+  if (isShortSource(sourceDurationSec)) {
+    try {
+      await prisma.freeUsage.create({
+        data: {
+          userId,
+          jobId,
+          kind: "REFUND",
+          reason: "SHORT_SOURCE_EMPTY",
+          seconds: charge.seconds,
+          estimatedCostUsd: 0,
+        },
+      });
+    } catch (err) {
+      if (!isDuplicateRow(err)) throw err;
+      return false;
+    }
+    return true;
+  }
 
   // READ THIS BEFORE RAISING concurrentJobsLimit FOR THE FREE TIER.
   //

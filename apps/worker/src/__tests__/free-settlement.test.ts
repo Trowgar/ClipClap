@@ -451,13 +451,20 @@ describe("finalize settlement", () => {
         clipsGenerated: 0,
         estimatedTranscriptionCostUsd: 0.06,
         estimatedAnalysisCostUsd: 0.05,
+        // Read on the settle query, not carried from the queue payload: the
+        // refund's short-source exception is decided on the MEASURED duration.
+        sourceDurationSec: 120,
       };
     });
 
     await runFinalizeStage({ jobId: "job1", userId: "u1" });
 
     expect(order).toEqual(["status", "settle"]);
-    expect(mocks.refundZeroClipJob).toHaveBeenCalledWith("u1", "job1");
+    // The duration travels. Without it every zero-clip refund falls back to the
+    // capped rule, and a user who was warned their source was too short is
+    // billed for the outcome we predicted - which is the whole point of the
+    // third argument.
+    expect(mocks.refundZeroClipJob).toHaveBeenCalledWith("u1", "job1", 120);
   });
 
   it("settles a finalize that threw as a FAILED job", async () => {

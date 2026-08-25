@@ -216,6 +216,92 @@ describe("free-tier.service", () => {
     expect(prisma.freeUsage.create).not.toHaveBeenCalled();
   });
 
+  describe("a source we warned was too short", () => {
+    // The bot tells the user, before the run, that a source under
+    // SOURCE_FLOOR.shortNoticeSec usually gives 0-2 clips. Measured 2026-08-24:
+    // 1-3 minutes is empty 82% of the time, 3-5 minutes 44%. These four tests
+    // are the rule that we do not then bill them for it.
+    it("refunds every time, not once, and under its own reason", async () => {
+      (prisma.freeUsage.findFirst as any).mockResolvedValue({
+        seconds: 120,
+        estimatedCostUsd: 0.05,
+      });
+      // The account's ZERO_CLIPS forgiveness is ALREADY SPENT. Under the old
+      // rule this returned false and the user paid for a run we predicted.
+      (prisma.freeUsage.count as any)
+        .mockResolvedValueOnce(0)
+        .mockResolvedValueOnce(1);
+      (prisma.freeUsage.create as any).mockResolvedValue({});
+
+      const refunded = await refundZeroClipJob("u1", "job1", 120);
+
+      expect(refunded).toBe(true);
+      expect((prisma.freeUsage.create as any).mock.calls[0][0].data.reason).toBe(
+        "SHORT_SOURCE_EMPTY"
+      );
+    });
+
+    // The property that makes uncapped safe here where raising zeroClipRefunds
+    // is not. The cap's read-then-write has a documented race; a decision made
+    // from this job's own duration never reads the account at all, so it cannot
+    // have one. If this branch ever starts counting, that argument is void.
+    it("never reads an account-wide count", async () => {
+      (prisma.freeUsage.findFirst as any).mockResolvedValue({
+        seconds: 120,
+        estimatedCostUsd: 0.05,
+      });
+      (prisma.freeUsage.count as any).mockResolvedValue(0);
+      (prisma.freeUsage.create as any).mockResolvedValue({});
+
+      await refundZeroClipJob("u1", "job1", 120);
+
+      // Exactly one: the alreadyRefunded check for THIS job. Never the second,
+      // which is the account's ZERO_CLIPS tally.
+      expect((prisma.freeUsage.count as any).mock.calls).toHaveLength(1);
+    });
+
+    it("does not apply to a source long enough that we promised nothing", async () => {
+      (prisma.freeUsage.findFirst as any).mockResolvedValue({
+        seconds: 1800,
+        estimatedCostUsd: 0.25,
+      });
+      (prisma.freeUsage.count as any)
+        .mockResolvedValueOnce(0)
+        .mockResolvedValueOnce(1);
+
+      const refunded = await refundZeroClipJob("u1", "job1", 1800);
+
+      expect(refunded).toBe(false);
+      expect(prisma.freeUsage.create).not.toHaveBeenCalled();
+    });
+
+    // An unmeasured job must fall through to the capped rule rather than being
+    // waved through as "short". isShortSource already refuses to judge 0 or
+    // undefined, and this is the test that keeps it that way from here.
+    it("treats an unknown duration as the capped case, not a free pass", async () => {
+      (prisma.freeUsage.findFirst as any).mockResolvedValue({
+        seconds: 0,
+        estimatedCostUsd: 0.03,
+      });
+      // Two count calls per invocation - alreadyRefunded for this job, then the
+      // account's ZERO_CLIPS tally - so three invocations need six values. Queue
+      // fewer and the mock returns undefined, `undefined >= 1` is false, and the
+      // cap silently stops existing: the first draft of this test passed a job
+      // through for exactly that reason.
+      (prisma.freeUsage.count as any)
+        .mockResolvedValueOnce(0)
+        .mockResolvedValueOnce(1)
+        .mockResolvedValueOnce(0)
+        .mockResolvedValueOnce(1)
+        .mockResolvedValueOnce(0)
+        .mockResolvedValueOnce(1);
+
+      expect(await refundZeroClipJob("u1", "job1", null)).toBe(false);
+      expect(await refundZeroClipJob("u1", "job2", undefined)).toBe(false);
+      expect(await refundZeroClipJob("u1", "job3", 0)).toBe(false);
+    });
+  });
+
   // The regression test for the hole this whole table exists to close.
   it("computes the balance from the ledger, never from jobs", async () => {
     ledger(3600, 0);

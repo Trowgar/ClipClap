@@ -81,6 +81,10 @@ export async function settleFreeLedger(
         // non-cash line is added, it must not.
         estimatedTranscriptionCostUsd: true,
         estimatedAnalysisCostUsd: true,
+        // For the zero-clip refund only, and only to answer "did we warn them?".
+        // The authoritative value, written by the source re-check after the file
+        // was measured - not what the submitter claimed.
+        sourceDurationSec: true,
       },
     });
     if (!job) return;
@@ -120,7 +124,11 @@ export async function settleFreeLedger(
       // transcribed and found nothing cost us money and showed the user
       // nothing, so the first is forgiven; an account that keeps feeding us
       // silence is not.
-      await refundZeroClipJob(job.userId, jobId);
+      //
+      // The duration is passed because that cap has one exception: a source the
+      // bot had ALREADY warned was too short to work is refunded every time. See
+      // refundZeroClipJob - we do not bill somebody for the outcome we predicted.
+      await refundZeroClipJob(job.userId, jobId, job.sourceDurationSec);
     }
   } catch (error) {
     console.error(
