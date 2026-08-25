@@ -110,3 +110,22 @@ Implementer: import wordsUnreliable/isReliableSegment from
 sentence-graph.ts (export them), do not re-copy; resolveAnalysisMode needs
 the segments array (index.ts call site passes transcription.segments);
 five boundary fixtures are specified in resolver-v2-metrics.ts.
+
+## SHIP NOTE (2026-08-25)
+
+Part 1 commit 394ccd3, part 2 commit e34e416; RESCUE_MID_SOURCE=on and
+ANALYZE_STREAM_RESOLVER_V2=on armed in .env, worker-analyze recreated
+(guarded on zero ANALYZE/TRANSCRIBE in flight) + prisma generate + shared
+build. Both parts: spec review + quality review clean; follow-ups taken:
+rescue.tier recorded on failed attempts too; one resolveMode call per job
+(the two wrappers had computed the metrics twice); empty transcripts
+resolve standard by construction (segmentCount > 0 conjunct, defensive).
+Corpus acceptance through the production resolver: exactly the 3 true
+streams of 54 jobs, zero false positives. Rescue floor finding: rescue.ts
+applies NO score floor - it ships the top-scored judged candidate that
+snaps; unchanged by decision (same as short rescue). Live-edit hygiene:
+every src landing went scratch -> esbuild -> single cp; TransformError
+count 0 across both parts. Watch: first rescue.tier=mid clip in the wild
+(and whether its user rates it), first modeResolution.branch=density_v2 on
+a non-twitch source, any real stream demoted to standard (diagnosable from
+modeResolution: density/medianSegmentSec/reliableSegmentShare).
