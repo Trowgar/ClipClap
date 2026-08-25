@@ -319,6 +319,51 @@ export interface AnalyzeConfig {
    *  Standard mode never reads this: merge's existing span guard is
    *  untouched there. */
   streamMinCandidateSec: number;
+  /** STREAM RESOLVER V2 (spec 2026-08-25-mid-rescue-and-stream-resolver-v2,
+   *  part 2): master switch for the tightened density fallback in mode.ts's
+   *  resolveAnalysisMode. Independent of `streamModeEnabled` (that flag must
+   *  ALSO be on - this one only decides which density rule fires once mode
+   *  resolution is already running); off, the density branch is byte-
+   *  identical to today (`streamDensityMax` alone). Measured on the 54-job
+   *  labeled corpus (.corpus/feedback-audit/stream-mode/): the old rule
+   *  (density < 0.55 AND duration > 1200) scores 11% precision, 3 real
+   *  streams of 27 flagged. The three-conjunct v2 rule below scores 3 TP / 0
+   *  FP on the same corpus once the existing >1200s duration gate is kept
+   *  (it is not being changed). n=3 true streams - provisional, hence the
+   *  flag; the observability fields on every resolution (see mode.ts's
+   *  ModeResolution) exist so the first false demotion of a real stream is
+   *  diagnosable from the DB rather than merely suspected. */
+  streamResolverV2Enabled: boolean;
+  /** Density ceiling for the v2 fallback (STRICT <, matching streamDensityMax's
+   *  own strictness) - tighter than streamDensityMax's 0.55. MEASURED (spec
+   *  part 2): of 27 jobs the old rule flagged, only 3 were real streams
+   *  (0.16/0.30/0.36 density); this ceiling plus medianSegmentSec and
+   *  reliableSegmentShare together clear every false positive on the corpus. */
+  streamDensityMaxV2: number;
+  /** Median segment-duration ceiling (seconds, STRICT <) for the v2 fallback.
+   *  medianSegmentSec = median of (segment.end - segment.start) over ALL
+   *  segments (reliable AND opaque) - see mode-metrics.ts's doc comment for
+   *  why that definition, not a reliable-only one, is what reproduces the
+   *  corpus measurement. Real streams' fast crosstalk/reaction cadence sits
+   *  well under this (1.5-2.4s on the 3-stream corpus); documentaries and
+   *  podcasts (the largest false-positive classes under the old rule) run
+   *  longer, uninterrupted segments. */
+  streamMedianSegMaxSec: number;
+  /** Ceiling (<=, not a floor, despite "share" reading like one - see
+   *  mode-metrics.ts's computeReliableSegmentShare doc comment for the
+   *  direction) on reliableSegmentShare = reliable segments / all segments.
+   *  Real streams score LOWER than degenerate transcripts here: genuine
+   *  crosstalk/noise on a stream produces more opaque (unreliable-word-
+   *  timing) segments, while a garbled-but-mechanically-confident ASR
+   *  transcript still produces well-formed monotonic word timings.
+   *  MEASURED, and the WEAKEST of the three knobs (spec's own words: "a
+   *  knife-edge on n=1"): midpoint of the corpus gap between the nearest
+   *  true stream (cmt5lnand, 0.7656) and the nearest degenerate job
+   *  (cmt42ke8q, 0.7951) - margin ~1.9% relative on each side. The other two
+   *  candidate metrics considered (reliable words/min, reliable speech-sec)
+   *  do not separate the two populations at all and were rejected; see
+   *  mode-metrics.ts. */
+  streamReliableShareMax: number;
   /** Master switch for music shorts (spec 2026-08-23-music-shorts, task M3) -
    *  when the song gate fires (`songGateEnabled` + `detectSong`) AND the
    *  source is a single track (<= `musicShortsMaxSec`), ship
@@ -454,12 +499,24 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     // together and goes red if either side drifts.
     shortSourceRescueMaxSec: num(env, "SHORT_SOURCE_RESCUE_MAX_SEC", 300),
     // Exact literal "on", same discipline as every other stage switch in this
+    // file: a stray truthy env value must not widen the rescue window to a
+    // real user's mid-length source by accident.
+    rescueMidSourceEnabled: env.RESCUE_MID_SOURCE === "on",
+    rescueMidMaxSourceSec: num(env, "RESCUE_MID_MAX_SOURCE_SEC", 1200),
+    // Exact literal "on", same discipline as every other stage switch in this
     // file: a stray truthy env value must not silently switch a real job onto
     // the stream-mode critic rubric/budget/merge behaviour tasks T2-T4 build.
     streamModeEnabled: env.ANALYZE_STREAM_MODE === "on",
     streamDensityMax: num(env, "STREAM_DENSITY_MAX", 0.55),
     streamCriticMaxCandidates: num(env, "STREAM_CRITIC_MAX_CANDIDATES", 80),
     streamMinCandidateSec: num(env, "STREAM_MIN_CANDIDATE_SEC", 12),
+    // Exact literal "on", same discipline as every other stage switch in this
+    // file: a stray truthy env value must not silently tighten a real job's
+    // stream-mode density fallback onto three provisional (n=3) constants.
+    streamResolverV2Enabled: env.ANALYZE_STREAM_RESOLVER_V2 === "on",
+    streamDensityMaxV2: num(env, "STREAM_DENSITY_MAX_V2", 0.45),
+    streamMedianSegMaxSec: num(env, "STREAM_MEDIAN_SEG_MAX_SEC", 2.8),
+    streamReliableShareMax: num(env, "STREAM_RELIABLE_SHARE_MAX", 0.78),
     // Exact literal "on", same discipline as every other stage switch in this
     // file: a stray truthy env value must not swap a real song-gate refusal
     // for a shipped result.
@@ -468,8 +525,3 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     musicShortsCount: num(env, "MUSIC_SHORTS_COUNT", 2),
   };
 }
-    // file: a stray truthy env value must not widen the rescue window to a
-    // real user's mid-length source by accident.
-    rescueMidSourceEnabled: env.RESCUE_MID_SOURCE === "on",
-    rescueMidMaxSourceSec: num(env, "RESCUE_MID_MAX_SOURCE_SEC", 1200),
-    // Exact literal "on", same discipline as every other stage switch in this

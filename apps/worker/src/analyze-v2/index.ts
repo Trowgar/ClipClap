@@ -2,7 +2,7 @@ import OpenAI from "openai";
 import type { TranscriptionResult } from "@clipclap/shared";
 import { loadAnalyzeConfig, type AnalyzeConfig } from "./config";
 import { buildSentenceGraph } from "./sentence-graph";
-import { resolveAnalysisMode } from "./mode";
+import { resolveMode } from "./mode";
 import { runScanner } from "./scanner";
 import { criticBudget, mergeCandidates, selectCriticCandidates, sourceSeconds } from "./candidates";
 import { AnalyzeTechnicalError, runCritic, repairCopy } from "./critic";
@@ -97,15 +97,30 @@ export async function analyzeHighlightsV2(
   // Mode resolution (spec 2026-08-19-stream-analyze-mode, S1): ONCE per job,
   // after speechSec is computed, before the scanner - every stage this task
   // threads it into (scanner, merge, candidate selection, critic) reads this
-  // SAME value. cfg.streamModeEnabled is checked again inside
-  // resolveAnalysisMode itself; the flag gate lives there so this call site
-  // cannot forget it. The degenerate-guard return above ran before this line
-  // and therefore never carries `analysisMode` - only telemetry built after
-  // this point does (not-a-key discipline, same as arcAudit).
-  const mode = resolveAnalysisMode(
-    { sourceUrl: options.sourceUrl, durationSec: options.sourceDurationSec, speechSec },
-    cfg
-  );
+  // SAME value. cfg.streamModeEnabled is checked again inside resolveMode
+  // itself; the flag gate lives there so this call site cannot forget it.
+  // The degenerate-guard return above ran before this line and therefore
+  // never carries `analysisMode` - only telemetry built after this point
+  // does (not-a-key discipline, same as arcAudit).
+  //
+  // `segments: transcription.segments` (spec 2026-08-25-mid-rescue-and-
+  // stream-resolver-v2, part 2): the v2 density fallback needs the RAW
+  // segments to compute medianSegmentSec/reliableSegmentShare, which the
+  // pre-v2 speechSec/durationSec path never needed - passed unconditionally
+  // so the diagnostic telemetry has it too, even on a job that never reaches
+  // the density branch (host/live/standard). A SINGLE resolveMode call
+  // (review nit: this used to be two separate calls - resolveAnalysisMode
+  // then computeModeResolution - each independently re-running the same
+  // segment scan and host-rule parse) returns both the mode decision and its
+  // telemetry from one resolution, so they can never disagree AND the work
+  // is done once per job, not twice.
+  const modeInput = {
+    sourceUrl: options.sourceUrl,
+    durationSec: options.sourceDurationSec,
+    speechSec,
+    segments: transcription.segments,
+  };
+  const { mode, modeResolution } = resolveMode(modeInput, cfg);
   let candidates: MergedCandidate[];
   let scannerTelemetry: Record<string, unknown> = {};
 
@@ -248,8 +263,13 @@ export async function analyzeHighlightsV2(
         holeDrops,
         // Not-a-key discipline, same as arcAudit: present only when the flag
         // is on. This return runs AFTER mode resolution above, unlike the
-        // degenerate guard earlier in this function.
-        ...(cfg.streamModeEnabled ? { analysisMode: mode } : {}),
+        // degenerate guard earlier in this function. modeResolution mirrors
+        // analysisMode's own discipline (spec part 2 observability note) -
+        // resolveMode already returns modeResolution: undefined when
+        // cfg.streamModeEnabled is false, so the explicit cfg check here
+        // only keeps this identical in shape to the analysisMode line, it
+        // does not change which jobs get the key.
+        ...(cfg.streamModeEnabled ? { analysisMode: mode, modeResolution } : {}),
       },
       usage,
     };
@@ -804,7 +824,10 @@ export async function analyzeHighlightsV2(
     // Not-a-key discipline (spec 2026-08-19-stream-analyze-mode, S1), same as
     // arcAudit below: present only when cfg.streamModeEnabled is true, so a
     // dark run adds no key at all - not "standard", not undefined, absent.
-    ...(cfg.streamModeEnabled ? { analysisMode: mode } : {}),
+    // modeResolution (spec 2026-08-25-mid-rescue-and-stream-resolver-v2, part
+    // 2 observability) mirrors that same discipline via resolveMode itself
+    // returning modeResolution: undefined when the flag is off.
+    ...(cfg.streamModeEnabled ? { analysisMode: mode, modeResolution } : {}),
     ...scannerTelemetry,
     criticVerdicts: critic.verdicts.length,
     verdictScores: critic.verdicts
@@ -1020,6 +1043,16 @@ export async function analyzeHighlightsV2(
       typeof options.sourceDurationSec === "number" &&
       options.sourceDurationSec > 0 &&
       options.sourceDurationSec < cfg.shortSourceRescueMaxSec;
+    // MID window: [shortSourceRescueMaxSec, rescueMidMaxSourceSec) - the same
+    // strict-under discipline at its own ceiling, disjoint from shortSource
+    // above so a duration is eligible for at most one tier. Independently
+    // switchable (rescueMidSourceEnabled) so the two ceilings can be armed on
+    // separate schedules; the candidate rules, lowQuality mark and bot copy
+    // inside rescueShortSource are untouched by this widening.
+    const midSource =
+      typeof options.sourceDurationSec === "number" &&
+      options.sourceDurationSec >= cfg.shortSourceRescueMaxSec &&
+      options.sourceDurationSec < cfg.rescueMidMaxSourceSec;
     let rescueTelemetry: RescueTelemetry | undefined;
     if (
       (cfg.shortSourceRescueEnabled && shortSource) ||
@@ -1046,16 +1079,6 @@ export async function analyzeHighlightsV2(
           // finalizerSurvivors, meanLexicalOverlap, snippetFallbacks - keep
           // their selection-path values deliberately: they describe the
           // selection that found nothing (kept > finalizerSurvivors is the
-    // MID window: [shortSourceRescueMaxSec, rescueMidMaxSourceSec) - the same
-    // strict-under discipline at its own ceiling, disjoint from shortSource
-    // above so a duration is eligible for at most one tier. Independently
-    // switchable (rescueMidSourceEnabled) so the two ceilings can be armed on
-    // separate schedules; the candidate rules, lowQuality mark and bot copy
-    // inside rescueShortSource are untouched by this widening.
-    const midSource =
-      typeof options.sourceDurationSec === "number" &&
-      options.sourceDurationSec >= cfg.shortSourceRescueMaxSec &&
-      options.sourceDurationSec < cfg.rescueMidMaxSourceSec;
           // rescue's signature in a job record, not a bug), and the rescue's
           // own copy provenance lives in rescue.copySource. `rescue.tier`
           // ("short" | "mid") records which ceiling made this job eligible,

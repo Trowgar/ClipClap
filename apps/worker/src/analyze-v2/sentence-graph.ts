@@ -7,7 +7,14 @@ const CLAUSE = /[,;:-]$/;
 const MICRO_SEC = 0.4;
 const MAX_WORD_SPAN_SEC = 3;
 
-function wordsUnreliable(words: SubtitleWord[]): boolean {
+/** Per-word reliability test: music/crosstalk/hallucinated word spans all
+ *  fail this and the owning segment becomes "opaque" (buildSentenceGraph
+ *  below, and isReliableSegment). Exported (spec 2026-08-25-mid-rescue-and-
+ *  stream-resolver-v2, part 2) so mode.ts's stream density v2 fallback reads
+ *  the SAME test rather than a second copy that could drift from this one -
+ *  see feedback_mocked_prisma_blind_spot.md's sibling lesson about silent
+ *  duplication. */
+export function wordsUnreliable(words: SubtitleWord[]): boolean {
   let prevStart = -Infinity;
   for (const w of words) {
     if (w.end <= w.start) return true;
@@ -16,6 +23,20 @@ function wordsUnreliable(words: SubtitleWord[]): boolean {
     prevStart = w.start;
   }
   return false;
+}
+
+/** A segment is RELIABLE iff it carries at least one word AND none of those
+ *  words fail wordsUnreliable() - exactly the `hasWords: false` branch
+ *  buildSentenceGraph takes below (words.length === 0 || wordsUnreliable(...)
+ *  -> opaque). Segment-granularity, not the full sentence-node graph: mode.ts
+ *  needs a per-segment signal (stream density v2's medianSegmentSec and
+ *  reliableSegmentShare) before any node graph exists for a job that hasn't
+ *  resolved its analysis mode yet. Exported for the same do-not-duplicate
+ *  reason as wordsUnreliable above. */
+export function isReliableSegment(seg: WhisperSegment): boolean {
+  const words = seg.words ?? [];
+  if (words.length === 0) return false;
+  return !wordsUnreliable(words);
 }
 
 /** A node opens cleanly when its leading boundary is strong (>= 0.8: after
