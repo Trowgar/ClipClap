@@ -5,6 +5,21 @@ import Link from "next/link";
 import { motion } from "framer-motion";
 import { ArrowRight, ArrowDown, Play, Check, Handshake } from "@phosphor-icons/react";
 import { Logo } from "@/components/logo";
+// The config module directly, NOT the package root: this is a client component and the
+// shared barrel is eager - it pulls prisma, redis and bullmq in with it. config/plans has
+// no runtime imports at all (its only import is a type), so it is safe to bundle.
+import { FREE_TIER } from "@clipclap/shared/config/plans";
+
+/** The free allowance as the timeline readout renders it: mm:ss.
+ *
+ *  Derived rather than written out, because it drifted the moment the allowance changed.
+ *  The graphic said "60:00 free" while the sentence directly beneath it said 40 minutes -
+ *  on the same card, live, for anyone who looked. A number that appears twice on one card
+ *  must come from one place. */
+const FREE_TIMELINE_LABEL = `${String(
+  Math.floor(FREE_TIER.lifetimeSeconds / 60)
+).padStart(2, "0")}:${String(FREE_TIER.lifetimeSeconds % 60).padStart(2, "0")}`;
+const FREE_MINUTES = Math.floor(FREE_TIER.lifetimeSeconds / 60);
 
 /* ────────────────────────────────────────────
    Data
@@ -581,7 +596,7 @@ export default function LandingPage() {
           </motion.div>
 
           <p className="mt-3.5 text-xs text-neutral-400">
-            First 40 minutes of source video are free - no card needed.
+            First {FREE_MINUTES} minutes of source video are free - no card needed.
           </p>
         </div>
 
@@ -808,10 +823,10 @@ export default function LandingPage() {
             </p>
           </FadeIn>
 
-          {/* Free allowance - rendered in the page's own instrument language:
-              a source-video timeline whose head fills up to the 60-minute
-              mark. States exactly what FREE_TIER grants (plans.ts): 60
-              lifetime source minutes on a new account, no card. */}
+          {/* Free allowance - rendered in the page's own instrument language: a
+              source-video timeline whose head fills to the end of the allowance. Both
+              numbers on this card come from FREE_TIER (plans.ts) so they cannot disagree
+              with each other or with what the bot actually grants. */}
           <FadeIn delay={0.05}>
             <div className="mt-12 rounded-xl border border-white/[0.06] bg-white/[0.01] px-5 py-4 sm:px-6 sm:py-5">
               {/* Readout header */}
@@ -828,7 +843,7 @@ export default function LandingPage() {
                 </span>
               </div>
 
-              {/* Timeline - fills to the full 60-minute allowance on scroll */}
+              {/* Timeline - fills to the full allowance on scroll */}
               <div className="mt-3">
                 <div className="h-[3px] overflow-hidden rounded-full bg-white/10">
                   <motion.div
@@ -841,7 +856,7 @@ export default function LandingPage() {
                 </div>
                 <div className="mt-1.5 flex items-center justify-between font-mono text-[10px] text-neutral-600">
                   <span>00:00</span>
-                  <span className="text-neutral-400">60:00 free</span>
+                  <span className="text-neutral-400">{FREE_TIMELINE_LABEL} free</span>
                 </div>
               </div>
 
@@ -850,7 +865,7 @@ export default function LandingPage() {
                 <p className="text-sm leading-relaxed text-neutral-400">
                   Your first{" "}
                   <span className="font-medium text-white">
-                    40 minutes of source video
+                    {FREE_MINUTES} minutes of source video
                   </span>{" "}
                   are free - one-time, on a new account.
                 </p>
