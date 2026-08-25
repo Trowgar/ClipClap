@@ -252,12 +252,12 @@ export default function OpusClipAlternativePage() {
             >
               Start free in Telegram
             </a>
-            <Link
-              href="/login"
-              className="text-sm text-neutral-500 transition-colors hover:text-neutral-300"
-            >
-              or use the web app
-            </Link>
+            {/* The web-app alternative is gone from every CTA on the site as of
+                2026-08-25: Telegram accounts activate at 36.7% and hold 112 of 116 jobs,
+                web-only accounts at 7.3% and 4. Offering both here split the decision in
+                favour of the surface that does not work. Sign-in still exists for people
+                who already have a web account; it is just not a competing call to
+                action. */}
           </div>
         </section>
 

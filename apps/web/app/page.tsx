@@ -472,8 +472,19 @@ function PlanCard({ plan }: { plan: Plan }) {
       </ul>
 
       <div className="mt-auto pt-6">
-        <Link
-          href="/login"
+        {/* The highest-intent button on the page, and until 2026-08-25 it sent people to
+            the web signup. Measured that day across every real account: Telegram arrivals
+            activate at 36.7% and have produced 112 of the product's 116 jobs, against 7.3%
+            and 4 jobs for web-only accounts. Somebody ready to pay was being routed to the
+            surface that has barely ever worked - and to Stripe, which has still never
+            completed a verified purchase, rather than to the bot's checkout, which has.
+
+            The source tag is not decoration: it is the only way to tell later whether the
+            pricing cards send anybody at all (funnel event bot_start_src_pricing). */}
+        <a
+          href="https://t.me/clipclapio_bot?start=src_pricing"
+          target="_blank"
+          rel="noopener noreferrer"
           className={`block rounded-lg px-4 py-2.5 text-center text-sm font-medium transition-all ${
             plan.popular
               ? "bg-white text-black hover:bg-neutral-200"
@@ -481,7 +492,7 @@ function PlanCard({ plan }: { plan: Plan }) {
           }`}
         >
           {plan.cta}
-        </Link>
+        </a>
       </div>
     </div>
   );
@@ -617,12 +628,11 @@ export default function LandingPage() {
               Start free in Telegram
               <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
             </a>
-            <Link
-              href="/login"
-              className="text-sm text-neutral-500 transition-colors hover:text-neutral-300"
-            >
-              or use the web app
-            </Link>
+            {/* No "or use the web app" here any more. It sat directly under the primary
+                CTA and split the one decision this page asks for, in favour of the surface
+                that activates at 7.3%. Sign in stays in the header and the footer, because
+                people who already have a web account must still be able to reach it - it
+                just no longer competes with the button that works. */}
           </motion.div>
 
           <p className="mt-3.5 text-xs text-neutral-400">
