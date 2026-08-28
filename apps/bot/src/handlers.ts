@@ -103,6 +103,21 @@ export function isLangCallback(data: string | undefined): boolean {
 }
 
 export const CALLBACK_SUBTITLES_TOGGLE = "subs_toggle";
+const MEDIA_GROUP_TTL_MS = 5 * 60 * 1000;
+const claimedMediaGroups = new Map<string, number>();
+
+function claimMediaGroup(chatId: number, mediaGroupId: string): boolean {
+  const now = Date.now();
+  for (const [key, expiresAt] of claimedMediaGroups) {
+    if (expiresAt <= now) claimedMediaGroups.delete(key);
+  }
+
+  const key = `${chatId}:${mediaGroupId}`;
+  if (claimedMediaGroups.has(key)) return false;
+  claimedMediaGroups.set(key, now + MEDIA_GROUP_TTL_MS);
+  return true;
+}
+
 /** Under every refusal. The refusal copy has always ENDED with "💳 Plans -
  *  choose or manage your subscription", as a sentence; 31 free_exhausted
  *  refusals to one user produced zero checkouts, and the Plans entry was a
@@ -740,6 +755,24 @@ export async function handleUpdate(
   }
 
   const source = getVideoSource(message);
+
+  const mediaGroupId = message.media_group_id?.trim();
+  if (source && mediaGroupId) {
+    const isFirstItem = claimMediaGroup(message.chat.id, mediaGroupId);
+    if (isFirstItem) {
+      await client
+        .sendMessage(message.chat.id, dict.mediaGroupSingleVideo)
+        .catch(() => undefined);
+      await recordUploadRefusal(
+        "bot",
+        from.id,
+        "MEDIA_GROUP",
+        { source: "file" },
+        from.language_code
+      );
+    }
+    return;
+  }
 
   // While a support session is open, capture the conversation. A video is NOT
   // turned into a clip here - tell the user to close the chat first. Screenshots

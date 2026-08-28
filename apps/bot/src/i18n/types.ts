@@ -62,6 +62,7 @@ export interface Dict {
   linkConflict: string;
   linkWrongDirection: string;
   sendVideoHint: string;
+  mediaGroupSingleVideo: string;
   uploading: string;
   queued: string;
   /* The live progress board.

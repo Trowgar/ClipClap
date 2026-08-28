@@ -57,6 +57,8 @@ const pt: Dict = {
     "Este código não pode ser usado aqui. Use /link para gerar um novo para este Telegram.",
   sendVideoHint:
     "Me manda um vídeo e eu transformo em clipes verticais. Use /start para começar.",
+  mediaGroupSingleVideo:
+    "Eu trabalho com um vídeo por vez. Você enviou vários arquivos ao mesmo tempo. Envie um vídeo em uma mensagem separada - não como álbum nem coleção.",
   uploading: "Enviando seu vídeo...",
   queued: "Na fila. Mando os clipes aqui quando a renderização terminar.",
   progressTitle: "🎬 Trabalhando no seu vídeo",

@@ -103,6 +103,8 @@ const en: Dict = {
     "This code can't be used here. Use /link to get a new one for this Telegram.",
   sendVideoHint:
     "Send me a video and I'll turn it into vertical clips. Use /start to get going.",
+  mediaGroupSingleVideo:
+    "I work with one video at a time. You sent several files at once. Send one video as a separate message - not as an album or a group.",
   uploading: "Uploading your video...",
   queued: "Queued. I'll send the clips back here when rendering finishes.",
   progressTitle: "🎬 Working on your video",

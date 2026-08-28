@@ -135,6 +135,32 @@ function startUpdate() {
   };
 }
 
+function groupedVideoUpdate(
+  mediaGroupId: string,
+  options: {
+    chat?: typeof CHAT;
+    from?: typeof FROM;
+    updateId?: number;
+  } = {}
+) {
+  const updateId = options.updateId ?? 30;
+  return {
+    update_id: updateId,
+    message: {
+      message_id: updateId,
+      media_group_id: mediaGroupId,
+      chat: options.chat ?? CHAT,
+      from: options.from ?? FROM,
+      video: {
+        file_id: `file-${updateId}`,
+        file_unique_id: `unique-${updateId}`,
+        duration: 40,
+        mime_type: "video/mp4",
+      },
+    },
+  };
+}
+
 function eventsRecorded() {
   return mocks.funnelUpsert.mock.calls.map(
     (c) => c[0].where.surface_subjectId_event.event
@@ -148,6 +174,144 @@ function refusalsRecorded() {
     detail: c[0].data.detail as Record<string, unknown>,
   }));
 }
+
+describe("Telegram video albums", () => {
+  const EXISTING_USER = {
+    id: "u-album",
+    telegramId: "4242",
+    telegramLocale: "ru",
+    supportOpen: false,
+    plan: "NONE",
+    subscriptionStatus: "NONE",
+    billingCycle: null,
+    subtitlesEnabled: false,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.SUPPORT_CHAT_ID;
+    delete process.env.REFERRAL_ADMIN_TELEGRAM_IDS;
+    mocks.userFindUnique.mockResolvedValue(EXISTING_USER);
+    mocks.userFindUniqueOrThrow.mockResolvedValue(EXISTING_USER);
+    mocks.accountFindUnique.mockResolvedValue({ userId: EXISTING_USER.id });
+    mocks.jobFindMany.mockResolvedValue([]);
+    mocks.funnelUpsert.mockResolvedValue({});
+    mocks.refusalCreate.mockResolvedValue({});
+  });
+
+  it("rejects concurrent videos in one album with one reply and one refusal", async () => {
+    const { client } = harness();
+
+    await Promise.all([
+      handleUpdate(
+        client as never,
+        groupedVideoUpdate("album-concurrent-1", { updateId: 31 }) as never,
+        CONFIG
+      ),
+      handleUpdate(
+        client as never,
+        groupedVideoUpdate("album-concurrent-1", { updateId: 32 }) as never,
+        CONFIG
+      ),
+    ]);
+
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      CHAT.id,
+      t("ru").mediaGroupSingleVideo
+    );
+    expect(refusalsRecorded()).toEqual([
+      { code: "MEDIA_GROUP", detail: { source: "file" } },
+    ]);
+    expect(eventsRecorded()).toEqual([uploadRejectedEvent("MEDIA_GROUP")]);
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+    expect(mocks.accountFindUnique).not.toHaveBeenCalled();
+    expect(mocks.accountCreate).not.toHaveBeenCalled();
+    expect(mocks.userFindUniqueOrThrow).not.toHaveBeenCalled();
+    expect(mocks.jobCount).not.toHaveBeenCalled();
+    expect(mocks.createJob).not.toHaveBeenCalled();
+    expect(mocks.jobFindMany).not.toHaveBeenCalled();
+    expect(mocks.createTelegramDelivery).not.toHaveBeenCalled();
+  });
+
+  it("replies separately to different album ids", async () => {
+    const { client } = harness();
+
+    await Promise.all([
+      handleUpdate(
+        client as never,
+        groupedVideoUpdate("album-different-2a", { updateId: 33 }) as never,
+        CONFIG
+      ),
+      handleUpdate(
+        client as never,
+        groupedVideoUpdate("album-different-2b", { updateId: 34 }) as never,
+        CONFIG
+      ),
+    ]);
+
+    expect(client.sendMessage).toHaveBeenCalledTimes(2);
+    expect(refusalsRecorded()).toEqual([
+      { code: "MEDIA_GROUP", detail: { source: "file" } },
+      { code: "MEDIA_GROUP", detail: { source: "file" } },
+    ]);
+  });
+
+  it("replies separately to the same album id in different chats", async () => {
+    const { client } = harness();
+    const otherChat = { id: 5252, type: "private" as const };
+
+    await Promise.all([
+      handleUpdate(
+        client as never,
+        groupedVideoUpdate("album-cross-chat-3", { updateId: 35 }) as never,
+        CONFIG
+      ),
+      handleUpdate(
+        client as never,
+        groupedVideoUpdate("album-cross-chat-3", {
+          chat: otherChat,
+          updateId: 36,
+        }) as never,
+        CONFIG
+      ),
+    ]);
+
+    expect(client.sendMessage).toHaveBeenCalledTimes(2);
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      CHAT.id,
+      t("ru").mediaGroupSingleVideo
+    );
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      otherChat.id,
+      t("ru").mediaGroupSingleVideo
+    );
+  });
+
+  it("uses English for an unsupported Telegram language", async () => {
+    const { client } = harness();
+    const germanFrom = { ...FROM, language_code: "de" };
+    mocks.userFindUnique.mockResolvedValue({
+      ...EXISTING_USER,
+      telegramLocale: null,
+    });
+
+    await handleUpdate(
+      client as never,
+      groupedVideoUpdate("album-english-fallback-4", {
+        from: germanFrom,
+        updateId: 37,
+      }) as never,
+      CONFIG
+    );
+
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      CHAT.id,
+      t("en").mediaGroupSingleVideo
+    );
+  });
+});
 
 describe("first-screen telemetry", () => {
   beforeEach(() => {

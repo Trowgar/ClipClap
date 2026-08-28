@@ -54,6 +54,8 @@ const id: Dict = {
     "Kode ini tidak bisa dipakai di sini. Pakai /link untuk membuat kode baru bagi Telegram ini.",
   sendVideoHint:
     "Kirim video dan aku ubah jadi klip vertikal. Pakai /start untuk mulai.",
+  mediaGroupSingleVideo:
+    "Saya memproses satu video dalam satu waktu. Kamu mengirim beberapa file sekaligus. Kirim satu video sebagai pesan terpisah - bukan sebagai album atau kumpulan.",
   uploading: "Mengunggah videomu...",
   queued: "Masuk antrean. Klipnya aku kirim ke sini begitu render selesai.",
   progressTitle: "🎬 Sedang mengerjakan videomu",

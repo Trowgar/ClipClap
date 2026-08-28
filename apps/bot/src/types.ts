@@ -50,6 +50,7 @@ export type ReplyMarkup =
 
 export interface TelegramMessage {
   message_id: number;
+  media_group_id?: string;
   chat: {
     id: number;
     type: string;
