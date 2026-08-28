@@ -63,7 +63,6 @@ export interface FunnelRow {
  *  by getRefusals. */
 const FUNNEL_ORDER = [
   "start_first_screen",
-  "first_screen_link_account",
   "signed_up",
   "app_opened",
   "email_verified",
@@ -88,15 +87,55 @@ export const RETIRED_FUNNEL_EVENTS = ["first_screen_new_account"] as const;
  *  cliff between two unrelated stages and make the drop-offs on either side
  *  meaningless. Read it directly when deciding whether to build the brokerage.
  *
- *  Anything listed here is deliberately invisible on /admin's funnel chart, which
- *  is exactly the hole the test in analytics.service.test.ts exists to catch - so
- *  a name only belongs here after someone has decided it is not a stage. */
+ *  Nothing listed here is drawn on the funnel chart. They are rendered under it
+ *  by getSideActions instead, as counts with no percentage and no drop-off -
+ *  which is exactly the hole the test in analytics.service.test.ts exists to
+ *  catch, so a name only belongs here after someone has decided it is not a
+ *  stage, and only with a label in SIDE_ACTION_LABELS. */
 // video_queued is a branch off video_submitted (the submission waited for a
 // slot instead of being refused), not a stage everyone passes through.
+//
+// first_screen_link_account was a main-path step until 2026-08-24, and both
+// things that go wrong when a branch is put on the main path went wrong. It was
+// step two of six because it once counted the "I already have an account"
+// button of the two-button first screen, which every stranger saw; that screen
+// was deleted on 2026-07-30 and the event moved to /link and the Settings
+// button, where only somebody who already owns a web account has any reason to
+// press it. Seven people ever have. So (a) it was permanently the "biggest
+// drop" - 7 against 66 - reported in red as if a product defect were losing 89%
+// of everybody, and (b) getFunnel advanced prevPeople to 7, so the step after
+// it drew "Created an account 68 -> 971% of previous". A branch on the main
+// path does not just misreport itself, it misreports its neighbour.
+//
+// The three checkout events landed on 2026-08-23 in FUNNEL_EVENTS and in
+// neither list, which left them written to the table and rendered nowhere -
+// and the guard test red. They are not stages either: plans_opened is not on
+// the way to a video, and checkout_error is a failure on our side, the
+// upload_rejected_* of the payment path. Counting them here answers the
+// question they were added for (opened prices -> started a checkout -> paid)
+// without inventing a cliff between "submitted a video" and "opened Plans".
 export const SIDE_ACTION_EVENTS = [
+  "first_screen_link_account",
   "earn_advertisers_tapped",
   "video_queued",
+  "plans_opened",
+  "checkout_started",
+  "checkout_error",
 ] as const;
+
+/** What each side action is called on /admin. Deliberately says what was
+ *  RECORDED, not what was achieved: `first_screen_link_account` fires when a
+ *  link code is handed over, and as of 2026-08-24 none of the seven codes the
+ *  bot has issued was ever redeemed - "Linked an account" was the page
+ *  asserting an outcome the event knows nothing about. */
+const SIDE_ACTION_LABELS: Record<(typeof SIDE_ACTION_EVENTS)[number], string> = {
+  first_screen_link_account: "Started an account link",
+  earn_advertisers_tapped: "Asked about advertisers",
+  video_queued: "Waited for a free slot",
+  plans_opened: "Opened the plans screen",
+  checkout_started: "Started a checkout",
+  checkout_error: "Checkout failed on our side",
+};
 
 /** An event that is recorded but missing from FUNNEL_ORDER is invisible here -
  *  getFunnel walks this list, not the table - so adding a step to
@@ -117,7 +156,6 @@ export const SIDE_ACTION_EVENTS = [
  *  step above it. */
 const FUNNEL_LABELS: Record<(typeof FUNNEL_ORDER)[number], string> = {
   start_first_screen: "Saw the welcome screen",
-  first_screen_link_account: "Linked an account",
   signed_up: "Created an account",
   app_opened: "Opened the app",
   email_verified: "Confirmed their email",
@@ -302,6 +340,51 @@ export async function getFunnel(surface?: FunnelSurface): Promise<FunnelStep[]> 
   if (biggestDrop) biggestDrop.biggestDrop = true;
 
   return steps;
+}
+
+export interface SideAction {
+  event: string;
+  label: string;
+  people: number;
+  repeats: number;
+}
+
+/**
+ * The events in SIDE_ACTION_EVENTS, in that order, with the empty ones dropped.
+ *
+ * No percentage and no drop-off flag, on purpose: none of these has a
+ * denominator. Nobody has to open the plans screen on the way to anything, so
+ * "11% of the step above" would be a number about the chart's own row order
+ * rather than about a person - which is precisely what put a permanent red
+ * "biggest drop" on a link nobody is asked to make.
+ */
+export async function getSideActions(
+  surface?: FunnelSurface
+): Promise<SideAction[]> {
+  const grouped = await prisma.funnelEvent.groupBy({
+    by: ["event"],
+    where: {
+      event: { in: [...SIDE_ACTION_EVENTS] },
+      ...(surface ? { surface } : {}),
+      ...(await excludeSyntheticSubjectsWhere()),
+    },
+    _count: { _all: true },
+    _sum: { occurrences: true },
+  });
+  const byEvent = new Map(grouped.map((g) => [g.event, g]));
+
+  return SIDE_ACTION_EVENTS.flatMap((event) => {
+    const row = byEvent.get(event);
+    if (!row || row._count._all === 0) return [];
+    return [
+      {
+        event,
+        label: SIDE_ACTION_LABELS[event],
+        people: row._count._all,
+        repeats: (row._sum.occurrences ?? 0) - row._count._all,
+      },
+    ];
+  });
 }
 
 export interface RefusalRow {

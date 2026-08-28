@@ -25,6 +25,7 @@ import {
   getFunnel,
   getPulse,
   getRefusals,
+  getSideActions,
   getTotals,
   isAdminEmail,
   isAdminUser,
@@ -664,6 +665,106 @@ describe("getFunnel and getRefusals exclude synthetic subjects", () => {
       surface: "web",
       subjectId: { notIn: ["u-synth"] },
       event: { startsWith: "upload_rejected_" },
+    });
+  });
+});
+
+/**
+ * The shape prod had on 2026-08-24, and the two ways it lied.
+ *
+ * `first_screen_link_account` sat at position two of the main path with 7
+ * people against 66 - it was the "biggest drop" every day by construction, and
+ * it handed `signed_up` a denominator of 7, so 68 accounts rendered as "971% of
+ * previous". A branch belongs off the path, and this is the test that says so
+ * in numbers rather than in a comment.
+ */
+describe("getFunnel keeps side actions off the main path", () => {
+  beforeEach(() => {
+    mocks.funnelGroupBy.mockReset();
+    mocks.userCount.mockReset();
+    mocks.userCount.mockResolvedValue(8);
+    mocks.funnelGroupBy.mockResolvedValue([
+      { event: FUNNEL_EVENTS.FIRST_SCREEN, _count: { _all: 66 }, _sum: { occurrences: 75 } },
+      { event: FUNNEL_EVENTS.LINK_ACCOUNT, _count: { _all: 7 }, _sum: { occurrences: 8 } },
+      { event: FUNNEL_EVENTS.SIGNED_UP, _count: { _all: 68 }, _sum: { occurrences: 68 } },
+      { event: FUNNEL_EVENTS.APP_OPENED, _count: { _all: 51 }, _sum: { occurrences: 575 } },
+    ]);
+  });
+
+  it("does not draw a side action as a step", async () => {
+    const steps = await getFunnel();
+
+    expect(steps.map((s) => s.event)).not.toContain(FUNNEL_EVENTS.LINK_ACCOUNT);
+  });
+
+  it("measures the next step against the last one everybody passed", async () => {
+    const steps = await getFunnel();
+    const signedUp = steps.find((s) => s.event === FUNNEL_EVENTS.SIGNED_UP);
+
+    // 68 of the 66 who saw the welcome screen, not 68 of the 7 who asked for a
+    // link code. The figure is over 100% because the two populations differ -
+    // that is a fact about instrumentation dates, not a denominator bug.
+    expect(signedUp?.pctOfPrev).toBe(103);
+  });
+
+  it("cannot hand the biggest-drop badge to a branch", async () => {
+    const steps = await getFunnel();
+
+    // 66 -> 68 -> 51: the only loss on the path is app_opened.
+    expect(steps.filter((s) => s.biggestDrop).map((s) => s.event)).toEqual([
+      FUNNEL_EVENTS.APP_OPENED,
+    ]);
+  });
+});
+
+/**
+ * The same guard the funnel has, for the list next to it. An event moved out of
+ * FUNNEL_ORDER is only "reclassified" if something still renders it; without
+ * this, moving a name into SIDE_ACTION_EVENTS would be indistinguishable from
+ * deleting it from the page - which is what had already happened to the three
+ * checkout events, written on 2026-08-23 and shown nowhere.
+ */
+describe("getSideActions renders every declared side action", () => {
+  beforeEach(() => {
+    mocks.funnelGroupBy.mockReset();
+  });
+
+  it("shows every SIDE_ACTION_EVENTS value that has rows, with a label", async () => {
+    mocks.funnelGroupBy.mockResolvedValue(
+      SIDE_ACTION_EVENTS.map((event, i) => ({
+        event,
+        _count: { _all: 10 - i },
+        _sum: { occurrences: 10 - i },
+      }))
+    );
+
+    const actions = await getSideActions();
+
+    expect(actions.map((a) => a.event)).toEqual([...SIDE_ACTION_EVENTS]);
+    for (const action of actions) {
+      expect(action.label).not.toBe(action.event);
+      expect(action.label.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("asks only for side actions, and skips the ones nobody did", async () => {
+    mocks.funnelGroupBy.mockResolvedValue([
+      { event: FUNNEL_EVENTS.LINK_ACCOUNT, _count: { _all: 7 }, _sum: { occurrences: 8 } },
+    ]);
+
+    const actions = await getSideActions("bot");
+
+    expect(actions).toEqual([
+      {
+        event: FUNNEL_EVENTS.LINK_ACCOUNT,
+        label: "Started an account link",
+        people: 7,
+        repeats: 1,
+      },
+    ]);
+    expect(mocks.funnelGroupBy.mock.calls[0][0].where).toEqual({
+      event: { in: [...SIDE_ACTION_EVENTS] },
+      surface: "bot",
     });
   });
 });
