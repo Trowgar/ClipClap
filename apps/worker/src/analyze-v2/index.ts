@@ -20,6 +20,7 @@ import { rescueShortSource, type RescueTelemetry } from "./rescue";
 import { runArcAudit, isFullyOk, type ArcAuditTelemetry } from "./arc-audit";
 import { extendClipStarts, type StartExtensionTelemetry } from "./start-extension";
 import { extendClipEnds } from "./end-extension";
+import { filterStandaloneClips, type StandaloneFilterTelemetry } from "./standalone-filter";
 import { finalizeClips } from "./finalize";
 import { detectTeaserRegion, isInTeaserRegion } from "./teaser";
 import { newUsage } from "./llm";
@@ -662,6 +663,27 @@ export async function analyzeHighlightsV2(
     arcDownrankTelemetry = t;
   }
 
+  let standaloneFilterTelemetry: StandaloneFilterTelemetry | undefined;
+  let afterStandaloneFilter = afterArcDownrank;
+  if (cfg.standaloneFilterEnabled && cfg.arcAuditEnabled) {
+    const filtered = filterStandaloneClips(
+      afterArcDownrank,
+      arcFlags,
+      cfg.scoreThreshold,
+      cfg.arcDownrankPenalty2
+    );
+    afterStandaloneFilter = filtered.clips;
+    standaloneFilterTelemetry = filtered.telemetry;
+    for (const drop of filtered.drops) {
+      droppedVerdicts.push({
+        id: drop.id,
+        stage: "standalone_filter",
+        reason: "not_self_contained",
+        score: drop.score,
+      });
+    }
+  }
+
   // NEVER throws: any error, refusal, truncation or malformed output ships the
   // input set with a reason in telemetry. A stage with veto authority over
   // already-approved clips must not be able to turn a content answer into a
@@ -670,7 +692,7 @@ export async function analyzeHighlightsV2(
   const finalized = await finalizeClips(
     client,
     usage,
-    afterArcDownrank,
+    afterStandaloneFilter,
     nodes,
     languageIso,
     isoToLanguageName(languageIso),
@@ -879,12 +901,11 @@ export async function analyzeHighlightsV2(
     // Counted off the ARGUMENT the finalizer received, not off selection. The
     // two agree today only because the extension stage returns its input 1:1 on
     // every path, and nothing at this call site says so - a counter that reads
-    // "what it was given" has to read what was given. `afterArcDownrank`, not
-    // `extension.clips`, IS that argument as of spec 2026-08-10 task 7: the
-    // downrank stage above can remove clips (droppedVerdicts carries the
-    // reason), and with it dark the two stay identical, the same reason they
-    // agreed with `extension.clips` before this task existed.
-    selectedForFinalizer: afterArcDownrank.length,
+    // "what it was given" has to read what was given. `afterStandaloneFilter`,
+    // not `extension.clips`, IS that argument: arc downrank and the standalone
+    // filter above can remove clips (droppedVerdicts carries the reason), and
+    // with both dark the arrays stay identical.
+    selectedForFinalizer: afterStandaloneFilter.length,
     finalizerSurvivors: finalized.clips.length,
     ...finalizedTelemetryRest,
     kept: highlights.length,
@@ -916,6 +937,7 @@ export async function analyzeHighlightsV2(
     // - the same not-a-key promise arcAudit/startExtension/longClips keep
     // above, not a zeroed placeholder.
     ...(arcDownrankTelemetry ? { arcDownrank: arcDownrankTelemetry } : {}),
+    ...(standaloneFilterTelemetry ? { standaloneFilter: standaloneFilterTelemetry } : {}),
   };
 
   if (highlights.length === 0) {
