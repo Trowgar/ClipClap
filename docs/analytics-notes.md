@@ -73,16 +73,26 @@ Steps, in the order a person passes them:
 
 | Event | Surface | Meaning |
 |---|---|---|
-| `start_first_screen` | bot | saw the two-button screen, no account yet |
-| `first_screen_new_account` | bot | pressed "New account" |
-| `first_screen_link_account` | bot | pressed "Link account" |
+| `start_first_screen` | bot | typed /start with no account yet (the two-button screen it was named for is gone since 2026-07-30) |
+| `signed_up` | both | a User row now exists, wherever it came from |
 | `app_opened` | both | bot: main menu sent · web: dashboard loaded |
+| `email_verified` | web | the confirmation link was opened - scoped to the accounts the wall applies to |
 | `video_submitted` | both | attempted to create a job, recorded **before** the limit checks |
-| `upload_rejected_*` | both | refused, with the reason in the name |
 
-Refusal reasons: `trial_used`, `trial_attempts`, `too_long`, `free_too_long`, `quota`, `lifecycle`,
-`daily_limit` (web only), `concurrent` (web only). The reason lives in the event NAME, not a column, so
-adding one is a code change rather than a migration, and `WHERE event LIKE 'upload_rejected%'` reads well.
+**Not stages, shown separately.** `SIDE_ACTION_EVENTS` in `analytics.service.ts` - things people do that
+nobody has to do on the way to anything: `first_screen_link_account` (a link code was handed over by /link
+or Settings), `earn_advertisers_tapped`, `video_queued`, `plans_opened`, `checkout_started`,
+`checkout_error`. They render under the funnel as counts with no percentage. `first_screen_new_account` is
+retired - the button that wrote it no longer exists, and a retired event is drawn nowhere at all.
+
+**Refusals are branches, not stages.** Current suffixes emitted on both surfaces are `free_exhausted`,
+`free_too_long`, `free_budget_closed`, `quota`, `lifecycle`, `too_long`, `too_short`, `duplicate`,
+`daily_limit`, `concurrent`, `probe_failed`, and `busy`. `media_group` is bot only. `submit_failed` is web
+only. `free_not_anchored` is web in normal operation; the bot creates a phone-backed Telegram account before
+the shared gate, so that code is structurally unreachable there. Historical `trial_used` and
+`trial_attempts` rows remain readable but those codes are retired. The reason lives in the event NAME, not a
+column, so adding one is a code change rather than a migration, and `WHERE event LIKE
+'upload_rejected%'` reads well.
 
 **Not events, on purpose:** job created, clips delivered, zero-clip outcomes, and "returned". They are
 already rows in `jobs`, `telegram_deliveries`, `clips` and in `occurrences`. A second counter would drift
@@ -203,6 +213,17 @@ anyone else), but the entry point is not theirs to see either. `sendMainMenu` no
 a screenshot, a proxy log, a borrowed phone - could mint fresh one-hour admin cookies all day. The gate posts
 initData the instant the Mini App loads, so nothing legitimate needs more than the hour it now gets; an admin
 who left the app open overnight just reopens it and Telegram issues a new `auth_date`.
+
+**11. A branch on the main path misreports itself AND its neighbour.** `first_screen_link_account` was
+funnel step two because it once counted a button every stranger saw. That screen was deleted on 2026-07-30
+and the event moved to /link, where only somebody who already owns a web account has a reason to press it -
+7 people in a month against 66 who saw the welcome screen. So it wore the red "biggest drop" badge
+permanently, as if a product defect were losing 89% of everybody, and because `getFunnel` advanced
+`prevPeople` past it the step below read "Created an account 68 -> **971%** of previous". Fixed 2026-08-24:
+side actions are their own list, with counts and no percentages. The same commit rescued `plans_opened`,
+`checkout_started` and `checkout_error`, which had been instrumented the day before, put in neither list and
+rendered nowhere - the guard test in `analytics.service.test.ts` was already red about it and was committed
+red. **The test being red IS the notification. Read it.**
 
 ---
 
