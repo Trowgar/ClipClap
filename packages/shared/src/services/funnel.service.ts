@@ -109,6 +109,8 @@ export type UploadRejectionCode =
   | "TOO_LONG"
   /** Under SOURCE_FLOOR.minDurationSec - see plans.ts for the numbers. */
   | "TOO_SHORT"
+  /** Telegram media groups - one album is rejected as a unit. */
+  | "MEDIA_GROUP"
   /** The same source again while its job runs, or after it finished with clips
    *  still in storage (which are handed back instead). findDuplicateJob. */
   | "DUPLICATE"
@@ -134,6 +136,7 @@ const REJECTION_SUFFIX: Record<UploadRejectionCode, string> = {
   LIFECYCLE: "lifecycle",
   TOO_LONG: "too_long",
   TOO_SHORT: "too_short",
+  MEDIA_GROUP: "media_group",
   DUPLICATE: "duplicate",
   DAILY_LIMIT: "daily_limit",
   CONCURRENT: "concurrent",
