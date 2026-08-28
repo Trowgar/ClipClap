@@ -45,7 +45,8 @@ ASCII hyphen `-`, never an en dash or em dash.
 Add one required dictionary key for the album rejection to every existing bot
 locale. The Russian text above is authoritative. Other locales carry the same
 meaning: one video at a time, the received group was not processed, resend one
-chosen video as a separate message.
+chosen video as a separate message. An unknown Telegram language code resolves
+through the existing locale detector and receives the English message.
 
 ## Telemetry
 
@@ -67,6 +68,7 @@ state without changing the decision, so it is deliberately excluded.
 - Two different group ids each receive one response.
 - The same group id in different chats is treated as two groups.
 - A normal single-video update remains unchanged.
+- An unsupported Telegram language code receives the English message.
 - The exact Russian message contains an ASCII hyphen and contains no `U+2013`
   or `U+2014` characters.
 
