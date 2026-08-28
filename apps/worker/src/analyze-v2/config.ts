@@ -197,6 +197,10 @@ export interface AnalyzeConfig {
    *  again in index.ts rather than trusted from an empty `arcFlags` map
    *  alone. */
   arcDownrankEnabled: boolean;
+  /** Alternative-aware standalone failure filter, evaluated only with
+   *  arcAuditEnabled after arc downrank and before the finalizer. Off by
+   *  default because it can remove a candidate from real finalizer input. */
+  standaloneFilterEnabled: boolean;
   /** Score penalty applied when a clip carries TWO OR MORE standing axes
    *  (`ok: false && !repaired`). Default 0.15, sized directly from the
    *  corpus (spec 2026-08-10 task 7, engine-notes §5c): two-flag SKIP scores
@@ -475,6 +479,7 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     // file: a stray truthy env value must not give the arc audit drop
     // authority over a real user's clip.
     arcDownrankEnabled: env.ARC_DOWNRANK === "on",
+    standaloneFilterEnabled: env.ANALYZE_STANDALONE_FILTER_V1 === "on",
     arcDownrankPenalty2: num(env, "ARC_DOWNRANK_PENALTY_2", 0.15),
     arcDownrankPenalty1: num(env, "ARC_DOWNRANK_PENALTY_1", 0.0),
     teaserWindowSec: num(env, "TEASER_WINDOW_SEC", 120),

@@ -415,6 +415,9 @@ export interface EngineFingerprint {
    *  shared-responses.json false-match risk startExtensionEnabled and
    *  longClipsEnabled exist to close. */
   arcDownrankEnabled: boolean;
+  /** Changes finalizer input without a request of its own, so replay records
+   *  the switch explicitly. */
+  standaloneFilterEnabled: boolean;
   /** Score penalty for a clip with 2+ standing arc-audit axes. See the doc
    *  comment above for the "can silence the stage" risk this key exists to
    *  close - the same shape endExtensionWindowSec/longClipMaxSec document. */
@@ -469,6 +472,7 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     longClipMaxSec: cfg.longClipMaxSec,
     arcFinalizerNotesEnabled: cfg.arcFinalizerNotesEnabled,
     arcDownrankEnabled: cfg.arcDownrankEnabled,
+    standaloneFilterEnabled: cfg.standaloneFilterEnabled,
     arcDownrankPenalty2: cfg.arcDownrankPenalty2,
     arcDownrankPenalty1: cfg.arcDownrankPenalty1,
     scanWindowBudget: cfg.scanWindowBudget,

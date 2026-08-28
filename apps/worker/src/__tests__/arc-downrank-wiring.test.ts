@@ -174,6 +174,15 @@ const arcDownrankOf = (telemetry: Record<string, unknown>) =>
   telemetry.arcDownrank as
     | { considered: number; penalized: number; dropped: number }
     | undefined;
+const standaloneFilterOf = (telemetry: Record<string, unknown>) =>
+  telemetry.standaloneFilter as
+    | {
+        considered: number;
+        eligible: number;
+        dropped: number;
+        bypassedNoCleanAlternative: number;
+      }
+    | undefined;
 
 describe("arc-downrank policy wiring", () => {
   it("makes no difference and adds no telemetry key while ARC_DOWNRANK is dark, even on a two-flag clip", async () => {
@@ -393,5 +402,125 @@ describe("arc-downrank policy wiring", () => {
       "arc_audit",
       "clip_finalizer",
     ]);
+  });
+
+  it("makes no difference and adds no telemetry key while ANALYZE_STANDALONE_FILTER_V1 is dark", async () => {
+    const darkCfg = loadAnalyzeConfig({ ARC_AUDIT: "on" });
+    const { client } = stubClient({
+      scan_candidates: { candidates: [scanCandidate(10, 14, 13)] },
+      critic_verdicts: { results: [verdict("c0", 10, 14, 13, 0.67)] },
+      arc_audit: { results: [auditRow("c0", true, true, false)] },
+      clip_finalizer: { clips: [shipRow("c0")] },
+    });
+    const r = await analyzeHighlightsV2(transcript(), { client, cfg: darkCfg });
+
+    expect(r.highlights).toHaveLength(1);
+    expect("standaloneFilter" in r.telemetry).toBe(false);
+  });
+
+  it("adds no standalone telemetry or audit call when only ANALYZE_STANDALONE_FILTER_V1 is on", async () => {
+    const flagOnlyCfg = loadAnalyzeConfig({ ANALYZE_STANDALONE_FILTER_V1: "on" });
+    const { client, requests } = stubClient({
+      scan_candidates: { candidates: [scanCandidate(10, 14, 13)] },
+      critic_verdicts: { results: [verdict("c0", 10, 14, 13, 0.67)] },
+      clip_finalizer: { clips: [shipRow("c0")] },
+    });
+    const r = await analyzeHighlightsV2(transcript(), { client, cfg: flagOnlyCfg });
+
+    expect(schemasOf(requests)).not.toContain("arc_audit");
+    expect(r.highlights).toHaveLength(1);
+    expect("standaloneFilter" in r.telemetry).toBe(false);
+  });
+
+  it("filters weak non-standalone clips before the finalizer and records measured telemetry", async () => {
+    const liveCfg = loadAnalyzeConfig({ ARC_AUDIT: "on", ANALYZE_STANDALONE_FILTER_V1: "on" });
+    const { client, requests } = stubClient({
+      scan_candidates: { candidates: [scanCandidate(10, 14, 13), scanCandidate(20, 24, 23)] },
+      critic_verdicts: {
+        results: [verdict("c0", 10, 14, 13, 0.82), verdict("c1", 20, 24, 23, 0.67)],
+      },
+      arc_audit: {
+        results: [auditRow("c0", true, true, true), auditRow("c1", true, true, false)],
+      },
+      clip_finalizer: { clips: [shipRow("c0")] },
+    });
+    const r = await analyzeHighlightsV2(transcript(), { client, cfg: liveCfg });
+
+    const finalizerUser = userFor(requests, "clip_finalizer");
+    expect(finalizerUser).toContain("CLIP c0 |");
+    expect(finalizerUser).not.toContain("CLIP c1 |");
+    expect(r.telemetry.selectedForFinalizer).toBe(1);
+    expect(standaloneFilterOf(r.telemetry)).toEqual({
+      considered: 2,
+      eligible: 1,
+      dropped: 1,
+      bypassedNoCleanAlternative: 0,
+    });
+    expect(r.telemetry.droppedVerdicts).toContainEqual({
+      id: "c1",
+      stage: "standalone_filter",
+      reason: "not_self_contained",
+      score: 0.67,
+    });
+    expect(r.highlights).toHaveLength(1);
+    expect(r.highlights[0].title).toBe("Заголовок c0");
+  });
+
+  it("runs the standalone filter after arc downrank and before the finalizer", async () => {
+    const liveCfg = loadAnalyzeConfig({
+      ARC_AUDIT: "on",
+      ARC_DOWNRANK: "on",
+      ANALYZE_STANDALONE_FILTER_V1: "on",
+    });
+    const { client, requests } = stubClient({
+      scan_candidates: {
+        candidates: [
+          scanCandidate(10, 14, 13),
+          scanCandidate(20, 24, 23),
+          scanCandidate(30, 34, 33),
+        ],
+      },
+      critic_verdicts: {
+        results: [
+          verdict("c0", 10, 14, 13, 0.82),
+          verdict("c1", 20, 24, 23, 0.65),
+          verdict("c2", 30, 34, 33, 0.67),
+        ],
+      },
+      arc_audit: {
+        results: [
+          auditRow("c0", true, true, true),
+          auditRow("c1", false, false, true),
+          auditRow("c2", true, true, false),
+        ],
+      },
+      clip_finalizer: { clips: [shipRow("c0")] },
+    });
+    const r = await analyzeHighlightsV2(transcript(), { client, cfg: liveCfg });
+
+    expect(arcDownrankOf(r.telemetry)).toEqual({ considered: 3, penalized: 1, dropped: 1 });
+    expect(standaloneFilterOf(r.telemetry)).toEqual({
+      considered: 2,
+      eligible: 1,
+      dropped: 1,
+      bypassedNoCleanAlternative: 0,
+    });
+    expect(r.telemetry.selectedForFinalizer).toBe(1);
+    expect(r.telemetry.droppedVerdicts).toContainEqual({
+      id: "c1",
+      stage: "arc_downrank",
+      reason: "arc_unrepairable",
+      score: 0.65,
+    });
+    expect(r.telemetry.droppedVerdicts).toContainEqual({
+      id: "c2",
+      stage: "standalone_filter",
+      reason: "not_self_contained",
+      score: 0.67,
+    });
+    const finalizerUser = userFor(requests, "clip_finalizer");
+    expect(finalizerUser).toContain("CLIP c0 |");
+    expect(finalizerUser).not.toContain("CLIP c1 |");
+    expect(finalizerUser).not.toContain("CLIP c2 |");
   });
 });

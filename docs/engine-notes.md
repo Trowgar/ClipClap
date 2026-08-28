@@ -1277,6 +1277,17 @@ truncated hibakusya arc); answer-arc 1, creator 1, ecology/sitcom 0 - **4 drops 
 considered, every one with 2+ standing axes, the positive control untouched**, and every set
 refilled from the finalizer headroom (7->7, 12->12, 12->12, 8->7).
 
+**Standalone alternative filter (2026-08-28).** User feedback exposed a one-axis gap the global
+arc downrank intentionally leaves inert: a `0.67` clip shipped with `standalone.ok=false` and no
+entry or exit defect. A fixed-cohort retrospective simulation over 40 DONE RECALL_CRITIC jobs and
+173 shipped clips found that a hard standalone gate would empty 3 jobs, while the alternative-aware
+rule identifies 16 clips across 12 jobs and empties none. With `ARC_AUDIT=on` and
+`ANALYZE_STANDALONE_FILTER_V1=on`, the stage runs after arc downrank and before FINALIZE. It removes
+only explicit standalone failures whose `score - arcDownrankPenalty2` is strictly below
+`scoreThreshold`, and only when another candidate is fully clean. Missing flags and repaired-only
+flags never establish the clean alternative. Critic scores are never mutated, and the feature ships
+dark pending rollout measurement.
+
 **Task 8 - the song gate (`SONG_GATE`), and a correction to §5c.** Measured first
 (`scripts/eval-song-gate.ts`, 8 candidate ids vs 15 speech jobs + 5 fixture transcripts): the
 two "film scene" jobs §5c called song-cut are **100% dialogue** (0 music tokens, 6.8% line
