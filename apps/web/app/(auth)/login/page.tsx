@@ -7,6 +7,9 @@ import { VerifiedNotice, parseVerifiedStatus } from "./verified-notice";
 
 export const metadata: Metadata = {
   title: "Sign in - ClipClap",
+  // A sign-in form has nothing to rank for and no query it could honestly answer. `noindex`
+  // keeps it out of search results, while `follow` lets crawlers traverse any links it exposes.
+  robots: { index: false, follow: true },
 };
 
 /**
