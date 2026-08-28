@@ -43,6 +43,7 @@ describe("computeFingerprint", () => {
       longClipMaxSec: baseCfg.longClipMaxSec,
       arcFinalizerNotesEnabled: baseCfg.arcFinalizerNotesEnabled,
       arcDownrankEnabled: baseCfg.arcDownrankEnabled,
+      standaloneFilterEnabled: baseCfg.standaloneFilterEnabled,
       arcDownrankPenalty2: baseCfg.arcDownrankPenalty2,
       arcDownrankPenalty1: baseCfg.arcDownrankPenalty1,
       scanWindowBudget: baseCfg.scanWindowBudget,
@@ -108,6 +109,10 @@ describe("computeFingerprint", () => {
     expect(computeFingerprint(baseCfg).arcDownrankEnabled).toBe(false);
     expect(computeFingerprint(baseCfg).arcDownrankPenalty2).toBe(0.15);
     expect(computeFingerprint(baseCfg).arcDownrankPenalty1).toBe(0);
+  });
+
+  it("records the standalone filter as DARK on the default config", () => {
+    expect(computeFingerprint(baseCfg).standaloneFilterEnabled).toBe(false);
   });
 });
 
@@ -254,6 +259,13 @@ describe("assertFingerprintMatches", () => {
     const changed = computeFingerprint({ ...baseCfg, arcDownrankEnabled: true });
     expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
       /arcDownrankEnabled/
+    );
+  });
+
+  it("fails when the standalone filter was switched on, even though it makes no request", () => {
+    const changed = computeFingerprint({ ...baseCfg, standaloneFilterEnabled: true });
+    expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
+      /standaloneFilterEnabled/
     );
   });
 

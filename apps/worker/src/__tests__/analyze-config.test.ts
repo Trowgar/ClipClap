@@ -72,6 +72,22 @@ describe("loadAnalyzeConfig", () => {
     );
   });
 
+  it("arms the standalone filter only for the exact literal on", () => {
+    expect(loadAnalyzeConfig({}).standaloneFilterEnabled).toBe(false);
+    expect(
+      loadAnalyzeConfig({ ANALYZE_STANDALONE_FILTER_V1: "on" }).standaloneFilterEnabled,
+    ).toBe(true);
+    expect(
+      loadAnalyzeConfig({ ANALYZE_STANDALONE_FILTER_V1: "true" }).standaloneFilterEnabled,
+    ).toBe(false);
+    expect(
+      loadAnalyzeConfig({ ANALYZE_STANDALONE_FILTER_V1: "1" }).standaloneFilterEnabled,
+    ).toBe(false);
+    expect(
+      loadAnalyzeConfig({ ANALYZE_STANDALONE_FILTER_V1: "ON" }).standaloneFilterEnabled,
+    ).toBe(false);
+  });
+
   it("falls back to legacy for unknown engines and accepts shadow", () => {
     expect(loadAnalyzeConfig({ ANALYZE_ENGINE: "garbage" }).engine).toBe(
       "legacy",
