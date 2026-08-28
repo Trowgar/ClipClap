@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import filterStandaloneClips from "../analyze-v2/standalone-filter";
+import { filterStandaloneClips } from "../analyze-v2/standalone-filter";
 import type { ArcFlags, SnappedClip } from "../analyze-v2/types";
 
 function clip(id: string, score: number): SnappedClip {
@@ -54,11 +54,14 @@ describe("filterStandaloneClips", () => {
     const clean = clip("clean", 0.82);
     const high = clip("high", 0.76);
     const equal = clip("equal", 0.75);
-    expect(run([clean, high, equal], [
+    const result = run([clean, high, equal], [
       ["clean", flags(true, true, true)],
       ["high", flags(true, true, false)],
       ["equal", flags(true, true, false)],
-    ]).telemetry).toEqual({ considered: 3, eligible: 0, dropped: 0, bypassedNoCleanAlternative: 0 });
+    ]);
+    expect(result.clips).toEqual([clean, high, equal]);
+    expect(result.drops).toEqual([]);
+    expect(result.telemetry).toEqual({ considered: 3, eligible: 0, dropped: 0, bypassedNoCleanAlternative: 0 });
   });
 
   it("keeps entry-only and exit-only failures above the threshold", () => {
@@ -71,6 +74,7 @@ describe("filterStandaloneClips", () => {
       ["exit", flags(true, false, true)],
     ]);
     expect(result.clips).toEqual([clean, entry, exit]);
+    expect(result.drops).toEqual([]);
     expect(result.telemetry).toEqual({ considered: 3, eligible: 0, dropped: 0, bypassedNoCleanAlternative: 0 });
   });
 
@@ -111,6 +115,20 @@ describe("filterStandaloneClips", () => {
     expect(result.clips[1]).toBe(last);
     expect(rejected.verdict.score).toBe(0.67);
     expect(result.drops).toEqual([{ id: "rejected", score: 0.67 }]);
+    expect(result.telemetry).toEqual({ considered: 3, eligible: 1, dropped: 1, bypassedNoCleanAlternative: 0 });
+  });
+
+  it("only drops the eligible object when verdict IDs are duplicated", () => {
+    const sameIdLow = clip("same-id", 0.67);
+    const sameIdHigh = clip("same-id", 0.8);
+    const clean = clip("clean", 0.9);
+    const result = run([sameIdLow, sameIdHigh, clean], [
+      ["same-id", flags(true, true, false)],
+      ["clean", flags(true, true, true)],
+    ]);
+    expect(result.clips).toEqual([sameIdHigh, clean]);
+    expect(result.clips[0]).toBe(sameIdHigh);
+    expect(result.drops).toEqual([{ id: "same-id", score: 0.67 }]);
     expect(result.telemetry).toEqual({ considered: 3, eligible: 1, dropped: 1, bypassedNoCleanAlternative: 0 });
   });
 });

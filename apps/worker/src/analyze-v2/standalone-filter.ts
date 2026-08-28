@@ -19,7 +19,7 @@ export interface StandaloneFilterResult {
   telemetry: StandaloneFilterTelemetry;
 }
 
-export default function filterStandaloneClips(
+export function filterStandaloneClips(
   clips: SnappedClip[],
   arcFlags: ReadonlyMap<string, ArcFlags>,
   scoreThreshold: number,
@@ -41,9 +41,9 @@ export default function filterStandaloneClips(
     return { clips, drops: [], telemetry };
   }
 
-  const eligibleIds = new Set(eligible.map((clip) => clip.verdict.id));
+  const eligibleClips = new Set(eligible);
   return {
-    clips: clips.filter((clip) => !eligibleIds.has(clip.verdict.id)),
+    clips: clips.filter((clip) => !eligibleClips.has(clip)),
     drops: eligible.map((clip) => ({ id: clip.verdict.id, score: clip.verdict.score })),
     telemetry,
   };
