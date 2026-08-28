@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * The rule that decides WHICH delivery rows the poller may act on lives in
@@ -279,6 +279,7 @@ function createStore(...seeds: (FakeJob | SeedRow)[]) {
 }
 
 let store: ReturnType<typeof createStore>;
+const originalClipFeedbackBot = process.env.CLIP_FEEDBACK_BOT;
 
 function makeClient() {
   return {
@@ -317,10 +318,19 @@ const poll = (client: ReturnType<typeof makeClient>) =>
 
 beforeEach(() => {
   vi.clearAllMocks();
+  delete process.env.CLIP_FEEDBACK_BOT;
   mocks.userFindUnique.mockResolvedValue({ telegramLocale: "en" });
   mocks.presign.mockImplementation(async (key: string) => `https://r2/${key}`);
   mocks.objectSize.mockResolvedValue(1_000_000);
   mocks.downloadToFile.mockImplementation(async (key: string) => `/tmp/${key}`);
+});
+
+afterEach(() => {
+  if (originalClipFeedbackBot === undefined) {
+    delete process.env.CLIP_FEEDBACK_BOT;
+  } else {
+    process.env.CLIP_FEEDBACK_BOT = originalClipFeedbackBot;
+  }
 });
 
 describe("deliverReadyTelegramJobs", () => {
@@ -587,8 +597,8 @@ describe("the pickup window drains", () => {
     }
 
     expect(store.rowAt(WALL).status).toBe("DELIVERED");
-    // 4th arg is the per-clip keyboard; handlers.ts does not wire one in yet
-    // (that is Task 8), so deliverClips passes an explicit undefined here.
+    // This suite neutralises the feedback flag in beforeEach, so deliverClips
+    // passes an explicit undefined instead of a per-clip keyboard here.
     expect(client.sendVideoUpload).toHaveBeenCalledWith(
       "victim-chat",
       expect.anything(),
