@@ -143,6 +143,49 @@ describe("canonicalJson", () => {
     expect(line).toEqual(Buffer.from("[1]\n", "utf8"));
     expect(calls).toBe(0);
   });
+
+  it("sorts and serializes object keys without inherited Array methods", () => {
+    const methodNames = ["sort", "map", "join"] as const;
+    const originals = new Map<string, PropertyDescriptor | undefined>();
+    const calls: Record<(typeof methodNames)[number], number> = {
+      sort: 0,
+      map: 0,
+      join: 0,
+    };
+    let canonical: string | undefined;
+    let canonicalError: unknown;
+    for (const name of methodNames) {
+      originals.set(name, Object.getOwnPropertyDescriptor(Array.prototype, name));
+    }
+
+    try {
+      for (const name of methodNames) {
+        Object.defineProperty(Array.prototype, name, {
+          configurable: true,
+          value: () => {
+            calls[name] += 1;
+            return ["poison"];
+          },
+          writable: true,
+        });
+      }
+      try {
+        canonical = canonicalJson({ b: 2, a: 1 });
+      } catch (error) {
+        canonicalError = error;
+      }
+    } finally {
+      for (const name of methodNames) {
+        const descriptor = originals.get(name);
+        if (descriptor === undefined) Reflect.deleteProperty(Array.prototype, name);
+        else Object.defineProperty(Array.prototype, name, descriptor);
+      }
+    }
+
+    expect(canonicalError).toBeUndefined();
+    expect(canonical).toBe('{"a":1,"b":2}');
+    expect(calls).toEqual({ sort: 0, map: 0, join: 0 });
+  });
 });
 
 describe("sha256", () => {

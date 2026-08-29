@@ -133,6 +133,10 @@ function captureJsonValue(value: unknown): CapturedJson {
   }
 }
 
+function compareKeys(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 function canonicalCaptured(value: CapturedJson): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) {
@@ -144,12 +148,24 @@ function canonicalCaptured(value: CapturedJson): string {
     return `${serialized}]`;
   }
 
-  const keys = Object.keys(value).sort((left, right) =>
-    left < right ? -1 : left > right ? 1 : 0
-  );
-  return `{${keys
-    .map((key) => `${JSON.stringify(key)}:${canonicalCaptured(value[key])}`)
-    .join(",")}}`;
+  const keys = Object.keys(value);
+  for (let index = 1; index < keys.length; index += 1) {
+    const key = keys[index];
+    let insertion = index;
+    while (insertion > 0 && compareKeys(keys[insertion - 1], key) > 0) {
+      keys[insertion] = keys[insertion - 1];
+      insertion -= 1;
+    }
+    keys[insertion] = key;
+  }
+
+  let serialized = "{";
+  for (let index = 0; index < keys.length; index += 1) {
+    if (index > 0) serialized += ",";
+    const key = keys[index];
+    serialized += `${JSON.stringify(key)}:${canonicalCaptured(value[key])}`;
+  }
+  return `${serialized}}`;
 }
 
 export function canonicalJson(value: unknown): string {
