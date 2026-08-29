@@ -7,8 +7,8 @@
  *     --end-ms <ms> --output /tmp/replay.mp4
  */
 import { execFile } from "child_process";
-import { rename, unlink } from "fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "path";
+import { mkdtemp, rename, rm, unlink } from "fs/promises";
+import { basename, dirname, isAbsolute, relative, resolve, sep } from "path";
 import { promisify } from "util";
 import { prisma } from "@clipclap/shared";
 import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
@@ -35,11 +35,13 @@ export type ReplayDependencies = Readonly<{
     }>;
     $disconnect(): Promise<void>;
   }>;
-  downloadVideo(sourceUrl: undefined, artifactKey: string): Promise<string>;
+  downloadVideo(sourceUrl: undefined, artifactKey: string, workspace: string): Promise<string>;
   probeDuration(path: string): Promise<number>;
-  trimClipFile(path: string, startSeconds: number, endSeconds: number): Promise<string>;
+  trimClipFile(path: string, startSeconds: number, endSeconds: number, workspace: string): Promise<string>;
   rename(from: string, to: string): Promise<void>;
   unlink(path: string): Promise<void>;
+  createWorkspace(): Promise<string>;
+  removeWorkspace(path: string): Promise<void>;
 }>;
 
 type ReplayArguments = Readonly<{
@@ -62,16 +64,21 @@ function parseMilliseconds(value: string | undefined): number {
 
 function isTmpOutput(path: string): boolean {
   if (!isAbsolute(path) || path.includes("\0")) return false;
-  const fromTmp = relative(TMP_ROOT, resolve(path));
+  const resolved = resolve(path);
   return (
-    fromTmp.length > 0 &&
-    fromTmp !== ".." &&
-    !fromTmp.startsWith(`..${sep}`) &&
-    !isAbsolute(fromTmp) &&
-    // A nested directory in /tmp can be a user-controlled symlink. A direct
-    // child is safe: rename replaces a destination symlink rather than
-    // traversing it, while no symlinked parent can redirect the write.
-    dirname(resolve(path)) === TMP_ROOT
+    // Do not normalize user input before validating it: /tmp/link/../file
+    // looks direct after resolve(), but the kernel traverses link first.
+    path === resolved &&
+    dirname(path) === TMP_ROOT &&
+    basename(path).length > 0
+  );
+}
+
+function isOwnedWorkspace(path: string): boolean {
+  return (
+    path === resolve(path) &&
+    dirname(path) === TMP_ROOT &&
+    basename(path).startsWith("clipclap-replay-")
   );
 }
 
@@ -115,6 +122,36 @@ async function ignoreUnlink(path: string | undefined, dependencies: ReplayDepend
   await dependencies.unlink(path).catch(() => {});
 }
 
+function isWorkspaceFile(path: string, workspace: string | undefined): boolean {
+  if (workspace === undefined || !isOwnedWorkspace(workspace) || path !== resolve(path)) {
+    return false;
+  }
+  const fromWorkspace = relative(workspace, path);
+  return (
+    fromWorkspace.length > 0 &&
+    fromWorkspace !== ".." &&
+    !fromWorkspace.startsWith(`..${sep}`) &&
+    !isAbsolute(fromWorkspace)
+  );
+}
+
+async function ignoreWorkspaceFileUnlink(
+  path: string | undefined,
+  workspace: string | undefined,
+  dependencies: ReplayDependencies
+): Promise<void> {
+  if (path === undefined || !isWorkspaceFile(path, workspace)) return;
+  await ignoreUnlink(path, dependencies);
+}
+
+async function ignoreWorkspaceRemoval(
+  path: string | undefined,
+  dependencies: ReplayDependencies
+): Promise<void> {
+  if (path === undefined || !isOwnedWorkspace(path)) return;
+  await dependencies.removeWorkspace(path).catch(() => {});
+}
+
 /**
  * Makes an exact source-time clip. All dependencies are explicit so tests do
  * not need a database, R2, ffmpeg, or filesystem writes.
@@ -125,6 +162,7 @@ export async function runReplay(
 ): Promise<string> {
   let sourcePath: string | undefined;
   let temporaryClipPath: string | undefined;
+  let workspace: string | undefined;
   try {
     const input = parseReplayArguments(argv);
     const job = await dependencies.prisma.job.findUnique({
@@ -141,7 +179,9 @@ export async function runReplay(
       );
     }
 
-    sourcePath = await dependencies.downloadVideo(undefined, artifactKey);
+    workspace = await dependencies.createWorkspace();
+    if (!isOwnedWorkspace(workspace)) throw new Error("Could not create replay workspace");
+    sourcePath = await dependencies.downloadVideo(undefined, artifactKey, workspace);
     const durationSeconds = await dependencies.probeDuration(sourcePath);
     if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
       throw new Error("Downloaded source duration could not be determined");
@@ -153,25 +193,42 @@ export async function runReplay(
     temporaryClipPath = await dependencies.trimClipFile(
       sourcePath,
       input.startMs / 1000,
-      input.endMs / 1000
+      input.endMs / 1000,
+      workspace
     );
     await dependencies.rename(temporaryClipPath, input.output);
     temporaryClipPath = undefined;
     return input.output;
   } finally {
-    await ignoreUnlink(temporaryClipPath, dependencies);
-    await ignoreUnlink(sourcePath, dependencies);
+    await ignoreWorkspaceFileUnlink(temporaryClipPath, workspace, dependencies);
+    await ignoreWorkspaceFileUnlink(sourcePath, workspace, dependencies);
+    await ignoreWorkspaceRemoval(workspace, dependencies);
     await dependencies.prisma.$disconnect();
+  }
+}
+
+async function withReplayWorkspace<T>(workspace: string, operation: () => Promise<T>): Promise<T> {
+  const previousTmpdir = process.env.TMPDIR;
+  process.env.TMPDIR = workspace;
+  try {
+    return await operation();
+  } finally {
+    if (previousTmpdir === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = previousTmpdir;
   }
 }
 
 const defaultReplayDependencies: ReplayDependencies = {
   prisma,
-  downloadVideo,
+  downloadVideo: (sourceUrl, artifactKey, workspace) =>
+    withReplayWorkspace(workspace, () => downloadVideo(sourceUrl, artifactKey)),
   probeDuration: probeLocalDuration,
-  trimClipFile,
+  trimClipFile: (path, startSeconds, endSeconds, workspace) =>
+    withReplayWorkspace(workspace, () => trimClipFile(path, startSeconds, endSeconds)),
   rename,
   unlink,
+  createWorkspace: () => mkdtemp(`${TMP_ROOT}/clipclap-replay-`),
+  removeWorkspace: (path) => rm(path, { recursive: true, force: true }),
 };
 
 export async function main(argv: readonly string[] = process.argv.slice(2)): Promise<void> {

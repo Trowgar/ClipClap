@@ -1,3 +1,6 @@
+import { access, mkdtemp, rename as renameFile, rm, writeFile } from "fs/promises";
+import { join } from "path";
+import { tmpdir } from "os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 type Job = {
@@ -18,11 +21,13 @@ function makeDependencies(job: Job | null = {
       job: { findUnique: vi.fn(async () => job) },
       $disconnect: vi.fn(async () => undefined),
     },
-    downloadVideo: vi.fn(async () => "/tmp/downloaded-source.mp4"),
+    downloadVideo: vi.fn(async () => "/tmp/clipclap-replay-test/downloaded-source.mp4"),
     probeDuration: vi.fn(async () => 60),
-    trimClipFile: vi.fn(async () => "/tmp/replay-trim.mp4"),
-    rename: vi.fn(async () => undefined),
+    trimClipFile: vi.fn(async () => "/tmp/clipclap-replay-test/replay-trim.mp4"),
+    rename: vi.fn(async (_from: string, _to: string): Promise<void> => {}),
     unlink: vi.fn(async () => undefined),
+    createWorkspace: vi.fn(async () => "/tmp/clipclap-replay-test"),
+    removeWorkspace: vi.fn(async () => undefined),
   };
 }
 
@@ -50,12 +55,16 @@ describe("exact-geometry replay", () => {
       where: { id: "job-1" },
       select: { normalizedArtifactKey: true, sourceArtifactKey: true },
     });
-    expect(dependencies.downloadVideo).toHaveBeenCalledWith(undefined, "work/job-1/normalized.mp4");
-    expect(dependencies.probeDuration).toHaveBeenCalledWith("/tmp/downloaded-source.mp4");
-    expect(dependencies.trimClipFile).toHaveBeenCalledWith("/tmp/downloaded-source.mp4", 1.234, 5.678);
-    expect(dependencies.rename).toHaveBeenCalledWith("/tmp/replay-trim.mp4", "/tmp/exact-replay.mp4");
-    expect(dependencies.unlink).toHaveBeenCalledWith("/tmp/downloaded-source.mp4");
-    expect(dependencies.unlink).not.toHaveBeenCalledWith("/tmp/replay-trim.mp4");
+    expect(dependencies.downloadVideo).toHaveBeenCalledWith(
+      undefined, "work/job-1/normalized.mp4", "/tmp/clipclap-replay-test"
+    );
+    expect(dependencies.probeDuration).toHaveBeenCalledWith("/tmp/clipclap-replay-test/downloaded-source.mp4");
+    expect(dependencies.trimClipFile).toHaveBeenCalledWith(
+      "/tmp/clipclap-replay-test/downloaded-source.mp4", 1.234, 5.678, "/tmp/clipclap-replay-test"
+    );
+    expect(dependencies.rename).toHaveBeenCalledWith("/tmp/clipclap-replay-test/replay-trim.mp4", "/tmp/exact-replay.mp4");
+    expect(dependencies.unlink).toHaveBeenCalledWith("/tmp/clipclap-replay-test/downloaded-source.mp4");
+    expect(dependencies.unlink).not.toHaveBeenCalledWith("/tmp/clipclap-replay-test/replay-trim.mp4");
     expect(dependencies.prisma.$disconnect).toHaveBeenCalledOnce();
   });
 
@@ -65,7 +74,9 @@ describe("exact-geometry replay", () => {
       sourceArtifactKey: "work/job-1/original.mp4",
     });
     await run(validArgs, dependencies);
-    expect(dependencies.downloadVideo).toHaveBeenCalledWith(undefined, "work/job-1/original.mp4");
+    expect(dependencies.downloadVideo).toHaveBeenCalledWith(
+      undefined, "work/job-1/original.mp4", "/tmp/clipclap-replay-test"
+    );
   });
 
   it.each([
@@ -83,6 +94,7 @@ describe("exact-geometry replay", () => {
     ["relative output", ["--job-id", "job-1", "--start-ms", "0", "--end-ms", "1", "--output", "replay.mp4"]],
     ["outside tmp output", ["--job-id", "job-1", "--start-ms", "0", "--end-ms", "1", "--output", "/var/tmp/replay.mp4"]],
     ["nested tmp output", ["--job-id", "job-1", "--start-ms", "0", "--end-ms", "1", "--output", "/tmp/attacker-link/replay.mp4"]],
+    ["symlink-plus-parent output", ["--job-id", "job-1", "--start-ms", "0", "--end-ms", "1", "--output", "/tmp/link/../review.mp4"]],
   ])("rejects %s before reading or downloading", async (_name, args) => {
     const dependencies = makeDependencies();
     await expect(run(args, dependencies)).rejects.toThrow("Invalid replay arguments");
@@ -125,15 +137,23 @@ describe("exact-geometry replay", () => {
     const dependencies = makeDependencies();
     dependencies.probeDuration.mockRejectedValueOnce(new Error("probe failed"));
     await expect(run(validArgs, dependencies)).rejects.toThrow("probe failed");
-    expect(dependencies.unlink).toHaveBeenCalledWith("/tmp/downloaded-source.mp4");
+    expect(dependencies.unlink).toHaveBeenCalledWith("/tmp/clipclap-replay-test/downloaded-source.mp4");
+  });
+
+  it("does not unlink a dependency path outside the owned replay workspace", async () => {
+    const dependencies = makeDependencies();
+    dependencies.downloadVideo.mockResolvedValueOnce("/tmp/not-a-replay-workspace/source.mp4");
+    dependencies.probeDuration.mockRejectedValueOnce(new Error("probe failed"));
+    await expect(run(validArgs, dependencies)).rejects.toThrow("probe failed");
+    expect(dependencies.unlink).not.toHaveBeenCalled();
   });
 
   it("cleans both temporary files if publishing the trimmed output fails", async () => {
     const dependencies = makeDependencies();
     dependencies.rename.mockRejectedValueOnce(new Error("rename failed"));
     await expect(run(validArgs, dependencies)).rejects.toThrow("rename failed");
-    expect(dependencies.unlink).toHaveBeenCalledWith("/tmp/replay-trim.mp4");
-    expect(dependencies.unlink).toHaveBeenCalledWith("/tmp/downloaded-source.mp4");
+    expect(dependencies.unlink).toHaveBeenCalledWith("/tmp/clipclap-replay-test/replay-trim.mp4");
+    expect(dependencies.unlink).toHaveBeenCalledWith("/tmp/clipclap-replay-test/downloaded-source.mp4");
     expect(dependencies.prisma.$disconnect).toHaveBeenCalledOnce();
   });
 
@@ -143,5 +163,65 @@ describe("exact-geometry replay", () => {
     dependencies.unlink.mockRejectedValueOnce(new Error("cleanup failed"));
     await expect(run(validArgs, dependencies)).rejects.toThrow("probe failed");
     expect(dependencies.prisma.$disconnect).toHaveBeenCalledOnce();
+  });
+
+  it("removes a partial download from its owned workspace when download rejects", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "clipclap-replay-download-"));
+    const partialPath = join(workspace, "partial-source.mp4");
+    const dependencies = makeDependencies();
+    dependencies.createWorkspace = vi.fn(async () => workspace);
+    dependencies.removeWorkspace = vi.fn(async (path: string) => rm(path, { recursive: true, force: true }));
+    dependencies.downloadVideo.mockImplementationOnce(async () => {
+      await writeFile(partialPath, "partial");
+      throw new Error("download failed after creating a partial source");
+    });
+
+    await expect(run(validArgs, dependencies)).rejects.toThrow("download failed after creating a partial source");
+    expect(dependencies.removeWorkspace).toHaveBeenCalledWith(workspace);
+    await expect(access(partialPath)).rejects.toThrow();
+  });
+
+  it("removes a partial trim from its owned workspace when trim rejects", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "clipclap-replay-trim-"));
+    const partialPath = join(workspace, "partial-trim.mp4");
+    const dependencies = makeDependencies();
+    dependencies.createWorkspace = vi.fn(async () => workspace);
+    dependencies.removeWorkspace = vi.fn(async (path: string) => rm(path, { recursive: true, force: true }));
+    dependencies.trimClipFile.mockImplementationOnce(async () => {
+      await writeFile(partialPath, "partial");
+      throw new Error("trim failed after creating a partial output");
+    });
+
+    await expect(run(validArgs, dependencies)).rejects.toThrow("trim failed after creating a partial output");
+    expect(dependencies.removeWorkspace).toHaveBeenCalledWith(workspace);
+    await expect(access(partialPath)).rejects.toThrow();
+  });
+
+  it("removes its owned workspace after success and leaves only the requested output", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "clipclap-replay-success-"));
+    const output = await mkdtemp(join(tmpdir(), "clipclap-replay-output-"));
+    await rm(output, { recursive: true });
+    const sourcePath = join(workspace, "source.mp4");
+    const trimmedPath = join(workspace, "trimmed.mp4");
+    const dependencies = makeDependencies();
+    dependencies.createWorkspace = vi.fn(async () => workspace);
+    dependencies.removeWorkspace = vi.fn(async (path: string) => rm(path, { recursive: true, force: true }));
+    dependencies.downloadVideo.mockImplementationOnce(async () => {
+      await writeFile(sourcePath, "source");
+      return sourcePath;
+    });
+    dependencies.trimClipFile.mockImplementationOnce(async () => {
+      await writeFile(trimmedPath, "trimmed");
+      return trimmedPath;
+    });
+    dependencies.rename.mockImplementationOnce(renameFile);
+
+    try {
+      await run([...validArgs.slice(0, -1), output], dependencies);
+      await expect(access(output)).resolves.toBeUndefined();
+      await expect(access(workspace)).rejects.toThrow();
+    } finally {
+      await rm(output, { force: true });
+    }
   });
 });
