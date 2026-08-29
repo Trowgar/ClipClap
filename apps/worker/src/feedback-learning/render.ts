@@ -88,6 +88,12 @@ const EXCLUSION_REASONS: readonly ExclusionReason[] = [
   "user_cap",
   "limit_reached",
 ];
+const mapGet = Map.prototype.get;
+const mapSet = Map.prototype.set;
+const mapSizeGetter = Object.getOwnPropertyDescriptor(Map.prototype, "size")?.get;
+const setHas = Set.prototype.has;
+const setAdd = Set.prototype.add;
+const setSizeGetter = Object.getOwnPropertyDescriptor(Set.prototype, "size")?.get;
 
 function invalidInput(): never {
   throw new TypeError("render_input_invalid");
@@ -267,7 +273,7 @@ function captureFreshness(raw: unknown): ApprovalFreshnessProjection[] {
       (item.snapshotCanonical !== null && !isString(item.snapshotCanonical)) ||
       (item.snapshotSha256 !== null && !isSha256(item.snapshotSha256)) ||
       (item.staleReason !== null && !enumContains(STALE_REASONS, item.staleReason)) ||
-      seen.has(item.feedbackId)
+      setHas.call(seen, item.feedbackId)
     )
       return invalidInput();
     if (
@@ -288,7 +294,7 @@ function captureFreshness(raw: unknown): ApprovalFreshnessProjection[] {
         sha256(item.snapshotCanonical) !== item.snapshotSha256)
     )
       return invalidInput();
-    seen.add(item.feedbackId);
+    setAdd.call(seen, item.feedbackId);
     appendData(projections, {
       feedbackId: item.feedbackId,
       present: item.present,
@@ -348,7 +354,7 @@ function captureCapacity(raw: unknown, ledger: EffectiveLedger): CapturedCapacit
   for (let index = 0; index < ledger.activeDecisions.length; index += 1) {
     const decision = dataAt(ledger.activeDecisions, index);
     if (decision.action === "approve") {
-      activeByVersion.set(decision.candidateVersion, {
+      mapSet.call(activeByVersion, decision.candidateVersion, {
         approval: decision,
         canonical: canonicalJson(decision),
       });
@@ -386,16 +392,18 @@ function captureCapacity(raw: unknown, ledger: EffectiveLedger): CapturedCapacit
       const candidateVersion =
         descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
       if (!isSha256(candidateVersion)) return invalidInput();
-      const expected = activeByVersion.get(candidateVersion);
+      const expected = mapGet.call(activeByVersion, candidateVersion) as
+        | { approval: ApprovalEvent; canonical: string }
+        | undefined;
       if (
         expected === undefined ||
         expected.canonical !== canonical ||
         expected.approval.set !== set ||
-        seen.has(candidateVersion)
+        setHas.call(seen, candidateVersion)
       ) {
         return invalidInput();
       }
-      seen.add(candidateVersion);
+      setAdd.call(seen, candidateVersion);
       return expected.approval;
     };
     for (let index = 0; index < rawFresh.length; index += 1) {
@@ -413,7 +421,12 @@ function captureCapacity(raw: unknown, ledger: EffectiveLedger): CapturedCapacit
     }
     capturedSets[set] = { freshApprovals, staleReservations };
   }
-  if (seen.size !== activeByVersion.size) return invalidInput();
+  if (
+    setSizeGetter === undefined ||
+    mapSizeGetter === undefined ||
+    setSizeGetter.call(seen) !== mapSizeGetter.call(activeByVersion)
+  )
+    return invalidInput();
   return {
     eval: capturedSets.eval as CapturedSetCapacity,
     holdout: capturedSets.holdout as CapturedSetCapacity,
@@ -429,12 +442,14 @@ function validateFreshness(
   const freshnessByFeedback = new Map<string, ApprovalFreshnessProjection>();
   for (let index = 0; index < freshness.length; index += 1) {
     const projection = dataAt(freshness, index);
-    freshnessByFeedback.set(projection.feedbackId, projection);
+    mapSet.call(freshnessByFeedback, projection.feedbackId, projection);
   }
   for (let index = 0; index < ledger.activeDecisions.length; index += 1) {
     const decision = dataAt(ledger.activeDecisions, index);
     if (decision.action !== "approve") continue;
-    const projection = freshnessByFeedback.get(decision.feedbackId);
+    const projection = mapGet.call(freshnessByFeedback, decision.feedbackId) as
+      | ApprovalFreshnessProjection
+      | undefined;
     if (projection === undefined) return invalidInput();
     const expectedReason: StaleReason | null = !projection.present
       ? "missing"
@@ -448,19 +463,27 @@ function validateFreshness(
     if (projection.staleReason !== expectedReason) return invalidInput();
     appendData(approvals, decision);
   }
-  if (freshnessByFeedback.size !== approvals.length) return invalidInput();
+  if (mapSizeGetter === undefined || mapSizeGetter.call(freshnessByFeedback) !== approvals.length)
+    return invalidInput();
   const targetSets = ["eval", "holdout"] as const;
   for (let setIndex = 0; setIndex < targetSets.length; setIndex += 1) {
     const set = dataAt(targetSets, setIndex);
     const setCapacity = set === "eval" ? capacity.eval : capacity.holdout;
     for (let index = 0; index < setCapacity.freshApprovals.length; index += 1) {
       const approval = dataAt(setCapacity.freshApprovals, index);
-      if (freshnessByFeedback.get(approval.feedbackId)?.staleReason !== null) return invalidInput();
+      const projection = mapGet.call(freshnessByFeedback, approval.feedbackId) as
+        | ApprovalFreshnessProjection
+        | undefined;
+      if (projection?.staleReason !== null) return invalidInput();
     }
     for (let index = 0; index < setCapacity.staleReservations.length; index += 1) {
       const reservation = dataAt(setCapacity.staleReservations, index);
       if (
-        freshnessByFeedback.get(reservation.approval.feedbackId)?.staleReason !== reservation.reason
+        (
+          mapGet.call(freshnessByFeedback, reservation.approval.feedbackId) as
+            | ApprovalFreshnessProjection
+            | undefined
+        )?.staleReason !== reservation.reason
       )
         return invalidInput();
     }
@@ -508,11 +531,18 @@ function markdown(
   const exclusionCounts = new Map<ExclusionReason, number>();
   for (let index = 0; index < exclusions.length; index += 1) {
     const reason = dataAt(exclusions, index).reason;
-    exclusionCounts.set(reason, (exclusionCounts.get(reason) ?? 0) + 1);
+    mapSet.call(
+      exclusionCounts,
+      reason,
+      ((mapGet.call(exclusionCounts, reason) as number | undefined) ?? 0) + 1,
+    );
   }
   for (let index = 0; index < EXCLUSION_REASONS.length; index += 1) {
     const reason = dataAt(EXCLUSION_REASONS, index);
-    appendData(lines, `- Exclusion ${reason}: ${exclusionCounts.get(reason) ?? 0}`);
+    appendData(
+      lines,
+      `- Exclusion ${reason}: ${(mapGet.call(exclusionCounts, reason) as number | undefined) ?? 0}`,
+    );
   }
   appendData(lines, "");
   appendData(lines, `## Stale assignments (${manifest.staleAssignments.length})`);

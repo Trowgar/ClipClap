@@ -36,9 +36,7 @@ export type EffectiveLedger = Readonly<{
   destinationLocks: readonly DestinationLock[];
 }>;
 
-export type Freshness =
-  | Readonly<{ fresh: true }>
-  | Readonly<{ fresh: false; reason: StaleReason }>;
+export type Freshness = Readonly<{ fresh: true }> | Readonly<{ fresh: false; reason: StaleReason }>;
 
 export type StaleReservation = Readonly<{
   approval: ApprovalEvent;
@@ -97,15 +95,19 @@ const CORRECTION_KEYS = [
   "reason",
 ] as const;
 
-const EFFECTIVE_LEDGER_KEYS = [
-  "activeDecisions",
-  "retiredTargetIds",
-  "destinationLocks",
-] as const;
+const EFFECTIVE_LEDGER_KEYS = ["activeDecisions", "retiredTargetIds", "destinationLocks"] as const;
 
 const DESTINATION_LOCK_KEYS = ["feedbackId", "set"] as const;
 
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/;
+const mapGet = Map.prototype.get;
+const mapSet = Map.prototype.set;
+const mapHas = Map.prototype.has;
+const mapDelete = Map.prototype.delete;
+const mapForEach = Map.prototype.forEach;
+const setHas = Set.prototype.has;
+const setAdd = Set.prototype.add;
+const setForEach = Set.prototype.forEach;
 
 function invalid(code: LedgerErrorCode): never {
   throw new LedgerError(code);
@@ -377,52 +379,60 @@ export function foldLedger(events: readonly ReviewEvent[]): EffectiveLedger {
 
   for (const rawEvent of events) {
     const event = validateEvent(rawEvent);
-    if (seenEventIds.has(event.eventId)) return invalid("duplicate_event_id");
-    seenEventIds.add(event.eventId);
+    if (setHas.call(seenEventIds, event.eventId)) return invalid("duplicate_event_id");
+    setAdd.call(seenEventIds, event.eventId);
 
     if (event.action === "correct") {
-      const target = priorEvents.get(event.targetEventId);
+      const target = mapGet.call(priorEvents, event.targetEventId) as ReviewEvent | undefined;
       if (target === undefined || target.action === "correct") {
         return invalid("invalid_transition");
       }
-      const active = activeByCandidate.get(target.candidateVersion);
+      const active = mapGet.call(activeByCandidate, target.candidateVersion) as
+        | DecisionEvent
+        | undefined;
       if (active?.eventId !== target.eventId) return invalid("invalid_transition");
 
-      activeByCandidate.delete(target.candidateVersion);
+      mapDelete.call(activeByCandidate, target.candidateVersion);
       if (
         target.action === "approve" &&
-        activeApprovalByFeedback.get(target.feedbackId)?.eventId === target.eventId
+        (mapGet.call(activeApprovalByFeedback, target.feedbackId) as ApprovalEvent | undefined)
+          ?.eventId === target.eventId
       ) {
-        activeApprovalByFeedback.delete(target.feedbackId);
+        mapDelete.call(activeApprovalByFeedback, target.feedbackId);
       }
-      retiredTargetIds.add(target.eventId);
-      priorEvents.set(event.eventId, event);
+      setAdd.call(retiredTargetIds, target.eventId);
+      mapSet.call(priorEvents, event.eventId, event);
       continue;
     }
 
-    if (activeByCandidate.has(event.candidateVersion)) {
+    if (mapHas.call(activeByCandidate, event.candidateVersion)) {
       return invalid("invalid_transition");
     }
 
     if (event.action === "approve") {
-      const lockedSet = destinationLocks.get(event.feedbackId);
+      const lockedSet = mapGet.call(destinationLocks, event.feedbackId) as TargetSet | undefined;
       if (lockedSet !== undefined && lockedSet !== event.set) {
         return invalid("invalid_transition");
       }
-      if (activeApprovalByFeedback.has(event.feedbackId)) {
+      if (mapHas.call(activeApprovalByFeedback, event.feedbackId)) {
         return invalid("invalid_transition");
       }
-      if (lockedSet === undefined) destinationLocks.set(event.feedbackId, event.set);
-      activeApprovalByFeedback.set(event.feedbackId, event);
+      if (lockedSet === undefined) mapSet.call(destinationLocks, event.feedbackId, event.set);
+      mapSet.call(activeApprovalByFeedback, event.feedbackId, event);
     }
 
-    activeByCandidate.set(event.candidateVersion, event);
-    priorEvents.set(event.eventId, event);
+    mapSet.call(activeByCandidate, event.candidateVersion, event);
+    mapSet.call(priorEvents, event.eventId, event);
   }
 
-  const activeDecisions = [...activeByCandidate.values()].sort(compareDecisions);
-  const retired = [...retiredTargetIds].sort(byteCompare);
-  const locks = [...destinationLocks].map(([feedbackId, set]) => ({ feedbackId, set }));
+  const activeDecisions: DecisionEvent[] = [];
+  mapForEach.call(activeByCandidate, (decision) => appendData(activeDecisions, decision));
+  activeDecisions.sort(compareDecisions);
+  const retired: string[] = [];
+  setForEach.call(retiredTargetIds, (eventId) => appendData(retired, eventId));
+  retired.sort(byteCompare);
+  const locks: DestinationLock[] = [];
+  mapForEach.call(destinationLocks, (set, feedbackId) => appendData(locks, { feedbackId, set }));
   locks.sort(compareLocks);
 
   return {
@@ -466,18 +476,18 @@ function validateEffectiveLedger(value: unknown): EffectiveLedger {
     const event = validateEvent(rawDecision);
     if (event.action === "correct") return invalid("invalid_event");
     if (
-      activeCandidateVersions.has(event.candidateVersion) ||
-      activeEventIds.has(event.eventId)
+      setHas.call(activeCandidateVersions, event.candidateVersion) ||
+      setHas.call(activeEventIds, event.eventId)
     ) {
       return invalid("invalid_transition");
     }
-    activeCandidateVersions.add(event.candidateVersion);
-    activeEventIds.add(event.eventId);
+    setAdd.call(activeCandidateVersions, event.candidateVersion);
+    setAdd.call(activeEventIds, event.eventId);
     if (event.action === "approve") {
-      if (activeApprovalFeedbackIds.has(event.feedbackId)) {
+      if (setHas.call(activeApprovalFeedbackIds, event.feedbackId)) {
         return invalid("invalid_transition");
       }
-      activeApprovalFeedbackIds.add(event.feedbackId);
+      setAdd.call(activeApprovalFeedbackIds, event.feedbackId);
     }
     appendData(activeDecisions, event);
   }
@@ -486,14 +496,14 @@ function validateEffectiveLedger(value: unknown): EffectiveLedger {
   const lockByFeedback = new Map<string, TargetSet>();
   for (const rawLock of rawLocks) {
     const lock = validateDestinationLock(rawLock);
-    if (lockByFeedback.has(lock.feedbackId)) return invalid("invalid_transition");
-    lockByFeedback.set(lock.feedbackId, lock.set);
+    if (mapHas.call(lockByFeedback, lock.feedbackId)) return invalid("invalid_transition");
+    mapSet.call(lockByFeedback, lock.feedbackId, lock.set);
     appendData(destinationLocks, lock);
   }
   for (const decision of activeDecisions) {
     if (
       decision.action === "approve" &&
-      lockByFeedback.get(decision.feedbackId) !== decision.set
+      mapGet.call(lockByFeedback, decision.feedbackId) !== decision.set
     ) {
       return invalid("invalid_transition");
     }
@@ -503,10 +513,10 @@ function validateEffectiveLedger(value: unknown): EffectiveLedger {
   const retiredIds = new Set<string>();
   for (const rawRetiredId of rawRetired) {
     if (!isNonEmptyString(rawRetiredId)) return invalid("invalid_event");
-    if (retiredIds.has(rawRetiredId) || activeEventIds.has(rawRetiredId)) {
+    if (setHas.call(retiredIds, rawRetiredId) || setHas.call(activeEventIds, rawRetiredId)) {
       return invalid("invalid_transition");
     }
-    retiredIds.add(rawRetiredId);
+    setAdd.call(retiredIds, rawRetiredId);
     appendData(retiredTargetIds, rawRetiredId);
   }
 
@@ -588,7 +598,7 @@ function emptyCapacity(): MutableSetCapacity {
 }
 
 function increment(counts: Map<string, number>, key: string): void {
-  counts.set(key, (counts.get(key) ?? 0) + 1);
+  mapSet.call(counts, key, ((mapGet.call(counts, key) as number | undefined) ?? 0) + 1);
 }
 
 function compareApprovals(left: ApprovalEvent, right: ApprovalEvent): number {
@@ -600,7 +610,15 @@ function compareApprovals(left: ApprovalEvent, right: ApprovalEvent): number {
 }
 
 function sortedCounts(counts: ReadonlyMap<string, number>): ReadonlyMap<string, number> {
-  return new Map([...counts].sort(([left], [right]) => byteCompare(left, right)));
+  const entries: [string, number][] = [];
+  mapForEach.call(counts, (count, key) => appendData(entries, [key, count]));
+  entries.sort(([left], [right]) => byteCompare(left, right));
+  const result = new Map<string, number>();
+  for (let index = 0; index < entries.length; index += 1) {
+    const [key, count] = entries[index];
+    mapSet.call(result, key, count);
+  }
+  return result;
 }
 
 function finalizeCapacity(capacity: MutableSetCapacity): SetCapacity {
@@ -640,16 +658,21 @@ export function buildCapacity(
 
   for (const approval of approvals) {
     const countedInDestination = countedFeedbackIds[approval.set];
-    if (countedInDestination.has(approval.feedbackId)) continue;
-    countedInDestination.add(approval.feedbackId);
+    if (setHas.call(countedInDestination, approval.feedbackId)) continue;
+    setAdd.call(countedInDestination, approval.feedbackId);
 
     const capacity = capacities[approval.set];
     const freshness = classifyApprovalFreshness(
       approval,
-      currentRows.get(approval.feedbackId) ?? null
+      (mapGet.call(currentRows, approval.feedbackId) as FeedbackProjection | null | undefined) ??
+        null
     );
     if (freshness.fresh) appendData(capacity.freshApprovals, approval);
-    else appendData(capacity.staleReservations, { approval, reason: freshness.reason });
+    else
+      appendData(capacity.staleReservations, {
+        approval,
+        reason: freshness.reason,
+      });
     increment(capacity.jobCounts, approval.jobId);
     increment(capacity.userCounts, approval.userId);
   }

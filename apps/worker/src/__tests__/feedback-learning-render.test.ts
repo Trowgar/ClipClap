@@ -804,6 +804,65 @@ describe("buildRunArtifacts", () => {
     expect(artifacts?.files["candidates.md"].toString("utf8")).toContain(privateSentinel);
   });
 
+  it("keeps bytes private and stable with polluted Map and Set methods", () => {
+    const privateSentinel = "PRIVATE_MAP_SET_TRANSCRIPT";
+    const item = normalized("private-map-set-feedback");
+    if (item.status !== "valid") throw new Error("expected valid");
+    const prepared = renderInput({
+      results: [
+        {
+          ...item,
+          record: {
+            ...item.record,
+            review: { ...item.record.review, transcript: privateSentinel },
+          },
+        },
+      ],
+    });
+    const baseline = buildRunArtifacts(prepared);
+    const targets = [
+      [Map.prototype, "set"],
+      [Map.prototype, "get"],
+      [Set.prototype, "has"],
+      [Set.prototype, "add"],
+    ] as const;
+    const originals = targets.map(([prototype, name]) =>
+      Object.getOwnPropertyDescriptor(prototype, name),
+    );
+    let invoked = 0;
+    let observed = "";
+    let result: ReturnType<typeof buildRunArtifacts> | undefined;
+    let caught: unknown;
+    try {
+      for (let index = 0; index < targets.length; index += 1) {
+        const [prototype, name] = targets[index];
+        Object.defineProperty(prototype, name, {
+          configurable: true,
+          value: function (...args: unknown[]) {
+            invoked += 1;
+            observed += String(args[0] ?? "");
+            return name === "get" || name === "has" ? undefined : this;
+          },
+          writable: true,
+        });
+      }
+      result = buildRunArtifacts(prepared);
+    } catch (error) {
+      caught = error;
+    } finally {
+      for (let index = 0; index < targets.length; index += 1) {
+        const [prototype, name] = targets[index];
+        const descriptor = originals[index];
+        if (descriptor === undefined) Reflect.deleteProperty(prototype, name);
+        else Object.defineProperty(prototype, name, descriptor);
+      }
+    }
+    expect(caught).toBeUndefined();
+    expect(invoked).toBe(0);
+    expect(observed).not.toContain(privateSentinel);
+    expect(result?.files).toEqual(baseline.files);
+  });
+
   it("separates nonempty stale assignments and candidates with a blank line", () => {
     const approved = {
       schemaVersion: 1 as const,

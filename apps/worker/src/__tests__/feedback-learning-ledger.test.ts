@@ -33,10 +33,7 @@ function candidateVersion(
   return sha256(`${feedbackId}\n${feedbackUpdatedAt}\n${snapshotSha256}`);
 }
 
-function approval(
-  eventId: string,
-  overrides: Partial<ApprovalEvent> = {}
-): ApprovalEvent {
+function approval(eventId: string, overrides: Partial<ApprovalEvent> = {}): ApprovalEvent {
   const event: ApprovalEvent = {
     schemaVersion: 1,
     eventId,
@@ -62,10 +59,7 @@ function approval(
   return event;
 }
 
-function rejection(
-  eventId: string,
-  overrides: Partial<RejectionEvent> = {}
-): RejectionEvent {
+function rejection(eventId: string, overrides: Partial<RejectionEvent> = {}): RejectionEvent {
   const event: RejectionEvent = {
     schemaVersion: 1,
     eventId,
@@ -167,7 +161,10 @@ describe("parseLedger", () => {
     ["no terminal LF", Buffer.from(JSON.stringify(approval("a")))],
     ["CRLF", Buffer.from(`${JSON.stringify(approval("a"))}\r\n`)],
     ["two terminal LFs", Buffer.from(`${JSON.stringify(approval("a"))}\n\n`)],
-    ["blank middle line", Buffer.from(`${JSON.stringify(approval("a"))}\n\n${JSON.stringify(rejection("b"))}\n`)],
+    [
+      "blank middle line",
+      Buffer.from(`${JSON.stringify(approval("a"))}\n\n${JSON.stringify(rejection("b"))}\n`),
+    ],
     ["pretty JSON", Buffer.from(`${JSON.stringify(approval("a"), null, 2)}\n`)],
     ["non-object JSON", Buffer.from("[]\n")],
   ])("rejects non-canonical JSONL: %s", (_label, bytes) => {
@@ -304,7 +301,10 @@ describe("foldLedger", () => {
       else Object.defineProperty(Object.prototype, "action", originalAction);
     }
 
-    expect(caught).toMatchObject({ code: "invalid_event", message: "invalid_event" });
+    expect(caught).toMatchObject({
+      code: "invalid_event",
+      message: "invalid_event",
+    });
     expect(invoked).toBe(0);
   });
 
@@ -326,7 +326,10 @@ describe("foldLedger", () => {
       caught = error;
     }
 
-    expect(caught).toMatchObject({ code: "invalid_event", message: "invalid_event" });
+    expect(caught).toMatchObject({
+      code: "invalid_event",
+      message: "invalid_event",
+    });
     expect(invoked).toBe(0);
   });
 
@@ -348,7 +351,10 @@ describe("foldLedger", () => {
       caught = error;
     }
 
-    expect(caught).toMatchObject({ code: "invalid_event", message: "invalid_event" });
+    expect(caught).toMatchObject({
+      code: "invalid_event",
+      message: "invalid_event",
+    });
     expect(String(caught)).not.toContain(privateMessage);
   });
 
@@ -505,10 +511,7 @@ describe("classifyApprovalFreshness", () => {
 
   it("treats a non-matching current feedback identity as missing before other checks", () => {
     expect(
-      classifyApprovalFreshness(
-        freshApproval,
-        projection(snapshot, { id: "different-feedback" })
-      )
+      classifyApprovalFreshness(freshApproval, projection(snapshot, { id: "different-feedback" }))
     ).toEqual({ fresh: false, reason: "missing" });
   });
 
@@ -516,7 +519,10 @@ describe("classifyApprovalFreshness", () => {
     ["missing wins", null, "missing"],
     [
       "verdict wins over timestamp and snapshot",
-      projection({ changed: true }, { verdict: "BAD", updatedAt: new Date("2026-01-01T00:00:00.000Z") }),
+      projection(
+        { changed: true },
+        { verdict: "BAD", updatedAt: new Date("2026-01-01T00:00:00.000Z") }
+      ),
       "verdict_changed",
     ],
     [
@@ -526,7 +532,10 @@ describe("classifyApprovalFreshness", () => {
     ],
     ["snapshot is last", projection({ changed: true }), "snapshot_changed"],
   ] as const)("uses stale precedence: %s", (_label, current, reason) => {
-    expect(classifyApprovalFreshness(freshApproval, current)).toEqual({ fresh: false, reason });
+    expect(classifyApprovalFreshness(freshApproval, current)).toEqual({
+      fresh: false,
+      reason,
+    });
   });
 
   it("classifies invalid dates and invalid snapshots without throwing private values", () => {
@@ -571,7 +580,10 @@ describe("classifyApprovalFreshness", () => {
         caught = error;
       }
 
-      expect(caught).toMatchObject({ code: "invalid_event", message: "invalid_event" });
+      expect(caught).toMatchObject({
+        code: "invalid_event",
+        message: "invalid_event",
+      });
       expect(String(caught)).not.toContain("private freshness getter");
       expect(invoked).toBe(0);
     }
@@ -655,7 +667,9 @@ describe("EffectiveLedger boundaries", () => {
       {
         activeDecisions: [
           approval("approval-a"),
-          approval("approval-b", { feedbackUpdatedAt: "2026-08-28T12:00:01.000Z" }),
+          approval("approval-b", {
+            feedbackUpdatedAt: "2026-08-28T12:00:01.000Z",
+          }),
         ],
         retiredTargetIds: [],
         destinationLocks: [{ feedbackId: "feedback-1", set: "eval" }],
@@ -805,6 +819,69 @@ describe("EffectiveLedger boundaries", () => {
       expect(invoked).toBe(0);
     }
   });
+
+  it("does not expose private ledger identities through polluted collection methods", () => {
+    const privateSentinel = "PRIVATE_LEDGER_COLLECTION_ID";
+    const event = approval(privateSentinel, {
+      feedbackId: privateSentinel,
+      jobId: privateSentinel,
+      userId: privateSentinel,
+    });
+    const state = foldLedger([event]);
+    const currentRows = new Map([[event.feedbackId, null]]);
+    const targets = [
+      [Map.prototype, "get"],
+      [Map.prototype, "set"],
+      [Map.prototype, "has"],
+      [Map.prototype, "delete"],
+      [Map.prototype, "forEach"],
+      [Set.prototype, "has"],
+      [Set.prototype, "add"],
+      [Set.prototype, "delete"],
+      [Set.prototype, "forEach"],
+    ] as const;
+    const originals = targets.map(([prototype, name]) =>
+      Object.getOwnPropertyDescriptor(prototype, name)
+    );
+    let invoked = 0;
+    let observed = "";
+    let canonical: string | undefined;
+    try {
+      for (let index = 0; index < targets.length; index += 1) {
+        const [prototype, name] = targets[index];
+        const descriptor = originals[index];
+        if (descriptor === undefined || typeof descriptor.value !== "function") {
+          throw new Error("collection intrinsic unavailable");
+        }
+        const intrinsic = descriptor.value as (
+          this: unknown,
+          value: unknown,
+          ...rest: unknown[]
+        ) => unknown;
+        Object.defineProperty(prototype, name, {
+          ...descriptor,
+          value: function (value: unknown, ...rest: unknown[]) {
+            invoked += 1;
+            observed += String(value);
+            return intrinsic.call(this, value, ...rest);
+          },
+        });
+      }
+      canonical = canonicalLedgerState(state);
+      buildCapacity(state, currentRows);
+    } finally {
+      for (let index = 0; index < targets.length; index += 1) {
+        const [prototype, name] = targets[index];
+        const descriptor = originals[index];
+        if (descriptor === undefined) Reflect.deleteProperty(prototype, name);
+        else Object.defineProperty(prototype, name, descriptor);
+      }
+    }
+
+    expect(canonical).toContain(privateSentinel);
+    expect(invoked).toBe(0);
+    expect(observed).not.toContain(privateSentinel);
+  });
 });
 
 describe("buildCapacity", () => {
@@ -842,7 +919,12 @@ describe("buildCapacity", () => {
     const reject = rejection("reject", {
       feedbackId: "feedback-r",
     });
-    const state = foldLedger([evalFresh.approval, evalFresh2.approval, holdoutStale.approval, reject]);
+    const state = foldLedger([
+      evalFresh.approval,
+      evalFresh2.approval,
+      holdoutStale.approval,
+      reject,
+    ]);
     const capacity = buildCapacity(
       state,
       new Map([
@@ -871,7 +953,9 @@ describe("buildCapacity", () => {
   });
 
   it("retired approvals free capacity without removing their destination lock", () => {
-    const item = assigned("approval", "feedback-1", "eval", "job-1", "user-1", { n: 1 });
+    const item = assigned("approval", "feedback-1", "eval", "job-1", "user-1", {
+      n: 1,
+    });
     const state = foldLedger([item.approval, correction("retire", item.approval.eventId)]);
     const capacity = buildCapacity(state, new Map([[item.approval.feedbackId, item.row]]));
 

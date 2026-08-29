@@ -762,4 +762,51 @@ describe("selectCandidates", () => {
     expect(invoked).toBe(0);
     expect(result?.candidates[0]?.feedbackId).toBe("safe-array");
   });
+
+  it("does not invoke polluted Map or Set prototype methods", () => {
+    const privateSentinel = "private-map-set-feedback";
+    const prepared = input({ results: [normalized(privateSentinel)] });
+    const baseline = selectCandidates(prepared);
+    const targets = [
+      [Map.prototype, "set"],
+      [Map.prototype, "get"],
+      [Set.prototype, "has"],
+      [Set.prototype, "add"],
+    ] as const;
+    const originals = targets.map(([prototype, name]) =>
+      Object.getOwnPropertyDescriptor(prototype, name),
+    );
+    let invoked = 0;
+    let observed = "";
+    let result: ReturnType<typeof selectCandidates> | undefined;
+    let caught: unknown;
+    try {
+      for (let index = 0; index < targets.length; index += 1) {
+        const [prototype, name] = targets[index];
+        Object.defineProperty(prototype, name, {
+          configurable: true,
+          value: function (...args: unknown[]) {
+            invoked += 1;
+            observed += String(args[0] ?? "");
+            return name === "get" || name === "has" ? undefined : this;
+          },
+          writable: true,
+        });
+      }
+      result = selectCandidates(prepared);
+    } catch (error) {
+      caught = error;
+    } finally {
+      for (let index = 0; index < targets.length; index += 1) {
+        const [prototype, name] = targets[index];
+        const descriptor = originals[index];
+        if (descriptor === undefined) Reflect.deleteProperty(prototype, name);
+        else Object.defineProperty(prototype, name, descriptor);
+      }
+    }
+    expect(caught).toBeUndefined();
+    expect(invoked).toBe(0);
+    expect(observed).not.toContain(privateSentinel);
+    expect(result).toEqual(baseline);
+  });
 });

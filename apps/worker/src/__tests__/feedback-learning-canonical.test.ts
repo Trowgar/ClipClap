@@ -186,12 +186,82 @@ describe("canonicalJson", () => {
     expect(canonical).toBe('{"a":1,"b":2}');
     expect(calls).toEqual({ sort: 0, map: 0, join: 0 });
   });
+
+  it("does not expose captured JSON through polluted Set methods", () => {
+    const privateSentinel = "PRIVATE_CANONICAL_SET_VALUE";
+    const originalHas = Object.getOwnPropertyDescriptor(Set.prototype, "has");
+    const originalAdd = Object.getOwnPropertyDescriptor(Set.prototype, "add");
+    const originalDelete = Object.getOwnPropertyDescriptor(Set.prototype, "delete");
+    const originalSize = Object.getOwnPropertyDescriptor(Set.prototype, "size");
+    if (
+      originalHas === undefined ||
+      originalAdd === undefined ||
+      originalDelete === undefined ||
+      originalSize?.get === undefined
+    ) {
+      throw new Error("Set intrinsics unavailable");
+    }
+    const has = originalHas.value as Set<unknown>["has"];
+    const add = originalAdd.value as Set<unknown>["add"];
+    const remove = originalDelete.value as Set<unknown>["delete"];
+    const size = originalSize.get;
+    let invoked = 0;
+    let observed = "";
+    let rendered: string | undefined;
+    try {
+      Object.defineProperty(Set.prototype, "has", {
+        ...originalHas,
+        value: function (value: unknown) {
+          invoked += 1;
+          observed += String(value);
+          return has.call(this, value);
+        },
+      });
+      Object.defineProperty(Set.prototype, "add", {
+        ...originalAdd,
+        value: function (value: unknown) {
+          invoked += 1;
+          observed += String(value);
+          return add.call(this, value);
+        },
+      });
+      Object.defineProperty(Set.prototype, "delete", {
+        ...originalDelete,
+        value: function (value: unknown) {
+          invoked += 1;
+          observed += String(value);
+          return remove.call(this, value);
+        },
+      });
+      Object.defineProperty(Set.prototype, "size", {
+        ...originalSize,
+        get: function () {
+          invoked += 1;
+          return size.call(this);
+        },
+      });
+      rendered = canonicalJson({
+        transcript: privateSentinel,
+        nested: [privateSentinel],
+      });
+    } finally {
+      Object.defineProperty(Set.prototype, "has", originalHas);
+      Object.defineProperty(Set.prototype, "add", originalAdd);
+      Object.defineProperty(Set.prototype, "delete", originalDelete);
+      Object.defineProperty(Set.prototype, "size", originalSize);
+    }
+
+    expect(rendered).toBe(
+      '{"nested":["PRIVATE_CANONICAL_SET_VALUE"],"transcript":"PRIVATE_CANONICAL_SET_VALUE"}'
+    );
+    expect(invoked).toBe(0);
+    expect(observed).not.toContain(privateSentinel);
+  });
 });
 
 describe("sha256", () => {
   it("returns the lowercase prefixed SHA-256 of UTF-8 strings and buffers", () => {
-    const expected =
-      "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    const expected = "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
     expect(sha256("abc")).toBe(expected);
     expect(sha256(Buffer.from("abc", "utf8"))).toBe(expected);

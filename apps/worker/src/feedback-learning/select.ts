@@ -116,6 +116,9 @@ const mapGet = Map.prototype.get;
 const mapSet = Map.prototype.set;
 const mapHas = Map.prototype.has;
 const mapSizeGetter = Object.getOwnPropertyDescriptor(Map.prototype, "size")?.get;
+const setHas = Set.prototype.has;
+const setAdd = Set.prototype.add;
+const setSizeGetter = Object.getOwnPropertyDescriptor(Set.prototype, "size")?.get;
 
 function invalidInput(): never {
   throw new TypeError("selection_input_invalid");
@@ -389,12 +392,12 @@ function validateResults(value: unknown): readonly NormalizedFeedbackResult[] {
         !isSha256(valid.candidateVersion) ||
         valid.candidateVersion !==
           sha256(`${record.feedbackId}\n${record.updatedAt}\n${record.snapshotSha256}`) ||
-        feedbackIds.has(record.feedbackId) ||
-        versions.has(valid.candidateVersion)
+        setHas.call(feedbackIds, record.feedbackId) ||
+        setHas.call(versions, valid.candidateVersion)
       )
         return invalidInput();
-      feedbackIds.add(record.feedbackId);
-      versions.add(valid.candidateVersion);
+      setAdd.call(feedbackIds, record.feedbackId);
+      setAdd.call(versions, valid.candidateVersion);
       appendData(results, {
         status: "valid",
         candidateVersion: valid.candidateVersion,
@@ -416,8 +419,8 @@ function validateResults(value: unknown): readonly NormalizedFeedbackResult[] {
     )
       return invalidInput();
     if (invalid.feedbackId !== null) {
-      if (feedbackIds.has(invalid.feedbackId)) return invalidInput();
-      feedbackIds.add(invalid.feedbackId);
+      if (setHas.call(feedbackIds, invalid.feedbackId)) return invalidInput();
+      setAdd.call(feedbackIds, invalid.feedbackId);
     }
     appendData(results, {
       status: "invalid",
@@ -560,10 +563,10 @@ function validateCapacity(value: unknown, ledger: EffectiveLedger): CapacityStat
         expected === undefined ||
         expected.canonical !== capturedCanonical ||
         expected.approval.set !== set ||
-        seen.has(version)
+        setHas.call(seen, version)
       )
         return invalidInput();
-      seen.add(version);
+      setAdd.call(seen, version);
       incrementMap(jobs, expected.approval.jobId);
       incrementMap(users, expected.approval.userId);
       return expected.approval;
@@ -587,7 +590,8 @@ function validateCapacity(value: unknown, ledger: EffectiveLedger): CapacityStat
       staleReservations,
     };
   }
-  if (seen.size !== mapSize(activeByVersion)) return invalidInput();
+  if (setSizeGetter === undefined || setSizeGetter.call(seen) !== mapSize(activeByVersion))
+    return invalidInput();
   return {
     eval: validatedSets.eval as SetCapacity,
     holdout: validatedSets.holdout as SetCapacity,

@@ -10,6 +10,11 @@ type CapturedJson =
   | CapturedJson[]
   | { [key: string]: CapturedJson };
 
+const setHas = Set.prototype.has;
+const setAdd = Set.prototype.add;
+const setDelete = Set.prototype.delete;
+const setSizeGetter = Object.getOwnPropertyDescriptor(Set.prototype, "size")?.get;
+
 function invalidValue(): never {
   throw new TypeError("canonical_json_invalid_value");
 }
@@ -57,16 +62,15 @@ function captureArray(value: unknown[], ancestors: Set<object>): CapturedJson[] 
       value: captureJsonValueInternal(descriptor.value, ancestors),
       writable: true,
     });
-    seenIndexes.add(index);
+    setAdd.call(seenIndexes, index);
   }
-  if (seenIndexes.size !== length) return invalidValue();
+  if (setSizeGetter === undefined || setSizeGetter.call(seenIndexes) !== length) {
+    return invalidValue();
+  }
   return captured;
 }
 
-function captureObject(
-  value: object,
-  ancestors: Set<object>
-): { [key: string]: CapturedJson } {
+function captureObject(value: object, ancestors: Set<object>): { [key: string]: CapturedJson } {
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return invalidValue();
 
@@ -107,14 +111,12 @@ function captureJsonValueInternal(value: unknown, ancestors: Set<object>): Captu
       return invalidValue();
   }
 
-  if (ancestors.has(value)) return invalidCycle();
-  ancestors.add(value);
+  if (setHas.call(ancestors, value)) return invalidCycle();
+  setAdd.call(ancestors, value);
   try {
-    return Array.isArray(value)
-      ? captureArray(value, ancestors)
-      : captureObject(value, ancestors);
+    return Array.isArray(value) ? captureArray(value, ancestors) : captureObject(value, ancestors);
   } finally {
-    ancestors.delete(value);
+    setDelete.call(ancestors, value);
   }
 }
 
@@ -124,8 +126,7 @@ function captureJsonValue(value: unknown): CapturedJson {
   } catch (error) {
     if (
       error instanceof TypeError &&
-      (error.message === "canonical_json_invalid_value" ||
-        error.message === "canonical_json_cycle")
+      (error.message === "canonical_json_invalid_value" || error.message === "canonical_json_cycle")
     ) {
       throw error;
     }
