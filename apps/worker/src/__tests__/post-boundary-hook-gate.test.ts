@@ -338,26 +338,17 @@ describe("post-boundary hook gate", () => {
     });
   });
 
-  it("fails open for non-finite, reversed, and post-end hook boundaries", () => {
-    const malformed = [
-      clip("infinite-end", { endSec: Number.POSITIVE_INFINITY, hookStartSec: 1 }),
-      clip("nan-end", { endSec: Number.NaN, hookStartSec: 1 }),
-      clip("reversed-end", { startSec: 3, endSec: 2, hookStartSec: 3 }),
-      clip("post-end-hook", { endSec: 2, hookStartSec: 3 }),
-    ];
+  it("evaluates beyond the final end and enforces hook delay from the start-to-hook interval", () => {
+    const postEndHook = clip("post-end-hook", { startSec: 0, endSec: 2, hookStartSec: 3 });
+    const result = applyPostBoundaryHookGate(
+      [postEndHook],
+      nodes([[0, 3]]),
+      options("enforce", { maxDelaySec: 1, maxPreHookGapSec: 1 }),
+    );
 
-    for (const mode of ["shadow", "enforce"] as const) {
-      const result = applyPostBoundaryHookGate(
-        malformed,
-        nodes([]),
-        options(mode, { maxDelaySec: 0, maxPreHookGapSec: 0 }),
-      );
-
-      expect(result.clips).toEqual(malformed);
-      expect(result.drops).toEqual([]);
-      expect(result.telemetry).toMatchObject({ evaluated: 0, notEvaluable: 4, passed: 0 });
-      expect(result.telemetry).toHaveProperty(mode === "shadow" ? "wouldDrop" : "dropped", 0);
-    }
+    expect(result.clips).toEqual([]);
+    expect(result.drops).toEqual([{ id: "post-end-hook", reasons: ["hook_delay"] }]);
+    expect(result.telemetry).toMatchObject({ evaluated: 1, notEvaluable: 0, dropped: 1 });
   });
 
   it("bounds diagnostics to the twenty greatest delay and gap outliers with stable ID ties", () => {

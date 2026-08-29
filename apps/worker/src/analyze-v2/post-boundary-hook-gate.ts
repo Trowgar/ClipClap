@@ -194,19 +194,16 @@ function durationBand(
 }
 
 function isEvaluable(clip: SnappedClip, nodes: SentenceNode[] | undefined): nodes is SentenceNode[] {
-  // The interval must be a coherent final clip boundary. Malformed final ends
-  // remain the existing boundary validator's responsibility; this policy only
-  // records them as not evaluable and never turns them into a gate drop.
+  // This policy owns only the half-open [startSec, hookStartSec) interval.
+  // Final-end validation stays with the existing boundary validator and does
+  // not make an otherwise measurable opening fail open here.
   return (
     Array.isArray(nodes) &&
     Number.isFinite(clip.startSec) &&
     clip.startSec >= 0 &&
-    Number.isFinite(clip.endSec) &&
-    clip.endSec >= clip.startSec &&
     Number.isFinite(clip.hookStartSec) &&
     clip.hookStartSec >= 0 &&
-    clip.hookStartSec >= clip.startSec &&
-    clip.hookStartSec <= clip.endSec
+    clip.hookStartSec >= clip.startSec
   );
 }
 
