@@ -1,5 +1,8 @@
 export type AnalyzeEngineSetting = "legacy" | "recall-critic" | "shadow";
 export type PostBoundaryHookGateMode = "off" | "observe" | "shadow" | "enforce";
+/** Safe-end V1 is deliberately observation-only. Any action authority needs a
+ * separately approved configuration and implementation. */
+export type SafeEndAuditMode = "off" | "shadow";
 
 export interface AnalyzeConfig {
   engine: AnalyzeEngineSetting;
@@ -258,6 +261,8 @@ export interface AnalyzeConfig {
   postBoundaryHookGateMode: PostBoundaryHookGateMode;
   postBoundaryHookMaxDelaySec?: number;
   postBoundaryHookMaxPreHookGapSec?: number;
+  /** Shadow-only audit of normal and rescue clip endings. */
+  safeEndAuditMode: SafeEndAuditMode;
   /** Master switch for the song-lyric source refusal gate (spec 2026-08-10
    *  task 8) - a deterministic, pre-scan check in `stages/analyze.ts` that
    *  resolves a verse-shaped transcript to `NO_USABLE_SPEECH` before the
@@ -460,9 +465,17 @@ function parsePostBoundaryHookGate(env: Env): Pick<
   };
 }
 
+function parseSafeEndAuditMode(env: Env): SafeEndAuditMode {
+  const raw = env.SAFE_END_AUDIT;
+  if (raw === undefined || raw.trim() === "") return "off";
+  if (raw === "shadow") return "shadow";
+  throw new Error(`Invalid SAFE_END_AUDIT: ${raw}`);
+}
+
 export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
   const engine = env.ANALYZE_ENGINE;
   const postBoundaryHookGate = parsePostBoundaryHookGate(env);
+  const safeEndAuditMode = parseSafeEndAuditMode(env);
   return {
     engine:
       engine === "recall-critic" || engine === "shadow" ? engine : "legacy",
@@ -542,6 +555,7 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     finalizerHeadroom: num(env, "FINALIZER_HEADROOM", 4),
     hookDedupSimilarity: num(env, "HOOK_DEDUP_SIMILARITY", 0.8),
     ...postBoundaryHookGate,
+    safeEndAuditMode,
     // Exact literal "on", same discipline as every other stage switch in this
     // file: a stray truthy env value must not refuse a real user's video.
     songGateEnabled: env.SONG_GATE === "on",
