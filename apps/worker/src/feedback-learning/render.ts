@@ -1,18 +1,8 @@
+import { types as utilTypes } from "node:util";
+
 import { canonicalJson, jsonLine, parseUtcMillisecond, sha256 } from "./canonical";
-import { canonicalLedgerState } from "./ledger";
-import {
-  appendData,
-  byteCompare,
-  captureClosedRoot,
-  captureDenseArray,
-  captureOwnData,
-  insertionSort,
-  selectValidatedCandidates,
-  validateSelectionFields,
-  type SelectionInput,
-  type SelectionResult,
-  type ValidatedSelectionInput,
-} from "./select";
+import { canonicalLedgerState, type EffectiveLedger } from "./ledger";
+import { selectCandidates, type SelectionInput, type SelectionResult } from "./select";
 import type {
   ApprovalEvent,
   ExclusionReason,
@@ -75,6 +65,14 @@ const FRESHNESS_KEYS = [
   "snapshotSha256",
   "staleReason",
 ] as const;
+const CAPACITY_KEYS = ["eval", "holdout"] as const;
+const SET_CAPACITY_KEYS = [
+  "jobCounts",
+  "userCounts",
+  "freshApprovals",
+  "staleReservations",
+] as const;
+const STALE_RESERVATION_KEYS = ["approval", "reason"] as const;
 const STALE_REASONS: readonly StaleReason[] = [
   "missing",
   "verdict_changed",
@@ -93,6 +91,121 @@ const EXCLUSION_REASONS: readonly ExclusionReason[] = [
 
 function invalidInput(): never {
   throw new TypeError("render_input_invalid");
+}
+function byteCompare(left: string, right: string): number {
+  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
+}
+function appendData<T>(array: T[], value: T): void {
+  Object.defineProperty(array, String(array.length), {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
+}
+function setData<T>(array: T[], index: number, value: T): void {
+  Object.defineProperty(array, String(index), {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
+}
+function insertionSort<T>(array: T[], compare: (left: T, right: T) => number): void {
+  for (let index = 1; index < array.length; index += 1) {
+    const value = dataAt(array, index);
+    let insertion = index;
+    while (insertion > 0 && compare(dataAt(array, insertion - 1), value) > 0) {
+      setData(array, insertion, dataAt(array, insertion - 1));
+      insertion -= 1;
+    }
+    setData(array, insertion, value);
+  }
+}
+function keyPresent(expected: readonly string[], key: string): boolean {
+  for (let index = 0; index < expected.length; index += 1) {
+    if (dataAt(expected, index) === key) return true;
+  }
+  return false;
+}
+function captureOwnData(
+  value: unknown,
+  expected: readonly string[],
+): Record<string, unknown> | undefined {
+  try {
+    if (
+      value === null ||
+      typeof value !== "object" ||
+      utilTypes.isProxy(value) ||
+      Array.isArray(value)
+    ) {
+      return undefined;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== expected.length) return undefined;
+    const captured: Record<string, unknown> = Object.create(null);
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = dataAt(keys, index);
+      if (typeof key !== "string" || !keyPresent(expected, key)) return undefined;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
+        return undefined;
+      }
+      Object.defineProperty(captured, key, {
+        configurable: true,
+        enumerable: true,
+        value: descriptor.value,
+        writable: true,
+      });
+    }
+    return captured;
+  } catch {
+    return undefined;
+  }
+}
+function captureDenseArray(value: unknown): unknown[] | undefined {
+  try {
+    if (
+      !Array.isArray(value) ||
+      utilTypes.isProxy(value) ||
+      Object.getPrototypeOf(value) !== Array.prototype
+    ) {
+      return undefined;
+    }
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (
+      lengthDescriptor === undefined ||
+      !("value" in lengthDescriptor) ||
+      !Number.isSafeInteger(lengthDescriptor.value) ||
+      lengthDescriptor.value < 0
+    ) {
+      return undefined;
+    }
+    const length = lengthDescriptor.value as number;
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== length + 1) return undefined;
+    const captured: unknown[] = [];
+    for (let index = 0; index < length; index += 1) {
+      if (dataAt(keys, index) !== String(index)) return undefined;
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) {
+        return undefined;
+      }
+      appendData(captured, descriptor.value);
+    }
+    if (dataAt(keys, length) !== "length") return undefined;
+    return captured;
+  } catch {
+    return undefined;
+  }
+}
+function captureClosedRoot(
+  value: unknown,
+  expected: readonly string[],
+): Record<string, unknown> | undefined {
+  return captureOwnData(value, expected);
 }
 function isWellFormedUnicode(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
@@ -208,7 +321,7 @@ function compareInputProjection(left: unknown, right: unknown): number {
   const id = byteCompare(leftId, rightId);
   return id !== 0 ? id : byteCompare(canonicalJson(left), canonicalJson(right));
 }
-function inputProjection(results: ValidatedSelectionInput["results"]): unknown[] {
+function inputProjection(results: unknown): unknown[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(canonicalJson(results)) as unknown;
@@ -221,8 +334,95 @@ function inputProjection(results: ValidatedSelectionInput["results"]): unknown[]
   return captured;
 }
 
+type CapturedSetCapacity = Readonly<{
+  freshApprovals: readonly ApprovalEvent[];
+  staleReservations: readonly { approval: ApprovalEvent; reason: StaleReason }[];
+}>;
+type CapturedCapacity = Readonly<{
+  eval: CapturedSetCapacity;
+  holdout: CapturedSetCapacity;
+}>;
+
+function captureCapacity(raw: unknown, ledger: EffectiveLedger): CapturedCapacity {
+  const activeByVersion = new Map<Sha256, { approval: ApprovalEvent; canonical: string }>();
+  for (let index = 0; index < ledger.activeDecisions.length; index += 1) {
+    const decision = dataAt(ledger.activeDecisions, index);
+    if (decision.action === "approve") {
+      activeByVersion.set(decision.candidateVersion, {
+        approval: decision,
+        canonical: canonicalJson(decision),
+      });
+    }
+  }
+  const root = captureOwnData(raw, CAPACITY_KEYS);
+  if (root === undefined) return invalidInput();
+  const capturedSets: Partial<Record<TargetSet, CapturedSetCapacity>> = Object.create(null);
+  const seen = new Set<Sha256>();
+  for (let setIndex = 0; setIndex < CAPACITY_KEYS.length; setIndex += 1) {
+    const set = dataAt(CAPACITY_KEYS, setIndex);
+    const rawSet = captureOwnData(root[set], SET_CAPACITY_KEYS);
+    if (rawSet === undefined) return invalidInput();
+    const rawFresh = captureDenseArray(rawSet.freshApprovals);
+    const rawStale = captureDenseArray(rawSet.staleReservations);
+    if (rawFresh === undefined || rawStale === undefined) return invalidInput();
+    const freshApprovals: ApprovalEvent[] = [];
+    const staleReservations: { approval: ApprovalEvent; reason: StaleReason }[] = [];
+    const captureApproval = (value: unknown): ApprovalEvent => {
+      if (value === null || typeof value !== "object" || utilTypes.isProxy(value)) {
+        return invalidInput();
+      }
+      let canonical: string;
+      let captured: unknown;
+      try {
+        canonical = canonicalJson(value);
+        captured = JSON.parse(canonical) as unknown;
+      } catch {
+        return invalidInput();
+      }
+      const descriptor =
+        captured !== null && typeof captured === "object"
+          ? Object.getOwnPropertyDescriptor(captured, "candidateVersion")
+          : undefined;
+      const candidateVersion =
+        descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
+      if (!isSha256(candidateVersion)) return invalidInput();
+      const expected = activeByVersion.get(candidateVersion);
+      if (
+        expected === undefined ||
+        expected.canonical !== canonical ||
+        expected.approval.set !== set ||
+        seen.has(candidateVersion)
+      ) {
+        return invalidInput();
+      }
+      seen.add(candidateVersion);
+      return expected.approval;
+    };
+    for (let index = 0; index < rawFresh.length; index += 1) {
+      appendData(freshApprovals, captureApproval(dataAt(rawFresh, index)));
+    }
+    for (let index = 0; index < rawStale.length; index += 1) {
+      const reservation = captureOwnData(dataAt(rawStale, index), STALE_RESERVATION_KEYS);
+      if (reservation === undefined || !enumContains(STALE_REASONS, reservation.reason)) {
+        return invalidInput();
+      }
+      appendData(staleReservations, {
+        approval: captureApproval(reservation.approval),
+        reason: reservation.reason as StaleReason,
+      });
+    }
+    capturedSets[set] = { freshApprovals, staleReservations };
+  }
+  if (seen.size !== activeByVersion.size) return invalidInput();
+  return {
+    eval: capturedSets.eval as CapturedSetCapacity,
+    holdout: capturedSets.holdout as CapturedSetCapacity,
+  };
+}
+
 function validateFreshness(
-  input: ValidatedSelectionInput,
+  ledger: EffectiveLedger,
+  capacity: CapturedCapacity,
   freshness: readonly ApprovalFreshnessProjection[],
 ): ApprovalEvent[] {
   const approvals: ApprovalEvent[] = [];
@@ -231,8 +431,8 @@ function validateFreshness(
     const projection = dataAt(freshness, index);
     freshnessByFeedback.set(projection.feedbackId, projection);
   }
-  for (let index = 0; index < input.ledger.activeDecisions.length; index += 1) {
-    const decision = dataAt(input.ledger.activeDecisions, index);
+  for (let index = 0; index < ledger.activeDecisions.length; index += 1) {
+    const decision = dataAt(ledger.activeDecisions, index);
     if (decision.action !== "approve") continue;
     const projection = freshnessByFeedback.get(decision.feedbackId);
     if (projection === undefined) return invalidInput();
@@ -249,14 +449,16 @@ function validateFreshness(
     appendData(approvals, decision);
   }
   if (freshnessByFeedback.size !== approvals.length) return invalidInput();
-  for (const set of ["eval", "holdout"] as const) {
-    const capacity = set === "eval" ? input.capacity.eval : input.capacity.holdout;
-    for (let index = 0; index < capacity.freshApprovals.length; index += 1) {
-      const approval = dataAt(capacity.freshApprovals, index);
+  const targetSets = ["eval", "holdout"] as const;
+  for (let setIndex = 0; setIndex < targetSets.length; setIndex += 1) {
+    const set = dataAt(targetSets, setIndex);
+    const setCapacity = set === "eval" ? capacity.eval : capacity.holdout;
+    for (let index = 0; index < setCapacity.freshApprovals.length; index += 1) {
+      const approval = dataAt(setCapacity.freshApprovals, index);
       if (freshnessByFeedback.get(approval.feedbackId)?.staleReason !== null) return invalidInput();
     }
-    for (let index = 0; index < capacity.staleReservations.length; index += 1) {
-      const reservation = dataAt(capacity.staleReservations, index);
+    for (let index = 0; index < setCapacity.staleReservations.length; index += 1) {
+      const reservation = dataAt(setCapacity.staleReservations, index);
       if (
         freshnessByFeedback.get(reservation.approval.feedbackId)?.staleReason !== reservation.reason
       )
@@ -353,41 +555,51 @@ function markdown(
       `- ${display(item.feedbackId)} - ${display(item.candidateVersion)} - ${item.reason}${suffix}`,
     );
   }
-  return Buffer.from(`${lines.join("\n").replace(/\n+$/u, "")}\n`, "utf8");
+  let lastLine = lines.length - 1;
+  while (lastLine >= 0 && dataAt(lines, lastLine) === "") lastLine -= 1;
+  let rendered = "";
+  for (let index = 0; index <= lastLine; index += 1) {
+    if (index > 0) rendered += "\n";
+    rendered += dataAt(lines, index);
+  }
+  return Buffer.from(`${rendered}\n`, "utf8");
 }
 
 export function buildRunArtifacts(rawInput: RenderInput): RunArtifacts {
   try {
     const root = captureClosedRoot(rawInput, ROOT_KEYS);
     if (root === undefined) return invalidInput();
-    const input = validateSelectionFields({
-      results: root.results,
-      targetSet: root.targetSet,
-      limit: root.limit,
-      ledger: root.ledger,
-      capacity: root.capacity,
-    });
+    const selectionInput: SelectionInput = {
+      results: root.results as SelectionInput["results"],
+      targetSet: root.targetSet as SelectionInput["targetSet"],
+      limit: root.limit as number,
+      ledger: root.ledger as SelectionInput["ledger"],
+      capacity: root.capacity as SelectionInput["capacity"],
+    };
+    const selection = selectCandidates(selectionInput);
     if (!isUtc(root.updatedFrom) || !isUtc(root.updatedTo) || root.updatedFrom >= root.updatedTo)
       return invalidInput();
+    const effectiveLedger = JSON.parse(
+      canonicalLedgerState(root.ledger as EffectiveLedger),
+    ) as EffectiveLedger;
+    const capacity = captureCapacity(root.capacity, effectiveLedger);
     const freshness = captureFreshness(root.approvalFreshness);
-    validateFreshness(input, freshness);
-    const selection = selectValidatedCandidates(input);
-    const effectiveLedger = JSON.parse(canonicalLedgerState(input.ledger)) as unknown;
+    validateFreshness(effectiveLedger, capacity, freshness);
     const optionsSha256 = sha256(
       canonicalJson({
         schemaVersion: 1,
-        targetSet: input.targetSet,
+        targetSet: selectionInput.targetSet,
         updatedFrom: root.updatedFrom,
         updatedTo: root.updatedTo,
-        limit: input.limit,
+        limit: selectionInput.limit,
       }),
     );
-    const inputSha256 = sha256(canonicalJson(inputProjection(input.results)));
+    const inputSha256 = sha256(canonicalJson(inputProjection(root.results)));
     const ledgerSha256 = sha256(canonicalJson({ effectiveLedger, approvalFreshness: freshness }));
     const runDigest = sha256(canonicalJson({ optionsSha256, inputSha256, ledgerSha256 }));
-    const runId = `${input.targetSet}-${runDigest.slice("sha256:".length, "sha256:".length + 16)}`;
+    const runId = `${selectionInput.targetSet}-${runDigest.slice("sha256:".length, "sha256:".length + 16)}`;
     const requestedCapacity =
-      input.targetSet === "eval" ? input.capacity.eval : input.capacity.holdout;
+      selectionInput.targetSet === "eval" ? capacity.eval : capacity.holdout;
     const staleAssignments: StaleAssignment[] = [];
     for (let index = 0; index < requestedCapacity.staleReservations.length; index += 1) {
       const reservation = dataAt(requestedCapacity.staleReservations, index);
@@ -422,10 +634,10 @@ export function buildRunArtifacts(rawInput: RenderInput): RunArtifacts {
     const manifest: RunManifest = {
       schemaVersion: 1,
       runId,
-      targetSet: input.targetSet,
+      targetSet: selectionInput.targetSet,
       updatedFrom: root.updatedFrom,
       updatedTo: root.updatedTo,
-      limit: input.limit,
+      limit: selectionInput.limit,
       optionsSha256,
       inputSha256,
       ledgerSha256,
@@ -439,7 +651,7 @@ export function buildRunArtifacts(rawInput: RenderInput): RunArtifacts {
       "exclusions.jsonl": jsonl(selection.exclusions),
       "candidates.md": markdown(manifest, selection.candidates, selection.exclusions),
     };
-    return { files, status: { runId, targetSet: input.targetSet, counts } };
+    return { files, status: { runId, targetSet: selectionInput.targetSet, counts } };
   } catch {
     return invalidInput();
   }

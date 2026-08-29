@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { sha256 } from "../feedback-learning/canonical";
 import type { CapacityState, EffectiveLedger, SetCapacity } from "../feedback-learning/ledger";
+import * as selectModule from "../feedback-learning/select";
 import { selectCandidates, type SelectionInput } from "../feedback-learning/select";
 import type {
   ApprovalEvent,
@@ -201,6 +202,10 @@ function input(overrides: Partial<SelectionInput> = {}): SelectionInput {
 }
 
 describe("selectCandidates", () => {
+  it("exports only the safe public runtime entrypoint", () => {
+    expect(Object.keys(selectModule)).toEqual(["selectCandidates"]);
+  });
+
   it("applies invalid, stale, approval and rejection precedence before balancing", () => {
     const staleApproval = approval("stale", "holdout", {
       feedbackUpdatedAt: "2026-08-27T12:00:00.000Z",

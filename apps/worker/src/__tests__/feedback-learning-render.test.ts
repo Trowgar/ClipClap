@@ -6,6 +6,7 @@ import {
   type CapacityState,
   type EffectiveLedger,
 } from "../feedback-learning/ledger";
+import * as renderModule from "../feedback-learning/render";
 import {
   buildRunArtifacts,
   type ApprovalFreshnessProjection,
@@ -94,6 +95,10 @@ function manifest(input: RenderInput = renderInput()) {
 }
 
 describe("buildRunArtifacts", () => {
+  it("exports only the safe public runtime entrypoint", () => {
+    expect(Object.keys(renderModule)).toEqual(["buildRunArtifacts"]);
+  });
+
   it("renders exactly four deterministic buffers with compact JSONL and LF contracts", () => {
     const first = buildRunArtifacts(renderInput());
     const second = buildRunArtifacts(renderInput());
@@ -735,6 +740,68 @@ describe("buildRunArtifacts", () => {
     expect(caught).toBeUndefined();
     expect(invoked).toBe(0);
     expect(artifacts?.status.counts.selected).toBe(1);
+  });
+
+  it("does not expose private Markdown data through inherited join or replace", () => {
+    const privateSentinel = "PRIVATE_JOIN_REPLACE_SENTINEL";
+    const item = normalized("private-markdown");
+    if (item.status !== "valid") throw new Error("expected valid");
+    const privateItem: NormalizedFeedbackResult = {
+      ...item,
+      record: {
+        ...item.record,
+        note: privateSentinel,
+        evidenceKey: privateSentinel,
+        review: {
+          ...item.record.review,
+          transcript: privateSentinel,
+          note: privateSentinel,
+          evidenceKey: privateSentinel,
+        },
+      },
+    };
+    const originalJoin = Object.getOwnPropertyDescriptor(Array.prototype, "join");
+    const originalReplace = Object.getOwnPropertyDescriptor(String.prototype, "replace");
+    let invoked = 0;
+    let observed = "";
+    let artifacts: ReturnType<typeof buildRunArtifacts> | undefined;
+    let caught: unknown;
+    try {
+      Object.defineProperty(Array.prototype, "join", {
+        configurable: true,
+        value: function () {
+          invoked += 1;
+          for (let index = 0; index < this.length; index += 1) {
+            const descriptor = Object.getOwnPropertyDescriptor(this, String(index));
+            if (descriptor !== undefined && "value" in descriptor)
+              observed += String(descriptor.value);
+          }
+          return observed;
+        },
+        writable: true,
+      });
+      Object.defineProperty(String.prototype, "replace", {
+        configurable: true,
+        value: function () {
+          invoked += 1;
+          observed += String(this);
+          return String(this);
+        },
+        writable: true,
+      });
+      artifacts = buildRunArtifacts(renderInput({ results: [privateItem] }));
+    } catch (error) {
+      caught = error;
+    } finally {
+      if (originalJoin === undefined) Reflect.deleteProperty(Array.prototype, "join");
+      else Object.defineProperty(Array.prototype, "join", originalJoin);
+      if (originalReplace === undefined) Reflect.deleteProperty(String.prototype, "replace");
+      else Object.defineProperty(String.prototype, "replace", originalReplace);
+    }
+    expect(caught).toBeUndefined();
+    expect(invoked).toBe(0);
+    expect(observed).not.toContain(privateSentinel);
+    expect(artifacts?.files["candidates.md"].toString("utf8")).toContain(privateSentinel);
   });
 
   it("separates nonempty stale assignments and candidates with a blank line", () => {

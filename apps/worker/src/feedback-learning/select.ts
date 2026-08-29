@@ -33,8 +33,8 @@ export type SelectionResult = Readonly<{
   candidates: readonly Candidate[];
   exclusions: readonly Exclusion[];
 }>;
-export type ValidatedSelectionInput = SelectionInput;
-export type SelectionFieldValues = Readonly<{
+type ValidatedSelectionInput = SelectionInput;
+type SelectionFieldValues = Readonly<{
   results: unknown;
   targetSet: unknown;
   limit: unknown;
@@ -120,11 +120,11 @@ const mapSizeGetter = Object.getOwnPropertyDescriptor(Map.prototype, "size")?.ge
 function invalidInput(): never {
   throw new TypeError("selection_input_invalid");
 }
-export function byteCompare(left: string, right: string): number {
+function byteCompare(left: string, right: string): number {
   return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
 
-export function appendData<T>(array: T[], value: T): void {
+function appendData<T>(array: T[], value: T): void {
   Object.defineProperty(array, String(array.length), {
     configurable: true,
     enumerable: true,
@@ -145,7 +145,7 @@ function dataAt<T>(array: readonly T[], index: number): T {
   if (descriptor === undefined || !("value" in descriptor)) return invalidInput();
   return descriptor.value as T;
 }
-export function insertionSort<T>(array: T[], compare: (left: T, right: T) => number): void {
+function insertionSort<T>(array: T[], compare: (left: T, right: T) => number): void {
   for (let index = 1; index < array.length; index += 1) {
     const value = dataAt(array, index);
     let insertion = index;
@@ -167,7 +167,7 @@ function enumIndex<T>(values: readonly T[], value: unknown): number {
   return -1;
 }
 
-export function captureOwnData(
+function captureOwnData(
   value: unknown,
   expected: readonly string[],
 ): Record<string, unknown> | undefined {
@@ -202,7 +202,7 @@ export function captureOwnData(
     return undefined;
   }
 }
-export function captureDenseArray(value: unknown): unknown[] | undefined {
+function captureDenseArray(value: unknown): unknown[] | undefined {
   try {
     if (
       !Array.isArray(value) ||
@@ -235,7 +235,7 @@ export function captureDenseArray(value: unknown): unknown[] | undefined {
     return undefined;
   }
 }
-export function captureClosedRoot(
+function captureClosedRoot(
   value: unknown,
   expected: readonly string[],
 ): Record<string, unknown> | undefined {
@@ -594,7 +594,7 @@ function validateCapacity(value: unknown, ledger: EffectiveLedger): CapacityStat
   };
 }
 
-export function validateSelectionFields(fields: SelectionFieldValues): ValidatedSelectionInput {
+function validateSelectionFields(fields: SelectionFieldValues): ValidatedSelectionInput {
   try {
     if (
       (fields.targetSet !== "eval" && fields.targetSet !== "holdout") ||
@@ -706,7 +706,7 @@ function rowCompare(left: ValidResult, right: ValidResult): number {
   return feedback !== 0 ? feedback : byteCompare(left.candidateVersion, right.candidateVersion);
 }
 
-export function selectValidatedCandidates(input: ValidatedSelectionInput): SelectionResult {
+function selectValidatedCandidates(input: ValidatedSelectionInput): SelectionResult {
   const exclusions: Exclusion[] = [];
   const undecided: ValidResult[] = [];
   const decisions = new Map<Sha256, "approve" | "reject">();
@@ -715,7 +715,9 @@ export function selectValidatedCandidates(input: ValidatedSelectionInput): Selec
     const decision = dataAt(input.ledger.activeDecisions, index);
     mapSet.call(decisions, decision.candidateVersion, decision.action);
   }
-  for (const set of ["eval", "holdout"] as const) {
+  const targetSets = ["eval", "holdout"] as const;
+  for (let setIndex = 0; setIndex < targetSets.length; setIndex += 1) {
+    const set = dataAt(targetSets, setIndex);
     const stale = requestedCapacity(input.capacity, set).staleReservations;
     for (let index = 0; index < stale.length; index += 1) {
       const approval = dataAt(stale, index).approval;
