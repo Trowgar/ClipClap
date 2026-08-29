@@ -93,6 +93,13 @@ In `observe`, the report must include only raw, threshold-free measurements:
   up to 20 with the greatest pre-hook gap, de-duplicated and tie-broken by
   candidate ID.
 
+V1 uses existing runtime boundaries for stable, non-arbitrary report bands:
+score is `below_threshold` for values below `scoreThreshold`,
+`threshold_to_0_8` for values from `scoreThreshold` through `0.8`, and
+`above_0_8` thereafter; duration is `short` below `targetMinSec`, `target` from
+`targetMinSec` through `maxSec`, and `long` thereafter. The raw maxima and
+diagnostics remain the source of truth when a boundary changes.
+
 In thresholded `shadow`, the report additionally includes count and rate of
 candidates that exceed each metric, bounded diagnostics for every would-drop
 candidate, and estimated output-count loss per job if enforcement were
