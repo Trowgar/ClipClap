@@ -1,5 +1,5 @@
 import {
-  cliIdentifiers,
+  captureReviewCommandResult,
   isCliInputError,
   machineReason,
   parseReviewArguments,
@@ -36,8 +36,7 @@ export async function runFeedbackLearningReview(
   let outcome: Outcome;
   try {
     const request = await requestFromArguments(argv);
-    const result = await dependencies.execute(request, { repository: dependencies.repository });
-    if (result.operation !== "review" || !cliIdentifiers.validEventId(result.eventId)) throw new Error("invalid_safe_result");
+    const result = captureReviewCommandResult(await dependencies.execute(request, { repository: dependencies.repository }));
     if (result.status === "committed" || result.status === "noop") {
       outcome = { code: 0, stream: "stdout", line: safeLog({ operation: "review", eventId: result.eventId }) };
     } else if (result.status === "committed_durability_uncertain") {
@@ -58,7 +57,9 @@ export async function runFeedbackLearningReview(
   try {
     await dependencies.disconnect();
   } catch {
-    outcome = { code: 1, stream: "stderr", line: safeLog({ operation: "review", reason: "disconnect_failed" }) };
+    if (outcome.code === 0) {
+      outcome = { code: 1, stream: "stderr", line: safeLog({ operation: "review", reason: "disconnect_failed" }) };
+    }
   }
   io[outcome.stream](outcome.line);
   return outcome.code;
@@ -76,9 +77,19 @@ export async function composeReviewCommandDependencies(): Promise<ReviewCommandD
   };
 }
 
-export async function main(argv: readonly string[] = process.argv.slice(2), io: CommandIo = processCommandIo): Promise<number> {
+export async function main(
+  argv: readonly string[] = process.argv.slice(2),
+  io: CommandIo = processCommandIo,
+  compose: () => Promise<ReviewCommandDependencies> = composeReviewCommandDependencies,
+): Promise<number> {
   try {
-    return await runFeedbackLearningReview(argv, await composeReviewCommandDependencies(), io);
+    parseReviewArguments(argv);
+  } catch (error) {
+    io.stderr(safeLog({ operation: "review", reason: isCliInputError(error) ? "invalid_arguments" : "review_failed" }));
+    return isCliInputError(error) ? 2 : 1;
+  }
+  try {
+    return await runFeedbackLearningReview(argv, await compose(), io);
   } catch {
     io.stderr(safeLog({ operation: "review", reason: "composition_failed" }));
     return 1;

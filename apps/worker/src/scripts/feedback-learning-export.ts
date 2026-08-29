@@ -1,5 +1,5 @@
 import {
-  cliIdentifiers,
+  captureExportCommandResult,
   isCliInputError,
   machineReason,
   parseExportArguments,
@@ -26,8 +26,7 @@ export async function runFeedbackLearningExport(
   let outcome: Outcome;
   try {
     const input = parseExportArguments(argv);
-    const result = await dependencies.execute(input, { repository: dependencies.repository });
-    if (result.operation !== "export" || !cliIdentifiers.validRunId(result.runId)) throw new Error("invalid_safe_result");
+    const result = captureExportCommandResult(await dependencies.execute(input, { repository: dependencies.repository }));
     if (result.status === "committed" || result.status === "noop") {
       outcome = { code: 0, stream: "stdout", line: safeLog({ operation: "export", runId: result.runId }) };
     } else if (result.status === "committed_durability_uncertain") {
@@ -48,7 +47,9 @@ export async function runFeedbackLearningExport(
   try {
     await dependencies.disconnect();
   } catch {
-    outcome = { code: 1, stream: "stderr", line: safeLog({ operation: "export", reason: "disconnect_failed" }) };
+    if (outcome.code === 0) {
+      outcome = { code: 1, stream: "stderr", line: safeLog({ operation: "export", reason: "disconnect_failed" }) };
+    }
   }
   io[outcome.stream](outcome.line);
   return outcome.code;
@@ -66,9 +67,19 @@ export async function composeExportCommandDependencies(): Promise<ExportCommandD
   };
 }
 
-export async function main(argv: readonly string[] = process.argv.slice(2), io: CommandIo = processCommandIo): Promise<number> {
+export async function main(
+  argv: readonly string[] = process.argv.slice(2),
+  io: CommandIo = processCommandIo,
+  compose: () => Promise<ExportCommandDependencies> = composeExportCommandDependencies,
+): Promise<number> {
   try {
-    return await runFeedbackLearningExport(argv, await composeExportCommandDependencies(), io);
+    parseExportArguments(argv);
+  } catch (error) {
+    io.stderr(safeLog({ operation: "export", reason: isCliInputError(error) ? "invalid_arguments" : "export_failed" }));
+    return isCliInputError(error) ? 2 : 1;
+  }
+  try {
+    return await runFeedbackLearningExport(argv, await compose(), io);
   } catch {
     io.stderr(safeLog({ operation: "export", reason: "composition_failed" }));
     return 1;

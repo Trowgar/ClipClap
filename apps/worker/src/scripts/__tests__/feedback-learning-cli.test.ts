@@ -8,9 +8,10 @@ import {
   parseExportArguments,
   parseReviewArguments,
   readPrivateReasonFile,
+  safeLog,
 } from "../../feedback-learning/cli";
-import { runFeedbackLearningExport } from "../feedback-learning-export";
-import { runFeedbackLearningReview } from "../feedback-learning-review";
+import { main as exportMain, runFeedbackLearningExport } from "../feedback-learning-export";
+import { main as reviewMain, runFeedbackLearningReview } from "../feedback-learning-review";
 
 const RUN_ID = "eval-0123456789abcdef";
 const SHA = `sha256:${"a".repeat(64)}`;
@@ -85,6 +86,26 @@ describe("feedback-learning CLI argument grammar", () => {
       Map.prototype.set = set;
     }
     expect(result).toEqual({ action: "approve", runId: RUN_ID, candidateVersion: SHA });
+  });
+
+  it("does not depend on mutable RegExp.prototype.exec", () => {
+    const nativeExec = RegExp.prototype.exec;
+    let valid: unknown;
+    let badRun: unknown;
+    let badVersion: unknown;
+    try {
+      RegExp.prototype.exec = (() => ["PRIVATE_REGEX"] as unknown as RegExpExecArray) as typeof nativeExec;
+      valid = parseReviewArguments(["approve", "--run", RUN_ID, "--candidate-version", SHA]);
+      try { parseReviewArguments(["approve", "--run", "PRIVATE_RUN", "--candidate-version", SHA]); } catch (error) { badRun = error; }
+      try { parseReviewArguments(["approve", "--run", RUN_ID, "--candidate-version", "PRIVATE_VERSION"]); } catch (error) { badVersion = error; }
+    } finally {
+      RegExp.prototype.exec = nativeExec;
+    }
+    expect(valid).toEqual({ action: "approve", runId: RUN_ID, candidateVersion: SHA });
+    expect(badRun).toBeInstanceOf(CliInputError);
+    expect(badVersion).toBeInstanceOf(CliInputError);
+    expect(String(badRun) + String(badVersion)).not.toContain("PRIVATE_RUN");
+    expect(String(badRun) + String(badVersion)).not.toContain("PRIVATE_VERSION");
   });
 
   it.each([
@@ -237,9 +258,149 @@ describe("thin command runners", () => {
     const capture = outputCapture();
     const disconnect = vi.fn(async () => { throw new Error("PRIVATE_DISCONNECT"); });
     const code = await runFeedbackLearningExport(["--set", "eval", "--updated-from", FROM, "--updated-to", TO],
-      { repository: {} as never, execute: vi.fn(async () => ({ operation: "export", runId: RUN_ID } as never)), disconnect }, capture.io);
+      { repository: {} as never, execute: vi.fn(async () => ({ operation: "export", runId: RUN_ID, status: "committed", counts: {} } as never)), disconnect }, capture.io);
     expect(code).toBe(1);
     expect(disconnect).toHaveBeenCalledOnce();
     expect(capture.stderr).toEqual([`{"operation":"export","reason":"disconnect_failed"}\n`]);
+  });
+
+  it("preserves export durability uncertainty when disconnect also fails", async () => {
+    const capture = outputCapture();
+    const disconnect = vi.fn(async () => { throw new Error("PRIVATE_DISCONNECT"); });
+    const code = await runFeedbackLearningExport(["--set", "eval", "--updated-from", FROM, "--updated-to", TO], {
+      repository: {} as never,
+      execute: vi.fn(async () => ({ operation: "export" as const, runId: RUN_ID, status: "committed_durability_uncertain" as const, counts: {} as never })),
+      disconnect,
+    }, capture.io);
+    expect(code).toBe(1);
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(capture.stderr).toEqual([`{"operation":"export","runId":"${RUN_ID}","reason":"durability_uncertain"}\n`]);
+  });
+
+  it("preserves export invalid-argument exit 2 when disconnect also fails", async () => {
+    const capture = outputCapture();
+    const disconnect = vi.fn(async () => { throw new Error("PRIVATE_DISCONNECT"); });
+    const code = await runFeedbackLearningExport(["--set", "invalid"], {
+      repository: {} as never,
+      execute: vi.fn(),
+      disconnect,
+    }, capture.io);
+    expect(code).toBe(2);
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(capture.stderr).toEqual([`{"operation":"export","reason":"invalid_arguments"}\n`]);
+  });
+
+  it("preserves review durability uncertainty when disconnect also fails", async () => {
+    const capture = outputCapture();
+    const disconnect = vi.fn(async () => { throw new Error("PRIVATE_DISCONNECT"); });
+    const code = await runFeedbackLearningReview(["approve", "--run", RUN_ID, "--candidate-version", SHA], {
+      repository: {} as never,
+      execute: vi.fn(async () => ({ operation: "review" as const, eventId: EVENT_ID, status: "committed_durability_uncertain" as const })),
+      disconnect,
+    }, capture.io);
+    expect(code).toBe(1);
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(capture.stderr).toEqual([`{"operation":"review","eventId":"${EVENT_ID}","reason":"durability_uncertain"}\n`]);
+  });
+
+  it("preserves review invalid-argument exit 2 when disconnect also fails", async () => {
+    const capture = outputCapture();
+    const disconnect = vi.fn(async () => { throw new Error("PRIVATE_DISCONNECT"); });
+    const code = await runFeedbackLearningReview(["approve", "--run", "invalid", "--candidate-version", SHA], {
+      repository: {} as never,
+      execute: vi.fn(),
+      disconnect,
+    }, capture.io);
+    expect(code).toBe(2);
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(capture.stderr).toEqual([`{"operation":"review","reason":"invalid_arguments"}\n`]);
+  });
+
+  it("rejects inherited Object.prototype eventId without logging it", async () => {
+    const capture = outputCapture();
+    const disconnect = vi.fn(async () => undefined);
+    Object.defineProperty(Object.prototype, "eventId", { configurable: true, value: "PRIVATE_EVENT_PAYLOAD" });
+    let code: number;
+    try {
+      code = await runFeedbackLearningReview(["approve", "--run", RUN_ID, "--candidate-version", SHA], {
+        repository: {} as never,
+        execute: vi.fn(async () => ({ operation: "review", status: "committed" } as never)),
+        disconnect,
+      }, capture.io);
+    } finally {
+      delete (Object.prototype as { eventId?: string }).eventId;
+    }
+    expect(code).toBe(1);
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(capture.stderr).toEqual([`{"operation":"review","reason":"review_failed"}\n`]);
+    expect(capture.stderr.join("")).not.toContain("PRIVATE_EVENT_PAYLOAD");
+  });
+
+  it("does not invoke inherited getters, result accessors, or Proxy traps", async () => {
+    let inheritedInvoked = 0;
+    let accessorInvoked = 0;
+    let proxyInvoked = 0;
+    const results = [
+      Object.assign(Object.create({ get status() { inheritedInvoked += 1; throw new Error("PRIVATE_INHERITED"); } }), { operation: "export", runId: RUN_ID, counts: {} }),
+      Object.defineProperty({ operation: "export", status: "committed", counts: {} }, "runId", { enumerable: true, get() { accessorInvoked += 1; throw new Error("PRIVATE_ACCESSOR"); } }),
+      new Proxy({ operation: "export", runId: RUN_ID, status: "committed", counts: {} }, { get(target, key, receiver) {
+        if (key === "then") return undefined;
+        proxyInvoked += 1;
+        throw new Error("PRIVATE_PROXY_RESULT");
+      } }),
+    ];
+    for (const result of results) {
+      const capture = outputCapture();
+      const disconnect = vi.fn(async () => undefined);
+      const code = await runFeedbackLearningExport(["--set", "eval", "--updated-from", FROM, "--updated-to", TO], {
+        repository: {} as never,
+        execute: vi.fn(async () => result as never),
+        disconnect,
+      }, capture.io);
+      expect(code).toBe(1);
+      expect(disconnect).toHaveBeenCalledOnce();
+      expect(capture.stderr).toEqual([`{"operation":"export","reason":"export_failed"}\n`]);
+      expect(capture.stderr.join("")).not.toMatch(/PRIVATE_(INHERITED|ACCESSOR|PROXY_RESULT)/);
+    }
+    expect(inheritedInvoked).toBe(0);
+    expect(accessorInvoked).toBe(0);
+    expect(proxyInvoked).toBe(0);
+  });
+
+  it("rejects malformed result unions and safeLog fields", async () => {
+    const capture = outputCapture();
+    const disconnect = vi.fn(async () => undefined);
+    const code = await runFeedbackLearningExport(["--set", "eval", "--updated-from", FROM, "--updated-to", TO], {
+      repository: {} as never,
+      execute: vi.fn(async () => ({ operation: "review", runId: RUN_ID, status: "committed", counts: {}, extra: "PRIVATE_EXTRA" } as never)),
+      disconnect,
+    }, capture.io);
+    expect(code).toBe(1);
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(capture.stderr).toEqual([`{"operation":"export","reason":"export_failed"}\n`]);
+    expect(() => safeLog(Object.create({ operation: "export", reason: "PRIVATE_LOG" }))).toThrow();
+    let logAccessor = 0;
+    expect(() => safeLog(Object.defineProperty({ operation: "export" }, "reason", { enumerable: true, get() { logAccessor += 1; throw new Error("PRIVATE_LOG_GETTER"); } }) as never)).toThrow();
+    expect(logAccessor).toBe(0);
+    let proxyTrap = 0;
+    expect(() => safeLog(new Proxy({ operation: "export", reason: "export_failed" }, { ownKeys() { proxyTrap += 1; throw new Error("PRIVATE_LOG_PROXY"); } }))).toThrow();
+    expect(proxyTrap).toBe(0);
+  });
+});
+
+describe("command main boundary", () => {
+  it.each([
+    ["export", exportMain, ["--set", "invalid"]],
+    ["review", reviewMain, ["approve", "--run", "invalid", "--candidate-version", SHA]],
+  ] as const)("validates invalid %s argv before composition", async (operation, commandMain, argv) => {
+    const capture = outputCapture();
+    const compose = vi.fn(async () => { throw new Error("PRIVATE_COMPOSITION"); });
+    const environment = Object.entries(process.env);
+    const code = await commandMain([...argv], capture.io, compose as never);
+    expect(code).toBe(2);
+    expect(compose).not.toHaveBeenCalled();
+    expect(capture.stdout).toEqual([]);
+    expect(capture.stderr).toEqual([`{"operation":"${operation}","reason":"invalid_arguments"}\n`]);
+    expect(Object.entries(process.env)).toEqual(environment);
   });
 });

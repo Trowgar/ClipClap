@@ -13,7 +13,7 @@ const getDescriptor = Object.getOwnPropertyDescriptor;
 const getPrototype = Object.getPrototypeOf;
 const ownKeys = Reflect.ownKeys;
 const isArray = Array.isArray;
-const regexpTest = RegExp.prototype.test;
+const regexpExec = RegExp.prototype.exec;
 const jsonStringify = JSON.stringify;
 const mapGet = Map.prototype.get;
 const mapSet = Map.prototype.set;
@@ -98,15 +98,15 @@ function flag(values: ReadonlyMap<string, string>, name: string): string {
 }
 
 function validRunId(value: string): boolean {
-  return regexpTest.call(RUN_PATTERN, value);
+  return regexpExec.call(RUN_PATTERN, value) !== null;
 }
 
 function validSha256(value: string): boolean {
-  return regexpTest.call(SHA256_PATTERN, value);
+  return regexpExec.call(SHA256_PATTERN, value) !== null;
 }
 
 function validEventId(value: string): boolean {
-  return regexpTest.call(EVENT_PATTERN, value);
+  return regexpExec.call(EVENT_PATTERN, value) !== null;
 }
 
 function validReasonPath(value: string): boolean {
@@ -143,7 +143,7 @@ export function parseExportArguments(raw: readonly string[]): Required<ExportReq
   }
   if (dateGetTime.call(from) >= dateGetTime.call(to)) return invalid();
   const rawLimit = (mapGet.call(values, "--limit") as string | undefined) ?? "50";
-  if (!regexpTest.call(POSITIVE_INTEGER_PATTERN, rawLimit)) return invalid();
+  if (regexpExec.call(POSITIVE_INTEGER_PATTERN, rawLimit) === null) return invalid();
   const limit = Number(rawLimit);
   if (!Number.isSafeInteger(limit) || limit <= 0) return invalid();
   return { targetSet, updatedFrom, updatedTo, limit };
@@ -205,6 +205,17 @@ export async function readPrivateReasonFile(path: string): Promise<string> {
 
 export type CommandOperation = "export" | "review";
 export type CommandIo = Readonly<{ stdout(line: string): void; stderr(line: string): void }>;
+export type CapturedExportCommandResult = Readonly<{
+  operation: "export";
+  runId: string;
+  status: "committed" | "noop" | "committed_durability_uncertain" | "indeterminate";
+  counts: unknown;
+}>;
+export type CapturedReviewCommandResult = Readonly<{
+  operation: "review";
+  eventId: string;
+  status: "committed" | "noop" | "committed_durability_uncertain" | "indeterminate";
+}>;
 export const processCommandIo: CommandIo = Object.freeze({
   stdout(line: string): void { process.stdout.write(line); },
   stderr(line: string): void { process.stderr.write(line); },
@@ -226,22 +237,81 @@ export function isCliInputError(error: unknown): error is CliInputError {
   catch { return false; }
 }
 
+class CommandBoundaryError extends Error {
+  constructor() {
+    super("invalid_command_boundary");
+    this.name = "CommandBoundaryError";
+  }
+}
+
+function commandBoundary(): never {
+  throw new CommandBoundaryError();
+}
+
+function captureOwnData(value: unknown, allowed: readonly string[], expectedLength?: number): Record<string, unknown> {
+  try {
+    if (value === null || typeof value !== "object" || utilTypes.isProxy(value) || isArray(value)) return commandBoundary();
+    const prototype = getPrototype(value);
+    if (prototype !== Object.prototype && prototype !== null) return commandBoundary();
+    const keys = ownKeys(value);
+    if (expectedLength !== undefined && keys.length !== expectedLength) return commandBoundary();
+    const captured: Record<string, unknown> = Object.create(null);
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = keys[index];
+      if (typeof key !== "string" || !contains(allowed, key)) return commandBoundary();
+      const descriptor = getDescriptor(value, key);
+      if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) return commandBoundary();
+      Object.defineProperty(captured, key, { configurable: true, enumerable: true, value: descriptor.value, writable: true });
+    }
+    return captured;
+  } catch {
+    return commandBoundary();
+  }
+}
+
+function validCommitStatus(value: unknown): value is CapturedExportCommandResult["status"] {
+  return value === "committed" || value === "noop" || value === "committed_durability_uncertain" || value === "indeterminate";
+}
+
+export function captureExportCommandResult(value: unknown): CapturedExportCommandResult {
+  const captured = captureOwnData(value, ["operation", "runId", "status", "counts"], 4);
+  if (captured.operation !== "export" || typeof captured.runId !== "string" || !validRunId(captured.runId) || !validCommitStatus(captured.status)) return commandBoundary();
+  return { operation: "export", runId: captured.runId, status: captured.status, counts: captured.counts };
+}
+
+export function captureReviewCommandResult(value: unknown): CapturedReviewCommandResult {
+  const captured = captureOwnData(value, ["operation", "eventId", "status"], 3);
+  if (captured.operation !== "review" || typeof captured.eventId !== "string" || !validEventId(captured.eventId) || !validCommitStatus(captured.status)) return commandBoundary();
+  return { operation: "review", eventId: captured.eventId, status: captured.status };
+}
+
 export function safeLog(fields: Readonly<{ operation: CommandOperation; runId?: string; eventId?: string; reason?: string }>): string {
+  const captured = captureOwnData(fields, ["operation", "runId", "eventId", "reason"]);
+  if ((captured.operation !== "export" && captured.operation !== "review") ||
+      (captured.runId !== undefined && typeof captured.runId !== "string") ||
+      (captured.eventId !== undefined && typeof captured.eventId !== "string") ||
+      (captured.reason !== undefined && typeof captured.reason !== "string")) return commandBoundary();
+  const hasRun = captured.runId !== undefined;
+  const hasEvent = captured.eventId !== undefined;
+  const hasReason = captured.reason !== undefined;
+  if ((hasRun && hasEvent) || (!hasRun && !hasEvent && !hasReason) ||
+      (!hasRun && !hasEvent && ownKeys(captured).length !== 2) ||
+      (captured.operation === "export" && hasEvent) || (captured.operation === "review" && hasRun)) return commandBoundary();
   const output = Object.create(null) as Record<string, string>;
-  output.operation = fields.operation;
-  if (fields.runId !== undefined) {
-    if (!validRunId(fields.runId)) throw new CliInputError();
-    output.runId = fields.runId;
+  output.operation = captured.operation;
+  if (typeof captured.runId === "string") {
+    if (!validRunId(captured.runId)) return commandBoundary();
+    output.runId = captured.runId;
   }
-  if (fields.eventId !== undefined) {
-    if (!validEventId(fields.eventId)) throw new CliInputError();
-    output.eventId = fields.eventId;
+  if (typeof captured.eventId === "string") {
+    if (!validEventId(captured.eventId)) return commandBoundary();
+    output.eventId = captured.eventId;
   }
-  if (fields.reason !== undefined) {
-    if (fields.reason !== "invalid_arguments" && fields.reason !== "disconnect_failed" &&
-        fields.reason !== "export_failed" && fields.reason !== "review_failed" &&
-        fields.reason !== "composition_failed" && !setHas.call(SAFE_MACHINE_REASONS, fields.reason)) throw new CliInputError();
-    output.reason = fields.reason;
+  if (typeof captured.reason === "string") {
+    if (captured.reason !== "invalid_arguments" && captured.reason !== "disconnect_failed" &&
+        captured.reason !== "export_failed" && captured.reason !== "review_failed" &&
+        captured.reason !== "composition_failed" && !setHas.call(SAFE_MACHINE_REASONS, captured.reason)) return commandBoundary();
+    output.reason = captured.reason;
   }
   return `${jsonStringify(output)}\n`;
 }
