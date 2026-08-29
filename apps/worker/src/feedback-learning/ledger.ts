@@ -340,7 +340,9 @@ export function classifyApprovalFreshness(
   approval: ApprovalEvent,
   current: FeedbackProjection | null
 ): Freshness {
-  if (current === null) return { fresh: false, reason: "missing" };
+  if (current === null || current.id !== approval.feedbackId) {
+    return { fresh: false, reason: "missing" };
+  }
   if (current.verdict !== "AS_IS") return { fresh: false, reason: "verdict_changed" };
 
   let currentUpdatedAt: string;
@@ -421,14 +423,18 @@ export function buildCapacity(
     eval: emptyCapacity(),
     holdout: emptyCapacity(),
   };
-  const countedFeedbackIds = new Set<string>();
+  const countedFeedbackIds = {
+    eval: new Set<string>(),
+    holdout: new Set<string>(),
+  };
   const approvals = state.activeDecisions
     .filter((event): event is ApprovalEvent => event.action === "approve")
     .sort(compareApprovals);
 
   for (const approval of approvals) {
-    if (countedFeedbackIds.has(approval.feedbackId)) continue;
-    countedFeedbackIds.add(approval.feedbackId);
+    const countedInDestination = countedFeedbackIds[approval.set];
+    if (countedInDestination.has(approval.feedbackId)) continue;
+    countedInDestination.add(approval.feedbackId);
 
     const capacity = capacities[approval.set];
     const freshness = classifyApprovalFreshness(

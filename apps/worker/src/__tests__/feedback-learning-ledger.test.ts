@@ -275,6 +275,15 @@ describe("classifyApprovalFreshness", () => {
     expect(classifyApprovalFreshness(freshApproval, projection(snapshot))).toEqual({ fresh: true });
   });
 
+  it("treats a non-matching current feedback identity as missing before other checks", () => {
+    expect(
+      classifyApprovalFreshness(
+        freshApproval,
+        projection(snapshot, { id: "different-feedback" })
+      )
+    ).toEqual({ fresh: false, reason: "missing" });
+  });
+
   it.each([
     ["missing wins", null, "missing"],
     [
@@ -382,17 +391,35 @@ describe("buildCapacity", () => {
     expect(state.destinationLocks).toEqual([{ feedbackId: "feedback-1", set: "eval" }]);
   });
 
-  it("counts a feedback ID at most once when handed a duplicated effective state", () => {
-    const item = assigned("approval-a", "feedback-1", "eval", "job-1", "user-1", { n: 1 });
-    const duplicate = approval("approval-b", {
+  it("counts a feedback ID once per destination when handed duplicated effective state", () => {
+    const item = assigned("approval-a", "feedback-1", "eval", "job-eval", "user-eval", {
+      n: 1,
+    });
+    const evalDuplicate = approval("approval-b", {
       ...item.approval,
       eventId: "approval-b",
-      candidateVersion: HASH_B,
+      candidateVersion: `sha256:${"2".repeat(64)}`,
+    });
+    const holdout = approval("approval-c", {
+      ...item.approval,
+      eventId: "approval-c",
+      candidateVersion: `sha256:${"3".repeat(64)}`,
+      jobId: "job-holdout",
+      userId: "user-holdout",
+      set: "holdout",
+    });
+    const holdoutDuplicate = approval("approval-d", {
+      ...holdout,
+      eventId: "approval-d",
+      candidateVersion: `sha256:${"4".repeat(64)}`,
     });
     const malformedState: EffectiveLedger = {
-      activeDecisions: [duplicate, item.approval],
+      activeDecisions: [holdoutDuplicate, evalDuplicate, holdout, item.approval],
       retiredTargetIds: [],
-      destinationLocks: [{ feedbackId: "feedback-1", set: "eval" }],
+      destinationLocks: [
+        { feedbackId: "feedback-1", set: "eval" },
+        { feedbackId: "feedback-1", set: "holdout" },
+      ],
     };
     const capacity = buildCapacity(
       malformedState,
@@ -400,7 +427,10 @@ describe("buildCapacity", () => {
     );
 
     expect(capacity.eval.freshApprovals).toHaveLength(1);
-    expect([...capacity.eval.jobCounts]).toEqual([["job-1", 1]]);
-    expect([...capacity.eval.userCounts]).toEqual([["user-1", 1]]);
+    expect([...capacity.eval.jobCounts]).toEqual([["job-eval", 1]]);
+    expect([...capacity.eval.userCounts]).toEqual([["user-eval", 1]]);
+    expect(capacity.holdout.freshApprovals).toHaveLength(1);
+    expect([...capacity.holdout.jobCounts]).toEqual([["job-holdout", 1]]);
+    expect([...capacity.holdout.userCounts]).toEqual([["user-holdout", 1]]);
   });
 });
