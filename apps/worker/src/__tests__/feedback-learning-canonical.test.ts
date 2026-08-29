@@ -52,6 +52,32 @@ describe("canonicalJson", () => {
       "canonical_json_invalid_value"
     );
   });
+
+  it.each(["object", "array"] as const)(
+    "rejects an enumerable %s accessor without invoking it",
+    (kind) => {
+      let reads = 0;
+      const value: Record<string, unknown> | unknown[] = kind === "object" ? {} : [0];
+      Object.defineProperty(value, kind === "object" ? "value" : "0", {
+        enumerable: true,
+        configurable: true,
+        get: () => {
+          reads += 1;
+          return reads;
+        },
+      });
+
+      expect(() => canonicalJson(value)).toThrowError("canonical_json_invalid_value");
+      expect(reads).toBe(0);
+    }
+  );
+
+  it.each([
+    ["object", Object.assign(Object.create({ inherited: "poison" }), { own: "safe" })],
+    ["array", Object.setPrototypeOf(["safe"], { inherited: "poison" })],
+  ])("rejects a %s with a non-plain prototype", (_kind, value) => {
+    expect(() => canonicalJson(value)).toThrowError("canonical_json_invalid_value");
+  });
 });
 
 describe("sha256", () => {
@@ -71,6 +97,21 @@ describe("jsonLine", () => {
 
     expect(bytes).toEqual(Buffer.from('{"z":"雪","a":[2,1]}\n', "utf8"));
     expect([...bytes.subarray(-1)]).toEqual([0x0a]);
+  });
+
+  it("rejects a changing getter without reading it or emitting divergent bytes", () => {
+    let reads = 0;
+    const value = { stable: true } as Record<string, unknown>;
+    Object.defineProperty(value, "changing", {
+      enumerable: true,
+      get: () => {
+        reads += 1;
+        return reads;
+      },
+    });
+
+    expect(() => jsonLine(value)).toThrowError("canonical_json_invalid_value");
+    expect(reads).toBe(0);
   });
 });
 

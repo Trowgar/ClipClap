@@ -8,6 +8,10 @@ import type {
   Warning,
 } from "./types";
 
+type OwnData =
+  | { status: "data"; value: unknown }
+  | { status: "invalid" };
+
 function invalid(
   feedbackId: string | null,
   detailCode: InvalidDetailCode
@@ -21,6 +25,42 @@ function invalid(
       detailCode,
     },
   };
+}
+
+function ownData(value: unknown, key: string): OwnData {
+  if (value === null || typeof value !== "object") return { status: "invalid" };
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (
+      descriptor === undefined ||
+      !descriptor.enumerable ||
+      !Object.prototype.hasOwnProperty.call(descriptor, "value")
+    ) {
+      return { status: "invalid" };
+    }
+    return { status: "data", value: descriptor.value };
+  } catch {
+    return { status: "invalid" };
+  }
+}
+
+function hasPlainObjectPrototype(value: unknown): value is object {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  try {
+    const prototype = Object.getPrototypeOf(value);
+    return prototype === Object.prototype || prototype === null;
+  } catch {
+    return false;
+  }
+}
+
+function hasPlainArrayPrototype(value: unknown): value is unknown[] {
+  if (!Array.isArray(value)) return false;
+  try {
+    return Object.getPrototypeOf(value) === Array.prototype;
+  } catch {
+    return false;
+  }
 }
 
 function isNonEmpty(value: unknown): value is string {
@@ -44,47 +84,137 @@ function normalizedLabel(value: unknown): string {
   return isNonEmpty(value) ? value.trim().toLowerCase() : "unknown";
 }
 
+function capturedDate(value: unknown): { milliseconds: number; iso: string } | null {
+  if (!(value instanceof Date)) return null;
+  try {
+    const milliseconds = Date.prototype.getTime.call(value);
+    if (!Number.isFinite(milliseconds)) return null;
+    return { milliseconds, iso: new Date(milliseconds).toISOString() };
+  } catch {
+    return null;
+  }
+}
+
+function transcriptSegments(value: unknown): { valid: boolean; isArray: boolean } {
+  if (value === null || value === undefined || typeof value !== "object") {
+    return { valid: true, isArray: false };
+  }
+  if (Array.isArray(value)) {
+    return { valid: hasPlainArrayPrototype(value), isArray: false };
+  }
+  if (!hasPlainObjectPrototype(value)) return { valid: false, isArray: false };
+
+  let descriptor: PropertyDescriptor | undefined;
+  try {
+    descriptor = Object.getOwnPropertyDescriptor(value, "segments");
+  } catch {
+    return { valid: false, isArray: false };
+  }
+  if (descriptor === undefined) return { valid: true, isArray: false };
+  if (
+    !descriptor.enumerable ||
+    !Object.prototype.hasOwnProperty.call(descriptor, "value")
+  ) {
+    return { valid: false, isArray: false };
+  }
+  if (!Array.isArray(descriptor.value)) return { valid: true, isArray: false };
+  const plainArray = hasPlainArrayPrototype(descriptor.value);
+  return { valid: plainArray, isArray: plainArray };
+}
+
 export function normalizeFeedback(
   row: FeedbackProjection,
   job: JobProjection | null
 ): NormalizedFeedbackResult {
-  const feedbackId = isNonEmpty(row?.id) ? row.id : null;
-  if (
-    feedbackId === null ||
-    !(row?.updatedAt instanceof Date) ||
-    !Number.isFinite(row.updatedAt.getTime())
-  ) {
+  const idField = ownData(row, "id");
+  const updatedAtField = ownData(row, "updatedAt");
+  const feedbackId = idField.status === "data" && isNonEmpty(idField.value)
+    ? idField.value
+    : null;
+  const date = updatedAtField.status === "data"
+    ? capturedDate(updatedAtField.value)
+    : null;
+  if (feedbackId === null || date === null) {
     return invalid(feedbackId, "identity_unavailable");
   }
 
+  if (!hasPlainObjectPrototype(row)) return invalid(feedbackId, "projection_invalid");
+
+  const snapshotField = ownData(row, "snapshot");
+  if (snapshotField.status !== "data") return invalid(feedbackId, "snapshot_not_json");
+
   let snapshotCanonical: string;
+  let capturedSnapshot: unknown;
   try {
-    snapshotCanonical = canonicalJson(row.snapshot);
+    snapshotCanonical = canonicalJson(snapshotField.value);
+    capturedSnapshot = JSON.parse(snapshotCanonical) as unknown;
   } catch {
     return invalid(feedbackId, "snapshot_not_json");
   }
 
+  const clipIdField = ownData(row, "clipId");
+  const jobIdField = ownData(row, "jobId");
+  const userIdField = ownData(row, "userId");
+  const verdictField = ownData(row, "verdict");
+  const noteField = ownData(row, "note");
+  const evidenceKeyField = ownData(row, "evidenceKey");
   if (
-    !isNonEmpty(row.clipId) ||
-    !isNonEmpty(row.jobId) ||
-    !isNonEmpty(row.userId) ||
-    typeof row.verdict !== "string" ||
-    !isNullableString(row.note) ||
-    !isNullableString(row.evidenceKey) ||
-    (job !== null &&
-      (typeof job !== "object" ||
-        !isNonEmpty(job.id) ||
-        job.id !== row.jobId ||
-        typeof job.transcriptPartial !== "boolean"))
+    clipIdField.status !== "data" ||
+    jobIdField.status !== "data" ||
+    userIdField.status !== "data" ||
+    verdictField.status !== "data" ||
+    noteField.status !== "data" ||
+    evidenceKeyField.status !== "data" ||
+    !isNonEmpty(clipIdField.value) ||
+    !isNonEmpty(jobIdField.value) ||
+    !isNonEmpty(userIdField.value) ||
+    typeof verdictField.value !== "string" ||
+    !isNullableString(noteField.value) ||
+    !isNullableString(evidenceKeyField.value)
   ) {
     return invalid(feedbackId, "projection_invalid");
   }
 
+  const clipId = clipIdField.value;
+  const jobId = jobIdField.value;
+  const userId = userIdField.value;
+  const verdict = verdictField.value;
+  const note = noteField.value;
+  const evidenceKey = evidenceKeyField.value;
+
+  let jobProjectionId: string | null = null;
+  let transcriptPresent: boolean | null = null;
+  let segmentsIsArray: boolean | null = null;
+  let transcriptPartial: boolean | null = null;
+  if (job !== null) {
+    if (!hasPlainObjectPrototype(job)) return invalid(feedbackId, "projection_invalid");
+    const jobProjectionIdField = ownData(job, "id");
+    const transcriptJsonField = ownData(job, "transcriptJson");
+    const transcriptPartialField = ownData(job, "transcriptPartial");
+    if (
+      jobProjectionIdField.status !== "data" ||
+      transcriptJsonField.status !== "data" ||
+      transcriptPartialField.status !== "data" ||
+      !isNonEmpty(jobProjectionIdField.value) ||
+      jobProjectionIdField.value !== jobId ||
+      typeof transcriptPartialField.value !== "boolean"
+    ) {
+      return invalid(feedbackId, "projection_invalid");
+    }
+
+    const segmentState = transcriptSegments(transcriptJsonField.value);
+    if (!segmentState.valid) return invalid(feedbackId, "projection_invalid");
+    jobProjectionId = jobProjectionIdField.value;
+    transcriptPresent =
+      transcriptJsonField.value !== null && transcriptJsonField.value !== undefined;
+    segmentsIsArray = segmentState.isArray;
+    transcriptPartial = transcriptPartialField.value;
+  }
+
   const snapshotSha256 = sha256(snapshotCanonical);
-  const updatedAt = row.updatedAt.toISOString();
-  const candidateVersion = sha256(`${feedbackId}\n${updatedAt}\n${snapshotSha256}`);
-  const snapshot = snapshotRecord(row.snapshot);
-  const snapshotMissing = row.snapshot === null;
+  const candidateVersion = sha256(`${feedbackId}\n${date.iso}\n${snapshotSha256}`);
+  const snapshot = snapshotRecord(capturedSnapshot);
+  const snapshotMissing = capturedSnapshot === null;
   const snapshotSparse =
     !snapshotMissing &&
     (snapshot === null ||
@@ -94,20 +224,7 @@ export function normalizeFeedback(
       !finiteNumber(snapshot.score));
   const transcriptSliceMissing =
     !snapshotMissing && (snapshot === null || !isNonEmpty(snapshot.transcript));
-
   const jobPresent = job !== null;
-  const transcriptJson = job?.transcriptJson;
-  const transcriptPresent = jobPresent
-    ? transcriptJson !== null && transcriptJson !== undefined
-    : null;
-  const transcriptObject =
-    transcriptPresent && typeof transcriptJson === "object"
-      ? (transcriptJson as Record<string, unknown>)
-      : null;
-  const segmentsIsArray = jobPresent
-    ? transcriptObject !== null && Array.isArray(transcriptObject.segments)
-    : null;
-  const transcriptPartial = jobPresent ? job.transcriptPartial : null;
   const warnings: Warning[] = [];
 
   if (!jobPresent) {
@@ -120,7 +237,7 @@ export function normalizeFeedback(
   if (snapshotMissing) warnings.push("snapshot_missing");
   else if (snapshotSparse) warnings.push("snapshot_sparse");
   if (jobPresent && transcriptSliceMissing) warnings.push("transcript_slice_missing");
-  if (!isNonEmpty(row.evidenceKey)) warnings.push("evidence_missing");
+  if (!isNonEmpty(evidenceKey)) warnings.push("evidence_missing");
 
   const review: ReviewRecord = {
     title: snapshot !== null && isNonEmpty(snapshot.title) ? snapshot.title : null,
@@ -129,8 +246,8 @@ export function normalizeFeedback(
     score: snapshot !== null && finiteNumber(snapshot.score) ? snapshot.score : null,
     transcript:
       snapshot !== null && isNonEmpty(snapshot.transcript) ? snapshot.transcript : null,
-    note: row.note,
-    evidenceKey: row.evidenceKey,
+    note,
+    evidenceKey,
   };
 
   return {
@@ -138,16 +255,16 @@ export function normalizeFeedback(
     candidateVersion,
     record: {
       feedbackId,
-      clipId: row.clipId,
-      jobId: row.jobId,
-      userId: row.userId,
-      verdict: row.verdict,
-      note: row.note,
-      evidenceKey: row.evidenceKey,
-      updatedAt,
+      clipId,
+      jobId,
+      userId,
+      verdict,
+      note,
+      evidenceKey,
+      updatedAt: date.iso,
       snapshotCanonical,
       snapshotSha256,
-      jobProjectionId: job?.id ?? null,
+      jobProjectionId,
       jobPresent,
       transcriptPresent,
       segmentsIsArray,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { canonicalJson, sha256 } from "../feedback-learning/canonical";
+import { canonicalJson, jsonLine, sha256 } from "../feedback-learning/canonical";
 import { normalizeFeedback } from "../feedback-learning/normalize";
 import type { FeedbackProjection, JobProjection } from "../feedback-learning/types";
 
@@ -117,6 +117,26 @@ describe("normalizeFeedback", () => {
     expect(result.candidateVersion).toBe(
       sha256(`feedback-1\n${updatedAt.toISOString()}\n${snapshotSha256}`)
     );
+  });
+
+  it("serializes one complete valid record as exact UTF-8 bytes in fixed field order", () => {
+    const result = valid(normalizeFeedback(feedback(), job()));
+    const expected =
+      '{"feedbackId":"feedback-1","clipId":"clip-1","jobId":"job-1","userId":"user-1",' +
+      '"verdict":"AS_IS","note":null,"evidenceKey":"feedback/clip-1.mp4",' +
+      '"updatedAt":"2026-08-28T12:00:00.123Z",' +
+      '"snapshotCanonical":"{\\"clipKind\\":\\" Insight \\",\\"endTime\\":45.6,' +
+      '\\"language\\":\\" RU \\",\\"score\\":0.82,\\"startTime\\":12.3,' +
+      '\\"title\\":\\"  A useful clip  \\",\\"transcript\\":\\" Private transcript slice \\"}",' +
+      '"snapshotSha256":"sha256:b2c587d58dd1563ff94ddef52e4d2f8a844ef5589f0aebf7b624c630c8c90d05",' +
+      '"jobProjectionId":"job-1","jobPresent":true,"transcriptPresent":true,' +
+      '"segmentsIsArray":true,"transcriptPartial":false,"language":"ru",' +
+      '"clipKind":"insight","tier":"replay-ready","warnings":[],' +
+      '"review":{"title":"  A useful clip  ","startTime":12.3,"endTime":45.6,' +
+      '"score":0.82,"transcript":" Private transcript slice ","note":null,' +
+      '"evidenceKey":"feedback/clip-1.mp4"}}\n';
+
+    expect(jsonLine(result.record)).toEqual(Buffer.from(expected, "utf8"));
   });
 
   it("uses unknown for absent language and clip kind and never falls back to locale", () => {
@@ -259,6 +279,152 @@ describe("normalizeFeedback", () => {
       },
     });
   });
+
+  it("rejects an accessor-backed snapshot without reading or mixing it", () => {
+    let reads = 0;
+    const row = feedback();
+    Object.defineProperty(row, "snapshot", {
+      enumerable: true,
+      get: () => {
+        reads += 1;
+        return reads === 1 ? feedback().snapshot : null;
+      },
+    });
+
+    expect(normalizeFeedback(row, job())).toEqual({
+      status: "invalid",
+      invalid: {
+        feedbackId: "feedback-1",
+        candidateVersion: null,
+        reason: "invalid_row",
+        detailCode: "snapshot_not_json",
+      },
+    });
+    expect(reads).toBe(0);
+  });
+
+  it("rejects snapshot field accessors without producing a hash/review mismatch", () => {
+    let reads = 0;
+    const snapshot = feedback().snapshot as Record<string, unknown>;
+    Object.defineProperty(snapshot, "title", {
+      enumerable: true,
+      configurable: true,
+      get: () => {
+        reads += 1;
+        return reads === 1 ? "first title" : "different title";
+      },
+    });
+
+    expect(normalizeFeedback(feedback({ snapshot }), job())).toEqual({
+      status: "invalid",
+      invalid: {
+        feedbackId: "feedback-1",
+        candidateVersion: null,
+        reason: "invalid_row",
+        detailCode: "snapshot_not_json",
+      },
+    });
+    expect(reads).toBe(0);
+  });
+
+  it.each(["accessor", "inherited"] as const)(
+    "does not accept %s transcript segments as replay-ready projection data",
+    (kind) => {
+      let reads = 0;
+      const transcriptJson: Record<string, unknown> =
+        kind === "inherited" ? Object.create({ segments: [] }) : {};
+      if (kind === "accessor") {
+        Object.defineProperty(transcriptJson, "segments", {
+          enumerable: true,
+          get: () => {
+            reads += 1;
+            return [];
+          },
+        });
+      }
+
+      expect(normalizeFeedback(feedback(), job({ transcriptJson }))).toEqual({
+        status: "invalid",
+        invalid: {
+          feedbackId: "feedback-1",
+          candidateVersion: null,
+          reason: "invalid_row",
+          detailCode: "projection_invalid",
+        },
+      });
+      expect(reads).toBe(0);
+    }
+  );
+
+  it.each([
+    ["accessor id", "id", "accessor", "identity_unavailable", null],
+    ["missing updatedAt", "updatedAt", "missing", "identity_unavailable", "feedback-1"],
+    ["inherited id", "id", "inherited", "identity_unavailable", null],
+    ["accessor clipId", "clipId", "accessor", "projection_invalid", "feedback-1"],
+    ["missing clipId", "clipId", "missing", "projection_invalid", "feedback-1"],
+    ["inherited clipId", "clipId", "inherited", "projection_invalid", "feedback-1"],
+  ] as const)(
+    "rejects %s as a non-own projection data value",
+    (_label, field, mode, detailCode, expectedFeedbackId) => {
+      let reads = 0;
+      const row = feedback() as FeedbackProjection & Record<string, unknown>;
+      const prior = row[field];
+      delete row[field];
+      if (mode === "accessor") {
+        Object.defineProperty(row, field, {
+          enumerable: true,
+          get: () => {
+            reads += 1;
+            return prior;
+          },
+        });
+      } else if (mode === "inherited") {
+        Object.setPrototypeOf(row, { [field]: prior });
+      }
+
+      expect(normalizeFeedback(row, job())).toEqual({
+        status: "invalid",
+        invalid: {
+          feedbackId: expectedFeedbackId,
+          candidateVersion: null,
+          reason: "invalid_row",
+          detailCode,
+        },
+      });
+      expect(reads).toBe(0);
+    }
+  );
+
+  it.each(["accessor", "missing", "inherited"] as const)(
+    "rejects a Job id supplied as %s projection data without repeated reads",
+    (mode) => {
+      let reads = 0;
+      const projectedJob = job() as unknown as Record<string, unknown>;
+      delete projectedJob.id;
+      if (mode === "accessor") {
+        Object.defineProperty(projectedJob, "id", {
+          enumerable: true,
+          get: () => {
+            reads += 1;
+            return "job-1";
+          },
+        });
+      } else if (mode === "inherited") {
+        Object.setPrototypeOf(projectedJob, { id: "job-1" });
+      }
+
+      expect(normalizeFeedback(feedback(), projectedJob as unknown as JobProjection)).toEqual({
+        status: "invalid",
+        invalid: {
+          feedbackId: "feedback-1",
+          candidateVersion: null,
+          reason: "invalid_row",
+          detailCode: "projection_invalid",
+        },
+      });
+      expect(reads).toBe(0);
+    }
+  );
 
   it.each([
     ["missing feedback id", { id: "" }, "identity_unavailable", null],
