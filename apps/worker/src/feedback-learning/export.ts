@@ -1,63 +1,54 @@
-import { types as utilTypes } from "node:util";
 import { resolve } from "node:path";
-
+import { types as utilTypes } from "node:util";
 import { canonicalJson, parseUtcMillisecond, sha256 } from "./canonical";
-import {
-  buildCapacity,
-  canonicalLedgerState,
-  classifyApprovalFreshness,
-  foldLedger,
-  parseLedger,
-  type EffectiveLedger,
-} from "./ledger";
+import { buildCapacity, canonicalLedgerState, classifyApprovalFreshness, foldLedger, LedgerError, parseLedger, type EffectiveLedger } from "./ledger";
 import { normalizeFeedback } from "./normalize";
 import {
   ensurePrivateTree as defaultEnsurePrivateTree,
+  PersistenceInputError,
+  PersistenceIntegrityError,
+  PersistencePathError,
   publishRunAtomically as defaultPublishRunAtomically,
   readLedgerSnapshot,
   type CommitResult,
   type PrivatePaths,
   type RunWrite,
 } from "./persistence";
-import {
-  buildRunArtifacts,
-  type ApprovalFreshnessProjection,
-} from "./render";
-import type { FeedbackLearningRepository } from "./repository";
-import type {
-  ApprovalEvent,
-  FeedbackProjection,
-  RunCounts,
-  Sha256,
-  TargetSet,
-} from "./types";
+import { buildRunArtifacts, type ApprovalFreshnessProjection } from "./render";
+import type { DatabaseSnapshot, FeedbackLearningRepository } from "./repository";
+import type { ApprovalEvent, FeedbackProjection, JobProjection, RunCounts, Sha256, TargetSet } from "./types";
 
 const DEFAULT_LIMIT = 50;
 const DEFAULT_ROOT = resolve(__dirname, "../../.corpus/feedback-learning");
 const REQUEST_KEYS = ["targetSet", "updatedFrom", "updatedTo", "limit"] as const;
+const DEPENDENCY_KEYS = ["repository", "root", "ensurePrivateTree", "withCorpusLock", "readLedger", "publishRunAtomically"] as const;
+const SNAPSHOT_KEYS = ["feedback", "jobs", "currentApprovals"] as const;
+const PATH_KEYS = ["root", "exportsDir", "ledgerDir", "reviewsFile", "lockFile"] as const;
+const FEEDBACK_KEYS = ["id", "clipId", "jobId", "userId", "verdict", "note", "snapshot", "evidenceKey", "updatedAt"] as const;
+const JOB_KEYS = ["id", "transcriptJson", "transcriptPartial"] as const;
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/;
+const getDescriptor = Object.getOwnPropertyDescriptor;
+const getPrototype = Object.getPrototypeOf;
+const ownKeys = Reflect.ownKeys;
+const isArray = Array.isArray;
+const jsonParse = JSON.parse;
+const mapGet = Map.prototype.get;
+const mapSet = Map.prototype.set;
+const mapHas = Map.prototype.has;
+const setHas = Set.prototype.has;
+const setAdd = Set.prototype.add;
 
-export type ExportRequest = Readonly<{
-  targetSet: TargetSet;
-  updatedFrom: string;
-  updatedTo: string;
-  limit?: number;
-}>;
-
-export type SafeExportResult = Readonly<{
-  operation: "export";
-  runId: string;
-  status: CommitResult["status"];
-  counts: RunCounts;
-}>;
-
+export type ExportRequest = Readonly<{ targetSet: TargetSet; updatedFrom: string; updatedTo: string; limit?: number }>;
+export type SafeExportResult = Readonly<{ operation: "export"; runId: string; status: CommitResult["status"]; counts: RunCounts }>;
 type LockOperation = <T>(lockPath: string, operation: () => Promise<T>) => Promise<T>;
-
 const defaultWithCorpusLock: LockOperation = async (lockPath, operation) => {
   const lock = await import("./lock");
-  return lock.withCorpusLock(lockPath, operation);
+  try { return await lock.withCorpusLock(lockPath, operation); }
+  catch (error) {
+    if (error instanceof lock.CorpusLockError) return boundary(error.code);
+    throw error;
+  }
 };
-
 export interface ExportDependencies {
   repository: FeedbackLearningRepository;
   root?: string;
@@ -66,233 +57,264 @@ export interface ExportDependencies {
   readLedger?: (paths: PrivatePaths) => Promise<Uint8Array>;
   publishRunAtomically?: (input: RunWrite) => Promise<CommitResult>;
 }
-
+type ExportErrorCode = "export_request_invalid" | "private_tree_failed" | "ledger_read_failed" | "database_snapshot_failed" | "projection_failed" | "publish_failed" | "lock_unavailable" | "lock_timeout";
 class ExportBoundaryError extends Error {
-  readonly code: "export_request_invalid" | "ledger_read_failed";
-
-  constructor(code: "export_request_invalid" | "ledger_read_failed") {
-    super(code);
-    this.name = "ExportBoundaryError";
-    this.code = code;
-  }
+  readonly code: ExportErrorCode;
+  constructor(code: ExportErrorCode) { super(code); this.name = "ExportBoundaryError"; this.code = code; }
 }
+type ValidatedRequest = Readonly<{ targetSet: TargetSet; updatedFrom: string; updatedTo: string; updatedFromDate: Date; updatedToDate: Date; limit: number }>;
+type CapturedDependencies = Required<Omit<ExportDependencies, "root">> & { root: string };
 
-type ValidatedRequest = Readonly<{
-  targetSet: TargetSet;
-  updatedFrom: string;
-  updatedTo: string;
-  updatedFromDate: Date;
-  updatedToDate: Date;
-  limit: number;
-}>;
-
-function invalidRequest(): never {
-  throw new ExportBoundaryError("export_request_invalid");
+function boundary(code: ExportErrorCode): never { throw new ExportBoundaryError(code); }
+function appendData<T>(array: T[], value: T): void {
+  Object.defineProperty(array, String(array.length), { configurable: true, enumerable: true, value, writable: true });
 }
-
-function captureRequest(input: unknown): Record<string, unknown> {
+function dataAt<T>(array: readonly T[], index: number): T {
+  const descriptor = getDescriptor(array, String(index));
+  if (descriptor === undefined || !("value" in descriptor)) return boundary("projection_failed");
+  return descriptor.value as T;
+}
+function setData<T>(array: T[], index: number, value: T): void {
+  Object.defineProperty(array, String(index), { configurable: true, enumerable: true, value, writable: true });
+}
+function byteCompare(left: string, right: string): number {
+  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
+}
+function contains(expected: readonly string[], key: string): boolean {
+  for (let index = 0; index < expected.length; index += 1) if (dataAt(expected, index) === key) return true;
+  return false;
+}
+function captureObject(value: unknown, allowed: readonly string[], exact: boolean, code: ExportErrorCode): Record<string, unknown> {
   try {
-    if (
-      input === null ||
-      typeof input !== "object" ||
-      utilTypes.isProxy(input) ||
-      Array.isArray(input) ||
-      Object.getPrototypeOf(input) !== Object.prototype
-    ) {
-      return invalidRequest();
-    }
-    const keys = Reflect.ownKeys(input);
-    if (keys.length !== 3 && keys.length !== 4) return invalidRequest();
+    if (value === null || typeof value !== "object" || utilTypes.isProxy(value) || isArray(value)) return boundary(code);
+    const prototype = getPrototype(value);
+    if (prototype !== Object.prototype && prototype !== null) return boundary(code);
+    const keys = ownKeys(value);
+    if (exact && keys.length !== allowed.length) return boundary(code);
     const captured: Record<string, unknown> = Object.create(null);
-    for (const key of keys) {
-      if (typeof key !== "string" || !REQUEST_KEYS.includes(key as (typeof REQUEST_KEYS)[number])) {
-        return invalidRequest();
-      }
-      const descriptor = Object.getOwnPropertyDescriptor(input, key);
-      if (!descriptor?.enumerable || !("value" in descriptor)) return invalidRequest();
-      captured[key] = descriptor.value;
-    }
-    if (!("targetSet" in captured) || !("updatedFrom" in captured) || !("updatedTo" in captured)) {
-      return invalidRequest();
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = dataAt(keys, index);
+      if (typeof key !== "string" || !contains(allowed, key)) return boundary(code);
+      const descriptor = getDescriptor(value, key);
+      if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) return boundary(code);
+      Object.defineProperty(captured, key, { configurable: true, enumerable: true, value: descriptor.value, writable: true });
     }
     return captured;
   } catch (error) {
     if (error instanceof ExportBoundaryError) throw error;
-    return invalidRequest();
+    return boundary(code);
   }
 }
-
-function validateRequest(input: ExportRequest): ValidatedRequest {
-  const captured = captureRequest(input);
-  if (
-    (captured.targetSet !== "eval" && captured.targetSet !== "holdout") ||
-    typeof captured.updatedFrom !== "string" ||
-    typeof captured.updatedTo !== "string"
-  ) {
-    return invalidRequest();
+function captureDenseArray(value: unknown): unknown[] {
+  try {
+    if (!isArray(value) || utilTypes.isProxy(value) || getPrototype(value) !== Array.prototype) return boundary("projection_failed");
+    const lengthDescriptor = getDescriptor(value, "length");
+    if (lengthDescriptor === undefined || !("value" in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0) return boundary("projection_failed");
+    const length = lengthDescriptor.value as number;
+    const keys = ownKeys(value);
+    if (keys.length !== length + 1) return boundary("projection_failed");
+    const result: unknown[] = [];
+    for (let index = 0; index < length; index += 1) {
+      if (dataAt(keys, index) !== String(index)) return boundary("projection_failed");
+      const descriptor = getDescriptor(value, String(index));
+      if (descriptor === undefined || !descriptor.enumerable || !("value" in descriptor)) return boundary("projection_failed");
+      appendData(result, descriptor.value);
+    }
+    if (dataAt(keys, length) !== "length") return boundary("projection_failed");
+    return result;
+  } catch (error) {
+    if (error instanceof ExportBoundaryError) throw error;
+    return boundary("projection_failed");
   }
+}
+function validateRequest(input: ExportRequest): ValidatedRequest {
+  const value = captureObject(input, REQUEST_KEYS, false, "export_request_invalid");
+  if (!("targetSet" in value) || !("updatedFrom" in value) || !("updatedTo" in value) ||
+      (value.targetSet !== "eval" && value.targetSet !== "holdout") || typeof value.updatedFrom !== "string" || typeof value.updatedTo !== "string") return boundary("export_request_invalid");
   let updatedFromDate: Date;
   let updatedToDate: Date;
-  try {
-    updatedFromDate = parseUtcMillisecond(captured.updatedFrom);
-    updatedToDate = parseUtcMillisecond(captured.updatedTo);
-  } catch {
-    return invalidRequest();
-  }
-  if (updatedFromDate.getTime() >= updatedToDate.getTime()) return invalidRequest();
-  const limit = captured.limit === undefined ? DEFAULT_LIMIT : captured.limit;
-  if (!Number.isSafeInteger(limit) || (limit as number) <= 0) return invalidRequest();
+  try { updatedFromDate = parseUtcMillisecond(value.updatedFrom); updatedToDate = parseUtcMillisecond(value.updatedTo); }
+  catch { return boundary("export_request_invalid"); }
+  if (updatedFromDate.getTime() >= updatedToDate.getTime()) return boundary("export_request_invalid");
+  const limit = value.limit === undefined ? DEFAULT_LIMIT : value.limit;
+  if (!Number.isSafeInteger(limit) || (limit as number) <= 0) return boundary("export_request_invalid");
+  return { targetSet: value.targetSet, updatedFrom: value.updatedFrom, updatedTo: value.updatedTo, updatedFromDate, updatedToDate, limit: limit as number };
+}
+function captureFunction(value: unknown): (...args: never[]) => unknown {
+  if (typeof value !== "function") return boundary("export_request_invalid");
+  return value as (...args: never[]) => unknown;
+}
+function captureDependencies(raw: ExportDependencies): CapturedDependencies {
+  const value = captureObject(raw, DEPENDENCY_KEYS, false, "export_request_invalid");
+  if (!("repository" in value)) return boundary("export_request_invalid");
+  const repository = captureObject(value.repository, ["captureExportSnapshot", "captureReviewSnapshot"], true, "export_request_invalid");
+  const capturedRepository: FeedbackLearningRepository = {
+    captureExportSnapshot: captureFunction(repository.captureExportSnapshot) as FeedbackLearningRepository["captureExportSnapshot"],
+    captureReviewSnapshot: captureFunction(repository.captureReviewSnapshot) as FeedbackLearningRepository["captureReviewSnapshot"],
+  };
+  if (value.root !== undefined && typeof value.root !== "string") return boundary("export_request_invalid");
   return {
-    targetSet: captured.targetSet,
-    updatedFrom: captured.updatedFrom,
-    updatedTo: captured.updatedTo,
-    updatedFromDate,
-    updatedToDate,
-    limit: limit as number,
+    repository: capturedRepository,
+    root: (value.root as string | undefined) ?? DEFAULT_ROOT,
+    ensurePrivateTree: (value.ensurePrivateTree === undefined ? defaultEnsurePrivateTree : captureFunction(value.ensurePrivateTree)) as CapturedDependencies["ensurePrivateTree"],
+    withCorpusLock: (value.withCorpusLock === undefined ? defaultWithCorpusLock : captureFunction(value.withCorpusLock)) as LockOperation,
+    readLedger: (value.readLedger === undefined ? readLedgerSnapshot : captureFunction(value.readLedger)) as CapturedDependencies["readLedger"],
+    publishRunAtomically: (value.publishRunAtomically === undefined ? defaultPublishRunAtomically : captureFunction(value.publishRunAtomically)) as CapturedDependencies["publishRunAtomically"],
   };
 }
-
-function byteCompare(left: string, right: string): number {
-  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
-}
-
-function approvalEvents(ledger: EffectiveLedger): ApprovalEvent[] {
-  return ledger.activeDecisions
-    .filter((event): event is ApprovalEvent => event.action === "approve")
-    .slice()
-    .sort((left, right) => byteCompare(left.feedbackId, right.feedbackId));
-}
-
 function snapshotLedger(bytes: Uint8Array): EffectiveLedger {
   const folded = foldLedger(parseLedger(Buffer.from(bytes)));
-  return JSON.parse(canonicalLedgerState(folded)) as EffectiveLedger;
+  return jsonParse(canonicalLedgerState(folded)) as EffectiveLedger;
 }
-
-function feedbackById(rows: readonly FeedbackProjection[]): Map<string, FeedbackProjection> {
-  const result = new Map<string, FeedbackProjection>();
-  for (const row of rows) result.set(row.id, row);
+function insertionSortApprovals(array: ApprovalEvent[]): void {
+  for (let index = 1; index < array.length; index += 1) {
+    const value = dataAt(array, index);
+    let insertion = index;
+    while (insertion > 0 && byteCompare(dataAt(array, insertion - 1).feedbackId, value.feedbackId) > 0) {
+      setData(array, insertion, dataAt(array, insertion - 1)); insertion -= 1;
+    }
+    setData(array, insertion, value);
+  }
+}
+function approvalEvents(ledger: EffectiveLedger): ApprovalEvent[] {
+  const approvals: ApprovalEvent[] = [];
+  for (let index = 0; index < ledger.activeDecisions.length; index += 1) {
+    const event = dataAt(ledger.activeDecisions, index);
+    if (event.action === "approve") appendData(approvals, event);
+  }
+  insertionSortApprovals(approvals);
+  return approvals;
+}
+function captureProjection(value: unknown, keys: readonly string[]): Record<string, unknown> {
+  return captureObject(value, keys, true, "projection_failed");
+}
+function copyFeedbackBoundary(value: unknown): FeedbackProjection {
+  return captureProjection(value, FEEDBACK_KEYS) as unknown as FeedbackProjection;
+}
+function copyJobBoundary(value: unknown): JobProjection {
+  return captureProjection(value, JOB_KEYS) as unknown as JobProjection;
+}
+function captureRows<T>(raw: unknown, copy: (value: unknown) => T, idOf: (value: T) => unknown, requireId: boolean): T[] {
+  const values = captureDenseArray(raw);
+  const result: T[] = [];
+  const seen = new Set<string>();
+  for (let index = 0; index < values.length; index += 1) {
+    const row = copy(dataAt(values, index));
+    const id = idOf(row);
+    if (requireId && (typeof id !== "string" || id.length === 0)) return boundary("projection_failed");
+    if (typeof id === "string") {
+      if (setHas.call(seen, id)) return boundary("projection_failed");
+      setAdd.call(seen, id);
+    }
+    appendData(result, row);
+  }
   return result;
 }
-
-function approvalFreshness(
-  approvals: readonly ApprovalEvent[],
-  current: ReadonlyMap<string, FeedbackProjection | null>,
-): ApprovalFreshnessProjection[] {
-  return approvals.map((approval) => {
-    const row = current.get(approval.feedbackId) ?? null;
+function captureDatabaseSnapshot(raw: unknown): DatabaseSnapshot {
+  const root = captureProjection(raw, SNAPSHOT_KEYS);
+  return {
+    feedback: captureRows(root.feedback, copyFeedbackBoundary, (row) => row.id, false),
+    jobs: captureRows(root.jobs, copyJobBoundary, (row) => row.id, true),
+    currentApprovals: captureRows(root.currentApprovals, copyFeedbackBoundary, (row) => row.id, true),
+  };
+}
+function approvalFreshness(approvals: readonly ApprovalEvent[], current: ReadonlyMap<string, FeedbackProjection | null>): ApprovalFreshnessProjection[] {
+  const result: ApprovalFreshnessProjection[] = [];
+  for (let index = 0; index < approvals.length; index += 1) {
+    const approval = dataAt(approvals, index);
+    const row = (mapGet.call(current, approval.feedbackId) as FeedbackProjection | null | undefined) ?? null;
     if (row === null) {
-      return {
-        feedbackId: approval.feedbackId,
-        present: false,
-        verdict: null,
-        updatedAt: null,
-        snapshotCanonical: null,
-        snapshotSha256: null,
-        staleReason: "missing",
-      };
+      appendData(result, { feedbackId: approval.feedbackId, present: false, verdict: null, updatedAt: null, snapshotCanonical: null, snapshotSha256: null, staleReason: "missing" });
+    } else {
+      const snapshotCanonical = canonicalJson(row.snapshot);
+      const snapshotSha256 = sha256(snapshotCanonical);
+      const freshness = classifyApprovalFreshness(approval, row);
+      appendData(result, { feedbackId: approval.feedbackId, present: true, verdict: row.verdict, updatedAt: Date.prototype.toISOString.call(row.updatedAt), snapshotCanonical, snapshotSha256, staleReason: freshness.fresh ? null : freshness.reason });
     }
-    const snapshotCanonical = canonicalJson(row.snapshot);
-    const snapshotSha256 = sha256(snapshotCanonical);
-    const freshness = classifyApprovalFreshness(approval, row);
-    return {
-      feedbackId: approval.feedbackId,
-      present: true,
-      verdict: row.verdict,
-      updatedAt: row.updatedAt.toISOString(),
-      snapshotCanonical,
-      snapshotSha256,
-      staleReason: freshness.fresh ? null : freshness.reason,
-    };
-  });
+  }
+  return result;
 }
-
 function safeCounts(counts: RunCounts): RunCounts {
-  return {
-    queried: counts.queried,
-    selected: counts.selected,
-    excluded: counts.excluded,
-    selectedReplayReady: counts.selectedReplayReady,
-    selectedReferenceOnly: counts.selectedReferenceOnly,
-    freshApprovals: counts.freshApprovals,
-    staleReservations: counts.staleReservations,
-  };
+  return { queried: counts.queried, selected: counts.selected, excluded: counts.excluded, selectedReplayReady: counts.selectedReplayReady, selectedReferenceOnly: counts.selectedReferenceOnly, freshApprovals: counts.freshApprovals, staleReservations: counts.staleReservations };
 }
-
-async function safeReadLedger(
-  reader: (paths: PrivatePaths) => Promise<Uint8Array>,
-  paths: PrivatePaths,
-): Promise<Uint8Array> {
-  try {
-    return new Uint8Array(await reader(paths));
-  } catch {
-    throw new ExportBoundaryError("ledger_read_failed");
-  }
+function safePersistence(error: unknown): boolean {
+  return error instanceof PersistencePathError || error instanceof PersistenceInputError || error instanceof PersistenceIntegrityError;
 }
-
-export async function exportFeedbackLearning(
-  input: ExportRequest,
-  dependencies: ExportDependencies,
-): Promise<SafeExportResult> {
+export async function exportFeedbackLearning(input: ExportRequest, rawDependencies: ExportDependencies): Promise<SafeExportResult> {
   const request = validateRequest(input);
-  if (!dependencies || !dependencies.repository) return invalidRequest();
-  const root = dependencies.root ?? DEFAULT_ROOT;
-  const ensurePrivateTree = dependencies.ensurePrivateTree ?? defaultEnsurePrivateTree;
-  const withCorpusLock = dependencies.withCorpusLock ?? defaultWithCorpusLock;
-  const readLedger = dependencies.readLedger ?? readLedgerSnapshot;
-  const publishRunAtomically =
-    dependencies.publishRunAtomically ?? defaultPublishRunAtomically;
-
-  const paths = await ensurePrivateTree(root);
-  const ledger = await withCorpusLock(paths.lockFile, async () =>
-    snapshotLedger(await safeReadLedger(readLedger, paths)),
-  );
+  const dependencies = captureDependencies(rawDependencies);
+  let paths: PrivatePaths;
+  try {
+    paths = captureObject(
+      await dependencies.ensurePrivateTree.call(undefined, dependencies.root),
+      PATH_KEYS,
+      true,
+      "private_tree_failed",
+    ) as unknown as PrivatePaths;
+  }
+  catch (error) { if (safePersistence(error)) throw error; return boundary("private_tree_failed"); }
+  let ledger: EffectiveLedger;
+  try {
+    ledger = await dependencies.withCorpusLock.call(undefined, paths.lockFile, async () => {
+      let bytes: Uint8Array;
+      try { bytes = new Uint8Array(await dependencies.readLedger.call(undefined, paths)); }
+      catch { return boundary("ledger_read_failed"); }
+      return snapshotLedger(bytes);
+    }) as EffectiveLedger;
+  } catch (error) {
+    if (error instanceof LedgerError || error instanceof ExportBoundaryError || safePersistence(error)) throw error;
+    return boundary("lock_unavailable");
+  }
   const approvals = approvalEvents(ledger);
-  const activeApprovalFeedbackIds = approvals.map((event) => event.feedbackId);
-  const database = await dependencies.repository.captureExportSnapshot({
-    updatedFrom: request.updatedFromDate,
-    updatedTo: request.updatedToDate,
-    activeApprovalFeedbackIds,
-  });
-
-  const jobs = new Map(database.jobs.map((job) => [job.id, job] as const));
-  const results = database.feedback.map((row) => normalizeFeedback(row, jobs.get(row.jobId) ?? null));
-  const foundCurrent = feedbackById(database.currentApprovals);
-  const currentApprovals = new Map<string, FeedbackProjection | null>();
-  for (const approval of approvals) {
-    currentApprovals.set(approval.feedbackId, foundCurrent.get(approval.feedbackId) ?? null);
+  const activeApprovalFeedbackIds: string[] = [];
+  for (let index = 0; index < approvals.length; index += 1) appendData(activeApprovalFeedbackIds, dataAt(approvals, index).feedbackId);
+  let databaseRaw: DatabaseSnapshot;
+  try {
+    databaseRaw = await dependencies.repository.captureExportSnapshot.call(undefined, {
+      updatedFrom: request.updatedFromDate, updatedTo: request.updatedToDate, activeApprovalFeedbackIds,
+    });
+  } catch { return boundary("database_snapshot_failed"); }
+  let artifacts: ReturnType<typeof buildRunArtifacts>;
+  try {
+    const database = captureDatabaseSnapshot(databaseRaw);
+    const jobs = new Map<string, JobProjection>();
+    for (let index = 0; index < database.jobs.length; index += 1) {
+      const job = dataAt(database.jobs, index);
+      mapSet.call(jobs, job.id, job);
+    }
+    const results: ReturnType<typeof normalizeFeedback>[] = [];
+    for (let index = 0; index < database.feedback.length; index += 1) {
+      const row = dataAt(database.feedback, index);
+      const job = typeof row.jobId === "string" ? (mapGet.call(jobs, row.jobId) as JobProjection | undefined) ?? null : null;
+      appendData(results, normalizeFeedback(row, job));
+    }
+    const foundCurrent = new Map<string, FeedbackProjection>();
+    for (let index = 0; index < database.currentApprovals.length; index += 1) {
+      const row = dataAt(database.currentApprovals, index);
+      mapSet.call(foundCurrent, row.id, row);
+    }
+    const currentApprovals = new Map<string, FeedbackProjection | null>();
+    for (let index = 0; index < approvals.length; index += 1) {
+      const id = dataAt(approvals, index).feedbackId;
+      mapSet.call(currentApprovals, id, mapHas.call(foundCurrent, id) ? mapGet.call(foundCurrent, id) as FeedbackProjection : null);
+    }
+    const capacity = buildCapacity(ledger, currentApprovals);
+    artifacts = buildRunArtifacts({ results, targetSet: request.targetSet, limit: request.limit, ledger, capacity, updatedFrom: request.updatedFrom, updatedTo: request.updatedTo, approvalFreshness: approvalFreshness(approvals, currentApprovals) });
+  } catch (error) {
+    if (error instanceof ExportBoundaryError) throw error;
+    return boundary("projection_failed");
   }
-  const capacity = buildCapacity(ledger, currentApprovals);
-  const artifacts = buildRunArtifacts({
-    results,
-    targetSet: request.targetSet,
-    limit: request.limit,
-    ledger,
-    capacity,
-    updatedFrom: request.updatedFrom,
-    updatedTo: request.updatedTo,
-    approvalFreshness: approvalFreshness(approvals, currentApprovals),
-  });
-  const manifest = JSON.parse(artifacts.files["run.json"].toString("utf8")) as {
-    runId?: unknown;
-    runDigest?: unknown;
-  };
-  if (
-    manifest.runId !== artifacts.status.runId ||
-    typeof manifest.runDigest !== "string" ||
-    !SHA256_PATTERN.test(manifest.runDigest)
-  ) {
-    throw new TypeError("render_output_invalid");
+  let manifest: { runId?: unknown; runDigest?: unknown };
+  try { manifest = jsonParse(artifacts.files["run.json"].toString("utf8")) as typeof manifest; }
+  catch { return boundary("projection_failed"); }
+  if (manifest.runId !== artifacts.status.runId || typeof manifest.runDigest !== "string" || !SHA256_PATTERN.test(manifest.runDigest)) return boundary("projection_failed");
+  let commit: CommitResult;
+  try {
+    const rawCommit = await dependencies.publishRunAtomically.call(undefined, { paths, runId: artifacts.status.runId, runDigest: manifest.runDigest as Sha256, files: artifacts.files });
+    const capturedCommit = captureObject(rawCommit, ["status"], true, "publish_failed");
+    if (capturedCommit.status !== "committed" && capturedCommit.status !== "noop" && capturedCommit.status !== "committed_durability_uncertain" && capturedCommit.status !== "indeterminate") return boundary("publish_failed");
+    commit = { status: capturedCommit.status };
   }
-  const commit = await publishRunAtomically({
-    paths,
-    runId: artifacts.status.runId,
-    runDigest: manifest.runDigest as Sha256,
-    files: artifacts.files,
-  });
-  return {
-    operation: "export",
-    runId: artifacts.status.runId,
-    status: commit.status,
-    counts: safeCounts(artifacts.status.counts),
-  };
+  catch (error) { if (safePersistence(error)) throw error; return boundary("publish_failed"); }
+  return { operation: "export", runId: artifacts.status.runId, status: commit.status, counts: safeCounts(artifacts.status.counts) };
 }

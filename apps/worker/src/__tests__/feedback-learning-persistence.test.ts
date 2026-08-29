@@ -32,6 +32,9 @@ const encoder = new TextEncoder();
 const PRIVATE_TREE_ROOT_OPEN_TEST_HOOK = Symbol.for(
   "clipclap.feedback-learning.persistence.private-tree-root-open-test-hook"
 );
+const PRIVATE_TREE_READY_TEST_HOOK = Symbol.for(
+  "clipclap.feedback-learning.persistence.private-tree-ready-test-hook"
+);
 
 function testHookGlobal(): Record<PropertyKey, unknown> {
   return globalThis as unknown as Record<PropertyKey, unknown>;
@@ -77,6 +80,7 @@ function failAt(expected: PersistenceFault): (actual: PersistenceFault) => void 
 
 afterEach(async () => {
   delete testHookGlobal()[PRIVATE_TREE_ROOT_OPEN_TEST_HOOK];
+  delete testHookGlobal()[PRIVATE_TREE_READY_TEST_HOOK];
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))
   );
@@ -98,6 +102,16 @@ describe("readLedgerSnapshot", () => {
 
     expect(actual).toEqual(expected);
     expect(actual).not.toBe(expected);
+  });
+
+  it.each([0o644, 0o666])("repairs an existing ledger mode %o before reading", async (fileMode) => {
+    const paths = await privatePaths();
+    const expected = ledgerBytes("event-mode");
+    await writeFile(paths.reviewsFile, expected, { mode: fileMode });
+    await chmod(paths.reviewsFile, fileMode);
+
+    expect(await readLedgerSnapshot(paths)).toEqual(expected);
+    expect(mode(await lstat(paths.reviewsFile))).toBe(0o600);
   });
 
   it.each(["symlink", "directory"] as const)(
@@ -133,6 +147,40 @@ describe("readLedgerSnapshot", () => {
       "private-outside",
     );
   });
+
+  it.each(["root", "ledger"] as const)(
+    "rejects a %s replacement after the trusted tree is continuously anchored",
+    async (component) => {
+      const { parent, root } = await temporaryRoot();
+      const paths = await ensurePrivateTree(root);
+      await writeFile(paths.reviewsFile, ledgerBytes("trusted"), { mode: 0o600 });
+      const parked = join(parent, `parked-${component}-read`);
+      const external = join(parent, `external-${component}-read`);
+      if (component === "root") {
+        await mkdir(external, 0o700);
+        await mkdir(join(external, "exports"), 0o700);
+        await mkdir(join(external, "ledger"), 0o700);
+        await writeFile(join(external, "ledger", "reviews.jsonl"), "PRIVATE_EXTERNAL");
+      } else {
+        await mkdir(external, 0o700);
+        await writeFile(join(external, "reviews.jsonl"), "PRIVATE_EXTERNAL");
+      }
+      testHookGlobal()[PRIVATE_TREE_READY_TEST_HOOK] = async () => {
+        const target = component === "root" ? paths.root : paths.ledgerDir;
+        await renamePath(target, parked);
+        await symlink(external, target);
+      };
+
+      let failure: unknown;
+      try {
+        await readLedgerSnapshot(paths);
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ code: "unsafe_path" });
+      expect(String(failure)).not.toContain("PRIVATE_EXTERNAL");
+    },
+  );
 });
 
 describe("ensurePrivateTree", () => {

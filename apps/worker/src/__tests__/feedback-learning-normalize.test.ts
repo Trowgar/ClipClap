@@ -47,6 +47,50 @@ function valid(
 }
 
 describe("normalizeFeedback", () => {
+  it.each(["id", "clipId", "jobId", "userId"] as const)(
+    "classifies malformed Unicode in identity field %s as identity_unavailable",
+    (field) => {
+      const result = normalizeFeedback(feedback({ [field]: `bad-\ud800` }), job());
+      expect(result).toMatchObject({
+        status: "invalid",
+        invalid: {
+          reason: "invalid_row",
+          detailCode: "identity_unavailable",
+          candidateVersion: null,
+        },
+      });
+      if (result.status === "invalid") {
+        expect(result.invalid.feedbackId === null || !result.invalid.feedbackId.includes("\ud800")).toBe(true);
+      }
+    },
+  );
+
+  it.each(["verdict", "note", "evidenceKey"] as const)(
+    "classifies malformed Unicode in nullable/output field %s as projection_invalid",
+    (field) => {
+      expect(normalizeFeedback(feedback({ [field]: `bad-\ud800` }), job())).toMatchObject({
+        status: "invalid",
+        invalid: { detailCode: "projection_invalid" },
+      });
+    },
+  );
+
+  it.each(["title", "transcript", "language", "clipKind"] as const)(
+    "classifies malformed Unicode in derived snapshot field %s as projection_invalid",
+    (field) => {
+      const row = feedback();
+      expect(
+        normalizeFeedback(
+          feedback({ snapshot: { ...(row.snapshot as Record<string, unknown>), [field]: `bad-\ud800` } }),
+          job(),
+        ),
+      ).toMatchObject({
+        status: "invalid",
+        invalid: { detailCode: "projection_invalid" },
+      });
+    },
+  );
+
   it("produces the exact fixed pre-selection record and stable candidate identity", () => {
     const row = feedback({ note: "curator note" });
     const result = valid(normalizeFeedback(row, job()));

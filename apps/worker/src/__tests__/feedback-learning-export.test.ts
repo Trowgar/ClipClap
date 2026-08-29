@@ -242,14 +242,14 @@ describe("exportFeedbackLearning", () => {
     expect(invalidLedger.publishRunAtomically).not.toHaveBeenCalled();
   });
 
-  it("publishes nothing on database failure and propagates stable integrity failure", async () => {
+  it("publishes nothing on database failure and preserves stable integrity failure", async () => {
     const databaseFailure = dependencies({ databaseError: new Error("db-failed") });
     await expect(
       exportFeedbackLearning(
         { targetSet: "eval", updatedFrom: UPDATED_FROM, updatedTo: UPDATED_TO },
         databaseFailure.injected,
       ),
-    ).rejects.toThrow("db-failed");
+    ).rejects.toMatchObject({ code: "database_snapshot_failed" });
     expect(databaseFailure.publishRunAtomically).not.toHaveBeenCalled();
 
     const integrity = dependencies({ publishError: new PersistenceIntegrityError() });
@@ -286,5 +286,237 @@ describe("exportFeedbackLearning", () => {
     expect(failure).toMatchObject({ code: "ledger_read_failed", message: "ledger_read_failed" });
     expect(String(failure)).not.toContain(root);
     expect(setup.captureExportSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("captures dependency descriptors once and rejects accessors or proxies without invocation", async () => {
+    const setup = dependencies({});
+    let invoked = 0;
+    const accessor = { ...setup.injected };
+    Object.defineProperty(accessor, "repository", {
+      enumerable: true,
+      get() {
+        invoked += 1;
+        throw new Error("PRIVATE_DEPENDENCY_GETTER");
+      },
+    });
+    const values = [
+      accessor,
+      new Proxy(setup.injected, { ownKeys() { throw new Error("PRIVATE_DEPENDENCY_PROXY"); } }),
+      { ...setup.injected, extra: true },
+    ];
+    for (const value of values) {
+      let failure: unknown;
+      try {
+        await exportFeedbackLearning(
+          { targetSet: "eval", updatedFrom: UPDATED_FROM, updatedTo: UPDATED_TO },
+          value as never,
+        );
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ code: "export_request_invalid" });
+      expect(String(failure)).not.toContain("PRIVATE");
+    }
+    expect(invoked).toBe(0);
+  });
+
+  it.each([
+    ["ensure", "private_tree_failed"],
+    ["database", "database_snapshot_failed"],
+    ["publish", "publish_failed"],
+  ] as const)("masks unknown %s failures with stable code", async (stage, code) => {
+    const setup = dependencies({
+      databaseError: stage === "database" ? new Error("PRIVATE_DATABASE") : undefined,
+      publishError: stage === "publish" ? new Error("PRIVATE_PUBLISH") : undefined,
+    });
+    if (stage === "ensure") {
+      setup.injected.ensurePrivateTree = vi.fn(async () => {
+        throw new Error("PRIVATE_TREE_PATH");
+      });
+    }
+    let failure: unknown;
+    try {
+      await exportFeedbackLearning(
+        { targetSet: "eval", updatedFrom: UPDATED_FROM, updatedTo: UPDATED_TO },
+        setup.injected,
+      );
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({ code, message: code });
+    expect(String(failure)).not.toContain("PRIVATE");
+  });
+
+  it("rejects accessor/proxy snapshots and duplicate cohort, Job, or current IDs before publish", async () => {
+    const valid = feedback("feedback-duplicate");
+    const accessor = { ...valid };
+    let invoked = 0;
+    Object.defineProperty(accessor, "jobId", {
+      enumerable: true,
+      get() {
+        invoked += 1;
+        throw new Error("PRIVATE_SNAPSHOT_GETTER");
+      },
+    });
+    const currentApproval = approval(valid);
+    const cases = [
+      { cohort: [accessor as FeedbackProjection] },
+      { cohort: [new Proxy(valid, { ownKeys() { throw new Error("PRIVATE_PROXY"); } })] },
+      { cohort: [valid, { ...valid }] },
+      { cohort: [valid], jobs: [job(valid.jobId), job(valid.jobId)] },
+      {
+        ledger: jsonLine(currentApproval),
+        current: [valid, { ...valid }],
+      },
+    ];
+    for (const value of cases) {
+      const setup = dependencies(value);
+      let failure: unknown;
+      try {
+        await exportFeedbackLearning(
+          { targetSet: "eval", updatedFrom: UPDATED_FROM, updatedTo: UPDATED_TO },
+          setup.injected,
+        );
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ code: "projection_failed" });
+      expect(String(failure)).not.toContain("PRIVATE");
+      expect(setup.publishRunAtomically).not.toHaveBeenCalled();
+    }
+    expect(invoked).toBe(0);
+  });
+
+  it("keeps a malformed-Unicode cohort row as invalid_row while publishing the valid row", async () => {
+    const good = feedback("feedback-good");
+    const bad = feedback("feedback-bad", { note: "bad-\ud800" });
+    const setup = dependencies({
+      cohort: [bad, good],
+      jobs: [job(bad.jobId), job(good.jobId)],
+    });
+
+    const result = await exportFeedbackLearning(
+      { targetSet: "eval", updatedFrom: UPDATED_FROM, updatedTo: UPDATED_TO },
+      setup.injected,
+    );
+
+    expect(result.counts).toMatchObject({ queried: 2, selected: 1, excluded: 1 });
+    const publication = setup.publishRunAtomically.mock.calls[0]?.[0];
+    expect(Buffer.from(publication?.files["exclusions.jsonl"] ?? []).toString("utf8")).toContain(
+      '"detailCode":"projection_invalid"',
+    );
+  });
+
+  it.each([
+    ["lock", "lock_unavailable"],
+    ["read", "ledger_read_failed"],
+  ] as const)("masks unknown %s failures without private details", async (stage, code) => {
+    const setup = dependencies({});
+    if (stage === "lock") {
+      setup.injected.withCorpusLock = vi.fn(async () => { throw new Error("PRIVATE_LOCK"); });
+    } else {
+      setup.injected.readLedger = vi.fn(async () => { throw new Error("PRIVATE_LEDGER_PATH"); });
+    }
+    let failure: unknown;
+    try {
+      await exportFeedbackLearning(
+        { targetSet: "eval", updatedFrom: UPDATED_FROM, updatedTo: UPDATED_TO },
+        setup.injected,
+      );
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({ code, message: code });
+    expect(String(failure)).not.toContain("PRIVATE");
+    expect(setup.captureExportSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("does not invoke poisoned Array or Map prototype behavior on private snapshot data", async () => {
+    const row = feedback("feedback-poison", { note: "PRIVATE_POISON_NOTE" });
+    const baselineSetup = dependencies({ cohort: [row], jobs: [job(row.jobId)] });
+    const baseline = await exportFeedbackLearning(
+      { targetSet: "eval", updatedFrom: UPDATED_FROM, updatedTo: UPDATED_TO },
+      baselineSetup.injected,
+    );
+    let poisonedPublication: RunWrite | undefined;
+    const poisonedPaths = paths();
+    const poisonedJob = job(row.jobId);
+    const ensuredTree = Promise.resolve(poisonedPaths);
+    const poisonedDependencies: ExportDependencies = {
+      repository: {
+        captureExportSnapshot: async () => ({ feedback: [row], jobs: [poisonedJob], currentApprovals: [] }),
+        captureReviewSnapshot: async () => ({ candidate: null, currentApprovals: [] }),
+      },
+      root: "/private/corpus",
+      ensurePrivateTree: () => ensuredTree,
+      withCorpusLock: async (_path, operation) => operation(),
+      readLedger: async () => Buffer.alloc(0),
+      publishRunAtomically: async (publication) => {
+        poisonedPublication = publication;
+        return { status: "committed" };
+      },
+    };
+    const arrayTargets: PropertyKey[] = ["map", "filter", "sort", Symbol.iterator, "0"];
+    const arrayOriginals = arrayTargets.map((name) => Object.getOwnPropertyDescriptor(Array.prototype, name));
+    const mapTargets = ["get", "set"] as const;
+    const mapOriginals = mapTargets.map((name) => Object.getOwnPropertyDescriptor(Map.prototype, name));
+    let invoked = 0;
+    let observed = "";
+    let result: Awaited<ReturnType<typeof exportFeedbackLearning>> | undefined;
+    let caught: unknown;
+    try {
+      for (let index = 0; index < arrayTargets.length - 1; index += 1) {
+        const target = arrayTargets[index];
+        Object.defineProperty(Array.prototype, target, {
+          configurable: true,
+          value: function (...args: unknown[]) {
+            invoked += 1;
+            observed += `array:${String(target)}:${String(args[0] ?? "")}`;
+            throw new Error("PRIVATE_ARRAY_POISON");
+          },
+          writable: true,
+        });
+      }
+      Object.defineProperty(Array.prototype, "0", {
+        configurable: true,
+        set(value) { invoked += 1; observed += `setter:${String(value)}`; throw new Error("PRIVATE_ARRAY_SETTER"); },
+      });
+      for (let index = 0; index < mapTargets.length; index += 1) {
+        const target = mapTargets[index];
+        Object.defineProperty(Map.prototype, target, {
+          configurable: true,
+          value: function (...args: unknown[]) {
+            invoked += 1;
+            observed += `map:${target}:${String(args[0] ?? "")}`;
+            return target === "get" ? undefined : this;
+          },
+          writable: true,
+        });
+      }
+      result = await exportFeedbackLearning(
+        { targetSet: "eval", updatedFrom: UPDATED_FROM, updatedTo: UPDATED_TO },
+        poisonedDependencies,
+      );
+    } catch (error) {
+      caught = error;
+    } finally {
+      for (let index = 0; index < arrayTargets.length; index += 1) {
+        const descriptor = arrayOriginals[index];
+        if (descriptor === undefined) Reflect.deleteProperty(Array.prototype, arrayTargets[index]);
+        else Object.defineProperty(Array.prototype, arrayTargets[index], descriptor);
+      }
+      for (let index = 0; index < mapTargets.length; index += 1) {
+        const descriptor = mapOriginals[index];
+        if (descriptor === undefined) Reflect.deleteProperty(Map.prototype, mapTargets[index]);
+        else Object.defineProperty(Map.prototype, mapTargets[index], descriptor);
+      }
+    }
+    expect(observed).toBe("");
+    expect(invoked).toBe(0);
+    expect(observed).not.toContain("PRIVATE_POISON_NOTE");
+    expect(caught).toBeUndefined();
+    expect(result).toEqual(baseline);
+    const baselinePublication = baselineSetup.publishRunAtomically.mock.calls[0]?.[0];
+    expect(poisonedPublication?.files).toEqual(baselinePublication?.files);
   });
 });

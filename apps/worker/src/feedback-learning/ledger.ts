@@ -118,8 +118,9 @@ function byteCompare(left: string, right: string): number {
 }
 
 function compareMany(...parts: readonly (readonly [string, string])[]): number {
-  for (const [left, right] of parts) {
-    const compared = byteCompare(left, right);
+  for (let index = 0; index < parts.length; index += 1) {
+    const pair = dataAt(parts, index);
+    const compared = byteCompare(dataAt(pair, 0), dataAt(pair, 1));
     if (compared !== 0) return compared;
   }
   return 0;
@@ -137,7 +138,8 @@ function hasExactKeys(value: Record<string, unknown>, expected: readonly string[
 function hasExactKeySet(value: Record<string, unknown>, expected: readonly string[]): boolean {
   const keys = Reflect.ownKeys(value);
   if (keys.length !== expected.length) return false;
-  for (const key of expected) {
+  for (let index = 0; index < expected.length; index += 1) {
+    const key = dataAt(expected, index);
     if (Object.getOwnPropertyDescriptor(value, key) === undefined) return false;
   }
   return true;
@@ -156,6 +158,30 @@ function appendData<T>(array: T[], value: T): void {
   defineArrayElement(array, array.length, value);
 }
 
+function dataAt<T>(array: readonly T[], index: number): T {
+  const descriptor = Object.getOwnPropertyDescriptor(array, String(index));
+  if (descriptor === undefined || !("value" in descriptor)) return invalid("invalid_event");
+  return descriptor.value as T;
+}
+
+function insertionSort<T>(array: T[], compare: (left: T, right: T) => number): void {
+  for (let index = 1; index < array.length; index += 1) {
+    const value = dataAt(array, index);
+    let insertion = index;
+    while (insertion > 0 && compare(dataAt(array, insertion - 1), value) > 0) {
+      defineArrayElement(array, insertion, dataAt(array, insertion - 1));
+      insertion -= 1;
+    }
+    defineArrayElement(array, insertion, value);
+  }
+}
+
+function copyArray<T>(source: readonly T[]): T[] {
+  const result: T[] = [];
+  for (let index = 0; index < source.length; index += 1) appendData(result, dataAt(source, index));
+  return result;
+}
+
 function captureOwnData(value: unknown): Record<string, unknown> | undefined {
   try {
     if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -163,7 +189,9 @@ function captureOwnData(value: unknown): Record<string, unknown> | undefined {
     if (prototype !== Object.prototype && prototype !== null) return undefined;
 
     const captured: Record<string, unknown> = Object.create(null);
-    for (const key of Reflect.ownKeys(value)) {
+    const keys = Reflect.ownKeys(value);
+    for (let index = 0; index < keys.length; index += 1) {
+      const key = dataAt(keys, index);
       if (typeof key !== "string") return undefined;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor?.enumerable || !("value" in descriptor)) return undefined;
@@ -338,7 +366,9 @@ export function parseLedger(bytes: Buffer): readonly ReviewEvent[] {
   }
 
   const parsed: ReviewEvent[] = [];
-  for (const line of contents.slice(0, -1).split("\n")) {
+  const lines = contents.slice(0, -1).split("\n");
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = dataAt(lines, index);
     if (line.length === 0) return invalid("invalid_jsonl");
 
     let value: unknown;
@@ -377,7 +407,8 @@ export function foldLedger(events: readonly ReviewEvent[]): EffectiveLedger {
   const destinationLocks = new Map<string, TargetSet>();
   const retiredTargetIds = new Set<string>();
 
-  for (const rawEvent of events) {
+  for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
+    const rawEvent = dataAt(events, eventIndex);
     const event = validateEvent(rawEvent);
     if (setHas.call(seenEventIds, event.eventId)) return invalid("duplicate_event_id");
     setAdd.call(seenEventIds, event.eventId);
@@ -427,13 +458,13 @@ export function foldLedger(events: readonly ReviewEvent[]): EffectiveLedger {
 
   const activeDecisions: DecisionEvent[] = [];
   mapForEach.call(activeByCandidate, (decision) => appendData(activeDecisions, decision));
-  activeDecisions.sort(compareDecisions);
+  insertionSort(activeDecisions, compareDecisions);
   const retired: string[] = [];
   setForEach.call(retiredTargetIds, (eventId) => appendData(retired, eventId));
-  retired.sort(byteCompare);
+  insertionSort(retired, byteCompare);
   const locks: DestinationLock[] = [];
   mapForEach.call(destinationLocks, (set, feedbackId) => appendData(locks, { feedbackId, set }));
-  locks.sort(compareLocks);
+  insertionSort(locks, compareLocks);
 
   return {
     activeDecisions,
@@ -472,7 +503,8 @@ function validateEffectiveLedger(value: unknown): EffectiveLedger {
   const activeCandidateVersions = new Set<Sha256>();
   const activeEventIds = new Set<string>();
   const activeApprovalFeedbackIds = new Set<string>();
-  for (const rawDecision of rawDecisions) {
+  for (let index = 0; index < rawDecisions.length; index += 1) {
+    const rawDecision = dataAt(rawDecisions, index);
     const event = validateEvent(rawDecision);
     if (event.action === "correct") return invalid("invalid_event");
     if (
@@ -494,13 +526,15 @@ function validateEffectiveLedger(value: unknown): EffectiveLedger {
 
   const destinationLocks: DestinationLock[] = [];
   const lockByFeedback = new Map<string, TargetSet>();
-  for (const rawLock of rawLocks) {
+  for (let index = 0; index < rawLocks.length; index += 1) {
+    const rawLock = dataAt(rawLocks, index);
     const lock = validateDestinationLock(rawLock);
     if (mapHas.call(lockByFeedback, lock.feedbackId)) return invalid("invalid_transition");
     mapSet.call(lockByFeedback, lock.feedbackId, lock.set);
     appendData(destinationLocks, lock);
   }
-  for (const decision of activeDecisions) {
+  for (let index = 0; index < activeDecisions.length; index += 1) {
+    const decision = dataAt(activeDecisions, index);
     if (
       decision.action === "approve" &&
       mapGet.call(lockByFeedback, decision.feedbackId) !== decision.set
@@ -511,7 +545,8 @@ function validateEffectiveLedger(value: unknown): EffectiveLedger {
 
   const retiredTargetIds: string[] = [];
   const retiredIds = new Set<string>();
-  for (const rawRetiredId of rawRetired) {
+  for (let index = 0; index < rawRetired.length; index += 1) {
+    const rawRetiredId = dataAt(rawRetired, index);
     if (!isNonEmptyString(rawRetiredId)) return invalid("invalid_event");
     if (setHas.call(retiredIds, rawRetiredId) || setHas.call(activeEventIds, rawRetiredId)) {
       return invalid("invalid_transition");
@@ -525,10 +560,16 @@ function validateEffectiveLedger(value: unknown): EffectiveLedger {
 
 export function canonicalLedgerState(state: EffectiveLedger): string {
   const validated = validateEffectiveLedger(state);
+  const activeDecisions = copyArray(validated.activeDecisions);
+  const retiredTargetIds = copyArray(validated.retiredTargetIds);
+  const destinationLocks = copyArray(validated.destinationLocks);
+  insertionSort(activeDecisions, compareDecisions);
+  insertionSort(retiredTargetIds, byteCompare);
+  insertionSort(destinationLocks, compareLocks);
   return canonicalJson({
-    activeDecisions: [...validated.activeDecisions].sort(compareDecisions),
-    retiredTargetIds: [...validated.retiredTargetIds].sort(byteCompare),
-    destinationLocks: [...validated.destinationLocks].sort(compareLocks),
+    activeDecisions,
+    retiredTargetIds,
+    destinationLocks,
   });
 }
 
@@ -612,18 +653,21 @@ function compareApprovals(left: ApprovalEvent, right: ApprovalEvent): number {
 function sortedCounts(counts: ReadonlyMap<string, number>): ReadonlyMap<string, number> {
   const entries: [string, number][] = [];
   mapForEach.call(counts, (count, key) => appendData(entries, [key, count]));
-  entries.sort(([left], [right]) => byteCompare(left, right));
+  insertionSort(entries, (left, right) =>
+    byteCompare(dataAt(left, 0) as string, dataAt(right, 0) as string));
   const result = new Map<string, number>();
   for (let index = 0; index < entries.length; index += 1) {
-    const [key, count] = entries[index];
+    const entry = dataAt(entries, index);
+    const key = dataAt(entry, 0) as string;
+    const count = dataAt(entry, 1) as number;
     mapSet.call(result, key, count);
   }
   return result;
 }
 
 function finalizeCapacity(capacity: MutableSetCapacity): SetCapacity {
-  capacity.freshApprovals.sort(compareApprovals);
-  capacity.staleReservations.sort((left, right) =>
+  insertionSort(capacity.freshApprovals, compareApprovals);
+  insertionSort(capacity.staleReservations, (left, right) =>
     compareMany(
       [left.approval.feedbackId, right.approval.feedbackId],
       [left.approval.candidateVersion, right.approval.candidateVersion],
@@ -652,11 +696,15 @@ export function buildCapacity(
     eval: new Set<string>(),
     holdout: new Set<string>(),
   };
-  const approvals = validated.activeDecisions
-    .filter((event): event is ApprovalEvent => event.action === "approve")
-    .sort(compareApprovals);
+  const approvals: ApprovalEvent[] = [];
+  for (let index = 0; index < validated.activeDecisions.length; index += 1) {
+    const event = dataAt(validated.activeDecisions, index);
+    if (event.action === "approve") appendData(approvals, event);
+  }
+  insertionSort(approvals, compareApprovals);
 
-  for (const approval of approvals) {
+  for (let index = 0; index < approvals.length; index += 1) {
+    const approval = dataAt(approvals, index);
     const countedInDestination = countedFeedbackIds[approval.set];
     if (setHas.call(countedInDestination, approval.feedbackId)) continue;
     setAdd.call(countedInDestination, approval.feedbackId);

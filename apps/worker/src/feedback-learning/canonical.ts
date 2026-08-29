@@ -29,6 +29,12 @@ function isDataDescriptor(
   return descriptor !== undefined && Object.prototype.hasOwnProperty.call(descriptor, "value");
 }
 
+function arrayDataAt<T>(array: readonly T[], index: number): T {
+  const descriptor = Object.getOwnPropertyDescriptor(array, String(index));
+  if (!isDataDescriptor(descriptor)) return invalidValue();
+  return descriptor.value as T;
+}
+
 function captureArray(value: unknown[], ancestors: Set<object>): CapturedJson[] {
   if (Object.getPrototypeOf(value) !== Array.prototype) return invalidValue();
 
@@ -45,7 +51,8 @@ function captureArray(value: unknown[], ancestors: Set<object>): CapturedJson[] 
   const captured = new Array<CapturedJson>(length);
   Object.setPrototypeOf(captured, null);
   const seenIndexes = new Set<number>();
-  for (const key of keys) {
+  for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+    const key = arrayDataAt(keys, keyIndex);
     if (typeof key === "symbol") return invalidValue();
     if (key === "length") continue;
 
@@ -75,7 +82,9 @@ function captureObject(value: object, ancestors: Set<object>): { [key: string]: 
   if (prototype !== Object.prototype && prototype !== null) return invalidValue();
 
   const captured: { [key: string]: CapturedJson } = Object.create(null);
-  for (const key of Reflect.ownKeys(value)) {
+  const keys = Reflect.ownKeys(value);
+  for (let keyIndex = 0; keyIndex < keys.length; keyIndex += 1) {
+    const key = arrayDataAt(keys, keyIndex);
     if (typeof key === "symbol") return invalidValue();
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     if (!descriptor?.enumerable) continue;

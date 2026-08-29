@@ -63,12 +63,38 @@ function hasPlainArrayPrototype(value: unknown): value is unknown[] {
   }
 }
 
+function isWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      if (index + 1 >= value.length) return false;
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return false;
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) return false;
+  }
+  return true;
+}
+
 function isNonEmpty(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
+  return typeof value === "string" && isWellFormedUnicode(value) && value.trim().length > 0;
 }
 
 function isNullableString(value: unknown): value is string | null {
-  return value === null || typeof value === "string";
+  return value === null || (typeof value === "string" && isWellFormedUnicode(value));
+}
+
+function isOutputString(value: unknown): value is string {
+  return typeof value === "string" && isWellFormedUnicode(value);
+}
+
+function appendData<T>(array: T[], value: T): void {
+  Object.defineProperty(array, String(array.length), {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
 }
 
 function finiteNumber(value: unknown): value is number {
@@ -170,15 +196,25 @@ export function normalizeFeedback(
     verdictField.status !== "data" ||
     noteField.status !== "data" ||
     evidenceKeyField.status !== "data" ||
-    !isNonEmpty(clipIdField.value) ||
-    !isNonEmpty(jobIdField.value) ||
-    !isNonEmpty(userIdField.value) ||
     typeof verdictField.value !== "string" ||
+    !isOutputString(verdictField.value) ||
     !isNullableString(noteField.value) ||
     !isNullableString(evidenceKeyField.value)
   ) {
     return invalid(feedbackId, "projection_invalid");
   }
+  if (
+    (typeof clipIdField.value === "string" && !isWellFormedUnicode(clipIdField.value)) ||
+    (typeof jobIdField.value === "string" && !isWellFormedUnicode(jobIdField.value)) ||
+    (typeof userIdField.value === "string" && !isWellFormedUnicode(userIdField.value))
+  ) {
+    return invalid(feedbackId, "identity_unavailable");
+  }
+  if (
+    !isNonEmpty(clipIdField.value) ||
+    !isNonEmpty(jobIdField.value) ||
+    !isNonEmpty(userIdField.value)
+  ) return invalid(feedbackId, "projection_invalid");
 
   const clipId = clipIdField.value;
   const jobId = jobIdField.value;
@@ -226,6 +262,14 @@ export function normalizeFeedback(
   const snapshotTranscript = optionalOwnData(snapshot, "transcript");
   const snapshotLanguage = optionalOwnData(snapshot, "language");
   const snapshotClipKind = optionalOwnData(snapshot, "clipKind");
+  if (
+    (typeof snapshotTitle === "string" && !isWellFormedUnicode(snapshotTitle)) ||
+    (typeof snapshotTranscript === "string" && !isWellFormedUnicode(snapshotTranscript)) ||
+    (typeof snapshotLanguage === "string" && !isWellFormedUnicode(snapshotLanguage)) ||
+    (typeof snapshotClipKind === "string" && !isWellFormedUnicode(snapshotClipKind))
+  ) {
+    return invalid(feedbackId, "projection_invalid");
+  }
   const snapshotMissing = capturedSnapshot === null;
   const snapshotSparse =
     !snapshotMissing &&
@@ -240,16 +284,16 @@ export function normalizeFeedback(
   const warnings: Warning[] = [];
 
   if (!jobPresent) {
-    warnings.push("job_missing");
+    appendData(warnings, "job_missing");
   } else {
-    if (!transcriptPresent) warnings.push("transcript_missing");
-    else if (!segmentsIsArray) warnings.push("transcript_segments_invalid");
-    if (transcriptPartial) warnings.push("transcript_partial");
+    if (!transcriptPresent) appendData(warnings, "transcript_missing");
+    else if (!segmentsIsArray) appendData(warnings, "transcript_segments_invalid");
+    if (transcriptPartial) appendData(warnings, "transcript_partial");
   }
-  if (snapshotMissing) warnings.push("snapshot_missing");
-  else if (snapshotSparse) warnings.push("snapshot_sparse");
-  if (jobPresent && transcriptSliceMissing) warnings.push("transcript_slice_missing");
-  if (!isNonEmpty(evidenceKey)) warnings.push("evidence_missing");
+  if (snapshotMissing) appendData(warnings, "snapshot_missing");
+  else if (snapshotSparse) appendData(warnings, "snapshot_sparse");
+  if (jobPresent && transcriptSliceMissing) appendData(warnings, "transcript_slice_missing");
+  if (!isNonEmpty(evidenceKey)) appendData(warnings, "evidence_missing");
 
   const review: ReviewRecord = {
     title: isNonEmpty(snapshotTitle) ? snapshotTitle : null,

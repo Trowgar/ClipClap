@@ -224,4 +224,88 @@ describe("createPrismaFeedbackLearningRepository", () => {
     ).rejects.toThrow("database-private-detail");
     expect(failed.client.$transaction).toHaveBeenCalledTimes(1);
   });
+
+  it("rejects request proxies, accessors, sparse IDs, and malformed Unicode without invocation", async () => {
+    const fake = fakeClient({});
+    const repository = createPrismaFeedbackLearningRepository(fake.client as never);
+    let invoked = 0;
+    const accessor = {
+      get updatedFrom() {
+        invoked += 1;
+        throw new Error("PRIVATE_REQUEST_GETTER");
+      },
+      updatedTo: UPDATED_TO,
+      activeApprovalFeedbackIds: [],
+    };
+    const idAccessor: unknown[] = [];
+    Object.defineProperty(idAccessor, "0", {
+      enumerable: true,
+      get() {
+        invoked += 1;
+        throw new Error("PRIVATE_ID_GETTER");
+      },
+    });
+    Object.defineProperty(idAccessor, "length", { value: 1 });
+    const requests = [
+      accessor,
+      new Proxy(request, { get() { throw new Error("PRIVATE_PROXY"); } }),
+      { ...request, activeApprovalFeedbackIds: idAccessor },
+      { ...request, activeApprovalFeedbackIds: ["bad-\ud800"] },
+    ];
+    for (const value of requests) {
+      let failure: unknown;
+      try {
+        await repository.captureExportSnapshot(value as never);
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ message: "snapshot_request_invalid" });
+      expect(String(failure)).not.toContain("PRIVATE");
+    }
+    expect(invoked).toBe(0);
+    expect(fake.client.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects accessor, proxy, extra-key, invalid-date, and duplicate projections stably", async () => {
+    const valid = feedback("feedback-1");
+    let invoked = 0;
+    const accessor = { ...valid };
+    Object.defineProperty(accessor, "id", {
+      enumerable: true,
+      get() {
+        invoked += 1;
+        throw new Error("PRIVATE_ROW_GETTER");
+      },
+    });
+    const cases = [
+      { cohort: [accessor] },
+      { cohort: [new Proxy(valid, { ownKeys() { throw new Error("PRIVATE_ROW_PROXY"); } })] },
+      { cohort: [{ ...valid, extra: "no" }] },
+      { cohort: [{ ...valid, updatedAt: new Date(Number.NaN) }] },
+      { cohort: [valid, { ...valid }] },
+      {
+        cohort: [valid],
+        jobs: [
+          { id: valid.jobId, transcriptJson: null, transcriptPartial: false },
+          { id: valid.jobId, transcriptJson: null, transcriptPartial: false },
+        ],
+      },
+      { cohort: [valid], current: [valid, { ...valid }] },
+    ];
+    for (const value of cases) {
+      const fake = fakeClient(value);
+      let failure: unknown;
+      try {
+        await createPrismaFeedbackLearningRepository(fake.client as never).captureExportSnapshot({
+          ...request,
+          activeApprovalFeedbackIds: value.current ? [valid.id] : [],
+        });
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ message: "snapshot_projection_invalid" });
+      expect(String(failure)).not.toContain("PRIVATE");
+    }
+    expect(invoked).toBe(0);
+  });
 });

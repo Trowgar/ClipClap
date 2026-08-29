@@ -8,6 +8,9 @@ const FILE_MODE = 0o600;
 const PRIVATE_TREE_ROOT_OPEN_TEST_HOOK = Symbol.for(
   "clipclap.feedback-learning.persistence.private-tree-root-open-test-hook"
 );
+const PRIVATE_TREE_READY_TEST_HOOK = Symbol.for(
+  "clipclap.feedback-learning.persistence.private-tree-ready-test-hook"
+);
 const RUN_FILE_NAMES = [
   "run.json",
   "candidates.jsonl",
@@ -190,6 +193,32 @@ async function secureDirectory(path: string): Promise<void> {
   }
 }
 
+async function openSecureDirectory(path: string): Promise<FileHandle> {
+  try {
+    const stat = await lstat(path);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throwUnsafe();
+  } catch (error) {
+    if (!isMissing(error)) throw error;
+    try {
+      await mkdir(path, DIRECTORY_MODE);
+    } catch (mkdirError) {
+      if (errorCode(mkdirError) !== "EEXIST") throw mkdirError;
+    }
+    const stat = await lstat(path);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throwUnsafe();
+  }
+
+  const handle = await openDirectoryNoFollow(path);
+  try {
+    await handle.chmod(DIRECTORY_MODE);
+    await handle.sync();
+    return handle;
+  } catch (error) {
+    await closeBestEffort(handle);
+    throw error;
+  }
+}
+
 async function ensureNoSymlinkOrSpecialFile(path: string): Promise<"missing" | "file" | "directory"> {
   try {
     const stat = await lstat(path);
@@ -210,8 +239,8 @@ async function readRegularFileNoFollow(path: string, repairMode: boolean): Promi
     if (kind !== "file") throwUnsafe();
     handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
     if (!(await handle.stat()).isFile()) throwUnsafe();
-    const bytes = await handle.readFile();
     if (repairMode) await handle.chmod(FILE_MODE);
+    const bytes = await handle.readFile();
     return bytes;
   } catch (error) {
     if (
@@ -312,6 +341,92 @@ async function runPrivateTreeRootOpenTestHook(): Promise<void> {
     PRIVATE_TREE_ROOT_OPEN_TEST_HOOK
   ];
   if (typeof hook === "function") await (hook as () => void | Promise<void>)();
+}
+
+async function runPrivateTreeReadyTestHook(): Promise<void> {
+  if (process.env.NODE_ENV !== "test") return;
+  const hook = (globalThis as unknown as Record<PropertyKey, unknown>)[
+    PRIVATE_TREE_READY_TEST_HOOK
+  ];
+  if (typeof hook === "function") await (hook as () => void | Promise<void>)();
+}
+
+type EnsuredPrivateTreeAnchor = Readonly<{
+  paths: PrivatePaths;
+  parentPath: string;
+  rootName: string;
+  parentHandle: FileHandle;
+  rootHandle: FileHandle;
+  exportsHandle: FileHandle;
+  ledgerHandle: FileHandle;
+}>;
+
+async function assertChildEntryCurrent(
+  trustedRoot: FileHandle,
+  childName: "exports" | "ledger",
+  trustedChild: FileHandle,
+): Promise<void> {
+  let currentChild: FileHandle | undefined;
+  try {
+    currentChild = await openDirectoryNoFollow(anchoredPath(trustedRoot, childName));
+    if (!(await sameDirectory(trustedChild, currentChild))) throwUnsafe();
+  } finally {
+    await closeBestEffort(currentChild);
+  }
+}
+
+async function assertEnsuredPrivateTreeCurrent(anchor: EnsuredPrivateTreeAnchor): Promise<void> {
+  await assertRootEntryCurrent(
+    anchor.parentPath,
+    anchor.rootName,
+    anchor.parentHandle,
+    anchor.rootHandle,
+  );
+  await assertChildEntryCurrent(anchor.rootHandle, "exports", anchor.exportsHandle);
+  await assertChildEntryCurrent(anchor.rootHandle, "ledger", anchor.ledgerHandle);
+}
+
+async function closeEnsuredPrivateTree(anchor: EnsuredPrivateTreeAnchor): Promise<void> {
+  await closeBestEffort(anchor.ledgerHandle);
+  await closeBestEffort(anchor.exportsHandle);
+  await closeBestEffort(anchor.rootHandle);
+  await closeBestEffort(anchor.parentHandle);
+}
+
+async function openEnsuredPrivateTree(root: string): Promise<EnsuredPrivateTreeAnchor> {
+  const paths = privatePaths(root);
+  const parentPath = dirname(paths.root);
+  const rootName = basename(paths.root);
+  const parentHandle = await openDirectoryNoFollow(parentPath);
+  let rootHandle: FileHandle | undefined;
+  let exportsHandle: FileHandle | undefined;
+  let ledgerHandle: FileHandle | undefined;
+  try {
+    rootHandle = await openSecureDirectory(anchoredPath(parentHandle, rootName));
+    await parentHandle.sync();
+    await runPrivateTreeRootOpenTestHook();
+    exportsHandle = await openSecureDirectory(anchoredPath(rootHandle, "exports"));
+    ledgerHandle = await openSecureDirectory(anchoredPath(rootHandle, "ledger"));
+    await rootHandle.sync();
+    const anchor: EnsuredPrivateTreeAnchor = {
+      paths,
+      parentPath,
+      rootName,
+      parentHandle,
+      rootHandle,
+      exportsHandle,
+      ledgerHandle,
+    };
+    await runPrivateTreeReadyTestHook();
+    await assertEnsuredPrivateTreeCurrent(anchor);
+    return anchor;
+  } catch (error) {
+    await closeBestEffort(ledgerHandle);
+    await closeBestEffort(exportsHandle);
+    await closeBestEffort(rootHandle);
+    await closeBestEffort(parentHandle);
+    throw error;
+  }
 }
 
 async function assertPrivateDirectoryAnchorCurrent(
@@ -438,42 +553,28 @@ async function uncertainRunResult(input: RunWrite): Promise<CommitResult> {
 }
 
 export async function ensurePrivateTree(root: string): Promise<PrivatePaths> {
-  const paths = privatePaths(root);
-  const parentPath = dirname(paths.root);
-  const rootName = basename(paths.root);
-  const parentHandle = await openDirectoryNoFollow(parentPath);
-  let rootHandle: FileHandle | undefined;
+  const anchor = await openEnsuredPrivateTree(root);
   try {
-    await secureDirectory(anchoredPath(parentHandle, rootName));
-    await parentHandle.sync();
-    rootHandle = await openDirectoryNoFollow(anchoredPath(parentHandle, rootName));
-    await runPrivateTreeRootOpenTestHook();
-    await secureDirectory(anchoredPath(rootHandle, "exports"));
-    await secureDirectory(anchoredPath(rootHandle, "ledger"));
-    await rootHandle.sync();
-    await assertRootEntryCurrent(parentPath, rootName, parentHandle, rootHandle);
-    return paths;
+    return anchor.paths;
   } finally {
-    await closeBestEffort(rootHandle);
-    await closeBestEffort(parentHandle);
+    await closeEnsuredPrivateTree(anchor);
   }
 }
 
 export async function readLedgerSnapshot(paths: PrivatePaths): Promise<Uint8Array> {
   assertPrivatePaths(paths);
-  await ensurePrivateTree(paths.root);
-  const anchor = await openPrivateDirectoryAnchor(paths.root, "ledger");
+  const anchor = await openEnsuredPrivateTree(paths.root);
   try {
-    const ledgerPath = anchoredPath(anchor.directoryHandle, "reviews.jsonl");
+    const ledgerPath = anchoredPath(anchor.ledgerHandle, "reviews.jsonl");
     const kind = await ensureNoSymlinkOrSpecialFile(ledgerPath);
     let bytes: Uint8Array;
     if (kind === "missing") bytes = new Uint8Array();
-    else if (kind === "file") bytes = await readRegularFileNoFollow(ledgerPath, false);
+    else if (kind === "file") bytes = await readRegularFileNoFollow(ledgerPath, true);
     else throwUnsafe();
-    await assertPrivateDirectoryAnchorCurrent(paths.root, anchor);
+    await assertEnsuredPrivateTreeCurrent(anchor);
     return new Uint8Array(bytes);
   } finally {
-    await closePrivateDirectoryAnchor(anchor);
+    await closeEnsuredPrivateTree(anchor);
   }
 }
 
