@@ -104,35 +104,48 @@ export function safeEndGeometryReference(clip: SnappedClip): SafeEndGeometryRefe
 export const geometryReference = safeEndGeometryReference;
 
 /**
- * Pure signal for an immediate spoken handoff. The endpoint node and its
- * immediate following node must both be word-bearing and temporally valid;
- * opaque or malformed graph segments fail closed instead of being skipped.
+ * Pure signal for an immediate spoken handoff. It finds the final valid
+ * word-bearing node inside the candidate range and the first such node after
+ * it; opaque and malformed timing nodes are not speech boundaries.
  */
 export function zeroTailHandoff(
-  clip: Pick<SnappedClip, "endSec" | "finalEndNode">,
+  clip: Pick<SnappedClip, "endSec" | "finalStartNode" | "finalEndNode">,
   nodes: ReadonlyArray<Pick<SentenceNode, "start" | "end" | "hasWords">>,
 ): boolean {
-  const last = nodes[clip.finalEndNode];
-  const next = nodes[clip.finalEndNode + 1];
-  if (!last || !next || !last.hasWords || !next.hasWords) return false;
   if (
     !Number.isFinite(clip.endSec) ||
-    !Number.isFinite(last.start) ||
-    !Number.isFinite(last.end) ||
-    !Number.isFinite(next.start) ||
-    !Number.isFinite(next.end) ||
-    last.start >= last.end ||
-    next.start >= next.end
+    !Number.isInteger(clip.finalStartNode) ||
+    !Number.isInteger(clip.finalEndNode) ||
+    clip.finalStartNode < 0 ||
+    clip.finalEndNode < clip.finalStartNode
   ) {
     return false;
   }
-  // Decimal timestamps such as 10.05 are not exactly representable in binary.
-  // Scale the floating-point allowance to the two inputs so the inclusive
-  // 50 ms edge survives representation noise without extending the threshold.
-  const withinFiftyMs = (time: number) =>
-    Math.abs(time - clip.endSec) <=
-    0.05 + Number.EPSILON * Math.max(1, Math.abs(time), Math.abs(clip.endSec)) * 4;
-  return withinFiftyMs(last.end) && withinFiftyMs(next.start);
+  const isValidWordNode = (
+    node: Pick<SentenceNode, "start" | "end" | "hasWords"> | undefined,
+  ): node is Pick<SentenceNode, "start" | "end" | "hasWords"> =>
+    Boolean(
+      node &&
+        node.hasWords &&
+        Number.isFinite(node.start) &&
+        Number.isFinite(node.end) &&
+        node.start < node.end,
+    );
+  let last: Pick<SentenceNode, "start" | "end" | "hasWords"> | undefined;
+  for (let index = clip.finalEndNode; index >= clip.finalStartNode; index--) {
+    if (isValidWordNode(nodes[index])) {
+      last = nodes[index];
+      break;
+    }
+  }
+  let next: Pick<SentenceNode, "start" | "end" | "hasWords"> | undefined;
+  for (let index = clip.finalEndNode + 1; index < nodes.length; index++) {
+    if (isValidWordNode(nodes[index])) {
+      next = nodes[index];
+      break;
+    }
+  }
+  return Boolean(last && next && Math.abs(last.end - clip.endSec) <= 0.05 && Math.abs(next.start - clip.endSec) <= 0.05);
 }
 
 const normalSeverity: Record<SafeEndNormalOutcome, number> = {
@@ -150,23 +163,17 @@ const rescueSeverity: Record<RescueProposedAction, number> = {
   none: 3,
 };
 
-function boundedLimit(limit: number): number {
-  return Number.isInteger(limit) && limit >= 0 ? Math.min(limit, DETAIL_CAP) : DETAIL_CAP;
-}
-
 /** Deterministically bounds normal detail. It never mutates the input records. */
 export function capSafeEndNormalRecords(
   records: readonly SafeEndNormalRecord[],
-  limit = DETAIL_CAP,
 ): SafeEndCappedRecords<SafeEndNormalRecord> {
-  const bounded = boundedLimit(limit);
   const selected = [...records]
     .sort(
       (left, right) =>
         normalSeverity[left.outcome] - normalSeverity[right.outcome] ||
         compareCandidateIds(left.geometry.candidateId, right.geometry.candidateId),
     )
-    .slice(0, bounded);
+    .slice(0, DETAIL_CAP);
   return { records: selected, truncatedCount: records.length - selected.length };
 }
 
@@ -176,18 +183,16 @@ export function capSafeEndNormalRecords(
  * bounded rather than silently expanding telemetry beyond its hard cap. */
 export function capSafeEndRescueRecords(
   records: readonly SafeEndRescueRecord[],
-  limit = DETAIL_CAP,
 ): SafeEndCappedRecords<SafeEndRescueRecord> {
-  const bounded = boundedLimit(limit);
   const ordered = [...records].sort(
     (left, right) =>
       rescueSeverity[left.proposedAction] - rescueSeverity[right.proposedAction] ||
       compareCandidateIds(left.geometry.candidateId, right.geometry.candidateId),
   );
-  const selected = ordered.slice(0, bounded);
+  const selected = ordered.slice(0, DETAIL_CAP);
   const rescueWinner = ordered.find((record) => record.selectedState === "selected");
 
-  if (rescueWinner && !selected.includes(rescueWinner) && bounded > 0) {
+  if (rescueWinner && !selected.includes(rescueWinner)) {
     selected[selected.length - 1] = rescueWinner;
     selected.sort(
       (left, right) =>
@@ -218,10 +223,10 @@ function hasGeometry(reference: SafeEndGeometryReference, clips: readonly Snappe
 }
 
 /**
- * Appends outcome metadata from the actual pipeline arrays. Matching requires
- * candidate id and the rounded snapped geometry, preventing an old geometry
- * from being attributed to a later re-snapped clip. No input array, record, or
- * clip is mutated.
+ * Appends outcome metadata from the actual pipeline arrays. The audited input
+ * geometry establishes identity before finalization; after finalization, the
+ * candidate id carries that identity through legitimate finalizer trims. No
+ * input array, record, or clip is mutated.
  */
 export function reconcileSafeEndNormalRecords(
   records: readonly SafeEndNormalRecord[],
@@ -234,10 +239,10 @@ export function reconcileSafeEndNormalRecords(
     if (!hasGeometry(record.geometry, beforeFinalizer)) {
       return { ...base, reconciliation: { state: "removed_before_finalizer" } };
     }
-    if (!hasGeometry(record.geometry, afterFinalizer)) {
+    if (!afterFinalizer.some((clip) => clip.verdict.id === record.geometry.candidateId)) {
       return { ...base, reconciliation: { state: "removed_by_finalizer" } };
     }
-    const shippedClip = shipped.find((clip) => sameGeometry(record.geometry, clip));
+    const shippedClip = shipped.find((clip) => clip.verdict.id === record.geometry.candidateId);
     if (!shippedClip) {
       return { ...base, reconciliation: { state: "removed_by_soft_cap" } };
     }
