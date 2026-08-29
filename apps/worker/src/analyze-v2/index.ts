@@ -27,7 +27,19 @@ import {
 } from "./post-boundary-hook-gate";
 import { finalizeClips } from "./finalize";
 import { detectTeaserRegion, isInTeaserRegion } from "./teaser";
-import { newUsage } from "./llm";
+import { callJsonSchema, newUsage } from "./llm";
+import {
+  SAFE_END_AUDIT_SYSTEM,
+  safeEndAuditForwardContext,
+  safeEndAuditUserPrompt,
+} from "./safe-end-audit-prompts";
+import { SAFE_END_AUDIT_SCHEMA, readSafeEndAuditRow } from "./safe-end-audit-schema";
+import {
+  capSafeEndNormalRecords,
+  safeEndGeometryReference,
+  type SafeEndAuditFailureCode,
+  type SafeEndNormalRecord,
+} from "./safe-end-audit";
 import type {
   ArcFlags,
   MergedCandidate,
@@ -39,6 +51,148 @@ import type {
 const DEGENERATE_MIN_WORDS = 5;
 const DEGENERATE_MIN_SPEECH_SEC = 4;
 const TINY_MAX_WORDS = 24;
+
+interface SafeEndNormalTelemetry {
+  evaluated: number;
+  safe: number;
+  needs_afterbeat: number;
+  hard_handoff: number;
+  not_evaluable: number;
+  audit_failed: number;
+  records: SafeEndNormalRecord[];
+  truncatedCount: number;
+}
+
+interface SafeEndAuditTelemetry {
+  normal: SafeEndNormalTelemetry;
+}
+
+function emptySafeEndNormalTelemetry(): SafeEndNormalTelemetry {
+  return {
+    evaluated: 0,
+    safe: 0,
+    needs_afterbeat: 0,
+    hard_handoff: 0,
+    not_evaluable: 0,
+    audit_failed: 0,
+    records: [],
+    truncatedCount: 0,
+  };
+}
+
+function safeEndFailureCode(
+  failure: { kind: "truncated" | "refusal" | "error"; error?: string }
+): SafeEndAuditFailureCode {
+  if (failure.kind === "refusal") return "model_refusal";
+  if (failure.kind === "error" && /timeout/i.test(failure.error ?? "")) return "timeout";
+  if (failure.kind === "error") return "construction_error";
+  return "malformed_response";
+}
+
+function failedSafeEndNormalTelemetry(
+  clips: readonly SnappedClip[],
+  code: SafeEndAuditFailureCode
+): SafeEndNormalTelemetry {
+  const telemetry = emptySafeEndNormalTelemetry();
+  telemetry.evaluated = clips.length;
+  telemetry.audit_failed = clips.length;
+  try {
+    const records: SafeEndNormalRecord[] = clips.map((clip) => ({
+      geometry: safeEndGeometryReference(clip),
+      score: clip.verdict.score,
+      language: clip.verdict.language,
+      ...(clip.verdict.kind ? { kind: clip.verdict.kind } : {}),
+      outcome: "audit_failed",
+      reason: null,
+      failureCode: code,
+      extendToNode: null,
+    }));
+    const capped = capSafeEndNormalRecords(records);
+    telemetry.records = capped.records;
+    telemetry.truncatedCount = capped.truncatedCount;
+  } catch {
+    // Even a broken telemetry record must not turn an observation feature into
+    // a job failure. The aggregate remains a closed audit_failed result.
+    telemetry.truncatedCount = clips.length;
+  }
+  return telemetry;
+}
+
+/**
+ * Isolated observation runner. It returns only privacy-safe records, never a
+ * flag map or a replacement clip list. Any feature-local failure is converted
+ * to a closed row and intentionally cannot interrupt the shared pipeline.
+ */
+async function runSafeEndNormalAudit(
+  client: OpenAI,
+  usage: import("./types").LlmUsage,
+  clips: SnappedClip[],
+  nodes: import("./types").SentenceNode[],
+  cfg: AnalyzeConfig,
+  options: { retryDelayMs?: number }
+): Promise<SafeEndAuditTelemetry> {
+  try {
+    if (clips.length === 0) return { normal: emptySafeEndNormalTelemetry() };
+    const response = await callJsonSchema<{ results?: unknown }>(client, usage, {
+      model: cfg.criticModel,
+      system: SAFE_END_AUDIT_SYSTEM,
+      user: safeEndAuditUserPrompt(clips, nodes),
+      schema: SAFE_END_AUDIT_SCHEMA,
+      reasoningEffort: cfg.reasoningEffort,
+      maxOutputTokens: 800 + 120 * clips.length,
+      retryDelayMs: options.retryDelayMs,
+    });
+    if (!response.ok) return { normal: failedSafeEndNormalTelemetry(clips, safeEndFailureCode(response)) };
+
+    const rawRows = response.data?.results;
+    if (!Array.isArray(rawRows)) {
+      return { normal: failedSafeEndNormalTelemetry(clips, "malformed_response") };
+    }
+    const rows = rawRows.map(readSafeEndAuditRow);
+    const expectedIds = new Set(clips.map((clip) => clip.verdict.id));
+    const seen = new Set<string>();
+    if (
+      rows.some((row) => row === null || !expectedIds.has(row.id) || seen.has(row.id) || !seen.add(row.id)) ||
+      seen.size !== clips.length
+    ) {
+      return { normal: failedSafeEndNormalTelemetry(clips, "malformed_response") };
+    }
+
+    const clipById = new Map(clips.map((clip) => [clip.verdict.id, clip]));
+    const telemetry = emptySafeEndNormalTelemetry();
+    const records: SafeEndNormalRecord[] = [];
+    for (const row of rows) {
+      if (!row) return { normal: failedSafeEndNormalTelemetry(clips, "malformed_response") };
+      const clip = clipById.get(row.id);
+      if (!clip) return { normal: failedSafeEndNormalTelemetry(clips, "malformed_response") };
+      if (
+        row.outcome === "needs_afterbeat" &&
+        !safeEndAuditForwardContext(clip, nodes).some((node) => node.index === row.extendToNode)
+      ) {
+        return { normal: failedSafeEndNormalTelemetry(clips, "malformed_response") };
+      }
+      telemetry.evaluated += 1;
+      telemetry[row.outcome] += 1;
+      records.push({
+        geometry: safeEndGeometryReference(clip),
+        score: clip.verdict.score,
+        language: clip.verdict.language,
+        ...(clip.verdict.kind ? { kind: clip.verdict.kind } : {}),
+        outcome: row.outcome,
+        reason: row.reason,
+        extendToNode: row.extendToNode,
+      });
+    }
+    const capped = capSafeEndNormalRecords(records);
+    telemetry.records = capped.records;
+    telemetry.truncatedCount = capped.truncatedCount;
+    return { normal: telemetry };
+  } catch {
+    // This is deliberately narrower than a JobStep write: this catch protects
+    // only feature-local prompt, parsing, and telemetry construction.
+    return { normal: failedSafeEndNormalTelemetry(clips, "construction_error") };
+  }
+}
 
 export interface AnalyzeV2Options {
   client?: OpenAI;
@@ -652,6 +806,23 @@ export async function analyzeHighlightsV2(
     }
   }
 
+  // SAFE-END SHADOW AUDIT (V1) - observes the exact post-extension,
+  // post-long-clip and post-hook-gate geometry at the last seam before any
+  // downstream authority. It intentionally receives the same array arc
+  // downrank will receive, but never replaces, reorders, flags, or otherwise
+  // changes it. This is a separate schema and telemetry channel from arcAudit.
+  let safeEndAuditTelemetry: SafeEndAuditTelemetry | undefined;
+  if (cfg.safeEndAuditMode === "shadow") {
+    safeEndAuditTelemetry = await runSafeEndNormalAudit(
+      client,
+      usage,
+      afterPostBoundaryHookGate,
+      nodes,
+      cfg,
+      { retryDelayMs: options.retryDelayMs }
+    );
+  }
+
   // ARC DOWNRANK (spec 2026-08-10 task 7) - the first DROP authority the arc
   // audit earns, placed exactly where the task 5 long-clip policy sits: AFTER
   // arcAudit and BOTH extension stages, so every `entry.repaired`/
@@ -990,6 +1161,9 @@ export async function analyzeHighlightsV2(
     ...(arcDownrankTelemetry ? { arcDownrank: arcDownrankTelemetry } : {}),
     ...(standaloneFilterTelemetry ? { standaloneFilter: standaloneFilterTelemetry } : {}),
     ...(postBoundaryHookGateTelemetry ? { postBoundaryHookGate: postBoundaryHookGateTelemetry } : {}),
+    // V1 is observation-only. The key is absent exactly when the shadow mode is
+    // off, not a zeroed placeholder; downstream stages have no reference to it.
+    ...(safeEndAuditTelemetry ? { safeEndAudit: safeEndAuditTelemetry } : {}),
   };
 
   if (highlights.length === 0) {
