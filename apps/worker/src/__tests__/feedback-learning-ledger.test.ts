@@ -25,11 +25,19 @@ const HASH_B = `sha256:${"b".repeat(64)}` as Sha256;
 const OCCURRED_AT = "2026-08-29T10:00:00.000Z";
 const UPDATED_AT = "2026-08-28T12:00:00.000Z";
 
+function candidateVersion(
+  feedbackId: string,
+  feedbackUpdatedAt: string,
+  snapshotSha256: Sha256
+): Sha256 {
+  return sha256(`${feedbackId}\n${feedbackUpdatedAt}\n${snapshotSha256}`);
+}
+
 function approval(
   eventId: string,
   overrides: Partial<ApprovalEvent> = {}
 ): ApprovalEvent {
-  return {
+  const event: ApprovalEvent = {
     schemaVersion: 1,
     eventId,
     action: "approve",
@@ -44,13 +52,21 @@ function approval(
     set: "eval",
     ...overrides,
   };
+  if (!Object.prototype.hasOwnProperty.call(overrides, "candidateVersion")) {
+    event.candidateVersion = candidateVersion(
+      event.feedbackId,
+      event.feedbackUpdatedAt,
+      event.snapshotSha256
+    );
+  }
+  return event;
 }
 
 function rejection(
   eventId: string,
   overrides: Partial<RejectionEvent> = {}
 ): RejectionEvent {
-  return {
+  const event: RejectionEvent = {
     schemaVersion: 1,
     eventId,
     action: "reject",
@@ -65,6 +81,14 @@ function rejection(
     reason: "private rejection reason",
     ...overrides,
   };
+  if (!Object.prototype.hasOwnProperty.call(overrides, "candidateVersion")) {
+    event.candidateVersion = candidateVersion(
+      event.feedbackId,
+      event.feedbackUpdatedAt,
+      event.snapshotSha256
+    );
+  }
+  return event;
 }
 
 function correction(
@@ -122,7 +146,7 @@ describe("parseLedger", () => {
     expect(parseLedger(Buffer.alloc(0))).toEqual([]);
 
     const approve = approval("approve-1");
-    const reject = rejection("reject-1", { candidateVersion: HASH_B });
+    const reject = rejection("reject-1");
     const correct = correction("correct-1", "reject-1");
     const parsed = parseLedger(lines(approve, reject, correct));
 
@@ -187,14 +211,136 @@ describe("parseLedger", () => {
   ])("rejects invalid closed event schema: %s", (_label, event) => {
     expectLedgerCode(() => parseLedger(lines(event)), "invalid_event");
   });
+
+  it("rejects a candidate version that does not match its frozen identity", () => {
+    expectLedgerCode(
+      () => parseLedger(lines(approval("mismatch", { candidateVersion: HASH_A }))),
+      "invalid_event"
+    );
+  });
+
+  it("does not invoke a polluted Object.prototype.toJSON while checking compact bytes", () => {
+    const bytes = lines(approval("safe-event"));
+    const original = Object.getOwnPropertyDescriptor(Object.prototype, "toJSON");
+    let invoked = 0;
+    let result: readonly ReviewEvent[] | undefined;
+    let caught: unknown;
+    try {
+      Object.defineProperty(Object.prototype, "toJSON", {
+        configurable: true,
+        enumerable: false,
+        value: () => {
+          invoked += 1;
+          throw new Error("private toJSON contents");
+        },
+      });
+      result = parseLedger(bytes);
+    } catch (error) {
+      caught = error;
+    } finally {
+      if (original === undefined) Reflect.deleteProperty(Object.prototype, "toJSON");
+      else Object.defineProperty(Object.prototype, "toJSON", original);
+    }
+
+    expect(caught).toBeUndefined();
+    expect(invoked).toBe(0);
+    expect(result).toEqual([approval("safe-event")]);
+  });
 });
 
 describe("foldLedger", () => {
   it("rejects duplicate event IDs without leaking the ID", () => {
     expectLedgerCode(
-      () => foldLedger([approval("private-id"), rejection("private-id", { candidateVersion: HASH_B })]),
+      () => foldLedger([approval("private-id"), rejection("private-id")]),
       "duplicate_event_id"
     );
+  });
+
+  it("rejects a direct event whose candidate version does not match its frozen identity", () => {
+    expectLedgerCode(
+      () => foldLedger([rejection("mismatch", { candidateVersion: HASH_A })]),
+      "invalid_event"
+    );
+  });
+
+  it("does not read inherited action or common fields from Object.prototype", () => {
+    const originalSchema = Object.getOwnPropertyDescriptor(Object.prototype, "schemaVersion");
+    const originalAction = Object.getOwnPropertyDescriptor(Object.prototype, "action");
+    let invoked = 0;
+    let caught: unknown;
+    try {
+      Object.defineProperty(Object.prototype, "schemaVersion", {
+        configurable: true,
+        enumerable: true,
+        get: () => {
+          invoked += 1;
+          return 1;
+        },
+      });
+      Object.defineProperty(Object.prototype, "action", {
+        configurable: true,
+        enumerable: true,
+        get: () => {
+          invoked += 1;
+          return "approve";
+        },
+      });
+      foldLedger([{} as ReviewEvent]);
+    } catch (error) {
+      caught = error;
+    } finally {
+      if (originalSchema === undefined) Reflect.deleteProperty(Object.prototype, "schemaVersion");
+      else Object.defineProperty(Object.prototype, "schemaVersion", originalSchema);
+      if (originalAction === undefined) Reflect.deleteProperty(Object.prototype, "action");
+      else Object.defineProperty(Object.prototype, "action", originalAction);
+    }
+
+    expect(caught).toMatchObject({ code: "invalid_event", message: "invalid_event" });
+    expect(invoked).toBe(0);
+  });
+
+  it("rejects an own accessor without invoking it or leaking its private error", () => {
+    const malicious: Record<string, unknown> = {};
+    let invoked = 0;
+    Object.defineProperty(malicious, "schemaVersion", {
+      enumerable: true,
+      get: () => {
+        invoked += 1;
+        throw new Error("private getter contents");
+      },
+    });
+
+    let caught: unknown;
+    try {
+      foldLedger([malicious as unknown as ReviewEvent]);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({ code: "invalid_event", message: "invalid_event" });
+    expect(invoked).toBe(0);
+  });
+
+  it("normalizes throwing proxy reflection traps to a safe ledger error", () => {
+    const privateMessage = "private proxy contents";
+    const malicious = new Proxy(
+      {},
+      {
+        getPrototypeOf: () => {
+          throw new Error(privateMessage);
+        },
+      }
+    );
+
+    let caught: unknown;
+    try {
+      foldLedger([malicious as ReviewEvent]);
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({ code: "invalid_event", message: "invalid_event" });
+    expect(String(caught)).not.toContain(privateMessage);
   });
 
   it.each([
@@ -204,7 +350,7 @@ describe("foldLedger", () => {
     ["active candidate conflict", [rejection("r"), approval("a")]],
     [
       "approval across versions conflict",
-      [approval("a1"), approval("a2", { candidateVersion: HASH_B })],
+      [approval("a1"), approval("a2", { feedbackUpdatedAt: "2026-08-28T12:00:01.000Z" })],
     ],
   ] satisfies readonly (readonly [string, readonly ReviewEvent[]])[])(
     "rejects invalid transition: %s",
@@ -216,7 +362,9 @@ describe("foldLedger", () => {
   it("retires decisions, permits a replacement, and permanently preserves the first set lock", () => {
     const first = approval("approval-old");
     const retired = correction("correction-1", first.eventId);
-    const replacement = approval("approval-new", { candidateVersion: HASH_B });
+    const replacement = approval("approval-new", {
+      feedbackUpdatedAt: "2026-08-28T12:00:01.000Z",
+    });
     const state = foldLedger([first, retired, replacement]);
 
     expect(state).toEqual({
@@ -229,7 +377,10 @@ describe("foldLedger", () => {
         foldLedger([
           first,
           retired,
-          approval("wrong-set", { candidateVersion: HASH_B, set: "holdout" }),
+          approval("wrong-set", {
+            feedbackUpdatedAt: "2026-08-28T12:00:01.000Z",
+            set: "holdout",
+          }),
         ]),
       "invalid_transition"
     );
@@ -245,14 +396,11 @@ describe("foldLedger", () => {
   });
 
   it("sorts with byte comparison and canonicalizes equivalent effective states identically", () => {
-    const low = rejection("z-event", {
-      candidateVersion: `sha256:${"0".repeat(64)}`,
-      feedbackId: "z-feedback",
-    });
-    const high = rejection("a-event", {
-      candidateVersion: `sha256:${"f".repeat(64)}`,
-      feedbackId: "a-feedback",
-    });
+    const first = rejection("z-event", { feedbackId: "z-feedback" });
+    const second = rejection("a-event", { feedbackId: "a-feedback" });
+    const [low, high] = [first, second].sort((left, right) =>
+      Buffer.compare(Buffer.from(left.candidateVersion), Buffer.from(right.candidateVersion))
+    );
     const left = foldLedger([high, low]);
     const right = foldLedger([low, high]);
 
@@ -262,6 +410,40 @@ describe("foldLedger", () => {
     ]);
     expect(canonicalLedgerState(left)).toBe(canonicalLedgerState(right));
     expect(canonicalLedgerState(left)).toBe(canonicalJson(left));
+  });
+
+  it("sorts Unicode identifiers by UTF-8 bytes rather than JavaScript UTF-16 code units", () => {
+    const bmp = "\uE000";
+    const astral = "\u{10000}";
+    expect(astral < bmp).toBe(true);
+    expect(Buffer.compare(Buffer.from(bmp), Buffer.from(astral))).toBeLessThan(0);
+
+    const state = foldLedger([
+      approval("astral-event", { feedbackId: astral }),
+      approval("bmp-event", { feedbackId: bmp }),
+    ]);
+
+    expect(state.destinationLocks.map((lock) => lock.feedbackId)).toEqual([bmp, astral]);
+  });
+
+  it("canonicalizes histories that differ only in correction metadata identically", () => {
+    const target = rejection("target-event");
+    const first = foldLedger([
+      target,
+      correction("correction-a", target.eventId, {
+        occurredAt: "2026-08-29T10:00:01.000Z",
+        reason: "first private reason",
+      }),
+    ]);
+    const second = foldLedger([
+      target,
+      correction("correction-b", target.eventId, {
+        occurredAt: "2026-08-29T10:00:02.000Z",
+        reason: "second private reason",
+      }),
+    ]);
+
+    expect(canonicalLedgerState(first)).toBe(canonicalLedgerState(second));
   });
 });
 
@@ -315,6 +497,129 @@ describe("classifyApprovalFreshness", () => {
   });
 });
 
+describe("EffectiveLedger boundaries", () => {
+  function expectStateCode(state: EffectiveLedger, code: LedgerError["code"]): void {
+    expectLedgerCode(() => canonicalLedgerState(state), code);
+    expectLedgerCode(() => buildCapacity(state, new Map()), code);
+  }
+
+  it.each([
+    [
+      "non-array root field",
+      {
+        activeDecisions: {},
+        retiredTargetIds: [],
+        destinationLocks: [],
+      } as unknown as EffectiveLedger,
+      "invalid_event",
+    ],
+    [
+      "invalid active candidate formula",
+      {
+        activeDecisions: [approval("bad-candidate", { candidateVersion: HASH_A })],
+        retiredTargetIds: [],
+        destinationLocks: [{ feedbackId: "feedback-1", set: "eval" }],
+      },
+      "invalid_event",
+    ],
+    [
+      "duplicate active candidate",
+      {
+        activeDecisions: [approval("event-a"), approval("event-b")],
+        retiredTargetIds: [],
+        destinationLocks: [{ feedbackId: "feedback-1", set: "eval" }],
+      },
+      "invalid_transition",
+    ],
+    [
+      "duplicate active event ID",
+      {
+        activeDecisions: [
+          rejection("same-event", { feedbackId: "feedback-a" }),
+          rejection("same-event", { feedbackId: "feedback-b" }),
+        ],
+        retiredTargetIds: [],
+        destinationLocks: [],
+      },
+      "invalid_transition",
+    ],
+    [
+      "multiple active approvals for one feedback",
+      {
+        activeDecisions: [
+          approval("approval-a"),
+          approval("approval-b", { feedbackUpdatedAt: "2026-08-28T12:00:01.000Z" }),
+        ],
+        retiredTargetIds: [],
+        destinationLocks: [{ feedbackId: "feedback-1", set: "eval" }],
+      },
+      "invalid_transition",
+    ],
+    [
+      "contradictory destination locks",
+      {
+        activeDecisions: [],
+        retiredTargetIds: [],
+        destinationLocks: [
+          { feedbackId: "feedback-1", set: "eval" },
+          { feedbackId: "feedback-1", set: "holdout" },
+        ],
+      },
+      "invalid_transition",
+    ],
+    [
+      "approval without its matching lock",
+      {
+        activeDecisions: [approval("approval")],
+        retiredTargetIds: [],
+        destinationLocks: [{ feedbackId: "feedback-1", set: "holdout" }],
+      },
+      "invalid_transition",
+    ],
+    [
+      "duplicate retired target",
+      {
+        activeDecisions: [],
+        retiredTargetIds: ["retired", "retired"],
+        destinationLocks: [],
+      },
+      "invalid_transition",
+    ],
+    [
+      "empty retired target",
+      {
+        activeDecisions: [],
+        retiredTargetIds: [""],
+        destinationLocks: [],
+      },
+      "invalid_event",
+    ],
+    [
+      "active event also retired",
+      {
+        activeDecisions: [rejection("same-event")],
+        retiredTargetIds: ["same-event"],
+        destinationLocks: [],
+      },
+      "invalid_transition",
+    ],
+  ] as const)("rejects fabricated state with %s", (_label, state, code) => {
+    expectStateCode(state as EffectiveLedger, code);
+  });
+
+  it("normalizes a throwing state accessor to invalid_event", () => {
+    const state: Record<string, unknown> = {};
+    Object.defineProperty(state, "activeDecisions", {
+      enumerable: true,
+      get: () => {
+        throw new Error("private state contents");
+      },
+    });
+
+    expectStateCode(state as unknown as EffectiveLedger, "invalid_event");
+  });
+});
+
 describe("buildCapacity", () => {
   function assigned(
     eventId: string,
@@ -326,7 +631,6 @@ describe("buildCapacity", () => {
   ): { approval: ApprovalEvent; row: FeedbackProjection } {
     return {
       approval: approval(eventId, {
-        candidateVersion: sha256(eventId),
         feedbackId,
         set,
         jobId,
@@ -349,7 +653,6 @@ describe("buildCapacity", () => {
       { n: 3 }
     );
     const reject = rejection("reject", {
-      candidateVersion: sha256("reject"),
       feedbackId: "feedback-r",
     });
     const state = foldLedger([evalFresh.approval, evalFresh2.approval, holdoutStale.approval, reject]);
@@ -391,27 +694,29 @@ describe("buildCapacity", () => {
     expect(state.destinationLocks).toEqual([{ feedbackId: "feedback-1", set: "eval" }]);
   });
 
-  it("counts a feedback ID once per destination when handed duplicated effective state", () => {
+  it("rejects a fabricated cross-destination duplicate feedback state", () => {
     const item = assigned("approval-a", "feedback-1", "eval", "job-eval", "user-eval", {
       n: 1,
     });
     const evalDuplicate = approval("approval-b", {
-      ...item.approval,
-      eventId: "approval-b",
-      candidateVersion: `sha256:${"2".repeat(64)}`,
+      feedbackId: "feedback-1",
+      feedbackUpdatedAt: "2026-08-28T12:00:01.000Z",
+      jobId: "job-eval",
+      userId: "user-eval",
     });
     const holdout = approval("approval-c", {
-      ...item.approval,
-      eventId: "approval-c",
-      candidateVersion: `sha256:${"3".repeat(64)}`,
+      feedbackId: "feedback-1",
+      feedbackUpdatedAt: "2026-08-28T12:00:02.000Z",
       jobId: "job-holdout",
       userId: "user-holdout",
       set: "holdout",
     });
     const holdoutDuplicate = approval("approval-d", {
-      ...holdout,
-      eventId: "approval-d",
-      candidateVersion: `sha256:${"4".repeat(64)}`,
+      feedbackId: "feedback-1",
+      feedbackUpdatedAt: "2026-08-28T12:00:03.000Z",
+      jobId: "job-holdout",
+      userId: "user-holdout",
+      set: "holdout",
     });
     const malformedState: EffectiveLedger = {
       activeDecisions: [holdoutDuplicate, evalDuplicate, holdout, item.approval],
@@ -421,16 +726,9 @@ describe("buildCapacity", () => {
         { feedbackId: "feedback-1", set: "holdout" },
       ],
     };
-    const capacity = buildCapacity(
-      malformedState,
-      new Map([[item.approval.feedbackId, item.row]])
+    expectLedgerCode(
+      () => buildCapacity(malformedState, new Map([[item.approval.feedbackId, item.row]])),
+      "invalid_transition"
     );
-
-    expect(capacity.eval.freshApprovals).toHaveLength(1);
-    expect([...capacity.eval.jobCounts]).toEqual([["job-eval", 1]]);
-    expect([...capacity.eval.userCounts]).toEqual([["user-eval", 1]]);
-    expect(capacity.holdout.freshApprovals).toHaveLength(1);
-    expect([...capacity.holdout.jobCounts]).toEqual([["job-holdout", 1]]);
-    expect([...capacity.holdout.userCounts]).toEqual([["user-holdout", 1]]);
   });
 });

@@ -1,4 +1,4 @@
-import { canonicalJson, parseUtcMillisecond, sha256 } from "./canonical";
+import { canonicalJson, jsonLine, parseUtcMillisecond, sha256 } from "./canonical";
 import type {
   ApprovalEvent,
   FeedbackProjection,
@@ -97,6 +97,14 @@ const CORRECTION_KEYS = [
   "reason",
 ] as const;
 
+const EFFECTIVE_LEDGER_KEYS = [
+  "activeDecisions",
+  "retiredTargetIds",
+  "destinationLocks",
+] as const;
+
+const DESTINATION_LOCK_KEYS = ["feedbackId", "set"] as const;
+
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/;
 
 function invalid(code: LedgerErrorCode): never {
@@ -104,7 +112,7 @@ function invalid(code: LedgerErrorCode): never {
 }
 
 function byteCompare(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
+  return Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8"));
 }
 
 function compareMany(...parts: readonly (readonly [string, string])[]): number {
@@ -115,24 +123,69 @@ function compareMany(...parts: readonly (readonly [string, string])[]): number {
   return 0;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
-
-function hasExactDataKeys(
-  value: Record<string, unknown>,
-  expected: readonly string[]
-): boolean {
+function hasExactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
   const keys = Reflect.ownKeys(value);
   if (keys.length !== expected.length) return false;
   for (let index = 0; index < expected.length; index += 1) {
     if (keys[index] !== expected[index]) return false;
-    const descriptor = Object.getOwnPropertyDescriptor(value, expected[index]);
-    if (!descriptor?.enumerable || !("value" in descriptor)) return false;
   }
   return true;
+}
+
+function captureOwnData(value: unknown): Record<string, unknown> | undefined {
+  try {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return undefined;
+
+    const captured: Record<string, unknown> = Object.create(null);
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== "string") return undefined;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor?.enumerable || !("value" in descriptor)) return undefined;
+      Object.defineProperty(captured, key, {
+        configurable: true,
+        enumerable: true,
+        value: descriptor.value,
+        writable: true,
+      });
+    }
+    return captured;
+  } catch {
+    return undefined;
+  }
+}
+
+function captureDenseArray(value: unknown): unknown[] | undefined {
+  try {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+      return undefined;
+    }
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, "length");
+    if (
+      !lengthDescriptor ||
+      !("value" in lengthDescriptor) ||
+      !Number.isSafeInteger(lengthDescriptor.value) ||
+      lengthDescriptor.value < 0
+    ) {
+      return undefined;
+    }
+    const length = lengthDescriptor.value as number;
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== length + 1 || keys[keys.length - 1] !== "length") return undefined;
+
+    const captured = new Array<unknown>(length);
+    for (let index = 0; index < length; index += 1) {
+      const key = String(index);
+      if (keys[index] !== key) return undefined;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor?.enumerable || !("value" in descriptor)) return undefined;
+      captured[index] = descriptor.value;
+    }
+    return captured;
+  } catch {
+    return undefined;
+  }
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -162,52 +215,62 @@ function hasValidCommonFields(value: Record<string, unknown>): boolean {
 }
 
 function hasValidFrozenFields(value: Record<string, unknown>): boolean {
+  if (
+    !isSha256(value.candidateVersion) ||
+    !isNonEmptyString(value.feedbackId) ||
+    !isUtcMillisecond(value.feedbackUpdatedAt) ||
+    !isSha256(value.snapshotSha256) ||
+    !isNonEmptyString(value.clipId) ||
+    !isNonEmptyString(value.jobId) ||
+    !isNonEmptyString(value.userId)
+  ) {
+    return false;
+  }
   return (
-    isSha256(value.candidateVersion) &&
-    isNonEmptyString(value.feedbackId) &&
-    isUtcMillisecond(value.feedbackUpdatedAt) &&
-    isSha256(value.snapshotSha256) &&
-    isNonEmptyString(value.clipId) &&
-    isNonEmptyString(value.jobId) &&
-    isNonEmptyString(value.userId)
+    value.candidateVersion ===
+    sha256(`${value.feedbackId}\n${value.feedbackUpdatedAt}\n${value.snapshotSha256}`)
   );
 }
 
 function validateEvent(value: unknown): ReviewEvent {
-  if (!isRecord(value) || !hasValidCommonFields(value)) return invalid("invalid_event");
+  const captured = captureOwnData(value);
+  if (captured === undefined) return invalid("invalid_event");
 
-  if (value.action === "approve") {
+  if (captured.action === "approve") {
     if (
-      !hasExactDataKeys(value, APPROVAL_KEYS) ||
-      !hasValidFrozenFields(value) ||
-      (value.set !== "eval" && value.set !== "holdout")
+      !hasExactKeys(captured, APPROVAL_KEYS) ||
+      !hasValidCommonFields(captured) ||
+      !hasValidFrozenFields(captured) ||
+      (captured.set !== "eval" && captured.set !== "holdout")
     ) {
       return invalid("invalid_event");
     }
-    return value as unknown as ApprovalEvent;
+    return captured as unknown as ApprovalEvent;
   }
 
-  if (value.action === "reject") {
+  if (captured.action === "reject") {
     if (
-      !hasExactDataKeys(value, REJECTION_KEYS) ||
-      !hasValidFrozenFields(value) ||
-      !isNonEmptyString(value.reason)
+      !hasExactKeys(captured, REJECTION_KEYS) ||
+      !hasValidCommonFields(captured) ||
+      !hasValidFrozenFields(captured) ||
+      !isNonEmptyString(captured.reason)
     ) {
       return invalid("invalid_event");
     }
-    return value as unknown as RejectionEvent;
+    return captured as unknown as RejectionEvent;
   }
 
-  if (value.action === "correct") {
+  if (captured.action === "correct") {
     if (
-      !hasExactDataKeys(value, CORRECTION_KEYS) ||
-      value.operation !== "retire" ||
-      !isNonEmptyString(value.targetEventId) ||
-      !isNonEmptyString(value.reason)
+      !hasExactKeys(captured, CORRECTION_KEYS) ||
+      !hasValidCommonFields(captured) ||
+      captured.operation !== "retire" ||
+      !isNonEmptyString(captured.targetEventId) ||
+      !isNonEmptyString(captured.reason)
     ) {
       return invalid("invalid_event");
     }
-    return value as unknown as ReviewEvent;
+    return captured as unknown as ReviewEvent;
   }
 
   return invalid("invalid_event");
@@ -244,10 +307,13 @@ export function parseLedger(bytes: Buffer): readonly ReviewEvent[] {
     } catch {
       return invalid("invalid_jsonl");
     }
-    if (!isRecord(value) || JSON.stringify(value) !== line) {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
       return invalid("invalid_jsonl");
     }
-    parsed.push(validateEvent(value));
+    const event = validateEvent(value);
+    const compact = jsonLine(event).subarray(0, -1).toString("utf8");
+    if (compact !== line) return invalid("invalid_jsonl");
+    parsed.push(event);
   }
   return parsed;
 }
@@ -328,11 +394,93 @@ export function foldLedger(events: readonly ReviewEvent[]): EffectiveLedger {
   };
 }
 
+function validateDestinationLock(value: unknown): DestinationLock {
+  const captured = captureOwnData(value);
+  if (
+    captured === undefined ||
+    !hasExactKeys(captured, DESTINATION_LOCK_KEYS) ||
+    !isNonEmptyString(captured.feedbackId) ||
+    (captured.set !== "eval" && captured.set !== "holdout")
+  ) {
+    return invalid("invalid_event");
+  }
+  return captured as DestinationLock;
+}
+
+function validateEffectiveLedger(value: unknown): EffectiveLedger {
+  const root = captureOwnData(value);
+  if (root === undefined || !hasExactKeys(root, EFFECTIVE_LEDGER_KEYS)) {
+    return invalid("invalid_event");
+  }
+
+  const rawDecisions = captureDenseArray(root.activeDecisions);
+  const rawRetired = captureDenseArray(root.retiredTargetIds);
+  const rawLocks = captureDenseArray(root.destinationLocks);
+  if (rawDecisions === undefined || rawRetired === undefined || rawLocks === undefined) {
+    return invalid("invalid_event");
+  }
+
+  const activeDecisions: DecisionEvent[] = [];
+  const activeCandidateVersions = new Set<Sha256>();
+  const activeEventIds = new Set<string>();
+  const activeApprovalFeedbackIds = new Set<string>();
+  for (const rawDecision of rawDecisions) {
+    const event = validateEvent(rawDecision);
+    if (event.action === "correct") return invalid("invalid_event");
+    if (
+      activeCandidateVersions.has(event.candidateVersion) ||
+      activeEventIds.has(event.eventId)
+    ) {
+      return invalid("invalid_transition");
+    }
+    activeCandidateVersions.add(event.candidateVersion);
+    activeEventIds.add(event.eventId);
+    if (event.action === "approve") {
+      if (activeApprovalFeedbackIds.has(event.feedbackId)) {
+        return invalid("invalid_transition");
+      }
+      activeApprovalFeedbackIds.add(event.feedbackId);
+    }
+    activeDecisions.push(event);
+  }
+
+  const destinationLocks: DestinationLock[] = [];
+  const lockByFeedback = new Map<string, TargetSet>();
+  for (const rawLock of rawLocks) {
+    const lock = validateDestinationLock(rawLock);
+    if (lockByFeedback.has(lock.feedbackId)) return invalid("invalid_transition");
+    lockByFeedback.set(lock.feedbackId, lock.set);
+    destinationLocks.push(lock);
+  }
+  for (const decision of activeDecisions) {
+    if (
+      decision.action === "approve" &&
+      lockByFeedback.get(decision.feedbackId) !== decision.set
+    ) {
+      return invalid("invalid_transition");
+    }
+  }
+
+  const retiredTargetIds: string[] = [];
+  const retiredIds = new Set<string>();
+  for (const rawRetiredId of rawRetired) {
+    if (!isNonEmptyString(rawRetiredId)) return invalid("invalid_event");
+    if (retiredIds.has(rawRetiredId) || activeEventIds.has(rawRetiredId)) {
+      return invalid("invalid_transition");
+    }
+    retiredIds.add(rawRetiredId);
+    retiredTargetIds.push(rawRetiredId);
+  }
+
+  return { activeDecisions, retiredTargetIds, destinationLocks };
+}
+
 export function canonicalLedgerState(state: EffectiveLedger): string {
+  const validated = validateEffectiveLedger(state);
   return canonicalJson({
-    activeDecisions: [...state.activeDecisions].sort(compareDecisions),
-    retiredTargetIds: [...state.retiredTargetIds].sort(byteCompare),
-    destinationLocks: [...state.destinationLocks].sort(compareLocks),
+    activeDecisions: [...validated.activeDecisions].sort(compareDecisions),
+    retiredTargetIds: [...validated.retiredTargetIds].sort(byteCompare),
+    destinationLocks: [...validated.destinationLocks].sort(compareLocks),
   });
 }
 
@@ -419,6 +567,7 @@ export function buildCapacity(
   state: EffectiveLedger,
   currentRows: ReadonlyMap<string, FeedbackProjection | null>
 ): CapacityState {
+  const validated = validateEffectiveLedger(state);
   const capacities = {
     eval: emptyCapacity(),
     holdout: emptyCapacity(),
@@ -427,7 +576,7 @@ export function buildCapacity(
     eval: new Set<string>(),
     holdout: new Set<string>(),
   };
-  const approvals = state.activeDecisions
+  const approvals = validated.activeDecisions
     .filter((event): event is ApprovalEvent => event.action === "approve")
     .sort(compareApprovals);
 
