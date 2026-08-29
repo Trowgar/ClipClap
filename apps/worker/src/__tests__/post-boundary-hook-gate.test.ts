@@ -284,6 +284,49 @@ describe("post-boundary hook gate", () => {
     expect(result.telemetry?.diagnostics[0]).not.toHaveProperty("language");
   });
 
+  it("passes before a start repair and drops after the repaired boundary delays the hook", () => {
+    const beforeRepair = clip("candidate", { startSec: 1, hookStartSec: 3 });
+    const afterRepair = clip("candidate", { startSec: 0, hookStartSec: 3 });
+    const gateOptions = {
+      ...options("enforce", { maxDelaySec: 2, maxPreHookGapSec: 1 }),
+      provenanceForClip: () => ({ startRepairApplied: true }),
+    };
+
+    const before = applyPostBoundaryHookGate([beforeRepair], nodes([[1, 3]]), gateOptions);
+    const after = applyPostBoundaryHookGate([afterRepair], nodes([[1, 3]]), gateOptions);
+
+    expect(before.clips).toEqual([beforeRepair]);
+    expect(before.telemetry).toMatchObject({ passed: 1, dropped: 0 });
+    expect(after.clips).toEqual([]);
+    expect(after.drops).toEqual([{ id: "candidate", reasons: ["hook_delay"] }]);
+    expect(after.telemetry).toMatchObject({
+      passed: 0,
+      dropped: 1,
+      diagnostics: [expect.objectContaining({ startRepairApplied: true, hookDelaySec: 3 })],
+    });
+  });
+
+  it("evaluates a zero-length hook interval as a zero-gap passing decision", () => {
+    const zeroLength = clip("zero", { startSec: 5, hookStartSec: 5 });
+    const result = applyPostBoundaryHookGate(
+      [zeroLength],
+      nodes([]),
+      options("enforce", { maxDelaySec: 0, maxPreHookGapSec: 0 }),
+    );
+
+    expect(result.clips).toEqual([zeroLength]);
+    expect(result.drops).toEqual([]);
+    expect(result.telemetry).toMatchObject({
+      evaluated: 1,
+      notEvaluable: 0,
+      passed: 1,
+      dropped: 0,
+      maxHookDelaySec: 0,
+      maxPreHookGapSec: 0,
+      distributions: { overall: { hookDelaySec: [0], preHookGapSec: [0] } },
+    });
+  });
+
   it("bounds diagnostics to the twenty greatest delay and gap outliers with stable ID ties", () => {
     const delayClips = Array.from({ length: 25 }, (_, index) =>
       clip(`delay-${String(index).padStart(2, "0")}`, { hookStartSec: 100 + index }),
