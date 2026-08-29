@@ -48,7 +48,7 @@ function options(
 describe("post-boundary hook gate", () => {
   it("drops in enforce when hook delay exceeds the strict limit", () => {
     const result = applyPostBoundaryHookGate(
-      [clip("late", { startSec: 10, hookStartSec: 12.01 })],
+      [clip("late", { startSec: 10, endSec: 12.01, hookStartSec: 12.01 })],
       nodes([[10, 12.01]]),
       options("enforce", { maxDelaySec: 2, maxPreHookGapSec: 9 }),
     );
@@ -84,8 +84,8 @@ describe("post-boundary hook gate", () => {
   it("uses strict comparisons at both limits", () => {
     const exact = clip("exact", { hookStartSec: 2 });
     const overDelay = clip("over-delay", { hookStartSec: 2.01 });
-    const exactGap = clip("exact-gap", { startSec: 10, hookStartSec: 12 });
-    const overGap = clip("over-gap", { startSec: 20, hookStartSec: 22 });
+    const exactGap = clip("exact-gap", { startSec: 10, endSec: 12, hookStartSec: 12 });
+    const overGap = clip("over-gap", { startSec: 20, endSec: 22, hookStartSec: 22 });
     const result = applyPostBoundaryHookGate(
       [exact, overDelay, exactGap, overGap],
       nodes([[0, 2], [10, 11], [20, 20.99]]),
@@ -228,9 +228,20 @@ describe("post-boundary hook gate", () => {
     });
   });
 
+  it("keeps prototype-like kind and language values as own distribution keys", () => {
+    const reserved = clip("reserved", { hookStartSec: 1 }, { kind: "__proto__", language: "constructor" });
+    const result = applyPostBoundaryHookGate([reserved], nodes([[0, 1]]), options("observe"));
+    const distributions = result.telemetry?.distributions;
+
+    expect(Object.hasOwn(distributions?.byKind ?? {}, "__proto__")).toBe(true);
+    expect(Object.hasOwn(distributions?.byLanguage ?? {}, "constructor")).toBe(true);
+    expect(distributions?.byKind.__proto__).toMatchObject({ count: 1, hookDelaySec: [1] });
+    expect(distributions?.byLanguage.constructor).toMatchObject({ count: 1, preHookGapSec: [0] });
+  });
+
   it("reports threshold exceedance rates and every threshold diagnostic without language", () => {
     const input = Array.from({ length: 45 }, (_, index) =>
-      clip(`drop-${String(index).padStart(2, "0")}`, { hookStartSec: index + 1 }),
+      clip(`drop-${String(index).padStart(2, "0")}`, { endSec: index + 2, hookStartSec: index + 1 }),
     );
     const result = applyPostBoundaryHookGate(
       input,
@@ -255,8 +266,8 @@ describe("post-boundary hook gate", () => {
 
   it("enforces repaired and extended failures with dual reasons and explicit provenance", () => {
     const repaired = clip("repaired", { hookStartSec: 3 });
-    const extended = clip("extended", { startSec: 10, hookStartSec: 11 });
-    const passing = clip("passing", { startSec: 20, hookStartSec: 21 });
+    const extended = clip("extended", { startSec: 10, endSec: 11, hookStartSec: 11 });
+    const passing = clip("passing", { startSec: 20, endSec: 21, hookStartSec: 21 });
     const result = applyPostBoundaryHookGate(
       [repaired, extended, passing],
       nodes([[20, 21]]),
@@ -327,12 +338,38 @@ describe("post-boundary hook gate", () => {
     });
   });
 
+  it("fails open for non-finite, reversed, and post-end hook boundaries", () => {
+    const malformed = [
+      clip("infinite-end", { endSec: Number.POSITIVE_INFINITY, hookStartSec: 1 }),
+      clip("nan-end", { endSec: Number.NaN, hookStartSec: 1 }),
+      clip("reversed-end", { startSec: 3, endSec: 2, hookStartSec: 3 }),
+      clip("post-end-hook", { endSec: 2, hookStartSec: 3 }),
+    ];
+
+    for (const mode of ["shadow", "enforce"] as const) {
+      const result = applyPostBoundaryHookGate(
+        malformed,
+        nodes([]),
+        options(mode, { maxDelaySec: 0, maxPreHookGapSec: 0 }),
+      );
+
+      expect(result.clips).toEqual(malformed);
+      expect(result.drops).toEqual([]);
+      expect(result.telemetry).toMatchObject({ evaluated: 0, notEvaluable: 4, passed: 0 });
+      expect(result.telemetry).toHaveProperty(mode === "shadow" ? "wouldDrop" : "dropped", 0);
+    }
+  });
+
   it("bounds diagnostics to the twenty greatest delay and gap outliers with stable ID ties", () => {
     const delayClips = Array.from({ length: 25 }, (_, index) =>
-      clip(`delay-${String(index).padStart(2, "0")}`, { hookStartSec: 100 + index }),
+      clip(`delay-${String(index).padStart(2, "0")}`, { endSec: 130, hookStartSec: 100 + index }),
     );
     const gapClips = Array.from({ length: 25 }, (_, index) =>
-      clip(`gap-${String(index).padStart(2, "0")}`, { startSec: 200 + index * 2, hookStartSec: 220 + index * 2 }),
+      clip(`gap-${String(index).padStart(2, "0")}`, {
+        startSec: 200 + index * 2,
+        endSec: 220 + index * 2,
+        hookStartSec: 220 + index * 2,
+      }),
     );
     const coverage = [
       ...nodes([[0, 130]]),

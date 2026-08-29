@@ -137,8 +137,11 @@ function emptyDistributions(): PostBoundaryHookGateDistributions {
   });
   return {
     overall: emptyMetric(),
-    byKind: {},
-    byLanguage: {},
+    // Kind and language originate outside this module. Null-prototype maps
+    // preserve literal keys such as "__proto__" instead of treating them as
+    // inherited object members.
+    byKind: Object.create(null) as Record<string, PostBoundaryHookGateMetricDistribution>,
+    byLanguage: Object.create(null) as Record<string, PostBoundaryHookGateMetricDistribution>,
     byScoreBand: {
       below_threshold: emptyMetric(),
       threshold_to_0_8: emptyMetric(),
@@ -168,7 +171,10 @@ function metricFor(
   metrics: Record<string, PostBoundaryHookGateMetricDistribution>,
   key: string,
 ): PostBoundaryHookGateMetricDistribution {
-  return (metrics[key] ??= { count: 0, hookDelaySec: [], preHookGapSec: [] });
+  if (!Object.hasOwn(metrics, key)) {
+    metrics[key] = { count: 0, hookDelaySec: [], preHookGapSec: [] };
+  }
+  return metrics[key];
 }
 
 function scoreBand(score: number, threshold: number): PostBoundaryHookGateScoreBand {
@@ -188,13 +194,19 @@ function durationBand(
 }
 
 function isEvaluable(clip: SnappedClip, nodes: SentenceNode[] | undefined): nodes is SentenceNode[] {
+  // The interval must be a coherent final clip boundary. Malformed final ends
+  // remain the existing boundary validator's responsibility; this policy only
+  // records them as not evaluable and never turns them into a gate drop.
   return (
     Array.isArray(nodes) &&
     Number.isFinite(clip.startSec) &&
     clip.startSec >= 0 &&
+    Number.isFinite(clip.endSec) &&
+    clip.endSec >= clip.startSec &&
     Number.isFinite(clip.hookStartSec) &&
     clip.hookStartSec >= 0 &&
-    clip.hookStartSec >= clip.startSec
+    clip.hookStartSec >= clip.startSec &&
+    clip.hookStartSec <= clip.endSec
   );
 }
 
