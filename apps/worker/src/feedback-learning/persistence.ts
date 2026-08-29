@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, readdir, rename, rm, type FileHandle } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -184,6 +184,7 @@ async function secureDirectory(path: string): Promise<void> {
   const handle = await openDirectoryNoFollow(path);
   try {
     await handle.chmod(DIRECTORY_MODE);
+    await handle.sync();
   } finally {
     await closeBestEffort(handle);
   }
@@ -287,12 +288,21 @@ async function sameDirectory(left: FileHandle, right: FileHandle): Promise<boole
   return leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
 }
 
-async function assertRootHandleCurrent(rootPath: string, trustedRoot: FileHandle): Promise<void> {
-  const currentRoot = await openDirectoryNoFollow(rootPath);
+async function assertRootEntryCurrent(
+  parentPath: string,
+  rootName: string,
+  trustedParent: FileHandle,
+  trustedRoot: FileHandle
+): Promise<void> {
+  const currentParent = await openDirectoryNoFollow(parentPath);
+  let currentRoot: FileHandle | undefined;
   try {
+    if (!(await sameDirectory(trustedParent, currentParent))) throwUnsafe();
+    currentRoot = await openDirectoryNoFollow(anchoredPath(currentParent, rootName));
     if (!(await sameDirectory(trustedRoot, currentRoot))) throwUnsafe();
   } finally {
     await closeBestEffort(currentRoot);
+    await closeBestEffort(currentParent);
   }
 }
 
@@ -317,6 +327,29 @@ async function assertPrivateDirectoryAnchorCurrent(
       throwUnsafe();
     }
   } finally {
+    await closePrivateDirectoryAnchor(current);
+  }
+}
+
+async function assertPublishedRunCurrent(
+  rootPath: string,
+  trusted: PrivateDirectoryAnchor,
+  runId: string,
+  trustedRun: FileHandle
+): Promise<void> {
+  const current = await openPrivateDirectoryAnchor(rootPath, "exports");
+  let currentRun: FileHandle | undefined;
+  try {
+    if (
+      !(await sameDirectory(trusted.rootHandle, current.rootHandle)) ||
+      !(await sameDirectory(trusted.directoryHandle, current.directoryHandle))
+    ) {
+      throwUnsafe();
+    }
+    currentRun = await openDirectoryNoFollow(anchoredPath(current.directoryHandle, runId));
+    if (!(await sameDirectory(trustedRun, currentRun))) throwUnsafe();
+  } finally {
+    await closeBestEffort(currentRun);
     await closePrivateDirectoryAnchor(current);
   }
 }
@@ -406,17 +439,23 @@ async function uncertainRunResult(input: RunWrite): Promise<CommitResult> {
 
 export async function ensurePrivateTree(root: string): Promise<PrivatePaths> {
   const paths = privatePaths(root);
-  await secureDirectory(paths.root);
-  const rootHandle = await openDirectoryNoFollow(paths.root);
+  const parentPath = dirname(paths.root);
+  const rootName = basename(paths.root);
+  const parentHandle = await openDirectoryNoFollow(parentPath);
+  let rootHandle: FileHandle | undefined;
   try {
+    await secureDirectory(anchoredPath(parentHandle, rootName));
+    await parentHandle.sync();
+    rootHandle = await openDirectoryNoFollow(anchoredPath(parentHandle, rootName));
     await runPrivateTreeRootOpenTestHook();
     await secureDirectory(anchoredPath(rootHandle, "exports"));
     await secureDirectory(anchoredPath(rootHandle, "ledger"));
     await rootHandle.sync();
-    await assertRootHandleCurrent(paths.root, rootHandle);
+    await assertRootEntryCurrent(parentPath, rootName, parentHandle, rootHandle);
     return paths;
   } finally {
     await closeBestEffort(rootHandle);
+    await closeBestEffort(parentHandle);
   }
 }
 
@@ -491,6 +530,7 @@ export async function replaceLedgerAtomically(input: LedgerWrite): Promise<Commi
       operation: "parent_fsync",
       timing: "after",
     });
+    await assertPrivateDirectoryAnchorCurrent(input.paths.root, anchor);
     return { status: "committed" };
   } catch (error) {
     if (renamePossible) return uncertainLedgerResult(input);
@@ -634,6 +674,7 @@ export async function publishRunAtomically(input: RunWrite): Promise<CommitResul
   ) as RunFiles;
   const anchor = await openPrivateDirectoryAnchor(input.paths.root, "exports");
   let tempDirectory: string | undefined;
+  let publishedRunHandle: FileHandle | undefined;
   let renamePossible = false;
   let renamed = false;
   try {
@@ -676,6 +717,7 @@ export async function publishRunAtomically(input: RunWrite): Promise<CommitResul
     renamePossible = true;
     await rename(tempDirectory, anchoredRunDirectory);
     renamed = true;
+    publishedRunHandle = await openDirectoryNoFollow(anchoredRunDirectory);
     await fault(input.injectFault, { scope: "run", operation: "rename", timing: "after" });
 
     await fault(input.injectFault, {
@@ -689,12 +731,19 @@ export async function publishRunAtomically(input: RunWrite): Promise<CommitResul
       operation: "parent_fsync",
       timing: "after",
     });
+    await assertPublishedRunCurrent(
+      input.paths.root,
+      anchor,
+      input.runId,
+      publishedRunHandle
+    );
     return { status: "committed" };
   } catch (error) {
     if (renamePossible) return uncertainRunResult(input);
     throw error;
   } finally {
     if (!renamed) await removeBestEffort(tempDirectory);
+    await closeBestEffort(publishedRunHandle);
     await closePrivateDirectoryAnchor(anchor);
   }
 }

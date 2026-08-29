@@ -3,8 +3,10 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  open,
   readFile,
   readdir,
+  readlink,
   rename as renamePath,
   rm,
   symlink,
@@ -119,6 +121,38 @@ describe("ensurePrivateTree", () => {
     expect(mode(await lstat(paths.root))).toBe(0o700);
     expect(mode(await lstat(paths.exportsDir))).toBe(0o700);
     expect(mode(await lstat(paths.ledgerDir))).toBe(0o700);
+  });
+
+  it("fsyncs every owned directory inode and the root parent entry in protocol order", async () => {
+    const { parent, root } = await temporaryRoot();
+    await chmod(parent, 0o751);
+    const probe = await open(parent, "r");
+    const prototype = Object.getPrototypeOf(probe) as {
+      fd: number;
+      sync(): Promise<void>;
+    };
+    const originalSync = prototype.sync;
+    const syncedPaths: string[] = [];
+    await probe.close();
+    prototype.sync = async function (): Promise<void> {
+      syncedPaths.push(await readlink(`/proc/self/fd/${this.fd}`));
+      await originalSync.call(this);
+    };
+
+    try {
+      await ensurePrivateTree(root);
+    } finally {
+      prototype.sync = originalSync;
+    }
+
+    expect(syncedPaths).toEqual([
+      root,
+      parent,
+      join(root, "exports"),
+      join(root, "ledger"),
+      root,
+    ]);
+    expect(mode(await lstat(parent))).toBe(0o751);
   });
 
   it.each(["root", "exports", "ledger"] as const)(
@@ -308,7 +342,6 @@ describe("replaceLedgerAtomically", () => {
             await writeFile(join(externalDirectory, tempName!), "external trap", { mode: 0o640 });
             await renamePath(paths.ledgerDir, `${paths.ledgerDir}-original`);
             await symlink(externalDirectory, paths.ledgerDir);
-            throw new Error("injected:ledger-parent-swap");
           }
         },
       })
@@ -342,7 +375,6 @@ describe("replaceLedgerAtomically", () => {
           if (sameFault(point, { scope: "ledger", operation: "rename", timing: "after" })) {
             await renamePath(paths.root, `${paths.root}-original`);
             await symlink(externalRoot, paths.root);
-            throw new Error("injected:ledger-root-swap");
           }
         },
       })
@@ -708,7 +740,6 @@ describe("publishRunAtomically", () => {
             });
             await renamePath(paths.exportsDir, `${paths.exportsDir}-original`);
             await symlink(externalDirectory, paths.exportsDir);
-            throw new Error("injected:exports-parent-swap");
           }
         },
       })
@@ -750,7 +781,6 @@ describe("publishRunAtomically", () => {
           if (sameFault(point, { scope: "run", operation: "rename", timing: "after" })) {
             await renamePath(paths.root, `${paths.root}-original`);
             await symlink(externalRoot, paths.root);
-            throw new Error("injected:run-root-swap");
           }
         },
       })
@@ -761,6 +791,40 @@ describe("publishRunAtomically", () => {
     expect(mode(await lstat(externalExports))).toBe(0o755);
     expect(mode(await lstat(externalRun))).toBe(0o755);
     expect(mode(await lstat(join(externalRun, "run.json")))).toBe(0o640);
+  });
+
+  it("does not report committed when the published run inode is silently replaced", async () => {
+    const paths = await privatePaths();
+    const runId = "eval-0123456789abcdef";
+    const runDigest = `sha256:${"0".repeat(64)}`;
+    const files = runFiles(runId, runDigest);
+    const publishedRun = join(paths.exportsDir, runId);
+    const externalRun = join(paths.root, "external-published-run");
+    await mkdir(externalRun, 0o755);
+    for (const [name, bytes] of Object.entries(files)) {
+      await writeFile(join(externalRun, name), bytes, { mode: 0o644 });
+    }
+
+    await expect(
+      publishRunAtomically({
+        paths,
+        runId,
+        runDigest,
+        files,
+        injectFault: async (point) => {
+          if (sameFault(point, { scope: "run", operation: "rename", timing: "after" })) {
+            await renamePath(publishedRun, `${publishedRun}-original`);
+            await symlink(externalRun, publishedRun);
+          }
+        },
+      })
+    ).resolves.toEqual({ status: "indeterminate" });
+
+    expect(mode(await lstat(externalRun))).toBe(0o755);
+    for (const [name, bytes] of Object.entries(files)) {
+      expect(await readFile(join(externalRun, name))).toEqual(Buffer.from(bytes));
+      expect(mode(await lstat(join(externalRun, name)))).toBe(0o644);
+    }
   });
 
   it("does not follow a swapped exports parent while cleaning a pre-rename temp", async () => {
