@@ -81,6 +81,27 @@ describe("safe-end audit primitives", () => {
     expect(zeroTailHandoff(clip("invalid", { finalEndNode: 0 }), nodes([[8, 8, true], [10, 12, true]]))).toBe(false);
   });
 
+  it("keeps the inclusive 50ms boundary stable at nonzero and large timestamps", () => {
+    expect(
+      zeroTailHandoff(
+        clip("nonzero", { endSec: 10, finalEndNode: 0 }),
+        nodes([[8, 10, true], [10.05, 12, true]]),
+      ),
+    ).toBe(true);
+    expect(
+      zeroTailHandoff(
+        clip("large", { endSec: 1_000_000, finalEndNode: 0 }),
+        nodes([[999_998, 1_000_000, true], [1_000_000.05, 1_000_002, true]]),
+      ),
+    ).toBe(true);
+    expect(
+      zeroTailHandoff(
+        clip("just-over", { endSec: 1_000_000, finalEndNode: 0 }),
+        nodes([[999_998, 1_000_000, true], [1_000_000.050001, 1_000_002, true]]),
+      ),
+    ).toBe(false);
+  });
+
   it("skips opaque and invalid nodes when finding the final and following word-bearing nodes", () => {
     expect(
       zeroTailHandoff(

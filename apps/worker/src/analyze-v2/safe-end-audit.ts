@@ -104,6 +104,19 @@ export function safeEndGeometryReference(clip: SnappedClip): SafeEndGeometryRefe
 export const geometryReference = safeEndGeometryReference;
 
 /**
+ * Preserves an inclusive decimal threshold after binary subtraction. The
+ * allowance is scaled to the inputs' floating-point representation error, not
+ * a product tolerance: a value measurably beyond `threshold` still fails.
+ */
+function withinInclusiveSeconds(value: number, target: number, threshold: number): boolean {
+  const difference = Math.abs(value - target);
+  if (difference <= threshold) return true;
+  const representationAllowance =
+    Number.EPSILON * Math.max(1, Math.abs(value), Math.abs(target)) * 4;
+  return difference - threshold <= representationAllowance;
+}
+
+/**
  * Pure signal for an immediate spoken handoff. It finds the final valid
  * word-bearing node inside the candidate range and the first such node after
  * it; opaque and malformed timing nodes are not speech boundaries.
@@ -145,7 +158,12 @@ export function zeroTailHandoff(
       break;
     }
   }
-  return Boolean(last && next && Math.abs(last.end - clip.endSec) <= 0.05 && Math.abs(next.start - clip.endSec) <= 0.05);
+  return Boolean(
+    last &&
+      next &&
+      withinInclusiveSeconds(last.end, clip.endSec, 0.05) &&
+      withinInclusiveSeconds(next.start, clip.endSec, 0.05),
+  );
 }
 
 const normalSeverity: Record<SafeEndNormalOutcome, number> = {
