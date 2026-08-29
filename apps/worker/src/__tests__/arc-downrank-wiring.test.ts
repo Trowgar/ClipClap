@@ -183,6 +183,17 @@ const standaloneFilterOf = (telemetry: Record<string, unknown>) =>
         bypassedNoCleanAlternative: number;
       }
     | undefined;
+const postBoundaryHookGateOf = (telemetry: Record<string, unknown>) =>
+  telemetry.postBoundaryHookGate as
+    | {
+        mode: "observe" | "shadow" | "enforce";
+        evaluated: number;
+        diagnostics: Array<Record<string, unknown>>;
+        wouldDrop?: number;
+        dropped?: number;
+        distributions: { byDurationBand: { long: { count: number } } };
+      }
+    | undefined;
 
 describe("arc-downrank policy wiring", () => {
   it("makes no difference and adds no telemetry key while ARC_DOWNRANK is dark, even on a two-flag clip", async () => {
@@ -522,5 +533,169 @@ describe("arc-downrank policy wiring", () => {
     expect(finalizerUser).toContain("CLIP c0 |");
     expect(finalizerUser).not.toContain("CLIP c1 |");
     expect(finalizerUser).not.toContain("CLIP c2 |");
+  });
+
+  it("keeps the gate dark without changing selection when post-boundary gating is off", async () => {
+    const cfg = loadAnalyzeConfig({});
+    const { client, requests } = stubClient({
+      scan_candidates: { candidates: [scanCandidate(10, 14, 13)] },
+      critic_verdicts: { results: [verdict("c0", 10, 14, 13, 0.82)] },
+      clip_finalizer: { clips: [shipRow("c0")] },
+    });
+
+    const r = await analyzeHighlightsV2(transcript(), { client, cfg });
+
+    expect(r.highlights).toHaveLength(1);
+    expect(userFor(requests, "clip_finalizer")).toContain("CLIP c0 |");
+    expect(r.telemetry).not.toHaveProperty("postBoundaryHookGate");
+  });
+
+  it("observes raw diagnostics without changing finalizer input", async () => {
+    const cfg = loadAnalyzeConfig({ POST_BOUNDARY_HOOK_GATE: "observe" });
+    const { client, requests } = stubClient({
+      scan_candidates: { candidates: [scanCandidate(10, 14, 13)] },
+      critic_verdicts: { results: [verdict("c0", 10, 14, 13, 0.82)] },
+      clip_finalizer: { clips: [shipRow("c0")] },
+    });
+
+    const r = await analyzeHighlightsV2(transcript(), { client, cfg });
+    const gate = postBoundaryHookGateOf(r.telemetry)!;
+
+    expect(r.highlights).toHaveLength(1);
+    expect(userFor(requests, "clip_finalizer")).toContain("CLIP c0 |");
+    expect(gate.mode).toBe("observe");
+    expect(gate.evaluated).toBe(1);
+    expect(gate.diagnostics[0]).toMatchObject({ id: "c0", language: "ru" });
+    expect(gate.diagnostics[0]).not.toHaveProperty("reasons");
+  });
+
+  it("reports shadow failures without removing a candidate from the finalizer", async () => {
+    const cfg = loadAnalyzeConfig({
+      POST_BOUNDARY_HOOK_GATE: "shadow",
+      POST_BOUNDARY_HOOK_MAX_DELAY_SEC: "1",
+      POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC: "0",
+    });
+    const { client, requests } = stubClient({
+      scan_candidates: { candidates: [scanCandidate(10, 14, 13)] },
+      critic_verdicts: { results: [verdict("c0", 10, 14, 13, 0.82)] },
+      clip_finalizer: { clips: [shipRow("c0")] },
+    });
+
+    const r = await analyzeHighlightsV2(transcript(), { client, cfg });
+    const gate = postBoundaryHookGateOf(r.telemetry)!;
+
+    expect(r.highlights).toHaveLength(1);
+    expect(userFor(requests, "clip_finalizer")).toContain("CLIP c0 |");
+    expect(gate).toMatchObject({ mode: "shadow", wouldDrop: 1 });
+    expect(gate.diagnostics[0]).toMatchObject({
+      id: "c0",
+      reasons: ["hook_delay", "pre_hook_gap"],
+    });
+    expect(gate.diagnostics[0]).not.toHaveProperty("language");
+  });
+
+  it("enforces post-extension gate failures before the finalizer with provenance and a drop row", async () => {
+    const cfg = loadAnalyzeConfig({
+      ARC_AUDIT: "on",
+      START_EXTENSION: "on",
+      END_EXTENSION: "on",
+      POST_BOUNDARY_HOOK_GATE: "enforce",
+      POST_BOUNDARY_HOOK_MAX_DELAY_SEC: "1",
+      POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC: "10",
+    });
+    const { client, requests } = stubClient({
+      scan_candidates: { candidates: [scanCandidate(10, 14, 13)] },
+      critic_verdicts: { results: [verdict("c0", 10, 14, 13, 0.82)] },
+      arc_audit: { results: [auditRow("c0", false, true, true, 9)] },
+      end_extension: { results: [{ id: "c0", extend: true, end_node: 17, reason: "finish the beat" }] },
+      clip_finalizer: { clips: [shipRow("c0")] },
+    });
+
+    const r = await analyzeHighlightsV2(transcript(), { client, cfg });
+    const gate = postBoundaryHookGateOf(r.telemetry)!;
+
+    expect(r.highlights).toHaveLength(0);
+    expect(schemasOf(requests)).toEqual([
+      "scan_candidates",
+      "critic_verdicts",
+      "arc_audit",
+      "end_extension",
+    ]);
+    expect(r.telemetry.selectedForFinalizer).toBe(0);
+    expect(gate).toMatchObject({ mode: "enforce", dropped: 1 });
+    expect(gate.diagnostics[0]).toMatchObject({
+      id: "c0",
+      startRepairApplied: true,
+      endExtensionApplied: true,
+    });
+    expect(r.telemetry.droppedVerdicts).toContainEqual({
+      id: "c0",
+      stage: "post_boundary_hook_gate",
+      reason: "hook_delay",
+      score: 0.82,
+    });
+  });
+
+  it("evaluates the post-sweep long boundary rather than the pre-extension clip", async () => {
+    const cfg = loadAnalyzeConfig({
+      ARC_AUDIT: "on",
+      LONG_CLIPS: "on",
+      END_EXTENSION: "on",
+      POST_BOUNDARY_HOOK_GATE: "observe",
+    });
+    const { client, requests } = stubClient({
+      scan_candidates: { candidates: [scanCandidate(10, 26, 25)] },
+      critic_verdicts: { results: [verdict("c0", 10, 26, 25, 0.82)] },
+      arc_audit: { results: [auditRow("c0", true, true, true)] },
+      end_extension: { results: [{ id: "c0", extend: true, end_node: 30, reason: "finish the beat" }] },
+      clip_finalizer: { clips: [shipRow("c0")] },
+    });
+
+    const r = await analyzeHighlightsV2(transcript(), { client, cfg });
+
+    expect(userFor(requests, "clip_finalizer")).toContain("CLIP c0 | score 0.82 | 105s");
+    expect(postBoundaryHookGateOf(r.telemetry)?.distributions.byDurationBand.long.count).toBe(1);
+  });
+
+  it.each([
+    ["short", 200, { SHORT_SOURCE_RESCUE: "on" }],
+    ["mid", 795, { RESCUE_MID_SOURCE: "on" }],
+  ] as const)("does not let %s rescue restore a gate-dropped verdict", async (_tier, sourceDurationSec, rescueEnv) => {
+    const cfg = loadAnalyzeConfig({
+      ...rescueEnv,
+      POST_BOUNDARY_HOOK_GATE: "enforce",
+      POST_BOUNDARY_HOOK_MAX_DELAY_SEC: "1",
+      POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC: "10",
+    });
+    const { client } = stubClient({
+      scan_candidates: { candidates: [scanCandidate(10, 14, 13)] },
+      critic_verdicts: { results: [verdict("c0", 10, 14, 13, 0.82)] },
+      clip_finalizer: {
+        clips: [{ ...shipRow("c0"), verdict: "drop", drop_reason: "no_payoff" }],
+      },
+    });
+
+    const r = await analyzeHighlightsV2(transcript(), { client, cfg, sourceDurationSec });
+
+    expect(r.highlights).toHaveLength(0);
+    expect(r.telemetry).not.toHaveProperty("rescue");
+  });
+
+  it("keeps ordinary short-source rescue available when the critic produced no clips", async () => {
+    const cfg = loadAnalyzeConfig({
+      SHORT_SOURCE_RESCUE: "on",
+      POST_BOUNDARY_HOOK_GATE: "enforce",
+      POST_BOUNDARY_HOOK_MAX_DELAY_SEC: "10",
+      POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC: "10",
+    });
+    const { client } = stubClient({
+      scan_candidates: { candidates: [scanCandidate(10, 14, 13)] },
+      critic_verdicts: { results: [{ ...verdict("c0", 10, 14, 13, 0.82), keep: false }] },
+    });
+
+    const r = await analyzeHighlightsV2(transcript(), { client, cfg, sourceDurationSec: 200 });
+
+    expect(r.highlights).toHaveLength(1);
+    expect(r.telemetry.rescue).toMatchObject({ shipped: true, verdictId: "c0", tier: "short" });
   });
 });

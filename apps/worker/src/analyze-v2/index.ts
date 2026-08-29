@@ -21,6 +21,10 @@ import { runArcAudit, isFullyOk, type ArcAuditTelemetry } from "./arc-audit";
 import { extendClipStarts, type StartExtensionTelemetry } from "./start-extension";
 import { extendClipEnds } from "./end-extension";
 import { filterStandaloneClips, type StandaloneFilterTelemetry } from "./standalone-filter";
+import {
+  applyPostBoundaryHookGate,
+  type PostBoundaryHookGateTelemetry,
+} from "./post-boundary-hook-gate";
 import { finalizeClips } from "./finalize";
 import { detectTeaserRegion, isInTeaserRegion } from "./teaser";
 import { newUsage } from "./llm";
@@ -560,6 +564,12 @@ export async function analyzeHighlightsV2(
   // cfg.endExtensionEnabled, the pre-existing self-motivated switch), so no
   // extra gate is needed at this call site - unlike start-extension, this
   // stage's OWN top-of-function guard already covers "neither switch is on".
+  // Capture end nodes at the exact boundary before this stage. The gate's
+  // provenance is about the clip geometry that survives extension, not what
+  // the critic proposed or what an audit inferred.
+  const endNodeBeforeExtension = new Map(
+    afterStartExtension.map((clip) => [clip.verdict.id, clip.finalEndNode])
+  );
   const extension = await extendClipEnds(
     client,
     usage,
@@ -568,6 +578,12 @@ export async function analyzeHighlightsV2(
     nodes,
     cfg,
     { retryDelayMs: options.retryDelayMs }
+  );
+  const endExtensionAppliedById = new Map(
+    extension.clips.map((clip) => [
+      clip.verdict.id,
+      endNodeBeforeExtension.get(clip.verdict.id) !== clip.finalEndNode,
+    ])
   );
 
   // LONG-CLIP SWEEP (spec 2026-08-10 task 5, follow-up) - closes an asymmetry
@@ -601,6 +617,41 @@ export async function analyzeHighlightsV2(
       : { ...clip, overLength: true }
   );
 
+  // POST-BOUNDARY HOOK GATE - evaluates the actual post-extension and
+  // post-sweep geometry before any later selection authority. Off is a true
+  // no-op: no telemetry key, no candidate filtering, and no rescue exclusion.
+  let postBoundaryHookGateTelemetry: PostBoundaryHookGateTelemetry | undefined;
+  let afterPostBoundaryHookGate = beforeFinalize;
+  const postBoundaryHookGateDroppedIds = new Set<string>();
+  let allSelectedClipsDroppedByPostBoundaryHookGate = false;
+  if (cfg.postBoundaryHookGateMode !== "off") {
+    const gated = applyPostBoundaryHookGate(beforeFinalize, nodes, {
+      mode: cfg.postBoundaryHookGateMode,
+      maxDelaySec: cfg.postBoundaryHookMaxDelaySec,
+      maxPreHookGapSec: cfg.postBoundaryHookMaxPreHookGapSec,
+      scoreThreshold: cfg.scoreThreshold,
+      targetMinSec: cfg.targetMinSec,
+      maxSec: cfg.maxSec,
+      provenanceForClip: (clip) => ({
+        startRepairApplied: arcFlags.get(clip.verdict.id)?.entry.repaired === true,
+        endExtensionApplied: endExtensionAppliedById.get(clip.verdict.id) === true,
+      }),
+    });
+    afterPostBoundaryHookGate = gated.clips;
+    postBoundaryHookGateTelemetry = gated.telemetry;
+    allSelectedClipsDroppedByPostBoundaryHookGate =
+      beforeFinalize.length > 0 && gated.drops.length === beforeFinalize.length;
+    for (const drop of gated.drops) {
+      postBoundaryHookGateDroppedIds.add(drop.id);
+      droppedVerdicts.push({
+        id: drop.id,
+        stage: "post_boundary_hook_gate",
+        reason: drop.reasons.join("+"),
+        score: critic.verdicts.find((verdict) => verdict.id === drop.id)?.score ?? 0,
+      });
+    }
+  }
+
   // ARC DOWNRANK (spec 2026-08-10 task 7) - the first DROP authority the arc
   // audit earns, placed exactly where the task 5 long-clip policy sits: AFTER
   // arcAudit and BOTH extension stages, so every `entry.repaired`/
@@ -623,11 +674,11 @@ export async function analyzeHighlightsV2(
   let arcDownrankTelemetry:
     | { considered: number; penalized: number; dropped: number }
     | undefined;
-  let afterArcDownrank = beforeFinalize;
+  let afterArcDownrank = afterPostBoundaryHookGate;
   if (cfg.arcDownrankEnabled && cfg.arcAuditEnabled) {
     const t = { considered: 0, penalized: 0, dropped: 0 };
     const kept: SnappedClip[] = [];
-    for (const clip of beforeFinalize) {
+    for (const clip of afterPostBoundaryHookGate) {
       t.considered += 1;
       const standing = standingArcFlagCount(arcFlags.get(clip.verdict.id));
       // Penalty tiers, verbatim from spec §7/task 7: 2+ standing axes pay
@@ -938,6 +989,7 @@ export async function analyzeHighlightsV2(
     // above, not a zeroed placeholder.
     ...(arcDownrankTelemetry ? { arcDownrank: arcDownrankTelemetry } : {}),
     ...(standaloneFilterTelemetry ? { standaloneFilter: standaloneFilterTelemetry } : {}),
+    ...(postBoundaryHookGateTelemetry ? { postBoundaryHookGate: postBoundaryHookGateTelemetry } : {}),
   };
 
   if (highlights.length === 0) {
@@ -1077,10 +1129,15 @@ export async function analyzeHighlightsV2(
       options.sourceDurationSec < cfg.rescueMidMaxSourceSec;
     let rescueTelemetry: RescueTelemetry | undefined;
     if (
-      (cfg.shortSourceRescueEnabled && shortSource) ||
-      (cfg.rescueMidSourceEnabled && midSource)
+      ((cfg.shortSourceRescueEnabled && shortSource) ||
+        (cfg.rescueMidSourceEnabled && midSource)) &&
+      !allSelectedClipsDroppedByPostBoundaryHookGate
     ) {
-      const rescue = rescueShortSource(critic.verdicts, nodes, cfg);
+      const rescue = rescueShortSource(
+        critic.verdicts.filter((verdict) => !postBoundaryHookGateDroppedIds.has(verdict.id)),
+        nodes,
+        cfg
+      );
       rescueTelemetry = rescue.telemetry;
       if (rescue.clip) {
         // An EMPTY map, never `arcFlags`: with ARC_AUDIT on, a verdict that
