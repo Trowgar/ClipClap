@@ -3,7 +3,7 @@ import { analyzeHighlightsV2 } from "../analyze-v2";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { SAFE_END_AUDIT_SCHEMA, readSafeEndAuditRow } from "../analyze-v2/safe-end-audit-schema";
 import { SAFE_END_AUDIT_SYSTEM, safeEndAuditUserPrompt } from "../analyze-v2/safe-end-audit-prompts";
-import { APIConnectionTimeoutError } from "openai";
+import { APIConnectionError, APIConnectionTimeoutError } from "openai";
 import type { TranscriptionResult, WhisperSegment } from "@clipclap/shared";
 
 function transcript(): TranscriptionResult {
@@ -35,7 +35,7 @@ const critic = {
 };
 const finalizer = { clips: [{ id: "c0", verdict: "ship", drop_reason: null, duplicate_of: null, shared_claim: null, title: null, title_evidence_nodes: null, trim_start_node: null }] };
 
-type Reply = Record<string, unknown> | "refusal" | "timeout" | "sdk_timeout" | "errno_timeout" | "transient" | "truncated" | "malformed" | "serialization_failure";
+type Reply = Record<string, unknown> | "refusal" | "timeout" | "sdk_timeout" | "errno_timeout" | "sdk_cause_timeout" | "transient" | "truncated" | "malformed" | "serialization_failure";
 interface Request { schema: string; user: string; maxRetries?: number; }
 
 function clientFor(replies: Record<string, Reply>) {
@@ -47,6 +47,11 @@ function clientFor(replies: Record<string, Reply>) {
     if (reply === "timeout") throw new Error("request timeout");
     if (reply === "sdk_timeout") throw new APIConnectionTimeoutError();
     if (reply === "errno_timeout") throw Object.assign(new Error("socket stalled"), { code: "ETIMEDOUT" });
+    if (reply === "sdk_cause_timeout") {
+      throw new APIConnectionError({
+        cause: Object.assign(new Error("socket stalled"), { code: "ETIMEDOUT" }),
+      });
+    }
     if (reply === "transient") throw new Error("temporary network failure");
     if (reply === "serialization_failure") JSON.stringify({ value: BigInt(1) });
     if (reply === "refusal") return { choices: [{ message: { content: null, refusal: "cannot assess" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
@@ -210,6 +215,7 @@ describe("safe-end normal shadow wiring", () => {
     ["timeout", "timeout"],
     ["sdk_timeout", "timeout"],
     ["errno_timeout", "timeout"],
+    ["sdk_cause_timeout", "timeout"],
     ["truncated", "malformed_response"],
     ["serialization_failure", "construction_error"],
   ] as const)("fails open on %s without changing output", async (failure, code) => {

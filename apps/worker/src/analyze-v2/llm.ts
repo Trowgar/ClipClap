@@ -126,6 +126,11 @@ function errorFacts(error: unknown): {
   const body = (typeof e.error === "object" && e.error !== null
     ? (e.error as Record<string, unknown>)
     : {}) as Record<string, unknown>;
+  // APIConnectionError retains the socket failure as `cause`; Node puts errno
+  // (for example ETIMEDOUT) there rather than on the SDK wrapper itself.
+  const cause = (typeof e.cause === "object" && e.cause !== null
+    ? (e.cause as Record<string, unknown>)
+    : {}) as Record<string, unknown>;
   const scalar = (...values: unknown[]): string => {
     for (const v of values) {
       if (typeof v === "string" && v.length > 0) return v;
@@ -136,7 +141,7 @@ function errorFacts(error: unknown): {
   const raw = error instanceof Error ? error.message : String(error);
   return {
     status: scalar(e.status, (e.response as Record<string, unknown> | undefined)?.status),
-    code: scalar(e.code, body.code),
+    code: scalar(e.code, body.code, cause.code),
     type: scalar(e.type, body.type),
     // One line, bounded: this runs per call and a stack-shaped message would
     // bury the fields above.
