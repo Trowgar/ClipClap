@@ -88,7 +88,7 @@ describe("post-boundary hook gate", () => {
     const overGap = clip("over-gap", { startSec: 20, hookStartSec: 22 });
     const result = applyPostBoundaryHookGate(
       [exact, overDelay, exactGap, overGap],
-      nodes([[0, 2], [10, 12], [20, 20.99]]),
+      nodes([[0, 2], [10, 11], [20, 20.99]]),
       options("enforce", { maxDelaySec: 2, maxPreHookGapSec: 1 }),
     );
 
@@ -101,6 +101,7 @@ describe("post-boundary hook gate", () => {
 
   it("measures leading, interior, trailing, absent, and empty-interval gaps", () => {
     expect(largestPreHookGap(nodes([[1, 2], [3, 4]]), 0, 5)).toBe(1);
+    expect(largestPreHookGap(nodes([[0, 2], [1, 4]]), 0, 5)).toBe(1);
     expect(largestPreHookGap(nodes([]), 3, 8)).toBe(5);
     expect(largestPreHookGap(nodes([[0, 1]]), 4, 4)).toBe(0);
   });
@@ -172,11 +173,115 @@ describe("post-boundary hook gate", () => {
 
     expect(result.telemetry).toMatchObject({
       distributions: {
-        scoreBand: { below_threshold: 1, threshold_to_0_8: 1, above_0_8: 1 },
-        durationBand: { short: 0, target: 2, long: 1 },
-        provenance: { startRepairApplied: 1, endExtensionApplied: 1 },
+        byScoreBand: {
+          below_threshold: { count: 1 },
+          threshold_to_0_8: { count: 1 },
+          above_0_8: { count: 1 },
+        },
+        byDurationBand: { short: { count: 0 }, target: { count: 2 }, long: { count: 1 } },
+        provenance: {
+          startRepairApplied: { yes: { count: 1 }, no: { count: 2 } },
+          endExtensionApplied: { yes: { count: 1 }, no: { count: 2 } },
+        },
       },
     });
+  });
+
+  it("splits raw delay and gap distributions and maxima across every report dimension", () => {
+    const repaired = clip("repaired", { endSec: 8, hookStartSec: 2 }, { score: 0.59, kind: "story", language: "en" });
+    const extended = clip("extended", { startSec: 10, endSec: 101, hookStartSec: 13 }, { score: 0.81, kind: "reaction", language: "ru" });
+    const result = applyPostBoundaryHookGate(
+      [repaired, extended],
+      nodes([[0, 2]]),
+      {
+        ...options("observe"),
+        provenanceForClip: (candidate) => ({
+          startRepairApplied: candidate.verdict.id === "repaired",
+          endExtensionApplied: candidate.verdict.id === "extended",
+        }),
+      },
+    );
+
+    expect(result.telemetry).toMatchObject({
+      distributions: {
+        byKind: {
+          story: { hookDelaySec: [2], preHookGapSec: [0], maxHookDelaySec: 2, maxPreHookGapSec: 0 },
+          reaction: { hookDelaySec: [3], preHookGapSec: [3], maxHookDelaySec: 3, maxPreHookGapSec: 3 },
+        },
+        byLanguage: {
+          en: { hookDelaySec: [2], preHookGapSec: [0] },
+          ru: { hookDelaySec: [3], preHookGapSec: [3] },
+        },
+        byScoreBand: {
+          below_threshold: { count: 1, hookDelaySec: [2] },
+          above_0_8: { count: 1, preHookGapSec: [3] },
+        },
+        byDurationBand: {
+          target: { count: 1, maxHookDelaySec: 2 },
+          long: { count: 1, maxPreHookGapSec: 3 },
+        },
+        provenance: {
+          startRepairApplied: { yes: { count: 1, hookDelaySec: [2] }, no: { count: 1, hookDelaySec: [3] } },
+          endExtensionApplied: { yes: { count: 1, preHookGapSec: [3] }, no: { count: 1, preHookGapSec: [0] } },
+        },
+      },
+    });
+  });
+
+  it("reports threshold exceedance rates and every threshold diagnostic without language", () => {
+    const input = Array.from({ length: 45 }, (_, index) =>
+      clip(`drop-${String(index).padStart(2, "0")}`, { hookStartSec: index + 1 }),
+    );
+    const result = applyPostBoundaryHookGate(
+      input,
+      nodes([]),
+      options("shadow", { maxDelaySec: 0, maxPreHookGapSec: 0 }),
+    );
+
+    expect(result.telemetry).toMatchObject({
+      wouldDrop: 45,
+      exceeds: {
+        hook_delay: { count: 45, rate: 1 },
+        pre_hook_gap: { count: 45, rate: 1 },
+      },
+      estimatedOutputCountLoss: 45,
+    });
+    expect(result.telemetry?.diagnostics).toHaveLength(45);
+    expect(result.telemetry?.diagnostics.map((diagnostic) => diagnostic.id)).toEqual(
+      input.map((candidate) => candidate.verdict.id),
+    );
+    expect(result.telemetry?.diagnostics[0]).not.toHaveProperty("language");
+  });
+
+  it("enforces repaired and extended failures with dual reasons and explicit provenance", () => {
+    const repaired = clip("repaired", { hookStartSec: 3 });
+    const extended = clip("extended", { startSec: 10, hookStartSec: 11 });
+    const passing = clip("passing", { startSec: 20, hookStartSec: 21 });
+    const result = applyPostBoundaryHookGate(
+      [repaired, extended, passing],
+      nodes([[20, 21]]),
+      {
+        ...options("enforce", { maxDelaySec: 2, maxPreHookGapSec: 0.5 }),
+        provenanceForClip: (candidate) => ({
+          startRepairApplied: candidate.verdict.id === "repaired",
+          endExtensionApplied: candidate.verdict.id === "extended",
+        }),
+      },
+    );
+
+    expect(result.clips).toEqual([passing]);
+    expect(result.drops).toEqual([
+      { id: "repaired", reasons: ["hook_delay", "pre_hook_gap"] },
+      { id: "extended", reasons: ["pre_hook_gap"] },
+    ]);
+    expect(result.telemetry).toMatchObject({
+      dropped: 2,
+      diagnostics: [
+        expect.objectContaining({ id: "repaired", startRepairApplied: true, reasons: ["hook_delay", "pre_hook_gap"] }),
+        expect.objectContaining({ id: "extended", endExtensionApplied: true, reasons: ["pre_hook_gap"] }),
+      ],
+    });
+    expect(result.telemetry?.diagnostics[0]).not.toHaveProperty("language");
   });
 
   it("bounds diagnostics to the twenty greatest delay and gap outliers with stable ID ties", () => {

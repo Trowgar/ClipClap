@@ -25,7 +25,20 @@ export interface PostBoundaryHookGateOptions {
   provenanceForClip?: (clip: SnappedClip) => PostBoundaryHookGateProvenance | undefined;
 }
 
-export interface PostBoundaryHookGateDiagnostic {
+export interface PostBoundaryHookGateMetricDistribution {
+  count: number;
+  hookDelaySec: number[];
+  preHookGapSec: number[];
+  maxHookDelaySec?: number;
+  maxPreHookGapSec?: number;
+}
+
+export interface PostBoundaryHookGateProvenanceDistributions {
+  startRepairApplied: Record<"yes" | "no", PostBoundaryHookGateMetricDistribution>;
+  endExtensionApplied: Record<"yes" | "no", PostBoundaryHookGateMetricDistribution>;
+}
+
+export interface PostBoundaryHookGateDiagnosticBase {
   id: string;
   startSec: number;
   hookStartSec: number;
@@ -33,42 +46,51 @@ export interface PostBoundaryHookGateDiagnostic {
   preHookGapSec: number;
   score: number;
   kind?: string;
-  language: string;
   startRepairApplied: boolean;
   endExtensionApplied: boolean;
-  reasons?: PostBoundaryHookGateReason[];
+}
+
+/** Raw outlier diagnostics are used only by observe mode. */
+export interface PostBoundaryHookGateObserveDiagnostic extends PostBoundaryHookGateDiagnosticBase {
+  language: string;
+}
+
+/** Threshold diagnostics intentionally exclude language, which is not needed
+ * to explain a drop decision. */
+export interface PostBoundaryHookGateThresholdDiagnostic extends PostBoundaryHookGateDiagnosticBase {
+  reasons: PostBoundaryHookGateReason[];
 }
 
 export interface PostBoundaryHookGateDistributions {
-  hookDelaySec: number[];
-  preHookGapSec: number[];
-  kind: Record<string, number>;
-  language: Record<string, number>;
-  scoreBand: Record<PostBoundaryHookGateScoreBand, number>;
-  durationBand: Record<PostBoundaryHookGateDurationBand, number>;
-  provenance: {
-    startRepairApplied: number;
-    endExtensionApplied: number;
-  };
+  overall: PostBoundaryHookGateMetricDistribution;
+  byKind: Record<string, PostBoundaryHookGateMetricDistribution>;
+  byLanguage: Record<string, PostBoundaryHookGateMetricDistribution>;
+  byScoreBand: Record<PostBoundaryHookGateScoreBand, PostBoundaryHookGateMetricDistribution>;
+  byDurationBand: Record<PostBoundaryHookGateDurationBand, PostBoundaryHookGateMetricDistribution>;
+  provenance: PostBoundaryHookGateProvenanceDistributions;
 }
 
-interface PostBoundaryHookGateTelemetryBase {
+interface PostBoundaryHookGateTelemetryBase<TDiagnostic> {
   evaluated: number;
   notEvaluable: number;
   maxHookDelaySec?: number;
   maxPreHookGapSec?: number;
   distributions: PostBoundaryHookGateDistributions;
-  diagnostics: PostBoundaryHookGateDiagnostic[];
+  diagnostics: TDiagnostic[];
 }
 
-export interface PostBoundaryHookGateObserveTelemetry extends PostBoundaryHookGateTelemetryBase {
+export interface PostBoundaryHookGateObserveTelemetry
+  extends PostBoundaryHookGateTelemetryBase<PostBoundaryHookGateObserveDiagnostic> {
   mode: "observe";
 }
 
-export interface PostBoundaryHookGateThresholdTelemetry extends PostBoundaryHookGateTelemetryBase {
+export interface PostBoundaryHookGateThresholdTelemetry
+  extends PostBoundaryHookGateTelemetryBase<PostBoundaryHookGateThresholdDiagnostic> {
   mode: "shadow" | "enforce";
   passed: number;
   reasons: Record<PostBoundaryHookGateReason, number>;
+  exceeds: Record<PostBoundaryHookGateReason, { count: number; rate: number }>;
+  estimatedOutputCountLoss: number;
 }
 
 export interface PostBoundaryHookGateShadowTelemetry extends PostBoundaryHookGateThresholdTelemetry {
@@ -99,7 +121,7 @@ export interface PostBoundaryHookGateResult {
 
 interface Evaluation {
   clip: SnappedClip;
-  diagnostic: PostBoundaryHookGateDiagnostic;
+  diagnostic: PostBoundaryHookGateObserveDiagnostic;
   reasons: PostBoundaryHookGateReason[];
 }
 
@@ -108,19 +130,45 @@ function compareCandidateIds(left: string, right: string): number {
 }
 
 function emptyDistributions(): PostBoundaryHookGateDistributions {
-  return {
+  const emptyMetric = (): PostBoundaryHookGateMetricDistribution => ({
+    count: 0,
     hookDelaySec: [],
     preHookGapSec: [],
-    kind: {},
-    language: {},
-    scoreBand: { below_threshold: 0, threshold_to_0_8: 0, above_0_8: 0 },
-    durationBand: { short: 0, target: 0, long: 0 },
-    provenance: { startRepairApplied: 0, endExtensionApplied: 0 },
+  });
+  return {
+    overall: emptyMetric(),
+    byKind: {},
+    byLanguage: {},
+    byScoreBand: {
+      below_threshold: emptyMetric(),
+      threshold_to_0_8: emptyMetric(),
+      above_0_8: emptyMetric(),
+    },
+    byDurationBand: { short: emptyMetric(), target: emptyMetric(), long: emptyMetric() },
+    provenance: {
+      startRepairApplied: { yes: emptyMetric(), no: emptyMetric() },
+      endExtensionApplied: { yes: emptyMetric(), no: emptyMetric() },
+    },
   };
 }
 
-function increment(counts: Record<string, number>, key: string): void {
-  counts[key] = (counts[key] ?? 0) + 1;
+function addMetric(
+  metric: PostBoundaryHookGateMetricDistribution,
+  hookDelaySec: number,
+  preHookGapSec: number,
+): void {
+  metric.count++;
+  metric.hookDelaySec.push(hookDelaySec);
+  metric.preHookGapSec.push(preHookGapSec);
+  metric.maxHookDelaySec = Math.max(metric.maxHookDelaySec ?? hookDelaySec, hookDelaySec);
+  metric.maxPreHookGapSec = Math.max(metric.maxPreHookGapSec ?? preHookGapSec, preHookGapSec);
+}
+
+function metricFor(
+  metrics: Record<string, PostBoundaryHookGateMetricDistribution>,
+  key: string,
+): PostBoundaryHookGateMetricDistribution {
+  return (metrics[key] ??= { count: 0, hookDelaySec: [], preHookGapSec: [] });
 }
 
 function scoreBand(score: number, threshold: number): PostBoundaryHookGateScoreBand {
@@ -181,7 +229,7 @@ export function largestPreHookGap(
   return Math.max(largest, hookStartSec - cursor);
 }
 
-function boundedDiagnostics(evaluations: Evaluation[], includeReasons: boolean): PostBoundaryHookGateDiagnostic[] {
+function boundedRawDiagnostics(evaluations: Evaluation[]): PostBoundaryHookGateObserveDiagnostic[] {
   const byDelay = [...evaluations].sort(
     (left, right) =>
       right.diagnostic.hookDelaySec - left.diagnostic.hookDelaySec ||
@@ -198,11 +246,16 @@ function boundedDiagnostics(evaluations: Evaluation[], includeReasons: boolean):
     const { id } = evaluation.diagnostic;
     if (seen.has(id)) return [];
     seen.add(id);
-    return [
-      includeReasons && evaluation.reasons.length > 0
-        ? { ...evaluation.diagnostic, reasons: evaluation.reasons }
-        : evaluation.diagnostic,
-    ];
+    return [evaluation.diagnostic];
+  });
+}
+
+function thresholdDiagnostics(
+  failures: Evaluation[],
+): PostBoundaryHookGateThresholdDiagnostic[] {
+  return failures.map(({ diagnostic, reasons }) => {
+    const { language: _language, ...thresholdDiagnostic } = diagnostic;
+    return { ...thresholdDiagnostic, reasons };
   });
 }
 
@@ -259,14 +312,21 @@ export function applyPostBoundaryHookGate(
       if (preHookGapSec > maxPreHookGapSec!) reasons.push("pre_hook_gap");
     }
 
-    distributions.hookDelaySec.push(hookDelaySec);
-    distributions.preHookGapSec.push(preHookGapSec);
-    increment(distributions.kind, clip.verdict.kind ?? "unknown");
-    increment(distributions.language, clip.verdict.language ?? "unknown");
-    distributions.scoreBand[candidateScoreBand]++;
-    distributions.durationBand[candidateDurationBand]++;
-    if (startRepairApplied) distributions.provenance.startRepairApplied++;
-    if (endExtensionApplied) distributions.provenance.endExtensionApplied++;
+    addMetric(distributions.overall, hookDelaySec, preHookGapSec);
+    addMetric(metricFor(distributions.byKind, clip.verdict.kind ?? "unknown"), hookDelaySec, preHookGapSec);
+    addMetric(metricFor(distributions.byLanguage, clip.verdict.language ?? "unknown"), hookDelaySec, preHookGapSec);
+    addMetric(distributions.byScoreBand[candidateScoreBand], hookDelaySec, preHookGapSec);
+    addMetric(distributions.byDurationBand[candidateDurationBand], hookDelaySec, preHookGapSec);
+    addMetric(
+      distributions.provenance.startRepairApplied[startRepairApplied ? "yes" : "no"],
+      hookDelaySec,
+      preHookGapSec,
+    );
+    addMetric(
+      distributions.provenance.endExtensionApplied[endExtensionApplied ? "yes" : "no"],
+      hookDelaySec,
+      preHookGapSec,
+    );
 
     evaluations.push({
       clip,
@@ -286,12 +346,7 @@ export function applyPostBoundaryHookGate(
     });
   }
 
-  const maxHookDelaySec = distributions.hookDelaySec.length
-    ? Math.max(...distributions.hookDelaySec)
-    : undefined;
-  const maxPreHookGapSec = distributions.preHookGapSec.length
-    ? Math.max(...distributions.preHookGapSec)
-    : undefined;
+  const { maxHookDelaySec, maxPreHookGapSec } = distributions.overall;
   const base = {
     evaluated: evaluations.length,
     notEvaluable,
@@ -304,7 +359,7 @@ export function applyPostBoundaryHookGate(
     return {
       clips,
       drops: [],
-      telemetry: { mode: "observe", ...base, diagnostics: boundedDiagnostics(evaluations, false) },
+      telemetry: { mode: "observe", ...base, diagnostics: boundedRawDiagnostics(evaluations) },
     };
   }
 
@@ -317,7 +372,18 @@ export function applyPostBoundaryHookGate(
     ...base,
     passed: evaluations.length - failures.length,
     reasons,
-    diagnostics: boundedDiagnostics(failures, true),
+    exceeds: {
+      hook_delay: {
+        count: reasons.hook_delay,
+        rate: evaluations.length === 0 ? 0 : reasons.hook_delay / evaluations.length,
+      },
+      pre_hook_gap: {
+        count: reasons.pre_hook_gap,
+        rate: evaluations.length === 0 ? 0 : reasons.pre_hook_gap / evaluations.length,
+      },
+    },
+    estimatedOutputCountLoss: failures.length,
+    diagnostics: thresholdDiagnostics(failures),
   };
 
   if (options.mode === "shadow") {
