@@ -246,6 +246,15 @@ describe("parseLedger", () => {
     expect(invoked).toBe(0);
     expect(result).toEqual([approval("safe-event")]);
   });
+
+  it("rejects escaped lone surrogates before distinct feedback identities can hash alike", () => {
+    const highA = approval("surrogate-a", { feedbackId: "\uD800" });
+    const highB = approval("surrogate-b", { feedbackId: "\uD801" });
+    expect(highA.candidateVersion).toBe(highB.candidateVersion);
+
+    expectLedgerCode(() => parseLedger(lines(highA)), "invalid_event");
+    expectLedgerCode(() => parseLedger(lines(highB)), "invalid_event");
+  });
 });
 
 describe("foldLedger", () => {
@@ -342,6 +351,22 @@ describe("foldLedger", () => {
     expect(caught).toMatchObject({ code: "invalid_event", message: "invalid_event" });
     expect(String(caught)).not.toContain(privateMessage);
   });
+
+  it.each([
+    ["event ID", approval("\uD800")],
+    ["feedback ID", approval("bad-feedback", { feedbackId: "\uD800" })],
+    ["clip ID", approval("bad-clip", { clipId: "\uD800" })],
+    ["job ID", approval("bad-job", { jobId: "\uD800" })],
+    ["user ID", approval("bad-user", { userId: "\uD800" })],
+    ["rejection reason", rejection("bad-reason", { reason: "\uD800" })],
+    ["correction target ID", correction("bad-target", "\uD800")],
+    ["correction reason", correction("bad-correction", "target", { reason: "\uD800" })],
+  ] satisfies readonly (readonly [string, ReviewEvent])[])(
+    "rejects malformed Unicode in direct %s",
+    (_label, event) => {
+      expectLedgerCode(() => foldLedger([event]), "invalid_event");
+    }
+  );
 
   it.each([
     ["forward target", [correction("c", "later"), rejection("later")]],
@@ -445,6 +470,27 @@ describe("foldLedger", () => {
 
     expect(canonicalLedgerState(first)).toBe(canonicalLedgerState(second));
   });
+
+  it("accepts reordered direct event keys while serialized JSONL remains ordered", () => {
+    const event = approval("reordered-event");
+    const reordered = {
+      action: event.action,
+      schemaVersion: event.schemaVersion,
+      set: event.set,
+      eventId: event.eventId,
+      occurredAt: event.occurredAt,
+      candidateVersion: event.candidateVersion,
+      feedbackId: event.feedbackId,
+      feedbackUpdatedAt: event.feedbackUpdatedAt,
+      snapshotSha256: event.snapshotSha256,
+      clipId: event.clipId,
+      jobId: event.jobId,
+      userId: event.userId,
+    } as ApprovalEvent;
+
+    expect(foldLedger([reordered])).toEqual(foldLedger([event]));
+    expectLedgerCode(() => parseLedger(lines(reordered)), "invalid_event");
+  });
 });
 
 describe("classifyApprovalFreshness", () => {
@@ -495,6 +541,67 @@ describe("classifyApprovalFreshness", () => {
       reason: "snapshot_changed",
     });
   });
+
+  it.each(["approval", "current"] as const)(
+    "rejects an own accessor on %s without invoking or leaking it",
+    (target) => {
+      const snapshot = { safe: true };
+      const safeApproval = approval("safe-approval", {
+        snapshotSha256: sha256(canonicalJson(snapshot)),
+      });
+      const safeCurrent = projection(snapshot);
+      const malicious = target === "approval" ? safeApproval : safeCurrent;
+      let invoked = 0;
+      Object.defineProperty(malicious, "id" in malicious ? "id" : "feedbackId", {
+        configurable: true,
+        enumerable: true,
+        get: () => {
+          invoked += 1;
+          throw new Error("private freshness getter");
+        },
+      });
+
+      let caught: unknown;
+      try {
+        classifyApprovalFreshness(
+          (target === "approval" ? malicious : safeApproval) as ApprovalEvent,
+          (target === "current" ? malicious : safeCurrent) as FeedbackProjection
+        );
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).toMatchObject({ code: "invalid_event", message: "invalid_event" });
+      expect(String(caught)).not.toContain("private freshness getter");
+      expect(invoked).toBe(0);
+    }
+  );
+
+  it.each(["approval", "current"] as const)(
+    "captures %s proxy own data without invoking its get trap",
+    (target) => {
+      const snapshot = { safe: true };
+      const safeApproval = approval("safe-approval", {
+        snapshotSha256: sha256(canonicalJson(snapshot)),
+      });
+      const safeCurrent = projection(snapshot);
+      let invoked = 0;
+      const proxied = new Proxy(target === "approval" ? safeApproval : safeCurrent, {
+        get: () => {
+          invoked += 1;
+          throw new Error("private freshness proxy");
+        },
+      });
+
+      const result = classifyApprovalFreshness(
+        (target === "approval" ? proxied : safeApproval) as ApprovalEvent,
+        (target === "current" ? proxied : safeCurrent) as FeedbackProjection
+      );
+
+      expect(result).toEqual({ fresh: true });
+      expect(invoked).toBe(0);
+    }
+  );
 });
 
 describe("EffectiveLedger boundaries", () => {
@@ -603,6 +710,27 @@ describe("EffectiveLedger boundaries", () => {
       },
       "invalid_transition",
     ],
+    [
+      "malformed destination lock ID",
+      {
+        activeDecisions: [],
+        retiredTargetIds: [],
+        destinationLocks: [
+          { feedbackId: "\uD800", set: "eval" },
+          { feedbackId: "\uD801", set: "holdout" },
+        ],
+      },
+      "invalid_event",
+    ],
+    [
+      "malformed retired target ID",
+      {
+        activeDecisions: [],
+        retiredTargetIds: ["\uD800", "\uD801"],
+        destinationLocks: [],
+      },
+      "invalid_event",
+    ],
   ] as const)("rejects fabricated state with %s", (_label, state, code) => {
     expectStateCode(state as EffectiveLedger, code);
   });
@@ -617,6 +745,65 @@ describe("EffectiveLedger boundaries", () => {
     });
 
     expectStateCode(state as unknown as EffectiveLedger, "invalid_event");
+  });
+
+  it("accepts reordered structural root and destination-lock keys", () => {
+    const event = approval("approval");
+    const reordered = {
+      destinationLocks: [{ set: "eval", feedbackId: event.feedbackId }],
+      activeDecisions: [event],
+      retiredTargetIds: [],
+    } as unknown as EffectiveLedger;
+    const expected = foldLedger([event]);
+
+    expect(canonicalLedgerState(reordered)).toBe(canonicalLedgerState(expected));
+    expect(buildCapacity(reordered, new Map([[event.feedbackId, null]]))).toEqual(
+      buildCapacity(expected, new Map([[event.feedbackId, null]]))
+    );
+  });
+
+  it("does not use inherited numeric array accessors while capturing or accumulating", () => {
+    const snapshot = { safe: true };
+    const event = approval("approval", {
+      snapshotSha256: sha256(canonicalJson(snapshot)),
+    });
+    const state = foldLedger([event]);
+    const row = projection(snapshot);
+    const bytes = lines(event);
+    const operations = [
+      () => parseLedger(bytes),
+      () => canonicalLedgerState(state),
+      () => buildCapacity(state, new Map([[event.feedbackId, row]])),
+    ] as const;
+
+    for (const operation of operations) {
+      const original = Object.getOwnPropertyDescriptor(Array.prototype, "0");
+      let invoked = 0;
+      let caught: unknown;
+      try {
+        Object.defineProperty(Array.prototype, "0", {
+          configurable: true,
+          enumerable: false,
+          get: () => {
+            invoked += 1;
+            throw new Error("private inherited array getter");
+          },
+          set: () => {
+            invoked += 1;
+            throw new Error("private inherited array setter");
+          },
+        });
+        operation();
+      } catch (error) {
+        caught = error;
+      } finally {
+        if (original === undefined) Reflect.deleteProperty(Array.prototype, "0");
+        else Object.defineProperty(Array.prototype, "0", original);
+      }
+
+      expect(caught).toBeUndefined();
+      expect(invoked).toBe(0);
+    }
   });
 });
 

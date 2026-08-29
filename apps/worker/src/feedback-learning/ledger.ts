@@ -132,6 +132,28 @@ function hasExactKeys(value: Record<string, unknown>, expected: readonly string[
   return true;
 }
 
+function hasExactKeySet(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  const keys = Reflect.ownKeys(value);
+  if (keys.length !== expected.length) return false;
+  for (const key of expected) {
+    if (Object.getOwnPropertyDescriptor(value, key) === undefined) return false;
+  }
+  return true;
+}
+
+function defineArrayElement<T>(array: T[], index: number, value: T): void {
+  Object.defineProperty(array, String(index), {
+    configurable: true,
+    enumerable: true,
+    value,
+    writable: true,
+  });
+}
+
+function appendData<T>(array: T[], value: T): void {
+  defineArrayElement(array, array.length, value);
+}
+
 function captureOwnData(value: unknown): Record<string, unknown> | undefined {
   try {
     if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -174,13 +196,13 @@ function captureDenseArray(value: unknown): unknown[] | undefined {
     const keys = Reflect.ownKeys(value);
     if (keys.length !== length + 1 || keys[keys.length - 1] !== "length") return undefined;
 
-    const captured = new Array<unknown>(length);
+    const captured: unknown[] = [];
     for (let index = 0; index < length; index += 1) {
       const key = String(index);
       if (keys[index] !== key) return undefined;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (!descriptor?.enumerable || !("value" in descriptor)) return undefined;
-      captured[index] = descriptor.value;
+      defineArrayElement(captured, index, descriptor.value);
     }
     return captured;
   } catch {
@@ -188,8 +210,23 @@ function captureDenseArray(value: unknown): unknown[] | undefined {
   }
 }
 
+function isWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      if (index + 1 >= value.length) return false;
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return false;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.length > 0;
+  return typeof value === "string" && value.length > 0 && isWellFormedUnicode(value);
 }
 
 function isSha256(value: unknown): value is Sha256 {
@@ -232,13 +269,14 @@ function hasValidFrozenFields(value: Record<string, unknown>): boolean {
   );
 }
 
-function validateEvent(value: unknown): ReviewEvent {
+function validateEvent(value: unknown, requireKeyOrder = false): ReviewEvent {
   const captured = captureOwnData(value);
   if (captured === undefined) return invalid("invalid_event");
+  const keysMatch = requireKeyOrder ? hasExactKeys : hasExactKeySet;
 
   if (captured.action === "approve") {
     if (
-      !hasExactKeys(captured, APPROVAL_KEYS) ||
+      !keysMatch(captured, APPROVAL_KEYS) ||
       !hasValidCommonFields(captured) ||
       !hasValidFrozenFields(captured) ||
       (captured.set !== "eval" && captured.set !== "holdout")
@@ -250,7 +288,7 @@ function validateEvent(value: unknown): ReviewEvent {
 
   if (captured.action === "reject") {
     if (
-      !hasExactKeys(captured, REJECTION_KEYS) ||
+      !keysMatch(captured, REJECTION_KEYS) ||
       !hasValidCommonFields(captured) ||
       !hasValidFrozenFields(captured) ||
       !isNonEmptyString(captured.reason)
@@ -262,7 +300,7 @@ function validateEvent(value: unknown): ReviewEvent {
 
   if (captured.action === "correct") {
     if (
-      !hasExactKeys(captured, CORRECTION_KEYS) ||
+      !keysMatch(captured, CORRECTION_KEYS) ||
       !hasValidCommonFields(captured) ||
       captured.operation !== "retire" ||
       !isNonEmptyString(captured.targetEventId) ||
@@ -310,10 +348,10 @@ export function parseLedger(bytes: Buffer): readonly ReviewEvent[] {
     if (value === null || typeof value !== "object" || Array.isArray(value)) {
       return invalid("invalid_jsonl");
     }
-    const event = validateEvent(value);
+    const event = validateEvent(value, true);
     const compact = jsonLine(event).subarray(0, -1).toString("utf8");
     if (compact !== line) return invalid("invalid_jsonl");
-    parsed.push(event);
+    appendData(parsed, event);
   }
   return parsed;
 }
@@ -398,7 +436,7 @@ function validateDestinationLock(value: unknown): DestinationLock {
   const captured = captureOwnData(value);
   if (
     captured === undefined ||
-    !hasExactKeys(captured, DESTINATION_LOCK_KEYS) ||
+    !hasExactKeySet(captured, DESTINATION_LOCK_KEYS) ||
     !isNonEmptyString(captured.feedbackId) ||
     (captured.set !== "eval" && captured.set !== "holdout")
   ) {
@@ -409,7 +447,7 @@ function validateDestinationLock(value: unknown): DestinationLock {
 
 function validateEffectiveLedger(value: unknown): EffectiveLedger {
   const root = captureOwnData(value);
-  if (root === undefined || !hasExactKeys(root, EFFECTIVE_LEDGER_KEYS)) {
+  if (root === undefined || !hasExactKeySet(root, EFFECTIVE_LEDGER_KEYS)) {
     return invalid("invalid_event");
   }
 
@@ -441,7 +479,7 @@ function validateEffectiveLedger(value: unknown): EffectiveLedger {
       }
       activeApprovalFeedbackIds.add(event.feedbackId);
     }
-    activeDecisions.push(event);
+    appendData(activeDecisions, event);
   }
 
   const destinationLocks: DestinationLock[] = [];
@@ -450,7 +488,7 @@ function validateEffectiveLedger(value: unknown): EffectiveLedger {
     const lock = validateDestinationLock(rawLock);
     if (lockByFeedback.has(lock.feedbackId)) return invalid("invalid_transition");
     lockByFeedback.set(lock.feedbackId, lock.set);
-    destinationLocks.push(lock);
+    appendData(destinationLocks, lock);
   }
   for (const decision of activeDecisions) {
     if (
@@ -469,7 +507,7 @@ function validateEffectiveLedger(value: unknown): EffectiveLedger {
       return invalid("invalid_transition");
     }
     retiredIds.add(rawRetiredId);
-    retiredTargetIds.push(rawRetiredId);
+    appendData(retiredTargetIds, rawRetiredId);
   }
 
   return { activeDecisions, retiredTargetIds, destinationLocks };
@@ -488,23 +526,43 @@ export function classifyApprovalFreshness(
   approval: ApprovalEvent,
   current: FeedbackProjection | null
 ): Freshness {
-  if (current === null || current.id !== approval.feedbackId) {
+  const validatedApproval = validateEvent(approval);
+  if (validatedApproval.action !== "approve") return invalid("invalid_event");
+  if (current === null) {
     return { fresh: false, reason: "missing" };
   }
-  if (current.verdict !== "AS_IS") return { fresh: false, reason: "verdict_changed" };
+  const capturedCurrent = captureOwnData(current);
+  if (
+    capturedCurrent === undefined ||
+    Object.getOwnPropertyDescriptor(capturedCurrent, "id") === undefined ||
+    Object.getOwnPropertyDescriptor(capturedCurrent, "verdict") === undefined ||
+    Object.getOwnPropertyDescriptor(capturedCurrent, "updatedAt") === undefined ||
+    Object.getOwnPropertyDescriptor(capturedCurrent, "snapshot") === undefined ||
+    !isNonEmptyString(capturedCurrent.id) ||
+    typeof capturedCurrent.verdict !== "string" ||
+    !isWellFormedUnicode(capturedCurrent.verdict)
+  ) {
+    return invalid("invalid_event");
+  }
+  if (capturedCurrent.id !== validatedApproval.feedbackId) {
+    return { fresh: false, reason: "missing" };
+  }
+  if (capturedCurrent.verdict !== "AS_IS") {
+    return { fresh: false, reason: "verdict_changed" };
+  }
 
   let currentUpdatedAt: string;
   try {
-    currentUpdatedAt = current.updatedAt.toISOString();
+    currentUpdatedAt = Date.prototype.toISOString.call(capturedCurrent.updatedAt);
   } catch {
     return { fresh: false, reason: "updated_at_changed" };
   }
-  if (currentUpdatedAt !== approval.feedbackUpdatedAt) {
+  if (currentUpdatedAt !== validatedApproval.feedbackUpdatedAt) {
     return { fresh: false, reason: "updated_at_changed" };
   }
 
   try {
-    if (sha256(canonicalJson(current.snapshot)) !== approval.snapshotSha256) {
+    if (sha256(canonicalJson(capturedCurrent.snapshot)) !== validatedApproval.snapshotSha256) {
       return { fresh: false, reason: "snapshot_changed" };
     }
   } catch {
@@ -590,8 +648,8 @@ export function buildCapacity(
       approval,
       currentRows.get(approval.feedbackId) ?? null
     );
-    if (freshness.fresh) capacity.freshApprovals.push(approval);
-    else capacity.staleReservations.push({ approval, reason: freshness.reason });
+    if (freshness.fresh) appendData(capacity.freshApprovals, approval);
+    else appendData(capacity.staleReservations, { approval, reason: freshness.reason });
     increment(capacity.jobCounts, approval.jobId);
     increment(capacity.userCounts, approval.userId);
   }
