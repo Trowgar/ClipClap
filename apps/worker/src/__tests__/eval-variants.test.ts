@@ -290,6 +290,83 @@ describe("variant definitions", () => {
   });
 });
 
+describe("post-boundary hook gate fingerprint", () => {
+  it("separates every gate mode without relying on an LLM prompt change", () => {
+    const off = computeFingerprint(loadAnalyzeConfig({ POST_BOUNDARY_HOOK_GATE: "off" }));
+    const observe = computeFingerprint(loadAnalyzeConfig({ POST_BOUNDARY_HOOK_GATE: "observe" }));
+    const shadow = computeFingerprint(
+      loadAnalyzeConfig({
+        POST_BOUNDARY_HOOK_GATE: "shadow",
+        POST_BOUNDARY_HOOK_MAX_DELAY_SEC: "1",
+        POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC: "2",
+      })
+    );
+    const enforce = computeFingerprint(
+      loadAnalyzeConfig({
+        POST_BOUNDARY_HOOK_GATE: "enforce",
+        POST_BOUNDARY_HOOK_MAX_DELAY_SEC: "1",
+        POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC: "2",
+      })
+    );
+
+    expect(off.postBoundaryHookGateMode).toBe("off");
+    expect(off.postBoundaryHookMaxDelaySec).toBeUndefined();
+    expect(off.postBoundaryHookMaxPreHookGapSec).toBeUndefined();
+    expect(observe.postBoundaryHookGateMode).toBe("observe");
+    expect(observe.postBoundaryHookMaxDelaySec).toBeUndefined();
+    expect(observe.postBoundaryHookMaxPreHookGapSec).toBeUndefined();
+
+    for (const fingerprint of [observe, shadow, enforce]) {
+      expect(() => assertFingerprintMatches("recorded-off", off, fingerprint)).toThrow(
+        /postBoundaryHookGateMode/
+      );
+    }
+
+    // These configurations only differ in output policy. Every pre-existing
+    // fingerprint key is unchanged, so this check cannot pass because a model
+    // request or prompt happened to change as well.
+    expect({
+      ...shadow,
+      postBoundaryHookGateMode: "off",
+      postBoundaryHookMaxDelaySec: undefined,
+      postBoundaryHookMaxPreHookGapSec: undefined,
+    }).toEqual(off);
+  });
+
+  it("separates either thresholded gate limit without an LLM prompt change", () => {
+    const baseline = computeFingerprint(
+      loadAnalyzeConfig({
+        POST_BOUNDARY_HOOK_GATE: "shadow",
+        POST_BOUNDARY_HOOK_MAX_DELAY_SEC: "1",
+        POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC: "2",
+      })
+    );
+    const delayChanged = computeFingerprint(
+      loadAnalyzeConfig({
+        POST_BOUNDARY_HOOK_GATE: "shadow",
+        POST_BOUNDARY_HOOK_MAX_DELAY_SEC: "3",
+        POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC: "2",
+      })
+    );
+    const gapChanged = computeFingerprint(
+      loadAnalyzeConfig({
+        POST_BOUNDARY_HOOK_GATE: "shadow",
+        POST_BOUNDARY_HOOK_MAX_DELAY_SEC: "1",
+        POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC: "4",
+      })
+    );
+
+    expect({ ...delayChanged, postBoundaryHookMaxDelaySec: 1 }).toEqual(baseline);
+    expect({ ...gapChanged, postBoundaryHookMaxPreHookGapSec: 2 }).toEqual(baseline);
+    expect(() => assertFingerprintMatches("recorded-baseline", baseline, delayChanged)).toThrow(
+      /postBoundaryHookMaxDelaySec/
+    );
+    expect(() => assertFingerprintMatches("recorded-baseline", baseline, gapChanged)).toThrow(
+      /postBoundaryHookMaxPreHookGapSec/
+    );
+  });
+});
+
 describe("fixture variant surface", () => {
   it("exposes the base snapshot and fingerprint under the base variant name", () => {
     const fixture = loadFixture("podcast-ecology");

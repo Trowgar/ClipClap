@@ -439,6 +439,16 @@ export interface EngineFingerprint {
    *  key does NOT change (identical prompt), so a stale recording would
    *  replay green while silently proving nothing about the union. */
   scanPasses: number;
+  /** Output policy applied after the boundary hook check. It may change the
+   *  shipped set without changing an LLM request, so replay records every
+   *  mode explicitly, including the dark `off` mode. */
+  postBoundaryHookGateMode: AnalyzeConfig["postBoundaryHookGateMode"];
+  /** Thresholded modes require this limit; inactive modes deliberately expose
+   *  it as undefined so their complete gate configuration is fingerprinted. */
+  postBoundaryHookMaxDelaySec: AnalyzeConfig["postBoundaryHookMaxDelaySec"];
+  /** Thresholded modes require this limit; inactive modes deliberately expose
+   *  it as undefined so their complete gate configuration is fingerprinted. */
+  postBoundaryHookMaxPreHookGapSec: AnalyzeConfig["postBoundaryHookMaxPreHookGapSec"];
 }
 
 export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
@@ -477,6 +487,9 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     arcDownrankPenalty1: cfg.arcDownrankPenalty1,
     scanWindowBudget: cfg.scanWindowBudget,
     scanPasses: cfg.scanPasses,
+    postBoundaryHookGateMode: cfg.postBoundaryHookGateMode,
+    postBoundaryHookMaxDelaySec: cfg.postBoundaryHookMaxDelaySec,
+    postBoundaryHookMaxPreHookGapSec: cfg.postBoundaryHookMaxPreHookGapSec,
   };
 }
 
