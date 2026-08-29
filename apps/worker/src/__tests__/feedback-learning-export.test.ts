@@ -12,7 +12,10 @@ import {
   type PrivatePaths,
   type RunWrite,
 } from "../feedback-learning/persistence";
-import type { FeedbackLearningRepository } from "../feedback-learning/repository";
+import {
+  createPrismaFeedbackLearningRepository,
+  type FeedbackLearningRepository,
+} from "../feedback-learning/repository";
 import type { ApprovalEvent, FeedbackProjection, JobProjection } from "../feedback-learning/types";
 
 const UPDATED_FROM = "2026-08-26T00:00:00.000Z";
@@ -518,5 +521,78 @@ describe("exportFeedbackLearning", () => {
     expect(result).toEqual(baseline);
     const baselinePublication = baselineSetup.publishRunAtomically.mock.calls[0]?.[0];
     expect(poisonedPublication?.files).toEqual(baselinePublication?.files);
+  });
+
+  it("publishes one invalid_row when wired to a real repository adapter with malformed cohort JSON", async () => {
+    const malformed = feedback("feedback-malformed", { snapshot: { invalid: BigInt(1) } });
+    const valid = feedback("feedback-valid");
+    let feedbackReads = 0;
+    const transaction = {
+      $executeRawUnsafe: async () => 0,
+      clipFeedback: {
+        findMany: async () => {
+          feedbackReads += 1;
+          return feedbackReads === 1 ? [malformed, valid] : [];
+        },
+        findUnique: async () => null,
+      },
+      job: { findMany: async () => [job(malformed.jobId), job(valid.jobId)] },
+    };
+    const repository = createPrismaFeedbackLearningRepository({
+      $transaction: async (operation: (client: typeof transaction) => Promise<unknown>) =>
+        operation(transaction),
+    } as never);
+    const setup = dependencies({});
+    setup.injected.repository = repository;
+
+    const result = await exportFeedbackLearning(
+      { targetSet: "eval", updatedFrom: UPDATED_FROM, updatedTo: UPDATED_TO },
+      setup.injected,
+    );
+
+    expect(result.counts).toMatchObject({ queried: 2, selected: 1, excluded: 1 });
+    const publication = setup.publishRunAtomically.mock.calls[0]?.[0];
+    expect(Buffer.from(publication?.files["exclusions.jsonl"] ?? []).toString("utf8")).toContain(
+      '"reason":"invalid_row","detailCode":"snapshot_not_json"',
+    );
+  });
+
+  it.each([
+    ["ensure", "private_tree_failed"],
+    ["lock", "lock_unavailable"],
+    ["database", "database_snapshot_failed"],
+    ["projection", "projection_failed"],
+    ["publish", "publish_failed"],
+  ] as const)("classifies a thrown hostile Proxy at %s without invoking its traps", async (stage, code) => {
+    let invoked = 0;
+    const thrownProxy = new Proxy(Object.create(null), {
+      getPrototypeOf() { invoked += 1; throw new Error("PRIVATE_PROXY_TRAP"); },
+      get() { invoked += 1; throw new Error("PRIVATE_PROXY_GET"); },
+    });
+    const setup = dependencies({});
+    if (stage === "ensure") setup.injected.ensurePrivateTree = vi.fn(async () => { throw thrownProxy; });
+    if (stage === "lock") setup.injected.withCorpusLock = vi.fn(async () => { throw thrownProxy; });
+    if (stage === "database") setup.captureExportSnapshot.mockImplementationOnce(async () => { throw thrownProxy; });
+    if (stage === "projection") {
+      const trigger = feedback("feedback-proxy-stage", {
+        updatedAt: new Proxy(new Date(UPDATED_AT), {
+          getPrototypeOf() { throw thrownProxy; },
+        }),
+      });
+      setup.captureExportSnapshot.mockImplementationOnce(async () => ({ feedback: [trigger], jobs: [], currentApprovals: [] }));
+    }
+    if (stage === "publish") setup.injected.publishRunAtomically = vi.fn(async () => { throw thrownProxy; });
+    let failure: unknown;
+    try {
+      await exportFeedbackLearning(
+        { targetSet: "eval", updatedFrom: UPDATED_FROM, updatedTo: UPDATED_TO },
+        setup.injected,
+      );
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({ code, message: code });
+    expect(String(failure)).not.toContain("PRIVATE");
+    expect(invoked).toBe(0);
   });
 });

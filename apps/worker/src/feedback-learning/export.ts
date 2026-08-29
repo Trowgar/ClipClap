@@ -45,7 +45,10 @@ const defaultWithCorpusLock: LockOperation = async (lockPath, operation) => {
   const lock = await import("./lock");
   try { return await lock.withCorpusLock(lockPath, operation); }
   catch (error) {
-    if (error instanceof lock.CorpusLockError) return boundary(error.code);
+    if (isKnownError(error, lock.CorpusLockError)) {
+      const code = safeOwnCode(error);
+      return boundary(code === "lock_timeout" ? "lock_timeout" : "lock_unavailable");
+    }
     throw error;
   }
 };
@@ -66,6 +69,29 @@ type ValidatedRequest = Readonly<{ targetSet: TargetSet; updatedFrom: string; up
 type CapturedDependencies = Required<Omit<ExportDependencies, "root">> & { root: string };
 
 function boundary(code: ExportErrorCode): never { throw new ExportBoundaryError(code); }
+function isProxySafe(value: unknown): boolean {
+  try { return value !== null && (typeof value === "object" || typeof value === "function") && utilTypes.isProxy(value); }
+  catch { return true; }
+}
+function isKnownError<T extends Error>(error: unknown, constructor: new (...args: never[]) => T): error is T {
+  try {
+    if (error === null || (typeof error !== "object" && typeof error !== "function") || isProxySafe(error)) return false;
+    return error instanceof constructor;
+  } catch { return false; }
+}
+function isExportBoundary(error: unknown): error is ExportBoundaryError {
+  return isKnownError(error, ExportBoundaryError);
+}
+function isLedgerError(error: unknown): error is LedgerError {
+  return isKnownError(error, LedgerError);
+}
+function safeOwnCode(error: unknown): unknown {
+  try {
+    if (error === null || typeof error !== "object" || isProxySafe(error)) return undefined;
+    const descriptor = getDescriptor(error, "code");
+    return descriptor !== undefined && "value" in descriptor ? descriptor.value : undefined;
+  } catch { return undefined; }
+}
 function appendData<T>(array: T[], value: T): void {
   Object.defineProperty(array, String(array.length), { configurable: true, enumerable: true, value, writable: true });
 }
@@ -101,7 +127,7 @@ function captureObject(value: unknown, allowed: readonly string[], exact: boolea
     }
     return captured;
   } catch (error) {
-    if (error instanceof ExportBoundaryError) throw error;
+    if (isExportBoundary(error)) throw error;
     return boundary(code);
   }
 }
@@ -123,7 +149,7 @@ function captureDenseArray(value: unknown): unknown[] {
     if (dataAt(keys, length) !== "length") return boundary("projection_failed");
     return result;
   } catch (error) {
-    if (error instanceof ExportBoundaryError) throw error;
+    if (isExportBoundary(error)) throw error;
     return boundary("projection_failed");
   }
 }
@@ -202,7 +228,7 @@ function captureRows<T>(raw: unknown, copy: (value: unknown) => T, idOf: (value:
     const row = copy(dataAt(values, index));
     const id = idOf(row);
     if (requireId && (typeof id !== "string" || id.length === 0)) return boundary("projection_failed");
-    if (typeof id === "string") {
+    if (typeof id === "string" && id.length > 0) {
       if (setHas.call(seen, id)) return boundary("projection_failed");
       setAdd.call(seen, id);
     }
@@ -238,7 +264,9 @@ function safeCounts(counts: RunCounts): RunCounts {
   return { queried: counts.queried, selected: counts.selected, excluded: counts.excluded, selectedReplayReady: counts.selectedReplayReady, selectedReferenceOnly: counts.selectedReferenceOnly, freshApprovals: counts.freshApprovals, staleReservations: counts.staleReservations };
 }
 function safePersistence(error: unknown): boolean {
-  return error instanceof PersistencePathError || error instanceof PersistenceInputError || error instanceof PersistenceIntegrityError;
+  return isKnownError(error, PersistencePathError) ||
+    isKnownError(error, PersistenceInputError) ||
+    isKnownError(error, PersistenceIntegrityError);
 }
 export async function exportFeedbackLearning(input: ExportRequest, rawDependencies: ExportDependencies): Promise<SafeExportResult> {
   const request = validateRequest(input);
@@ -262,7 +290,7 @@ export async function exportFeedbackLearning(input: ExportRequest, rawDependenci
       return snapshotLedger(bytes);
     }) as EffectiveLedger;
   } catch (error) {
-    if (error instanceof LedgerError || error instanceof ExportBoundaryError || safePersistence(error)) throw error;
+    if (isLedgerError(error) || isExportBoundary(error) || safePersistence(error)) throw error;
     return boundary("lock_unavailable");
   }
   const approvals = approvalEvents(ledger);
@@ -301,7 +329,7 @@ export async function exportFeedbackLearning(input: ExportRequest, rawDependenci
     const capacity = buildCapacity(ledger, currentApprovals);
     artifacts = buildRunArtifacts({ results, targetSet: request.targetSet, limit: request.limit, ledger, capacity, updatedFrom: request.updatedFrom, updatedTo: request.updatedTo, approvalFreshness: approvalFreshness(approvals, currentApprovals) });
   } catch (error) {
-    if (error instanceof ExportBoundaryError) throw error;
+    if (isExportBoundary(error)) throw error;
     return boundary("projection_failed");
   }
   let manifest: { runId?: unknown; runDigest?: unknown };

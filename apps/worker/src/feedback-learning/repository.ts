@@ -18,6 +18,7 @@ const dateGetTime = Date.prototype.getTime;
 const setHas = Set.prototype.has;
 const setAdd = Set.prototype.add;
 const jsonParse = JSON.parse;
+const INVALID_SEMANTIC_VALUE = Object.freeze(Object.create(null)) as unknown;
 
 export type SnapshotRequest = Readonly<{ updatedFrom: Date; updatedTo: Date; activeApprovalFeedbackIds: readonly string[] }>;
 export type ReviewSnapshotRequest = Readonly<{ candidateFeedbackId: string; activeApprovalFeedbackIds: readonly string[] }>;
@@ -154,20 +155,47 @@ function captureFeedback(value: unknown): FeedbackProjection {
     note: row.note as string | null, snapshot: copyJson(row.snapshot), evidenceKey: row.evidenceKey as string | null,
     updatedAt: capturedDate(row.updatedAt, false) };
 }
+function safeCohortValue(value: unknown): unknown {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) return value;
+  return INVALID_SEMANTIC_VALUE;
+}
+function safeCohortDate(value: unknown): unknown {
+  try { return capturedDate(value, false); } catch { return null; }
+}
+function safeCohortJson(value: unknown): unknown {
+  try { return copyJson(value); } catch { return undefined; }
+}
+function captureCohortFeedback(value: unknown): FeedbackProjection {
+  const row = captureOwnData(value, FEEDBACK_KEYS, false);
+  return {
+    id: safeCohortValue(row.id),
+    clipId: safeCohortValue(row.clipId),
+    jobId: safeCohortValue(row.jobId),
+    userId: safeCohortValue(row.userId),
+    verdict: safeCohortValue(row.verdict),
+    note: safeCohortValue(row.note),
+    snapshot: safeCohortJson(row.snapshot),
+    evidenceKey: safeCohortValue(row.evidenceKey),
+    updatedAt: safeCohortDate(row.updatedAt),
+  } as unknown as FeedbackProjection;
+}
 function captureJob(value: unknown): JobProjection {
   const row = captureOwnData(value, JOB_KEYS, false);
   if (!isNonEmptyString(row.id) || typeof row.transcriptPartial !== "boolean") return invalidProjection();
   return { id: row.id, transcriptJson: copyJson(row.transcriptJson), transcriptPartial: row.transcriptPartial };
 }
-function captureRows<T>(raw: unknown, capture: (value: unknown) => T, idOf: (value: T) => string): T[] {
+function captureRows<T>(raw: unknown, capture: (value: unknown) => T, idOf: (value: T) => unknown, requireId = true): T[] {
   const values = captureDenseArray(raw, false);
   const seen = new Set<string>();
   const result: T[] = [];
   for (let index = 0; index < values.length; index += 1) {
     const item = capture(dataAt(values, index));
     const id = idOf(item);
-    if (setHas.call(seen, id)) return invalidProjection();
-    setAdd.call(seen, id);
+    if (requireId && !isNonEmptyString(id)) return invalidProjection();
+    if (isNonEmptyString(id)) {
+      if (setHas.call(seen, id)) return invalidProjection();
+      setAdd.call(seen, id);
+    }
     appendData(result, item);
   }
   return result;
@@ -184,9 +212,12 @@ export function createPrismaFeedbackLearningRepository(client: PrismaClient): Fe
       const approvalIds = sortedUniqueIds(request.activeApprovalFeedbackIds, true);
       return client.$transaction(async (transaction) => {
         await transaction.$executeRawUnsafe("SET TRANSACTION READ ONLY");
-        const feedback = captureRows(await transaction.clipFeedback.findMany({ where: { verdict: "AS_IS", updatedAt: { gte: updatedFrom, lt: updatedTo } }, select: FEEDBACK_SELECT, orderBy: [{ updatedAt: "asc" }, { id: "asc" }] }), captureFeedback, (row) => row.id);
+        const feedback = captureRows(await transaction.clipFeedback.findMany({ where: { verdict: "AS_IS", updatedAt: { gte: updatedFrom, lt: updatedTo } }, select: FEEDBACK_SELECT, orderBy: [{ updatedAt: "asc" }, { id: "asc" }] }), captureCohortFeedback, (row) => row.id, false);
         const jobIds: string[] = [];
-        for (let index = 0; index < feedback.length; index += 1) appendData(jobIds, dataAt(feedback, index).jobId);
+        for (let index = 0; index < feedback.length; index += 1) {
+          const jobId = dataAt(feedback, index).jobId;
+          if (isNonEmptyString(jobId)) appendData(jobIds, jobId);
+        }
         const jobs = captureRows(await transaction.job.findMany({ where: { id: { in: sortedUniqueIds(jobIds, true) } }, select: JOB_SELECT, orderBy: { id: "asc" } }), captureJob, (row) => row.id);
         const currentApprovals = captureRows(await transaction.clipFeedback.findMany({ where: { id: { in: approvalIds } }, select: FEEDBACK_SELECT, orderBy: { id: "asc" } }), captureFeedback, (row) => row.id);
         return { feedback, jobs, currentApprovals };

@@ -266,7 +266,7 @@ describe("createPrismaFeedbackLearningRepository", () => {
     expect(fake.client.$transaction).not.toHaveBeenCalled();
   });
 
-  it("rejects accessor, proxy, extra-key, invalid-date, and duplicate projections stably", async () => {
+  it("rejects accessor, proxy, extra-key, and duplicate projections stably", async () => {
     const valid = feedback("feedback-1");
     let invoked = 0;
     const accessor = { ...valid };
@@ -281,7 +281,6 @@ describe("createPrismaFeedbackLearningRepository", () => {
       { cohort: [accessor] },
       { cohort: [new Proxy(valid, { ownKeys() { throw new Error("PRIVATE_ROW_PROXY"); } })] },
       { cohort: [{ ...valid, extra: "no" }] },
-      { cohort: [{ ...valid, updatedAt: new Date(Number.NaN) }] },
       { cohort: [valid, { ...valid }] },
       {
         cohort: [valid],
@@ -307,5 +306,37 @@ describe("createPrismaFeedbackLearningRepository", () => {
       expect(String(failure)).not.toContain("PRIVATE");
     }
     expect(invoked).toBe(0);
+  });
+
+  it("safely preserves semantic-invalid cohort values for row-level normalization", async () => {
+    const invalid = {
+      ...feedback("invalid"),
+      id: "",
+      clipId: 42,
+      jobId: null,
+      userId: undefined,
+      verdict: false,
+      note: { not: "a string" },
+      evidenceKey: 7,
+      updatedAt: new Date(Number.NaN),
+      snapshot: { invalid: BigInt(1) },
+    };
+    const valid = feedback("valid");
+    const fake = fakeClient({ cohort: [invalid, valid] });
+
+    const snapshot = await createPrismaFeedbackLearningRepository(fake.client as never)
+      .captureExportSnapshot({ ...request, activeApprovalFeedbackIds: [] });
+
+    expect(snapshot.feedback).toHaveLength(2);
+    expect(snapshot.feedback[0]).toMatchObject({
+      id: "",
+      clipId: 42,
+      jobId: null,
+      userId: undefined,
+      verdict: false,
+      evidenceKey: 7,
+    });
+    expect(snapshot.feedback[0].snapshot).not.toBe(invalid.snapshot);
+    expect(fake.calls[3].args).toMatchObject({ where: { id: { in: ["job-valid"] } } });
   });
 });
