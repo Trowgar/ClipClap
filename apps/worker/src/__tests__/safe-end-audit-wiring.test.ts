@@ -3,6 +3,8 @@ import { analyzeHighlightsV2 } from "../analyze-v2";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { SAFE_END_AUDIT_SCHEMA, readSafeEndAuditRow } from "../analyze-v2/safe-end-audit-schema";
 import { SAFE_END_AUDIT_SYSTEM, safeEndAuditUserPrompt } from "../analyze-v2/safe-end-audit-prompts";
+import * as safeEndAudit from "../analyze-v2/safe-end-audit";
+import { APIConnectionTimeoutError } from "openai";
 import type { TranscriptionResult, WhisperSegment } from "@clipclap/shared";
 
 function transcript(): TranscriptionResult {
@@ -34,7 +36,7 @@ const critic = {
 };
 const finalizer = { clips: [{ id: "c0", verdict: "ship", drop_reason: null, duplicate_of: null, shared_claim: null, title: null, title_evidence_nodes: null, trim_start_node: null }] };
 
-type Reply = Record<string, unknown> | "refusal" | "timeout" | "truncated" | "malformed" | "serialization_failure";
+type Reply = Record<string, unknown> | "refusal" | "timeout" | "sdk_timeout" | "truncated" | "malformed" | "serialization_failure";
 interface Request { schema: string; user: string; }
 
 function clientFor(replies: Record<string, Reply>) {
@@ -44,6 +46,7 @@ function clientFor(replies: Record<string, Reply>) {
     requests.push({ schema, user: body.messages.find((message) => message.role === "user")?.content ?? "" });
     const reply = replies[schema];
     if (reply === "timeout") throw new Error("request timeout");
+    if (reply === "sdk_timeout") throw new APIConnectionTimeoutError();
     if (reply === "serialization_failure") JSON.stringify({ value: BigInt(1) });
     if (reply === "refusal") return { choices: [{ message: { content: null, refusal: "cannot assess" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
     if (reply === "truncated") return { choices: [{ message: { content: "{", refusal: null }, finish_reason: "length" }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
@@ -69,7 +72,7 @@ const twoStandingArcFlags = {
 
 function projection(result: Awaited<ReturnType<typeof analyzeHighlightsV2>>) {
   return {
-    highlights: result.highlights.map(({ start, end, title, description, lowQuality }) => ({ start, end, title, description, lowQuality })),
+    highlights: result.highlights,
     noClipsReason: result.noClipsReason,
     rescue: result.telemetry.rescue,
   };
@@ -129,6 +132,34 @@ describe("safe-end normal shadow wiring", () => {
     expect(shadow.requests.find((request) => request.schema === "clip_finalizer")?.user).not.toContain("safe_end");
   });
 
+  it("keeps every persisted highlight field identical with arc audit enabled", async () => {
+    const arcReply = {
+      results: [{
+        id: "c0",
+        entry: { ok: true, defect: null, fix_start_node: null },
+        exit: { ok: true, defect: null, fix_end_node: null },
+        standalone: { ok: true, missing: null },
+      }],
+    };
+    const controlStub = clientFor({ ...replies(), arc_audit: arcReply });
+    const shadowStub = clientFor({
+      ...replies({ results: [{ id: "c0", outcome: "hard_handoff", reason: "topic_switch", extendToNode: null }] }),
+      arc_audit: arcReply,
+    });
+    const cfg = loadAnalyzeConfig({ ARC_AUDIT: "on" });
+    const control = await analyzeHighlightsV2(transcript(), { client: controlStub.client, cfg });
+    const observed = await analyzeHighlightsV2(transcript(), {
+      client: shadowStub.client,
+      cfg: { ...cfg, safeEndAuditMode: "shadow" },
+    });
+
+    expect(projection(observed)).toEqual(projection(control));
+    expect(observed.highlights[0]).toEqual(control.highlights[0]);
+    expect(shadowStub.requests.find((request) => request.schema === "clip_finalizer")?.user).toEqual(
+      controlStub.requests.find((request) => request.schema === "clip_finalizer")?.user
+    );
+  });
+
   it("rejects an afterbeat pointer outside the prompt's bounded forward context", async () => {
     const observed = await analyzeHighlightsV2(transcript(), {
       client: clientFor(replies({ results: [{ id: "c0", outcome: "needs_afterbeat", reason: "post_payoff_context", extendToNode: 11 }] })).client,
@@ -176,6 +207,7 @@ describe("safe-end normal shadow wiring", () => {
     ["refusal", "model_refusal"],
     ["malformed", "malformed_response"],
     ["timeout", "timeout"],
+    ["sdk_timeout", "timeout"],
     ["truncated", "malformed_response"],
     ["serialization_failure", "construction_error"],
   ] as const)("fails open on %s without changing output", async (failure, code) => {
@@ -189,6 +221,30 @@ describe("safe-end normal shadow wiring", () => {
       reason: null,
       failureCode: code,
     });
+  });
+
+  it("fails open when the feature's capped telemetry construction faults", async () => {
+    const cap = vi
+      .spyOn(safeEndAudit, "capSafeEndNormalRecords")
+      .mockImplementationOnce(() => {
+        throw new Error("safe-end telemetry serialization failed");
+      });
+    try {
+      const off = await analyzeHighlightsV2(transcript(), { client: clientFor(replies()).client, cfg: loadAnalyzeConfig({}) });
+      const observed = await analyzeHighlightsV2(transcript(), {
+        client: clientFor(replies()).client,
+        cfg: loadAnalyzeConfig({ SAFE_END_AUDIT: "shadow" }),
+      });
+
+      expect(projection(observed)).toEqual(projection(off));
+      expect(safeEndTelemetry(observed)?.normal).toMatchObject({ evaluated: 1, audit_failed: 1 });
+      expect(safeEndTelemetry(observed)?.normal.records[0]).toMatchObject({
+        outcome: "audit_failed",
+        failureCode: "construction_error",
+      });
+    } finally {
+      cap.mockRestore();
+    }
   });
 
   it("only accepts closed safe-end rows", () => {

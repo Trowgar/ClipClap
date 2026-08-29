@@ -84,7 +84,12 @@ function safeEndFailureCode(
   failure: { kind: "truncated" | "refusal" | "error"; error?: string }
 ): SafeEndAuditFailureCode {
   if (failure.kind === "refusal") return "model_refusal";
-  if (failure.kind === "error" && /timeout/i.test(failure.error ?? "")) return "timeout";
+  // OpenAI's SDK calls this `APIConnectionTimeoutError` and uses the exact
+  // message "Request timed out."; other transport layers commonly say
+  // "timeout". Both are operational timeouts, not feature construction bugs.
+  if (failure.kind === "error" && /timeout|timed out/i.test(failure.error ?? "")) {
+    return "timeout";
+  }
   if (failure.kind === "error") return "construction_error";
   return "malformed_response";
 }
