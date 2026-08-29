@@ -636,6 +636,55 @@ describe("arc-downrank policy wiring", () => {
     });
   });
 
+  it("measures hook delay from the start-repaired boundary", async () => {
+    const cfg = loadAnalyzeConfig({
+      ARC_AUDIT: "on",
+      START_EXTENSION: "on",
+      POST_BOUNDARY_HOOK_GATE: "enforce",
+      // The original snapped start is 49.85s (5.15s to the hook), while the
+      // audit repair moves it to 44.85s (10.15s). This limit distinguishes
+      // those two geometries.
+      POST_BOUNDARY_HOOK_MAX_DELAY_SEC: "7",
+      POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC: "10",
+    });
+    const { client } = stubClient({
+      scan_candidates: { candidates: [scanCandidate(10, 14, 13)] },
+      critic_verdicts: { results: [verdict("c0", 10, 14, 13, 0.82)] },
+      arc_audit: { results: [auditRow("c0", false, true, true, 9)] },
+    });
+
+    const r = await analyzeHighlightsV2(transcript(), { client, cfg });
+    const diagnostic = postBoundaryHookGateOf(r.telemetry)!.diagnostics[0] as {
+      startSec: number;
+      hookDelaySec: number;
+      startRepairApplied: boolean;
+    };
+
+    expect(r.highlights).toHaveLength(0);
+    expect(diagnostic.startSec).toBeCloseTo(44.85, 6);
+    expect(diagnostic.hookDelaySec).toBeCloseTo(10.15, 6);
+    expect(diagnostic.startRepairApplied).toBe(true);
+  });
+
+  it("does not mistake snap's critic-end correction for an end extension", async () => {
+    const cfg = loadAnalyzeConfig({ POST_BOUNDARY_HOOK_GATE: "observe" });
+    const { client } = stubClient({
+      scan_candidates: { candidates: [scanCandidate(10, 14, 13)] },
+      // The critic requests node 14, but snap ends this clip on its payoff at
+      // node 13. End extension remains disabled and must report no change.
+      critic_verdicts: { results: [verdict("c0", 10, 14, 13, 0.82)] },
+      clip_finalizer: { clips: [shipRow("c0")] },
+    });
+
+    const r = await analyzeHighlightsV2(transcript(), { client, cfg });
+    const diagnostic = postBoundaryHookGateOf(r.telemetry)!.diagnostics[0] as {
+      endExtensionApplied: boolean;
+    };
+
+    expect(r.highlights[0]._endNode).toBe(13);
+    expect(diagnostic.endExtensionApplied).toBe(false);
+  });
+
   it("evaluates the post-sweep long boundary rather than the pre-extension clip", async () => {
     const cfg = loadAnalyzeConfig({
       ARC_AUDIT: "on",
@@ -679,6 +728,58 @@ describe("arc-downrank policy wiring", () => {
 
     expect(r.highlights).toHaveLength(0);
     expect(r.telemetry).not.toHaveProperty("rescue");
+  });
+
+  it.each([
+    ["short", 200, { SHORT_SOURCE_RESCUE: "on" }],
+    ["mid", 795, { RESCUE_MID_SOURCE: "on" }],
+  ] as const)("does not let %s rescue restore c0 after arc downrank removes surviving c1", async (_tier, sourceDurationSec, rescueEnv) => {
+    const cfg = loadAnalyzeConfig({
+      ...rescueEnv,
+      ARC_AUDIT: "on",
+      ARC_DOWNRANK: "on",
+      POST_BOUNDARY_HOOK_GATE: "enforce",
+      POST_BOUNDARY_HOOK_MAX_DELAY_SEC: "1",
+      POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC: "1",
+    });
+    const { client } = stubClient({
+      scan_candidates: {
+        candidates: [scanCandidate(10, 14, 13), scanCandidate(20, 24, 23)],
+      },
+      critic_verdicts: {
+        results: [
+          verdict("c0", 10, 14, 13, 0.82),
+          // c1 enters at its hook, so it survives the hook gate and can be
+          // removed only by the later arc downrank stage.
+          { ...verdict("c1", 20, 24, 23, 0.65), hook_start_node: 20 },
+        ],
+      },
+      arc_audit: {
+        results: [
+          auditRow("c0", true, true, true),
+          auditRow("c1", false, false, true),
+        ],
+      },
+    });
+
+    const r = await analyzeHighlightsV2(transcript(), { client, cfg, sourceDurationSec });
+
+    expect(r.telemetry.droppedVerdicts).toContainEqual({
+      id: "c0",
+      stage: "post_boundary_hook_gate",
+      reason: "hook_delay",
+      score: 0.82,
+    });
+    expect(r.telemetry.droppedVerdicts).toContainEqual({
+      id: "c1",
+      stage: "arc_downrank",
+      reason: "arc_unrepairable",
+      score: 0.65,
+    });
+    // If rescue stops excluding gate-dropped ids, c0's higher score wins.
+    expect(r.highlights).toHaveLength(1);
+    expect(r.highlights[0].title).toBe("Заголовок c1");
+    expect(r.telemetry.rescue).toMatchObject({ shipped: true, verdictId: "c1", tier: _tier });
   });
 
   it("keeps ordinary short-source rescue available when the critic produced no clips", async () => {
