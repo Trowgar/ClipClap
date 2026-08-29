@@ -42,12 +42,10 @@ import { SAFE_END_AUDIT_SCHEMA, readSafeEndAuditRow } from "./safe-end-audit-sch
 import {
   capSafeEndNormalRecords,
   capSafeEndRescueRecords,
-  isSafeEndRescueRecord,
   reconcileSafeEndNormalRecords,
   safeEndGeometryReference,
   type SafeEndAuditFailureCode,
   type SafeEndNormalRecord,
-  type SafeEndRescueObservation,
   type SafeEndRescueRecord,
 } from "./safe-end-audit";
 import { observeRescueCandidates } from "./safe-end-rescue-observation";
@@ -90,16 +88,15 @@ interface SafeEndRescueTelemetry {
   selected: number;
   not_selected: number;
   proposedAction: Record<"none" | "zero_tail_handoff" | "standing_arc" | "both", number>;
-  unrealizableByReason: Partial<Record<import("./safe-end-audit").SafeEndRescueUnrealizableReason, number>>;
   records: SafeEndRescueRecord[];
   truncatedCount: number;
 }
 
 function safeEndRescueTelemetry(
-  observations: readonly SafeEndRescueObservation[],
+  observation: { evaluated: number; records: readonly SafeEndRescueRecord[] },
   summary: SafeEndRescueTelemetry["summary"],
 ): SafeEndRescueTelemetry {
-  const records = observations.filter(isSafeEndRescueRecord);
+  const records = observation.records;
   const capped = capSafeEndRescueRecords(records);
   const proposedAction = {
     none: 0,
@@ -107,25 +104,20 @@ function safeEndRescueTelemetry(
     standing_arc: 0,
     both: 0,
   };
-  const unrealizableByReason: SafeEndRescueTelemetry["unrealizableByReason"] = {};
-  for (const observation of observations) {
-    proposedAction[observation.proposedAction] += 1;
-    if (observation.status === "unrealizable") {
-      unrealizableByReason[observation.reason] = (unrealizableByReason[observation.reason] ?? 0) + 1;
-    }
+  for (const record of records) {
+    proposedAction[record.proposedAction] += 1;
   }
   return {
     summary,
-    evaluated: observations.length,
+    evaluated: observation.evaluated,
     realizable: records.length,
-    zeroTailHandoff: observations.filter((record) => record.zeroTailHandoff).length,
-    matchingStanding: observations.filter((record) => record.arcEvidence === "matching_standing").length,
-    matchingClear: observations.filter((record) => record.arcEvidence === "matching_clear").length,
-    staleOrAbsent: observations.filter((record) => record.arcEvidence === "stale_or_absent").length,
-    selected: observations.filter((record) => record.selectedState === "selected").length,
-    not_selected: observations.filter((record) => record.selectedState === "not_selected").length,
+    zeroTailHandoff: records.filter((record) => record.zeroTailHandoff).length,
+    matchingStanding: records.filter((record) => record.arcEvidence === "matching_standing").length,
+    matchingClear: records.filter((record) => record.arcEvidence === "matching_clear").length,
+    staleOrAbsent: records.filter((record) => record.arcEvidence === "stale_or_absent").length,
+    selected: records.filter((record) => record.selectedState === "selected").length,
+    not_selected: records.filter((record) => record.selectedState === "not_selected").length,
     proposedAction,
-    unrealizableByReason,
     records: capped.records,
     truncatedCount: capped.truncatedCount,
   };
@@ -924,7 +916,7 @@ export async function analyzeHighlightsV2(
     );
     safeEndAuditTelemetry = {
       ...normalAudit,
-      rescue: safeEndRescueTelemetry([], "not_run"),
+      rescue: safeEndRescueTelemetry({ evaluated: 0, records: [] }, "not_run"),
     };
   }
 
@@ -1439,7 +1431,7 @@ export async function analyzeHighlightsV2(
             const observations = observeRescueCandidates(rescuePool, nodes, cfg, arcGeometryEvidence);
             return safeEndRescueTelemetry(
               observations,
-              observations.some(isSafeEndRescueRecord) ? "selected" : "no_realizable_candidate",
+              observations.records.length > 0 ? "selected" : "no_realizable_candidate",
             );
           })(),
         };

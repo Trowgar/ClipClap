@@ -212,15 +212,16 @@ describe("safe-end normal shadow wiring", () => {
 
     expect(result.highlights).toHaveLength(1);
     expect(result.highlights[0]?.score).toBe(0.8);
-    const rescue = (result.telemetry.safeEndAudit as { rescue: Record<string, unknown> }).rescue;
+    const rescue = (result.telemetry.safeEndAudit as { rescue: Record<string, unknown> & { records: unknown[] } }).rescue;
     expect(rescue).toMatchObject({
-      summary: "selected", evaluated: 2, realizable: 1, selected: 1, not_selected: 1,
-      proposedAction: { none: 2, zero_tail_handoff: 0, standing_arc: 0, both: 0 },
-      unrealizableByReason: { too_long: 1 },
+      summary: "selected", evaluated: 2, realizable: 1, selected: 1, not_selected: 0,
+      proposedAction: { none: 1, zero_tail_handoff: 0, standing_arc: 0, both: 0 },
     });
     expect(rescue.records).toEqual([
       expect.objectContaining({ geometry: expect.objectContaining({ candidateId: "c1" }), language: "en", kind: "story" }),
     ]);
+    expect(rescue.records[0]).not.toHaveProperty("status");
+    expect(rescue.records[0]).not.toHaveProperty("reason");
   });
 
   it("reconciles a retained normal record from the finalizer's actual trimmed geometry", async () => {

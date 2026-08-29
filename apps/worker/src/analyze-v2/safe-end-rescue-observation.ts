@@ -6,7 +6,6 @@ import {
   zeroTailHandoff,
   type RescueArcEvidence,
   type RescueProposedAction,
-  type SafeEndRescueObservation,
   type SafeEndRescueRecord,
 } from "./safe-end-audit";
 import type { CriticVerdict, SentenceNode, SnappedClip } from "./types";
@@ -57,28 +56,15 @@ export function observeRescueCandidates(
   nodes: SentenceNode[],
   cfg: AnalyzeConfig,
   arcEvidence: ReadonlyMap<string, ArcAuditGeometryEvidence>,
-): SafeEndRescueObservation[] {
+): { evaluated: number; records: SafeEndRescueRecord[] } {
   const ordered = [...verdicts].sort(
     (left, right) => right.score - left.score || left.id.localeCompare(right.id),
   );
-  const observations: SafeEndRescueObservation[] = [];
+  const records: SafeEndRescueRecord[] = [];
 
   for (const [index, verdict] of ordered.entries()) {
     const snapped = snapNodes(verdict, nodes, cfg);
     if (!snapped.ok) {
-      observations.push({
-        candidateId: verdict.id,
-        score: verdict.score,
-        scoreRank: index + 1,
-        language: verdict.language,
-        ...(verdict.kind ? { kind: verdict.kind } : {}),
-        status: "unrealizable",
-        reason: snapped.reason,
-        zeroTailHandoff: false,
-        arcEvidence: "stale_or_absent",
-        proposedAction: "none",
-        selectedState: "not_selected",
-      });
       continue;
     }
     let clip = snapped.clip;
@@ -93,19 +79,6 @@ export function observeRescueCandidates(
         cfg,
       );
       if (!compressed.ok) {
-        observations.push({
-          candidateId: verdict.id,
-          score: verdict.score,
-          scoreRank: index + 1,
-          language: verdict.language,
-          ...(verdict.kind ? { kind: verdict.kind } : {}),
-          status: "unrealizable",
-          reason: "compress_failed",
-          zeroTailHandoff: false,
-          arcEvidence: "stale_or_absent",
-          proposedAction: "none",
-          selectedState: "not_selected",
-        });
         continue;
       }
       clip = {
@@ -118,21 +91,17 @@ export function observeRescueCandidates(
     }
     const matchedArcEvidence = arcEvidenceFor(clip, arcEvidence);
     const zeroTail = zeroTailHandoff(clip, nodes);
-    observations.push({
+    records.push({
       geometry: safeEndGeometryReference(clip),
       score: verdict.score,
       scoreRank: index + 1,
       language: verdict.language,
       ...(verdict.kind ? { kind: verdict.kind } : {}),
-      status: "realizable",
-      reason: null,
       zeroTailHandoff: zeroTail,
       arcEvidence: matchedArcEvidence,
       proposedAction: proposedAction(zeroTail, matchedArcEvidence),
-      selectedState: observations.some((observation) => observation.status !== "unrealizable")
-        ? "not_selected"
-        : "selected",
+      selectedState: records.length === 0 ? "selected" : "not_selected",
     });
   }
-  return observations;
+  return { evaluated: ordered.length, records };
 }

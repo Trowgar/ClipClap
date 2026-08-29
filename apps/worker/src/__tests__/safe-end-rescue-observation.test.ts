@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { observeRescueCandidates } from "../analyze-v2/safe-end-rescue-observation";
-import { isSafeEndRescueRecord, type SafeEndRescueRecord } from "../analyze-v2/safe-end-audit";
+import type { SafeEndRescueRecord } from "../analyze-v2/safe-end-audit";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import type { ArcAuditGeometryEvidence } from "../analyze-v2/arc-audit";
 import type { CriticVerdict, SentenceNode } from "../analyze-v2/types";
@@ -63,19 +63,11 @@ describe("safe-end rescue observation", () => {
       new Map(),
     );
 
-    expect(observations).toHaveLength(2);
-    expect(observations[0]).toMatchObject({
-      candidateId: "bad",
-      status: "unrealizable",
-      reason: "invariant_violation",
-      scoreRank: 1,
-      selectedState: "not_selected",
-    });
-    expect(observations[1]).toMatchObject({
+    expect(observations.evaluated).toBe(2);
+    expect(observations.records).toHaveLength(1);
+    expect(observations.records[0]).toMatchObject({
       geometry: { candidateId: "winner" },
       language: "en",
-      status: "realizable",
-      reason: null,
       scoreRank: 2,
       selectedState: "selected",
     });
@@ -87,7 +79,7 @@ describe("safe-end rescue observation", () => {
       nodes(),
       cfg,
       new Map(),
-    ).filter(isSafeEndRescueRecord);
+    ).records;
 
     expect(records.map((record) => [record.geometry.candidateId, record.scoreRank, record.selectedState])).toEqual([
       ["a", 1, "selected"],
@@ -98,16 +90,16 @@ describe("safe-end rescue observation", () => {
   });
 
   it("uses arc flags only when their audit-time geometry exactly matches, without mutating them", () => {
-    const first = observeRescueCandidates([verdict("c0", 0.7)], nodes(), cfg, new Map()).filter(isSafeEndRescueRecord)[0];
+    const first = observeRescueCandidates([verdict("c0", 0.7)], nodes(), cfg, new Map()).records[0];
     const clear = evidenceFor(first);
     const standing = evidenceFor(first);
     standing.flags.entry = { ok: false, defect: "mid_story" };
     const stale = { ...evidenceFor(first), startMs: first.geometry.startMs + 1 };
     const original = structuredClone(standing);
 
-    expect(observeRescueCandidates([verdict("c0", 0.7)], nodes(), cfg, new Map([["c0", clear]])).filter(isSafeEndRescueRecord)[0]?.arcEvidence).toBe("matching_clear");
-    expect(observeRescueCandidates([verdict("c0", 0.7)], nodes(), cfg, new Map([["c0", standing]])).filter(isSafeEndRescueRecord)[0]).toMatchObject({ arcEvidence: "matching_standing", proposedAction: "both" });
-    expect(observeRescueCandidates([verdict("c0", 0.7)], nodes(), cfg, new Map([["c0", stale]])).filter(isSafeEndRescueRecord)[0]?.arcEvidence).toBe("stale_or_absent");
+    expect(observeRescueCandidates([verdict("c0", 0.7)], nodes(), cfg, new Map([["c0", clear]])).records[0]?.arcEvidence).toBe("matching_clear");
+    expect(observeRescueCandidates([verdict("c0", 0.7)], nodes(), cfg, new Map([["c0", standing]])).records[0]).toMatchObject({ arcEvidence: "matching_standing", proposedAction: "both" });
+    expect(observeRescueCandidates([verdict("c0", 0.7)], nodes(), cfg, new Map([["c0", stale]])).records[0]?.arcEvidence).toBe("stale_or_absent");
     expect(standing).toEqual(original);
   });
 });

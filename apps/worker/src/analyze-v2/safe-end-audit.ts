@@ -26,15 +26,6 @@ export type SafeEndAuditFailureCode =
 export type RescueArcEvidence = "matching_standing" | "matching_clear" | "stale_or_absent";
 export type RescueProposedAction = "none" | "zero_tail_handoff" | "standing_arc" | "both";
 export type SafeEndRescueSelectedState = "selected" | "not_selected";
-export type SafeEndRescueUnrealizableReason =
-  | "no_clean_start"
-  | "no_clean_end"
-  | "opaque_end"
-  | "opaque_payoff"
-  | "invariant_violation"
-  | "too_short"
-  | "too_long"
-  | "compress_failed";
 
 /** Rounded, job-local geometry only. It deliberately carries neither text nor
  * media identity, so it is safe to persist inside ANALYZE telemetry. */
@@ -66,37 +57,10 @@ export interface SafeEndRescueRecord {
    * Task 1's standalone capping primitive fixtures. */
   language?: string;
   kind?: string;
-  status?: "realizable";
-  reason?: null;
   zeroTailHandoff: boolean;
   arcEvidence: RescueArcEvidence;
   proposedAction: RescueProposedAction;
   selectedState: SafeEndRescueSelectedState;
-}
-
-/** All verdicts rescue evaluated, including those that did not produce a
- * renderable geometry. Unrealizable observations intentionally carry no
- * geometry: emitting a made-up range would turn a failed snap into evidence. */
-export type SafeEndRescueObservation =
-  | SafeEndRescueRecord
-  | {
-      candidateId: string;
-      score: number;
-      scoreRank: number;
-      language: string;
-      kind?: string;
-      status: "unrealizable";
-      reason: SafeEndRescueUnrealizableReason;
-      zeroTailHandoff: false;
-      arcEvidence: "stale_or_absent";
-      proposedAction: "none";
-      selectedState: "not_selected";
-    };
-
-export function isSafeEndRescueRecord(
-  observation: SafeEndRescueObservation,
-): observation is SafeEndRescueRecord {
-  return observation.status !== "unrealizable";
 }
 
 export type SafeEndReconciliationState =

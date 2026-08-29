@@ -275,6 +275,7 @@ describe("short-source rescue wiring", () => {
       ARC_AUDIT: "on",
       ARC_DOWNRANK: "on",
       LONG_CLIPS: "on",
+      SAFE_END_AUDIT: "shadow",
     });
     const keptButWeak = rejectedCriticResponse({ keep: true, score: 0.65 });
     const auditTwoStanding = {
@@ -294,7 +295,14 @@ describe("short-source rescue wiring", () => {
       }],
       usage: { prompt_tokens: 150, completion_tokens: 40 },
     };
-    const c = client(scanResponse(), keptButWeak, auditTwoStanding);
+    const safeEnd = {
+      choices: [{
+        message: { content: JSON.stringify({ results: [{ id: "c0", outcome: "safe", reason: null, extendToNode: null }] }) },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 100, completion_tokens: 20 },
+    };
+    const c = client(scanResponse(), keptButWeak, auditTwoStanding, safeEnd);
     const r = await analyzeHighlightsV2(transcript(), {
       client: c,
       cfg: prodCfg,
@@ -306,9 +314,12 @@ describe("short-source rescue wiring", () => {
     expect(r.highlights[0].lowQuality).toBe(true);
     expect(r.highlights[0]).not.toHaveProperty("_arcFlags");
     expect(r.telemetry.rescue).toMatchObject({ shipped: true, verdictId: "c0", keptByCritic: true });
-    // scan + critic + audit - the rescue itself still spends nothing, and the
+    expect(r.telemetry.safeEndAudit).toMatchObject({
+      rescue: { records: [expect.objectContaining({ arcEvidence: "matching_standing" })] },
+    });
+    // scan + critic + arc audit + safe-end audit - rescue itself spends nothing, and the
     // finalizer skipped on the empty survivor set.
-    expect(c.chat.completions.create).toHaveBeenCalledTimes(3);
+    expect(c.chat.completions.create).toHaveBeenCalledTimes(4);
   });
 
   it("never masks a technical failure - unjudged candidates still throw with the flag on", async () => {
