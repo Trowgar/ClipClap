@@ -5,6 +5,9 @@ import { basename, join } from "node:path";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
+const PRIVATE_TREE_ROOT_OPEN_TEST_HOOK = Symbol.for(
+  "clipclap.feedback-learning.persistence.private-tree-root-open-test-hook"
+);
 const RUN_FILE_NAMES = [
   "run.json",
   "candidates.jsonl",
@@ -284,6 +287,23 @@ async function sameDirectory(left: FileHandle, right: FileHandle): Promise<boole
   return leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
 }
 
+async function assertRootHandleCurrent(rootPath: string, trustedRoot: FileHandle): Promise<void> {
+  const currentRoot = await openDirectoryNoFollow(rootPath);
+  try {
+    if (!(await sameDirectory(trustedRoot, currentRoot))) throwUnsafe();
+  } finally {
+    await closeBestEffort(currentRoot);
+  }
+}
+
+async function runPrivateTreeRootOpenTestHook(): Promise<void> {
+  if (process.env.NODE_ENV !== "test") return;
+  const hook = (globalThis as unknown as Record<PropertyKey, unknown>)[
+    PRIVATE_TREE_ROOT_OPEN_TEST_HOOK
+  ];
+  if (typeof hook === "function") await (hook as () => void | Promise<void>)();
+}
+
 async function assertPrivateDirectoryAnchorCurrent(
   rootPath: string,
   trusted: PrivateDirectoryAnchor
@@ -387,9 +407,17 @@ async function uncertainRunResult(input: RunWrite): Promise<CommitResult> {
 export async function ensurePrivateTree(root: string): Promise<PrivatePaths> {
   const paths = privatePaths(root);
   await secureDirectory(paths.root);
-  await secureDirectory(paths.exportsDir);
-  await secureDirectory(paths.ledgerDir);
-  return paths;
+  const rootHandle = await openDirectoryNoFollow(paths.root);
+  try {
+    await runPrivateTreeRootOpenTestHook();
+    await secureDirectory(anchoredPath(rootHandle, "exports"));
+    await secureDirectory(anchoredPath(rootHandle, "ledger"));
+    await rootHandle.sync();
+    await assertRootHandleCurrent(paths.root, rootHandle);
+    return paths;
+  } finally {
+    await closeBestEffort(rootHandle);
+  }
 }
 
 export async function replaceLedgerAtomically(input: LedgerWrite): Promise<CommitResult> {

@@ -26,6 +26,13 @@ import {
 
 const temporaryDirectories: string[] = [];
 const encoder = new TextEncoder();
+const PRIVATE_TREE_ROOT_OPEN_TEST_HOOK = Symbol.for(
+  "clipclap.feedback-learning.persistence.private-tree-root-open-test-hook"
+);
+
+function testHookGlobal(): Record<PropertyKey, unknown> {
+  return globalThis as unknown as Record<PropertyKey, unknown>;
+}
 
 async function temporaryRoot(): Promise<{ parent: string; root: string }> {
   const parent = await mkdtemp(join(tmpdir(), "clipclap-corpus-persistence-"));
@@ -66,6 +73,7 @@ function failAt(expected: PersistenceFault): (actual: PersistenceFault) => void 
 }
 
 afterEach(async () => {
+  delete testHookGlobal()[PRIVATE_TREE_ROOT_OPEN_TEST_HOOK];
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))
   );
@@ -134,6 +142,40 @@ describe("ensurePrivateTree", () => {
       expect(mode(await lstat(external))).toBe(0o755);
     }
   );
+
+  it("anchors child setup to the opened root when the public root is replaced", async () => {
+    const { parent, root } = await temporaryRoot();
+    const originalRoot = `${root}-original`;
+    const externalRoot = join(parent, "external-root");
+    const externalExports = join(externalRoot, "exports");
+    await mkdir(externalRoot, 0o755);
+    await mkdir(externalExports, 0o751);
+    await writeFile(join(externalExports, "sentinel"), "outside", { mode: 0o640 });
+    let hookCalled = false;
+    testHookGlobal()[PRIVATE_TREE_ROOT_OPEN_TEST_HOOK] = async () => {
+      hookCalled = true;
+      await renamePath(root, originalRoot);
+      await symlink(externalRoot, root);
+    };
+
+    await expect(ensurePrivateTree(root)).rejects.toMatchObject({ code: "unsafe_path" });
+
+    expect(hookCalled).toBe(true);
+    expect((await lstat(root)).isSymbolicLink()).toBe(true);
+    for (const directory of [
+      originalRoot,
+      join(originalRoot, "exports"),
+      join(originalRoot, "ledger"),
+    ]) {
+      expect((await lstat(directory)).isDirectory()).toBe(true);
+      expect(mode(await lstat(directory))).toBe(0o700);
+    }
+    expect(mode(await lstat(externalRoot))).toBe(0o755);
+    expect(mode(await lstat(externalExports))).toBe(0o751);
+    expect(await readFile(join(externalExports, "sentinel"), "utf8")).toBe("outside");
+    expect(mode(await lstat(join(externalExports, "sentinel")))).toBe(0o640);
+    expect((await readdir(externalRoot)).sort()).toEqual(["exports"]);
+  });
 });
 
 describe("replaceLedgerAtomically", () => {
