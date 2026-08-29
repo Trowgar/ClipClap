@@ -1,5 +1,5 @@
-import { ChildProcess, spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { ChildProcess, execFileSync, spawn } from "node:child_process";
+import { chmod, lstat, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -110,6 +110,47 @@ afterEach(async () => {
 });
 
 describe("withCorpusLock", () => {
+  it("rejects a FIFO without changing its mode", async () => {
+    const lockPath = await temporaryLockPath();
+    execFileSync("mkfifo", [lockPath]);
+    await chmod(lockPath, 0o640);
+    let callbackRan = false;
+
+    await expect(
+      withCorpusLock(lockPath, async () => {
+        callbackRan = true;
+      })
+    ).rejects.toMatchObject({
+      code: "lock_unavailable",
+      message: "lock_unavailable",
+    });
+
+    expect(callbackRan).toBe(false);
+    expect((await lstat(lockPath)).mode & 0o777).toBe(0o640);
+  });
+
+  it("refuses a symlink without changing the target mode", async () => {
+    const lockPath = await temporaryLockPath();
+    const targetPath = `${lockPath}.target`;
+    await writeFile(targetPath, "");
+    await chmod(targetPath, 0o640);
+    await symlink(targetPath, lockPath);
+    let callbackRan = false;
+
+    await expect(
+      withCorpusLock(lockPath, async () => {
+        callbackRan = true;
+      })
+    ).rejects.toMatchObject({
+      code: "lock_unavailable",
+      message: "lock_unavailable",
+    });
+
+    expect(callbackRan).toBe(false);
+    expect((await lstat(lockPath)).isSymbolicLink()).toBe(true);
+    expect((await lstat(targetPath)).mode & 0o777).toBe(0o640);
+  });
+
   it("runs the callback while reviews.lock is a regular 0600 file", async () => {
     const lockPath = await temporaryLockPath();
     const child = spawnLockChild(lockPath, "try");
