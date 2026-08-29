@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, readdir, rename, rm, type FileHandle } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+import { types as utilTypes } from "node:util";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -20,6 +21,12 @@ const RUN_FILE_NAMES = [
   "candidates.md",
   "exclusions.jsonl",
 ] as const;
+const PRIVATE_PATH_KEYS = ["root", "exportsDir", "ledgerDir", "reviewsFile", "lockFile"] as const;
+const getDescriptor = Object.getOwnPropertyDescriptor;
+const getPrototype = Object.getPrototypeOf;
+const ownKeys = Reflect.ownKeys;
+const isArray = Array.isArray;
+const stringIncludes = String.prototype.includes;
 
 export type CommitResult =
   | { status: "committed" }
@@ -115,8 +122,9 @@ function throwUnsafe(): never {
 }
 
 function privatePaths(root: string): PrivatePaths {
+  if (typeof root !== "string") throw new PersistenceInputError();
   const rootName = basename(root);
-  if (!root || !rootName || rootName === "." || rootName === ".." || root.includes("\0")) {
+  if (!root || !rootName || rootName === "." || rootName === ".." || stringIncludes.call(root, "\0")) {
     throw new PersistenceInputError();
   }
   const exportsDir = join(root, "exports");
@@ -130,12 +138,61 @@ function privatePaths(root: string): PrivatePaths {
   });
 }
 
-function assertPrivatePaths(paths: PrivatePaths): void {
-  const expected = privatePaths(paths.root);
-  for (const key of Object.keys(expected) as (keyof PrivatePaths)[]) {
-    if (paths[key] !== expected[key]) throw new PersistenceInputError();
+function privatePathKey(value: string): value is keyof PrivatePaths {
+  for (let index = 0; index < PRIVATE_PATH_KEYS.length; index += 1) {
+    const descriptor = getDescriptor(PRIVATE_PATH_KEYS, String(index));
+    if (descriptor !== undefined && "value" in descriptor && descriptor.value === value) return true;
   }
-  if (Object.keys(paths).length !== Object.keys(expected).length) throw new PersistenceInputError();
+  return false;
+}
+
+function assertPrivatePaths(raw: PrivatePaths): PrivatePaths {
+  try {
+    if (
+      raw === null ||
+      typeof raw !== "object" ||
+      utilTypes.isProxy(raw) ||
+      isArray(raw)
+    ) {
+      throw new PersistenceInputError();
+    }
+    const prototype = getPrototype(raw);
+    if (prototype !== Object.prototype && prototype !== null) throw new PersistenceInputError();
+    const keys = ownKeys(raw);
+    if (keys.length !== PRIVATE_PATH_KEYS.length) throw new PersistenceInputError();
+    const captured: Record<string, string> = Object.create(null);
+    for (let index = 0; index < keys.length; index += 1) {
+      const keyDescriptor = getDescriptor(keys, String(index));
+      if (keyDescriptor === undefined || !("value" in keyDescriptor)) throw new PersistenceInputError();
+      const key = keyDescriptor.value as keyof PrivatePaths;
+      if (typeof key !== "string" || !privatePathKey(key)) throw new PersistenceInputError();
+      const descriptor = getDescriptor(raw, key);
+      if (
+        descriptor === undefined ||
+        !descriptor.enumerable ||
+        !("value" in descriptor) ||
+        typeof descriptor.value !== "string"
+      ) {
+        throw new PersistenceInputError();
+      }
+      Object.defineProperty(captured, key, {
+        configurable: true,
+        enumerable: true,
+        value: descriptor.value,
+        writable: true,
+      });
+    }
+    const expected = privatePaths(captured.root);
+    for (let index = 0; index < PRIVATE_PATH_KEYS.length; index += 1) {
+      const keyDescriptor = getDescriptor(PRIVATE_PATH_KEYS, String(index));
+      if (keyDescriptor === undefined || !("value" in keyDescriptor)) throw new PersistenceInputError();
+      const key = keyDescriptor.value as keyof PrivatePaths;
+      if (captured[key] !== expected[key]) throw new PersistenceInputError();
+    }
+    return Object.freeze(captured) as PrivatePaths;
+  } catch {
+    throw new PersistenceInputError();
+  }
 }
 
 async function closeBestEffort(handle: FileHandle | undefined): Promise<void> {
@@ -587,8 +644,8 @@ export async function ensurePrivateTree(root: string): Promise<PrivatePaths> {
 }
 
 export async function readLedgerSnapshot(paths: PrivatePaths): Promise<Uint8Array> {
-  assertPrivatePaths(paths);
-  const anchor = await openEnsuredPrivateTree(paths.root);
+  const capturedPaths = assertPrivatePaths(paths);
+  const anchor = await openEnsuredPrivateTree(capturedPaths.root);
   try {
     const ledgerPath = anchoredPath(anchor.ledgerHandle, "reviews.jsonl");
     const kind = await ensureNoSymlinkOrSpecialFile(ledgerPath);
@@ -607,20 +664,21 @@ export async function readPublishedCandidateSnapshot(
   paths: PrivatePaths,
   runId: string,
 ): Promise<Uint8Array> {
-  assertPrivatePaths(paths);
   if (
+    typeof runId !== "string" ||
     !runId ||
     runId === "." ||
     runId === ".." ||
     basename(runId) !== runId ||
-    runId.includes("/") ||
-    runId.includes("\\") ||
-    runId.includes("\0")
+    stringIncludes.call(runId, "/") ||
+    stringIncludes.call(runId, "\\") ||
+    stringIncludes.call(runId, "\0")
   ) {
     throw new PersistencePathError();
   }
 
-  const anchor = await openEnsuredPrivateTree(paths.root);
+  const capturedPaths = assertPrivatePaths(paths);
+  const anchor = await openEnsuredPrivateTree(capturedPaths.root);
   let runHandle: FileHandle | undefined;
   try {
     runHandle = await openDirectoryNoFollow(anchoredPath(anchor.exportsHandle, runId));
@@ -725,13 +783,14 @@ export async function replaceLedgerAtomically(input: LedgerWrite): Promise<Commi
 
 function assertRunInput(input: RunWrite): void {
   if (
+    typeof input.runId !== "string" ||
     !input.runId ||
     input.runId === "." ||
     input.runId === ".." ||
     basename(input.runId) !== input.runId ||
-    input.runId.includes("/") ||
-    input.runId.includes("\\") ||
-    input.runId.includes("\0") ||
+    stringIncludes.call(input.runId, "/") ||
+    stringIncludes.call(input.runId, "\\") ||
+    stringIncludes.call(input.runId, "\0") ||
     !input.runDigest
   ) {
     throw new PersistencePathError();

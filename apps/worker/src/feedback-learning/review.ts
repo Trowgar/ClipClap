@@ -433,11 +433,11 @@ async function insideLock(request: ValidatedRequest, candidate: Candidate | unde
       if (decision.candidateVersion === candidate.candidateVersion) return boundary(decision.action === "approve" ? "already_approved" : "already_rejected");
       if (decision.action === "approve" && decision.feedbackId === candidate.feedbackId) return boundary("stale_review_requires_retirement");
     }
-    for (let index = 0; index < state.destinationLocks.length; index += 1) {
-      const lock = dataAt(state.destinationLocks, index);
-      if (lock.feedbackId === current.id && lock.set !== request.targetSet) return boundary("destination_locked");
-    }
     if (request.action === "approve") {
+      for (let index = 0; index < state.destinationLocks.length; index += 1) {
+        const lock = dataAt(state.destinationLocks, index);
+        if (lock.feedbackId === current.id && lock.set !== request.targetSet) return boundary("destination_locked");
+      }
       const rows = currentMap(approvalIds, snapshot.currentApprovals);
       const capacity = buildCapacity(state, rows)[request.targetSet];
       const jobCount = (mapGet.call(capacity.jobCounts, current.jobId) as number | undefined) ?? 0;

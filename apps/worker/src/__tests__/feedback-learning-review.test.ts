@@ -158,6 +158,22 @@ describe("reviewFeedback", () => {
     await expect(reviewFeedback({ action: "approve", runId: RUN_ID, candidateVersion: candidate(lockedRow).candidateVersion }, locked.dependencies)).rejects.toMatchObject({ code: "destination_locked" });
   });
 
+  it("allows rejection from an export opposite a retained destination lock", async () => {
+    const current = row("locked");
+    const prior = approval("holdout-prior", current, "holdout");
+    const retired = { schemaVersion: 1, eventId: "retire-prior", action: "correct", occurredAt: OCCURRED_AT,
+      operation: "retire", targetEventId: prior.eventId, reason: "retire" } as const;
+    const selected = candidate(current);
+    const test = setup({ candidates: [selected], rows: [current], ledger: [prior, retired] });
+
+    await expect(reviewFeedback({ action: "reject", runId: RUN_ID, candidateVersion: selected.candidateVersion,
+      reason: "Not suitable" }, test.dependencies)).resolves.toMatchObject({ status: "committed" });
+
+    const appended = JSON.parse(Buffer.from(test.writes[0].bytes).subarray(jsonLine(prior).length + jsonLine(retired).length).toString("utf8"));
+    expect(appended.action).toBe("reject");
+    expect(appended).not.toHaveProperty("set");
+  });
+
   it.each(["committed", "noop", "committed_durability_uncertain", "indeterminate"] as const)("returns only the safe %s persistence outcome", async (status) => {
     const current = row("feedback-1"); const selected = candidate(current);
     const test = setup({ candidates: [selected], rows: [current], status });

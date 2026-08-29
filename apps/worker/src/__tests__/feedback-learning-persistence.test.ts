@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import {
   chmod,
   lstat,
@@ -137,6 +138,50 @@ describe("readPublishedCandidateSnapshot", () => {
     });
   });
 
+  it("rejects hostile path objects and non-string run IDs without invoking traps", async () => {
+    const valid = await privatePaths();
+    let invoked = 0;
+    const accessor = { ...valid };
+    Object.defineProperty(accessor, "root", { enumerable: true, get() { invoked += 1; throw new Error("PRIVATE_PATH_GETTER"); } });
+    const hostile = [
+      new Proxy(valid, { ownKeys() { invoked += 1; throw new Error("PRIVATE_PATH_PROXY"); } }),
+      accessor,
+      { ...valid, extra: "forbidden" },
+      { ...valid, exportsDir: 123 },
+      Object.assign({ ...valid }, { [Symbol("private")]: "forbidden" }),
+    ];
+    for (const value of hostile) {
+      let failure: unknown;
+      try { await readPublishedCandidateSnapshot(value as never, "eval-0123456789abcdef"); }
+      catch (error) { failure = error; }
+      expect(failure).toMatchObject({ code: "invalid_input" });
+      expect(String(failure)).not.toContain("PRIVATE_PATH");
+    }
+    let runFailure: unknown;
+    try { await readPublishedCandidateSnapshot(valid, 42 as never); }
+    catch (error) { runFailure = error; }
+    expect(runFailure).toMatchObject({ code: "unsafe_path" });
+    expect(String(runFailure)).not.toContain("PRIVATE_PATH");
+    expect(invoked).toBe(0);
+  });
+
+  it("uses captured String path intrinsics and returns unchanged candidate bytes", async () => {
+    const paths = await privatePaths();
+    const runId = "eval-0123456789abcdef";
+    const expected = encoder.encode('{"candidate":"safe"}\n');
+    await mkdir(join(paths.exportsDir, runId), 0o700);
+    await writeFile(join(paths.exportsDir, runId, "candidates.jsonl"), expected, { mode: 0o600 });
+    const descriptor = Object.getOwnPropertyDescriptor(String.prototype, "includes");
+    let invoked = 0;
+    Object.defineProperty(String.prototype, "includes", { configurable: true, writable: true,
+      value() { invoked += 1; throw new Error("PRIVATE_STRING_INCLUDES"); } });
+    let actual: Uint8Array | undefined;
+    try { actual = await readPublishedCandidateSnapshot(paths, runId); }
+    finally { if (descriptor) Object.defineProperty(String.prototype, "includes", descriptor); }
+    expect(actual).toEqual(expected);
+    expect(invoked).toBe(0);
+  });
+
   it.each(["root", "exports", "run"] as const)(
     "rejects a %s replacement while preserving external candidate bytes",
     async (component) => {
@@ -186,6 +231,20 @@ describe("readLedgerSnapshot", () => {
     const paths = await privatePaths();
 
     await expect(readLedgerSnapshot(paths)).resolves.toEqual(new Uint8Array());
+  });
+
+  it("rejects proxy and accessor PrivatePaths without trap invocation or leakage", async () => {
+    const valid = await privatePaths();
+    let invoked = 0;
+    const accessor = { ...valid };
+    Object.defineProperty(accessor, "reviewsFile", { enumerable: true, get() { invoked += 1; throw new Error("PRIVATE_LEDGER_GETTER"); } });
+    for (const value of [new Proxy(valid, { get() { invoked += 1; throw new Error("PRIVATE_LEDGER_PROXY"); } }), accessor]) {
+      let failure: unknown;
+      try { await readLedgerSnapshot(value as never); } catch (error) { failure = error; }
+      expect(failure).toMatchObject({ code: "invalid_input" });
+      expect(String(failure)).not.toContain("PRIVATE_LEDGER");
+    }
+    expect(invoked).toBe(0);
   });
 
   it("returns an isolated exact byte snapshot from an anchored regular file", async () => {
@@ -1100,4 +1159,3 @@ describe("publishRunAtomically", () => {
     expect(await readdir(paths.exportsDir)).toEqual([]);
   });
 });
-import { execFile } from "node:child_process";
