@@ -11,6 +11,9 @@ const PRIVATE_TREE_ROOT_OPEN_TEST_HOOK = Symbol.for(
 const PRIVATE_TREE_READY_TEST_HOOK = Symbol.for(
   "clipclap.feedback-learning.persistence.private-tree-ready-test-hook"
 );
+const PUBLISHED_CANDIDATE_READY_TEST_HOOK = Symbol.for(
+  "clipclap.feedback-learning.persistence.published-candidate-ready-test-hook"
+);
 const RUN_FILE_NAMES = [
   "run.json",
   "candidates.jsonl",
@@ -351,6 +354,14 @@ async function runPrivateTreeReadyTestHook(): Promise<void> {
   if (typeof hook === "function") await (hook as () => void | Promise<void>)();
 }
 
+async function runPublishedCandidateReadyTestHook(): Promise<void> {
+  if (process.env.NODE_ENV !== "test") return;
+  const hook = (globalThis as unknown as Record<PropertyKey, unknown>)[
+    PUBLISHED_CANDIDATE_READY_TEST_HOOK
+  ];
+  if (typeof hook === "function") await (hook as () => void | Promise<void>)();
+}
+
 type EnsuredPrivateTreeAnchor = Readonly<{
   paths: PrivatePaths;
   parentPath: string;
@@ -384,6 +395,20 @@ async function assertEnsuredPrivateTreeCurrent(anchor: EnsuredPrivateTreeAnchor)
   );
   await assertChildEntryCurrent(anchor.rootHandle, "exports", anchor.exportsHandle);
   await assertChildEntryCurrent(anchor.rootHandle, "ledger", anchor.ledgerHandle);
+}
+
+async function assertRunEntryCurrent(
+  exportsHandle: FileHandle,
+  runId: string,
+  trustedRun: FileHandle,
+): Promise<void> {
+  let currentRun: FileHandle | undefined;
+  try {
+    currentRun = await openDirectoryNoFollow(anchoredPath(exportsHandle, runId));
+    if (!(await sameDirectory(trustedRun, currentRun))) throwUnsafe();
+  } finally {
+    await closeBestEffort(currentRun);
+  }
 }
 
 async function closeEnsuredPrivateTree(anchor: EnsuredPrivateTreeAnchor): Promise<void> {
@@ -574,6 +599,43 @@ export async function readLedgerSnapshot(paths: PrivatePaths): Promise<Uint8Arra
     await assertEnsuredPrivateTreeCurrent(anchor);
     return new Uint8Array(bytes);
   } finally {
+    await closeEnsuredPrivateTree(anchor);
+  }
+}
+
+export async function readPublishedCandidateSnapshot(
+  paths: PrivatePaths,
+  runId: string,
+): Promise<Uint8Array> {
+  assertPrivatePaths(paths);
+  if (
+    !runId ||
+    runId === "." ||
+    runId === ".." ||
+    basename(runId) !== runId ||
+    runId.includes("/") ||
+    runId.includes("\\") ||
+    runId.includes("\0")
+  ) {
+    throw new PersistencePathError();
+  }
+
+  const anchor = await openEnsuredPrivateTree(paths.root);
+  let runHandle: FileHandle | undefined;
+  try {
+    runHandle = await openDirectoryNoFollow(anchoredPath(anchor.exportsHandle, runId));
+    await runHandle.chmod(DIRECTORY_MODE);
+    await runPublishedCandidateReadyTestHook();
+    await assertRunEntryCurrent(anchor.exportsHandle, runId, runHandle);
+    const bytes = await readRegularFileNoFollow(
+      anchoredPath(runHandle, "candidates.jsonl"),
+      true,
+    );
+    await assertRunEntryCurrent(anchor.exportsHandle, runId, runHandle);
+    await assertEnsuredPrivateTreeCurrent(anchor);
+    return new Uint8Array(bytes);
+  } finally {
+    await closeBestEffort(runHandle);
     await closeEnsuredPrivateTree(anchor);
   }
 }

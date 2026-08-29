@@ -14,12 +14,14 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
   PersistenceIntegrityError,
   ensurePrivateTree,
   publishRunAtomically,
+  readPublishedCandidateSnapshot,
   readLedgerSnapshot,
   replaceLedgerAtomically,
   type PersistenceFault,
@@ -29,11 +31,15 @@ import {
 
 const temporaryDirectories: string[] = [];
 const encoder = new TextEncoder();
+const execFileAsync = promisify(execFile);
 const PRIVATE_TREE_ROOT_OPEN_TEST_HOOK = Symbol.for(
   "clipclap.feedback-learning.persistence.private-tree-root-open-test-hook"
 );
 const PRIVATE_TREE_READY_TEST_HOOK = Symbol.for(
   "clipclap.feedback-learning.persistence.private-tree-ready-test-hook"
+);
+const PUBLISHED_CANDIDATE_READY_TEST_HOOK = Symbol.for(
+  "clipclap.feedback-learning.persistence.published-candidate-ready-test-hook"
 );
 
 function testHookGlobal(): Record<PropertyKey, unknown> {
@@ -81,8 +87,97 @@ function failAt(expected: PersistenceFault): (actual: PersistenceFault) => void 
 afterEach(async () => {
   delete testHookGlobal()[PRIVATE_TREE_ROOT_OPEN_TEST_HOOK];
   delete testHookGlobal()[PRIVATE_TREE_READY_TEST_HOOK];
+  delete testHookGlobal()[PUBLISHED_CANDIDATE_READY_TEST_HOOK];
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))
+  );
+});
+
+describe("readPublishedCandidateSnapshot", () => {
+  it("reads exact isolated candidate bytes and repairs private modes", async () => {
+    const paths = await privatePaths();
+    const runId = "eval-0123456789abcdef";
+    const runDirectory = join(paths.exportsDir, runId);
+    const expected = encoder.encode('{"candidate":1}\n');
+    await mkdir(runDirectory, 0o755);
+    await writeFile(join(runDirectory, "candidates.jsonl"), expected, { mode: 0o644 });
+
+    const actual = await readPublishedCandidateSnapshot(paths, runId);
+
+    expect(actual).toEqual(expected);
+    expect(actual).not.toBe(expected);
+    expect(mode(await lstat(runDirectory))).toBe(0o700);
+    expect(mode(await lstat(join(runDirectory, "candidates.jsonl")))).toBe(0o600);
+  });
+
+  it.each(["missing", "symlink", "directory", "fifo"] as const)(
+    "rejects a %s candidate file",
+    async (kind) => {
+      const paths = await privatePaths();
+      const runId = "eval-0123456789abcdef";
+      const runDirectory = join(paths.exportsDir, runId);
+      const external = join((await temporaryRoot()).parent, "external-candidates");
+      await mkdir(runDirectory, 0o700);
+      await writeFile(external, "PRIVATE_EXTERNAL");
+      if (kind === "symlink") await symlink(external, join(runDirectory, "candidates.jsonl"));
+      if (kind === "directory") await mkdir(join(runDirectory, "candidates.jsonl"));
+      if (kind === "fifo") await execFileAsync("mkfifo", [join(runDirectory, "candidates.jsonl")]);
+
+      await expect(readPublishedCandidateSnapshot(paths, runId)).rejects.toMatchObject({
+        code: "unsafe_path",
+      });
+      expect(await readFile(external, "utf8")).toBe("PRIVATE_EXTERNAL");
+    },
+  );
+
+  it("rejects unsafe run components before opening exports", async () => {
+    const paths = await privatePaths();
+    await expect(readPublishedCandidateSnapshot(paths, "../escape")).rejects.toMatchObject({
+      code: "unsafe_path",
+    });
+  });
+
+  it.each(["root", "exports", "run"] as const)(
+    "rejects a %s replacement while preserving external candidate bytes",
+    async (component) => {
+      const { parent, root } = await temporaryRoot();
+      const paths = await ensurePrivateTree(root);
+      const runId = "holdout-0123456789abcdef";
+      const runDirectory = join(paths.exportsDir, runId);
+      await mkdir(runDirectory, 0o700);
+      await writeFile(join(runDirectory, "candidates.jsonl"), "TRUSTED\n", { mode: 0o600 });
+      const parked = join(parent, `parked-candidate-${component}`);
+      const external = join(parent, `external-candidate-${component}`);
+      if (component === "root") {
+        await mkdir(external, 0o700);
+        await mkdir(join(external, "exports"), 0o700);
+        await mkdir(join(external, "ledger"), 0o700);
+        await mkdir(join(external, "exports", runId), 0o700);
+        await writeFile(join(external, "exports", runId, "candidates.jsonl"), "PRIVATE_EXTERNAL\n");
+      } else if (component === "exports") {
+        await mkdir(external, 0o700);
+        await mkdir(join(external, runId), 0o700);
+        await writeFile(join(external, runId, "candidates.jsonl"), "PRIVATE_EXTERNAL\n");
+      } else {
+        await mkdir(external, 0o700);
+        await writeFile(join(external, "candidates.jsonl"), "PRIVATE_EXTERNAL\n");
+      }
+      const hook = async () => {
+        const target = component === "root" ? paths.root : component === "exports" ? paths.exportsDir : runDirectory;
+        await renamePath(target, parked);
+        await symlink(external, target);
+      };
+      testHookGlobal()[component === "run" ? PUBLISHED_CANDIDATE_READY_TEST_HOOK : PRIVATE_TREE_READY_TEST_HOOK] = hook;
+
+      let failure: unknown;
+      try {
+        await readPublishedCandidateSnapshot(paths, runId);
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toMatchObject({ code: "unsafe_path" });
+      expect(String(failure)).not.toContain("PRIVATE_EXTERNAL");
+    },
   );
 });
 
@@ -1005,3 +1100,4 @@ describe("publishRunAtomically", () => {
     expect(await readdir(paths.exportsDir)).toEqual([]);
   });
 });
+import { execFile } from "node:child_process";
