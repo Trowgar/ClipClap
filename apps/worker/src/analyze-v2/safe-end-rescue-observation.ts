@@ -6,6 +6,7 @@ import {
   zeroTailHandoff,
   type RescueArcEvidence,
   type RescueProposedAction,
+  type SafeEndRescueObservation,
   type SafeEndRescueRecord,
 } from "./safe-end-audit";
 import type { CriticVerdict, SentenceNode, SnappedClip } from "./types";
@@ -56,15 +57,30 @@ export function observeRescueCandidates(
   nodes: SentenceNode[],
   cfg: AnalyzeConfig,
   arcEvidence: ReadonlyMap<string, ArcAuditGeometryEvidence>,
-): SafeEndRescueRecord[] {
+): SafeEndRescueObservation[] {
   const ordered = [...verdicts].sort(
     (left, right) => right.score - left.score || left.id.localeCompare(right.id),
   );
-  const records: SafeEndRescueRecord[] = [];
+  const observations: SafeEndRescueObservation[] = [];
 
   for (const [index, verdict] of ordered.entries()) {
     const snapped = snapNodes(verdict, nodes, cfg);
-    if (!snapped.ok) continue;
+    if (!snapped.ok) {
+      observations.push({
+        candidateId: verdict.id,
+        score: verdict.score,
+        scoreRank: index + 1,
+        language: verdict.language,
+        ...(verdict.kind ? { kind: verdict.kind } : {}),
+        status: "unrealizable",
+        reason: snapped.reason,
+        zeroTailHandoff: false,
+        arcEvidence: "stale_or_absent",
+        proposedAction: "none",
+        selectedState: "not_selected",
+      });
+      continue;
+    }
     let clip = snapped.clip;
     if (clip.overLength) {
       const compressed = compressToFit(
@@ -76,7 +92,22 @@ export function observeRescueCandidates(
         nodes,
         cfg,
       );
-      if (!compressed.ok) continue;
+      if (!compressed.ok) {
+        observations.push({
+          candidateId: verdict.id,
+          score: verdict.score,
+          scoreRank: index + 1,
+          language: verdict.language,
+          ...(verdict.kind ? { kind: verdict.kind } : {}),
+          status: "unrealizable",
+          reason: "compress_failed",
+          zeroTailHandoff: false,
+          arcEvidence: "stale_or_absent",
+          proposedAction: "none",
+          selectedState: "not_selected",
+        });
+        continue;
+      }
       clip = {
         ...clip,
         startSec: compressed.startSec,
@@ -87,15 +118,21 @@ export function observeRescueCandidates(
     }
     const matchedArcEvidence = arcEvidenceFor(clip, arcEvidence);
     const zeroTail = zeroTailHandoff(clip, nodes);
-    records.push({
+    observations.push({
       geometry: safeEndGeometryReference(clip),
       score: verdict.score,
       scoreRank: index + 1,
+      language: verdict.language,
+      ...(verdict.kind ? { kind: verdict.kind } : {}),
+      status: "realizable",
+      reason: null,
       zeroTailHandoff: zeroTail,
       arcEvidence: matchedArcEvidence,
       proposedAction: proposedAction(zeroTail, matchedArcEvidence),
-      selectedState: records.length === 0 ? "selected" : "not_selected",
+      selectedState: observations.some((observation) => observation.status !== "unrealizable")
+        ? "not_selected"
+        : "selected",
     });
   }
-  return records;
+  return observations;
 }

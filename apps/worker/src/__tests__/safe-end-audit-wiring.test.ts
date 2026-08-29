@@ -183,6 +183,46 @@ describe("safe-end normal shadow wiring", () => {
     });
   });
 
+  it("counts a higher-ranked unrealizable verdict while preserving the lower-ranked rescue winner", async () => {
+    const scanTwo = {
+      candidates: [
+        { start_node: 0, end_node: 4, payoff_node: 4, interest: 0.9, type: "story", thread: null },
+        { start_node: 7, end_node: 10, payoff_node: 8, interest: 0.8, type: "story", thread: null },
+      ],
+    };
+    const rejectedTwo = {
+      results: [
+        {
+          ...critic.results[0], id: "c0", keep: false, score: 0.9,
+          start_node: 0, payoff_node: 4, end_node: 4, hook_start_node: 0, hook_end_node: 1,
+          title_evidence_nodes: [4], description_evidence_nodes: [4],
+        },
+        {
+          ...critic.results[0], id: "c1", keep: false, score: 0.8,
+          start_node: 7, payoff_node: 8, end_node: 10, hook_start_node: 7, hook_end_node: 8,
+          title_evidence_nodes: [8], description_evidence_nodes: [8],
+        },
+      ],
+    };
+    const result = await analyzeHighlightsV2(transcript(), {
+      client: clientFor({ scan_candidates: scanTwo, critic_verdicts: rejectedTwo }).client,
+      cfg: { ...loadAnalyzeConfig({ SHORT_SOURCE_RESCUE: "on", SAFE_END_AUDIT: "shadow" }), maxSec: 20 },
+      sourceDurationSec: 200,
+    });
+
+    expect(result.highlights).toHaveLength(1);
+    expect(result.highlights[0]?.score).toBe(0.8);
+    const rescue = (result.telemetry.safeEndAudit as { rescue: Record<string, unknown> }).rescue;
+    expect(rescue).toMatchObject({
+      summary: "selected", evaluated: 2, realizable: 1, selected: 1, not_selected: 1,
+      proposedAction: { none: 2, zero_tail_handoff: 0, standing_arc: 0, both: 0 },
+      unrealizableByReason: { too_long: 1 },
+    });
+    expect(rescue.records).toEqual([
+      expect.objectContaining({ geometry: expect.objectContaining({ candidateId: "c1" }), language: "en", kind: "story" }),
+    ]);
+  });
+
   it("reconciles a retained normal record from the finalizer's actual trimmed geometry", async () => {
     const stub = clientFor({
       ...replies(),
@@ -281,7 +321,88 @@ describe("safe-end normal shadow wiring", () => {
     expect(safeEndTelemetry(result)?.normal).toMatchObject({ evaluated: 1, safe: 1 });
     expect(result.telemetry.postBoundaryHookGate).toBeDefined();
     expect(result.telemetry.arcDownrank).toMatchObject({ considered: 1, dropped: 1 });
+    expect(safeEndTelemetry(result)?.normal.records[0]).toMatchObject({
+      reconciliation: { state: "removed_before_finalizer" },
+    });
     expect(result.highlights).toEqual([]);
+  });
+
+  it("reconciles a normal safe-end record removed by the finalizer", async () => {
+    const scanTwo = {
+      candidates: [
+        { start_node: 2, end_node: 4, payoff_node: 3, interest: 0.9, type: "story", thread: null },
+        { start_node: 7, end_node: 9, payoff_node: 8, interest: 0.8, type: "story", thread: null },
+      ],
+    };
+    const criticTwo = {
+      results: [
+        { ...critic.results[0], id: "c0", score: 0.9 },
+        { ...critic.results[0], id: "c1", score: 0.8, start_node: 7, payoff_node: 8, end_node: 9, hook_start_node: 7, hook_end_node: 8, title_evidence_nodes: [8], description_evidence_nodes: [8] },
+      ],
+    };
+    const result = await analyzeHighlightsV2(transcript(), {
+      client: clientFor({
+        scan_candidates: scanTwo,
+        critic_verdicts: criticTwo,
+        safe_end_audit: { results: [
+          { id: "c0", outcome: "safe", reason: null, extendToNode: null },
+          { id: "c1", outcome: "safe", reason: null, extendToNode: null },
+        ] },
+        clip_finalizer: {
+          clips: [{
+            id: "c0", verdict: "drop", drop_reason: "no_payoff", duplicate_of: null, shared_claim: null,
+            title: null, title_evidence_nodes: null, trim_start_node: null,
+          }, {
+            id: "c1", verdict: "ship", drop_reason: null, duplicate_of: null, shared_claim: null,
+            title: null, title_evidence_nodes: null, trim_start_node: null,
+          }],
+        },
+      }).client,
+      cfg: loadAnalyzeConfig({ SAFE_END_AUDIT: "shadow" }),
+    });
+
+    expect(result.highlights).toHaveLength(1);
+    expect(safeEndTelemetry(result)?.normal.records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ geometry: expect.objectContaining({ candidateId: "c0" }),
+      reconciliation: { state: "removed_by_finalizer" },
+      }),
+    ]));
+  });
+
+  it("reconciles a finalizer survivor removed by the soft cap", async () => {
+    const scanTwo = {
+      candidates: [
+        { start_node: 0, end_node: 2, payoff_node: 1, interest: 0.9, type: "story", thread: null },
+        { start_node: 5, end_node: 7, payoff_node: 6, interest: 0.8, type: "story", thread: null },
+      ],
+    };
+    const criticTwo = {
+      results: [
+        { ...critic.results[0], id: "c0", score: 0.9, start_node: 0, payoff_node: 1, end_node: 2, hook_start_node: 0, hook_end_node: 1, title_evidence_nodes: [1], description_evidence_nodes: [1] },
+        { ...critic.results[0], id: "c1", score: 0.8, start_node: 5, payoff_node: 6, end_node: 7, hook_start_node: 5, hook_end_node: 6, title_evidence_nodes: [6], description_evidence_nodes: [6] },
+      ],
+    };
+    const result = await analyzeHighlightsV2(transcript(), {
+      client: clientFor({
+        scan_candidates: scanTwo,
+        critic_verdicts: criticTwo,
+        safe_end_audit: { results: [
+          { id: "c0", outcome: "safe", reason: null, extendToNode: null },
+          { id: "c1", outcome: "safe", reason: null, extendToNode: null },
+        ] },
+        clip_finalizer: { clips: [
+          { id: "c0", verdict: "ship", drop_reason: null, duplicate_of: null, shared_claim: null, title: null, title_evidence_nodes: null, trim_start_node: null },
+          { id: "c1", verdict: "ship", drop_reason: null, duplicate_of: null, shared_claim: null, title: null, title_evidence_nodes: null, trim_start_node: null },
+        ] },
+      }).client,
+      cfg: { ...loadAnalyzeConfig({ SAFE_END_AUDIT: "shadow" }), softCap: 1 },
+    });
+
+    expect(result.highlights).toHaveLength(1);
+    expect(safeEndTelemetry(result)?.normal.records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ geometry: expect.objectContaining({ candidateId: "c0" }), reconciliation: expect.objectContaining({ state: "shipped" }) }),
+      expect.objectContaining({ geometry: expect.objectContaining({ candidateId: "c1" }), reconciliation: { state: "removed_by_soft_cap" } }),
+    ]));
   });
 
   it.each([
