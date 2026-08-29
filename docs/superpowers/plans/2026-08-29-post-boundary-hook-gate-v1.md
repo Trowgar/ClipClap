@@ -241,8 +241,88 @@ git add apps/worker/src/__tests__/helpers/eval-fingerprint.ts apps/worker/src/__
 git commit -m "test(worker): fingerprint post-boundary hook gate"
 ```
 
+### Task 4: Persisted telemetry and caramel regression coverage
+
+**Files:**
+
+- Modify: `apps/worker/src/__tests__/post-boundary-hook-gate.test.ts`
+- Modify: `apps/worker/src/__tests__/stage-flow.test.ts`
+
+- [ ] **Step 1: Add the failing caramel regression fixture.**
+
+```ts
+it("observes the caramel opening and drops it below approved limits", () => {
+  const shadow = applyPostBoundaryHookGate([caramelClip], caramelNodes, shadow(9, 6));
+  expect(shadow.telemetry.maxHookDelaySec).toBeCloseTo(9.31, 2);
+  expect(shadow.telemetry.maxPreHookGapSec).toBeCloseTo(6.28, 2);
+  expect(shadow.telemetry.wouldDrop).toBe(1);
+
+  const enforced = applyPostBoundaryHookGate([caramelClip], caramelNodes, enforce(9, 6));
+  expect(enforced.clips).toEqual([]);
+});
+```
+
+- [ ] **Step 2: Run the regression test and confirm it fails before its fixture/assertions are implemented.**
+
+Run: `npx --yes --package=node@22.23.1 node node_modules/vitest/vitest.mjs run --root . apps/worker/src/__tests__/post-boundary-hook-gate.test.ts`
+
+Expected: FAIL at the missing caramel fixture or gate assertion.
+
+- [ ] **Step 3: Add a synthetic fixture with the recorded timings.**
+
+Encode only the observed timing geometry: `startSec = 562.99`,
+`hookStartSec = 572.30`, and a leading transcript hole of `6.28` seconds in
+`[startSec, hookStartSec)`. Do not add user transcript text, source URL, user
+identity, or video key. Prove both values are measured in shadow and that
+strictly lower configured limits produce the expected enforce drop.
+
+- [ ] **Step 4: Add failing ANALYZE-stage persistence tests.**
+
+```ts
+it("persists direct-v2 gate telemetry under ANALYZE outputJson.telemetry", async () => {
+  mocks.analyzeHighlightsV2.mockResolvedValue(v2ResultWithGateTelemetry);
+  vi.stubEnv("ANALYZE_ENGINE", "recall-critic");
+  await runAnalyzeStage({ jobId: "job1", userId: "u1" });
+  expect(mocks.completeJobStep).toHaveBeenCalledWith("job1", "ANALYZE", expect.objectContaining({
+    telemetry: expect.objectContaining({ postBoundaryHookGate: expect.any(Object) }),
+  }));
+});
+
+it("persists shadow-v2 gate telemetry without changing legacy delivery", async () => {
+  mocks.analyzeHighlightsV2.mockResolvedValue(v2ResultWithGateTelemetry);
+  vi.stubEnv("ANALYZE_ENGINE", "shadow");
+  await runAnalyzeStage({ jobId: "job1", userId: "u1" });
+  expect(mocks.completeJobStep).toHaveBeenCalledWith("job1", "ANALYZE", expect.objectContaining({
+    shadowV2: expect.objectContaining({ telemetry: expect.objectContaining({ postBoundaryHookGate: expect.any(Object) }) }),
+  }));
+  expect(mocks.queueAdd).toHaveBeenCalledWith("render", expect.objectContaining({ mode: "clips" }));
+});
+```
+
+- [ ] **Step 5: Run the stage-flow test and confirm the new persistence assertions fail.**
+
+Run: `npx --yes --package=node@22.23.1 node node_modules/vitest/vitest.mjs run --root . apps/worker/src/__tests__/stage-flow.test.ts`
+
+Expected: FAIL until the test mocks and exact persistence assertions are correct; production stage code already serializes the returned telemetry and should need no change.
+
+- [ ] **Step 6: Make Task 4 green and commit.**
+
+Run:
+
+```bash
+npx --yes --package=node@22.23.1 node node_modules/vitest/vitest.mjs run --root . apps/worker/src/__tests__/post-boundary-hook-gate.test.ts apps/worker/src/__tests__/stage-flow.test.ts
+npm run typecheck -w @clipclap/worker
+```
+
+Expected: all focused tests pass and worker TypeScript has no error.
+
+```bash
+git add apps/worker/src/__tests__/post-boundary-hook-gate.test.ts apps/worker/src/__tests__/stage-flow.test.ts
+git commit -m "test(worker): cover hook gate persistence"
+```
+
 ## Plan self-review
 
-- Spec coverage: all four modes, strict limits, exact half-open gap semantics, dual reasons, provenance, diagnostics/privacy, downstream ordering, terminal rescue behavior, persistence, bands, and rollout documentation map to Tasks 1-3.
+- Spec coverage: all four modes, strict limits, exact half-open gap semantics, dual reasons, provenance, diagnostics/privacy, downstream ordering, terminal rescue behavior, persistence, caramel regression, bands, and rollout documentation map to Tasks 1-4.
 - No placeholder scan: no `TODO`, `TBD`, or deferred implementation markers are present.
 - Type consistency: `PostBoundaryHookGateMode`, `applyPostBoundaryHookGate`, `postBoundaryHookGate`, and the three environment keys use one spelling across tasks.
