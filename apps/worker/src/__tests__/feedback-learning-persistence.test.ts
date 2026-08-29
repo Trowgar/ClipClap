@@ -20,6 +20,7 @@ import {
   PersistenceIntegrityError,
   ensurePrivateTree,
   publishRunAtomically,
+  readLedgerSnapshot,
   replaceLedgerAtomically,
   type PersistenceFault,
   type PrivatePaths,
@@ -79,6 +80,59 @@ afterEach(async () => {
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))
   );
+});
+
+describe("readLedgerSnapshot", () => {
+  it("returns zero bytes when the anchored ledger file is missing", async () => {
+    const paths = await privatePaths();
+
+    await expect(readLedgerSnapshot(paths)).resolves.toEqual(new Uint8Array());
+  });
+
+  it("returns an isolated exact byte snapshot from an anchored regular file", async () => {
+    const paths = await privatePaths();
+    const expected = ledgerBytes("event-read");
+    await writeFile(paths.reviewsFile, expected, { mode: 0o600 });
+
+    const actual = await readLedgerSnapshot(paths);
+
+    expect(actual).toEqual(expected);
+    expect(actual).not.toBe(expected);
+  });
+
+  it.each(["symlink", "directory"] as const)(
+    "rejects a final %s without reading an external target",
+    async (kind) => {
+      const paths = await privatePaths();
+      const external = join((await temporaryRoot()).parent, "external-ledger");
+      await writeFile(external, "private-outside");
+      if (kind === "symlink") await symlink(external, paths.reviewsFile);
+      else await mkdir(paths.reviewsFile);
+
+      await expect(readLedgerSnapshot(paths)).rejects.toMatchObject({ code: "unsafe_path" });
+      expect(await readFile(external, "utf8")).toBe("private-outside");
+    },
+  );
+
+  it("rejects a root replacement during private-tree validation", async () => {
+    const { parent, root } = await temporaryRoot();
+    const paths = await ensurePrivateTree(root);
+    const parkedRoot = join(parent, "parked-root-read");
+    const externalRoot = join(parent, "external-root-read");
+    await mkdir(externalRoot, 0o700);
+    await mkdir(join(externalRoot, "exports"), 0o700);
+    await mkdir(join(externalRoot, "ledger"), 0o700);
+    await writeFile(join(externalRoot, "ledger", "reviews.jsonl"), "private-outside");
+    testHookGlobal()[PRIVATE_TREE_ROOT_OPEN_TEST_HOOK] = async () => {
+      await renamePath(root, parkedRoot);
+      await symlink(externalRoot, root);
+    };
+
+    await expect(readLedgerSnapshot(paths)).rejects.toMatchObject({ code: "unsafe_path" });
+    expect(await readFile(join(externalRoot, "ledger", "reviews.jsonl"), "utf8")).toBe(
+      "private-outside",
+    );
+  });
 });
 
 describe("ensurePrivateTree", () => {

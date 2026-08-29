@@ -4,6 +4,11 @@
   "private": true,
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "require": "./dist/index.js", "default": "./dist/index.js" },
+    "./lib/*": { "types": "./dist/lib/*.d.ts", "require": "./dist/lib/*.js", "default": "./dist/lib/*.js" },
+    "./config/*": { "types": "./dist/config/*.d.ts", "require": "./dist/config/*.js", "default": "./dist/config/*.js" }
+  },
   "scripts": {
     "build": "tsc",
     "test": "vitest run --root ../.. packages/shared/src",

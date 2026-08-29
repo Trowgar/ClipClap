@@ -459,6 +459,24 @@ export async function ensurePrivateTree(root: string): Promise<PrivatePaths> {
   }
 }
 
+export async function readLedgerSnapshot(paths: PrivatePaths): Promise<Uint8Array> {
+  assertPrivatePaths(paths);
+  await ensurePrivateTree(paths.root);
+  const anchor = await openPrivateDirectoryAnchor(paths.root, "ledger");
+  try {
+    const ledgerPath = anchoredPath(anchor.directoryHandle, "reviews.jsonl");
+    const kind = await ensureNoSymlinkOrSpecialFile(ledgerPath);
+    let bytes: Uint8Array;
+    if (kind === "missing") bytes = new Uint8Array();
+    else if (kind === "file") bytes = await readRegularFileNoFollow(ledgerPath, false);
+    else throwUnsafe();
+    await assertPrivateDirectoryAnchorCurrent(paths.root, anchor);
+    return new Uint8Array(bytes);
+  } finally {
+    await closePrivateDirectoryAnchor(anchor);
+  }
+}
+
 export async function replaceLedgerAtomically(input: LedgerWrite): Promise<CommitResult> {
   assertPrivatePaths(input.paths);
   if (!input.expectedEventId) throw new PersistenceInputError();
