@@ -5,6 +5,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  rename as renamePath,
   rm,
   symlink,
   writeFile,
@@ -242,6 +243,74 @@ describe("replaceLedgerAtomically", () => {
     ).resolves.toEqual({ status: "indeterminate" });
   });
 
+  it("returns indeterminate when the ledger parent is swapped for a symlink after rename", async () => {
+    const paths = await privatePaths();
+    const expectedEventId = "event-new";
+    const externalDirectory = join(paths.root, "external-ledger-directory");
+    const externalBytes = ledgerBytes(expectedEventId);
+    let tempName: string | undefined;
+    await mkdir(externalDirectory, 0o755);
+    await writeFile(join(externalDirectory, "reviews.jsonl"), externalBytes, { mode: 0o640 });
+
+    await expect(
+      replaceLedgerAtomically({
+        paths,
+        bytes: ledgerBytes(expectedEventId),
+        expectedEventId,
+        injectFault: async (point) => {
+          if (sameFault(point, { scope: "ledger", operation: "rename", timing: "before" })) {
+            tempName = (await readdir(paths.ledgerDir)).find((name) => name.startsWith(".reviews"));
+          }
+          if (sameFault(point, { scope: "ledger", operation: "rename", timing: "after" })) {
+            expect(tempName).toBeDefined();
+            await writeFile(join(externalDirectory, tempName!), "external trap", { mode: 0o640 });
+            await renamePath(paths.ledgerDir, `${paths.ledgerDir}-original`);
+            await symlink(externalDirectory, paths.ledgerDir);
+            throw new Error("injected:ledger-parent-swap");
+          }
+        },
+      })
+    ).resolves.toEqual({ status: "indeterminate" });
+
+    expect(await readFile(join(externalDirectory, "reviews.jsonl"))).toEqual(
+      Buffer.from(externalBytes)
+    );
+    expect(mode(await lstat(externalDirectory))).toBe(0o755);
+    expect(mode(await lstat(join(externalDirectory, "reviews.jsonl")))).toBe(0o640);
+    expect(await readFile(join(externalDirectory, tempName!), "utf8")).toBe("external trap");
+    expect(mode(await lstat(join(externalDirectory, tempName!)))).toBe(0o640);
+  });
+
+  it("does not follow a swapped ledger parent while cleaning a pre-rename temp", async () => {
+    const paths = await privatePaths();
+    const externalDirectory = join(paths.root, "external-ledger-cleanup");
+    await mkdir(externalDirectory, 0o755);
+    await writeFile(join(externalDirectory, "reviews.jsonl"), "outside", { mode: 0o640 });
+    let tempName: string | undefined;
+
+    await expect(
+      replaceLedgerAtomically({
+        paths,
+        bytes: ledgerBytes("event-new"),
+        expectedEventId: "event-new",
+        injectFault: async (point) => {
+          if (sameFault(point, { scope: "ledger", operation: "rename", timing: "before" })) {
+            tempName = (await readdir(paths.ledgerDir)).find((name) => name.startsWith(".reviews"));
+            expect(tempName).toBeDefined();
+            await writeFile(join(externalDirectory, tempName!), "external trap", { mode: 0o640 });
+            await renamePath(paths.ledgerDir, `${paths.ledgerDir}-original`);
+            await symlink(externalDirectory, paths.ledgerDir);
+            throw new Error("injected:ledger-parent-swap-before-rename");
+          }
+        },
+      })
+    ).rejects.toThrow("injected:ledger-parent-swap-before-rename");
+
+    expect(await readFile(join(externalDirectory, "reviews.jsonl"), "utf8")).toBe("outside");
+    expect(await readFile(join(externalDirectory, tempName!), "utf8")).toBe("external trap");
+    expect(mode(await lstat(join(externalDirectory, tempName!)))).toBe(0o640);
+  });
+
   it("rejects a symlink ledger without modifying the target", async () => {
     const paths = await privatePaths();
     const target = join(paths.root, "external-ledger");
@@ -352,6 +421,31 @@ describe("publishRunAtomically", () => {
     expect(await readdir(paths.exportsDir)).toEqual([runId]);
   });
 
+  it("rejects an otherwise exact existing run that contains an unexpected file without mutation", async () => {
+    const paths = await privatePaths();
+    const runId = "eval-0123456789abcdef";
+    const runDigest = `sha256:${"a".repeat(64)}`;
+    const files = runFiles(runId, runDigest);
+    const runDir = join(paths.exportsDir, runId);
+    await mkdir(runDir, 0o700);
+    for (const [name, bytes] of Object.entries(files)) {
+      await writeFile(join(runDir, name), bytes, { mode: 0o600 });
+    }
+    const unexpected = encoder.encode("do not modify\n");
+    await writeFile(join(runDir, "unexpected.txt"), unexpected, { mode: 0o640 });
+
+    await expect(
+      publishRunAtomically({ paths, runId, runDigest, files })
+    ).rejects.toMatchObject({ code: "run_integrity" });
+
+    expect((await readdir(runDir)).sort()).toEqual([...Object.keys(files), "unexpected.txt"].sort());
+    for (const [name, bytes] of Object.entries(files)) {
+      expect(await readFile(join(runDir, name))).toEqual(Buffer.from(bytes));
+    }
+    expect(await readFile(join(runDir, "unexpected.txt"))).toEqual(Buffer.from(unexpected));
+    expect(mode(await lstat(join(runDir, "unexpected.txt")))).toBe(0o640);
+  });
+
   it.each([
     ...(["run.json", "candidates.jsonl", "candidates.md", "exclusions.jsonl"] as const).flatMap(
       (file) =>
@@ -432,6 +526,92 @@ describe("publishRunAtomically", () => {
         },
       })
     ).resolves.toEqual({ status: "indeterminate" });
+  });
+
+  it("returns indeterminate when the exports parent is swapped for a symlink after rename", async () => {
+    const paths = await privatePaths();
+    const runId = "eval-0123456789abcdef";
+    const runDigest = `sha256:${"b".repeat(64)}`;
+    const externalDirectory = join(paths.root, "external-exports-directory");
+    const externalRunDirectory = join(externalDirectory, runId);
+    const externalRunBytes = runFiles(runId, runDigest)["run.json"];
+    let tempName: string | undefined;
+    await mkdir(externalDirectory, 0o755);
+    await mkdir(externalRunDirectory, 0o755);
+    await writeFile(join(externalRunDirectory, "run.json"), externalRunBytes, { mode: 0o640 });
+
+    await expect(
+      publishRunAtomically({
+        paths,
+        runId,
+        runDigest,
+        files: runFiles(runId, runDigest),
+        injectFault: async (point) => {
+          if (sameFault(point, { scope: "run", operation: "rename", timing: "before" })) {
+            tempName = (await readdir(paths.exportsDir)).find((name) => name !== runId);
+          }
+          if (sameFault(point, { scope: "run", operation: "rename", timing: "after" })) {
+            expect(tempName).toBeDefined();
+            await mkdir(join(externalDirectory, tempName!), 0o755);
+            await writeFile(join(externalDirectory, tempName!, "sentinel"), "external trap", {
+              mode: 0o640,
+            });
+            await renamePath(paths.exportsDir, `${paths.exportsDir}-original`);
+            await symlink(externalDirectory, paths.exportsDir);
+            throw new Error("injected:exports-parent-swap");
+          }
+        },
+      })
+    ).resolves.toEqual({ status: "indeterminate" });
+
+    expect(await readFile(join(externalRunDirectory, "run.json"))).toEqual(
+      Buffer.from(externalRunBytes)
+    );
+    expect(mode(await lstat(externalDirectory))).toBe(0o755);
+    expect(mode(await lstat(externalRunDirectory))).toBe(0o755);
+    expect(mode(await lstat(join(externalRunDirectory, "run.json")))).toBe(0o640);
+    expect(await readFile(join(externalDirectory, tempName!, "sentinel"), "utf8")).toBe(
+      "external trap"
+    );
+    expect(mode(await lstat(join(externalDirectory, tempName!)))).toBe(0o755);
+    expect(mode(await lstat(join(externalDirectory, tempName!, "sentinel")))).toBe(0o640);
+  });
+
+  it("does not follow a swapped exports parent while cleaning a pre-rename temp", async () => {
+    const paths = await privatePaths();
+    const runId = "eval-0123456789abcdef";
+    const runDigest = `sha256:${"c".repeat(64)}`;
+    const externalDirectory = join(paths.root, "external-exports-cleanup");
+    await mkdir(externalDirectory, 0o755);
+    let tempName: string | undefined;
+
+    await expect(
+      publishRunAtomically({
+        paths,
+        runId,
+        runDigest,
+        files: runFiles(runId, runDigest),
+        injectFault: async (point) => {
+          if (sameFault(point, { scope: "run", operation: "rename", timing: "before" })) {
+            tempName = (await readdir(paths.exportsDir)).find((name) => name !== runId);
+            expect(tempName).toBeDefined();
+            await mkdir(join(externalDirectory, tempName!), 0o755);
+            await writeFile(join(externalDirectory, tempName!, "sentinel"), "external trap", {
+              mode: 0o640,
+            });
+            await renamePath(paths.exportsDir, `${paths.exportsDir}-original`);
+            await symlink(externalDirectory, paths.exportsDir);
+            throw new Error("injected:exports-parent-swap-before-rename");
+          }
+        },
+      })
+    ).rejects.toThrow("injected:exports-parent-swap-before-rename");
+
+    expect(await readFile(join(externalDirectory, tempName!, "sentinel"), "utf8")).toBe(
+      "external trap"
+    );
+    expect(mode(await lstat(join(externalDirectory, tempName!)))).toBe(0o755);
+    expect(mode(await lstat(join(externalDirectory, tempName!, "sentinel")))).toBe(0o640);
   });
 
   it("rejects symlinks at the final run and owned file paths without touching targets", async () => {
