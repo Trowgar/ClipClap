@@ -324,8 +324,9 @@ Approval example:
 prior event ID plus `correct --operation retire`. It never accepts raw IDs in place of a candidate
 record for a new decision.
 
-Every corpus directory is mode `0700`; every regular file and temporary file is `0600`. Commands
-reject symlinks at owned paths. On Linux, each command opens `reviews.lock` with mode `0600`, keeps
+Every V1-owned directory under `.corpus/feedback-learning` is mode `0700`; every V1-owned regular
+file and temporary file is `0600`. Commands reject symlinks at owned paths and do not change
+unrelated existing `.corpus` content. On Linux, each command opens `reviews.lock` with mode `0600`, keeps
 the file descriptor open, and retries advisory `flock(fd, LOCK_EX | LOCK_NB)` every 50 ms for at most
 5 seconds using monotonic time. Timeout fails without work. Closing the descriptor or process exit
 lets the kernel release the lock; no stale-lock deletion or PID guessing exists.
