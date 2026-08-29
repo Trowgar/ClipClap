@@ -3,7 +3,6 @@ import { analyzeHighlightsV2 } from "../analyze-v2";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { SAFE_END_AUDIT_SCHEMA, readSafeEndAuditRow } from "../analyze-v2/safe-end-audit-schema";
 import { SAFE_END_AUDIT_SYSTEM, safeEndAuditUserPrompt } from "../analyze-v2/safe-end-audit-prompts";
-import * as safeEndAudit from "../analyze-v2/safe-end-audit";
 import { APIConnectionTimeoutError } from "openai";
 import type { TranscriptionResult, WhisperSegment } from "@clipclap/shared";
 
@@ -223,28 +222,23 @@ describe("safe-end normal shadow wiring", () => {
     });
   });
 
-  it("fails open when the feature's capped telemetry construction faults", async () => {
-    const cap = vi
-      .spyOn(safeEndAudit, "capSafeEndNormalRecords")
-      .mockImplementationOnce(() => {
-        throw new Error("safe-end telemetry serialization failed");
-      });
-    try {
-      const off = await analyzeHighlightsV2(transcript(), { client: clientFor(replies()).client, cfg: loadAnalyzeConfig({}) });
-      const observed = await analyzeHighlightsV2(transcript(), {
-        client: clientFor(replies()).client,
-        cfg: loadAnalyzeConfig({ SAFE_END_AUDIT: "shadow" }),
-      });
+  it("fails open when safe-end telemetry itself cannot be JSON serialized", async () => {
+    const off = await analyzeHighlightsV2(transcript(), { client: clientFor(replies()).client, cfg: loadAnalyzeConfig({}) });
+    const observed = await analyzeHighlightsV2(transcript(), {
+      client: clientFor(replies()).client,
+      cfg: loadAnalyzeConfig({ SAFE_END_AUDIT: "shadow" }),
+      safeEndAuditTelemetryTestHook: (result) => ({
+        ...(result as Record<string, unknown>),
+        nonJson: BigInt(1),
+      }),
+    });
 
-      expect(projection(observed)).toEqual(projection(off));
-      expect(safeEndTelemetry(observed)?.normal).toMatchObject({ evaluated: 1, audit_failed: 1 });
-      expect(safeEndTelemetry(observed)?.normal.records[0]).toMatchObject({
-        outcome: "audit_failed",
-        failureCode: "construction_error",
-      });
-    } finally {
-      cap.mockRestore();
-    }
+    expect(projection(observed)).toEqual(projection(off));
+    expect(safeEndTelemetry(observed)?.normal).toMatchObject({ evaluated: 1, audit_failed: 1 });
+    expect(safeEndTelemetry(observed)?.normal.records[0]).toMatchObject({
+      outcome: "audit_failed",
+      failureCode: "construction_error",
+    });
   });
 
   it("only accepts closed safe-end rows", () => {

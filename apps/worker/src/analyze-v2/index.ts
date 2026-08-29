@@ -67,6 +67,22 @@ interface SafeEndAuditTelemetry {
   normal: SafeEndNormalTelemetry;
 }
 
+/** Converts the feature's local telemetry into the exact JSON-safe form that
+ * can be merged into ANALYZE output. This deliberately does not surround any
+ * shared job-step persistence: only safe-end observation data is fail-open. */
+function jsonSafeEndAuditTelemetry(
+  telemetry: unknown,
+  clips: readonly SnappedClip[]
+): SafeEndAuditTelemetry {
+  try {
+    const serialized = JSON.stringify(telemetry);
+    if (typeof serialized !== "string") throw new Error("safe-end telemetry did not serialize");
+    return JSON.parse(serialized) as SafeEndAuditTelemetry;
+  } catch {
+    return { normal: failedSafeEndNormalTelemetry(clips, "construction_error") };
+  }
+}
+
 function emptySafeEndNormalTelemetry(): SafeEndNormalTelemetry {
   return {
     evaluated: 0,
@@ -218,6 +234,10 @@ export interface AnalyzeV2Options {
   sourceUrl?: string;
   /** Test hook - forwarded to scanner/critic. */
   retryDelayMs?: number;
+  /** Test-only injection point for safe-end telemetry serialization faults.
+   * It is applied solely to the detached audit result before its local JSON
+   * preflight; it cannot affect clips, finalizer input, rescue, or persistence. */
+  safeEndAuditTelemetryTestHook?: (telemetry: unknown) => unknown;
 }
 
 export async function analyzeHighlightsV2(
@@ -818,7 +838,7 @@ export async function analyzeHighlightsV2(
   // changes it. This is a separate schema and telemetry channel from arcAudit.
   let safeEndAuditTelemetry: SafeEndAuditTelemetry | undefined;
   if (cfg.safeEndAuditMode === "shadow") {
-    safeEndAuditTelemetry = await runSafeEndNormalAudit(
+    const audit = await runSafeEndNormalAudit(
       client,
       usage,
       afterPostBoundaryHookGate,
@@ -826,6 +846,10 @@ export async function analyzeHighlightsV2(
       cfg,
       { retryDelayMs: options.retryDelayMs }
     );
+    const injected = options.safeEndAuditTelemetryTestHook
+      ? options.safeEndAuditTelemetryTestHook(audit)
+      : audit;
+    safeEndAuditTelemetry = jsonSafeEndAuditTelemetry(injected, afterPostBoundaryHookGate);
   }
 
   // ARC DOWNRANK (spec 2026-08-10 task 7) - the first DROP authority the arc
