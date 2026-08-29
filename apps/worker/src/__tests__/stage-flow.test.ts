@@ -111,6 +111,32 @@ import {
 } from "../stages/finalize";
 import { runTranscribeStage } from "../stages/transcribe";
 
+function hookGateV2Result() {
+  const highlights = [{ start: 12, end: 32, title: "Gate survivor", reason: "Hook" }];
+  const postBoundaryHookGate = {
+    mode: "enforce",
+    evaluated: 2,
+    notEvaluable: 0,
+    maxHookDelaySec: 9.31,
+    maxPreHookGapSec: 6.28,
+    passed: 1,
+    dropped: 1,
+  };
+  const telemetry = { postBoundaryHookGate };
+  const result = {
+    highlights,
+    noClipsReason: null,
+    telemetry,
+    usage: {
+      requests: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      byModel: {},
+    },
+  };
+  return { highlights, postBoundaryHookGate, result, telemetry };
+}
+
 describe("stage handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -255,6 +281,72 @@ describe("stage handlers", () => {
         highlights: [{ start: 0, end: 10, title: "Clip", reason: "Hook" }],
       }),
     });
+    expect(mocks.queueAdd).toHaveBeenCalledWith("render", {
+      jobId: "job1",
+      userId: "u1",
+      mode: "clips",
+    });
+  });
+
+  it("persists direct recall-critic hook-gate telemetry with its gated survivors", async () => {
+    vi.stubEnv("ANALYZE_ENGINE", "recall-critic");
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      transcriptJson: { text: "", segments: [] },
+      transcriptPartial: false,
+    });
+    const v2 = hookGateV2Result();
+    mocks.analyzeHighlightsV2.mockResolvedValue(v2.result);
+
+    await runAnalyzeStage({ jobId: "job1", userId: "u1" });
+
+    const analyzeOutput = mocks.completeJobStep.mock.calls.find(
+      ([jobId, step]) => jobId === "job1" && step === "ANALYZE",
+    )?.[2] as { telemetry?: typeof v2.telemetry };
+    expect(analyzeOutput.telemetry).toBe(v2.telemetry);
+    expect(analyzeOutput.telemetry?.postBoundaryHookGate).toBe(v2.postBoundaryHookGate);
+
+    // V2 returns only post-gate survivors. This is the set persisted for the
+    // render worker to read; the stage never reintroduces a pre-gate clip.
+    const analyzeWrite = mocks.jobUpdate.mock.calls
+      .map(([write]) => write.data as { highlights?: unknown })
+      .find((data) => "highlights" in data);
+    expect(analyzeWrite?.highlights).toBe(v2.highlights);
+    expect(mocks.analyzeHighlightsV1).not.toHaveBeenCalled();
+    expect(mocks.queueAdd).toHaveBeenCalledTimes(1);
+    expect(mocks.queueAdd).toHaveBeenCalledWith("render", {
+      jobId: "job1",
+      userId: "u1",
+      mode: "clips",
+    });
+  });
+
+  it("persists shadow V2 hook-gate telemetry while delivering only legacy highlights", async () => {
+    vi.stubEnv("ANALYZE_ENGINE", "shadow");
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      transcriptJson: { text: "", segments: [] },
+      transcriptPartial: false,
+    });
+    const legacyHighlights = [{ start: 0, end: 1, title: "Legacy", reason: "V1" }];
+    const v2 = hookGateV2Result();
+    mocks.analyzeHighlightsV1.mockResolvedValue(legacyHighlights);
+    mocks.analyzeHighlightsV2.mockResolvedValue(v2.result);
+
+    await runAnalyzeStage({ jobId: "job1", userId: "u1" });
+
+    const analyzeOutput = mocks.completeJobStep.mock.calls.find(
+      ([jobId, step]) => jobId === "job1" && step === "ANALYZE",
+    )?.[2] as { shadowV2?: { telemetry?: typeof v2.telemetry } };
+    expect(analyzeOutput.shadowV2?.telemetry).toBe(v2.telemetry);
+    expect(analyzeOutput.shadowV2?.telemetry?.postBoundaryHookGate).toBe(v2.postBoundaryHookGate);
+
+    const analyzeWrite = mocks.jobUpdate.mock.calls
+      .map(([write]) => write.data as { highlights?: unknown })
+      .find((data) => "highlights" in data);
+    expect(analyzeWrite?.highlights).toBe(legacyHighlights);
+    expect(analyzeWrite?.highlights).not.toBe(v2.highlights);
+    expect(mocks.queueAdd).toHaveBeenCalledTimes(1);
     expect(mocks.queueAdd).toHaveBeenCalledWith("render", {
       jobId: "job1",
       userId: "u1",

@@ -45,6 +45,25 @@ function options(
   };
 }
 
+// Timing geometry only: this synthetic fixture intentionally carries no
+// transcript content, source URL, user identifier, or storage key.
+const caramelClip = clip("caramel", {
+  startSec: 562.99,
+  endSec: 582.3,
+  hookStartSec: 572.3,
+});
+const caramelNodes: SentenceNode[] = [
+  {
+    index: 0,
+    start: 569.27,
+    end: 572.3,
+    text: "",
+    hasWords: true,
+    trailingStrength: 1,
+    leadingStrength: 1,
+  },
+];
+
 describe("post-boundary hook gate", () => {
   it("drops in enforce when hook delay exceeds the strict limit", () => {
     const result = applyPostBoundaryHookGate(
@@ -55,6 +74,38 @@ describe("post-boundary hook gate", () => {
 
     expect(result.clips).toEqual([]);
     expect(result.drops).toEqual([{ id: "late", reasons: ["hook_delay"] }]);
+  });
+
+  it("observes the synthetic caramel opening and drops it below strict limits", () => {
+    const shadow = applyPostBoundaryHookGate(
+      [caramelClip],
+      caramelNodes,
+      options("shadow", { maxDelaySec: 9, maxPreHookGapSec: 6 }),
+    );
+
+    expect(shadow.telemetry?.maxHookDelaySec).toBeCloseTo(9.31, 2);
+    expect(shadow.telemetry?.maxPreHookGapSec).toBeCloseTo(6.28, 2);
+    expect(shadow.telemetry).toMatchObject({
+      mode: "shadow",
+      wouldDrop: 1,
+      diagnostics: [
+        expect.objectContaining({
+          id: "caramel",
+          hookDelaySec: expect.closeTo(9.31, 2),
+          preHookGapSec: expect.closeTo(6.28, 2),
+        }),
+      ],
+    });
+
+    const enforced = applyPostBoundaryHookGate(
+      [caramelClip],
+      caramelNodes,
+      options("enforce", { maxDelaySec: 9, maxPreHookGapSec: 6 }),
+    );
+    expect(enforced.clips).toEqual([]);
+    expect(enforced.drops).toEqual([
+      { id: "caramel", reasons: ["hook_delay", "pre_hook_gap"] },
+    ]);
   });
 
   it("merges adjacent sentence coverage and measures the largest half-open gap", () => {
