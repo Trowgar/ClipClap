@@ -101,12 +101,44 @@ function databaseBoundaryViolations(path: string, source: string): string[] {
     const access = accessedProperty(node);
     if (access !== undefined && mutationNames.has(access.name) && !isAllowedNonDatabaseUse(access)) violations.push(node.getText(sourceFile));
     if (access !== undefined && rawNames.has(access.name) && !isReadOnlyTransactionStatement(node, access)) violations.push(node.getText(sourceFile));
+    if (ts.isElementAccessExpression(node) && stringValue(node.argumentExpression) === undefined &&
+        ts.isCallExpression(node.parent) && node.parent.expression === node &&
+        (ts.isPropertyAccessExpression(node.expression) || ts.isElementAccessExpression(node.expression))) {
+      violations.push(node.getText(sourceFile));
+    }
     if (ts.isBindingElement(node)) {
       const name = node.propertyName === undefined ? node.name.getText(sourceFile) : node.propertyName.getText(sourceFile);
       if (mutationNames.has(name) || rawNames.has(name)) violations.push(node.getText(sourceFile));
     }
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && (mutationNames.has(node.expression.text) || rawNames.has(node.expression.text))) violations.push(node.getText(sourceFile));
     if (ts.isTaggedTemplateExpression(node) && ts.isIdentifier(node.tag) && rawNames.has(node.tag.text)) violations.push(node.getText(sourceFile));
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
+  return violations;
+}
+
+function loaderBoundaryViolations(path: string, source: string): string[] {
+  const sourceFile = parse(path, source);
+  const violations: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword &&
+        (node.arguments.length !== 1 || stringValue(node.arguments[0]) === undefined)) {
+      violations.push(node.getText(sourceFile));
+    }
+    const access = accessedProperty(node);
+    if (access !== undefined && (access.name === "createRequire" || access.name === "require")) {
+      violations.push(node.getText(sourceFile));
+    }
+    if (ts.isElementAccessExpression(node) && node.expression.getText(sourceFile) === "module" &&
+        stringValue(node.argumentExpression) === undefined) violations.push(node.getText(sourceFile));
+    if (ts.isIdentifier(node) && node.text === "createRequire") violations.push(node.getText(sourceFile));
+    if (ts.isIdentifier(node) && node.text === "require") {
+      const directLiteralCall = ts.isCallExpression(node.parent) && node.parent.expression === node &&
+        node.parent.arguments.length === 1 && stringValue(node.parent.arguments[0]) !== undefined;
+      const mainGuard = ts.isPropertyAccessExpression(node.parent) && node.parent.expression === node && node.parent.name.text === "main";
+      if (!directLiteralCall && !mainGuard) violations.push(node.getText(sourceFile));
+    }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
@@ -137,8 +169,26 @@ describe("feedback-learning dependency boundary", () => {
       "client['$executeRaw']('DELETE FROM users')",
       "const { $executeRaw: run } = client",
       "require('./mutation').client.user.upsert({})",
+      "client.user[method]({})",
+      "client.user['up' + 'date']({})",
     ]) expect(databaseBoundaryViolations("forbidden.ts", forbidden)).not.toEqual([]);
     expect(databaseBoundaryViolations("allowed.ts", "transaction.$executeRawUnsafe('SET TRANSACTION READ ONLY'); Object.create(null); createHash('sha256').update(value)")).toEqual([]);
+  });
+
+  it("rejects unsupported dynamic and aliased module loaders", async () => {
+    const sources = await reachableSources();
+    expect([...sources].flatMap(([path, source]) => loaderBoundaryViolations(path, source))).toEqual([]);
+    for (const forbidden of [
+      "import(moduleName)",
+      "require(moduleName)",
+      "module.require('./private')",
+      "module['require']('./private')",
+      "module[loaderName]('./private')",
+      "globalThis['require']('./private')",
+      "const load = require; load('./private')",
+      "import { createRequire as makeRequire } from 'node:module'; const load = makeRequire(import.meta.url)",
+      "const { createRequire: makeRequire } = require('node:module')",
+    ]) expect(loaderBoundaryViolations("forbidden.ts", forbidden)).not.toEqual([]);
   });
 
   it("imports command modules without stdout, stderr, main invocation or eager fs-ext", async () => {

@@ -28,32 +28,31 @@ async function requestFromArguments(argv: readonly string[]): Promise<ReviewRequ
     : { action: "correct", targetEventId: parsed.targetEventId, operation: "retire", reason };
 }
 
-export async function runFeedbackLearningReview(
-  argv: readonly string[],
-  dependencies: ReviewCommandDependencies,
-  io: CommandIo = processCommandIo,
-): Promise<number> {
-  let outcome: Outcome;
+function failureOutcome(error: unknown): Outcome {
+  const inputFailure = isCliInputError(error);
+  return {
+    code: inputFailure ? 2 : 1,
+    stream: "stderr",
+    line: safeLog({ operation: "review", reason: inputFailure ? "invalid_arguments" : machineReason(error, "review_failed") }),
+  };
+}
+
+async function outcomeForRequest(request: ReviewRequest, dependencies: ReviewCommandDependencies): Promise<Outcome> {
   try {
-    const request = await requestFromArguments(argv);
     const result = captureReviewCommandResult(await dependencies.execute(request, { repository: dependencies.repository }));
     if (result.status === "committed" || result.status === "noop") {
-      outcome = { code: 0, stream: "stdout", line: safeLog({ operation: "review", eventId: result.eventId }) };
-    } else if (result.status === "committed_durability_uncertain") {
-      outcome = { code: 1, stream: "stderr", line: safeLog({ operation: "review", eventId: result.eventId, reason: "durability_uncertain" }) };
-    } else if (result.status === "indeterminate") {
-      outcome = { code: 1, stream: "stderr", line: safeLog({ operation: "review", eventId: result.eventId, reason: "commit_indeterminate" }) };
-    } else {
-      throw new Error("invalid_safe_result");
+      return { code: 0, stream: "stdout", line: safeLog({ operation: "review", eventId: result.eventId }) };
     }
+    if (result.status === "committed_durability_uncertain") {
+      return { code: 1, stream: "stderr", line: safeLog({ operation: "review", eventId: result.eventId, reason: "durability_uncertain" }) };
+    }
+    return { code: 1, stream: "stderr", line: safeLog({ operation: "review", eventId: result.eventId, reason: "commit_indeterminate" }) };
   } catch (error) {
-    const inputFailure = isCliInputError(error);
-    outcome = {
-      code: inputFailure ? 2 : 1,
-      stream: "stderr",
-      line: safeLog({ operation: "review", reason: inputFailure ? "invalid_arguments" : machineReason(error, "review_failed") }),
-    };
+    return failureOutcome(error);
   }
+}
+
+async function finishReviewOutcome(outcome: Outcome, dependencies: ReviewCommandDependencies, io: CommandIo): Promise<number> {
   try {
     await dependencies.disconnect();
   } catch {
@@ -63,6 +62,20 @@ export async function runFeedbackLearningReview(
   }
   io[outcome.stream](outcome.line);
   return outcome.code;
+}
+
+export async function runFeedbackLearningReview(
+  argv: readonly string[],
+  dependencies: ReviewCommandDependencies,
+  io: CommandIo = processCommandIo,
+): Promise<number> {
+  let request: ReviewRequest;
+  try {
+    request = await requestFromArguments(argv);
+  } catch (error) {
+    return finishReviewOutcome(failureOutcome(error), dependencies, io);
+  }
+  return finishReviewOutcome(await outcomeForRequest(request, dependencies), dependencies, io);
 }
 
 export async function composeReviewCommandDependencies(): Promise<ReviewCommandDependencies> {
@@ -82,18 +95,21 @@ export async function main(
   io: CommandIo = processCommandIo,
   compose: () => Promise<ReviewCommandDependencies> = composeReviewCommandDependencies,
 ): Promise<number> {
+  let request: ReviewRequest;
   try {
-    parseReviewArguments(argv);
+    request = await requestFromArguments(argv);
   } catch (error) {
     io.stderr(safeLog({ operation: "review", reason: isCliInputError(error) ? "invalid_arguments" : "review_failed" }));
     return isCliInputError(error) ? 2 : 1;
   }
+  let dependencies: ReviewCommandDependencies;
   try {
-    return await runFeedbackLearningReview(argv, await compose(), io);
+    dependencies = await compose();
   } catch {
     io.stderr(safeLog({ operation: "review", reason: "composition_failed" }));
     return 1;
   }
+  return finishReviewOutcome(await outcomeForRequest(request, dependencies), dependencies, io);
 }
 
 if (require.main === module) {

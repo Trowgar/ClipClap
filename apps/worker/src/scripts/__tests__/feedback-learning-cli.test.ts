@@ -403,4 +403,39 @@ describe("command main boundary", () => {
     expect(capture.stderr).toEqual([`{"operation":"${operation}","reason":"invalid_arguments"}\n`]);
     expect(Object.entries(process.env)).toEqual(environment);
   });
+
+  it("rejects missing and unsafe review reason files before composition", async () => {
+    const missing = await reasonFile("removed");
+    await import("node:fs/promises").then(({ unlink }) => unlink(missing));
+    const unsafe = await reasonFile("PRIVATE_UNSAFE_REASON");
+    await chmod(unsafe, 0o640);
+    for (const path of [missing, unsafe]) {
+      const capture = outputCapture();
+      const compose = vi.fn(async () => { throw new Error("PRIVATE_COMPOSITION"); });
+      const code = await reviewMain(["reject", "--run", RUN_ID, "--candidate-version", SHA, "--reason-file", path], capture.io, compose as never);
+      expect(code).toBe(2);
+      expect(compose).not.toHaveBeenCalled();
+      expect(capture.stdout).toEqual([]);
+      expect(capture.stderr).toEqual([`{"operation":"review","reason":"invalid_arguments"}\n`]);
+      expect(capture.stderr.join("")).not.toContain(path);
+      expect(capture.stderr.join("")).not.toContain("PRIVATE_UNSAFE_REASON");
+    }
+  });
+
+  it("reads a review reason once before composition and executes the captured request", async () => {
+    const path = await reasonFile("CAPTURED_REASON");
+    const capture = outputCapture();
+    const execute = vi.fn(async () => ({ operation: "review" as const, eventId: EVENT_ID, status: "committed" as const }));
+    const disconnect = vi.fn(async () => undefined);
+    const compose = vi.fn(async () => {
+      await import("node:fs/promises").then(({ unlink }) => unlink(path));
+      return { repository: {} as never, execute, disconnect };
+    });
+    const code = await reviewMain(["reject", "--run", RUN_ID, "--candidate-version", SHA, "--reason-file", path], capture.io, compose);
+    expect(code).toBe(0);
+    expect(compose).toHaveBeenCalledOnce();
+    expect(execute).toHaveBeenCalledWith({ action: "reject", runId: RUN_ID, candidateVersion: SHA, reason: "CAPTURED_REASON" }, expect.anything());
+    expect(disconnect).toHaveBeenCalledOnce();
+    expect(capture.stdout).toEqual([`{"operation":"review","eventId":"${EVENT_ID}"}\n`]);
+  });
 });
