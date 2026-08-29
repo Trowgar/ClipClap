@@ -99,6 +99,29 @@ function safeEndTelemetry(result: Awaited<ReturnType<typeof analyzeHighlightsV2>
 }
 
 describe("safe-end normal shadow wiring", () => {
+  it("excludes a hook-dropped higher score from rescue observation while the lower winner is unchanged", async () => {
+    const scanTwo = { candidates: [
+      { start_node: 7, end_node: 9, payoff_node: 8, interest: 0.9, type: "story", thread: null },
+      { start_node: 0, end_node: 2, payoff_node: 1, interest: 0.8, type: "story", thread: null },
+    ] };
+    const criticTwo = { results: [
+      { ...critic.results[0], id: "c0", score: 0.9, start_node: 7, payoff_node: 8, end_node: 9, hook_start_node: 8, hook_end_node: 9, title_evidence_nodes: [8], description_evidence_nodes: [8] },
+      { ...critic.results[0], id: "c1", score: 0.7, start_node: 0, payoff_node: 1, end_node: 2, hook_start_node: 0, hook_end_node: 1, title_evidence_nodes: [1], description_evidence_nodes: [1] },
+    ] };
+    const arc = { results: [
+      { id: "c0", entry: { ok: true, defect: null, fix_start_node: null }, exit: { ok: true, defect: null, fix_end_node: null }, standalone: { ok: true, missing: null } },
+      { id: "c1", entry: { ok: false, defect: "mid_story", fix_start_node: null }, exit: { ok: false, defect: "mid_thought", fix_end_node: null }, standalone: { ok: true, missing: null } },
+    ] };
+    const result = await analyzeHighlightsV2(transcript(), {
+      client: clientFor({ scan_candidates: scanTwo, critic_verdicts: criticTwo, arc_audit: arc, safe_end_audit: { results: [{ id: "c1", outcome: "safe", reason: null, extendToNode: null }] } }).client,
+      cfg: loadAnalyzeConfig({ SAFE_END_AUDIT: "shadow", SHORT_SOURCE_RESCUE: "on", ARC_AUDIT: "on", ARC_DOWNRANK: "on", POST_BOUNDARY_HOOK_GATE: "enforce", POST_BOUNDARY_HOOK_MAX_DELAY_SEC: "0", POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC: "0" }),
+      sourceDurationSec: 200,
+    });
+    const rescue = (result.telemetry.safeEndAudit as { rescue: { records: Array<{ geometry: { candidateId: string }; selectedState: string }> } }).rescue;
+    expect(result.highlights[0]?.score).toBe(0.7);
+    expect(rescue.records[0]).toMatchObject({ geometry: { candidateId: "c1" }, selectedState: "selected" });
+  });
+
   it("does not observe rescue when the post-boundary hook gate dropped every selected clip", async () => {
     const result = await analyzeHighlightsV2(transcript(), {
       client: clientFor(replies()).client,
