@@ -17,6 +17,7 @@ RUN pip3 install --break-system-packages "yt-dlp[default]==2026.8.19" \
 
 # --- Dependencies ---
 FROM base AS deps
+RUN apk add --no-cache build-base
 COPY package.json package-lock.json* ./
 COPY apps/worker/package.json ./apps/worker/
 COPY packages/shared/package.json ./packages/shared/
@@ -41,6 +42,7 @@ RUN npx tsc
 FROM base AS production
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
+RUN node -e "require('fs-ext')" && ! apk info -e build-base
 COPY --from=build /app/apps/worker/package.json ./apps/worker/package.json
 COPY --from=build /app/apps/worker/dist ./apps/worker/dist
 COPY --from=build /app/apps/worker/assets ./apps/worker/assets

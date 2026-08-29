@@ -19,12 +19,14 @@
   "dependencies": {
     "@clipclap/shared": "*",
     "bullmq": "^5.30.0",
+    "fs-ext": "2.1.1",
     "openai": "^4.80.0"
   },
   "devDependencies": {
+    "@types/fs-ext": "2.0.3",
+    "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0",
-    "@types/node": "^22.0.0"
+    "vitest": "^3.0.0"
   }
 }
