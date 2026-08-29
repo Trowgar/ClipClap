@@ -3,7 +3,14 @@ import type { LlmUsage, ModelUsage } from "./types";
 
 export type SchemaCallResult<T> =
   | { ok: true; data: T }
-  | { ok: false; kind: "truncated" | "refusal" | "error"; error?: string };
+  | {
+      ok: false;
+      kind: "truncated" | "refusal" | "error";
+      error?: string;
+      /** Closed transport code where the SDK exposed one (for callers that
+       * need to distinguish an errno without altering its human message). */
+      errorCode?: string;
+    };
 
 export interface SchemaCallOptions {
   model: string;
@@ -25,6 +32,10 @@ export interface SchemaCallOptions {
    * server-supplied `Retry-After` - to a handful of milliseconds.
    */
   retryDelayMs?: number;
+  /** Make exactly one SDK request: no outer retry and `maxRetries: 0` on the
+   * OpenAI request. Used by observation-only callers that must fail open
+   * without adding user-facing latency. */
+  noRetry?: boolean;
 }
 
 /**
@@ -322,12 +333,14 @@ export async function callJsonSchema<T>(
       : {}),
   };
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+  const maxAttempts = opts.noRetry ? 1 : MAX_ATTEMPTS;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
       const response = await client.chat.completions.create(
         body as Parameters<typeof client.chat.completions.create>[0] & {
           reasoning_effort?: string;
-        }
+        },
+        ...(opts.noRetry ? ([{ maxRetries: 0 }] as const) : [])
       );
       const completion = response as OpenAI.Chat.Completions.ChatCompletion;
       // Attributed to the model this request NAMED, which on a fallback call is
@@ -344,14 +357,14 @@ export async function callJsonSchema<T>(
       if (!choice) {
         // Same class as a thrown API error - it degrades the batch to the
         // fallback model - and just as invisible until it is logged.
-        logCallFailure(opts.model, attempt, MAX_ATTEMPTS, "giving up", noApiDetail("no choices"));
+        logCallFailure(opts.model, attempt, maxAttempts, "giving up", noApiDetail("no choices"));
         return { ok: false, kind: "error", error: "no choices" };
       }
       if (choice.message.refusal) return { ok: false, kind: "refusal" };
       if (choice.finish_reason === "length") return { ok: false, kind: "truncated" };
       const content = choice.message.content;
       if (!content) {
-        logCallFailure(opts.model, attempt, MAX_ATTEMPTS, "giving up", noApiDetail("empty content"));
+        logCallFailure(opts.model, attempt, maxAttempts, "giving up", noApiDetail("empty content"));
         return { ok: false, kind: "error", error: "empty content" };
       }
       try {
@@ -373,11 +386,12 @@ export async function callJsonSchema<T>(
       const give = (
         outcome: "giving up" | "not retryable"
       ): SchemaCallResult<T> => {
-        logCallFailure(opts.model, attempt, MAX_ATTEMPTS, outcome, detail);
+        logCallFailure(opts.model, attempt, maxAttempts, outcome, detail);
         return {
           ok: false,
           kind: "error",
           error: error instanceof Error ? error.message : String(error),
+          ...(facts.code !== "-" ? { errorCode: facts.code } : {}),
         };
       };
 
@@ -385,9 +399,9 @@ export async function callJsonSchema<T>(
       // worse judge but a real one, and reaching it a few seconds sooner is
       // strictly better than sleeping first - the user is waiting.
       if (!isRetryableFailure(error)) return give("not retryable");
-      if (attempt === MAX_ATTEMPTS) return give("giving up");
+      if (attempt === maxAttempts) return give("giving up");
 
-      logCallFailure(opts.model, attempt, MAX_ATTEMPTS, "retrying", detail);
+      logCallFailure(opts.model, attempt, maxAttempts, "retrying", detail);
       await sleep(
         nextRetryDelayMs(attempt, error, opts.retryDelayMs ?? DEFAULT_RETRY_BASE_MS)
       );

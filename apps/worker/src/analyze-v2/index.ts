@@ -72,10 +72,11 @@ interface SafeEndAuditTelemetry {
  * shared job-step persistence: only safe-end observation data is fail-open. */
 function jsonSafeEndAuditTelemetry(
   telemetry: unknown,
-  clips: readonly SnappedClip[]
+  clips: readonly SnappedClip[],
+  hook?: (telemetry: unknown) => unknown
 ): SafeEndAuditTelemetry {
   try {
-    const serialized = JSON.stringify(telemetry);
+    const serialized = JSON.stringify(hook ? hook(telemetry) : telemetry);
     if (typeof serialized !== "string") throw new Error("safe-end telemetry did not serialize");
     return JSON.parse(serialized) as SafeEndAuditTelemetry;
   } catch {
@@ -97,13 +98,16 @@ function emptySafeEndNormalTelemetry(): SafeEndNormalTelemetry {
 }
 
 function safeEndFailureCode(
-  failure: { kind: "truncated" | "refusal" | "error"; error?: string }
+  failure: { kind: "truncated" | "refusal" | "error"; error?: string; errorCode?: string }
 ): SafeEndAuditFailureCode {
   if (failure.kind === "refusal") return "model_refusal";
   // OpenAI's SDK calls this `APIConnectionTimeoutError` and uses the exact
   // message "Request timed out."; other transport layers commonly say
   // "timeout". Both are operational timeouts, not feature construction bugs.
-  if (failure.kind === "error" && /timeout|timed out/i.test(failure.error ?? "")) {
+  if (
+    failure.kind === "error" &&
+    (failure.errorCode === "ETIMEDOUT" || /timeout|timed out/i.test(failure.error ?? ""))
+  ) {
     return "timeout";
   }
   if (failure.kind === "error") return "construction_error";
@@ -162,6 +166,7 @@ async function runSafeEndNormalAudit(
       reasoningEffort: cfg.reasoningEffort,
       maxOutputTokens: 800 + 120 * clips.length,
       retryDelayMs: options.retryDelayMs,
+      noRetry: true,
     });
     if (!response.ok) return { normal: failedSafeEndNormalTelemetry(clips, safeEndFailureCode(response)) };
 
@@ -846,10 +851,11 @@ export async function analyzeHighlightsV2(
       cfg,
       { retryDelayMs: options.retryDelayMs }
     );
-    const injected = options.safeEndAuditTelemetryTestHook
-      ? options.safeEndAuditTelemetryTestHook(audit)
-      : audit;
-    safeEndAuditTelemetry = jsonSafeEndAuditTelemetry(injected, afterPostBoundaryHookGate);
+    safeEndAuditTelemetry = jsonSafeEndAuditTelemetry(
+      audit,
+      afterPostBoundaryHookGate,
+      options.safeEndAuditTelemetryTestHook
+    );
   }
 
   // ARC DOWNRANK (spec 2026-08-10 task 7) - the first DROP authority the arc

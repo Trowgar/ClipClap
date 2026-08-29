@@ -35,17 +35,19 @@ const critic = {
 };
 const finalizer = { clips: [{ id: "c0", verdict: "ship", drop_reason: null, duplicate_of: null, shared_claim: null, title: null, title_evidence_nodes: null, trim_start_node: null }] };
 
-type Reply = Record<string, unknown> | "refusal" | "timeout" | "sdk_timeout" | "truncated" | "malformed" | "serialization_failure";
-interface Request { schema: string; user: string; }
+type Reply = Record<string, unknown> | "refusal" | "timeout" | "sdk_timeout" | "errno_timeout" | "transient" | "truncated" | "malformed" | "serialization_failure";
+interface Request { schema: string; user: string; maxRetries?: number; }
 
 function clientFor(replies: Record<string, Reply>) {
   const requests: Request[] = [];
-  const create = vi.fn(async (body: { messages: Array<{ role: string; content: string }>; response_format: { json_schema: { name: string } } }) => {
+  const create = vi.fn(async (body: { messages: Array<{ role: string; content: string }>; response_format: { json_schema: { name: string } } }, options?: { maxRetries?: number }) => {
     const schema = body.response_format.json_schema.name;
-    requests.push({ schema, user: body.messages.find((message) => message.role === "user")?.content ?? "" });
+    requests.push({ schema, user: body.messages.find((message) => message.role === "user")?.content ?? "", maxRetries: options?.maxRetries });
     const reply = replies[schema];
     if (reply === "timeout") throw new Error("request timeout");
     if (reply === "sdk_timeout") throw new APIConnectionTimeoutError();
+    if (reply === "errno_timeout") throw Object.assign(new Error("socket stalled"), { code: "ETIMEDOUT" });
+    if (reply === "transient") throw new Error("temporary network failure");
     if (reply === "serialization_failure") JSON.stringify({ value: BigInt(1) });
     if (reply === "refusal") return { choices: [{ message: { content: null, refusal: "cannot assess" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
     if (reply === "truncated") return { choices: [{ message: { content: "{", refusal: null }, finish_reason: "length" }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
@@ -207,6 +209,7 @@ describe("safe-end normal shadow wiring", () => {
     ["malformed", "malformed_response"],
     ["timeout", "timeout"],
     ["sdk_timeout", "timeout"],
+    ["errno_timeout", "timeout"],
     ["truncated", "malformed_response"],
     ["serialization_failure", "construction_error"],
   ] as const)("fails open on %s without changing output", async (failure, code) => {
@@ -235,6 +238,37 @@ describe("safe-end normal shadow wiring", () => {
 
     expect(projection(observed)).toEqual(projection(off));
     expect(safeEndTelemetry(observed)?.normal).toMatchObject({ evaluated: 1, audit_failed: 1 });
+    expect(safeEndTelemetry(observed)?.normal.records[0]).toMatchObject({
+      outcome: "audit_failed",
+      failureCode: "construction_error",
+    });
+  });
+
+  it("contains a transient safe-end failure to one no-retry HTTP request", async () => {
+    const stub = clientFor(replies("transient"));
+    const result = await analyzeHighlightsV2(transcript(), {
+      client: stub.client,
+      cfg: loadAnalyzeConfig({ SAFE_END_AUDIT: "shadow" }),
+      retryDelayMs: 1,
+    });
+
+    const calls = stub.requests.filter((request) => request.schema === "safe_end_audit");
+    expect(calls).toHaveLength(1);
+    expect(calls[0].maxRetries).toBe(0);
+    expect(safeEndTelemetry(result)?.normal).toMatchObject({ audit_failed: 1 });
+  });
+
+  it("contains a throwing safe-end telemetry hook", async () => {
+    const off = await analyzeHighlightsV2(transcript(), { client: clientFor(replies()).client, cfg: loadAnalyzeConfig({}) });
+    const observed = await analyzeHighlightsV2(transcript(), {
+      client: clientFor(replies()).client,
+      cfg: loadAnalyzeConfig({ SAFE_END_AUDIT: "shadow" }),
+      safeEndAuditTelemetryTestHook: () => {
+        throw new Error("test-only telemetry hook fault");
+      },
+    });
+
+    expect(projection(observed)).toEqual(projection(off));
     expect(safeEndTelemetry(observed)?.normal.records[0]).toMatchObject({
       outcome: "audit_failed",
       failureCode: "construction_error",
