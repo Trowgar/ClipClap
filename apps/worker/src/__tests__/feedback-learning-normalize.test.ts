@@ -168,9 +168,25 @@ describe("normalizeFeedback", () => {
       score: null,
       transcript: null,
       note: null,
-      evidenceKey: null,
+      evidenceKey: "",
     });
   });
+
+  it.each([
+    [null, true],
+    ["", true],
+    ["  ", true],
+    [" feedback/clip-1.mp4 ", false],
+  ] as const)(
+    "preserves raw evidence projection %j while classifying its warning",
+    (evidenceKey, warningExpected) => {
+      const result = valid(normalizeFeedback(feedback({ evidenceKey }), job()));
+
+      expect(result.record.evidenceKey).toBe(evidenceKey);
+      expect(result.record.review.evidenceKey).toBe(evidenceKey);
+      expect(result.record.warnings.includes("evidence_missing")).toBe(warningExpected);
+    }
+  );
 
   it("suppresses transcript warnings when the Job is missing", () => {
     const result = valid(

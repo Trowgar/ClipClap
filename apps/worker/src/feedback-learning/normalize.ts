@@ -130,7 +130,7 @@ export function normalizeFeedback(
     transcript:
       snapshot !== null && isNonEmpty(snapshot.transcript) ? snapshot.transcript : null,
     note: row.note,
-    evidenceKey: isNonEmpty(row.evidenceKey) ? row.evidenceKey : null,
+    evidenceKey: row.evidenceKey,
   };
 
   return {
@@ -143,7 +143,7 @@ export function normalizeFeedback(
       userId: row.userId,
       verdict: row.verdict,
       note: row.note,
-      evidenceKey: isNonEmpty(row.evidenceKey) ? row.evidenceKey : null,
+      evidenceKey: row.evidenceKey,
       updatedAt,
       snapshotCanonical,
       snapshotSha256,
