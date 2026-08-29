@@ -99,6 +99,23 @@ function safeEndTelemetry(result: Awaited<ReturnType<typeof analyzeHighlightsV2>
 }
 
 describe("safe-end normal shadow wiring", () => {
+  it("does not observe rescue when the post-boundary hook gate dropped every selected clip", async () => {
+    const result = await analyzeHighlightsV2(transcript(), {
+      client: clientFor(replies()).client,
+      cfg: loadAnalyzeConfig({
+        SAFE_END_AUDIT: "shadow",
+        SHORT_SOURCE_RESCUE: "on",
+        POST_BOUNDARY_HOOK_GATE: "enforce",
+        POST_BOUNDARY_HOOK_MAX_DELAY_SEC: "0",
+        POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC: "0",
+      }),
+      sourceDurationSec: 200,
+    });
+
+    expect(result.highlights).toEqual([]);
+    expect(safeEndTelemetry(result)).toMatchObject({ rescue: { summary: "not_run", evaluated: 0, records: [] } });
+  });
+
   it("observes the realizable rescue winner only in shadow without changing rescue output", async () => {
     const rejected = {
       results: [{ ...critic.results[0], keep: false, score: 0.8 }],
