@@ -17,7 +17,12 @@ import {
 import { dominantScript, isoToLanguageName, scriptMismatch } from "./language";
 import { selectAndOrder } from "./select";
 import { rescueShortSource, type RescueTelemetry } from "./rescue";
-import { runArcAudit, isFullyOk, type ArcAuditTelemetry } from "./arc-audit";
+import {
+  runArcAudit,
+  isFullyOk,
+  type ArcAuditGeometryEvidence,
+  type ArcAuditTelemetry,
+} from "./arc-audit";
 import { extendClipStarts, type StartExtensionTelemetry } from "./start-extension";
 import { extendClipEnds } from "./end-extension";
 import { filterStandaloneClips, type StandaloneFilterTelemetry } from "./standalone-filter";
@@ -36,10 +41,14 @@ import {
 import { SAFE_END_AUDIT_SCHEMA, readSafeEndAuditRow } from "./safe-end-audit-schema";
 import {
   capSafeEndNormalRecords,
+  capSafeEndRescueRecords,
+  reconcileSafeEndNormalRecords,
   safeEndGeometryReference,
   type SafeEndAuditFailureCode,
   type SafeEndNormalRecord,
+  type SafeEndRescueRecord,
 } from "./safe-end-audit";
+import { observeRescueCandidates } from "./safe-end-rescue-observation";
 import type {
   ArcFlags,
   MergedCandidate,
@@ -65,6 +74,37 @@ interface SafeEndNormalTelemetry {
 
 interface SafeEndAuditTelemetry {
   normal: SafeEndNormalTelemetry;
+  rescue?: SafeEndRescueTelemetry;
+}
+
+interface SafeEndRescueTelemetry {
+  summary: "not_run" | "no_realizable_candidate" | "selected";
+  realizable: number;
+  zeroTailHandoff: number;
+  matchingStanding: number;
+  matchingClear: number;
+  staleOrAbsent: number;
+  selected: number;
+  records: SafeEndRescueRecord[];
+  truncatedCount: number;
+}
+
+function safeEndRescueTelemetry(
+  records: readonly SafeEndRescueRecord[],
+  summary: SafeEndRescueTelemetry["summary"],
+): SafeEndRescueTelemetry {
+  const capped = capSafeEndRescueRecords(records);
+  return {
+    summary,
+    realizable: records.length,
+    zeroTailHandoff: records.filter((record) => record.zeroTailHandoff).length,
+    matchingStanding: records.filter((record) => record.arcEvidence === "matching_standing").length,
+    matchingClear: records.filter((record) => record.arcEvidence === "matching_clear").length,
+    staleOrAbsent: records.filter((record) => record.arcEvidence === "stale_or_absent").length,
+    selected: records.filter((record) => record.selectedState === "selected").length,
+    records: capped.records,
+    truncatedCount: capped.truncatedCount,
+  };
 }
 
 /** Converts the feature's local telemetry into the exact JSON-safe form that
@@ -629,12 +669,14 @@ export async function analyzeHighlightsV2(
   // in the eval suite depends on that being literally true, not merely
   // zeroed.
   let arcFlags: Map<string, ArcFlags> = new Map();
+  let arcGeometryEvidence: Map<string, ArcAuditGeometryEvidence> = new Map();
   let arcAuditTelemetry: ArcAuditTelemetry | undefined;
   if (cfg.arcAuditEnabled) {
     const audit = await runArcAudit(client, usage, selection.selected, nodes, cfg, {
       retryDelayMs: options.retryDelayMs,
     });
     arcFlags = audit.flags;
+    arcGeometryEvidence = audit.geometryEvidence;
     arcAuditTelemetry = audit.telemetry;
   }
 
@@ -851,11 +893,15 @@ export async function analyzeHighlightsV2(
       cfg,
       { retryDelayMs: options.retryDelayMs }
     );
-    safeEndAuditTelemetry = jsonSafeEndAuditTelemetry(
+    const normalAudit = jsonSafeEndAuditTelemetry(
       audit,
       afterPostBoundaryHookGate,
       options.safeEndAuditTelemetryTestHook
     );
+    safeEndAuditTelemetry = {
+      ...normalAudit,
+      rescue: safeEndRescueTelemetry([], "not_run"),
+    };
   }
 
   // ARC DOWNRANK (spec 2026-08-10 task 7) - the first DROP authority the arc
@@ -980,6 +1026,21 @@ export async function analyzeHighlightsV2(
     if (result.regrounded.includes("title")) snippetTitleIds.add(clip.verdict.id);
     return result.clip;
   });
+
+  if (safeEndAuditTelemetry) {
+    safeEndAuditTelemetry = {
+      ...safeEndAuditTelemetry,
+      normal: {
+        ...safeEndAuditTelemetry.normal,
+        records: reconcileSafeEndNormalRecords(
+          safeEndAuditTelemetry.normal.records,
+          afterStandaloneFilter,
+          finalized.clips,
+          shipped,
+        ),
+      },
+    };
+  }
 
   // ---------------------------------------------------------------------------
   // DEGENERATE TITLES - the last stage that can write copy, and the only one
@@ -1200,6 +1261,8 @@ export async function analyzeHighlightsV2(
     // off, not a zeroed placeholder; downstream stages have no reference to it.
     ...(safeEndAuditTelemetry ? { safeEndAudit: safeEndAuditTelemetry } : {}),
   };
+  const telemetryWithCurrentSafeEndAudit = () =>
+    safeEndAuditTelemetry ? { ...telemetry, safeEndAudit: safeEndAuditTelemetry } : telemetry;
 
   if (highlights.length === 0) {
     // Zero clips is only an ANSWER if every candidate actually got answered.
@@ -1342,8 +1405,23 @@ export async function analyzeHighlightsV2(
         (cfg.rescueMidSourceEnabled && midSource)) &&
       !allSelectedClipsDroppedByPostBoundaryHookGate
     ) {
+      const rescuePool = critic.verdicts.filter(
+        (verdict) => !postBoundaryHookGateDroppedIds.has(verdict.id),
+      );
+      if (cfg.safeEndAuditMode === "shadow" && safeEndAuditTelemetry) {
+        safeEndAuditTelemetry = {
+          ...safeEndAuditTelemetry,
+          rescue: (() => {
+            const records = observeRescueCandidates(rescuePool, nodes, cfg, arcGeometryEvidence);
+            return safeEndRescueTelemetry(
+              records,
+              records.length > 0 ? "selected" : "no_realizable_candidate",
+            );
+          })(),
+        };
+      }
       const rescue = rescueShortSource(
-        critic.verdicts.filter((verdict) => !postBoundaryHookGateDroppedIds.has(verdict.id)),
+        rescuePool,
         nodes,
         cfg
       );
@@ -1373,7 +1451,7 @@ export async function analyzeHighlightsV2(
           // additive only on the shipped path, so the 2026-09 checkpoint can
           // tell the two populations apart.
           telemetry: {
-            ...telemetry,
+            ...telemetryWithCurrentSafeEndAudit(),
             kept: 1,
             durations: [Math.round((h.end - h.start) * 10) / 10],
             rescue: { ...rescueTelemetry, tier: shortSource ? "short" : "mid" },
@@ -1395,13 +1473,13 @@ export async function analyzeHighlightsV2(
       // as arcAudit) - here that is "ran and could not realize any verdict",
       // which the 2026-09 checkpoint needs to see as clearly as a success.
       telemetry: rescueTelemetry
-        ? { ...telemetry, rescue: { ...rescueTelemetry, tier: shortSource ? "short" : "mid" } }
-        : telemetry,
+        ? { ...telemetryWithCurrentSafeEndAudit(), rescue: { ...rescueTelemetry, tier: shortSource ? "short" : "mid" } }
+        : telemetryWithCurrentSafeEndAudit(),
       usage,
     };
   }
 
-  return { highlights, telemetry, usage };
+  return { highlights, telemetry: telemetryWithCurrentSafeEndAudit(), usage };
 }
 
 /** Every candidate the scanner found was thrown away for crossing a transcript

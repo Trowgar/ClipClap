@@ -115,6 +115,18 @@ export interface ArcAuditTelemetry {
 export interface ArcAuditResult {
   flags: Map<string, ArcFlags>;
   telemetry: ArcAuditTelemetry;
+  /** Telemetry-only audit-time geometry. It deliberately shares the already
+   * published flag object rather than creating or mutating a second flag map. */
+  geometryEvidence: Map<string, ArcAuditGeometryEvidence>;
+}
+
+export interface ArcAuditGeometryEvidence {
+  id: string;
+  finalStartNode: number;
+  finalEndNode: number;
+  startMs: number;
+  endMs: number;
+  flags: ArcFlags;
 }
 
 /**
@@ -325,13 +337,14 @@ export async function runArcAudit(
 ): Promise<ArcAuditResult> {
   const telemetry = emptyTelemetry();
   const flags = new Map<string, ArcFlags>();
+  const geometryEvidence = new Map<string, ArcAuditGeometryEvidence>();
   // Defence in depth, same as extendClipEnds's own top-of-function guard: the
   // caller (index.ts) already gates this behind cfg.arcAuditEnabled, but a
   // module that moves a boundary - or, here, publishes a flag - must not trust
   // a single call site to be the only thing standing between it and a live
   // call while the stage is meant to ship dark.
   if (!cfg.arcAuditEnabled || clips.length === 0) {
-    return { flags, telemetry };
+    return { flags, telemetry, geometryEvidence };
   }
 
   const byId = new Map(clips.map((c) => [c.verdict.id, c]));
@@ -402,7 +415,16 @@ export async function runArcAudit(
         standaloneFlag.missing = row.standalone.missing;
       }
 
-      flags.set(row.id, { entry: entryFlag, exit: exitFlag, standalone: standaloneFlag });
+      const flag = { entry: entryFlag, exit: exitFlag, standalone: standaloneFlag };
+      flags.set(row.id, flag);
+      geometryEvidence.set(row.id, {
+        id: row.id,
+        finalStartNode: clip.finalStartNode,
+        finalEndNode: clip.finalEndNode,
+        startMs: Math.round(clip.startSec * 1000),
+        endMs: Math.round(clip.endSec * 1000),
+        flags: flag,
+      });
       telemetry.audited += 1;
       if (!row.entry.ok) telemetry.flaggedEntry += 1;
       if (!row.exit.ok) telemetry.flaggedExit += 1;
@@ -413,5 +435,5 @@ export async function runArcAudit(
     telemetry.unaudited += missed.length;
   });
 
-  return { flags, telemetry };
+  return { flags, telemetry, geometryEvidence };
 }

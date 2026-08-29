@@ -97,6 +97,28 @@ describe("short-source rescue config", () => {
 });
 
 describe("short-source rescue wiring", () => {
+  it("keeps the short rescue byte-equivalent while safe-end shadow observes its winner", async () => {
+    const control = await analyzeHighlightsV2(transcript(), {
+      client: client(scanResponse(), rejectedCriticResponse()),
+      cfg: rescueCfg,
+      transcriptPartial: false,
+      sourceDurationSec: 200,
+    });
+    const observed = await analyzeHighlightsV2(transcript(), {
+      client: client(scanResponse(), rejectedCriticResponse()),
+      cfg: { ...rescueCfg, safeEndAuditMode: "shadow" },
+      transcriptPartial: false,
+      sourceDurationSec: 200,
+    });
+
+    expect(observed.highlights).toEqual(control.highlights);
+    expect(observed.telemetry.rescue).toEqual(control.telemetry.rescue);
+    expect(observed.telemetry.safeEndAudit).toMatchObject({
+      rescue: { summary: "selected", realizable: 1, selected: 1, records: [expect.objectContaining({ selectedState: "selected" })] },
+    });
+    expect(observed.highlights[0]).not.toHaveProperty("_arcFlags");
+  });
+
   it("ships one lowQuality clip when a short source was judged and fully rejected", async () => {
     const c = client(scanResponse(), rejectedCriticResponse());
     const r = await analyzeHighlightsV2(transcript(), {

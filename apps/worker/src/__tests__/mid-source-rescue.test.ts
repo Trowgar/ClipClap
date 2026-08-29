@@ -98,6 +98,28 @@ describe("mid-source rescue config", () => {
 });
 
 describe("mid-source rescue wiring", () => {
+  it("keeps the mid rescue byte-equivalent while safe-end shadow observes its winner", async () => {
+    const control = await analyzeHighlightsV2(transcript(), {
+      client: client(scanResponse(), rejectedCriticResponse()),
+      cfg: midCfg,
+      transcriptPartial: false,
+      sourceDurationSec: 795,
+    });
+    const observed = await analyzeHighlightsV2(transcript(), {
+      client: client(scanResponse(), rejectedCriticResponse()),
+      cfg: { ...midCfg, safeEndAuditMode: "shadow" },
+      transcriptPartial: false,
+      sourceDurationSec: 795,
+    });
+
+    expect(observed.highlights).toEqual(control.highlights);
+    expect(observed.telemetry.rescue).toEqual(control.telemetry.rescue);
+    expect(observed.telemetry.safeEndAudit).toMatchObject({
+      rescue: { summary: "selected", realizable: 1, selected: 1, records: [expect.objectContaining({ selectedState: "selected" })] },
+    });
+    expect(observed.highlights[0]).not.toHaveProperty("_arcFlags");
+  });
+
   // (b) kept=0 + 795s source + flag on -> exactly one lowQuality highlight.
   it("ships one lowQuality clip for the 795s trigger case when judged and fully rejected", async () => {
     const c = client(scanResponse(), rejectedCriticResponse());

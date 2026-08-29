@@ -99,6 +99,36 @@ function safeEndTelemetry(result: Awaited<ReturnType<typeof analyzeHighlightsV2>
 }
 
 describe("safe-end normal shadow wiring", () => {
+  it("observes the realizable rescue winner only in shadow without changing rescue output", async () => {
+    const rejected = {
+      results: [{ ...critic.results[0], keep: false, score: 0.8 }],
+    };
+    const control = await analyzeHighlightsV2(transcript(), {
+      client: clientFor({ scan_candidates: scan, critic_verdicts: rejected }).client,
+      cfg: loadAnalyzeConfig({ SHORT_SOURCE_RESCUE: "on" }),
+      sourceDurationSec: 200,
+    });
+    const observed = await analyzeHighlightsV2(transcript(), {
+      client: clientFor({ scan_candidates: scan, critic_verdicts: rejected }).client,
+      cfg: loadAnalyzeConfig({ SHORT_SOURCE_RESCUE: "on", SAFE_END_AUDIT: "shadow" }),
+      sourceDurationSec: 200,
+    });
+
+    expect(projection(observed)).toEqual(projection(control));
+    expect(observed.highlights[0]).not.toHaveProperty("_arcFlags");
+    expect(safeEndTelemetry(observed)).toMatchObject({
+      rescue: {
+        summary: "selected",
+        realizable: 1,
+        records: [expect.objectContaining({
+          selectedState: "selected",
+          scoreRank: 1,
+          proposedAction: "none",
+        })],
+      },
+    });
+  });
+
   it("does not request or publish a safe-end audit when off", async () => {
     const stub = clientFor(replies());
     const result = await analyzeHighlightsV2(transcript(), { client: stub.client, cfg: loadAnalyzeConfig({}) });
@@ -136,6 +166,51 @@ describe("safe-end normal shadow wiring", () => {
       off.requests.find((request) => request.schema === "clip_finalizer")?.user
     );
     expect(shadow.requests.find((request) => request.schema === "clip_finalizer")?.user).not.toContain("safe_end");
+    expect(safeEndTelemetry(observed)).toMatchObject({ rescue: { summary: "not_run", records: [] } });
+  });
+
+  it("records no_realizable_candidate only after the eligible rescue guards pass", async () => {
+    const rejected = { results: [{ ...critic.results[0], keep: false, score: 0.8 }] };
+    const result = await analyzeHighlightsV2(transcript(), {
+      client: clientFor({ scan_candidates: scan, critic_verdicts: rejected }).client,
+      cfg: { ...loadAnalyzeConfig({ SHORT_SOURCE_RESCUE: "on", SAFE_END_AUDIT: "shadow" }), maxSec: 1 },
+      sourceDurationSec: 200,
+    });
+
+    expect(result.highlights).toEqual([]);
+    expect(safeEndTelemetry(result)).toMatchObject({
+      rescue: { summary: "no_realizable_candidate", realizable: 0, records: [] },
+    });
+  });
+
+  it("reconciles a retained normal record from the finalizer's actual trimmed geometry", async () => {
+    const stub = clientFor({
+      ...replies(),
+      critic_verdicts: {
+        results: [{
+          ...critic.results[0], start_node: 1, payoff_node: 3, end_node: 4,
+          hook_start_node: 1, hook_end_node: 2,
+        }],
+      },
+      safe_end_audit: { results: [{ id: "c0", outcome: "safe", reason: null, extendToNode: null }] },
+      clip_finalizer: {
+        clips: [{
+          id: "c0", verdict: "ship", drop_reason: null, duplicate_of: null, shared_claim: null,
+          title: null, title_evidence_nodes: null, trim_start_node: 2,
+        }],
+      },
+    });
+    const result = await analyzeHighlightsV2(transcript(), {
+      client: stub.client,
+      cfg: loadAnalyzeConfig({ SAFE_END_AUDIT: "shadow" }),
+    });
+
+    expect(safeEndTelemetry(result)?.normal.records[0]).toMatchObject({
+      reconciliation: {
+        state: "shipped",
+        finalGeometry: { candidateId: "c0", startNode: 2 },
+      },
+    });
   });
 
   it("keeps every persisted highlight field identical with arc audit enabled", async () => {
