@@ -17,6 +17,59 @@ describe("loadAnalyzeConfig", () => {
     expect(cfg.v2Pct).toBe(0);
   });
 
+  it("defaults the post-boundary hook gate to off without limits", () => {
+    const cfg = loadAnalyzeConfig({});
+    expect(cfg.postBoundaryHookGateMode).toBe("off");
+    expect(cfg.postBoundaryHookMaxDelaySec).toBeUndefined();
+    expect(cfg.postBoundaryHookMaxPreHookGapSec).toBeUndefined();
+  });
+
+  it("accepts limits only for shadow and enforce gate modes", () => {
+    expect(() => loadAnalyzeConfig({ POST_BOUNDARY_HOOK_GATE: "shadow" })).toThrow();
+    expect(() =>
+      loadAnalyzeConfig({
+        POST_BOUNDARY_HOOK_GATE: "enforce",
+        POST_BOUNDARY_HOOK_MAX_DELAY_SEC: "NaN",
+        POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC: "1",
+      }),
+    ).toThrow();
+    expect(() =>
+      loadAnalyzeConfig({
+        POST_BOUNDARY_HOOK_GATE: "observe",
+        POST_BOUNDARY_HOOK_MAX_DELAY_SEC: "1",
+      }),
+    ).toThrow();
+    expect(
+      loadAnalyzeConfig({
+        POST_BOUNDARY_HOOK_GATE: "shadow",
+        POST_BOUNDARY_HOOK_MAX_DELAY_SEC: "1",
+        POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC: "0",
+      }),
+    ).toMatchObject({
+      postBoundaryHookGateMode: "shadow",
+      postBoundaryHookMaxDelaySec: 1,
+      postBoundaryHookMaxPreHookGapSec: 0,
+    });
+  });
+
+  it("rejects every invalid post-boundary hook gate mode and numeric limit", () => {
+    expect(() => loadAnalyzeConfig({ POST_BOUNDARY_HOOK_GATE: "enabled" })).toThrow();
+
+    for (const value of ["", " ", "-1", "Infinity", "-Infinity", "not-a-number"]) {
+      for (const invalidLimit of ["POST_BOUNDARY_HOOK_MAX_DELAY_SEC", "POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC"] as const) {
+        expect(() =>
+          loadAnalyzeConfig({
+            POST_BOUNDARY_HOOK_GATE: "enforce",
+            POST_BOUNDARY_HOOK_MAX_DELAY_SEC:
+              invalidLimit === "POST_BOUNDARY_HOOK_MAX_DELAY_SEC" ? value : "0",
+            POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC:
+              invalidLimit === "POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC" ? value : "0",
+          }),
+        ).toThrow();
+      }
+    }
+  });
+
   it("reads overrides and clamps garbage numbers to defaults", () => {
     const cfg = loadAnalyzeConfig({
       ANALYZE_ENGINE: "recall-critic",

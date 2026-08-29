@@ -1,4 +1,5 @@
 export type AnalyzeEngineSetting = "legacy" | "recall-critic" | "shadow";
+export type PostBoundaryHookGateMode = "off" | "observe" | "shadow" | "enforce";
 
 export interface AnalyzeConfig {
   engine: AnalyzeEngineSetting;
@@ -251,6 +252,12 @@ export interface AnalyzeConfig {
   finalizerHeadroom: number;
   /** Jaccard floor for the deterministic opening-line dedup pass. */
   hookDedupSimilarity: number;
+  /** Post-boundary opening quality policy. Limits are intentionally absent
+   * outside thresholded modes so an observe run cannot accidentally carry a
+   * production decision. */
+  postBoundaryHookGateMode: PostBoundaryHookGateMode;
+  postBoundaryHookMaxDelaySec?: number;
+  postBoundaryHookMaxPreHookGapSec?: number;
   /** Master switch for the song-lyric source refusal gate (spec 2026-08-10
    *  task 8) - a deterministic, pre-scan check in `stages/analyze.ts` that
    *  resolves a verse-shaped transcript to `NO_USABLE_SPEECH` before the
@@ -409,8 +416,53 @@ function positiveInt(env: Env, key: string, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function parsePostBoundaryHookGate(env: Env): Pick<
+  AnalyzeConfig,
+  | "postBoundaryHookGateMode"
+  | "postBoundaryHookMaxDelaySec"
+  | "postBoundaryHookMaxPreHookGapSec"
+> {
+  const rawMode = env.POST_BOUNDARY_HOOK_GATE;
+  const mode: PostBoundaryHookGateMode =
+    rawMode === undefined || rawMode.trim() === ""
+      ? "off"
+      : rawMode === "off" || rawMode === "observe" || rawMode === "shadow" || rawMode === "enforce"
+        ? rawMode
+        : (() => {
+            throw new Error(`Invalid POST_BOUNDARY_HOOK_GATE: ${rawMode}`);
+          })();
+  const delay = env.POST_BOUNDARY_HOOK_MAX_DELAY_SEC;
+  const gap = env.POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC;
+  const requiresLimits = mode === "shadow" || mode === "enforce";
+
+  if (!requiresLimits) {
+    if (delay !== undefined || gap !== undefined) {
+      throw new Error("Post-boundary hook limits are only valid in shadow or enforce mode");
+    }
+    return { postBoundaryHookGateMode: mode };
+  }
+
+  const parseLimit = (key: string, raw: string | undefined): number => {
+    if (raw === undefined || raw.trim() === "") {
+      throw new Error(`${key} is required in ${mode} mode`);
+    }
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error(`${key} must be a finite non-negative number`);
+    }
+    return value;
+  };
+
+  return {
+    postBoundaryHookGateMode: mode,
+    postBoundaryHookMaxDelaySec: parseLimit("POST_BOUNDARY_HOOK_MAX_DELAY_SEC", delay),
+    postBoundaryHookMaxPreHookGapSec: parseLimit("POST_BOUNDARY_HOOK_MAX_PRE_HOOK_GAP_SEC", gap),
+  };
+}
+
 export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
   const engine = env.ANALYZE_ENGINE;
+  const postBoundaryHookGate = parsePostBoundaryHookGate(env);
   return {
     engine:
       engine === "recall-critic" || engine === "shadow" ? engine : "legacy",
@@ -489,6 +541,7 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
       env.OPENAI_FINALIZER_MODEL || env.OPENAI_CRITIC_MODEL || "gpt-5.6-luna",
     finalizerHeadroom: num(env, "FINALIZER_HEADROOM", 4),
     hookDedupSimilarity: num(env, "HOOK_DEDUP_SIMILARITY", 0.8),
+    ...postBoundaryHookGate,
     // Exact literal "on", same discipline as every other stage switch in this
     // file: a stray truthy env value must not refuse a real user's video.
     songGateEnabled: env.SONG_GATE === "on",
