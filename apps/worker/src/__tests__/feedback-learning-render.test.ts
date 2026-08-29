@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
-import { canonicalLedgerState, type CapacityState, type EffectiveLedger } from "../feedback-learning/ledger";
+import {
+  canonicalLedgerState,
+  type CapacityState,
+  type EffectiveLedger,
+} from "../feedback-learning/ledger";
 import {
   buildRunArtifacts,
   type ApprovalFreshnessProjection,
@@ -107,7 +111,8 @@ describe("buildRunArtifacts", () => {
     expect(first.files["candidates.jsonl"].toString("utf8")).toMatch(/^\{[^\n]+\}\n$/);
     expect(first.files["exclusions.jsonl"]).toEqual(Buffer.alloc(0));
     expect(first.files["candidates.md"].toString("utf8")).toMatch(/[^\n]\n$/);
-    for (const bytes of Object.values(first.files)) expect(bytes.toString("utf8")).not.toContain("\r");
+    for (const bytes of Object.values(first.files))
+      expect(bytes.toString("utf8")).not.toContain("\r");
   });
 
   it("writes the exact run and candidate field order and count equations", () => {
@@ -117,30 +122,30 @@ describe("buildRunArtifacts", () => {
 
     expect(run).toBe(
       '{"schemaVersion":1,"runId":"eval-09d54c11318ec43c","targetSet":"eval",' +
-      '"updatedFrom":"2026-08-22T00:00:00.000Z","updatedTo":"2026-08-29T00:00:00.000Z",' +
-      '"limit":50,"optionsSha256":"sha256:751062991b502359f0900a3cc6e19a3267d388841a194cd21fd1e369473bfaf9",' +
-      '"inputSha256":"sha256:468a8ef2f2868e1fe0a541a4fff2a9e3d902b18c6a475f89ab8fa3673626960c",' +
-      '"ledgerSha256":"sha256:22ad1174d4b4e9fa9da354dd4d128ccb63565e34ac7155662e696ae847c16cbf",' +
-      '"runDigest":"sha256:09d54c11318ec43cfcc0d73eca32ca4721aa12829357ea160e9de366bbb745fc",' +
-      '"counts":{"queried":1,"selected":1,"excluded":0,"selectedReplayReady":1,' +
-      '"selectedReferenceOnly":0,"freshApprovals":0,"staleReservations":0},' +
-      '"staleAssignments":[]}\n'
+        '"updatedFrom":"2026-08-22T00:00:00.000Z","updatedTo":"2026-08-29T00:00:00.000Z",' +
+        '"limit":50,"optionsSha256":"sha256:751062991b502359f0900a3cc6e19a3267d388841a194cd21fd1e369473bfaf9",' +
+        '"inputSha256":"sha256:468a8ef2f2868e1fe0a541a4fff2a9e3d902b18c6a475f89ab8fa3673626960c",' +
+        '"ledgerSha256":"sha256:22ad1174d4b4e9fa9da354dd4d128ccb63565e34ac7155662e696ae847c16cbf",' +
+        '"runDigest":"sha256:09d54c11318ec43cfcc0d73eca32ca4721aa12829357ea160e9de366bbb745fc",' +
+        '"counts":{"queried":1,"selected":1,"excluded":0,"selectedReplayReady":1,' +
+        '"selectedReferenceOnly":0,"freshApprovals":0,"staleReservations":0},' +
+        '"staleAssignments":[]}\n',
     );
     expect(candidate).toBe(
       '{"schemaVersion":1,"candidateVersion":"sha256:203fd43d54f777bae4ada3c4a13d79ab041320549a5c2cddbda422b735824f92",' +
-      '"targetSet":"eval","feedbackId":"feedback-1","clipId":"clip-feedback-1",' +
-      '"jobId":"job-feedback-1","userId":"user-feedback-1","updatedAt":"2026-08-28T12:00:00.000Z",' +
-      '"snapshotSha256":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",' +
-      '"language":"en","clipKind":"insight","tier":"replay-ready","warnings":["evidence_missing"],' +
-      '"review":{"title":"Title feedback-1","startTime":1,"endTime":2,"score":0.8,' +
-      '"transcript":"Private transcript feedback-1","note":"Private note",' +
-      '"evidenceKey":"evidence/feedback-1"}}\n'
+        '"targetSet":"eval","feedbackId":"feedback-1","clipId":"clip-feedback-1",' +
+        '"jobId":"job-feedback-1","userId":"user-feedback-1","updatedAt":"2026-08-28T12:00:00.000Z",' +
+        '"snapshotSha256":"sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",' +
+        '"language":"en","clipKind":"insight","tier":"replay-ready","warnings":["evidence_missing"],' +
+        '"review":{"title":"Title feedback-1","startTime":1,"endTime":2,"score":0.8,' +
+        '"transcript":"Private transcript feedback-1","note":"Private note",' +
+        '"evidenceKey":"evidence/feedback-1"}}\n',
     );
 
     const parsed = manifest();
     expect(parsed.counts.queried).toBe(parsed.counts.selected + parsed.counts.excluded);
     expect(parsed.counts.selected).toBe(
-      parsed.counts.selectedReplayReady + parsed.counts.selectedReferenceOnly
+      parsed.counts.selectedReplayReady + parsed.counts.selectedReferenceOnly,
     );
   });
 
@@ -154,29 +159,32 @@ describe("buildRunArtifacts", () => {
         updatedFrom: input.updatedFrom,
         updatedTo: input.updatedTo,
         limit: input.limit,
-      })
+      }),
     );
     const expectedInput = sha256(
       canonicalJson([
         {
           status: "valid",
-          candidateVersion: (input.results[0] as Extract<NormalizedFeedbackResult, { status: "valid" }>).candidateVersion,
-          record: (input.results[0] as Extract<NormalizedFeedbackResult, { status: "valid" }>).record,
+          candidateVersion: (
+            input.results[0] as Extract<NormalizedFeedbackResult, { status: "valid" }>
+          ).candidateVersion,
+          record: (input.results[0] as Extract<NormalizedFeedbackResult, { status: "valid" }>)
+            .record,
         },
-      ])
+      ]),
     );
     const expectedLedger = sha256(
       canonicalJson({
         effectiveLedger: JSON.parse(canonicalLedgerState(input.ledger)),
         approvalFreshness: [],
-      })
+      }),
     );
     const expectedDigest = sha256(
       canonicalJson({
         optionsSha256: expectedOptions,
         inputSha256: expectedInput,
         ledgerSha256: expectedLedger,
-      })
+      }),
     );
 
     expect(run).toMatchObject({
@@ -196,24 +204,24 @@ describe("buildRunArtifacts", () => {
     expect(artifacts.files["exclusions.jsonl"]).toEqual(Buffer.alloc(0));
     expect(markdown).toBe(
       "# AS_IS learning corpus - eval-3f1112e05a86e9fa\n\n" +
-      "## Summary\n\n" +
-      "- Queried: 0\n" +
-      "- Selected: 0\n" +
-      "- Excluded: 0\n" +
-      "- Selected replay-ready: 0\n" +
-      "- Selected reference-only: 0\n" +
-      "- Fresh approvals: 0\n" +
-      "- Stale reservations: 0\n" +
-      "- Exclusion invalid_row: 0\n" +
-      "- Exclusion stale_review_requires_retirement: 0\n" +
-      "- Exclusion already_approved: 0\n" +
-      "- Exclusion already_rejected: 0\n" +
-      "- Exclusion job_cap: 0\n" +
-      "- Exclusion user_cap: 0\n" +
-      "- Exclusion limit_reached: 0\n\n" +
-      "## Stale assignments (0)\n\n" +
-      "## Candidates (0)\n\n" +
-      "## Exclusions (0)\n"
+        "## Summary\n\n" +
+        "- Queried: 0\n" +
+        "- Selected: 0\n" +
+        "- Excluded: 0\n" +
+        "- Selected replay-ready: 0\n" +
+        "- Selected reference-only: 0\n" +
+        "- Fresh approvals: 0\n" +
+        "- Stale reservations: 0\n" +
+        "- Exclusion invalid_row: 0\n" +
+        "- Exclusion stale_review_requires_retirement: 0\n" +
+        "- Exclusion already_approved: 0\n" +
+        "- Exclusion already_rejected: 0\n" +
+        "- Exclusion job_cap: 0\n" +
+        "- Exclusion user_cap: 0\n" +
+        "- Exclusion limit_reached: 0\n\n" +
+        "## Stale assignments (0)\n\n" +
+        "## Candidates (0)\n\n" +
+        "## Exclusions (0)\n",
     );
   });
 
@@ -228,10 +236,14 @@ describe("buildRunArtifacts", () => {
       },
     };
     const ordered = buildRunArtifacts(
-      renderInput({ results: [invalid, normalized("feedback-a"), normalized("feedback-b")] })
+      renderInput({
+        results: [invalid, normalized("feedback-a"), normalized("feedback-b")],
+      }),
     );
     const reversed = buildRunArtifacts(
-      renderInput({ results: [normalized("feedback-b"), invalid, normalized("feedback-a")] })
+      renderInput({
+        results: [normalized("feedback-b"), invalid, normalized("feedback-a")],
+      }),
     );
     const changedInvalid = buildRunArtifacts(
       renderInput({
@@ -243,14 +255,12 @@ describe("buildRunArtifacts", () => {
           normalized("feedback-a"),
           normalized("feedback-b"),
         ],
-      })
+      }),
     );
 
     expect(reversed.files).toEqual(ordered.files);
     expect(changedInvalid.files["run.json"]).not.toEqual(ordered.files["run.json"]);
-    expect(changedInvalid.files["exclusions.jsonl"]).not.toEqual(
-      ordered.files["exclusions.jsonl"]
-    );
+    expect(changedInvalid.files["exclusions.jsonl"]).not.toEqual(ordered.files["exclusions.jsonl"]);
   });
 
   it("sorts stale assignments by UTF-8 feedback ID and reports requested-set capacity only", () => {
@@ -277,7 +287,13 @@ describe("buildRunArtifacts", () => {
       jobId: "job-astral",
       userId: "user-astral",
     };
-    const holdout = { ...bmp, eventId: "approve-holdout", feedbackId: "holdout", set: "holdout" as const, candidateVersion: sha256(`holdout\n${UPDATED_AT}\n${SNAPSHOT_HASH}`) };
+    const holdout = {
+      ...bmp,
+      eventId: "approve-holdout",
+      feedbackId: "holdout",
+      set: "holdout" as const,
+      candidateVersion: sha256(`holdout\n${UPDATED_AT}\n${SNAPSHOT_HASH}`),
+    };
     const ledger: EffectiveLedger = {
       activeDecisions: [astral, bmp, holdout],
       retiredTargetIds: [],
@@ -293,8 +309,14 @@ describe("buildRunArtifacts", () => {
     ];
     const capacity: CapacityState = {
       eval: {
-        jobCounts: new Map([[astral.jobId, 1], [bmp.jobId, 1]]),
-        userCounts: new Map([[astral.userId, 1], [bmp.userId, 1]]),
+        jobCounts: new Map([
+          [astral.jobId, 1],
+          [bmp.jobId, 1],
+        ]),
+        userCounts: new Map([
+          [astral.userId, 1],
+          [bmp.userId, 1],
+        ]),
         freshApprovals: [],
         staleReservations: evalStale,
       },
@@ -314,7 +336,7 @@ describe("buildRunArtifacts", () => {
       snapshotSha256: null,
       staleReason: "missing",
     }));
-    const currentSnapshotCanonical = "{\"changed\":true}";
+    const currentSnapshotCanonical = '{"changed":true}';
     approvalFreshness[1] = {
       ...approvalFreshness[1],
       present: true,
@@ -327,10 +349,23 @@ describe("buildRunArtifacts", () => {
 
     const run = manifest(renderInput({ results: [], ledger, capacity, approvalFreshness }));
 
-    expect(run.counts).toMatchObject({ freshApprovals: 0, staleReservations: 2 });
+    expect(run.counts).toMatchObject({
+      freshApprovals: 0,
+      staleReservations: 2,
+    });
     expect(run.staleAssignments).toEqual([
-      { feedbackId: bmp.feedbackId, candidateVersion: bmp.candidateVersion, set: "eval", reason: "snapshot_changed" },
-      { feedbackId: astral.feedbackId, candidateVersion: astral.candidateVersion, set: "eval", reason: "missing" },
+      {
+        feedbackId: bmp.feedbackId,
+        candidateVersion: bmp.candidateVersion,
+        set: "eval",
+        reason: "snapshot_changed",
+      },
+      {
+        feedbackId: astral.feedbackId,
+        candidateVersion: astral.candidateVersion,
+        set: "eval",
+        reason: "missing",
+      },
     ]);
   });
 
@@ -355,7 +390,7 @@ describe("buildRunArtifacts", () => {
       destinationLocks: [{ feedbackId: approved.feedbackId, set: "eval" }],
     };
     const projection = (
-      overrides: Partial<ApprovalFreshnessProjection> = {}
+      overrides: Partial<ApprovalFreshnessProjection> = {},
     ): ApprovalFreshnessProjection => ({
       feedbackId: approved.feedbackId,
       present: true,
@@ -368,7 +403,7 @@ describe("buildRunArtifacts", () => {
     });
     const state = (
       freshness: ApprovalFreshnessProjection,
-      reason: null | "missing" | "verdict_changed" | "updated_at_changed" | "snapshot_changed"
+      reason: null | "missing" | "verdict_changed" | "updated_at_changed" | "snapshot_changed",
     ): RenderInput => ({
       ...renderInput({ results: [] }),
       ledger,
@@ -384,7 +419,7 @@ describe("buildRunArtifacts", () => {
       approvalFreshness: [freshness],
     });
     const fresh = manifest(state(projection(), null));
-    const changedSnapshotCanonical = "{\"changed\":true}";
+    const changedSnapshotCanonical = '{"changed":true}';
     const variants = [
       state(
         projection({
@@ -395,18 +430,15 @@ describe("buildRunArtifacts", () => {
           snapshotSha256: null,
           staleReason: "missing",
         }),
-        "missing"
+        "missing",
       ),
-      state(
-        projection({ verdict: "EDIT", staleReason: "verdict_changed" }),
-        "verdict_changed"
-      ),
+      state(projection({ verdict: "EDIT", staleReason: "verdict_changed" }), "verdict_changed"),
       state(
         projection({
           updatedAt: "2026-08-28T13:00:00.000Z",
           staleReason: "updated_at_changed",
         }),
-        "updated_at_changed"
+        "updated_at_changed",
       ),
       state(
         projection({
@@ -414,15 +446,23 @@ describe("buildRunArtifacts", () => {
           snapshotSha256: sha256(changedSnapshotCanonical),
           staleReason: "snapshot_changed",
         }),
-        "snapshot_changed"
+        "snapshot_changed",
       ),
     ];
 
-    expect(fresh.counts).toMatchObject({ queried: 0, freshApprovals: 1, staleReservations: 0 });
+    expect(fresh.counts).toMatchObject({
+      queried: 0,
+      freshApprovals: 1,
+      staleReservations: 0,
+    });
     for (const variant of variants) {
       const changed = manifest(variant);
       expect(changed.ledgerSha256).not.toBe(fresh.ledgerSha256);
-      expect(changed.counts).toMatchObject({ queried: 0, freshApprovals: 0, staleReservations: 1 });
+      expect(changed.counts).toMatchObject({
+        queried: 0,
+        freshApprovals: 0,
+        staleReservations: 1,
+      });
     }
   });
 
@@ -431,7 +471,7 @@ describe("buildRunArtifacts", () => {
     if (base.status !== "valid") throw new Error("expected valid");
     const baseHash = manifest(renderInput({ results: [base] })).inputSha256;
     const changedUpdatedAt = "2026-08-28T13:00:00.000Z";
-    const changedSnapshotCanonical = "{\"x\":1}";
+    const changedSnapshotCanonical = '{"x":1}';
     const changedSnapshotSha256 = sha256(changedSnapshotCanonical);
     const mutations: NormalizedFeedbackResult[] = [
       {
@@ -467,13 +507,55 @@ describe("buildRunArtifacts", () => {
       { ...base, record: { ...base.record, clipKind: "story" } },
       { ...base, record: { ...base.record, tier: "reference-only" } },
       { ...base, record: { ...base.record, warnings: ["job_missing"] } },
-      { ...base, record: { ...base.record, review: { ...base.record.review, title: "changed" } } },
-      { ...base, record: { ...base.record, review: { ...base.record.review, startTime: 3 } } },
-      { ...base, record: { ...base.record, review: { ...base.record.review, endTime: 4 } } },
-      { ...base, record: { ...base.record, review: { ...base.record.review, score: 0.7 } } },
-      { ...base, record: { ...base.record, review: { ...base.record.review, transcript: "changed" } } },
-      { ...base, record: { ...base.record, review: { ...base.record.review, note: "changed" } } },
-      { ...base, record: { ...base.record, review: { ...base.record.review, evidenceKey: "changed" } } },
+      {
+        ...base,
+        record: {
+          ...base.record,
+          review: { ...base.record.review, title: "changed" },
+        },
+      },
+      {
+        ...base,
+        record: {
+          ...base.record,
+          review: { ...base.record.review, startTime: 3 },
+        },
+      },
+      {
+        ...base,
+        record: {
+          ...base.record,
+          review: { ...base.record.review, endTime: 4 },
+        },
+      },
+      {
+        ...base,
+        record: {
+          ...base.record,
+          review: { ...base.record.review, score: 0.7 },
+        },
+      },
+      {
+        ...base,
+        record: {
+          ...base.record,
+          review: { ...base.record.review, transcript: "changed" },
+        },
+      },
+      {
+        ...base,
+        record: {
+          ...base.record,
+          review: { ...base.record.review, note: "changed" },
+        },
+      },
+      {
+        ...base,
+        record: {
+          ...base.record,
+          review: { ...base.record.review, evidenceKey: "changed" },
+        },
+      },
     ];
 
     for (const changed of mutations) {
@@ -489,5 +571,266 @@ describe("buildRunArtifacts", () => {
     expect(status).not.toContain("feedback-1");
     expect(status).not.toContain("Private");
     expect(status).not.toContain("user-");
+  });
+
+  it("rejects cloned capacity approvals with changed frozen identifiers", () => {
+    const approved = {
+      schemaVersion: 1 as const,
+      eventId: "approve-frozen",
+      action: "approve" as const,
+      occurredAt: "2026-08-29T10:00:00.000Z",
+      candidateVersion: sha256(`approved-frozen\n${UPDATED_AT}\n${SNAPSHOT_HASH}`),
+      feedbackId: "approved-frozen",
+      feedbackUpdatedAt: UPDATED_AT,
+      snapshotSha256: SNAPSHOT_HASH,
+      clipId: "clip-approved-frozen",
+      jobId: "job-private-original",
+      userId: "user-private-original",
+      set: "eval" as const,
+    };
+    const cloned = {
+      ...approved,
+      jobId: "job-private-changed",
+      userId: "user-private-changed",
+    };
+    const ledger: EffectiveLedger = {
+      activeDecisions: [approved],
+      retiredTargetIds: [],
+      destinationLocks: [{ feedbackId: approved.feedbackId, set: "eval" }],
+    };
+    const capacity: CapacityState = {
+      eval: {
+        jobCounts: new Map([[cloned.jobId, 1]]),
+        userCounts: new Map([[cloned.userId, 1]]),
+        freshApprovals: [cloned],
+        staleReservations: [],
+      },
+      holdout: emptyCapacity().holdout,
+    };
+    const approvalFreshness: ApprovalFreshnessProjection[] = [
+      {
+        feedbackId: approved.feedbackId,
+        present: true,
+        verdict: "AS_IS",
+        updatedAt: UPDATED_AT,
+        snapshotCanonical: "{}",
+        snapshotSha256: SNAPSHOT_HASH,
+        staleReason: null,
+      },
+    ];
+    const withOriginalJob = (feedbackId: string): NormalizedFeedbackResult => {
+      const item = normalized(feedbackId);
+      if (item.status !== "valid") throw new Error("expected valid");
+      return { ...item, record: { ...item.record, jobId: approved.jobId } };
+    };
+
+    expect(() =>
+      buildRunArtifacts(
+        renderInput({
+          results: [
+            withOriginalJob("job-candidate-1"),
+            withOriginalJob("job-candidate-2"),
+            withOriginalJob("job-candidate-3"),
+          ],
+          ledger,
+          capacity,
+          approvalFreshness,
+        }),
+      ),
+    ).toThrowError("render_input_invalid");
+  });
+
+  it("captures the render root once without invoking accessors or proxy traps", () => {
+    const changingInput = renderInput();
+    let changingInvoked = 0;
+    Object.defineProperty(changingInput, "updatedFrom", {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        changingInvoked += 1;
+        return changingInvoked === 1
+          ? "2026-08-22T00:00:00.000Z"
+          : "private changing getter sentinel";
+      },
+    });
+    expect(() => buildRunArtifacts(changingInput)).toThrowError("render_input_invalid");
+    expect(changingInvoked).toBe(0);
+
+    const getterInput = renderInput();
+    let invoked = 0;
+    Object.defineProperty(getterInput, "updatedTo", {
+      configurable: true,
+      enumerable: true,
+      get: () => {
+        invoked += 1;
+        throw new Error("private render getter sentinel");
+      },
+    });
+    let getterError: unknown;
+    try {
+      buildRunArtifacts(getterInput);
+    } catch (error) {
+      getterError = error;
+    }
+    expect(invoked).toBe(0);
+    expect(getterError).toMatchObject({ message: "render_input_invalid" });
+    expect(String(getterError)).not.toContain("private render getter sentinel");
+
+    const proxy = new Proxy(renderInput(), {
+      get: () => {
+        invoked += 1;
+        throw new Error("private render proxy sentinel");
+      },
+      ownKeys: () => {
+        invoked += 1;
+        throw new Error("private render proxy sentinel");
+      },
+    });
+    let proxyError: unknown;
+    try {
+      buildRunArtifacts(proxy);
+    } catch (error) {
+      proxyError = error;
+    }
+    expect(invoked).toBe(0);
+    expect(proxyError).toMatchObject({ message: "render_input_invalid" });
+    expect(String(proxyError)).not.toContain("private render proxy sentinel");
+  });
+
+  it("does not invoke inherited Array methods while rendering", () => {
+    const names = ["map", "indexOf", "0"] as const;
+    const originals = new Map<PropertyKey, PropertyDescriptor | undefined>();
+    for (const name of names)
+      originals.set(name, Object.getOwnPropertyDescriptor(Array.prototype, name));
+    let invoked = 0;
+    let artifacts: ReturnType<typeof buildRunArtifacts> | undefined;
+    let caught: unknown;
+    try {
+      for (const name of names.slice(0, -1)) {
+        Object.defineProperty(Array.prototype, name, {
+          configurable: true,
+          value: () => {
+            invoked += 1;
+            throw new Error("private render array method sentinel");
+          },
+          writable: true,
+        });
+      }
+      Object.defineProperty(Array.prototype, "0", {
+        configurable: true,
+        set: () => {
+          invoked += 1;
+          throw new Error("private render array setter sentinel");
+        },
+      });
+      artifacts = buildRunArtifacts(renderInput());
+    } catch (error) {
+      caught = error;
+    } finally {
+      for (const [name, descriptor] of originals) {
+        if (descriptor === undefined) Reflect.deleteProperty(Array.prototype, name);
+        else Object.defineProperty(Array.prototype, name, descriptor);
+      }
+    }
+    expect(caught).toBeUndefined();
+    expect(invoked).toBe(0);
+    expect(artifacts?.status.counts.selected).toBe(1);
+  });
+
+  it("separates nonempty stale assignments and candidates with a blank line", () => {
+    const approved = {
+      schemaVersion: 1 as const,
+      eventId: "approve-stale-spacing",
+      action: "approve" as const,
+      occurredAt: "2026-08-29T10:00:00.000Z",
+      candidateVersion: sha256(`stale-spacing\n${UPDATED_AT}\n${SNAPSHOT_HASH}`),
+      feedbackId: "stale-spacing",
+      feedbackUpdatedAt: UPDATED_AT,
+      snapshotSha256: SNAPSHOT_HASH,
+      clipId: "clip-stale-spacing",
+      jobId: "job-stale-spacing",
+      userId: "user-stale-spacing",
+      set: "eval" as const,
+    };
+    const capacity: CapacityState = {
+      eval: {
+        jobCounts: new Map([[approved.jobId, 1]]),
+        userCounts: new Map([[approved.userId, 1]]),
+        freshApprovals: [],
+        staleReservations: [{ approval: approved, reason: "missing" }],
+      },
+      holdout: emptyCapacity().holdout,
+    };
+    const artifacts = buildRunArtifacts(
+      renderInput({
+        results: [
+          normalized("feedback-1"),
+          {
+            status: "invalid",
+            invalid: {
+              feedbackId: "invalid-row",
+              candidateVersion: null,
+              reason: "invalid_row",
+              detailCode: "projection_invalid",
+            },
+          },
+        ],
+        ledger: {
+          activeDecisions: [approved],
+          retiredTargetIds: [],
+          destinationLocks: [{ feedbackId: approved.feedbackId, set: "eval" }],
+        },
+        capacity,
+        approvalFreshness: [
+          {
+            feedbackId: approved.feedbackId,
+            present: false,
+            verdict: null,
+            updatedAt: null,
+            snapshotCanonical: null,
+            snapshotSha256: null,
+            staleReason: "missing",
+          },
+        ],
+      }),
+    );
+    const markdown = artifacts.files["candidates.md"].toString("utf8");
+    expect(artifacts.files["exclusions.jsonl"].toString("utf8")).toBe(
+      '{"schemaVersion":1,"feedbackId":"invalid-row","candidateVersion":null,' +
+        '"reason":"invalid_row","detailCode":"projection_invalid"}\n',
+    );
+    expect(markdown).toBe(
+      "# AS_IS learning corpus - eval-04a2fe77bb8cc300\n\n" +
+        "## Summary\n\n" +
+        "- Queried: 2\n" +
+        "- Selected: 1\n" +
+        "- Excluded: 1\n" +
+        "- Selected replay-ready: 1\n" +
+        "- Selected reference-only: 0\n" +
+        "- Fresh approvals: 0\n" +
+        "- Stale reservations: 1\n" +
+        "- Exclusion invalid_row: 1\n" +
+        "- Exclusion stale_review_requires_retirement: 0\n" +
+        "- Exclusion already_approved: 0\n" +
+        "- Exclusion already_rejected: 0\n" +
+        "- Exclusion job_cap: 0\n" +
+        "- Exclusion user_cap: 0\n" +
+        "- Exclusion limit_reached: 0\n\n" +
+        "## Stale assignments (1)\n\n" +
+        `- "stale-spacing" - eval - missing - ${approved.candidateVersion}\n\n` +
+        "## Candidates (1)\n\n" +
+        "### Candidate 1\n\n" +
+        '- Feedback ID: "feedback-1"\n' +
+        "- Candidate version: sha256:203fd43d54f777bae4ada3c4a13d79ab041320549a5c2cddbda422b735824f92\n" +
+        "- Tier: replay-ready\n" +
+        "- Warnings: evidence_missing\n" +
+        '- Language: "en"\n' +
+        '- Clip kind: "insight"\n' +
+        '- Review: {"endTime":2,"evidenceKey":"evidence/feedback-1","note":"Private note",' +
+        '"score":0.8,"startTime":1,"title":"Title feedback-1",' +
+        '"transcript":"Private transcript feedback-1"}\n\n' +
+        "## Exclusions (1)\n\n" +
+        '- "invalid-row" - null - invalid_row - projection_invalid\n',
+    );
   });
 });
