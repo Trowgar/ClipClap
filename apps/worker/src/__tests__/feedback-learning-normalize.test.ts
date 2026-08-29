@@ -162,6 +162,63 @@ describe("normalizeFeedback", () => {
     expect(result.record.clipKind).toBe("unknown");
   });
 
+  it("ignores inherited snapshot fields when Object.prototype is polluted", () => {
+    const poison = {
+      title: "Inherited title",
+      language: "XX",
+      clipKind: "BadKind",
+      transcript: "Inherited transcript",
+      startTime: 1,
+      endTime: 2,
+      score: 0.99,
+    };
+    const originals = new Map<PropertyKey, PropertyDescriptor | undefined>();
+    for (const key of Object.keys(poison)) {
+      originals.set(key, Object.getOwnPropertyDescriptor(Object.prototype, key));
+    }
+
+    try {
+      for (const [key, value] of Object.entries(poison)) {
+        Object.defineProperty(Object.prototype, key, {
+          configurable: true,
+          enumerable: true,
+          value,
+          writable: true,
+        });
+      }
+
+      const snapshot = { own: "safe" };
+      const result = valid(normalizeFeedback(feedback({ snapshot }), job()));
+      const snapshotCanonical = '{"own":"safe"}';
+      const snapshotSha256 = sha256(snapshotCanonical);
+
+      expect(result.candidateVersion).toBe(
+        sha256(`feedback-1\n${updatedAt.toISOString()}\n${snapshotSha256}`)
+      );
+      expect(result.record).toMatchObject({
+        snapshotCanonical,
+        snapshotSha256,
+        language: "unknown",
+        clipKind: "unknown",
+        warnings: ["snapshot_sparse", "transcript_slice_missing"],
+        review: {
+          title: null,
+          startTime: null,
+          endTime: null,
+          score: null,
+          transcript: null,
+          note: null,
+          evidenceKey: "feedback/clip-1.mp4",
+        },
+      });
+    } finally {
+      for (const [key, descriptor] of originals) {
+        if (descriptor === undefined) Reflect.deleteProperty(Object.prototype, key);
+        else Object.defineProperty(Object.prototype, key, descriptor);
+      }
+    }
+  });
+
   it("emits each warning once in exact order and keeps a readable sparse row", () => {
     const result = valid(
       normalizeFeedback(

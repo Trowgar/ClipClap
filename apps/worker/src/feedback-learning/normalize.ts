@@ -80,6 +80,11 @@ function snapshotRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function optionalOwnData(value: unknown, key: string): unknown {
+  const field = ownData(value, key);
+  return field.status === "data" ? field.value : undefined;
+}
+
 function normalizedLabel(value: unknown): string {
   return isNonEmpty(value) ? value.trim().toLowerCase() : "unknown";
 }
@@ -214,16 +219,23 @@ export function normalizeFeedback(
   const snapshotSha256 = sha256(snapshotCanonical);
   const candidateVersion = sha256(`${feedbackId}\n${date.iso}\n${snapshotSha256}`);
   const snapshot = snapshotRecord(capturedSnapshot);
+  const snapshotTitle = optionalOwnData(snapshot, "title");
+  const snapshotStartTime = optionalOwnData(snapshot, "startTime");
+  const snapshotEndTime = optionalOwnData(snapshot, "endTime");
+  const snapshotScore = optionalOwnData(snapshot, "score");
+  const snapshotTranscript = optionalOwnData(snapshot, "transcript");
+  const snapshotLanguage = optionalOwnData(snapshot, "language");
+  const snapshotClipKind = optionalOwnData(snapshot, "clipKind");
   const snapshotMissing = capturedSnapshot === null;
   const snapshotSparse =
     !snapshotMissing &&
     (snapshot === null ||
-      !isNonEmpty(snapshot.title) ||
-      !finiteNumber(snapshot.startTime) ||
-      !finiteNumber(snapshot.endTime) ||
-      !finiteNumber(snapshot.score));
+      !isNonEmpty(snapshotTitle) ||
+      !finiteNumber(snapshotStartTime) ||
+      !finiteNumber(snapshotEndTime) ||
+      !finiteNumber(snapshotScore));
   const transcriptSliceMissing =
-    !snapshotMissing && (snapshot === null || !isNonEmpty(snapshot.transcript));
+    !snapshotMissing && (snapshot === null || !isNonEmpty(snapshotTranscript));
   const jobPresent = job !== null;
   const warnings: Warning[] = [];
 
@@ -240,12 +252,11 @@ export function normalizeFeedback(
   if (!isNonEmpty(evidenceKey)) warnings.push("evidence_missing");
 
   const review: ReviewRecord = {
-    title: snapshot !== null && isNonEmpty(snapshot.title) ? snapshot.title : null,
-    startTime: snapshot !== null && finiteNumber(snapshot.startTime) ? snapshot.startTime : null,
-    endTime: snapshot !== null && finiteNumber(snapshot.endTime) ? snapshot.endTime : null,
-    score: snapshot !== null && finiteNumber(snapshot.score) ? snapshot.score : null,
-    transcript:
-      snapshot !== null && isNonEmpty(snapshot.transcript) ? snapshot.transcript : null,
+    title: isNonEmpty(snapshotTitle) ? snapshotTitle : null,
+    startTime: finiteNumber(snapshotStartTime) ? snapshotStartTime : null,
+    endTime: finiteNumber(snapshotEndTime) ? snapshotEndTime : null,
+    score: finiteNumber(snapshotScore) ? snapshotScore : null,
+    transcript: isNonEmpty(snapshotTranscript) ? snapshotTranscript : null,
     note,
     evidenceKey,
   };
@@ -269,8 +280,8 @@ export function normalizeFeedback(
       transcriptPresent,
       segmentsIsArray,
       transcriptPartial,
-      language: normalizedLabel(snapshot?.language),
-      clipKind: normalizedLabel(snapshot?.clipKind),
+      language: normalizedLabel(snapshotLanguage),
+      clipKind: normalizedLabel(snapshotClipKind),
       tier: jobPresent && segmentsIsArray === true && transcriptPartial === false
         ? "replay-ready"
         : "reference-only",
