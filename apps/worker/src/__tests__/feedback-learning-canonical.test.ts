@@ -78,6 +78,71 @@ describe("canonicalJson", () => {
   ])("rejects a %s with a non-plain prototype", (_kind, value) => {
     expect(() => canonicalJson(value)).toThrowError("canonical_json_invalid_value");
   });
+
+  it("ignores an inherited numeric Array accessor without invoking it", () => {
+    const input = [1];
+    const prior = Object.getOwnPropertyDescriptor(Array.prototype, "0");
+    let reads = 0;
+    let canonical: string | undefined;
+    let line: Buffer | undefined;
+    let canonicalError: unknown;
+    let lineError: unknown;
+    try {
+      Object.defineProperty(Array.prototype, "0", {
+        configurable: true,
+        get: () => {
+          reads += 1;
+          return "poison";
+        },
+      });
+      try {
+        canonical = canonicalJson(input);
+      } catch (error) {
+        canonicalError = error;
+      }
+      try {
+        line = jsonLine(input);
+      } catch (error) {
+        lineError = error;
+      }
+    } finally {
+      if (prior === undefined) Reflect.deleteProperty(Array.prototype, "0");
+      else Object.defineProperty(Array.prototype, "0", prior);
+    }
+
+    expect(canonicalError).toBeUndefined();
+    expect(lineError).toBeUndefined();
+    expect(canonical).toBe("[1]");
+    expect(line).toEqual(Buffer.from("[1]\n", "utf8"));
+    expect(reads).toBe(0);
+  });
+
+  it("isolates captured arrays from an inherited toJSON hook", () => {
+    const input = [1];
+    const prior = Object.getOwnPropertyDescriptor(Array.prototype, "toJSON");
+    let calls = 0;
+    let canonical: string | undefined;
+    let line: Buffer | undefined;
+    try {
+      Object.defineProperty(Array.prototype, "toJSON", {
+        configurable: true,
+        value: () => {
+          calls += 1;
+          return "poison";
+        },
+        writable: true,
+      });
+      canonical = canonicalJson(input);
+      line = jsonLine(input);
+    } finally {
+      if (prior === undefined) Reflect.deleteProperty(Array.prototype, "toJSON");
+      else Object.defineProperty(Array.prototype, "toJSON", prior);
+    }
+
+    expect(canonical).toBe("[1]");
+    expect(line).toEqual(Buffer.from("[1]\n", "utf8"));
+    expect(calls).toBe(0);
+  });
 });
 
 describe("sha256", () => {

@@ -38,6 +38,7 @@ function captureArray(value: unknown[], ancestors: Set<object>): CapturedJson[] 
   const length = lengthDescriptor.value as number;
   const keys = Reflect.ownKeys(value);
   const captured = new Array<CapturedJson>(length);
+  Object.setPrototypeOf(captured, null);
   const seenIndexes = new Set<number>();
   for (const key of keys) {
     if (typeof key === "symbol") return invalidValue();
@@ -50,7 +51,12 @@ function captureArray(value: unknown[], ancestors: Set<object>): CapturedJson[] 
     if (!Number.isSafeInteger(index) || index >= length || !isDataDescriptor(descriptor)) {
       return invalidValue();
     }
-    captured[index] = captureJsonValueInternal(descriptor.value, ancestors);
+    Object.defineProperty(captured, key, {
+      configurable: true,
+      enumerable: true,
+      value: captureJsonValueInternal(descriptor.value, ancestors),
+      writable: true,
+    });
     seenIndexes.add(index);
   }
   if (seenIndexes.size !== length) return invalidValue();
@@ -130,7 +136,12 @@ function captureJsonValue(value: unknown): CapturedJson {
 function canonicalCaptured(value: CapturedJson): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) {
-    return `[${value.map(canonicalCaptured).join(",")}]`;
+    let serialized = "[";
+    for (let index = 0; index < value.length; index += 1) {
+      if (index > 0) serialized += ",";
+      serialized += canonicalCaptured(value[index]);
+    }
+    return `${serialized}]`;
   }
 
   const keys = Object.keys(value).sort((left, right) =>
