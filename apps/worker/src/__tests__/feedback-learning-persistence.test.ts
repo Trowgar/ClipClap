@@ -1,0 +1,475 @@
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+
+import {
+  PersistenceIntegrityError,
+  ensurePrivateTree,
+  publishRunAtomically,
+  replaceLedgerAtomically,
+  type PersistenceFault,
+  type PrivatePaths,
+  type RunFiles,
+} from "../feedback-learning/persistence";
+
+const temporaryDirectories: string[] = [];
+const encoder = new TextEncoder();
+
+async function temporaryRoot(): Promise<{ parent: string; root: string }> {
+  const parent = await mkdtemp(join(tmpdir(), "clipclap-corpus-persistence-"));
+  temporaryDirectories.push(parent);
+  return { parent, root: join(parent, "feedback-learning") };
+}
+
+async function privatePaths(): Promise<PrivatePaths> {
+  const { root } = await temporaryRoot();
+  return ensurePrivateTree(root);
+}
+
+function mode(stat: { mode: number }): number {
+  return stat.mode & 0o777;
+}
+
+function ledgerBytes(eventId: string): Uint8Array {
+  return encoder.encode(`${JSON.stringify({ schemaVersion: 1, eventId })}\n`);
+}
+
+function runFiles(runId: string, runDigest: string): RunFiles {
+  return {
+    "run.json": encoder.encode(`${JSON.stringify({ schemaVersion: 1, runId, runDigest })}\n`),
+    "candidates.jsonl": encoder.encode('{"candidate":1}\n'),
+    "candidates.md": encoder.encode("# candidates\n"),
+    "exclusions.jsonl": new Uint8Array(),
+  };
+}
+
+function sameFault(actual: PersistenceFault, expected: PersistenceFault): boolean {
+  return JSON.stringify(actual) === JSON.stringify(expected);
+}
+
+function failAt(expected: PersistenceFault): (actual: PersistenceFault) => void {
+  return (actual) => {
+    if (sameFault(actual, expected)) throw new Error(`injected:${JSON.stringify(expected)}`);
+  };
+}
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))
+  );
+});
+
+describe("ensurePrivateTree", () => {
+  it("creates only the V1-owned tree as exact 0700 under a permissive umask", async () => {
+    const { parent, root } = await temporaryRoot();
+    await chmod(parent, 0o755);
+    const previousUmask = process.umask(0);
+    let paths: PrivatePaths;
+    try {
+      paths = await ensurePrivateTree(root);
+    } finally {
+      process.umask(previousUmask);
+    }
+
+    expect(paths).toEqual({
+      root,
+      exportsDir: join(root, "exports"),
+      ledgerDir: join(root, "ledger"),
+      reviewsFile: join(root, "ledger", "reviews.jsonl"),
+      lockFile: join(root, "ledger", "reviews.lock"),
+    });
+    expect(mode(await lstat(parent))).toBe(0o755);
+    for (const directory of [paths.root, paths.exportsDir, paths.ledgerDir]) {
+      const stat = await lstat(directory);
+      expect(stat.isDirectory()).toBe(true);
+      expect(mode(stat)).toBe(0o700);
+    }
+  });
+
+  it("repairs modes only on existing V1-owned directories", async () => {
+    const { parent, root } = await temporaryRoot();
+    await chmod(parent, 0o751);
+    await mkdir(root, 0o755);
+    await mkdir(join(root, "exports"), 0o755);
+    await mkdir(join(root, "ledger"), 0o755);
+
+    const paths = await ensurePrivateTree(root);
+
+    expect(mode(await lstat(parent))).toBe(0o751);
+    expect(mode(await lstat(paths.root))).toBe(0o700);
+    expect(mode(await lstat(paths.exportsDir))).toBe(0o700);
+    expect(mode(await lstat(paths.ledgerDir))).toBe(0o700);
+  });
+
+  it.each(["root", "exports", "ledger"] as const)(
+    "rejects a symlink at the owned %s component without touching its external target",
+    async (component) => {
+      const { parent, root } = await temporaryRoot();
+      const external = join(parent, `external-${component}`);
+      await mkdir(external, 0o755);
+      await writeFile(join(external, "sentinel"), "outside");
+
+      if (component === "root") {
+        await symlink(external, root);
+      } else {
+        await mkdir(root, 0o700);
+        if (component === "ledger") await mkdir(join(root, "exports"), 0o700);
+        await symlink(external, join(root, component));
+      }
+
+      await expect(ensurePrivateTree(root)).rejects.toMatchObject({ code: "unsafe_path" });
+      expect(await readFile(join(external, "sentinel"), "utf8")).toBe("outside");
+      expect(mode(await lstat(external))).toBe(0o755);
+    }
+  );
+});
+
+describe("replaceLedgerAtomically", () => {
+  it("writes all bytes through the ordered durable protocol with exact 0600 modes", async () => {
+    const paths = await privatePaths();
+    const bytes = ledgerBytes("event-1");
+    const observed: PersistenceFault[] = [];
+    const previousUmask = process.umask(0);
+    try {
+      await expect(
+        replaceLedgerAtomically({
+          paths,
+          bytes,
+          expectedEventId: "event-1",
+          injectFault: (point) => {
+            observed.push(point);
+          },
+        })
+      ).resolves.toEqual({ status: "committed" });
+    } finally {
+      process.umask(previousUmask);
+    }
+
+    expect(await readFile(paths.reviewsFile)).toEqual(Buffer.from(bytes));
+    expect(mode(await lstat(paths.reviewsFile))).toBe(0o600);
+    expect(observed).toEqual([
+      { scope: "ledger", operation: "write", timing: "before" },
+      { scope: "ledger", operation: "write", timing: "after" },
+      { scope: "ledger", operation: "file_fsync", timing: "before" },
+      { scope: "ledger", operation: "file_fsync", timing: "after" },
+      { scope: "ledger", operation: "close", timing: "before" },
+      { scope: "ledger", operation: "close", timing: "after" },
+      { scope: "ledger", operation: "rename", timing: "before" },
+      { scope: "ledger", operation: "rename", timing: "after" },
+      { scope: "ledger", operation: "parent_fsync", timing: "before" },
+      { scope: "ledger", operation: "parent_fsync", timing: "after" },
+    ]);
+    expect((await readdir(paths.ledgerDir)).sort()).toEqual(["reviews.jsonl"]);
+  });
+
+  it.each([
+    { scope: "ledger", operation: "write", timing: "before" },
+    { scope: "ledger", operation: "write", timing: "after" },
+    { scope: "ledger", operation: "file_fsync", timing: "before" },
+    { scope: "ledger", operation: "file_fsync", timing: "after" },
+    { scope: "ledger", operation: "close", timing: "before" },
+    { scope: "ledger", operation: "close", timing: "after" },
+    { scope: "ledger", operation: "rename", timing: "before" },
+  ] satisfies PersistenceFault[])(
+    "leaves the prior ledger unchanged on a $timing $operation fault before commit",
+    async (fault) => {
+      const paths = await privatePaths();
+      const prior = ledgerBytes("event-old");
+      await writeFile(paths.reviewsFile, prior, { mode: 0o600 });
+
+      await expect(
+        replaceLedgerAtomically({
+          paths,
+          bytes: ledgerBytes("event-new"),
+          expectedEventId: "event-new",
+          injectFault: failAt(fault),
+        })
+      ).rejects.toThrow("injected:");
+
+      expect(await readFile(paths.reviewsFile)).toEqual(Buffer.from(prior));
+      expect((await readdir(paths.ledgerDir)).sort()).toEqual(["reviews.jsonl"]);
+    }
+  );
+
+  it.each([
+    { scope: "ledger", operation: "rename", timing: "after" },
+    { scope: "ledger", operation: "parent_fsync", timing: "before" },
+    { scope: "ledger", operation: "parent_fsync", timing: "after" },
+  ] satisfies PersistenceFault[])(
+    "rereads the committed event and reports uncertain durability on a $timing $operation fault",
+    async (fault) => {
+      const paths = await privatePaths();
+      const bytes = ledgerBytes("event-new");
+
+      await expect(
+        replaceLedgerAtomically({
+          paths,
+          bytes,
+          expectedEventId: "event-new",
+          injectFault: failAt(fault),
+        })
+      ).resolves.toEqual({ status: "committed_durability_uncertain" });
+      expect(await readFile(paths.reviewsFile)).toEqual(Buffer.from(bytes));
+    }
+  );
+
+  it("returns indeterminate rather than a false success when post-rename verification mismatches", async () => {
+    const paths = await privatePaths();
+
+    await expect(
+      replaceLedgerAtomically({
+        paths,
+        bytes: ledgerBytes("event-new"),
+        expectedEventId: "event-new",
+        injectFault: async (point) => {
+          if (sameFault(point, { scope: "ledger", operation: "rename", timing: "after" })) {
+            await writeFile(paths.reviewsFile, ledgerBytes("event-other"));
+            throw new Error("injected:post-rename-race");
+          }
+        },
+      })
+    ).resolves.toEqual({ status: "indeterminate" });
+  });
+
+  it("rejects a symlink ledger without modifying the target", async () => {
+    const paths = await privatePaths();
+    const target = join(paths.root, "external-ledger");
+    await writeFile(target, "outside", { mode: 0o640 });
+    await symlink(target, paths.reviewsFile);
+
+    await expect(
+      replaceLedgerAtomically({
+        paths,
+        bytes: ledgerBytes("event-new"),
+        expectedEventId: "event-new",
+      })
+    ).rejects.toMatchObject({ code: "unsafe_path" });
+    expect(await readFile(target, "utf8")).toBe("outside");
+    expect(mode(await lstat(target))).toBe(0o640);
+  });
+});
+
+describe("publishRunAtomically", () => {
+  it("publishes one sibling 0700 directory containing exactly four synced 0600 files", async () => {
+    const paths = await privatePaths();
+    const runId = "eval-0123456789abcdef";
+    const runDigest = `sha256:${"1".repeat(64)}`;
+    const files = runFiles(runId, runDigest);
+    const observed: PersistenceFault[] = [];
+    let inspectedTemp = false;
+    const previousUmask = process.umask(0);
+    try {
+      await expect(
+        publishRunAtomically({
+          paths,
+          runId,
+          runDigest,
+          files,
+          injectFault: async (point) => {
+            observed.push(point);
+            if (sameFault(point, { scope: "run", operation: "rename", timing: "before" })) {
+              const siblings = await readdir(paths.exportsDir);
+              const tempName = siblings.find((name) => name !== runId);
+              expect(tempName).toBeDefined();
+              const temp = join(paths.exportsDir, tempName!);
+              expect(mode(await lstat(temp))).toBe(0o700);
+              expect((await readdir(temp)).sort()).toEqual(Object.keys(files).sort());
+              for (const name of Object.keys(files)) {
+                expect(mode(await lstat(join(temp, name)))).toBe(0o600);
+              }
+              inspectedTemp = true;
+            }
+          },
+        })
+      ).resolves.toEqual({ status: "committed" });
+    } finally {
+      process.umask(previousUmask);
+    }
+
+    expect(inspectedTemp).toBe(true);
+    const runDir = join(paths.exportsDir, runId);
+    expect(mode(await lstat(runDir))).toBe(0o700);
+    expect((await readdir(runDir)).sort()).toEqual(Object.keys(files).sort());
+    for (const [name, bytes] of Object.entries(files)) {
+      expect(await readFile(join(runDir, name))).toEqual(Buffer.from(bytes));
+      expect(mode(await lstat(join(runDir, name)))).toBe(0o600);
+    }
+    expect(observed.at(-4)).toEqual({ scope: "run", operation: "rename", timing: "before" });
+    expect(observed.slice(-3)).toEqual([
+      { scope: "run", operation: "rename", timing: "after" },
+      { scope: "run", operation: "parent_fsync", timing: "before" },
+      { scope: "run", operation: "parent_fsync", timing: "after" },
+    ]);
+  });
+
+  it("returns noop for byte-identical existing output and repairs its owned modes", async () => {
+    const paths = await privatePaths();
+    const runId = "eval-0123456789abcdef";
+    const runDigest = `sha256:${"2".repeat(64)}`;
+    const files = runFiles(runId, runDigest);
+    const runDir = join(paths.exportsDir, runId);
+    await mkdir(runDir, 0o755);
+    for (const [name, bytes] of Object.entries(files)) {
+      await writeFile(join(runDir, name), bytes, { mode: 0o644 });
+    }
+
+    await expect(publishRunAtomically({ paths, runId, runDigest, files })).resolves.toEqual({
+      status: "noop",
+    });
+    expect(mode(await lstat(runDir))).toBe(0o700);
+    for (const name of Object.keys(files)) expect(mode(await lstat(join(runDir, name)))).toBe(0o600);
+    expect(await readdir(paths.exportsDir)).toEqual([runId]);
+  });
+
+  it("throws a typed integrity error and never overwrites differing bytes for the same runId", async () => {
+    const paths = await privatePaths();
+    const runId = "eval-0123456789abcdef";
+    const runDigest = `sha256:${"3".repeat(64)}`;
+    const files = runFiles(runId, runDigest);
+    const runDir = join(paths.exportsDir, runId);
+    await mkdir(runDir, 0o700);
+    for (const [name, bytes] of Object.entries(files)) {
+      await writeFile(join(runDir, name), bytes, { mode: 0o600 });
+    }
+    const changed = encoder.encode("different bytes\n");
+    await writeFile(join(runDir, "candidates.md"), changed, { mode: 0o600 });
+
+    const promise = publishRunAtomically({ paths, runId, runDigest, files });
+    await expect(promise).rejects.toBeInstanceOf(PersistenceIntegrityError);
+    await expect(promise).rejects.toMatchObject({ code: "run_integrity" });
+    expect(await readFile(join(runDir, "candidates.md"))).toEqual(Buffer.from(changed));
+    expect(await readdir(paths.exportsDir)).toEqual([runId]);
+  });
+
+  it.each([
+    ...(["run.json", "candidates.jsonl", "candidates.md", "exclusions.jsonl"] as const).flatMap(
+      (file) =>
+        (["write", "file_fsync", "close"] as const).flatMap((operation) =>
+          (["before", "after"] as const).map(
+            (timing): PersistenceFault => ({ scope: "run", operation, timing, file })
+          )
+        )
+    ),
+    { scope: "run", operation: "temp_dir_fsync", timing: "before" },
+    { scope: "run", operation: "temp_dir_fsync", timing: "after" },
+    { scope: "run", operation: "rename", timing: "before" },
+  ] satisfies PersistenceFault[])(
+    "never exposes a partial run on a $timing $operation fault before commit",
+    async (fault) => {
+      const paths = await privatePaths();
+      const runId = "eval-0123456789abcdef";
+      const runDigest = `sha256:${"4".repeat(64)}`;
+
+      await expect(
+        publishRunAtomically({
+          paths,
+          runId,
+          runDigest,
+          files: runFiles(runId, runDigest),
+          injectFault: failAt(fault),
+        })
+      ).rejects.toThrow("injected:");
+
+      await expect(lstat(join(paths.exportsDir, runId))).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await readdir(paths.exportsDir)).toEqual([]);
+    }
+  );
+
+  it.each([
+    { scope: "run", operation: "rename", timing: "after" },
+    { scope: "run", operation: "parent_fsync", timing: "before" },
+    { scope: "run", operation: "parent_fsync", timing: "after" },
+  ] satisfies PersistenceFault[])(
+    "verifies runDigest and reports uncertain durability on a $timing $operation fault",
+    async (fault) => {
+      const paths = await privatePaths();
+      const runId = "eval-0123456789abcdef";
+      const runDigest = `sha256:${"5".repeat(64)}`;
+
+      await expect(
+        publishRunAtomically({
+          paths,
+          runId,
+          runDigest,
+          files: runFiles(runId, runDigest),
+          injectFault: failAt(fault),
+        })
+      ).resolves.toEqual({ status: "committed_durability_uncertain" });
+      expect(await readdir(paths.exportsDir)).toEqual([runId]);
+    }
+  );
+
+  it("returns indeterminate when a post-rename no-follow reread sees a different digest", async () => {
+    const paths = await privatePaths();
+    const runId = "eval-0123456789abcdef";
+    const runDigest = `sha256:${"6".repeat(64)}`;
+
+    await expect(
+      publishRunAtomically({
+        paths,
+        runId,
+        runDigest,
+        files: runFiles(runId, runDigest),
+        injectFault: async (point) => {
+          if (sameFault(point, { scope: "run", operation: "rename", timing: "after" })) {
+            await writeFile(
+              join(paths.exportsDir, runId, "run.json"),
+              `${JSON.stringify({ runDigest: `sha256:${"7".repeat(64)}` })}\n`
+            );
+            throw new Error("injected:post-rename-race");
+          }
+        },
+      })
+    ).resolves.toEqual({ status: "indeterminate" });
+  });
+
+  it("rejects symlinks at the final run and owned file paths without touching targets", async () => {
+    const paths = await privatePaths();
+    const runId = "eval-0123456789abcdef";
+    const runDigest = `sha256:${"8".repeat(64)}`;
+    const files = runFiles(runId, runDigest);
+    const externalDirectory = join(paths.root, "external-run");
+    await mkdir(externalDirectory, 0o755);
+    await writeFile(join(externalDirectory, "sentinel"), "outside");
+    await symlink(externalDirectory, join(paths.exportsDir, runId));
+
+    await expect(
+      publishRunAtomically({ paths, runId, runDigest, files })
+    ).rejects.toMatchObject({ code: "unsafe_path" });
+    expect(await readFile(join(externalDirectory, "sentinel"), "utf8")).toBe("outside");
+
+    await rm(join(paths.exportsDir, runId));
+    await mkdir(join(paths.exportsDir, runId), 0o700);
+    const externalFile = join(paths.root, "external-file");
+    await writeFile(externalFile, "outside", { mode: 0o640 });
+    await symlink(externalFile, join(paths.exportsDir, runId, "run.json"));
+
+    await expect(
+      publishRunAtomically({ paths, runId, runDigest, files })
+    ).rejects.toMatchObject({ code: "unsafe_path" });
+    expect(await readFile(externalFile, "utf8")).toBe("outside");
+    expect(mode(await lstat(externalFile))).toBe(0o640);
+  });
+
+  it("rejects unsafe runIds before creating any path", async () => {
+    const paths = await privatePaths();
+    const runDigest = `sha256:${"9".repeat(64)}`;
+    for (const runId of ["", ".", "..", "../escape", "nested/run"]) {
+      await expect(
+        publishRunAtomically({ paths, runId, runDigest, files: runFiles(runId, runDigest) })
+      ).rejects.toMatchObject({ code: "unsafe_path" });
+    }
+    expect(await readdir(paths.exportsDir)).toEqual([]);
+  });
+});
