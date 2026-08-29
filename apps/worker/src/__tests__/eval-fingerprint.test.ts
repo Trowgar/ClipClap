@@ -48,6 +48,9 @@ describe("computeFingerprint", () => {
       arcDownrankPenalty1: baseCfg.arcDownrankPenalty1,
       scanWindowBudget: baseCfg.scanWindowBudget,
       scanPasses: baseCfg.scanPasses,
+      postBoundaryHookGateMode: "off",
+      postBoundaryHookMaxDelaySec: null,
+      postBoundaryHookMaxPreHookGapSec: null,
     });
   });
 

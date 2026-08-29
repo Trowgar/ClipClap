@@ -310,17 +310,24 @@ describe("post-boundary hook gate fingerprint", () => {
     );
 
     expect(off.postBoundaryHookGateMode).toBe("off");
-    expect(off.postBoundaryHookMaxDelaySec).toBeUndefined();
-    expect(off.postBoundaryHookMaxPreHookGapSec).toBeUndefined();
+    expect(off.postBoundaryHookMaxDelaySec).toBeNull();
+    expect(off.postBoundaryHookMaxPreHookGapSec).toBeNull();
     expect(observe.postBoundaryHookGateMode).toBe("observe");
-    expect(observe.postBoundaryHookMaxDelaySec).toBeUndefined();
-    expect(observe.postBoundaryHookMaxPreHookGapSec).toBeUndefined();
+    expect(observe.postBoundaryHookMaxDelaySec).toBeNull();
+    expect(observe.postBoundaryHookMaxPreHookGapSec).toBeNull();
 
-    for (const fingerprint of [observe, shadow, enforce]) {
-      expect(() => assertFingerprintMatches("recorded-off", off, fingerprint)).toThrow(
-        /postBoundaryHookGateMode/
-      );
+    const modeFingerprints = [off, observe, shadow, enforce];
+    for (let left = 0; left < modeFingerprints.length; left += 1) {
+      for (let right = left + 1; right < modeFingerprints.length; right += 1) {
+        expect(modeFingerprints[left]).not.toEqual(modeFingerprints[right]);
+        expect(() =>
+          assertFingerprintMatches("recorded-mode", modeFingerprints[left], modeFingerprints[right])
+        ).toThrow(/postBoundaryHookGateMode/);
+      }
     }
+
+    const serializedOff = JSON.parse(JSON.stringify(off)) as typeof off;
+    expect(() => assertFingerprintMatches("recorded-off", serializedOff, off, vi.fn())).not.toThrow();
 
     // These configurations only differ in output policy. Every pre-existing
     // fingerprint key is unchanged, so this check cannot pass because a model
@@ -328,8 +335,8 @@ describe("post-boundary hook gate fingerprint", () => {
     expect({
       ...shadow,
       postBoundaryHookGateMode: "off",
-      postBoundaryHookMaxDelaySec: undefined,
-      postBoundaryHookMaxPreHookGapSec: undefined,
+      postBoundaryHookMaxDelaySec: null,
+      postBoundaryHookMaxPreHookGapSec: null,
     }).toEqual(off);
   });
 
@@ -356,6 +363,8 @@ describe("post-boundary hook gate fingerprint", () => {
       })
     );
 
+    expect(delayChanged).not.toEqual(baseline);
+    expect(gapChanged).not.toEqual(baseline);
     expect({ ...delayChanged, postBoundaryHookMaxDelaySec: 1 }).toEqual(baseline);
     expect({ ...gapChanged, postBoundaryHookMaxPreHookGapSec: 2 }).toEqual(baseline);
     expect(() => assertFingerprintMatches("recorded-baseline", baseline, delayChanged)).toThrow(

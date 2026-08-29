@@ -443,12 +443,16 @@ export interface EngineFingerprint {
    *  shipped set without changing an LLM request, so replay records every
    *  mode explicitly, including the dark `off` mode. */
   postBoundaryHookGateMode: AnalyzeConfig["postBoundaryHookGateMode"];
-  /** Thresholded modes require this limit; inactive modes deliberately expose
-   *  it as undefined so their complete gate configuration is fingerprinted. */
-  postBoundaryHookMaxDelaySec: AnalyzeConfig["postBoundaryHookMaxDelaySec"];
-  /** Thresholded modes require this limit; inactive modes deliberately expose
-   *  it as undefined so their complete gate configuration is fingerprinted. */
-  postBoundaryHookMaxPreHookGapSec: AnalyzeConfig["postBoundaryHookMaxPreHookGapSec"];
+  /** Thresholded modes require this limit; inactive modes use the JSON-stable
+   *  null sentinel so a serialized fingerprint round-trips without becoming
+   *  indistinguishable from an older recording that had no such key. */
+  postBoundaryHookMaxDelaySec: NonNullable<AnalyzeConfig["postBoundaryHookMaxDelaySec"]> | null;
+  /** Thresholded modes require this limit; inactive modes use the JSON-stable
+   *  null sentinel so a serialized fingerprint round-trips without becoming
+   *  indistinguishable from an older recording that had no such key. */
+  postBoundaryHookMaxPreHookGapSec:
+    | NonNullable<AnalyzeConfig["postBoundaryHookMaxPreHookGapSec"]>
+    | null;
 }
 
 export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
@@ -488,8 +492,8 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     scanWindowBudget: cfg.scanWindowBudget,
     scanPasses: cfg.scanPasses,
     postBoundaryHookGateMode: cfg.postBoundaryHookGateMode,
-    postBoundaryHookMaxDelaySec: cfg.postBoundaryHookMaxDelaySec,
-    postBoundaryHookMaxPreHookGapSec: cfg.postBoundaryHookMaxPreHookGapSec,
+    postBoundaryHookMaxDelaySec: cfg.postBoundaryHookMaxDelaySec ?? null,
+    postBoundaryHookMaxPreHookGapSec: cfg.postBoundaryHookMaxPreHookGapSec ?? null,
   };
 }
 
