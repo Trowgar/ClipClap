@@ -24,6 +24,26 @@ function transcript(): TranscriptionResult {
   return { text: segments.map((segment) => segment.text).join(" "), segments, language: "en" };
 }
 
+function longTranscript(segmentCount: number, secondsPerSegment = 20): TranscriptionResult {
+  const segments: WhisperSegment[] = Array.from({ length: segmentCount }, (_, index) => {
+    const start = index * (secondsPerSegment + 1);
+    const end = start + secondsPerSegment - 0.5;
+    return {
+      start,
+      end,
+      text: Array.from({ length: secondsPerSegment - 1 }, (_, wordIndex) =>
+        wordIndex === secondsPerSegment - 2 ? `word${wordIndex}.` : `word${wordIndex}`,
+      ).join(" "),
+      words: Array.from({ length: secondsPerSegment - 1 }, (_, wordIndex) => ({
+        text: wordIndex === secondsPerSegment - 2 ? `word${wordIndex}.` : `word${wordIndex}`,
+        start: start + wordIndex,
+        end: start + wordIndex + 0.9,
+      })),
+    };
+  });
+  return { text: segments.map((segment) => segment.text).join(" "), segments, language: "en" };
+}
+
 const scan = { candidates: [{ start_node: 2, end_node: 4, payoff_node: 3, interest: 0.9, type: "story", thread: null }] };
 const critic = {
   results: [{
@@ -262,6 +282,171 @@ describe("safe-end normal shadow wiring", () => {
     ]);
     expect(rescue.records[0]).not.toHaveProperty("status");
     expect(rescue.records[0]).not.toHaveProperty("reason");
+  });
+
+  it("caps full-pipeline rescue telemetry while retaining the selected winner outside the ordinary first 20", async () => {
+    const candidates = Array.from({ length: 21 }, (_, index) => {
+      const start_node = index * 3;
+      return {
+        start_node,
+        end_node: start_node + 2,
+        payoff_node: start_node + 1,
+        interest: 0.9,
+        type: "story",
+        thread: null,
+      };
+    });
+    const verdicts = candidates.map((candidate, index) => ({
+      ...critic.results[0],
+      id: `c${index}`,
+      keep: true,
+      score: index === 9 ? 0.99 : 0.8,
+      start_node: candidate.start_node,
+      payoff_node: candidate.payoff_node,
+      end_node: candidate.end_node,
+      hook_start_node: candidate.start_node,
+      hook_end_node: candidate.start_node + 1,
+      title_evidence_nodes: [candidate.payoff_node],
+      description_evidence_nodes: [candidate.payoff_node],
+    }));
+    const result = await analyzeHighlightsV2(longTranscript(90, 21), {
+      client: clientFor({
+        scan_candidates: { candidates },
+        critic_verdicts: { results: verdicts },
+        safe_end_audit: { results: [] },
+        clip_finalizer: {
+          clips: verdicts.map((verdict) => ({
+            id: verdict.id,
+            verdict: "drop",
+            drop_reason: "no_payoff",
+            duplicate_of: null,
+            shared_claim: null,
+            title: null,
+            title_evidence_nodes: null,
+            trim_start_node: null,
+          })),
+        },
+      }).client,
+      cfg: {
+        ...loadAnalyzeConfig({ SHORT_SOURCE_RESCUE: "on", SAFE_END_AUDIT: "shadow" }),
+        softCap: 0,
+        regionMaxCandidates: 30,
+        scanWindowSec: 99_999,
+        nodeMaxSec: 100,
+        teaserMinHits: 1_000,
+      },
+      sourceDurationSec: 200,
+    });
+
+    const rescue = (result.telemetry.safeEndAudit as {
+      rescue: { records: Array<{ geometry: { candidateId: string }; selectedState: string }>; truncatedCount: number };
+    }).rescue;
+    expect(rescue.records.length).toBeLessThanOrEqual(20);
+    expect(rescue.truncatedCount).toBe(1);
+    expect(rescue.records).toContainEqual(expect.objectContaining({
+      geometry: expect.objectContaining({ candidateId: "c9" }),
+      selectedState: "selected",
+    }));
+  });
+
+  it("reports matching_clear when the actual arc audit geometry matches the re-snapped rescue", async () => {
+    const arc = {
+      results: [{
+        id: "c0",
+        entry: { ok: true, defect: null, fix_start_node: null },
+        exit: { ok: true, defect: null, fix_end_node: null },
+        standalone: { ok: true, missing: null },
+      }],
+    };
+    const stub = clientFor({
+        ...replies(),
+        arc_audit: arc,
+      });
+    const result = await analyzeHighlightsV2(transcript(), {
+      client: stub.client,
+      cfg: {
+        ...loadAnalyzeConfig({ SHORT_SOURCE_RESCUE: "on", SAFE_END_AUDIT: "shadow", ARC_AUDIT: "on" }),
+        softCap: 0,
+      },
+      sourceDurationSec: 200,
+    });
+
+    expect(safeEndTelemetry(result)).toMatchObject({
+      rescue: {
+        matchingClear: 1,
+        staleOrAbsent: 0,
+        records: [expect.objectContaining({
+          geometry: expect.objectContaining({ candidateId: "c0", startNode: 2, endNode: 3 }),
+          arcEvidence: "matching_clear",
+        })],
+      },
+    });
+    expect(stub.requests.map((request) => request.schema)).toContain("arc_audit");
+  });
+
+  it("reports stale_or_absent when rescue re-snaps a compressed long candidate without leaking arc flags", async () => {
+    const arc = {
+      results: [{
+        id: "c0",
+        entry: { ok: false, defect: "mid_story", fix_start_node: null },
+        exit: { ok: false, defect: "mid_thought", fix_end_node: null },
+        standalone: { ok: true, missing: null },
+      }],
+    };
+    const longCandidate = {
+      start_node: 0, end_node: 6, payoff_node: 5, interest: 0.9, type: "story", thread: null,
+    };
+    const longVerdict = {
+      ...critic.results[0],
+      keep: true,
+      score: 0.7,
+      start_node: 0,
+      payoff_node: 5,
+      end_node: 6,
+      hook_start_node: 3,
+      hook_end_node: 4,
+      title_evidence_nodes: [5],
+      description_evidence_nodes: [5],
+    };
+    const stub = clientFor({
+        scan_candidates: { candidates: [longCandidate] },
+        critic_verdicts: { results: [longVerdict] },
+        arc_audit: arc,
+        safe_end_audit: { results: [{ id: "c0", outcome: "safe", reason: null, extendToNode: null }] },
+      });
+    const result = await analyzeHighlightsV2(transcript(), {
+      client: stub.client,
+      cfg: {
+        ...loadAnalyzeConfig({
+          SHORT_SOURCE_RESCUE: "on",
+          SAFE_END_AUDIT: "shadow",
+          ARC_AUDIT: "on",
+          ARC_DOWNRANK: "on",
+          LONG_CLIPS: "on",
+        }),
+        maxSec: 20,
+        longClipMaxSec: 50,
+      },
+      sourceDurationSec: 200,
+    });
+
+    expect(safeEndTelemetry(result)).toMatchObject({
+      rescue: {
+        staleOrAbsent: 1,
+        matchingClear: 0,
+        records: [expect.objectContaining({
+          geometry: expect.objectContaining({ candidateId: "c0" }),
+          arcEvidence: "stale_or_absent",
+        })],
+      },
+    });
+    const rescue = (safeEndTelemetry(result) as unknown as {
+      rescue: { records: Array<{ geometry: { startNode: number; endNode: number } }> };
+    }).rescue;
+    expect(rescue.records[0]?.geometry).not.toMatchObject({ startNode: 0, endNode: 6 });
+    expect(stub.requests.map((request) => request.schema)).toContain("arc_audit");
+    expect(result.highlights).toHaveLength(1);
+    expect(result.highlights[0]).not.toHaveProperty("_arcFlags");
   });
 
   it("reconciles a retained normal record from the finalizer's actual trimmed geometry", async () => {
