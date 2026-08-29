@@ -281,6 +281,39 @@ describe("replaceLedgerAtomically", () => {
     expect(mode(await lstat(join(externalDirectory, tempName!)))).toBe(0o640);
   });
 
+  it("returns indeterminate when the private root is swapped for a matching symlink after ledger rename", async () => {
+    const paths = await privatePaths();
+    const expectedEventId = "event-root-swap";
+    const externalRoot = `${paths.root}-external`;
+    const externalLedger = join(externalRoot, "ledger");
+    const externalBytes = ledgerBytes(expectedEventId);
+    await mkdir(externalRoot, 0o755);
+    await mkdir(externalLedger, 0o755);
+    await writeFile(join(externalLedger, "reviews.jsonl"), externalBytes, { mode: 0o640 });
+
+    await expect(
+      replaceLedgerAtomically({
+        paths,
+        bytes: ledgerBytes(expectedEventId),
+        expectedEventId,
+        injectFault: async (point) => {
+          if (sameFault(point, { scope: "ledger", operation: "rename", timing: "after" })) {
+            await renamePath(paths.root, `${paths.root}-original`);
+            await symlink(externalRoot, paths.root);
+            throw new Error("injected:ledger-root-swap");
+          }
+        },
+      })
+    ).resolves.toEqual({ status: "indeterminate" });
+
+    expect(await readFile(join(externalLedger, "reviews.jsonl"))).toEqual(
+      Buffer.from(externalBytes)
+    );
+    expect(mode(await lstat(externalRoot))).toBe(0o755);
+    expect(mode(await lstat(externalLedger))).toBe(0o755);
+    expect(mode(await lstat(join(externalLedger, "reviews.jsonl")))).toBe(0o640);
+  });
+
   it("does not follow a swapped ledger parent while cleaning a pre-rename temp", async () => {
     const paths = await privatePaths();
     const externalDirectory = join(paths.root, "external-ledger-cleanup");
@@ -446,6 +479,81 @@ describe("publishRunAtomically", () => {
     expect(mode(await lstat(join(runDir, "unexpected.txt")))).toBe(0o640);
   });
 
+  it("rejects a raced exact run behind a swapped exports symlink without touching it", async () => {
+    const paths = await privatePaths();
+    const runId = "eval-0123456789abcdef";
+    const runDigest = `sha256:${"e".repeat(64)}`;
+    const files = runFiles(runId, runDigest);
+    const externalExports = join(paths.root, "external-raced-exports");
+    const externalRun = join(externalExports, runId);
+    await mkdir(externalExports, 0o755);
+    await mkdir(externalRun, 0o755);
+    for (const [name, bytes] of Object.entries(files)) {
+      await writeFile(join(externalRun, name), bytes, { mode: 0o644 });
+    }
+
+    await expect(
+      publishRunAtomically({
+        paths,
+        runId,
+        runDigest,
+        files,
+        injectFault: async (point) => {
+          if (sameFault(point, { scope: "run", operation: "temp_dir_fsync", timing: "after" })) {
+            await renamePath(paths.exportsDir, `${paths.exportsDir}-original`);
+            await symlink(externalExports, paths.exportsDir);
+          }
+        },
+      })
+    ).rejects.toMatchObject({ code: "unsafe_path" });
+
+    expect(mode(await lstat(externalExports))).toBe(0o755);
+    expect(mode(await lstat(externalRun))).toBe(0o755);
+    for (const [name, bytes] of Object.entries(files)) {
+      expect(await readFile(join(externalRun, name))).toEqual(Buffer.from(bytes));
+      expect(mode(await lstat(join(externalRun, name)))).toBe(0o644);
+    }
+  });
+
+  it("rejects a raced exact run behind a swapped root symlink without touching it", async () => {
+    const paths = await privatePaths();
+    const runId = "eval-0123456789abcdef";
+    const runDigest = `sha256:${"f".repeat(64)}`;
+    const files = runFiles(runId, runDigest);
+    const externalRoot = `${paths.root}-raced-external`;
+    const externalExports = join(externalRoot, "exports");
+    const externalRun = join(externalExports, runId);
+    await mkdir(externalRoot, 0o755);
+    await mkdir(externalExports, 0o755);
+    await mkdir(externalRun, 0o755);
+    for (const [name, bytes] of Object.entries(files)) {
+      await writeFile(join(externalRun, name), bytes, { mode: 0o644 });
+    }
+
+    await expect(
+      publishRunAtomically({
+        paths,
+        runId,
+        runDigest,
+        files,
+        injectFault: async (point) => {
+          if (sameFault(point, { scope: "run", operation: "temp_dir_fsync", timing: "after" })) {
+            await renamePath(paths.root, `${paths.root}-original`);
+            await symlink(externalRoot, paths.root);
+          }
+        },
+      })
+    ).rejects.toMatchObject({ code: "unsafe_path" });
+
+    expect(mode(await lstat(externalRoot))).toBe(0o755);
+    expect(mode(await lstat(externalExports))).toBe(0o755);
+    expect(mode(await lstat(externalRun))).toBe(0o755);
+    for (const [name, bytes] of Object.entries(files)) {
+      expect(await readFile(join(externalRun, name))).toEqual(Buffer.from(bytes));
+      expect(mode(await lstat(join(externalRun, name)))).toBe(0o644);
+    }
+  });
+
   it.each([
     ...(["run.json", "candidates.jsonl", "candidates.md", "exclusions.jsonl"] as const).flatMap(
       (file) =>
@@ -575,6 +683,42 @@ describe("publishRunAtomically", () => {
     );
     expect(mode(await lstat(join(externalDirectory, tempName!)))).toBe(0o755);
     expect(mode(await lstat(join(externalDirectory, tempName!, "sentinel")))).toBe(0o640);
+  });
+
+  it("returns indeterminate when the private root is swapped for a matching symlink after run rename", async () => {
+    const paths = await privatePaths();
+    const runId = "eval-0123456789abcdef";
+    const runDigest = `sha256:${"d".repeat(64)}`;
+    const externalRoot = `${paths.root}-external`;
+    const externalExports = join(externalRoot, "exports");
+    const externalRun = join(externalExports, runId);
+    const externalRunBytes = runFiles(runId, runDigest)["run.json"];
+    await mkdir(externalRoot, 0o755);
+    await mkdir(externalExports, 0o755);
+    await mkdir(externalRun, 0o755);
+    await writeFile(join(externalRun, "run.json"), externalRunBytes, { mode: 0o640 });
+
+    await expect(
+      publishRunAtomically({
+        paths,
+        runId,
+        runDigest,
+        files: runFiles(runId, runDigest),
+        injectFault: async (point) => {
+          if (sameFault(point, { scope: "run", operation: "rename", timing: "after" })) {
+            await renamePath(paths.root, `${paths.root}-original`);
+            await symlink(externalRoot, paths.root);
+            throw new Error("injected:run-root-swap");
+          }
+        },
+      })
+    ).resolves.toEqual({ status: "indeterminate" });
+
+    expect(await readFile(join(externalRun, "run.json"))).toEqual(Buffer.from(externalRunBytes));
+    expect(mode(await lstat(externalRoot))).toBe(0o755);
+    expect(mode(await lstat(externalExports))).toBe(0o755);
+    expect(mode(await lstat(externalRun))).toBe(0o755);
+    expect(mode(await lstat(join(externalRun, "run.json")))).toBe(0o640);
   });
 
   it("does not follow a swapped exports parent while cleaning a pre-rename temp", async () => {

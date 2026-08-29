@@ -254,6 +254,53 @@ function anchoredPath(handle: FileHandle, child?: string): string {
   return child === undefined ? root : join(root, child);
 }
 
+type PrivateDirectoryAnchor = Readonly<{
+  rootHandle: FileHandle;
+  directoryHandle: FileHandle;
+  directoryName: "ledger" | "exports";
+}>;
+
+async function openPrivateDirectoryAnchor(
+  rootPath: string,
+  directoryName: "ledger" | "exports"
+): Promise<PrivateDirectoryAnchor> {
+  const rootHandle = await openDirectoryNoFollow(rootPath);
+  try {
+    const directoryHandle = await openDirectoryNoFollow(anchoredPath(rootHandle, directoryName));
+    return { rootHandle, directoryHandle, directoryName };
+  } catch (error) {
+    await closeBestEffort(rootHandle);
+    throw error;
+  }
+}
+
+async function closePrivateDirectoryAnchor(anchor: PrivateDirectoryAnchor): Promise<void> {
+  await closeBestEffort(anchor.directoryHandle);
+  await closeBestEffort(anchor.rootHandle);
+}
+
+async function sameDirectory(left: FileHandle, right: FileHandle): Promise<boolean> {
+  const [leftStat, rightStat] = await Promise.all([left.stat(), right.stat()]);
+  return leftStat.dev === rightStat.dev && leftStat.ino === rightStat.ino;
+}
+
+async function assertPrivateDirectoryAnchorCurrent(
+  rootPath: string,
+  trusted: PrivateDirectoryAnchor
+): Promise<void> {
+  const current = await openPrivateDirectoryAnchor(rootPath, trusted.directoryName);
+  try {
+    if (
+      !(await sameDirectory(trusted.rootHandle, current.rootHandle)) ||
+      !(await sameDirectory(trusted.directoryHandle, current.directoryHandle))
+    ) {
+      throwUnsafe();
+    }
+  } finally {
+    await closePrivateDirectoryAnchor(current);
+  }
+}
+
 function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
   if (left.byteLength !== right.byteLength) return false;
   for (let index = 0; index < left.byteLength; index += 1) {
@@ -263,21 +310,21 @@ function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
 }
 
 async function verifyLedgerEvent(
-  ledgerDirectory: string,
+  rootPath: string,
   expectedEventId: string
 ): Promise<boolean> {
-  let directoryHandle: FileHandle | undefined;
+  let anchor: PrivateDirectoryAnchor | undefined;
   try {
-    directoryHandle = await openDirectoryNoFollow(ledgerDirectory);
+    anchor = await openPrivateDirectoryAnchor(rootPath, "ledger");
     const bytes = await readRegularFileNoFollow(
-      anchoredPath(directoryHandle, "reviews.jsonl"),
+      anchoredPath(anchor.directoryHandle, "reviews.jsonl"),
       false
     );
     const lines = new TextDecoder("utf-8", { fatal: true })
       .decode(bytes)
       .split("\n")
       .filter((line) => line.length > 0);
-    return lines.some((line) => {
+    const matches = lines.some((line) => {
       const value: unknown = JSON.parse(line);
       return (
         typeof value === "object" &&
@@ -286,47 +333,53 @@ async function verifyLedgerEvent(
         value.eventId === expectedEventId
       );
     });
+    if (!matches) return false;
+    await assertPrivateDirectoryAnchorCurrent(rootPath, anchor);
+    return true;
   } catch {
     return false;
   } finally {
-    await closeBestEffort(directoryHandle);
+    if (anchor) await closePrivateDirectoryAnchor(anchor);
   }
 }
 
 async function verifyRunDigest(
-  exportsDirectory: string,
+  rootPath: string,
   runId: string,
   expectedRunDigest: string
 ): Promise<boolean> {
-  let exportsHandle: FileHandle | undefined;
+  let anchor: PrivateDirectoryAnchor | undefined;
   let runHandle: FileHandle | undefined;
   try {
-    exportsHandle = await openDirectoryNoFollow(exportsDirectory);
-    runHandle = await openDirectoryNoFollow(anchoredPath(exportsHandle, runId));
+    anchor = await openPrivateDirectoryAnchor(rootPath, "exports");
+    runHandle = await openDirectoryNoFollow(anchoredPath(anchor.directoryHandle, runId));
     const bytes = await readRegularFileNoFollow(anchoredPath(runHandle, "run.json"), false);
     const value: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-    return (
+    const matches = (
       typeof value === "object" &&
       value !== null &&
       "runDigest" in value &&
       value.runDigest === expectedRunDigest
     );
+    if (!matches) return false;
+    await assertPrivateDirectoryAnchorCurrent(rootPath, anchor);
+    return true;
   } catch {
     return false;
   } finally {
     await closeBestEffort(runHandle);
-    await closeBestEffort(exportsHandle);
+    if (anchor) await closePrivateDirectoryAnchor(anchor);
   }
 }
 
 async function uncertainLedgerResult(input: LedgerWrite): Promise<CommitResult> {
-  return (await verifyLedgerEvent(input.paths.ledgerDir, input.expectedEventId))
+  return (await verifyLedgerEvent(input.paths.root, input.expectedEventId))
     ? { status: "committed_durability_uncertain" }
     : { status: "indeterminate" };
 }
 
 async function uncertainRunResult(input: RunWrite): Promise<CommitResult> {
-  return (await verifyRunDigest(input.paths.exportsDir, input.runId, input.runDigest))
+  return (await verifyRunDigest(input.paths.root, input.runId, input.runDigest))
     ? { status: "committed_durability_uncertain" }
     : { status: "indeterminate" };
 }
@@ -343,19 +396,21 @@ export async function replaceLedgerAtomically(input: LedgerWrite): Promise<Commi
   assertPrivatePaths(input.paths);
   if (!input.expectedEventId) throw new PersistenceInputError();
   await ensurePrivateTree(input.paths.root);
-  const finalKind = await ensureNoSymlinkOrSpecialFile(input.paths.reviewsFile);
-  if (finalKind === "directory") throwUnsafe();
-
-  const bytes = new Uint8Array(input.bytes);
-  const ledgerHandle = await openDirectoryNoFollow(input.paths.ledgerDir);
-  const tempPath = uniqueSibling(anchoredPath(ledgerHandle), ".reviews.jsonl.tmp-");
-  const anchoredReviewsFile = anchoredPath(ledgerHandle, "reviews.jsonl");
+  const anchor = await openPrivateDirectoryAnchor(input.paths.root, "ledger");
+  let tempPath: string | undefined;
   let handle: FileHandle | undefined;
   let closed = false;
   let renamePossible = false;
   let renamed = false;
 
   try {
+    const finalKind = await ensureNoSymlinkOrSpecialFile(
+      anchoredPath(anchor.directoryHandle, "reviews.jsonl")
+    );
+    if (finalKind === "directory") throwUnsafe();
+    const bytes = new Uint8Array(input.bytes);
+    tempPath = uniqueSibling(anchoredPath(anchor.directoryHandle), ".reviews.jsonl.tmp-");
+    const anchoredReviewsFile = anchoredPath(anchor.directoryHandle, "reviews.jsonl");
     handle = await open(
       tempPath,
       constants.O_CREAT |
@@ -391,6 +446,7 @@ export async function replaceLedgerAtomically(input: LedgerWrite): Promise<Commi
     const currentKind = await ensureNoSymlinkOrSpecialFile(anchoredReviewsFile);
     if (currentKind === "directory") throwUnsafe();
     await fault(input.injectFault, { scope: "ledger", operation: "rename", timing: "before" });
+    await assertPrivateDirectoryAnchorCurrent(input.paths.root, anchor);
     renamePossible = true;
     await rename(tempPath, anchoredReviewsFile);
     renamed = true;
@@ -401,7 +457,7 @@ export async function replaceLedgerAtomically(input: LedgerWrite): Promise<Commi
       operation: "parent_fsync",
       timing: "before",
     });
-    await syncDirectory(input.paths.ledgerDir);
+    await anchor.directoryHandle.sync();
     await fault(input.injectFault, {
       scope: "ledger",
       operation: "parent_fsync",
@@ -414,7 +470,7 @@ export async function replaceLedgerAtomically(input: LedgerWrite): Promise<Commi
   } finally {
     if (!closed) await closeBestEffort(handle);
     if (!renamed) await removeBestEffort(tempPath);
-    await closeBestEffort(ledgerHandle);
+    await closePrivateDirectoryAnchor(anchor);
   }
 }
 
@@ -548,16 +604,22 @@ export async function publishRunAtomically(input: RunWrite): Promise<CommitResul
       RUN_FILE_NAMES.map((name) => [name, new Uint8Array(input.files[name])])
     )
   ) as RunFiles;
-  const runDirectory = join(input.paths.exportsDir, input.runId);
-  const priorResult = await existingRunResult(runDirectory, copiedFiles);
-  if (priorResult) return priorResult;
-
-  const exportsHandle = await openDirectoryNoFollow(input.paths.exportsDir);
-  const tempDirectory = uniqueSibling(anchoredPath(exportsHandle), `.${input.runId}.tmp-`);
-  const anchoredRunDirectory = anchoredPath(exportsHandle, input.runId);
+  const anchor = await openPrivateDirectoryAnchor(input.paths.root, "exports");
+  let tempDirectory: string | undefined;
   let renamePossible = false;
   let renamed = false;
   try {
+    const anchoredRunDirectory = anchoredPath(anchor.directoryHandle, input.runId);
+    const priorResult = await existingRunResult(anchoredRunDirectory, copiedFiles);
+    if (priorResult) {
+      await assertPrivateDirectoryAnchorCurrent(input.paths.root, anchor);
+      return priorResult;
+    }
+
+    tempDirectory = uniqueSibling(
+      anchoredPath(anchor.directoryHandle),
+      `.${input.runId}.tmp-`
+    );
     await mkdir(tempDirectory, DIRECTORY_MODE);
     await secureDirectory(tempDirectory);
     for (const name of RUN_FILE_NAMES) {
@@ -576,9 +638,13 @@ export async function publishRunAtomically(input: RunWrite): Promise<CommitResul
       timing: "after",
     });
 
-    const racedResult = await existingRunResult(runDirectory, copiedFiles);
-    if (racedResult) return racedResult;
+    const racedResult = await existingRunResult(anchoredRunDirectory, copiedFiles);
+    if (racedResult) {
+      await assertPrivateDirectoryAnchorCurrent(input.paths.root, anchor);
+      return racedResult;
+    }
     await fault(input.injectFault, { scope: "run", operation: "rename", timing: "before" });
+    await assertPrivateDirectoryAnchorCurrent(input.paths.root, anchor);
     renamePossible = true;
     await rename(tempDirectory, anchoredRunDirectory);
     renamed = true;
@@ -589,7 +655,7 @@ export async function publishRunAtomically(input: RunWrite): Promise<CommitResul
       operation: "parent_fsync",
       timing: "before",
     });
-    await syncDirectory(input.paths.exportsDir);
+    await anchor.directoryHandle.sync();
     await fault(input.injectFault, {
       scope: "run",
       operation: "parent_fsync",
@@ -601,6 +667,6 @@ export async function publishRunAtomically(input: RunWrite): Promise<CommitResul
     throw error;
   } finally {
     if (!renamed) await removeBestEffort(tempDirectory);
-    await closeBestEffort(exportsHandle);
+    await closePrivateDirectoryAnchor(anchor);
   }
 }
