@@ -199,8 +199,18 @@ export async function runSafetyPlannerCli(
   return { exitCode: 0, stdout: output, stderr: "" };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
-  void runSafetyPlannerCli().then((result) => {
-    process.exitCode = result.exitCode;
+export async function main(argv: string[] = process.argv): Promise<void> {
+  const result = await runSafetyPlannerCli(argv);
+  process.exitCode = result.exitCode;
+}
+
+if (
+  typeof require !== "undefined" &&
+  typeof module !== "undefined" &&
+  require.main === module
+) {
+  void main().catch(() => {
+    process.exitCode = 1;
+    process.stderr.write("capture_invalid\n");
   });
 }
