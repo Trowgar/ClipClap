@@ -441,6 +441,14 @@ describe("planDetected: stream-layout coverage gate", () => {
     mouthActivity: 0.05,
     path: [{ t: 0.5, x: 575, y: 285, w: 49, h: 55 }],
   };
+  // The detector median still places the synthesized cam rect around x=575,
+  // but this sample is at x=470: the full-height crop after stream gating can
+  // contain it, while the pre-gate webcam tile cannot. This makes the order
+  // assertion differential rather than merely checking a safe fixture twice.
+  const streamGateSafetyFace: FaceTrack = {
+    ...toxFace,
+    path: [{ t: 0.5, x: 470, y: 285, w: 49, h: 55 }],
+  };
   // Same geometry as reframe-plan.test.ts's "a real, resolvable camRect wins
   // via D5" fixture: contains toxFace, solves, and (unlike a synthesized
   // rect) carries a nonzero score - a genuinely DETECTED inset.
@@ -569,7 +577,12 @@ describe("planDetected: stream-layout coverage gate", () => {
   /** One shot showing the streamer (duration `onSec`), one shot showing
    *  nothing at all (duration `offSec`) - the shape every measured FP had:
    *  a synthesized rect that is only sometimes actually on screen. */
-  function lowHighDetection(onSec: number, offSec: number, camRect: null | typeof realCamRect): Detection {
+  function lowHighDetection(
+    onSec: number,
+    offSec: number,
+    camRect: null | typeof realCamRect,
+    face: FaceTrack = toxFace
+  ): Detection {
     return {
       width: SW,
       height: SH,
@@ -579,7 +592,7 @@ describe("planDetected: stream-layout coverage gate", () => {
         { start: onSec, end: onSec + offSec },
       ],
       tracksByShot: [
-        { shotIndex: 0, tracks: [toxFace], camRect },
+        { shotIndex: 0, tracks: [face], camRect },
         { shotIndex: 1, tracks: [], camRect },
       ],
     };
@@ -861,7 +874,12 @@ describe("planDetected: stream-layout coverage gate", () => {
   });
 
   it("evaluates the final stream-gated plan rather than its pre-gate stream layout", () => {
-    const detection = lowHighDetection(1, 9, null);
+    const detection = lowHighDetection(1, 9, null, streamGateSafetyFace);
+    const preGate = planDetected(detection, {
+      ...gateOn,
+      streamCoverageGate: false,
+      safetyShadow: true,
+    });
     const gated = planDetected(detection, {
       ...gateOn,
       safetyShadow: true,
@@ -869,6 +887,8 @@ describe("planDetected: stream-layout coverage gate", () => {
       safeFit: true,
     });
 
+    expect(preGate.plan?.shots.some((s) => s.layout === "stream")).toBe(true);
+    expect(preGate.safetyShadow?.status).toBe("fail");
     expect(gated.plan?.shots.some((s) => s.layout === "stream")).toBe(false);
     expect(gated.plan?.shots.some((s) => s.layout === "safe-fit")).toBe(false);
     expect(gated.safetyShadow).toEqual({
