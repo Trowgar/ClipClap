@@ -6,11 +6,15 @@ import type {
   ShotLayout,
 } from "./types";
 import { cropWidthFor, evenClamp, tileWidthFor } from "./plan";
+import {
+  formatLayoutTime,
+  formatRampTime,
+  MIN_RENDER_RAMP_DT,
+  roundRampTime,
+} from "./render-time";
 
 type SplitLayout = Extract<ShotLayout, { layout: "split" }>;
 type StreamLayout = Extract<ShotLayout, { layout: "stream" }>;
-
-const fmt = (n: number) => n.toFixed(2);
 
 /** Piecewise-constant x(t) over consecutive windows; the last x is the else
  *  branch, so the expression is total for every t. x values are integers. */
@@ -18,7 +22,7 @@ export function piecewiseX(segments: Array<{ end: number; x: number }>): string 
   if (segments.length === 0) throw new Error("piecewiseX: empty");
   let expr = String(segments[segments.length - 1].x);
   for (let i = segments.length - 2; i >= 0; i--) {
-    expr = `if(lt(t,${fmt(segments[i].end)}),${segments[i].x},${expr})`;
+    expr = `if(lt(t,${formatLayoutTime(segments[i].end)}),${segments[i].x},${expr})`;
   }
   return expr;
 }
@@ -26,13 +30,12 @@ export function piecewiseX(segments: Array<{ end: number; x: number }>): string 
 /** A step takes this long. Sub-frame at any frame rate this product encodes, so
  *  it is a step in every rendered frame, while giving the ramp a non-zero
  *  denominator. */
-const STEP_SEC = 0.001;
-
 /**
  * `rampX`'s own formatter, three decimals, used for BOTH halves of a term -
  * the offset `t-a.t` and the duration `dt`.
  *
- * It exists because `fmt` is two decimals, which rendered STEP_SEC as "0.00"
+ * It exists because `formatLayoutTime` is two decimals, which rendered the
+ * minimum step as "0.00"
  * and made the constant inert: an instantaneous step compiled to a literal
  * `clip((t-4.50)/0.00,0,1)`. Measured on ffmpeg 8.0.1, that did NOT crash -
  * av_expr's clip() maps -inf to 0, +inf to 1 and NaN to 0, so t below the step
@@ -41,7 +44,7 @@ const STEP_SEC = 0.001;
  * entirely on undocumented clip(NaN) handling is not a guarantee, so the
  * denominator is now genuinely non-zero.
  *
- * `fmt` is deliberately NOT changed. It formats the times inside `piecewiseX`,
+ * `formatLayoutTime` is deliberately NOT changed. It formats the times inside `piecewiseX`,
  * whose output must stay byte-identical to what ships today - 96 crop plans are
  * already persisted in Postgres and must keep rendering the same frames. Only
  * `rampX` output is new, so only `rampX` is free to be more precise.
@@ -49,8 +52,6 @@ const STEP_SEC = 0.001;
  * One formatter for both halves on purpose: fixing the denominator and leaving
  * the numerator at two decimals is the obvious next mistake.
  */
-const rfmt = (n: number) => n.toFixed(3);
-
 /**
  * x(t) as a FLAT SUM of clipped ramps: `x0 + d1*clip((t-t0)/dt0,0,1) + ...`.
  *
@@ -72,9 +73,9 @@ export function rampX(keys: Keyframe[]): string {
     const b = keys[i];
     const delta = b.x - a.x;
     if (delta === 0) continue;
-    const dt = Math.max(b.t - a.t, STEP_SEC);
+    const dt = roundRampTime(Math.max(b.t - a.t, MIN_RENDER_RAMP_DT));
     terms.push(
-      `${delta >= 0 ? "+" : "-"}${Math.abs(delta)}*clip((t-${rfmt(a.t)})/${rfmt(dt)},0,1)`
+      `${delta >= 0 ? "+" : "-"}${Math.abs(delta)}*clip((t-${formatRampTime(a.t)})/${formatRampTime(dt)},0,1)`
     );
   }
   return terms.join("");
@@ -314,7 +315,9 @@ export function buildFiltergraph(
     const punchIndexSet = new Set(punchIndices);
     const punchEnable = workingPlan.shots
       .map((s, i) =>
-        punchIndexSet.has(i) ? `gte(t,${fmt(s.start)})*lt(t,${fmt(s.end)})` : null
+        punchIndexSet.has(i)
+          ? `gte(t,${formatLayoutTime(s.start)})*lt(t,${formatLayoutTime(s.end)})`
+          : null
       )
       .filter((e): e is string => e !== null)
       .join("+");
@@ -364,7 +367,10 @@ export function buildFiltergraph(
         contentSegs.push({ end: s.end, x: lastContent });
       }
       const enable = streams
-        .map((s) => `gte(t,${fmt(s.start)})*lt(t,${fmt(s.end)})`)
+        .map(
+          (s) =>
+            `gte(t,${formatLayoutTime(s.start)})*lt(t,${formatLayoutTime(s.end)})`
+        )
         .join("+");
       // setsar=1 after each scale: without it `scale` derives each tile's SAR
       // from its own crop aspect, so the stacked frame is assembled from three
@@ -406,7 +412,10 @@ export function buildFiltergraph(
   // Half-open [start,end) matches piecewiseX's lt(t,end) switch; between() is
   // inclusive at end, which flashes the overlay one frame past the seam.
   const enable = splits
-    .map((s) => `gte(t,${fmt(s.start)})*lt(t,${fmt(s.end)})`)
+    .map(
+      (s) =>
+        `gte(t,${formatLayoutTime(s.start)})*lt(t,${formatLayoutTime(s.end)})`
+    )
     .join("+");
 
   const chains = [

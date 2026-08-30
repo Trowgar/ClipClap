@@ -4,6 +4,13 @@ import {
   coverageForBox,
   evaluatePlanCoverage,
 } from "../reframe/safety";
+import {
+  formatLayoutTime,
+  formatRampTime,
+  interpolateRenderedTrajectory,
+  roundLayoutTime,
+  roundRampTime,
+} from "../reframe/render-time";
 import type {
   CropPlan,
   FaceTrack,
@@ -107,7 +114,27 @@ describe("coverageForBox", () => {
   it("returns zero for a non-positive region and preserves an exact .9 result", () => {
     expect(coverageForBox(box(0, 0, 0, 10), box(0, 0, 100, 100))).toBe(0);
     expect(coverageForBox(box(0, 0, 10, -1), box(0, 0, 100, 100))).toBe(0);
+    expect(coverageForBox(box(Number.NaN, 0, 10, 10), box(0, 0, 100, 100))).toBe(0);
+    expect(coverageForBox(box(0, 0, 10, 10), box(Number.POSITIVE_INFINITY, 0, 100, 100))).toBe(0);
     expect(coverageForBox(box(500, 0, 100, 100), box(28, 0, 562, 100))).toBe(0.9);
+  });
+});
+
+describe("render-time semantics", () => {
+  it("shares layout/ramp formatting and numeric rounding with the renderer", () => {
+    expect(formatLayoutTime(1.236)).toBe("1.24");
+    expect(roundLayoutTime(1.236)).toBe(1.24);
+    expect(formatRampTime(1.2364)).toBe("1.236");
+    expect(roundRampTime(1.2364)).toBe(1.236);
+  });
+
+  it("interpolates using rounded keyframe time and rounded minimum ramp duration", () => {
+    expect(
+      interpolateRenderedTrajectory(
+        [{ t: 1.2364, x: 0 }, { t: 1.2368, x: 100 }],
+        1.2365
+      )
+    ).toBeCloseTo(50);
   });
 });
 
@@ -207,7 +234,7 @@ describe("evaluatePlanCoverage", () => {
     );
     expect(
       evaluatePlanCoverage(stream, [
-        region("cam", "mandatory", [{ t: 1, box: box(120, 30, 100, 100) }]),
+        region("cam", "mandatory", [{ t: 1, box: box(120, 210, 100, 10) }]),
         region("content", "mandatory", [{ t: 1, box: box(1100, 100, 100, 100) }]),
       ])
     ).toMatchObject({ status: "pass", evaluatedSamples: 2, unmappedSamples: 0 });
@@ -256,6 +283,149 @@ describe("evaluatePlanCoverage", () => {
       evaluatedSamples: 2,
       unmappedSamples: 0,
     });
+  });
+
+  it("uses rounded half-open boundaries like the renderer", () => {
+    const roundedBoundary = plan([
+      { start: 0, end: 1.236, layout: "single", x: 0 },
+      { start: 1.236, end: 2, layout: "single", x: 400 },
+    ]);
+    const regionAtRoundedEnd = [
+      region("rounded", "mandatory", [{ t: 1.24, box: box(700, 0, 100, 100) }]),
+    ];
+    expect(evaluatePlanCoverage(roundedBoundary, regionAtRoundedEnd)).toMatchObject({
+      status: "pass",
+      minimumCoverage: 1,
+    });
+  });
+
+  it("uses the base crop in a gap rather than inventing missing video", () => {
+    const gapped = plan([
+      { start: 0, end: 4, layout: "single", x: 0 },
+      { start: 6, end: 10, layout: "single", x: 400 },
+    ]);
+    expect(
+      evaluatePlanCoverage(gapped, [
+        region("gap", "mandatory", [{ t: 5, box: box(700, 0, 100, 100) }]),
+      ])
+    ).toMatchObject({ status: "pass", evaluatedSamples: 1, unmappedSamples: 0 });
+  });
+
+  it("uses global ramp trajectory for the base crop during a gap", () => {
+    const movingThenGapped = plan([
+      {
+        start: 0,
+        end: 1,
+        layout: "single",
+        x: 0,
+        xs: [{ t: 0, x: 0 }, { t: 1, x: 400 }],
+      },
+      { start: 3, end: 4, layout: "center", x: 1220 },
+    ]);
+    expect(
+      evaluatePlanCoverage(movingThenGapped, [
+        region("global-ramp", "mandatory", [{ t: 2, box: box(810, 0, 100, 100) }]),
+      ])
+    ).toMatchObject({ status: "pass", evaluatedSamples: 1, minimumCoverage: 1 });
+  });
+
+  it("rejects samples in rounded-overlap and malformed timelines", () => {
+    const overlap = plan([
+      { start: 0, end: 1.236, layout: "single", x: 0 },
+      { start: 1.234, end: 2, layout: "single", x: 400 },
+    ]);
+    const sample = [region("overlap", "mandatory", [{ t: 1.235, box: box(700, 0, 100, 100) }])];
+    expect(evaluatePlanCoverage(overlap, sample)).toMatchObject({
+      status: "not_evaluable",
+      evaluatedSamples: 0,
+      unmappedSamples: 1,
+    });
+
+    const compositeOverlap = plan([
+      { start: 0, end: 2, layout: "split", top: { x: 0 }, bottom: { x: 1250 } },
+      { start: 1, end: 3, layout: "stream", cam: { x: 0 }, content: { x: 1250 } },
+    ], {
+      camCrop: { w: 300, h: 200, y: 20 },
+      contentCrop: { w: 800, h: 1000 },
+      outCamH: 500,
+      outContentH: 1420,
+    });
+    expect(evaluatePlanCoverage(compositeOverlap, sample)).toMatchObject({
+      status: "not_evaluable",
+      evaluatedSamples: 0,
+      unmappedSamples: 1,
+    });
+
+    const malformed = plan([
+      { start: Number.NaN, end: 2, layout: "single", x: 0 },
+    ]);
+    expect(evaluatePlanCoverage(malformed, sample)).toMatchObject({
+      status: "not_evaluable",
+      evaluatedSamples: 0,
+      unmappedSamples: 1,
+    });
+  });
+
+  it("fails closed for malformed threshold, regions, layouts, trajectories, and stream geometry", () => {
+    const staticPlan = plan([{ start: 0, end: 10, layout: "single", x: 0 }]);
+    const sample = region("invalid", "mandatory", [{ t: 1, box: box(100, 0, 100, 100) }]);
+    expect(evaluatePlanCoverage(staticPlan, [sample], Number.NaN)).toMatchObject({
+      status: "not_evaluable",
+      unmappedSamples: 1,
+    });
+    expect(
+      evaluatePlanCoverage(staticPlan, [region("bad-box", "mandatory", [{ t: 1, box: box(Number.NaN, 0, 100, 100) }])])
+    ).toMatchObject({ status: "not_evaluable", unmappedSamples: 1 });
+    expect(
+      evaluatePlanCoverage(plan([{ start: 0, end: 10, layout: "single", x: Number.NaN }]), [sample])
+    ).toMatchObject({ status: "not_evaluable", unmappedSamples: 1 });
+    expect(
+      evaluatePlanCoverage(
+        plan([{ start: 0, end: 10, layout: "single", x: 0, xs: [{ t: 0, x: Number.POSITIVE_INFINITY }] }]),
+        [sample]
+      )
+    ).toMatchObject({ status: "not_evaluable", unmappedSamples: 1 });
+    expect(
+      evaluatePlanCoverage(
+        plan(
+          [{ start: 0, end: 10, layout: "stream", cam: { x: 0 }, content: { x: 0 } }],
+          {
+            camCrop: { w: 300, h: 200, y: Number.NaN },
+            contentCrop: { w: 800, h: 1000 },
+            outCamH: 500,
+            outContentH: 1420,
+          }
+        ),
+        [sample]
+      )
+    ).toMatchObject({ status: "not_evaluable", unmappedSamples: 1 });
+  });
+
+  it("uses the base crop at the exact final end of split and stream overlays", () => {
+    const split = plan([
+      { start: 0, end: 10, layout: "split", top: { x: 0 }, bottom: { x: 1250 } },
+    ]);
+    expect(
+      evaluatePlanCoverage(split, [
+        region("split-final", "mandatory", [{ t: 10, box: box(100, 100, 100, 100) }]),
+      ])
+    ).toMatchObject({ status: "fail", evaluatedSamples: 1, rejectedSamples: 1 });
+
+    const geometry = {
+      camCrop: { w: 300, h: 200, y: 20 },
+      contentCrop: { w: 800, h: 1000 },
+      outCamH: 500,
+      outContentH: 1420,
+    };
+    const stream = plan(
+      [{ start: 0, end: 10, layout: "stream", cam: { x: 100 }, content: { x: 1000 } }],
+      geometry
+    );
+    expect(
+      evaluatePlanCoverage(stream, [
+        region("stream-final", "mandatory", [{ t: 10, box: box(120, 210, 100, 10) }]),
+      ])
+    ).toMatchObject({ status: "fail", evaluatedSamples: 1, rejectedSamples: 1 });
   });
 
   it("fails the whole plan when one mandatory sample is below threshold and counts it", () => {
