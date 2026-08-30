@@ -1699,6 +1699,32 @@ describe("buildTargetSamples", () => {
     expect(samples[1]).toEqual({ t: 0.5, cx: 260 });
   });
 
+  it("does not carry a later face backward before its first observation", () => {
+    const early: FaceTrack = {
+      id: 0,
+      box: { x: 100, y: 0, w: 100, h: 100 },
+      score: 0.9,
+      samples: 2,
+      mouthActivity: 0,
+      path: [
+        { t: 0, x: 100, y: 0, w: 100, h: 100 },
+        { t: 1, x: 120, y: 0, w: 100, h: 100 },
+      ],
+    };
+    const late: FaceTrack = {
+      id: 1,
+      box: { x: 1000, y: 0, w: 100, h: 100 },
+      score: 0.9,
+      samples: 1,
+      mouthActivity: 0,
+      path: [{ t: 1, x: 1000, y: 0, w: 100, h: 100 }],
+    };
+    expect(buildTargetSamples([early, late], 0, 1)).toEqual([
+      { t: 0, cx: 150 },
+      { t: 1, cx: 610 },
+    ]);
+  });
+
   it("returns nothing when no member has a path", () => {
     const noPath = {
       id: 0, box: { x: 10, y: 0, w: 100, h: 100 },

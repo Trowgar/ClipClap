@@ -773,12 +773,10 @@ export function selectGroupForShot(
  * Where the anchored group's centre sits at each detector sample inside
  * `[spanStart, spanEnd]`.
  *
- * Every member contributes at every sample time. When a member has no
- * detection at some time its last known box is carried forward - its first
- * known box, before it appears at all. Dropping the member instead would
- * shrink the bounding box and move the target with no change of selection,
- * which is the confound the frozen-anchor rule exists to prevent, arriving
- * through the back door.
+ * Every member contributes at every sample time after its first observation.
+ * When a member has no detection at some later time its last known box is
+ * carried forward. A member that has not appeared yet does not widen the
+ * target with a future box.
  */
 export function buildTargetSamples(
   group: FaceTrack[],
@@ -791,22 +789,23 @@ export function buildTargetSamples(
     .filter((t) => t >= spanStart && t <= spanEnd)
     .sort((a, b) => a - b);
 
-  return times.map((t) => {
+  return times.flatMap((t) => {
     let minX = Infinity;
     let maxX = -Infinity;
     for (const track of withPath) {
       const box = boxAt(track.path!, t);
+      if (!box) continue;
       minX = Math.min(minX, box.x);
       maxX = Math.max(maxX, box.x + box.w);
     }
-    return { t, cx: (minX + maxX) / 2 };
+    return minX === Infinity ? [] : [{ t, cx: (minX + maxX) / 2 }];
   });
 }
 
 /** The track's box at time `t`: the exact sample if there is one, otherwise the
- *  most recent earlier sample, otherwise the earliest sample. */
-function boxAt(path: PathSample[], t: number): PathSample {
-  let chosen = path[0];
+ *  most recent earlier sample. */
+function boxAt(path: PathSample[], t: number): PathSample | undefined {
+  let chosen: PathSample | undefined;
   for (const p of path) {
     if (p.t > t) break;
     chosen = p;
