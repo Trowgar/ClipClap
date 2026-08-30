@@ -326,6 +326,7 @@ async function renderClips(
               fallbackReason: reframe.fallbackReason,
               cutRecovery: reframe.cutRecovery,
               safetyShadow: reframe.safetyShadow,
+              safetyPlanner: reframe.safetyPlanner,
             })
           );
         }

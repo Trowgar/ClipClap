@@ -453,6 +453,97 @@ describe("planDetected: stream-layout coverage gate", () => {
     streamCoverageGate: true,
   };
 
+  const safetyDetection = (tracksByShot: Detection["tracksByShot"]): Detection => ({
+    width: 1280,
+    height: 720,
+    candidates: [],
+    shots: tracksByShot.map((_, index) => ({ start: index * 5, end: (index + 1) * 5 })),
+    tracksByShot,
+  });
+
+  const unsafeTrack = (x = 800): FaceTrack => ({
+    id: 1,
+    box: { x: 800, y: 180, w: 240, h: 240 },
+    score: 0.92,
+    samples: 8,
+    mouthActivity: 0.3,
+    path: [{ t: 2.5, x, y: 180, w: 240, h: 240 }],
+  });
+
+  it.each([
+    [false, false, "legacy"],
+    [true, false, "legacy"],
+    [false, true, "legacy"],
+    [true, true, "safe-fit"],
+  ])("activates only when both safety flags are on (%s, %s)", (safetyPlanner, safeFit, layout) => {
+    const detection = safetyDetection([{
+      shotIndex: 0,
+      camRect: null,
+      tracks: [unsafeTrack(100)],
+    }]);
+    const result = planDetected(detection, {
+      ...cfg,
+      safetyPlanner,
+      safeFit,
+      safetyShadow: false,
+    });
+
+    expect(result.plan?.shots[0].layout).toBe(layout === "safe-fit" ? "safe-fit" : "single");
+    expect(result.safetyPlanner).toEqual(
+      layout === "safe-fit"
+        ? expect.objectContaining({ safeFitShots: 1, coverageFallbacks: 1 })
+        : undefined
+    );
+  });
+
+  it("keeps original aggregate shadow telemetry when active planning changes the plan", () => {
+    const result = planDetected(
+      safetyDetection([{ shotIndex: 0, camRect: null, tracks: [unsafeTrack(100)] }]),
+      { ...cfg, safetyPlanner: true, safeFit: true, safetyShadow: true }
+    );
+    expect(result.plan?.shots[0].layout).toBe("safe-fit");
+    expect(result.safetyShadow?.status).toBe("fail");
+    expect(result.safetyPlanner?.safeFitShots).toBe(1);
+  });
+
+  it("fails closed for a malformed path and maps it to the merged plan span", () => {
+    const malformed = unsafeTrack(800);
+    malformed.path = [{ t: 2.5, x: 800, y: 180, w: -1, h: 240 }];
+    const result = planDetected(
+      safetyDetection([
+        { shotIndex: 0, camRect: null, tracks: [malformed] },
+        { shotIndex: 1, camRect: null, tracks: [unsafeTrack(800)] },
+      ]),
+      { ...cfg, safetyPlanner: true, safeFit: true }
+    );
+    expect(result.plan?.shots).toEqual([{ start: 0, end: 10, layout: "safe-fit", reason: "invalid_evidence" }]);
+    expect(result.safetyPlanner).toMatchObject({ invalidEvidenceFallbacks: 1 });
+  });
+
+  it("turns every shot safe-fit on invalid original alignment", () => {
+    const result = planDetected(
+      safetyDetection([{ shotIndex: 0, camRect: null, tracks: [unsafeTrack(100)] }]),
+      { ...cfg, safetyPlanner: true, safeFit: true, safetyShadow: false }
+    );
+    // Replace with an out-of-range set while keeping the candidate plan valid.
+    const invalid = planDetected({
+      ...safetyDetection([{ shotIndex: 2, camRect: null, tracks: [unsafeTrack(100)] }]),
+      shots: [{ start: 0, end: 5 }],
+    }, { ...cfg, safetyPlanner: true, safeFit: true });
+    expect(result.plan?.shots[0].layout).toBe("safe-fit");
+    expect(invalid.plan?.shots[0]).toEqual({ start: 0, end: 5, layout: "safe-fit", reason: "invalid_evidence" });
+  });
+
+  it("does not evaluate or change music-mode plans", () => {
+    const result = planDetected(
+      safetyDetection([{ shotIndex: 0, camRect: null, tracks: [unsafeTrack(100)] }]),
+      { ...cfg, musicMode: true, safetyPlanner: true, safeFit: true, safetyShadow: true }
+    );
+    expect(result.plan?.shots[0].layout).toBe("single");
+    expect(result.safetyShadow).toBeUndefined();
+    expect(result.safetyPlanner).toBeUndefined();
+  });
+
   /** One shot showing the streamer (duration `onSec`), one shot showing
    *  nothing at all (duration `offSec`) - the shape every measured FP had:
    *  a synthesized rect that is only sometimes actually on screen. */

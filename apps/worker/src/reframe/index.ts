@@ -8,8 +8,15 @@ import { resolveCamRect } from "./cam-rect";
 import { recoverCuts, type CutRecoveryResult, type CutRecoveryTelemetry } from "./cut-recovery";
 import type { PlanOptions } from "./options";
 import type { CropPlan, Shot, ShotTracks } from "./types";
-import { faceTracksToRegions } from "./regions";
-import { evaluatePlanCoverage, type SafetyShadowTelemetry } from "./safety";
+import { faceTracksToRegionEvidence } from "./regions";
+import {
+  evaluatePlanCoverageDetailed,
+  type SafetyShadowTelemetry,
+} from "./safety";
+import {
+  applySafetyPlanner,
+  type SafetyPlannerTelemetry,
+} from "./safety-planner";
 
 import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
 
@@ -25,6 +32,7 @@ export type ReframeFallbackReason =
 export interface ReframeResult {
   plan: CropPlan | null;
   safetyShadow?: SafetyShadowTelemetry;
+  safetyPlanner?: SafetyPlannerTelemetry;
   fallbackReason?: ReframeFallbackReason;
   detectMs: number;
   /** DETECTOR shots, before cut recovery; the recovered count is plan.shots.length. */
@@ -126,6 +134,7 @@ export async function detectRange(
 export interface PlannedDetection {
   plan: CropPlan | null;
   safetyShadow?: SafetyShadowTelemetry;
+  safetyPlanner?: SafetyPlannerTelemetry;
   cutRecovery?: CutRecoveryTelemetry;
   /** Per-candidate verdicts, for the eval only - never copied into
    *  ReframeResult or the manifest. */
@@ -182,8 +191,11 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
   // map and renumber its output. Recovery may normalize malformed sets into a
   // shape that looks valid, but that cannot make the original safety evidence
   // trustworthy.
+  const activeRequested = cfg.safetyPlanner && cfg.safeFit && !cfg.musicMode;
+  const safetyRequested =
+    (cfg.safetyShadow && !cfg.musicMode) || activeRequested;
   const invalidOriginalAlignment =
-    cfg.safetyShadow && !validTrackSetAlignment(d.shots, d.tracksByShot);
+    safetyRequested && !validTrackSetAlignment(d.shots, d.tracksByShot);
   const cam = resolveCamRect(d.tracksByShot.map((t) => t.camRect), d.width, d.height);
   let shots = d.shots;
   let tracks = d.tracksByShot;
@@ -260,11 +272,11 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
       : replanned;
   }
   let safetyShadow: SafetyShadowTelemetry | undefined;
-  if (cfg.safetyShadow && !cfg.musicMode && plan) {
-    // Keep the shadow's source alignment identical to buildCropPlan: detector
-    // track sets are keyed by shotIndex, not by their array position. Any
-    // malformed alignment is fail-closed rather than risking a plausible
-    // pass for regions attached to the wrong shot.
+  let safetyPlanner: SafetyPlannerTelemetry | undefined;
+  if (safetyRequested && plan) {
+    // Keep safety evidence aligned by the detector's shotIndex, not by array
+    // position. Recovery can renumber valid output, but it must not make a
+    // malformed original sidecar appear trustworthy.
     const tracksByShot = new Map<number, ShotTracks>();
     let invalidAlignment = invalidOriginalAlignment || tracks.length !== shots.length;
     for (const trackSet of tracks) {
@@ -282,23 +294,58 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
     }
     if (tracksByShot.size !== shots.length) invalidAlignment = true;
 
-    const regions = invalidAlignment
-      ? []
-      : shots.flatMap((shot, index) => {
-          const trackSet = tracksByShot.get(index);
-          return trackSet
-            ? faceTracksToRegions(
-                survivingTracks(trackSet.tracks),
-                shot,
-                `shot-${index}`
-              )
-            : [];
-        });
-    safetyShadow = evaluatePlanCoverage(plan, regions);
+    const regions = [] as ReturnType<typeof faceTracksToRegionEvidence>["regions"];
+    const invalidSpans: Shot[] = [];
+    if (!invalidAlignment) {
+      for (let index = 0; index < shots.length; index++) {
+        const trackSet = tracksByShot.get(index)!;
+        const evidence = faceTracksToRegionEvidence(
+          survivingTracks(trackSet.tracks),
+          shots[index],
+          `shot-${index}`
+        );
+        regions.push(...evidence.regions);
+        if (evidence.invalid) invalidSpans.push(shots[index]);
+      }
+    }
+
+    // This is deliberately the only safety evaluation. It runs against the
+    // original final candidate (after stream gating), so shadow telemetry is
+    // comparable even when active mode replaces shots below.
+    const detailed = evaluatePlanCoverageDetailed(plan, regions);
+    if (cfg.safetyShadow && !cfg.musicMode) {
+      safetyShadow = detailed.aggregate;
+    }
+
+    const invalidEvidenceShots = new Set<number>();
+    for (const invalidSpan of invalidSpans) {
+      for (let planIndex = 0; planIndex < plan.shots.length; planIndex++) {
+        const planShot = plan.shots[planIndex];
+        if (invalidSpan.start < planShot.end && planShot.start < invalidSpan.end) {
+          invalidEvidenceShots.add(planIndex);
+        }
+      }
+    }
+    if (activeRequested) {
+      const mandatoryEvidenceShots = new Set(
+        detailed.shots
+          .filter((verdict) => verdict.evaluatedSamples > 0)
+          .map((verdict) => verdict.shotIndex)
+      );
+      const applied = applySafetyPlanner(plan, {
+        verdicts: detailed.shots,
+        mandatoryEvidenceShots,
+        invalidEvidenceShots,
+        invalidAlignment,
+      });
+      plan = applied.plan;
+      safetyPlanner = applied.telemetry;
+    }
   }
   return {
     plan,
     ...(safetyShadow ? { safetyShadow } : {}),
+    ...(safetyPlanner ? { safetyPlanner } : {}),
     ...(cutRecovery ? { cutRecovery } : {}),
     ...(decisions ? { decisions } : {}),
   };
@@ -358,6 +405,7 @@ export async function computeCropPlan(
     shotCount: detected.shotCount,
     detectMs: detectMs(),
     ...(planned.safetyShadow ? { safetyShadow: planned.safetyShadow } : {}),
+    ...(planned.safetyPlanner ? { safetyPlanner: planned.safetyPlanner } : {}),
     ...telemetry,
   };
 }

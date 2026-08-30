@@ -1,6 +1,7 @@
 import { planLayoutCounts } from "./plan";
 import type { CutRecoveryTelemetry } from "./cut-recovery";
 import type { SafetyShadowTelemetry } from "./safety";
+import type { SafetyPlannerTelemetry } from "./safety-planner";
 import type { CropPlan, SourceProfile } from "./types";
 
 export interface ReframeCheck {
@@ -14,6 +15,8 @@ export interface ReframeCheck {
   cutRecovery?: CutRecoveryTelemetry;
   /** Present iff aggregate safety-shadow evaluation ran for this highlight. */
   safetyShadow?: SafetyShadowTelemetry;
+  /** Present iff active safety planning was requested for this highlight. */
+  safetyPlanner?: SafetyPlannerTelemetry;
 }
 
 export interface ReframeCheckInput {
@@ -23,6 +26,7 @@ export interface ReframeCheckInput {
   fallbackReason?: string;
   cutRecovery?: CutRecoveryTelemetry;
   safetyShadow?: SafetyShadowTelemetry;
+  safetyPlanner?: SafetyPlannerTelemetry;
 }
 
 /** Pure: what the render stage records about one reframe attempt. */
@@ -35,6 +39,7 @@ export function buildReframeCheck(input: ReframeCheckInput): ReframeCheck {
     ...(input.fallbackReason ? { fallbackReason: input.fallbackReason } : {}),
     ...(input.cutRecovery ? { cutRecovery: input.cutRecovery } : {}),
     ...(input.safetyShadow ? { safetyShadow: input.safetyShadow } : {}),
+    ...(input.safetyPlanner ? { safetyPlanner: input.safetyPlanner } : {}),
   };
 }
 

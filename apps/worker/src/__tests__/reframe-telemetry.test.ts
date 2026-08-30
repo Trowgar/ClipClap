@@ -34,6 +34,15 @@ const safetyShadow = {
   unmappedSamples: 1,
 };
 
+const safetyPlanner = {
+  mode: "active" as const,
+  evaluatedShots: 2,
+  safeFitShots: 1,
+  coverageFallbacks: 1,
+  invalidEvidenceFallbacks: 0,
+  minimumCoverage: 0.72,
+};
+
 describe("buildReframeCheck", () => {
   it("carries the profile and the layout counts", () => {
     expect(
@@ -123,6 +132,24 @@ describe("buildReframeCheck", () => {
     }
   });
 
+  it("copies only aggregate active safety-planner telemetry", () => {
+    const check = buildReframeCheck({
+      plan: streamPlan,
+      shotCount: 1,
+      detectMs: 50,
+      safetyPlanner,
+    });
+    expect(check.safetyPlanner).toEqual(safetyPlanner);
+    expect(Object.keys(check.safetyPlanner!)).toEqual([
+      "mode",
+      "evaluatedShots",
+      "safeFitShots",
+      "coverageFallbacks",
+      "invalidEvidenceFallbacks",
+      "minimumCoverage",
+    ]);
+  });
+
   it("marks a check as an encode failure without inventing layouts", () => {
     const check = buildReframeCheck({ plan: streamPlan, shotCount: 1, detectMs: 900 });
     expect(markEncodeFailed(check)).toEqual({
@@ -152,6 +179,20 @@ describe("buildReframeCheck", () => {
       profile: streamPlan.profile,
       fallbackReason: "encode_failed",
       safetyShadow,
+    });
+
+    const withSafetyPlanner = buildReframeCheck({
+      plan: streamPlan,
+      shotCount: 1,
+      detectMs: 900,
+      safetyPlanner,
+    });
+    expect(markEncodeFailed(withSafetyPlanner)).toEqual({
+      shotCount: 1,
+      detectMs: 900,
+      profile: streamPlan.profile,
+      fallbackReason: "encode_failed",
+      safetyPlanner,
     });
   });
 });

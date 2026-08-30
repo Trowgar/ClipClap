@@ -216,6 +216,27 @@ describe("renderClips reframe branch", () => {
     ]);
   });
 
+  it("persists attempted active safety-planner telemetry", async () => {
+    const safetyPlanner = {
+      mode: "active" as const,
+      evaluatedShots: 1,
+      safeFitShots: 1,
+      coverageFallbacks: 1,
+      invalidEvidenceFallbacks: 0,
+      minimumCoverage: 0.2,
+    };
+    mocks.computeCropPlan.mockResolvedValue({
+      plan: streamPlan,
+      shotCount: 1,
+      detectMs: 900,
+      safetyPlanner,
+    });
+
+    await runRenderStage({ mode: "clips", jobId: "job1", userId: "u1" });
+
+    expect(manifest().reframe.checks[0]).toMatchObject({ safetyPlanner });
+  });
+
   it("falls back to the legacy crop and records why when there is no plan", async () => {
     mocks.computeCropPlan.mockResolvedValue({
       plan: null,
@@ -235,10 +256,19 @@ describe("renderClips reframe branch", () => {
   });
 
   it("re-cuts without the filtergraph when the reframe encode throws", async () => {
+    const safetyPlanner = {
+      mode: "active" as const,
+      evaluatedShots: 1,
+      safeFitShots: 1,
+      coverageFallbacks: 1,
+      invalidEvidenceFallbacks: 0,
+      minimumCoverage: 0.2,
+    };
     mocks.computeCropPlan.mockResolvedValue({
       plan: streamPlan,
       shotCount: 1,
       detectMs: 900,
+      safetyPlanner,
     });
     mocks.cutClips
       .mockRejectedValueOnce(new Error("ffmpeg error -22"))
@@ -260,6 +290,7 @@ describe("renderClips reframe branch", () => {
         detectMs: 900,
         profile: streamPlan.profile,
         fallbackReason: "encode_failed",
+        safetyPlanner,
       },
     ]);
   });
