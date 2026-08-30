@@ -139,6 +139,22 @@ export function applySafetyPlanner(
   }
   const merged = mergeAdjacentSafeFit(plannedShots);
 
+  const hasStream = merged.shots.some((shot) => shot.layout === "stream");
+  if (!hasStream && "stream" in plan) {
+    // Stream geometry belongs only to stream layouts. Remove it from a
+    // changed plan once the last stream shot has become safe-fit, while
+    // leaving the original plan and its nested objects untouched.
+    const { stream: _stream, ...withoutStream } = plan;
+    return {
+      plan: {
+        ...withoutStream,
+        version: 4,
+        shots: merged.shots,
+      },
+      telemetry,
+    };
+  }
+
   return {
     plan: {
       ...plan,

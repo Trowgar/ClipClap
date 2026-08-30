@@ -15,6 +15,13 @@ const safe = (
   reason: "coverage" | "invalid_evidence"
 ): ShotLayout => ({ start, end, layout: "safe-fit", reason });
 
+const streamGeometry: NonNullable<CropPlan["stream"]> = {
+  camCrop: { w: 640, h: 360, y: 0 },
+  contentCrop: { w: 1920, h: 1080 },
+  outCamH: 480,
+  outContentH: 1440,
+};
+
 const plan = (shots: ShotLayout[], version: CropPlan["version"] = 3): CropPlan => ({
   version,
   engine: "faces",
@@ -199,6 +206,46 @@ describe("applySafetyPlanner", () => {
       minimumCoverage: 1,
       safeFitShots: 0,
     });
+  });
+
+  it("drops stream geometry when every stream shot becomes safe-fit", () => {
+    const original = {
+      ...plan([{ start: 0, end: 1, layout: "stream", cam: { x: 0 }, content: { x: 0 } }], 2),
+      stream: streamGeometry,
+    } satisfies CropPlan;
+    const result = applySafetyPlanner(
+      original,
+      input({
+        verdicts: [verdict(0, "fail", 0)],
+        mandatoryEvidenceShots: new Set([0]),
+      })
+    );
+
+    expect(result.plan.version).toBe(4);
+    expect(result.plan.shots[0]).toEqual(safe(0, 1, "coverage"));
+    expect("stream" in result.plan).toBe(false);
+    expect(original.stream).toBe(streamGeometry);
+  });
+
+  it("retains the same stream geometry when another shot remains stream", () => {
+    const original = {
+      ...plan([
+        { start: 0, end: 1, layout: "stream", cam: { x: 0 }, content: { x: 0 } },
+        shot(1, 2),
+      ], 2),
+      stream: streamGeometry,
+    } satisfies CropPlan;
+    const result = applySafetyPlanner(
+      original,
+      input({
+        verdicts: [verdict(1, "fail", 0)],
+        mandatoryEvidenceShots: new Set([1]),
+      })
+    );
+
+    expect(result.plan.stream).toBe(streamGeometry);
+    expect(result.plan.shots[0]).toBe(original.shots[0]);
+    expect(result.plan.shots[1]).toEqual(safe(1, 2, "coverage"));
   });
 
   it("ignores out-of-range evidence indexes and is idempotent", () => {
