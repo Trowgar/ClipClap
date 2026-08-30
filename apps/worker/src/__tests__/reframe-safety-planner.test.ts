@@ -184,6 +184,23 @@ describe("applySafetyPlanner", () => {
     expect(result.telemetry.evaluatedShots).toBe(1);
   });
 
+  it("derives minimum coverage from the canonical last verdict", () => {
+    const result = applySafetyPlanner(
+      plan([shot(0, 1)]),
+      input({
+        verdicts: [verdict(0, "fail", 0.2), verdict(0, "pass", 1)],
+        mandatoryEvidenceShots: new Set([0]),
+      })
+    );
+
+    expect(result.plan.shots[0]).toEqual(shot(0, 1));
+    expect(result.telemetry).toMatchObject({
+      evaluatedShots: 1,
+      minimumCoverage: 1,
+      safeFitShots: 0,
+    });
+  });
+
   it("ignores out-of-range evidence indexes and is idempotent", () => {
     const original = plan([shot(0, 1), shot(1, 2)]);
     const policy = input({

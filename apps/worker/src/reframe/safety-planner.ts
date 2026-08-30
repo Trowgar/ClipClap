@@ -94,8 +94,9 @@ export function applySafetyPlanner(
     if (inPlan) {
       verdicts.set(verdict.shotIndex, verdict);
     }
+  }
+  for (const verdict of verdicts.values()) {
     if (
-      inPlan &&
       input.mandatoryEvidenceShots.has(verdict.shotIndex) &&
       Number.isFinite(verdict.minimumCoverage)
     ) {
