@@ -56,6 +56,7 @@ export function observeRescueCandidates(
   nodes: SentenceNode[],
   cfg: AnalyzeConfig,
   arcEvidence: ReadonlyMap<string, ArcAuditGeometryEvidence>,
+  languageIso: string,
 ): { evaluated: number; records: SafeEndRescueRecord[] } {
   const ordered = [...verdicts].sort(
     (left, right) => right.score - left.score || left.id.localeCompare(right.id),
@@ -95,7 +96,7 @@ export function observeRescueCandidates(
       geometry: safeEndGeometryReference(clip),
       score: verdict.score,
       scoreRank: index + 1,
-      language: verdict.language,
+      language: languageIso,
       ...(verdict.kind ? { kind: verdict.kind } : {}),
       zeroTailHandoff: zeroTail,
       arcEvidence: matchedArcEvidence,

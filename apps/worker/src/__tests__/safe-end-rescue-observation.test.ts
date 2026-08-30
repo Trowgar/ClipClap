@@ -61,6 +61,7 @@ describe("safe-end rescue observation", () => {
       nodes(),
       cfg,
       new Map(),
+      "en",
     );
 
     expect(observations.evaluated).toBe(2);
@@ -79,6 +80,7 @@ describe("safe-end rescue observation", () => {
       nodes(),
       cfg,
       new Map(),
+      "en",
     ).records;
 
     expect(records.map((record) => [record.geometry.candidateId, record.scoreRank, record.selectedState])).toEqual([
@@ -90,16 +92,16 @@ describe("safe-end rescue observation", () => {
   });
 
   it("uses arc flags only when their audit-time geometry exactly matches, without mutating them", () => {
-    const first = observeRescueCandidates([verdict("c0", 0.7)], nodes(), cfg, new Map()).records[0];
+    const first = observeRescueCandidates([verdict("c0", 0.7)], nodes(), cfg, new Map(), "en").records[0];
     const clear = evidenceFor(first);
     const standing = evidenceFor(first);
     standing.flags.entry = { ok: false, defect: "mid_story" };
     const stale = { ...evidenceFor(first), startMs: first.geometry.startMs + 1 };
     const original = structuredClone(standing);
 
-    expect(observeRescueCandidates([verdict("c0", 0.7)], nodes(), cfg, new Map([["c0", clear]])).records[0]?.arcEvidence).toBe("matching_clear");
-    expect(observeRescueCandidates([verdict("c0", 0.7)], nodes(), cfg, new Map([["c0", standing]])).records[0]).toMatchObject({ arcEvidence: "matching_standing", proposedAction: "both" });
-    expect(observeRescueCandidates([verdict("c0", 0.7)], nodes(), cfg, new Map([["c0", stale]])).records[0]?.arcEvidence).toBe("stale_or_absent");
+    expect(observeRescueCandidates([verdict("c0", 0.7)], nodes(), cfg, new Map([["c0", clear]]), "en").records[0]?.arcEvidence).toBe("matching_clear");
+    expect(observeRescueCandidates([verdict("c0", 0.7)], nodes(), cfg, new Map([["c0", standing]]), "en").records[0]).toMatchObject({ arcEvidence: "matching_standing", proposedAction: "both" });
+    expect(observeRescueCandidates([verdict("c0", 0.7)], nodes(), cfg, new Map([["c0", stale]]), "en").records[0]?.arcEvidence).toBe("stale_or_absent");
     expect(standing).toEqual(original);
   });
 });

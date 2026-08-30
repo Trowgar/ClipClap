@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createHash } from "crypto";
 
 const mocks = vi.hoisted(() => ({
   startJobStep: vi.fn(),
@@ -152,31 +151,6 @@ function safeEndAuditV2Result() {
   };
   const telemetry = { ...base.telemetry, safeEndAudit };
   return { ...base, result: { ...base.result, telemetry }, telemetry, safeEndAudit };
-}
-
-/** The stage harness's deterministic render-request boundary. It preserves
- * every persisted highlight field, recursively sorted for a stable hash, while
- * excluding only analysis telemetry, usage, and job identity metadata. */
-function renderStageBoundaryMock(highlights: unknown) {
-  const renderInput = renderRequestValue(highlights);
-  const artifactRequest = JSON.stringify(renderInput);
-  return {
-    renderRequest: renderInput,
-    cutInputs: (renderInput as Array<{ start: number; end: number }>).map(({ start, end }) => ({ start, end })),
-    artifactRequestHash: createHash("sha256").update(artifactRequest).digest("hex"),
-  };
-}
-
-function renderRequestValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(renderRequestValue);
-  if (value === null || typeof value !== "object") return value;
-
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .filter(([key]) => !["telemetry", "usage", "id", "jobId", "userId"].includes(key))
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, nested]) => [key, renderRequestValue(nested)]),
-  );
 }
 
 function persistedHighlights() {
@@ -502,7 +476,7 @@ describe("stage handlers", () => {
     });
   });
 
-  it("keeps real V2 safe-end shadow render requests, cut inputs, and artifact-request hash identical to off", async () => {
+  it("keeps real V2 safe-end shadow persisted highlights and render queue identical to off", async () => {
     vi.stubEnv("ANALYZE_ENGINE", "recall-critic");
     const job = {
       id: "job1",
@@ -520,7 +494,7 @@ describe("stage handlers", () => {
     );
     await runAnalyzeStage({ jobId: "job1", userId: "u1" });
     const offHighlights = persistedHighlights();
-    const offRenderBoundary = renderStageBoundaryMock(offHighlights);
+    const offRenderQueuePayload = mocks.queueAdd.mock.calls.at(-1)?.[1];
     expect(mocks.analyzeHighlightsV2.mock.calls[0]?.[1]?.cfg.safeEndAuditMode).toBe("off");
     expect(offClient.schemas).toEqual(["scan_candidates", "critic_verdicts", "clip_finalizer"]);
 
@@ -534,12 +508,12 @@ describe("stage handlers", () => {
     );
     await runAnalyzeStage({ jobId: "job1", userId: "u1" });
     const shadowHighlights = persistedHighlights();
-    const shadowRenderBoundary = renderStageBoundaryMock(shadowHighlights);
+    const shadowRenderQueuePayload = mocks.queueAdd.mock.calls.at(-1)?.[1];
 
     expect(mocks.analyzeHighlightsV2.mock.calls[0]?.[1]?.cfg.safeEndAuditMode).toBe("shadow");
     expect(shadowClient.schemas).toEqual(["scan_candidates", "critic_verdicts", "safe_end_audit", "clip_finalizer"]);
     expect(shadowHighlights).toEqual(offHighlights);
-    expect(shadowRenderBoundary).toEqual(offRenderBoundary);
+    expect(shadowRenderQueuePayload).toEqual(offRenderQueuePayload);
     expect(mocks.queueAdd).toHaveBeenCalledWith("render", {
       jobId: "job1",
       userId: "u1",

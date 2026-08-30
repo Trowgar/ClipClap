@@ -129,6 +129,7 @@ function safeEndRescueTelemetry(
 function jsonSafeEndAuditTelemetry(
   telemetry: unknown,
   clips: readonly SnappedClip[],
+  languageIso: string,
   hook?: (telemetry: unknown) => unknown
 ): SafeEndAuditTelemetry {
   try {
@@ -136,7 +137,7 @@ function jsonSafeEndAuditTelemetry(
     if (typeof serialized !== "string") throw new Error("safe-end telemetry did not serialize");
     return JSON.parse(serialized) as SafeEndAuditTelemetry;
   } catch {
-    return { normal: failedSafeEndNormalTelemetry(clips, "construction_error") };
+    return { normal: failedSafeEndNormalTelemetry(clips, "construction_error", languageIso) };
   }
 }
 
@@ -172,7 +173,8 @@ function safeEndFailureCode(
 
 function failedSafeEndNormalTelemetry(
   clips: readonly SnappedClip[],
-  code: SafeEndAuditFailureCode
+  code: SafeEndAuditFailureCode,
+  languageIso: string,
 ): SafeEndNormalTelemetry {
   const telemetry = emptySafeEndNormalTelemetry();
   telemetry.evaluated = clips.length;
@@ -181,7 +183,7 @@ function failedSafeEndNormalTelemetry(
     const records: SafeEndNormalRecord[] = clips.map((clip) => ({
       geometry: safeEndGeometryReference(clip),
       score: clip.verdict.score,
-      language: clip.verdict.language,
+      language: languageIso,
       ...(clip.verdict.kind ? { kind: clip.verdict.kind } : {}),
       outcome: "audit_failed",
       reason: null,
@@ -210,6 +212,7 @@ async function runSafeEndNormalAudit(
   clips: SnappedClip[],
   nodes: import("./types").SentenceNode[],
   cfg: AnalyzeConfig,
+  languageIso: string,
   options: { retryDelayMs?: number }
 ): Promise<SafeEndAuditTelemetry> {
   try {
@@ -224,11 +227,11 @@ async function runSafeEndNormalAudit(
       retryDelayMs: options.retryDelayMs,
       noRetry: true,
     });
-    if (!response.ok) return { normal: failedSafeEndNormalTelemetry(clips, safeEndFailureCode(response)) };
+    if (!response.ok) return { normal: failedSafeEndNormalTelemetry(clips, safeEndFailureCode(response), languageIso) };
 
     const rawRows = response.data?.results;
     if (!Array.isArray(rawRows)) {
-      return { normal: failedSafeEndNormalTelemetry(clips, "malformed_response") };
+      return { normal: failedSafeEndNormalTelemetry(clips, "malformed_response", languageIso) };
     }
     const rows = rawRows.map(readSafeEndAuditRow);
     const expectedIds = new Set(clips.map((clip) => clip.verdict.id));
@@ -237,28 +240,28 @@ async function runSafeEndNormalAudit(
       rows.some((row) => row === null || !expectedIds.has(row.id) || seen.has(row.id) || !seen.add(row.id)) ||
       seen.size !== clips.length
     ) {
-      return { normal: failedSafeEndNormalTelemetry(clips, "malformed_response") };
+      return { normal: failedSafeEndNormalTelemetry(clips, "malformed_response", languageIso) };
     }
 
     const clipById = new Map(clips.map((clip) => [clip.verdict.id, clip]));
     const telemetry = emptySafeEndNormalTelemetry();
     const records: SafeEndNormalRecord[] = [];
     for (const row of rows) {
-      if (!row) return { normal: failedSafeEndNormalTelemetry(clips, "malformed_response") };
+      if (!row) return { normal: failedSafeEndNormalTelemetry(clips, "malformed_response", languageIso) };
       const clip = clipById.get(row.id);
-      if (!clip) return { normal: failedSafeEndNormalTelemetry(clips, "malformed_response") };
+      if (!clip) return { normal: failedSafeEndNormalTelemetry(clips, "malformed_response", languageIso) };
       if (
         row.outcome === "needs_afterbeat" &&
         !safeEndAuditForwardContext(clip, nodes).some((node) => node.index === row.extendToNode)
       ) {
-        return { normal: failedSafeEndNormalTelemetry(clips, "malformed_response") };
+        return { normal: failedSafeEndNormalTelemetry(clips, "malformed_response", languageIso) };
       }
       telemetry.evaluated += 1;
       telemetry[row.outcome] += 1;
       records.push({
         geometry: safeEndGeometryReference(clip),
         score: clip.verdict.score,
-        language: clip.verdict.language,
+        language: languageIso,
         ...(clip.verdict.kind ? { kind: clip.verdict.kind } : {}),
         outcome: row.outcome,
         reason: row.reason,
@@ -272,7 +275,7 @@ async function runSafeEndNormalAudit(
   } catch {
     // This is deliberately narrower than a JobStep write: this catch protects
     // only feature-local prompt, parsing, and telemetry construction.
-    return { normal: failedSafeEndNormalTelemetry(clips, "construction_error") };
+    return { normal: failedSafeEndNormalTelemetry(clips, "construction_error", languageIso) };
   }
 }
 
@@ -907,11 +910,13 @@ export async function analyzeHighlightsV2(
       afterPostBoundaryHookGate,
       nodes,
       cfg,
+      languageIso,
       { retryDelayMs: options.retryDelayMs }
     );
     const normalAudit = jsonSafeEndAuditTelemetry(
       audit,
       afterPostBoundaryHookGate,
+      languageIso,
       options.safeEndAuditTelemetryTestHook
     );
     safeEndAuditTelemetry = {
@@ -1428,7 +1433,7 @@ export async function analyzeHighlightsV2(
         safeEndAuditTelemetry = {
           ...safeEndAuditTelemetry,
           rescue: (() => {
-            const observations = observeRescueCandidates(rescuePool, nodes, cfg, arcGeometryEvidence);
+            const observations = observeRescueCandidates(rescuePool, nodes, cfg, arcGeometryEvidence, languageIso);
             return safeEndRescueTelemetry(
               observations,
               observations.records.length > 0 ? "selected" : "no_realizable_candidate",
