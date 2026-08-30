@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { faceTracksToRegions } from "../reframe/regions";
+import { faceTracksToRegionEvidence, faceTracksToRegions } from "../reframe/regions";
 import {
   coverageForBox,
+  evaluatePlanCoverageDetailed,
   evaluatePlanCoverage,
 } from "../reframe/safety";
 import {
@@ -68,6 +69,46 @@ describe("faceTracksToRegions", () => {
       },
     ]);
     expect(tracks).toEqual(original);
+  });
+
+  it("marks every surviving track mandatory and rejects any malformed path", () => {
+    const valid: FaceTrack = {
+      id: 1,
+      box: box(10, 20, 30, 40),
+      score: 1,
+      samples: 2,
+      mouthActivity: 0,
+      path: [
+        { t: 1, x: 10, y: 20, w: 30, h: 40 },
+        { t: 2, x: 11, y: 21, w: 30, h: 40 },
+      ],
+    };
+    const invalidPaths: Array<FaceTrack["path"]> = [
+      undefined,
+      [],
+      [{ t: 2, x: 10, y: 20, w: 30, h: 40 }, { t: 1, x: 10, y: 20, w: 30, h: 40 }],
+      [{ t: Number.NaN, x: 10, y: 20, w: 30, h: 40 }],
+      [{ t: 1, x: 10, y: 20, w: 0, h: 40 }],
+      [{ t: 3, x: 10, y: 20, w: 30, h: 40 }],
+    ];
+    const span: Shot = { start: 1, end: 2 };
+
+    expect(faceTracksToRegionEvidence([], span, "empty")).toEqual({
+      regions: [],
+      hasMandatoryRegions: false,
+      invalid: false,
+    });
+    for (const path of invalidPaths) {
+      const result = faceTracksToRegionEvidence(
+        [valid, { ...valid, id: 2, path }],
+        span,
+        "mixed"
+      );
+      expect(result.invalid).toBe(true);
+      expect(result.hasMandatoryRegions).toBe(true);
+      expect(result.regions).toHaveLength(1);
+      expect(result.regions[0].id).toBe("mixed:face-1");
+    }
   });
 });
 
@@ -146,6 +187,80 @@ describe("render-time semantics", () => {
 });
 
 describe("evaluatePlanCoverage", () => {
+  it("returns renderer-aligned per-shot verdicts while keeping the aggregate wrapper", () => {
+    const twoShots = plan([
+      { start: 0, end: 1.236, layout: "single", x: 0 },
+      { start: 1.236, end: 2, layout: "safe-fit", reason: "coverage" },
+    ]);
+    const regions = [
+      region("first", "mandatory", [{ t: 1, box: box(1000, 0, 100, 100) }]),
+      region("second", "mandatory", [{ t: 1.24, box: box(2900, 900, 100, 100) }]),
+    ];
+    const detailed = evaluatePlanCoverageDetailed(twoShots, regions, 0.9);
+
+    expect(detailed.shots).toEqual([
+      {
+        shotIndex: 0,
+        status: "fail",
+        minimumCoverage: 0,
+        evaluatedSamples: 1,
+        rejectedSamples: 1,
+        unmappedSamples: 0,
+      },
+      {
+        shotIndex: 1,
+        status: "pass",
+        minimumCoverage: 1,
+        evaluatedSamples: 1,
+        rejectedSamples: 0,
+        unmappedSamples: 0,
+      },
+    ]);
+    expect(evaluatePlanCoverage(twoShots, regions, 0.9)).toEqual(detailed.aggregate);
+    expect(detailed.aggregate).toMatchObject({
+      status: "fail",
+      minimumCoverage: 0,
+      evaluatedSamples: 2,
+      rejectedSamples: 1,
+      unmappedSamples: 0,
+    });
+  });
+
+  it("maps a sample at a rounded boundary to the next rendered shot", () => {
+    const roundedBoundary = plan([
+      { start: 0, end: 1.236, layout: "single", x: 0 },
+      { start: 1.236, end: 2, layout: "single", x: 400 },
+    ]);
+    const detailed = evaluatePlanCoverageDetailed(roundedBoundary, [
+      region("boundary", "mandatory", [{ t: 1.24, box: box(700, 0, 100, 100) }]),
+    ]);
+    expect(detailed.shots[0]).toMatchObject({ evaluatedSamples: 0, status: "not_evaluable" });
+    expect(detailed.shots[1]).toMatchObject({
+      status: "pass",
+      minimumCoverage: 1,
+      evaluatedSamples: 1,
+      rejectedSamples: 0,
+      unmappedSamples: 0,
+    });
+  });
+
+  it("marks invalid layout geometry not evaluable for the affected shot", () => {
+    const invalid = plan([{ start: 0, end: 10, layout: "single", x: -1 }]);
+    const detailed = evaluatePlanCoverageDetailed(invalid, [
+      region("invalid-layout", "mandatory", [{ t: 1, box: box(100, 0, 100, 100) }]),
+    ]);
+    expect(detailed.shots).toEqual([
+      {
+        shotIndex: 0,
+        status: "not_evaluable",
+        minimumCoverage: null,
+        evaluatedSamples: 0,
+        rejectedSamples: 0,
+        unmappedSamples: 0,
+      },
+    ]);
+  });
+
   it("treats a valid safe-fit shot as full-frame coverage", () => {
     const safeFit: CropPlan = {
       version: 4,

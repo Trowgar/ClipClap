@@ -15,6 +15,20 @@ export interface SafetyShadowTelemetry {
   unmappedSamples: number;
 }
 
+export interface ShotSafetyVerdict {
+  shotIndex: number;
+  status: "not_evaluable" | "pass" | "fail";
+  minimumCoverage: number | null;
+  evaluatedSamples: number;
+  rejectedSamples: number;
+  unmappedSamples: number;
+}
+
+export interface DetailedSafetyEvaluation {
+  aggregate: SafetyShadowTelemetry;
+  shots: ShotSafetyVerdict[];
+}
+
 const DEFAULT_THRESHOLD = 0.9;
 // Numerical-only tolerance: this is far below any product coverage margin.
 const COVERAGE_EPSILON = Number.EPSILON * 16;
@@ -285,6 +299,18 @@ function baseXAt(plan: CropPlan, timeline: Timeline, t: number): number {
   return baseXForShot(plan.shots[plan.shots.length - 1], centerX);
 }
 
+function renderedShotIndexAt(
+  plan: CropPlan,
+  timeline: Timeline,
+  t: number
+): number | null {
+  if (t < timeline.firstStart || t > timeline.finalEnd) return null;
+  for (let index = 0; index < plan.shots.length - 1; index++) {
+    if (t < roundLayoutTime(plan.shots[index].end)) return index;
+  }
+  return plan.shots.length > 0 ? plan.shots.length - 1 : null;
+}
+
 function activeCompositesAt(
   plan: CropPlan,
   t: number
@@ -344,11 +370,11 @@ function windowsForSample(
   return [{ x, y: 0, w: cropWidthFor(plan.source.height), h: plan.source.height }];
 }
 
-export function evaluatePlanCoverage(
+export function evaluatePlanCoverageDetailed(
   plan: CropPlan,
   regions: FocalRegionTrack[],
   threshold = 0.9
-): SafetyShadowTelemetry {
+): DetailedSafetyEvaluation {
   let evaluatedSamples = 0;
   let rejectedSamples = 0;
   let unmappedSamples = 0;
@@ -358,16 +384,37 @@ export function evaluatePlanCoverage(
     Number.isFinite(threshold) && threshold >= 0 && threshold <= 1;
   const normalizedThreshold = validThreshold ? threshold : DEFAULT_THRESHOLD;
   const regionList = Array.isArray(regions) ? regions : [];
+  const rawShots = record(plan)?.shots;
+  const shots: ShotSafetyVerdict[] = Array.isArray(rawShots)
+    ? rawShots.map((_, shotIndex) => ({
+        shotIndex,
+        status: "not_evaluable",
+        minimumCoverage: null,
+        evaluatedSamples: 0,
+        rejectedSamples: 0,
+        unmappedSamples: 0,
+      }))
+    : [];
+
+  const markUnmapped = (shotIndex: number | null): void => {
+    unmappedSamples++;
+    if (shotIndex !== null && shots[shotIndex]) shots[shotIndex].unmappedSamples++;
+  };
 
   for (const rawRegion of regionList) {
     const focalRegion = record(rawRegion);
     if (!focalRegion || focalRegion.priority !== "mandatory") continue;
     if (!Array.isArray(focalRegion.samples)) {
-      unmappedSamples++;
+      markUnmapped(null);
       continue;
     }
     for (const rawSample of focalRegion.samples) {
       const sample = record(rawSample);
+      const sampleTime = sample?.t;
+      const shotIndex =
+        timeline && Number.isFinite(sampleTime)
+          ? renderedShotIndexAt(plan, timeline, sampleTime as number)
+          : null;
       if (
         !timeline ||
         !validThreshold ||
@@ -377,12 +424,12 @@ export function evaluatePlanCoverage(
         (sample.t as number) < timeline.firstStart ||
         (sample.t as number) > timeline.finalEnd
       ) {
-        unmappedSamples++;
+        markUnmapped(shotIndex);
         continue;
       }
       const windows = windowsForSample(plan, timeline, sample.t as number);
       if (!windows || !windows.every((window) => finiteBox(window))) {
-        unmappedSamples++;
+        markUnmapped(shotIndex);
         continue;
       }
 
@@ -390,12 +437,23 @@ export function evaluatePlanCoverage(
         ...windows.map((window) => coverageForBox(sample.box as FaceBox, window))
       );
       if (!Number.isFinite(coverage)) {
-        unmappedSamples++;
+        markUnmapped(shotIndex);
         continue;
       }
       evaluatedSamples++;
       minimumCoverage =
         minimumCoverage === null ? coverage : Math.min(minimumCoverage, coverage);
+      if (shotIndex !== null && shots[shotIndex]) {
+        const verdict = shots[shotIndex];
+        verdict.evaluatedSamples++;
+        verdict.minimumCoverage =
+          verdict.minimumCoverage === null
+            ? coverage
+            : Math.min(verdict.minimumCoverage, coverage);
+        if (coverage + COVERAGE_EPSILON < normalizedThreshold) {
+          verdict.rejectedSamples++;
+        }
+      }
       if (coverage + COVERAGE_EPSILON < normalizedThreshold) rejectedSamples++;
     }
   }
@@ -406,12 +464,31 @@ export function evaluatePlanCoverage(
       : rejectedSamples > 0
         ? "fail"
         : "pass";
+  for (const verdict of shots) {
+    verdict.status =
+      verdict.evaluatedSamples === 0 || verdict.unmappedSamples > 0
+        ? "not_evaluable"
+        : verdict.rejectedSamples > 0
+          ? "fail"
+          : "pass";
+  }
   return {
-    status,
-    threshold: normalizedThreshold,
-    minimumCoverage,
-    evaluatedSamples,
-    rejectedSamples,
-    unmappedSamples,
+    aggregate: {
+      status,
+      threshold: normalizedThreshold,
+      minimumCoverage,
+      evaluatedSamples,
+      rejectedSamples,
+      unmappedSamples,
+    },
+    shots,
   };
+}
+
+export function evaluatePlanCoverage(
+  plan: CropPlan,
+  regions: FocalRegionTrack[],
+  threshold = 0.9
+): SafetyShadowTelemetry {
+  return evaluatePlanCoverageDetailed(plan, regions, threshold).aggregate;
 }
