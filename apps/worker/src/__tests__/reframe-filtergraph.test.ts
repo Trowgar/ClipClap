@@ -32,14 +32,114 @@ describe("piecewiseX", () => {
 });
 
 describe("buildFiltergraph", () => {
-  it("fails closed for a v4 safe-fit plan until its renderer is implemented", () => {
-    const v4SafeFit: CropPlan = {
+  const safeFitPlan = (shots: CropPlan["shots"]): CropPlan => ({
+    version: 4,
+    engine: "faces",
+    source: { width: 1920, height: 1080 },
+    shots,
+  });
+
+  it("renders an all-safe-fit plan with a contain foreground over a blurred full canvas", () => {
+    const v4SafeFit = safeFitPlan([
+      { start: 0, end: 10, layout: "safe-fit", reason: "coverage" },
+    ]);
+    expect(buildFiltergraph(v4SafeFit)).toEqual({
+      kind: "complex",
+      graph: [
+        "[0:v]split=2[legacyin][safein]",
+        "[legacyin]crop=w=608:h=ih:x='656':y=0,scale=1080:1920,setsar=1[legacyout]",
+        "[safein]split=2[safebg][safefg]",
+        "[safebg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=luma_radius=20:luma_power=2,setsar=1[safebgout]",
+        "[safefg]scale=1080:1920:force_original_aspect_ratio=decrease,setsar=1[safefgout]",
+        "[safebgout][safefgout]overlay=x='(W-w)/2':y='(H-h)/2'[safe]",
+        "[legacyout][safe]overlay=x=0:y=0:enable='gte(t,0.00)*lt(t,10.00)'[vout]",
+      ].join(";"),
+    });
+  });
+
+  it("composes safe-fit only over its mixed single-shot interval", () => {
+    const v4SafeFit = safeFitPlan([
+      { start: 0, end: 10, layout: "single", x: 496 },
+      { start: 10, end: 20, layout: "safe-fit", reason: "coverage" },
+      { start: 20, end: 30, layout: "center", x: 656 },
+    ]);
+    const graph = buildFiltergraph(v4SafeFit).graph;
+    expect(graph).toContain("[legacyin]crop=w=608:h=ih:x='if(lt(t,10.00),496,if(lt(t,20.00),656,656))'");
+    expect(graph).toContain(
+      "enable='gte(t,10.00)*lt(t,20.00)'[vout]"
+    );
+    expect(graph.match(/\[safein\]split=2/g)).toHaveLength(1);
+  });
+
+  it("unites multiple safe-fit windows with half-open exact boundaries", () => {
+    const v4SafeFit = safeFitPlan([
+      { start: 0, end: 5, layout: "safe-fit", reason: "coverage" },
+      { start: 5, end: 10, layout: "single", x: 496 },
+      { start: 10, end: 15, layout: "safe-fit", reason: "invalid_evidence" },
+    ]);
+    expect(buildFiltergraph(v4SafeFit).graph).toContain(
+      "enable='gte(t,0.00)*lt(t,5.00)+gte(t,10.00)*lt(t,15.00)'"
+    );
+    expect(buildFiltergraph(v4SafeFit).graph).not.toContain("between(");
+  });
+
+  it("supports safe-fit mixed with split and stream layouts", () => {
+    const split = safeFitPlan([
+      { start: 0, end: 10, layout: "split", top: { x: 0 }, bottom: { x: 704 } },
+      { start: 10, end: 20, layout: "safe-fit", reason: "coverage" },
+    ]);
+    expect(buildFiltergraph(split).graph).toContain("[legacyin]split=3[b0][t0][m0]");
+    expect(buildFiltergraph(split).graph).toContain(
+      "[legacyout][safe]overlay=x=0:y=0:enable='gte(t,10.00)*lt(t,20.00)'[vout]"
+    );
+
+    const stream: CropPlan = {
+      version: 4,
+      engine: "faces",
+      source: { width: 1280, height: 720 },
+      stream: {
+        camCrop: { w: 336, h: 240, y: 0 },
+        contentCrop: { w: 676, h: 720 },
+        outCamH: 770,
+        outContentH: 1150,
+      },
+      shots: [
+        { start: 0, end: 10, layout: "stream", cam: { x: 32 }, content: { x: 428 } },
+        { start: 10, end: 20, layout: "safe-fit", reason: "coverage" },
+      ],
+    };
+    expect(buildFiltergraph(stream).graph).toContain("[legacyin]split=3[b0][c0][m0]");
+    expect(buildFiltergraph(stream).graph).toContain(
+      "enable='gte(t,10.00)*lt(t,20.00)'[vout]"
+    );
+  });
+
+  it("burns subtitles once, after the final safe-fit overlay, without mutating the plan", () => {
+    const v4SafeFit = safeFitPlan([
+      { start: 0, end: 10, layout: "safe-fit", reason: "coverage" },
+    ]);
+    const snapshot = structuredClone(v4SafeFit);
+    Object.freeze(v4SafeFit);
+    Object.freeze(v4SafeFit.source);
+    Object.freeze(v4SafeFit.shots[0]);
+    Object.freeze(v4SafeFit.shots);
+    const graph = buildFiltergraph(v4SafeFit, "ass=x.ass").graph;
+    expect(graph.match(/ass=x\.ass/g)).toHaveLength(1);
+    expect(graph.endsWith("[safeover]ass=x.ass[vout]")).toBe(true);
+    expect(v4SafeFit).toEqual(snapshot);
+  });
+
+  it("does not change the legacy exact path when no safe-fit shot exists", () => {
+    const v4NoSafeFit: CropPlan = {
       version: 4,
       engine: "faces",
       source: { width: 1920, height: 1080 },
-      shots: [{ start: 0, end: 10, layout: "safe-fit", reason: "coverage" }],
+      shots: [{ start: 0, end: 10, layout: "center", x: 656 }],
     };
-    expect(() => buildFiltergraph(v4SafeFit)).toThrow("safe-fit_not_supported");
+    expect(buildFiltergraph(v4NoSafeFit)).toEqual({
+      kind: "vf",
+      graph: "crop=w=608:h=ih:x='656':y=0,scale=1080:1920,setsar=1",
+    });
   });
 
   it("stays -vf for a single static shot", () => {

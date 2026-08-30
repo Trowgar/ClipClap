@@ -23,9 +23,8 @@ function baseXForShot(shot: ShotLayout, centerX: number): number {
       return shot.x;
     case "split":
     case "stream":
-      return centerX;
     case "safe-fit":
-      throw new Error("safe-fit_not_supported");
+      return centerX;
   }
 }
 
@@ -191,6 +190,73 @@ function remapShotForBars(
   return shot;
 }
 
+function safeFitEnable(plan: CropPlan): string {
+  return plan.shots
+    .filter((shot) => shot.layout === "safe-fit")
+    .map(
+      (shot) =>
+        `gte(t,${formatLayoutTime(shot.start)})*lt(t,${formatLayoutTime(shot.end)})`
+    )
+    .join("+");
+}
+
+/**
+ * Safe-fit is an overlay around the existing renderer, rather than a second
+ * implementation of its crop/stream/split semantics. The legacy branch gets
+ * a centre crop in safe-fit windows; it is fully covered there by the
+ * contain-over-blur branch, while every other window remains byte-identical
+ * to the existing compiler.
+ */
+function buildSafeFitFiltergraph(
+  plan: CropPlan,
+  assSnippet: string | undefined,
+  musicDirection: MusicDirectionOpts | undefined
+): FilterSpec {
+  const cropWidth = cropWidthFor(plan.source.height);
+  const centerX = evenClamp(
+    (plan.source.width - cropWidth) / 2,
+    cropWidth,
+    plan.source.width
+  );
+  const legacyPlan: CropPlan = {
+    ...plan,
+    shots: plan.shots.map((shot) =>
+      shot.layout === "safe-fit"
+        ? { start: shot.start, end: shot.end, layout: "center", x: centerX }
+        : shot
+    ),
+  };
+  const legacy = buildFiltergraph(legacyPlan, undefined, musicDirection);
+  const legacyGraph =
+    legacy.kind === "vf"
+      ? `[legacyin]${legacy.graph}[legacyout]`
+      : (() => {
+          if (!legacy.graph.startsWith("[0:v]")) {
+            throw new Error("safe-fit_legacy_input_missing");
+          }
+          if (!legacy.graph.endsWith("[vout]")) {
+            throw new Error("safe-fit_legacy_terminal_missing");
+          }
+          return `${legacy.graph.slice(0, -"[vout]".length).replace("[0:v]", "[legacyin]")}[legacyout]`;
+        })();
+  const enable = safeFitEnable(plan);
+  if (!enable) throw new Error("safe-fit_interval_missing");
+
+  const chains = [
+    "[0:v]split=2[legacyin][safein]",
+    legacyGraph,
+    "[safein]split=2[safebg][safefg]",
+    "[safebg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=luma_radius=20:luma_power=2,setsar=1[safebgout]",
+    "[safefg]scale=1080:1920:force_original_aspect_ratio=decrease,setsar=1[safefgout]",
+    "[safebgout][safefgout]overlay=x='(W-w)/2':y='(H-h)/2'[safe]",
+    assSnippet
+      ? `[legacyout][safe]overlay=x=0:y=0:enable='${enable}'[safeover]`
+      : `[legacyout][safe]overlay=x=0:y=0:enable='${enable}'[vout]`,
+  ];
+  if (assSnippet) chains.push(`[safeover]${assSnippet}[vout]`);
+  return { kind: "complex", graph: chains.join(";") };
+}
+
 /**
  * Compiles a CropPlan (+ optional ass snippet) into a single-pass filter.
  * No tiled shots -> plain -vf chain. Any stream shot (webcam over content) or
@@ -210,7 +276,7 @@ export function buildFiltergraph(
   musicDirection?: MusicDirectionOpts
 ): FilterSpec {
   if (plan.shots.some((shot) => shot.layout === "safe-fit")) {
-    throw new Error("safe-fit_not_supported");
+    return buildSafeFitFiltergraph(plan, assSnippet, musicDirection);
   }
   const cropW0 = cropWidthFor(plan.source.height);
   // R1: a constant letterbox bar (0/0 is the common case - most sources have
