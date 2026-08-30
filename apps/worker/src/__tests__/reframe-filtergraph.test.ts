@@ -46,15 +46,47 @@ describe("buildFiltergraph", () => {
     expect(buildFiltergraph(v4SafeFit)).toEqual({
       kind: "complex",
       graph: [
-        "[0:v]split=2[legacyin][safein]",
-        "[legacyin]crop=w=608:h=ih:x='656':y=0,scale=1080:1920,setsar=1[legacyout]",
-        "[safein]split=2[safebg][safefg]",
+        "[0:v]split=2[safebg][safefg]",
         "[safebg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=luma_radius=20:luma_power=2,setsar=1[safebgout]",
         "[safefg]scale=1080:1920:force_original_aspect_ratio=decrease,setsar=1[safefgout]",
-        "[safebgout][safefgout]overlay=x='(W-w)/2':y='(H-h)/2'[safe]",
-        "[legacyout][safe]overlay=x=0:y=0:enable='gte(t,0.00)*lt(t,10.00)'[vout]",
+        "[safebgout][safefgout]overlay=x='(W-w)/2':y='(H-h)/2'[vout]",
       ].join(";"),
     });
+  });
+
+  it("renders a narrow all-safe-fit source without constructing an invalid legacy crop", () => {
+    const narrow: CropPlan = {
+      version: 4,
+      engine: "faces",
+      source: { width: 400, height: 1000 },
+      shots: [{ start: 0, end: 1, layout: "safe-fit", reason: "coverage" }],
+    };
+    expect(buildFiltergraph(narrow)).toEqual({
+      kind: "complex",
+      graph: [
+        "[0:v]split=2[safebg][safefg]",
+        "[safebg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=luma_radius=20:luma_power=2,setsar=1[safebgout]",
+        "[safefg]scale=1080:1920:force_original_aspect_ratio=decrease,setsar=1[safefgout]",
+        "[safebgout][safefgout]overlay=x='(W-w)/2':y='(H-h)/2'[vout]",
+      ].join(";"),
+    });
+    expect(buildFiltergraph(narrow).graph).not.toContain("[legacyin]");
+    expect(buildFiltergraph(narrow).graph).not.toContain("crop=w=");
+  });
+
+  it("fails closed for a mixed narrow source before emitting an invalid legacy crop", () => {
+    const narrowMixed: CropPlan = {
+      version: 4,
+      engine: "faces",
+      source: { width: 400, height: 1000 },
+      shots: [
+        { start: 0, end: 0.5, layout: "single", x: 0 },
+        { start: 0.5, end: 1, layout: "safe-fit", reason: "coverage" },
+      ],
+    };
+    expect(() => buildFiltergraph(narrowMixed)).toThrow(
+      "safe-fit_legacy_crop_invalid"
+    );
   });
 
   it("composes safe-fit only over its mixed single-shot interval", () => {
@@ -125,7 +157,7 @@ describe("buildFiltergraph", () => {
     Object.freeze(v4SafeFit.shots);
     const graph = buildFiltergraph(v4SafeFit, "ass=x.ass").graph;
     expect(graph.match(/ass=x\.ass/g)).toHaveLength(1);
-    expect(graph.endsWith("[safeover]ass=x.ass[vout]")).toBe(true);
+    expect(graph.endsWith("[safe]ass=x.ass[vout]")).toBe(true);
     expect(v4SafeFit).toEqual(snapshot);
   });
 

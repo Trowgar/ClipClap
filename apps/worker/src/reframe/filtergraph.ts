@@ -200,6 +200,18 @@ function safeFitEnable(plan: CropPlan): string {
     .join("+");
 }
 
+function safeFitCompositionChains(
+  inputLabel: string,
+  outputLabel = "safe"
+): string[] {
+  return [
+    `${inputLabel}split=2[safebg][safefg]`,
+    "[safebg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=luma_radius=20:luma_power=2,setsar=1[safebgout]",
+    "[safefg]scale=1080:1920:force_original_aspect_ratio=decrease,setsar=1[safefgout]",
+    `[safebgout][safefgout]overlay=x='(W-w)/2':y='(H-h)/2'[${outputLabel}]`,
+  ];
+}
+
 /**
  * Safe-fit is an overlay around the existing renderer, rather than a second
  * implementation of its crop/stream/split semantics. The legacy branch gets
@@ -212,7 +224,24 @@ function buildSafeFitFiltergraph(
   assSnippet: string | undefined,
   musicDirection: MusicDirectionOpts | undefined
 ): FilterSpec {
+  const allSafeFit = plan.shots.every((shot) => shot.layout === "safe-fit");
+  if (allSafeFit) {
+    const chains = safeFitCompositionChains(
+      "[0:v]",
+      assSnippet ? "safe" : "vout"
+    );
+    if (assSnippet) chains.push(`[safe]${assSnippet}[vout]`);
+    return { kind: "complex", graph: chains.join(";") };
+  }
+
   const cropWidth = cropWidthFor(plan.source.height);
+  if (
+    !Number.isFinite(cropWidth) ||
+    cropWidth <= 0 ||
+    cropWidth > plan.source.width
+  ) {
+    throw new Error("safe-fit_legacy_crop_invalid");
+  }
   const centerX = evenClamp(
     (plan.source.width - cropWidth) / 2,
     cropWidth,
@@ -245,10 +274,7 @@ function buildSafeFitFiltergraph(
   const chains = [
     "[0:v]split=2[legacyin][safein]",
     legacyGraph,
-    "[safein]split=2[safebg][safefg]",
-    "[safebg]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=luma_radius=20:luma_power=2,setsar=1[safebgout]",
-    "[safefg]scale=1080:1920:force_original_aspect_ratio=decrease,setsar=1[safefgout]",
-    "[safebgout][safefgout]overlay=x='(W-w)/2':y='(H-h)/2'[safe]",
+    ...safeFitCompositionChains("[safein]"),
     assSnippet
       ? `[legacyout][safe]overlay=x=0:y=0:enable='${enable}'[safeover]`
       : `[legacyout][safe]overlay=x=0:y=0:enable='${enable}'[vout]`,
