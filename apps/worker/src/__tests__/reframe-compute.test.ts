@@ -481,6 +481,7 @@ describe("planDetected: stream-layout coverage gate", () => {
       camRect: null,
       tracks: [unsafeTrack(100)],
     }]);
+    const baseline = planDetected(detection, cfg);
     const result = planDetected(detection, {
       ...cfg,
       safetyPlanner,
@@ -488,6 +489,9 @@ describe("planDetected: stream-layout coverage gate", () => {
       safetyShadow: false,
     });
 
+    if (layout === "legacy") {
+      expect(JSON.stringify(result.plan)).toBe(JSON.stringify(baseline.plan));
+    }
     expect(result.plan?.shots[0].layout).toBe(layout === "safe-fit" ? "safe-fit" : "single");
     expect(result.safetyPlanner).toEqual(
       layout === "safe-fit"
@@ -542,6 +546,24 @@ describe("planDetected: stream-layout coverage gate", () => {
     expect(result.plan?.shots[0].layout).toBe("single");
     expect(result.safetyShadow).toBeUndefined();
     expect(result.safetyPlanner).toBeUndefined();
+  });
+
+  it("leaves faceless active plans byte-identical and reports no fallback", () => {
+    const detection = safetyDetection([{ shotIndex: 0, camRect: null, tracks: [] }]);
+    const baseline = planDetected(detection, cfg);
+    const active = planDetected(detection, {
+      ...cfg,
+      safetyPlanner: true,
+      safeFit: true,
+    });
+
+    expect(JSON.stringify(active.plan)).toBe(JSON.stringify(baseline.plan));
+    expect(active.safetyPlanner).toMatchObject({
+      evaluatedShots: 0,
+      safeFitShots: 0,
+      coverageFallbacks: 0,
+      invalidEvidenceFallbacks: 0,
+    });
   });
 
   /** One shot showing the streamer (duration `onSec`), one shot showing
@@ -840,9 +862,15 @@ describe("planDetected: stream-layout coverage gate", () => {
 
   it("evaluates the final stream-gated plan rather than its pre-gate stream layout", () => {
     const detection = lowHighDetection(1, 9, null);
-    const gated = planDetected(detection, { ...gateOn, safetyShadow: true });
+    const gated = planDetected(detection, {
+      ...gateOn,
+      safetyShadow: true,
+      safetyPlanner: true,
+      safeFit: true,
+    });
 
     expect(gated.plan?.shots.some((s) => s.layout === "stream")).toBe(false);
+    expect(gated.plan?.shots.some((s) => s.layout === "safe-fit")).toBe(false);
     expect(gated.safetyShadow).toEqual({
       status: "pass",
       threshold: 0.9,
@@ -850,6 +878,14 @@ describe("planDetected: stream-layout coverage gate", () => {
       evaluatedSamples: 1,
       rejectedSamples: 0,
       unmappedSamples: 0,
+    });
+    expect(gated.safetyPlanner).toMatchObject({
+      mode: "active",
+      evaluatedShots: 1,
+      safeFitShots: 0,
+      coverageFallbacks: 0,
+      invalidEvidenceFallbacks: 0,
+      minimumCoverage: 1,
     });
   });
 
