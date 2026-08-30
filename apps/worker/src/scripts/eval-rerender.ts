@@ -134,6 +134,8 @@ function shotXs(shot: ShotLayout): string {
       return `split top=${shot.top.x} bottom=${shot.bottom.x}`;
     case "stream":
       return `stream cam=${shot.cam.x} content=${shot.content.x}`;
+    case "safe-fit":
+      return `safe-fit reason=${shot.reason}`;
   }
 }
 

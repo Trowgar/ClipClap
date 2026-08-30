@@ -124,6 +124,9 @@ function finiteShot(value: unknown): value is ShotLayout {
     const bottom = record(shot.bottom);
     return !!top && !!bottom && Number.isFinite(top.x) && Number.isFinite(bottom.x);
   }
+  if (shot.layout === "safe-fit") {
+    return shot.reason === "coverage" || shot.reason === "invalid_evidence";
+  }
   if (shot.layout !== "stream") return false;
   const cam = record(shot.cam);
   const content = record(shot.content);
@@ -212,11 +215,9 @@ function validateTimeline(value: unknown): Timeline | null {
       ) {
         return null;
       }
-    } else if (
-      !finiteStreamGeometry(planTyped, sourceHeight)
-    ) {
+    } else if (shot.layout === "stream" && !finiteStreamGeometry(planTyped, sourceHeight)) {
       return null;
-    } else {
+    } else if (shot.layout === "stream") {
       const stream = planTyped.stream!;
       if (
         shot.cam.x < 0 ||
@@ -244,7 +245,15 @@ function centerXFor(plan: CropPlan): number {
 }
 
 function baseXForShot(shot: ShotLayout, centerX: number): number {
-  return shot.layout === "split" || shot.layout === "stream" ? centerX : shot.x;
+  switch (shot.layout) {
+    case "center":
+    case "single":
+      return shot.x;
+    case "split":
+    case "stream":
+    case "safe-fit":
+      return centerX;
+  }
 }
 
 function planKeyframes(plan: CropPlan, centerX: number): Keyframe[] {
@@ -293,6 +302,14 @@ function windowsForSample(
   timeline: Timeline,
   t: number
 ): Window[] | null {
+  const safeFitActive = plan.shots.some((shot) => {
+    if (shot.layout !== "safe-fit") return false;
+    return t >= roundLayoutTime(shot.start) && t < roundLayoutTime(shot.end);
+  });
+  if (safeFitActive) {
+    return [{ x: 0, y: 0, w: plan.source.width, h: plan.source.height }];
+  }
+
   const composites = activeCompositesAt(plan, t);
   if (composites.length > 1) return null;
   if (composites.length === 1) {

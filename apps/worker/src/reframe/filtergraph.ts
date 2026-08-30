@@ -16,6 +16,19 @@ import {
 type SplitLayout = Extract<ShotLayout, { layout: "split" }>;
 type StreamLayout = Extract<ShotLayout, { layout: "stream" }>;
 
+function baseXForShot(shot: ShotLayout, centerX: number): number {
+  switch (shot.layout) {
+    case "center":
+    case "single":
+      return shot.x;
+    case "split":
+    case "stream":
+      return centerX;
+    case "safe-fit":
+      throw new Error("safe-fit_not_supported");
+  }
+}
+
 /** Piecewise-constant x(t) over consecutive windows; the last x is the else
  *  branch, so the expression is total for every t. x values are integers. */
 export function piecewiseX(segments: Array<{ end: number; x: number }>): string {
@@ -95,8 +108,7 @@ export function planKeyframes(plan: CropPlan, centerX: number): Keyframe[] {
       keys.push(...shot.xs);
       continue;
     }
-    const x =
-      shot.layout === "split" || shot.layout === "stream" ? centerX : shot.x;
+    const x = baseXForShot(shot, centerX);
     keys.push({ t: shot.start, x }, { t: shot.end, x });
   }
   return keys;
@@ -197,6 +209,9 @@ export function buildFiltergraph(
   assSnippet?: string,
   musicDirection?: MusicDirectionOpts
 ): FilterSpec {
+  if (plan.shots.some((shot) => shot.layout === "safe-fit")) {
+    throw new Error("safe-fit_not_supported");
+  }
   const cropW0 = cropWidthFor(plan.source.height);
   // R1: a constant letterbox bar (0/0 is the common case - most sources have
   // none) shrinks the crop height and recomputes the 9:16 width from it.
@@ -248,7 +263,7 @@ export function buildFiltergraph(
     : piecewiseX(
         workingPlan.shots.map((s) => ({
           end: s.end,
-          x: s.layout === "split" || s.layout === "stream" ? centerX : s.x,
+          x: baseXForShot(s, centerX),
         }))
       );
   // R1: h/y stay the legacy "ih"/"0" tokens off the music path (byte-identical

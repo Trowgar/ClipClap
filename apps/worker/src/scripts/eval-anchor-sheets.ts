@@ -200,6 +200,8 @@ function describeShot(s: import("../reframe/types").ShotLayout): string {
       return `${span}split   top.x=${s.top.x} bottom.x=${s.bottom.x}`;
     case "stream":
       return `${span}stream  cam.x=${s.cam.x} content.x=${s.content.x}`;
+    case "safe-fit":
+      return `${span}safe-fit reason=${s.reason}`;
   }
 }
 

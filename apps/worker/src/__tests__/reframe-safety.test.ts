@@ -146,6 +146,26 @@ describe("render-time semantics", () => {
 });
 
 describe("evaluatePlanCoverage", () => {
+  it("treats a valid safe-fit shot as full-frame coverage", () => {
+    const safeFit: CropPlan = {
+      version: 4,
+      engine: "faces",
+      source: { width: 3000, height: 1000 },
+      shots: [{ start: 0, end: 10, layout: "safe-fit", reason: "coverage" }],
+    };
+    expect(
+      evaluatePlanCoverage(safeFit, [
+        region("full-frame", "mandatory", [{ t: 1, box: box(2900, 900, 100, 100) }]),
+      ])
+    ).toMatchObject({
+      status: "pass",
+      minimumCoverage: 1,
+      evaluatedSamples: 1,
+      rejectedSamples: 0,
+      unmappedSamples: 0,
+    });
+  });
+
   it("passes an exact .9 center and single containment but fails .899", () => {
     const center = plan([
       { start: 0, end: 10, layout: "center", x: 28 },

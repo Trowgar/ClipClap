@@ -127,6 +127,19 @@ function legacyPiecewiseX(segments: Array<{ end: number; x: number }>): string {
 type SplitLayout = Extract<ShotLayout, { layout: "split" }>;
 type StreamLayout = Extract<ShotLayout, { layout: "stream" }>;
 
+function legacyBaseXForShot(shot: ShotLayout, centerX: number): number {
+  switch (shot.layout) {
+    case "center":
+    case "single":
+      return shot.x;
+    case "split":
+    case "stream":
+      return centerX;
+    case "safe-fit":
+      throw new Error("safe-fit_not_supported");
+  }
+}
+
 function legacyFiltergraph(plan: CropPlan, assSnippet?: string): FilterSpec {
   const cropW = legacyCropWidthFor(plan.source.height);
   const tileW = legacyTileWidthFor(plan.source.height);
@@ -140,7 +153,7 @@ function legacyFiltergraph(plan: CropPlan, assSnippet?: string): FilterSpec {
   const baseX = legacyPiecewiseX(
     plan.shots.map((s) => ({
       end: s.end,
-      x: s.layout === "split" || s.layout === "stream" ? centerX : s.x,
+      x: legacyBaseXForShot(s, centerX),
     }))
   );
   const baseChain = `crop=w=${cropW}:h=ih:x='${baseX}':y=0,scale=1080:1920`;

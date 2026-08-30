@@ -32,6 +32,16 @@ describe("piecewiseX", () => {
 });
 
 describe("buildFiltergraph", () => {
+  it("fails closed for a v4 safe-fit plan until its renderer is implemented", () => {
+    const v4SafeFit: CropPlan = {
+      version: 4,
+      engine: "faces",
+      source: { width: 1920, height: 1080 },
+      shots: [{ start: 0, end: 10, layout: "safe-fit", reason: "coverage" }],
+    };
+    expect(() => buildFiltergraph(v4SafeFit)).toThrow("safe-fit_not_supported");
+  });
+
   it("stays -vf for a single static shot", () => {
     expect(buildFiltergraph(base([{ start: 0, end: 30, layout: "single", x: 496 }])))
       .toEqual({
