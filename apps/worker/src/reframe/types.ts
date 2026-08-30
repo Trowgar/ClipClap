@@ -76,6 +76,8 @@ export interface ShotTracks {
   saliency?: Saliency | null;
 }
 
+export type SafeFitReason = "coverage" | "invalid_evidence";
+
 export type ShotLayout =
   | {
       start: number;
@@ -121,10 +123,16 @@ export type ShotLayout =
       layout: "stream";
       cam: { x: number };
       content: { x: number };
+    }
+  | {
+      start: number;
+      end: number;
+      layout: "safe-fit";
+      reason: SafeFitReason;
     };
 
 export interface CropPlan {
-  version: 1 | 2 | 3;
+  version: 1 | 2 | 3 | 4;
   engine: "faces";
   source: { width: number; height: number };
   profile?: SourceProfile;

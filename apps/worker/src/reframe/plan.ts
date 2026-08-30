@@ -1289,7 +1289,7 @@ export function sliceCropPlan(
 ): CropPlan | null {
   if (
     !plan ||
-    (plan.version !== 1 && plan.version !== 2 && plan.version !== 3) ||
+    (plan.version !== 1 && plan.version !== 2 && plan.version !== 3 && plan.version !== 4) ||
     !Array.isArray(plan.shots) ||
     !plan.source ||
     typeof plan.source.width !== "number" ||
@@ -1334,8 +1334,19 @@ export function sliceCropPlan(
 
 export function planLayoutCounts(
   plan: CropPlan
-): Record<"single" | "split" | "center" | "stream", number> {
-  const counts = { single: 0, split: 0, center: 0, stream: 0 };
-  for (const s of plan.shots) counts[s.layout] += 1;
+): PlanLayoutCounts {
+  const counts: PlanLayoutCounts = { single: 0, split: 0, center: 0, stream: 0 };
+  for (const s of plan.shots) {
+    if (s.layout === "safe-fit") {
+      counts["safe-fit"] = (counts["safe-fit"] ?? 0) + 1;
+    } else {
+      counts[s.layout] += 1;
+    }
+  }
   return counts;
 }
+
+export type PlanLayoutCounts =
+  Record<"single" | "split" | "center" | "stream", number> & {
+    "safe-fit"?: number;
+  };

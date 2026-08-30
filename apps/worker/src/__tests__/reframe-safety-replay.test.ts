@@ -38,6 +38,8 @@ const baseConfig: ReframeConfig = Object.freeze({
   tailKeep: false,
   saliencyShadow: false,
   safetyShadow: false,
+  safetyPlanner: false,
+  safeFit: false,
   streamCoverageGate: false,
   camera,
 });

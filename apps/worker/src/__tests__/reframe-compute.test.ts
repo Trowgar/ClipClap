@@ -54,6 +54,8 @@ const cfg: ReframeConfig = {
   tailKeep: false,
   saliencyShadow: false,
   safetyShadow: false,
+  safetyPlanner: false,
+  safeFit: false,
   streamCoverageGate: false,
   streamVirtualCam: false,
   camera: DEFAULT_CAMERA,

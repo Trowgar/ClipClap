@@ -656,11 +656,10 @@ describe("sliceCropPlan (trim re-render)", () => {
 
   it("returns null for an empty window or wrong version", () => {
     expect(sliceCropPlan(plan, 100, 120)).toBeNull();
-    // 2 and 3 are now supported plan versions (see "v2 plan handling" and
-    // "sliceCropPlan with trajectories" below); 4 is genuinely unknown and must
+    // 2, 3, and 4 are now supported plan versions; 5 is genuinely unknown and must
     // still be rejected. This probe has to move up with every version we learn
     // to read - the assertion under test is "unknown is refused", not "3 is".
-    expect(sliceCropPlan({ ...plan, version: 4 as unknown as 1 }, 0, 10)).toBeNull();
+    expect(sliceCropPlan({ ...plan, version: 5 as unknown as 1 }, 0, 10)).toBeNull();
   });
 
   it("returns null for a foreign/corrupt stored Json instead of throwing", () => {
@@ -744,10 +743,41 @@ describe("v2 plan handling", () => {
     });
   });
 
+  it("counts safe-fit shots without adding a zero key to legacy plans", () => {
+    expect(planLayoutCounts(v2)).not.toHaveProperty("safe-fit");
+    const safeFit = {
+      ...v2,
+      version: 4 as const,
+      shots: [
+        { start: 0, end: 10, layout: "safe-fit" as const, reason: "coverage" as const },
+        { start: 10, end: 20, layout: "safe-fit" as const, reason: "invalid_evidence" as const },
+      ],
+    };
+    expect(planLayoutCounts(safeFit)).toEqual({
+      single: 0,
+      split: 0,
+      center: 0,
+      stream: 0,
+      "safe-fit": 2,
+    });
+  });
+
   it("still rejects an unknown version", () => {
-    // Was 3, which the trajectory work turned into a real version; 4 is the
+    // Was 3, which the trajectory work turned into a real version; 5 is the
     // next unknown one.
-    expect(sliceCropPlan({ ...v2, version: 4 as unknown as 2 }, 0, 10)).toBeNull();
+    expect(sliceCropPlan({ ...v2, version: 5 as unknown as 2 }, 0, 10)).toBeNull();
+  });
+
+  it("accepts and trims a v4 safe-fit plan", () => {
+    const plan: CropPlan = {
+      version: 4,
+      engine: "faces",
+      source: { width: 1920, height: 1080 },
+      shots: [{ start: 0, end: 10, layout: "safe-fit", reason: "coverage" }],
+    };
+    expect(sliceCropPlan(plan, 2, 8)?.shots).toEqual([
+      { start: 0, end: 6, layout: "safe-fit", reason: "coverage" },
+    ]);
   });
 });
 

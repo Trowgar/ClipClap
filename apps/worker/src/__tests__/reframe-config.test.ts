@@ -30,6 +30,8 @@ describe("loadReframeConfig", () => {
       tailKeep: false,
       saliencyShadow: false,
       safetyShadow: false,
+      safetyPlanner: false,
+      safeFit: false,
       streamCoverageGate: false,
       camera: DEFAULT_CAMERA,
     });
@@ -70,6 +72,25 @@ describe("loadReframeConfig", () => {
     expect(loadReframeConfig({ REFRAME_SAFETY_SHADOW: "true" }).safetyShadow).toBe(false);
     expect(loadReframeConfig({ REFRAME_SAFETY_SHADOW: "1" }).safetyShadow).toBe(false);
     expect(loadReframeConfig({}).safetyShadow).toBe(false);
+  });
+
+  it.each([undefined, "", "true", "1", "ON", "off"])(
+    "keeps active safety off for %j",
+    (value) => {
+      const cfg = loadReframeConfig({
+        REFRAME_SAFETY_PLANNER: value,
+        REFRAME_SAFE_FIT: value,
+      });
+      expect(cfg.safetyPlanner).toBe(false);
+      expect(cfg.safeFit).toBe(false);
+    }
+  );
+
+  it("enables each active safety flag only for the exact literal 'on'", () => {
+    expect(loadReframeConfig({ REFRAME_SAFETY_PLANNER: "on" }).safetyPlanner).toBe(true);
+    expect(loadReframeConfig({ REFRAME_SAFE_FIT: "on" }).safeFit).toBe(true);
+    expect(loadReframeConfig({ REFRAME_SAFETY_PLANNER: "true" }).safetyPlanner).toBe(false);
+    expect(loadReframeConfig({ REFRAME_SAFE_FIT: "1" }).safeFit).toBe(false);
   });
 
   // spec 2026-08-24-render-retry-and-stream-gate §2. Same rule as

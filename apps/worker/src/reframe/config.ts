@@ -50,6 +50,11 @@ export interface ReframeConfig {
   /** Safety-shadow telemetry killswitch. Computes mandatory focal-region
    *  coverage after the final plan is built, but never changes that plan. */
   safetyShadow: boolean;
+  /** Active safety planner killswitch. Requires safeFit as the rendering
+   *  fallback, and is intentionally exact-literal to preserve rollback. */
+  safetyPlanner: boolean;
+  /** Active safe-fit composition killswitch. Requires safetyPlanner. */
+  safeFit: boolean;
   /** Stream-layout coverage-gate killswitch (spec
    *  2026-08-24-render-retry-and-stream-gate §2). Off is today's virtualCam
    *  plan byte for byte. On, a plan whose `profile.virtualCam` is `true`
@@ -121,6 +126,8 @@ export function loadReframeConfig(
     // Exact literal: telemetry nobody asked for must not turn on from a
     // stray truthy value.
     safetyShadow: env.REFRAME_SAFETY_SHADOW === "on",
+    safetyPlanner: env.REFRAME_SAFETY_PLANNER === "on",
+    safeFit: env.REFRAME_SAFE_FIT === "on",
     // Exact literal, the REFRAME_STREAM rule: a killswitch that can be
     // flipped by accident is not one.
     streamCoverageGate: env.REFRAME_STREAM_COVERAGE_GATE === "on",
