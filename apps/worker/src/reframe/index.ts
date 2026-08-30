@@ -260,7 +260,7 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
       : replanned;
   }
   let safetyShadow: SafetyShadowTelemetry | undefined;
-  if (cfg.safetyShadow && plan) {
+  if (cfg.safetyShadow && !cfg.musicMode && plan) {
     // Keep the shadow's source alignment identical to buildCropPlan: detector
     // track sets are keyed by shotIndex, not by their array position. Any
     // malformed alignment is fail-closed rather than risking a plausible

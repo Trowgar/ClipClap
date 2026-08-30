@@ -504,6 +504,35 @@ describe("planDetected: stream-layout coverage gate", () => {
     });
   });
 
+  it("does not compute safety shadow telemetry for music-mode plans", () => {
+    const detection: Detection = {
+      width: 1280,
+      height: 720,
+      candidates: [],
+      shots: [{ start: 0, end: 10 }],
+      tracksByShot: [{
+        shotIndex: 0,
+        camRect: null,
+        tracks: [{
+          id: 9,
+          box: { x: 100, y: 180, w: 240, h: 240 },
+          score: 0.92,
+          samples: 8,
+          mouthActivity: 0.3,
+          path: [{ t: 5, x: 100, y: 180, w: 240, h: 240 }],
+        }],
+      }],
+    };
+
+    const result = planDetected(detection, {
+      ...cfg,
+      musicMode: true,
+      safetyShadow: true,
+    });
+
+    expect(result.safetyShadow).toBeUndefined();
+  });
+
   it("reports a failed shadow when a mandatory sample is outside the final crop", () => {
     const detection: Detection = {
       width: 1280,
