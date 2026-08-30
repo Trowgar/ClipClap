@@ -4,7 +4,10 @@ import type { ReframeConfig } from "../reframe/config";
 import type { CropPlan, FaceBox, FaceTrack, ShotTracks } from "../reframe/types";
 import { faceTracksToRegions } from "../reframe/regions";
 import { evaluatePlanCoverage } from "../reframe/safety";
-import { evaluateSafetyCapture } from "../scripts/eval-reframe-safety-shadow";
+import {
+  evaluateSafetyCapture,
+  runSafetyShadowCli,
+} from "../scripts/eval-reframe-safety-shadow";
 
 const source = { width: 3000, height: 1000 };
 
@@ -211,5 +214,174 @@ describe("private safety-shadow capture reader", () => {
     expect(
       evaluateSafetyCapture({ ...capture, tracks: [{ ...capture.tracks[0], shotIndex: 1 }] })
     ).toMatchObject({ status: "not_evaluable", minimumCoverage: null });
+
+    expect(evaluateSafetyCapture({ ...capture, source: { width: 2999, height: 1000 } })).toBeNull();
+    expect(
+      evaluateSafetyCapture({
+        ...capture,
+        plan: {
+          ...capture.plan!,
+          shots: [{ ...capture.plan!.shots[0], start: 11, end: 12 }],
+        },
+      })
+    ).toBeNull();
+
+    const mergedDetection = detection(
+      [
+        { start: 0, end: 5 },
+        { start: 5, end: 10 },
+      ],
+      [
+        shotTracks(0, [track(107, { x: 760, y: 220, w: 240, h: 240 }, [
+          { t: 1, x: 760, y: 220, w: 240, h: 240 },
+          { t: 4, x: 760, y: 220, w: 240, h: 240 },
+        ])]),
+        shotTracks(1, [track(108, { x: 760, y: 220, w: 240, h: 240 }, [
+          { t: 6, x: 760, y: 220, w: 240, h: 240 },
+          { t: 9, x: 760, y: 220, w: 240, h: 240 },
+        ])]),
+      ]
+    );
+    const mergedPlan = planDetected(mergedDetection, baseConfig).plan;
+    expect(mergedPlan?.shots).toHaveLength(1);
+    expect(
+      evaluateSafetyCapture({
+        shots: mergedDetection.shots,
+        tracks: mergedDetection.tracksByShot,
+        plan: mergedPlan,
+        source,
+        clip: { start: 0, end: 10 },
+      })
+    ).toMatchObject({ status: "pass" });
+    expect(
+      evaluateSafetyCapture({
+        shots: mergedDetection.shots,
+        tracks: [mergedDetection.tracksByShot[1], mergedDetection.tracksByShot[0]],
+        plan: mergedPlan,
+        source,
+        clip: { start: 0, end: 10 },
+      })
+    ).toMatchObject({ status: "pass" });
+    expect(
+      evaluateSafetyCapture({ ...capture, plan: null })
+    ).toBeNull();
+  });
+
+  it("reports explicit final-plan telemetry for the gated virtual-camera replay", () => {
+    const d = detection(
+      [{ start: 0, end: 1 }, { start: 1, end: 10 }],
+      [
+        shotTracks(0, [track(109, { x: 100, y: 100, w: 100, h: 100 }, [
+          { t: 0.2, x: 100, y: 100, w: 100, h: 100 },
+          { t: 0.8, x: 100, y: 100, w: 100, h: 100 },
+        ])]),
+        shotTracks(1, []),
+      ]
+    );
+    const cfg = {
+      ...baseConfig,
+      stream: true,
+      streamVirtualCam: true,
+      streamCoverageGate: true,
+      safetyShadow: true,
+    };
+    const result = planDetected(d, cfg);
+    expect(result.plan?.shots.every((shot) => shot.layout !== "stream")).toBe(true);
+    expect(result.safetyShadow).toEqual({
+      status: "fail",
+      threshold: 0.9,
+      minimumCoverage: 0,
+      evaluatedSamples: 2,
+      rejectedSamples: 2,
+      unmappedSamples: 0,
+    });
+  });
+
+  it("keeps the private CLI contract machine-readable through an injected runner", async () => {
+    const d = detection(
+      [{ start: 0, end: 10 }],
+      [shotTracks(0, [track(110, { x: 100, y: 220, w: 220, h: 220 }, [
+        { t: 1, x: 100, y: 220, w: 220, h: 220 },
+        { t: 9, x: 1700, y: 220, w: 220, h: 220 },
+      ])])]
+    );
+    const capture = JSON.stringify({
+      shots: d.shots,
+      tracks: d.tracksByShot,
+      plan: planDetected(d, baseConfig).plan,
+      source,
+      clip: { start: 0, end: 10 },
+    });
+    const run = async (
+      argv: string[],
+      raw = capture,
+      size = Buffer.byteLength(raw),
+      unreadable = false,
+    ) => {
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const result = await runSafetyShadowCli(argv, {
+        stat: async () => {
+          if (unreadable) throw new Error("unreadable");
+          return { size };
+        },
+        readFile: async () => raw,
+        stdout: (value) => stdout.push(value),
+        stderr: (value) => stderr.push(value),
+      });
+      return { ...result, stdout: stdout.join(""), stderr: stderr.join("") };
+    };
+
+    await expect(run(["tsx"])).resolves.toMatchObject({ exitCode: 1, stdout: "", stderr: "usage\n" });
+    await expect(run(["node", "tsx", "missing.json"], capture, 0, true)).resolves.toMatchObject({
+      exitCode: 1,
+      stdout: "",
+      stderr: "capture_unreadable\n",
+    });
+    await expect(run(["node", "tsx", "missing.json"], capture, 1 << 27)).resolves.toMatchObject({
+      exitCode: 1,
+      stdout: "",
+      stderr: "capture_invalid\n",
+    });
+    await expect(run(["node", "tsx", "case.json"], "{bad")).resolves.toMatchObject({
+      exitCode: 1,
+      stdout: "",
+      stderr: "capture_invalid\n",
+    });
+    await expect(run(["node", "tsx", "case.json"], "{}" )).resolves.toMatchObject({
+      exitCode: 1,
+      stdout: "",
+      stderr: "capture_invalid\n",
+    });
+    const valid = await run(["node", "tsx", "case.json"]);
+    expect(valid.exitCode).toBe(0);
+    expect(valid.stderr).toBe("");
+    expect(valid.stdout.split("\n")).toHaveLength(2);
+    expect(JSON.parse(valid.stdout)).toEqual({
+      safetyShadow: {
+        status: "fail",
+        threshold: 0.9,
+        minimumCoverage: 0,
+        evaluatedSamples: 2,
+        rejectedSamples: 1,
+        unmappedSamples: 0,
+      },
+    });
+
+    const nullPlan = await run(
+      ["node", "tsx", "case.json"],
+      JSON.stringify({
+        shots: d.shots,
+        tracks: d.tracksByShot,
+        plan: null,
+        source,
+        clip: { start: 0, end: 10 },
+      })
+    );
+    expect(nullPlan).toMatchObject({
+      exitCode: 0,
+      stderr: "",
+      stdout: '{"safetyShadow":null}\n',
+    });
   });
 });

@@ -5,10 +5,10 @@
  *   /app/node_modules/.bin/tsx src/scripts/eval-reframe-safety-shadow.ts \
  *     .corpus/reframe-safety/case-03.plan.json
  */
-import { readFile } from "node:fs/promises";
+import { readFile, stat as fsStat } from "node:fs/promises";
 import { faceTracksToRegions } from "../reframe/regions";
 import { evaluatePlanCoverage, type SafetyShadowTelemetry } from "../reframe/safety";
-import { survivingTracks } from "../reframe/plan";
+import { MAX_PLAN_SHOTS, survivingTracks } from "../reframe/plan";
 import type { CropPlan, FaceBox, FaceTrack, Shot, ShotTracks } from "../reframe/types";
 
 export interface SafetyCapture {
@@ -18,6 +18,24 @@ export interface SafetyCapture {
   source: { width: number; height: number };
   clip: { start: number; end: number };
 }
+
+export interface SafetyShadowIo {
+  stat(path: string): Promise<{ size: number }>;
+  readFile(path: string): Promise<string>;
+  stdout?(value: string): void;
+  stderr?(value: string): void;
+}
+
+export interface SafetyShadowRunResult {
+  exitCode: 0 | 1;
+  stdout: string;
+  stderr: string;
+}
+
+const MAX_CAPTURE_BYTES = 64 * 1024 * 1024;
+const MAX_CAPTURE_TRACKS = 100_000;
+const MAX_CAPTURE_PATH_SAMPLES = 500_000;
+const TIMELINE_EPSILON = 1e-6;
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object"
@@ -38,6 +56,30 @@ function positiveBox(value: unknown): value is FaceBox {
 function validShot(value: unknown): value is Shot {
   const shot = record(value);
   return !!shot && finite(shot.start) && finite(shot.end) && shot.end > shot.start;
+}
+
+function validTimeline(
+  shots: unknown[],
+  duration: number,
+  envelope?: { start: number; end: number }
+): boolean {
+  let previousEnd = Number.NEGATIVE_INFINITY;
+  for (const value of shots) {
+    if (!validShot(value)) return false;
+    const shot = value as Shot;
+    if (
+      shot.start < -TIMELINE_EPSILON ||
+      shot.end > duration + TIMELINE_EPSILON ||
+      shot.start + TIMELINE_EPSILON < previousEnd
+    ) return false;
+    if (
+      envelope &&
+      (shot.start < envelope.start - TIMELINE_EPSILON ||
+        shot.end > envelope.end + TIMELINE_EPSILON)
+    ) return false;
+    previousEnd = shot.end;
+  }
+  return shots.length > 0;
 }
 
 function validFaceTrack(value: unknown): value is FaceTrack {
@@ -68,7 +110,7 @@ function validPlanEnvelope(value: unknown): value is CropPlan {
   const plan = record(value);
   const source = record(plan?.source);
   return !!plan && plan.engine === "faces" && Array.isArray(plan.shots)
-    && plan.shots.length > 0 && !!source
+    && plan.shots.length > 0 && plan.shots.length <= MAX_PLAN_SHOTS && !!source
     && finite(source.width) && finite(source.height)
     && source.width > 0 && source.height > 0;
 }
@@ -77,13 +119,47 @@ function validCapture(value: unknown): value is SafetyCapture {
   const capture = record(value);
   const source = record(capture?.source);
   const clip = record(capture?.clip);
-  return !!capture && Array.isArray(capture.shots) && capture.shots.length > 0
-    && capture.shots.every(validShot)
-    && Array.isArray(capture.tracks) && capture.tracks.every(validTrackSet)
-    && (capture.plan === null || validPlanEnvelope(capture.plan))
-    && !!source && finite(source.width) && finite(source.height)
-    && source.width > 0 && source.height > 0
-    && !!clip && finite(clip.start) && finite(clip.end) && clip.end >= clip.start;
+  if (
+    !capture ||
+    !Array.isArray(capture.shots) ||
+    capture.shots.length === 0 ||
+    capture.shots.length > MAX_PLAN_SHOTS ||
+    !Array.isArray(capture.tracks) ||
+    capture.tracks.length > MAX_PLAN_SHOTS ||
+    !capture.tracks.every(validTrackSet) ||
+    (capture.plan !== null && !validPlanEnvelope(capture.plan)) ||
+    !source ||
+    !finite(source.width) ||
+    !finite(source.height) ||
+    source.width <= 0 ||
+    source.height <= 0 ||
+    !clip ||
+    !finite(clip.start) ||
+    !finite(clip.end) ||
+    clip.end <= clip.start ||
+    !validTimeline(capture.shots, clip.end - clip.start)
+  ) return false;
+
+  let trackCount = 0;
+  let pathSampleCount = 0;
+  for (const trackSet of capture.tracks) {
+    trackCount += trackSet.tracks.length;
+    for (const track of trackSet.tracks) {
+      pathSampleCount += track.path?.length ?? 0;
+    }
+  }
+  if (trackCount > MAX_CAPTURE_TRACKS || pathSampleCount > MAX_CAPTURE_PATH_SAMPLES) return false;
+
+  if (capture.plan !== null) {
+    const planSource = capture.plan.source;
+    if (planSource.width !== source.width || planSource.height !== source.height) return false;
+    const first = capture.shots[0];
+    const last = capture.shots[capture.shots.length - 1];
+    if (!validTimeline(capture.plan.shots, clip.end - clip.start, { start: first.start, end: last.end })) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function notEvaluable(): SafetyShadowTelemetry {
@@ -132,41 +208,72 @@ function captureHasUsablePlan(capture: SafetyCapture): capture is SafetyCapture 
   return capture.plan !== null;
 }
 
-function fail(code: "usage" | "capture_unreadable" | "capture_invalid"): void {
-  process.exitCode = 1;
-  process.stderr.write(`${code}\n`);
+function defaultIo(): SafetyShadowIo {
+  return {
+    stat: async (path) => fsStat(path),
+    readFile: async (path) => readFile(path, "utf8"),
+    stdout: (value) => process.stdout.write(value),
+    stderr: (value) => process.stderr.write(value),
+  };
 }
 
-export async function main(argv: string[] = process.argv): Promise<void> {
+function errorResult(
+  io: SafetyShadowIo,
+  code: "usage" | "capture_unreadable" | "capture_invalid"
+): 1 {
+  io.stderr?.(`${code}\n`);
+  return 1;
+}
+
+/** Testable CLI runner; diagnostics are data, so a valid fail aggregate exits 0. */
+export async function runSafetyShadowCli(
+  argv: string[] = process.argv,
+  io: SafetyShadowIo = defaultIo()
+): Promise<SafetyShadowRunResult> {
   if (argv.length !== 3) {
-    fail("usage");
-    return;
+    return { exitCode: errorResult(io, "usage"), stdout: "", stderr: "usage\n" };
+  }
+  let fileSize: number;
+  try {
+    fileSize = (await io.stat(argv[2])).size;
+  } catch {
+    return { exitCode: errorResult(io, "capture_unreadable"), stdout: "", stderr: "capture_unreadable\n" };
+  }
+  if (!finite(fileSize) || fileSize < 0 || fileSize > MAX_CAPTURE_BYTES) {
+    return { exitCode: errorResult(io, "capture_invalid"), stdout: "", stderr: "capture_invalid\n" };
   }
   let raw: string;
   try {
-    raw = await readFile(argv[2], "utf8");
+    raw = await io.readFile(argv[2]);
   } catch {
-    fail("capture_unreadable");
-    return;
+    return { exitCode: errorResult(io, "capture_unreadable"), stdout: "", stderr: "capture_unreadable\n" };
   }
   let value: unknown;
   try {
     value = JSON.parse(raw);
   } catch {
-    fail("capture_invalid");
-    return;
+    return { exitCode: errorResult(io, "capture_invalid"), stdout: "", stderr: "capture_invalid\n" };
   }
   if (!validCapture(value)) {
-    fail("capture_invalid");
-    return;
+    return { exitCode: errorResult(io, "capture_invalid"), stdout: "", stderr: "capture_invalid\n" };
   }
   try {
-    process.stdout.write(`${JSON.stringify({ safetyShadow: evaluateSafetyCapture(value) })}\n`);
+    const output = `${JSON.stringify({ safetyShadow: evaluateSafetyCapture(value) })}\n`;
+    io.stdout?.(output);
+    return { exitCode: 0, stdout: output, stderr: "" };
   } catch {
-    fail("capture_invalid");
+    return { exitCode: errorResult(io, "capture_invalid"), stdout: "", stderr: "capture_invalid\n" };
   }
 }
 
+export async function main(argv: string[] = process.argv): Promise<void> {
+  const result = await runSafetyShadowCli(argv);
+  process.exitCode = result.exitCode;
+}
+
 if (typeof require !== "undefined" && require.main === module) {
-  void main().catch(() => fail("capture_invalid"));
+  void main().catch(() => {
+    process.exitCode = 1;
+    process.stderr.write("capture_invalid\n");
+  });
 }
