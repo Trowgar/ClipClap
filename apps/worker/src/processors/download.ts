@@ -30,9 +30,10 @@ const execFileAsync = promisify(execFile);
 // browser-undecodable codec still bypasses the submit-time cap on a PAID plan.
 export async function downloadVideo(
   sourceUrl?: string,
-  sourceKey?: string
+  sourceKey?: string,
+  destinationPath?: string
 ): Promise<string> {
-  const outputPath = join(tmpdir(), `clipclap-${randomUUID()}.mp4`);
+  const outputPath = destinationPath ?? join(tmpdir(), `clipclap-${randomUUID()}.mp4`);
 
   if (sourceUrl) {
     return downloadFromUrl(sourceUrl, outputPath);

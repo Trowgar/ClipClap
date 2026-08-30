@@ -281,9 +281,10 @@ export async function cutClips(
 export async function trimClipFile(
   videoPath: string,
   start: number,
-  end: number
+  end: number,
+  destinationPath?: string
 ): Promise<string> {
-  const clipPath = join(tmpdir(), `clipclap-trim-${randomUUID()}.mp4`);
+  const clipPath = destinationPath ?? join(tmpdir(), `clipclap-trim-${randomUUID()}.mp4`);
 
   await execFileAsync("ffmpeg", [
     "-ss", String(start),

@@ -8,7 +8,7 @@
  */
 import { execFile } from "child_process";
 import { mkdtemp, rename, rm, unlink } from "fs/promises";
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "path";
 import { promisify } from "util";
 import { prisma } from "@clipclap/shared";
 import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
@@ -35,9 +35,9 @@ export type ReplayDependencies = Readonly<{
     }>;
     $disconnect(): Promise<void>;
   }>;
-  downloadVideo(sourceUrl: undefined, artifactKey: string, workspace: string): Promise<string>;
+  downloadVideo(sourceUrl: undefined, artifactKey: string, destinationPath: string): Promise<void>;
   probeDuration(path: string): Promise<number>;
-  trimClipFile(path: string, startSeconds: number, endSeconds: number, workspace: string): Promise<string>;
+  trimClipFile(path: string, startSeconds: number, endSeconds: number, destinationPath: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;
   unlink(path: string): Promise<void>;
   createWorkspace(): Promise<string>;
@@ -144,12 +144,17 @@ async function ignoreWorkspaceFileUnlink(
   await ignoreUnlink(path, dependencies);
 }
 
-async function ignoreWorkspaceRemoval(
+async function removeWorkspace(
   path: string | undefined,
   dependencies: ReplayDependencies
-): Promise<void> {
-  if (path === undefined || !isOwnedWorkspace(path)) return;
-  await dependencies.removeWorkspace(path).catch(() => {});
+): Promise<{ failed: boolean; error?: unknown }> {
+  if (path === undefined || !isOwnedWorkspace(path)) return { failed: false };
+  try {
+    await dependencies.removeWorkspace(path);
+    return { failed: false };
+  } catch (error) {
+    return { failed: true, error };
+  }
 }
 
 /**
@@ -163,6 +168,9 @@ export async function runReplay(
   let sourcePath: string | undefined;
   let temporaryClipPath: string | undefined;
   let workspace: string | undefined;
+  let output: string | undefined;
+  let replayFailed = false;
+  let replayError: unknown;
   try {
     const input = parseReplayArguments(argv);
     const job = await dependencies.prisma.job.findUnique({
@@ -181,7 +189,8 @@ export async function runReplay(
 
     workspace = await dependencies.createWorkspace();
     if (!isOwnedWorkspace(workspace)) throw new Error("Could not create replay workspace");
-    sourcePath = await dependencies.downloadVideo(undefined, artifactKey, workspace);
+    sourcePath = join(workspace, "source.mp4");
+    await dependencies.downloadVideo(undefined, artifactKey, sourcePath);
     const durationSeconds = await dependencies.probeDuration(sourcePath);
     if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
       throw new Error("Downloaded source duration could not be determined");
@@ -190,41 +199,49 @@ export async function runReplay(
       throw new Error("Requested replay range is outside the downloaded source duration");
     }
 
-    temporaryClipPath = await dependencies.trimClipFile(
+    temporaryClipPath = join(workspace, "trimmed.mp4");
+    await dependencies.trimClipFile(
       sourcePath,
       input.startMs / 1000,
       input.endMs / 1000,
-      workspace
+      temporaryClipPath
     );
     await dependencies.rename(temporaryClipPath, input.output);
     temporaryClipPath = undefined;
-    return input.output;
-  } finally {
-    await ignoreWorkspaceFileUnlink(temporaryClipPath, workspace, dependencies);
-    await ignoreWorkspaceFileUnlink(sourcePath, workspace, dependencies);
-    await ignoreWorkspaceRemoval(workspace, dependencies);
-    await dependencies.prisma.$disconnect();
+    output = input.output;
+  } catch (error) {
+    replayFailed = true;
+    replayError = error;
   }
-}
 
-async function withReplayWorkspace<T>(workspace: string, operation: () => Promise<T>): Promise<T> {
-  const previousTmpdir = process.env.TMPDIR;
-  process.env.TMPDIR = workspace;
+  await ignoreWorkspaceFileUnlink(temporaryClipPath, workspace, dependencies);
+  await ignoreWorkspaceFileUnlink(sourcePath, workspace, dependencies);
+  const workspaceRemoval = await removeWorkspace(workspace, dependencies);
+  let disconnectFailed = false;
+  let disconnectError: unknown;
   try {
-    return await operation();
-  } finally {
-    if (previousTmpdir === undefined) delete process.env.TMPDIR;
-    else process.env.TMPDIR = previousTmpdir;
+    await dependencies.prisma.$disconnect();
+  } catch (error) {
+    disconnectFailed = true;
+    disconnectError = error;
   }
+
+  if (replayFailed) throw replayError;
+  if (workspaceRemoval.failed) throw workspaceRemoval.error;
+  if (disconnectFailed) throw disconnectError;
+  if (output === undefined) throw new Error("Replay did not produce an output path");
+  return output;
 }
 
 const defaultReplayDependencies: ReplayDependencies = {
   prisma,
-  downloadVideo: (sourceUrl, artifactKey, workspace) =>
-    withReplayWorkspace(workspace, () => downloadVideo(sourceUrl, artifactKey)),
+  downloadVideo: async (sourceUrl, artifactKey, destinationPath) => {
+    await downloadVideo(sourceUrl, artifactKey, destinationPath);
+  },
   probeDuration: probeLocalDuration,
-  trimClipFile: (path, startSeconds, endSeconds, workspace) =>
-    withReplayWorkspace(workspace, () => trimClipFile(path, startSeconds, endSeconds)),
+  trimClipFile: async (path, startSeconds, endSeconds, destinationPath) => {
+    await trimClipFile(path, startSeconds, endSeconds, destinationPath);
+  },
   rename,
   unlink,
   createWorkspace: () => mkdtemp(`${TMP_ROOT}/clipclap-replay-`),
