@@ -60,6 +60,7 @@ const cfg: ReframeConfig = {
   cutRecovery: false,
   tailKeep: false,
   saliencyShadow: false,
+  safetyShadow: false,
   streamCoverageGate: false,
   streamVirtualCam: false,
   camera: DEFAULT_CAMERA,

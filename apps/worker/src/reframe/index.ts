@@ -3,11 +3,13 @@ import { promisify } from "util";
 import { loadReframeConfig, type ReframeConfig } from "./config";
 import { detectShots, type CutCandidate } from "./shots";
 import { detectFaces } from "./faces";
-import { buildCropPlan, MAX_PLAN_SHOTS } from "./plan";
+import { buildCropPlan, MAX_PLAN_SHOTS, survivingTracks } from "./plan";
 import { resolveCamRect } from "./cam-rect";
 import { recoverCuts, type CutRecoveryResult, type CutRecoveryTelemetry } from "./cut-recovery";
 import type { PlanOptions } from "./options";
 import type { CropPlan, Shot, ShotTracks } from "./types";
+import { faceTracksToRegions } from "./regions";
+import { evaluatePlanCoverage, type SafetyShadowTelemetry } from "./safety";
 
 import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
 
@@ -22,6 +24,7 @@ export type ReframeFallbackReason =
 
 export interface ReframeResult {
   plan: CropPlan | null;
+  safetyShadow?: SafetyShadowTelemetry;
   fallbackReason?: ReframeFallbackReason;
   detectMs: number;
   /** DETECTOR shots, before cut recovery; the recovered count is plan.shots.length. */
@@ -122,6 +125,7 @@ export async function detectRange(
 
 export interface PlannedDetection {
   plan: CropPlan | null;
+  safetyShadow?: SafetyShadowTelemetry;
   cutRecovery?: CutRecoveryTelemetry;
   /** Per-candidate verdicts, for the eval only - never copied into
    *  ReframeResult or the manifest. */
@@ -231,8 +235,23 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
         }
       : replanned;
   }
+  let safetyShadow: SafetyShadowTelemetry | undefined;
+  if (cfg.safetyShadow && plan) {
+    const regions = shots.flatMap((shot, index) => {
+      const trackSet = tracks[index];
+      return trackSet
+        ? faceTracksToRegions(
+            survivingTracks(trackSet.tracks),
+            shot,
+            `shot-${index}`
+          )
+        : [];
+    });
+    safetyShadow = evaluatePlanCoverage(plan, regions);
+  }
   return {
     plan,
+    ...(safetyShadow ? { safetyShadow } : {}),
     ...(cutRecovery ? { cutRecovery } : {}),
     ...(decisions ? { decisions } : {}),
   };
@@ -287,5 +306,11 @@ export async function computeCropPlan(
       ...telemetry,
     };
   }
-  return { plan: planned.plan, shotCount: detected.shotCount, detectMs: detectMs(), ...telemetry };
+  return {
+    plan: planned.plan,
+    shotCount: detected.shotCount,
+    detectMs: detectMs(),
+    ...(planned.safetyShadow ? { safetyShadow: planned.safetyShadow } : {}),
+    ...telemetry,
+  };
 }

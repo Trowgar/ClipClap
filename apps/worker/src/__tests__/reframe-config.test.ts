@@ -29,6 +29,7 @@ describe("loadReframeConfig", () => {
       cutRecovery: false,
       tailKeep: false,
       saliencyShadow: false,
+      safetyShadow: false,
       streamCoverageGate: false,
       camera: DEFAULT_CAMERA,
     });
@@ -61,6 +62,14 @@ describe("loadReframeConfig", () => {
     expect(loadReframeConfig({ REFRAME_SALIENCY_SHADOW: "true" }).saliencyShadow).toBe(false);
     expect(loadReframeConfig({ REFRAME_SALIENCY_SHADOW: "1" }).saliencyShadow).toBe(false);
     expect(loadReframeConfig({}).saliencyShadow).toBe(false);
+  });
+
+  it("turns safety shadow telemetry on only for the exact literal 'on'", () => {
+    expect(loadReframeConfig({ REFRAME_SAFETY_SHADOW: "on" }).safetyShadow).toBe(true);
+    expect(loadReframeConfig({ REFRAME_SAFETY_SHADOW: "ON" }).safetyShadow).toBe(false);
+    expect(loadReframeConfig({ REFRAME_SAFETY_SHADOW: "true" }).safetyShadow).toBe(false);
+    expect(loadReframeConfig({ REFRAME_SAFETY_SHADOW: "1" }).safetyShadow).toBe(false);
+    expect(loadReframeConfig({}).safetyShadow).toBe(false);
   });
 
   // spec 2026-08-24-render-retry-and-stream-gate §2. Same rule as

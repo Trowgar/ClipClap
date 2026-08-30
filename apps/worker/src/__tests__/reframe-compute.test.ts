@@ -53,6 +53,7 @@ const cfg: ReframeConfig = {
   cutRecovery: false,
   tailKeep: false,
   saliencyShadow: false,
+  safetyShadow: false,
   streamCoverageGate: false,
   streamVirtualCam: false,
   camera: DEFAULT_CAMERA,
@@ -237,11 +238,12 @@ describe("computeCropPlan never throws", () => {
         ? { stdout: detectorJson(0), stderr: "" }
         : happyPath(cmd, args);
 
-    const r = await computeCropPlan("/x.mp4", 5, 5, cfg);
+    const r = await computeCropPlan("/x.mp4", 5, 5, { ...cfg, safetyShadow: true });
 
     expect(r.plan).toBeNull();
     expect(r.fallbackReason).toBe("plan_empty");
     expect(r.shotCount).toBe(0);
+    expect(r.safetyShadow).toBeUndefined();
   });
 
   it("survives a spawn that throws synchronously", async () => {
@@ -275,6 +277,41 @@ describe("computeCropPlan never throws", () => {
       "ffmpeg", // frame extraction
       "python3",
     ]);
+  });
+
+  it("propagates safety shadow telemetry from a successful detector path", async () => {
+    const pathDetector = JSON.stringify({
+      shots: [{
+        shotIndex: 0,
+        camRect: null,
+        tracks: [{
+          id: 1,
+          box: { x: 800, y: 180, w: 240, h: 240 },
+          score: 0.92,
+          samples: 8,
+          mouthActivity: 0.3,
+          path: [{ t: 5, x: 800, y: 180, w: 240, h: 240 }],
+        }],
+      }],
+    });
+    h.respond = (cmd, args) =>
+      cmd === "python3" ? { stdout: pathDetector, stderr: "" } : happyPath(cmd, args);
+
+    const on = await computeCropPlan("/x.mp4", 0, 10, { ...cfg, safetyShadow: true });
+    const off = await computeCropPlan("/x.mp4", 0, 10, cfg);
+
+    expect(JSON.stringify(on.plan)).toBe(JSON.stringify(off.plan));
+    expect(off.safetyShadow).toBeUndefined();
+    expect(on.safetyShadow).toEqual({
+      status: "pass",
+      threshold: 0.9,
+      minimumCoverage: 1,
+      evaluatedSamples: 1,
+      rejectedSamples: 0,
+      unmappedSamples: 0,
+    });
+    expect(JSON.stringify(on.plan)).not.toContain("800");
+    expect(JSON.stringify(on.safetyShadow)).not.toMatch(/face|box|region|id/i);
   });
 });
 
@@ -400,6 +437,7 @@ describe("planDetected: stream-layout coverage gate", () => {
     score: 0.89,
     samples: 111,
     mouthActivity: 0.05,
+    path: [{ t: 0.5, x: 575, y: 285, w: 49, h: 55 }],
   };
   // Same geometry as reframe-plan.test.ts's "a real, resolvable camRect wins
   // via D5" fixture: contains toxFace, solves, and (unlike a synthesized
@@ -432,6 +470,70 @@ describe("planDetected: stream-layout coverage gate", () => {
     };
   }
 
+  it("keeps the plan byte-identical while adding aggregate shadow telemetry", () => {
+    const detection: Detection = {
+      width: 1280,
+      height: 720,
+      candidates: [],
+      shots: [{ start: 0, end: 10 }],
+      tracksByShot: [{
+        shotIndex: 0,
+        camRect: null,
+        tracks: [{
+          id: 7,
+          box: { x: 800, y: 180, w: 240, h: 240 },
+          score: 0.92,
+          samples: 8,
+          mouthActivity: 0.3,
+          path: [{ t: 5, x: 800, y: 180, w: 240, h: 240 }],
+        }],
+      }],
+    };
+    const off = planDetected(detection, { ...cfg, safetyShadow: false });
+    const on = planDetected(detection, { ...cfg, safetyShadow: true });
+
+    expect(JSON.stringify(off.plan)).toBe(JSON.stringify(on.plan));
+    expect(off.safetyShadow).toBeUndefined();
+    expect(on.safetyShadow).toEqual({
+      status: "pass",
+      threshold: 0.9,
+      minimumCoverage: 1,
+      evaluatedSamples: 1,
+      rejectedSamples: 0,
+      unmappedSamples: 0,
+    });
+  });
+
+  it("reports a failed shadow when a mandatory sample is outside the final crop", () => {
+    const detection: Detection = {
+      width: 1280,
+      height: 720,
+      candidates: [],
+      shots: [{ start: 0, end: 10 }],
+      tracksByShot: [{
+        shotIndex: 0,
+        camRect: null,
+        tracks: [{
+          id: 8,
+          box: { x: 800, y: 180, w: 240, h: 240 },
+          score: 0.92,
+          samples: 8,
+          mouthActivity: 0.3,
+          path: [{ t: 5, x: 100, y: 180, w: 240, h: 240 }],
+        }],
+      }],
+    };
+
+    expect(planDetected(detection, { ...cfg, safetyShadow: true }).safetyShadow).toEqual({
+      status: "fail",
+      threshold: 0.9,
+      minimumCoverage: 0,
+      evaluatedSamples: 1,
+      rejectedSamples: 1,
+      unmappedSamples: 0,
+    });
+  });
+
   it("(a) virtualCam plan at ~10% coverage re-plans to zero stream shots, stamped and otherwise equal to an explicit stream:false plan", () => {
     const detection = lowHighDetection(1, 9, null);
 
@@ -455,6 +557,21 @@ describe("planDetected: stream-layout coverage gate", () => {
     expect(gated.plan).toEqual({
       ...streamOff.plan,
       profile: { ...streamOff.plan?.profile, reason: "stream_coverage_gated", gatedCoverage: 0.1 },
+    });
+  });
+
+  it("evaluates the final stream-gated plan rather than its pre-gate stream layout", () => {
+    const detection = lowHighDetection(1, 9, null);
+    const gated = planDetected(detection, { ...gateOn, safetyShadow: true });
+
+    expect(gated.plan?.shots.some((s) => s.layout === "stream")).toBe(false);
+    expect(gated.safetyShadow).toEqual({
+      status: "pass",
+      threshold: 0.9,
+      minimumCoverage: 1,
+      evaluatedSamples: 1,
+      rejectedSamples: 0,
+      unmappedSamples: 0,
     });
   });
 

@@ -47,6 +47,9 @@ export interface ReframeConfig {
    *  (spec 2026-08-23-music-shorts v1.1), so this flag never fires there
    *  regardless of its own value - see plan.ts's `saliencyShadowFor`. */
   saliencyShadow: boolean;
+  /** Safety-shadow telemetry killswitch. Computes mandatory focal-region
+   *  coverage after the final plan is built, but never changes that plan. */
+  safetyShadow: boolean;
   /** Stream-layout coverage-gate killswitch (spec
    *  2026-08-24-render-retry-and-stream-gate §2). Off is today's virtualCam
    *  plan byte for byte. On, a plan whose `profile.virtualCam` is `true`
@@ -115,6 +118,9 @@ export function loadReframeConfig(
     // still a behaviour change (extra data written to Clip.cropPlan) and
     // must not turn on from a stray truthy value either.
     saliencyShadow: env.REFRAME_SALIENCY_SHADOW === "on",
+    // Exact literal: telemetry nobody asked for must not turn on from a
+    // stray truthy value.
+    safetyShadow: env.REFRAME_SAFETY_SHADOW === "on",
     // Exact literal, the REFRAME_STREAM rule: a killswitch that can be
     // flipped by accident is not one.
     streamCoverageGate: env.REFRAME_STREAM_COVERAGE_GATE === "on",
