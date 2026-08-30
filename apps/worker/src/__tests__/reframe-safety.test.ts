@@ -98,6 +98,7 @@ describe("faceTracksToRegions", () => {
       hasMandatoryRegions: false,
       invalid: false,
     });
+    expect(faceTracksToRegionEvidence([valid], { start: 1, end: 1 }, "zero-span").invalid).toBe(true);
     for (const path of invalidPaths) {
       const result = faceTracksToRegionEvidence(
         [valid, { ...valid, id: 2, path }],
@@ -273,6 +274,32 @@ describe("evaluatePlanCoverage", () => {
         region("full-frame", "mandatory", [{ t: 1, box: box(2900, 900, 100, 100) }]),
       ])
     ).toMatchObject({
+      status: "pass",
+      minimumCoverage: 1,
+      evaluatedSamples: 1,
+      rejectedSamples: 0,
+      unmappedSamples: 0,
+    });
+  });
+
+  it("evaluates an all-safe-fit plan on a source narrower than the legacy crop", () => {
+    const safeFit: CropPlan = {
+      version: 4,
+      engine: "faces",
+      source: { width: 400, height: 1000 },
+      shots: [{ start: 0, end: 10, layout: "safe-fit", reason: "coverage" }],
+    };
+    const detailed = evaluatePlanCoverageDetailed(safeFit, [
+      region("edge", "mandatory", [{ t: 1, box: box(350, 0, 50, 100) }]),
+    ]);
+    expect(detailed.shots[0]).toMatchObject({
+      status: "pass",
+      minimumCoverage: 1,
+      evaluatedSamples: 1,
+      rejectedSamples: 0,
+      unmappedSamples: 0,
+    });
+    expect(detailed.aggregate).toMatchObject({
       status: "pass",
       minimumCoverage: 1,
       evaluatedSamples: 1,

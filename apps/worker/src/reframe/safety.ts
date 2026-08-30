@@ -174,7 +174,13 @@ function validateTimeline(value: unknown): Timeline | null {
   }
   const planTyped = value as CropPlan;
   const cropWidth = cropWidthFor(sourceHeight);
-  if (!Number.isFinite(cropWidth) || cropWidth <= 0 || cropWidth > sourceWidth) {
+  const hasLegacyCrop = shots.some(
+    (shot) => record(shot)?.layout !== "safe-fit"
+  );
+  if (
+    hasLegacyCrop &&
+    (!Number.isFinite(cropWidth) || cropWidth <= 0 || cropWidth > sourceWidth)
+  ) {
     return null;
   }
   let previousEnd = Number.NEGATIVE_INFINITY;

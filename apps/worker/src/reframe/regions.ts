@@ -61,7 +61,7 @@ export function faceTracksToRegionEvidence(
   let invalid =
     !Number.isFinite(span.start) ||
     !Number.isFinite(span.end) ||
-    !(span.end >= span.start);
+    !(span.end > span.start);
   const regions: FocalRegionTrack[] = [];
   for (const rawTrack of tracks) {
     const track = record(rawTrack);
