@@ -534,6 +534,86 @@ describe("planDetected: stream-layout coverage gate", () => {
     });
   });
 
+  it("aligns safety regions by shotIndex when detector track sets arrive reversed", () => {
+    const detection: Detection = {
+      width: 1280,
+      height: 720,
+      candidates: [],
+      shots: [
+        { start: 0, end: 10 },
+        { start: 10, end: 20 },
+      ],
+      // Deliberately reversed: buildCropPlan uses shotIndex, not array order.
+      tracksByShot: [
+        {
+          shotIndex: 1,
+          camRect: null,
+          tracks: [{
+            id: 21,
+            box: { x: 900, y: 180, w: 240, h: 240 },
+            score: 0.92,
+            samples: 8,
+            mouthActivity: 0.3,
+            path: [{ t: 11, x: 900, y: 180, w: 240, h: 240 }],
+          }],
+        },
+        {
+          shotIndex: 0,
+          camRect: null,
+          tracks: [{
+            id: 20,
+            box: { x: 100, y: 180, w: 240, h: 240 },
+            score: 0.92,
+            samples: 8,
+            mouthActivity: 0.3,
+            path: [{ t: 1, x: 100, y: 180, w: 240, h: 240 }],
+          }],
+        },
+      ],
+    };
+
+    expect(planDetected(detection, { ...cfg, safetyShadow: true }).safetyShadow).toEqual({
+      status: "pass",
+      threshold: 0.9,
+      minimumCoverage: 1,
+      evaluatedSamples: 2,
+      rejectedSamples: 0,
+      unmappedSamples: 0,
+    });
+  });
+
+  it("fails closed when track sets contain duplicate shotIndex values", () => {
+    const detection: Detection = {
+      width: 1280,
+      height: 720,
+      candidates: [],
+      shots: [{ start: 0, end: 10 }],
+      tracksByShot: [
+        {
+          shotIndex: 0,
+          camRect: null,
+          tracks: [{
+            id: 30,
+            box: { x: 800, y: 180, w: 240, h: 240 },
+            score: 0.92,
+            samples: 8,
+            mouthActivity: 0.3,
+            path: [{ t: 5, x: 800, y: 180, w: 240, h: 240 }],
+          }],
+        },
+        {
+          shotIndex: 0,
+          camRect: null,
+          tracks: [],
+        },
+      ],
+    };
+
+    expect(planDetected(detection, { ...cfg, safetyShadow: true }).safetyShadow?.status).toBe(
+      "not_evaluable"
+    );
+  });
+
   it("(a) virtualCam plan at ~10% coverage re-plans to zero stream shots, stamped and otherwise equal to an explicit stream:false plan", () => {
     const detection = lowHighDetection(1, 9, null);
 

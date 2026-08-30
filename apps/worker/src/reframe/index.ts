@@ -237,16 +237,39 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
   }
   let safetyShadow: SafetyShadowTelemetry | undefined;
   if (cfg.safetyShadow && plan) {
-    const regions = shots.flatMap((shot, index) => {
-      const trackSet = tracks[index];
-      return trackSet
-        ? faceTracksToRegions(
-            survivingTracks(trackSet.tracks),
-            shot,
-            `shot-${index}`
-          )
-        : [];
-    });
+    // Keep the shadow's source alignment identical to buildCropPlan: detector
+    // track sets are keyed by shotIndex, not by their array position. Any
+    // malformed alignment is fail-closed rather than risking a plausible
+    // pass for regions attached to the wrong shot.
+    const tracksByShot = new Map<number, ShotTracks>();
+    let invalidAlignment = tracks.length !== shots.length;
+    for (const trackSet of tracks) {
+      const index = trackSet?.shotIndex;
+      if (
+        !Number.isInteger(index) ||
+        index < 0 ||
+        index >= shots.length ||
+        tracksByShot.has(index)
+      ) {
+        invalidAlignment = true;
+        continue;
+      }
+      tracksByShot.set(index, trackSet);
+    }
+    if (tracksByShot.size !== shots.length) invalidAlignment = true;
+
+    const regions = invalidAlignment
+      ? []
+      : shots.flatMap((shot, index) => {
+          const trackSet = tracksByShot.get(index);
+          return trackSet
+            ? faceTracksToRegions(
+                survivingTracks(trackSet.tracks),
+                shot,
+                `shot-${index}`
+              )
+            : [];
+        });
     safetyShadow = evaluatePlanCoverage(plan, regions);
   }
   return {
