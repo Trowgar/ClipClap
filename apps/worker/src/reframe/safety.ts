@@ -16,7 +16,8 @@ export interface SafetyShadowTelemetry {
 }
 
 const DEFAULT_THRESHOLD = 0.9;
-const COVERAGE_EPSILON = 1e-9;
+// Numerical-only tolerance: this is far below any product coverage margin.
+const COVERAGE_EPSILON = Number.EPSILON * 16;
 
 function record(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object"
@@ -40,6 +41,8 @@ function finiteBox(value: unknown): value is FaceBox {
 /** Returns the fraction of `region` area covered by `window`. */
 export function coverageForBox(region: FaceBox, window: FaceBox): number {
   if (!finiteBox(region) || !finiteBox(window)) return 0;
+  const regionArea = region.w * region.h;
+  if (!Number.isFinite(regionArea) || !(regionArea > 0)) return 0;
 
   const overlapW =
     Math.min(region.x + region.w, window.x + window.w) -
@@ -47,8 +50,18 @@ export function coverageForBox(region: FaceBox, window: FaceBox): number {
   const overlapH =
     Math.min(region.y + region.h, window.y + window.h) -
     Math.max(region.y, window.y);
-  if (!(overlapW > 0) || !(overlapH > 0)) return 0;
-  return (overlapW * overlapH) / (region.w * region.h);
+  if (
+    !Number.isFinite(overlapW) ||
+    !Number.isFinite(overlapH) ||
+    !(overlapW > 0) ||
+    !(overlapH > 0)
+  ) {
+    return 0;
+  }
+  const intersectionArea = overlapW * overlapH;
+  if (!Number.isFinite(intersectionArea)) return 0;
+  const result = intersectionArea / regionArea;
+  return Number.isFinite(result) ? result : 0;
 }
 
 interface Window extends FaceBox {}
@@ -172,6 +185,19 @@ function validateTimeline(value: unknown): Timeline | null {
         shot.xs.some((key) => key.x < 0 || key.x + cropWidth > sourceWidth)
       ) {
         return null;
+      }
+      if (shot.layout === "single" && shot.xs) {
+        let previousTime = shot.start;
+        for (const key of shot.xs) {
+          if (
+            key.t < shot.start ||
+            key.t > shot.end ||
+            key.t < previousTime
+          ) {
+            return null;
+          }
+          previousTime = key.t;
+        }
       }
     } else if (shot.layout === "split") {
       const tileWidth = tileWidthFor(sourceHeight);

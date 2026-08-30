@@ -118,6 +118,12 @@ describe("coverageForBox", () => {
     expect(coverageForBox(box(0, 0, 10, 10), box(Number.POSITIVE_INFINITY, 0, 100, 100))).toBe(0);
     expect(coverageForBox(box(500, 0, 100, 100), box(28, 0, 562, 100))).toBe(0.9);
     expect(coverageForBox(box(500.00000000005, 0, 100, 100), box(28, 0, 562, 100))).toBeCloseTo(0.9, 10);
+    expect(
+      coverageForBox(
+        box(Number.MAX_VALUE / 2, Number.MAX_VALUE / 2, Number.MAX_VALUE / 4, Number.MAX_VALUE / 4),
+        box(Number.MAX_VALUE / 2, Number.MAX_VALUE / 2, Number.MAX_VALUE / 4, Number.MAX_VALUE / 4)
+      )
+    ).toBe(0);
   });
 });
 
@@ -345,6 +351,54 @@ describe("evaluatePlanCoverage", () => {
     ).toMatchObject({ status: "pass", evaluatedSamples: 1, minimumCoverage: 1 });
   });
 
+  it("requires trajectory keyframes to stay within their owning shot and ordered", () => {
+    const sample = [region("trajectory", "mandatory", [{ t: 5, box: box(600, 0, 100, 100) }])];
+    const invalidTrajectories: CropPlan[] = [
+      plan([
+        { start: 0, end: 10, layout: "single", x: 0, xs: [{ t: -1, x: 0 }, { t: 10, x: 400 }] },
+      ]),
+      plan([
+        { start: 0, end: 10, layout: "single", x: 0, xs: [{ t: 0, x: 0 }, { t: 11, x: 400 }] },
+      ]),
+      plan([
+        { start: 0, end: 10, layout: "single", x: 0, xs: [{ t: 6, x: 0 }, { t: 5, x: 400 }] },
+      ]),
+    ];
+    for (const invalidPlan of invalidTrajectories) {
+      expect(evaluatePlanCoverage(invalidPlan, sample)).toMatchObject({
+        status: "not_evaluable",
+        evaluatedSamples: 0,
+        unmappedSamples: 1,
+      });
+    }
+
+    const duplicateTimes = plan([
+      {
+        start: 0,
+        end: 10,
+        layout: "single",
+        x: 0,
+        xs: [{ t: 0, x: 0 }, { t: 5, x: 400 }, { t: 5, x: 400 }, { t: 10, x: 400 }],
+      },
+    ]);
+    expect(evaluatePlanCoverage(duplicateTimes, sample)).toMatchObject({
+      status: "pass",
+      evaluatedSamples: 1,
+    });
+  });
+
+  it("uses only machine-scale numerical tolerance at the threshold", () => {
+    const staticPlan = plan([{ start: 0, end: 10, layout: "single", x: 28 }]);
+    const exact = evaluatePlanCoverage(staticPlan, [
+      region("exact", "mandatory", [{ t: 1, box: box(500, 0, 100, 100) }]),
+    ]);
+    const below = evaluatePlanCoverage(staticPlan, [
+      region("below", "mandatory", [{ t: 1, box: box(500.0000000001, 0, 100, 100) }]),
+    ]);
+    expect(exact.status).toBe("pass");
+    expect(below.status).toBe("fail");
+  });
+
   it("rejects samples in rounded-overlap and malformed timelines", () => {
     const overlap = plan([
       { start: 0, end: 1.236, layout: "single", x: 0 },
@@ -521,7 +575,11 @@ describe("evaluatePlanCoverage", () => {
     };
     deepFreeze(frozenPlan);
     deepFreeze(frozenRegions);
+    const planSnapshot = structuredClone(frozenPlan);
+    const regionsSnapshot = structuredClone(frozenRegions);
     expect(() => evaluatePlanCoverage(frozenPlan, frozenRegions)).not.toThrow();
+    expect(frozenPlan).toEqual(planSnapshot);
+    expect(frozenRegions).toEqual(regionsSnapshot);
   });
 
   it("uses the base crop at the exact final end of split and stream overlays", () => {
