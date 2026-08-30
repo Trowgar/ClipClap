@@ -1,5 +1,6 @@
 import { planLayoutCounts } from "./plan";
 import type { CutRecoveryTelemetry } from "./cut-recovery";
+import type { SafetyShadowTelemetry } from "./safety";
 import type { CropPlan, SourceProfile } from "./types";
 
 export interface ReframeCheck {
@@ -11,6 +12,8 @@ export interface ReframeCheck {
   fallbackReason?: string;
   /** Present iff cut recovery ran for this highlight (flag on, detection ok). */
   cutRecovery?: CutRecoveryTelemetry;
+  /** Present iff aggregate safety-shadow evaluation ran for this highlight. */
+  safetyShadow?: SafetyShadowTelemetry;
 }
 
 export interface ReframeCheckInput {
@@ -19,6 +22,7 @@ export interface ReframeCheckInput {
   detectMs: number;
   fallbackReason?: string;
   cutRecovery?: CutRecoveryTelemetry;
+  safetyShadow?: SafetyShadowTelemetry;
 }
 
 /** Pure: what the render stage records about one reframe attempt. */
@@ -30,6 +34,7 @@ export function buildReframeCheck(input: ReframeCheckInput): ReframeCheck {
     ...(input.plan?.profile ? { profile: input.plan.profile } : {}),
     ...(input.fallbackReason ? { fallbackReason: input.fallbackReason } : {}),
     ...(input.cutRecovery ? { cutRecovery: input.cutRecovery } : {}),
+    ...(input.safetyShadow ? { safetyShadow: input.safetyShadow } : {}),
   };
 }
 

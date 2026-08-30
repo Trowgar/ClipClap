@@ -325,6 +325,7 @@ async function renderClips(
               detectMs: reframe.detectMs,
               fallbackReason: reframe.fallbackReason,
               cutRecovery: reframe.cutRecovery,
+              safetyShadow: reframe.safetyShadow,
             })
           );
         }

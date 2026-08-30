@@ -25,6 +25,15 @@ const cutRecovery = {
   capHit: 0,
 };
 
+const safetyShadow = {
+  status: "fail" as const,
+  threshold: 0.9,
+  minimumCoverage: 0.72,
+  evaluatedSamples: 8,
+  rejectedSamples: 2,
+  unmappedSamples: 1,
+};
+
 describe("buildReframeCheck", () => {
   it("carries the profile and the layout counts", () => {
     expect(
@@ -75,6 +84,45 @@ describe("buildReframeCheck", () => {
     );
   });
 
+  it("copies only aggregate safety-shadow telemetry and omits it when absent", () => {
+    const check = buildReframeCheck({
+      plan: streamPlan,
+      shotCount: 1,
+      detectMs: 50,
+      safetyShadow,
+    });
+    expect(check.safetyShadow).toEqual(safetyShadow);
+    expect(
+      "safetyShadow" in
+        buildReframeCheck({ plan: streamPlan, shotCount: 1, detectMs: 50 })
+    ).toBe(false);
+
+    const keys = new Set<string>();
+    const collectKeys = (value: unknown): void => {
+      if (!value || typeof value !== "object") return;
+      for (const [key, child] of Object.entries(value)) {
+        keys.add(key);
+        collectKeys(child);
+      }
+    };
+    collectKeys(check);
+    for (const forbidden of [
+      "box",
+      "x",
+      "y",
+      "path",
+      "id",
+      "userId",
+      "storageKey",
+      "url",
+      "sourcePath",
+      "regions",
+      "samples",
+    ]) {
+      expect(keys.has(forbidden)).toBe(false);
+    }
+  });
+
   it("marks a check as an encode failure without inventing layouts", () => {
     const check = buildReframeCheck({ plan: streamPlan, shotCount: 1, detectMs: 900 });
     expect(markEncodeFailed(check)).toEqual({
@@ -90,5 +138,20 @@ describe("buildReframeCheck", () => {
       cutRecovery,
     });
     expect(markEncodeFailed(withCutRecovery).cutRecovery).toEqual(cutRecovery);
+
+    const withSafetyShadow = buildReframeCheck({
+      plan: streamPlan,
+      shotCount: 1,
+      detectMs: 900,
+      fallbackReason: "encode_failed",
+      safetyShadow,
+    });
+    expect(markEncodeFailed(withSafetyShadow)).toEqual({
+      shotCount: 1,
+      detectMs: 900,
+      profile: streamPlan.profile,
+      fallbackReason: "encode_failed",
+      safetyShadow,
+    });
   });
 });

@@ -187,6 +187,35 @@ describe("renderClips reframe branch", () => {
     });
   });
 
+  it("persists aggregate safety-shadow telemetry from the computed result", async () => {
+    const safetyShadow = {
+      status: "pass" as const,
+      threshold: 0.9,
+      minimumCoverage: 0.95,
+      evaluatedSamples: 4,
+      rejectedSamples: 0,
+      unmappedSamples: 0,
+    };
+    mocks.computeCropPlan.mockResolvedValue({
+      plan: streamPlan,
+      shotCount: 1,
+      detectMs: 900,
+      safetyShadow,
+    });
+
+    await runRenderStage({ mode: "clips", jobId: "job1", userId: "u1" });
+
+    expect(manifest().reframe.checks).toEqual([
+      {
+        shotCount: 1,
+        detectMs: 900,
+        layouts: { single: 0, split: 0, center: 0, stream: 1 },
+        profile: streamPlan.profile,
+        safetyShadow,
+      },
+    ]);
+  });
+
   it("falls back to the legacy crop and records why when there is no plan", async () => {
     mocks.computeCropPlan.mockResolvedValue({
       plan: null,
