@@ -141,7 +141,7 @@ function pathsBelongToCaptureShots(capture: SafetyCapture): boolean {
   return true;
 }
 
-function validCapture(value: unknown): value is SafetyCapture {
+export function parseSafetyCapture(value: unknown): SafetyCapture | null {
   const capture = record(value);
   const source = record(capture?.source);
   const clip = record(capture?.clip);
@@ -164,7 +164,7 @@ function validCapture(value: unknown): value is SafetyCapture {
     !finite(clip.end) ||
     clip.end <= clip.start ||
     !validTimeline(capture.shots, clip.end - clip.start)
-  ) return false;
+  ) return null;
 
   const typedCapture = capture as unknown as SafetyCapture;
   let trackCount = 0;
@@ -175,19 +175,19 @@ function validCapture(value: unknown): value is SafetyCapture {
       pathSampleCount += track.path?.length ?? 0;
     }
   }
-  if (trackCount > MAX_CAPTURE_TRACKS || pathSampleCount > MAX_CAPTURE_PATH_SAMPLES) return false;
-  if (!pathsBelongToCaptureShots(typedCapture)) return false;
+  if (trackCount > MAX_CAPTURE_TRACKS || pathSampleCount > MAX_CAPTURE_PATH_SAMPLES) return null;
+  if (!pathsBelongToCaptureShots(typedCapture)) return null;
 
   if (typedCapture.plan !== null) {
     const planSource = typedCapture.plan.source;
-    if (planSource.width !== source.width || planSource.height !== source.height) return false;
+    if (planSource.width !== source.width || planSource.height !== source.height) return null;
     const first = typedCapture.shots[0];
     const last = typedCapture.shots[typedCapture.shots.length - 1];
     if (!validTimeline(typedCapture.plan.shots, clip.end - clip.start, { start: first.start, end: last.end })) {
-      return false;
+      return null;
     }
   }
-  return true;
+  return typedCapture;
 }
 
 function notEvaluable(): SafetyShadowTelemetry {
@@ -201,7 +201,7 @@ function notEvaluable(): SafetyShadowTelemetry {
   };
 }
 
-function alignedTracks(capture: SafetyCapture): boolean {
+export function alignedTracks(capture: SafetyCapture): boolean {
   if (capture.tracks.length !== capture.shots.length) return false;
   const seen = new Set<number>();
   for (const trackSet of capture.tracks) {
@@ -218,18 +218,18 @@ function alignedTracks(capture: SafetyCapture): boolean {
 
 /** Pure replay helper, exported so tests can exercise the reader without a process. */
 export function evaluateSafetyCapture(value: unknown): SafetyShadowTelemetry | null {
-  if (!validCapture(value)) return null;
-  if (!captureHasUsablePlan(value)) return null;
-  if (!alignedTracks(value)) return notEvaluable();
+  const capture = parseSafetyCapture(value);
+  if (!capture || !captureHasUsablePlan(capture)) return null;
+  if (!alignedTracks(capture)) return notEvaluable();
 
-  const byIndex = new Map(value.tracks.map((trackSet) => [trackSet.shotIndex, trackSet]));
-  const regions = value.shots.flatMap((shot, index) => {
+  const byIndex = new Map(capture.tracks.map((trackSet) => [trackSet.shotIndex, trackSet]));
+  const regions = capture.shots.flatMap((shot, index) => {
     const trackSet = byIndex.get(index);
     return trackSet
       ? faceTracksToRegions(survivingTracks(trackSet.tracks), shot, `shot-${index}`)
       : [];
   });
-  return evaluatePlanCoverage(value.plan, regions);
+  return evaluatePlanCoverage(capture.plan, regions);
 }
 
 function captureHasUsablePlan(capture: SafetyCapture): capture is SafetyCapture & { plan: CropPlan } {
@@ -287,7 +287,7 @@ export async function runSafetyShadowCli(
   } catch {
     return { exitCode: errorResult(io, "capture_invalid"), stdout: "", stderr: "capture_invalid\n" };
   }
-  if (!validCapture(value)) {
+  if (!parseSafetyCapture(value)) {
     return { exitCode: errorResult(io, "capture_invalid"), stdout: "", stderr: "capture_invalid\n" };
   }
   try {

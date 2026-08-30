@@ -8,6 +8,10 @@ import {
   evaluateSafetyCapture,
   runSafetyShadowCli,
 } from "../scripts/eval-reframe-safety-shadow";
+import {
+  evaluateSafetyPlannerCapture,
+  runSafetyPlannerCli,
+} from "../scripts/eval-reframe-safety-planner";
 
 const source = { width: 3000, height: 1000 };
 
@@ -421,5 +425,133 @@ describe("private safety-shadow capture reader", () => {
       stderr: "",
       stdout: '{"safetyShadow":null}\n',
     });
+  });
+});
+
+describe("immutable active safe-fit replay", () => {
+  function activeCapture(secondFaceX: number, firstFaceX = 100) {
+    const plan: CropPlan = {
+      version: 3,
+      engine: "faces",
+      source,
+      shots: [
+        { start: 0, end: 5, layout: "single", x: 0 },
+        { start: 5, end: 10, layout: "single", x: 0 },
+      ],
+    };
+    return {
+      shots: [{ start: 0, end: 5 }, { start: 5, end: 10 }],
+      tracks: [
+        shotTracks(0, [track(201, { x: firstFaceX, y: 220, w: 220, h: 220 }, [
+          { t: 1, x: firstFaceX, y: 220, w: 220, h: 220 },
+          { t: 4, x: firstFaceX, y: 220, w: 220, h: 220 },
+        ])]),
+        shotTracks(1, [track(202, { x: secondFaceX, y: 220, w: 220, h: 220 }, [
+          { t: 6, x: secondFaceX, y: 220, w: 220, h: 220 },
+          { t: 9, x: secondFaceX, y: 220, w: 220, h: 220 },
+        ])]),
+      ],
+      plan,
+      source,
+      clip: { start: 0, end: 10 },
+    };
+  }
+
+  it("turns an unsafe captured shot into safe-fit and passes after replay", () => {
+    const result = evaluateSafetyPlannerCapture(activeCapture(2_200));
+    expect(result).toEqual({
+      before: {
+        status: "fail",
+        threshold: 0.9,
+        minimumCoverage: 0,
+        evaluatedSamples: 4,
+        rejectedSamples: 2,
+        unmappedSamples: 0,
+      },
+      after: {
+        status: "pass",
+        threshold: 0.9,
+        minimumCoverage: 1,
+        evaluatedSamples: 4,
+        rejectedSamples: 0,
+        unmappedSamples: 0,
+      },
+      active: {
+        mode: "active",
+        evaluatedShots: 2,
+        safeFitShots: 1,
+        coverageFallbacks: 1,
+        invalidEvidenceFallbacks: 0,
+        minimumCoverage: 0,
+      },
+      unchangedSafeShots: 1,
+    });
+  });
+
+  it("keeps safe controls structurally unchanged", () => {
+    const capture = activeCapture(100);
+    const result = evaluateSafetyPlannerCapture(capture);
+    expect(result?.before.status).toBe("pass");
+    expect(result?.after).toEqual(result?.before);
+    expect(result?.active.safeFitShots).toBe(0);
+    expect(result?.unchangedSafeShots).toBe(2);
+    expect(Object.keys(result ?? {})).toEqual(["before", "after", "active", "unchangedSafeShots"]);
+  });
+
+  it("fails closed to safe-fit for every shot when captured indexes are untrusted", () => {
+    const capture = activeCapture(2_200);
+    capture.tracks = [capture.tracks[0], { ...capture.tracks[0], shotIndex: 0 }];
+    const result = evaluateSafetyPlannerCapture(capture);
+    expect(result?.active).toMatchObject({
+      safeFitShots: 2,
+      coverageFallbacks: 0,
+      invalidEvidenceFallbacks: 2,
+    });
+    expect(result?.after.status).toBe("pass");
+    expect(result?.unchangedSafeShots).toBe(0);
+  });
+
+  it("keeps a measured fail as a valid CLI result while rejecting malformed input", async () => {
+    const capture = JSON.stringify(activeCapture(2_200));
+    const run = async (
+      argv: string[],
+      raw = capture,
+      unreadable = false,
+    ) => {
+      const stdout: string[] = [];
+      const stderr: string[] = [];
+      const result = await runSafetyPlannerCli(argv, {
+        stat: async () => {
+          if (unreadable) throw new Error("unreadable");
+          return { size: Buffer.byteLength(raw) };
+        },
+        readFile: async () => raw,
+        stdout: (value) => stdout.push(value),
+        stderr: (value) => stderr.push(value),
+      });
+      return { ...result, stdout: stdout.join(""), stderr: stderr.join("") };
+    };
+
+    await expect(run(["tsx"])).resolves.toMatchObject({
+      exitCode: 1,
+      stdout: "",
+      stderr: "usage\n",
+    });
+    await expect(run(["node", "tsx", "case.json"], capture, true)).resolves.toMatchObject({
+      exitCode: 1,
+      stdout: "",
+      stderr: "capture_unreadable\n",
+    });
+    await expect(run(["node", "tsx", "case.json"], "{bad")).resolves.toMatchObject({
+      exitCode: 1,
+      stdout: "",
+      stderr: "capture_invalid\n",
+    });
+    const valid = await run(["node", "tsx", "case.json"]);
+    expect(valid.exitCode).toBe(0);
+    expect(JSON.parse(valid.stdout)).toEqual(expect.objectContaining({
+      before: expect.objectContaining({ status: "fail" }),
+      after: expect.objectContaining({ status: "pass" }),
+    }));
   });
 });
