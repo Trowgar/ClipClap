@@ -511,6 +511,21 @@ describe("immutable active safe-fit replay", () => {
     expect(result?.unchangedSafeShots).toBe(0);
   });
 
+  it("counts a safe control after merged fallbacks despite its shifted index", () => {
+    const capture = activeCapture(2_200, 2_200);
+    capture.shots.push({ start: 10, end: 15 });
+    capture.clip.end = 15;
+    capture.tracks.push(shotTracks(2, [track(203, { x: 100, y: 220, w: 220, h: 220 }, [
+      { t: 11, x: 100, y: 220, w: 220, h: 220 },
+      { t: 14, x: 100, y: 220, w: 220, h: 220 },
+    ])]));
+    capture.plan.shots.push({ start: 10, end: 15, layout: "single", x: 0 });
+
+    const result = evaluateSafetyPlannerCapture(capture);
+    expect(result?.active.safeFitShots).toBe(2);
+    expect(result?.unchangedSafeShots).toBe(1);
+  });
+
   it("keeps a measured fail as a valid CLI result while rejecting malformed input", async () => {
     const capture = JSON.stringify(activeCapture(2_200));
     const run = async (

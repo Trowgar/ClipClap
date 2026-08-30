@@ -77,10 +77,22 @@ function evidenceForCapture(capture: SafetyCapture, plan: CropPlan): {
 }
 
 function unchangedSafeShots(before: CropPlan, after: CropPlan): number {
+  // Safe shots can move indexes when adjacent fallback shots are merged. A
+  // multiset gives each original shot one structural match without assuming
+  // that transformed and original arrays retain positional correspondence.
+  const remaining = new Map<string, number>();
+  for (const shot of after.shots) {
+    const key = JSON.stringify(shot);
+    remaining.set(key, (remaining.get(key) ?? 0) + 1);
+  }
   let unchanged = 0;
-  for (let index = 0; index < before.shots.length; index++) {
-    if (JSON.stringify(before.shots[index]) === JSON.stringify(after.shots[index])) {
+  for (const shot of before.shots) {
+    const key = JSON.stringify(shot);
+    const count = remaining.get(key) ?? 0;
+    if (count > 0) {
       unchanged++;
+      if (count === 1) remaining.delete(key);
+      else remaining.set(key, count - 1);
     }
   }
   return unchanged;
