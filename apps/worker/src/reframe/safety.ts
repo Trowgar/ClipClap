@@ -15,14 +15,25 @@ export interface SafetyShadowTelemetry {
   unmappedSamples: number;
 }
 
-function finiteBox(box: FaceBox): boolean {
+const DEFAULT_THRESHOLD = 0.9;
+const COVERAGE_EPSILON = 1e-9;
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function finiteBox(value: unknown): value is FaceBox {
+  const box = record(value);
+  if (!box) return false;
   return (
     Number.isFinite(box.x) &&
     Number.isFinite(box.y) &&
     Number.isFinite(box.w) &&
     Number.isFinite(box.h) &&
-    box.w > 0 &&
-    box.h > 0
+    (box.w as number) > 0 &&
+    (box.h as number) > 0
   );
 }
 
@@ -42,39 +53,52 @@ export function coverageForBox(region: FaceBox, window: FaceBox): number {
 
 interface Window extends FaceBox {}
 
-function finiteKeyframes(keys: Keyframe[] | undefined): boolean {
+function finiteKeyframes(keys: unknown): keys is Keyframe[] | undefined {
   return (
     keys === undefined ||
-    keys.every((key) => Number.isFinite(key.t) && Number.isFinite(key.x))
+    (Array.isArray(keys) &&
+      keys.every((key) => {
+        const value = record(key);
+        return !!value && Number.isFinite(value.t) && Number.isFinite(value.x);
+      }))
   );
 }
 
-function finiteStreamGeometry(plan: CropPlan): boolean {
-  const stream = plan.stream;
-  if (!stream) return false;
+function finiteStreamGeometry(plan: unknown, sourceHeight: number): boolean {
+  const planRecord = record(plan);
+  const stream = record(planRecord?.stream);
+  const camCrop = record(stream?.camCrop);
+  const contentCrop = record(stream?.contentCrop);
+  if (!stream || !camCrop || !contentCrop) return false;
   return (
-    Number.isFinite(stream.camCrop.w) &&
-    Number.isFinite(stream.camCrop.h) &&
-    Number.isFinite(stream.camCrop.y) &&
-    Number.isFinite(stream.contentCrop.w) &&
-    Number.isFinite(stream.contentCrop.h) &&
+    Number.isFinite(camCrop.w) &&
+    Number.isFinite(camCrop.h) &&
+    Number.isFinite(camCrop.y) &&
+    Number.isFinite(contentCrop.w) &&
+    Number.isFinite(contentCrop.h) &&
     Number.isFinite(stream.outCamH) &&
     Number.isFinite(stream.outContentH) &&
-    stream.camCrop.w > 0 &&
-    stream.camCrop.h > 0 &&
-    stream.camCrop.y >= 0 &&
-    stream.contentCrop.w > 0 &&
-    stream.contentCrop.h > 0 &&
-    stream.outCamH > 0 &&
-    stream.outContentH > 0
+    (camCrop.w as number) > 0 &&
+    (camCrop.h as number) > 0 &&
+    (camCrop.y as number) >= 0 &&
+    (camCrop.y as number) + (camCrop.h as number) <= sourceHeight &&
+    (contentCrop.w as number) > 0 &&
+    (contentCrop.h as number) === sourceHeight &&
+    (stream.outCamH as number) > 0 &&
+    (stream.outContentH as number) > 0 &&
+    (stream.outCamH as number) + (stream.outContentH as number) === 1920
   );
 }
 
-function finiteShot(shot: ShotLayout): boolean {
+function finiteShot(value: unknown): value is ShotLayout {
+  const shot = record(value);
+  if (!shot || typeof shot.layout !== "string") return false;
+  const start = shot.start as number;
+  const end = shot.end as number;
   if (
-    !Number.isFinite(shot.start) ||
-    !Number.isFinite(shot.end) ||
-    !(shot.end > shot.start)
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    !(end > start)
   ) {
     return false;
   }
@@ -83,9 +107,14 @@ function finiteShot(shot: ShotLayout): boolean {
     return Number.isFinite(shot.x) && finiteKeyframes(shot.xs);
   }
   if (shot.layout === "split") {
-    return Number.isFinite(shot.top.x) && Number.isFinite(shot.bottom.x);
+    const top = record(shot.top);
+    const bottom = record(shot.bottom);
+    return !!top && !!bottom && Number.isFinite(top.x) && Number.isFinite(bottom.x);
   }
-  return Number.isFinite(shot.cam.x) && Number.isFinite(shot.content.x);
+  if (shot.layout !== "stream") return false;
+  const cam = record(shot.cam);
+  const content = record(shot.content);
+  return !!cam && !!content && Number.isFinite(cam.x) && Number.isFinite(content.x);
 }
 
 interface Timeline {
@@ -94,22 +123,36 @@ interface Timeline {
   hasTrajectory: boolean;
 }
 
-function validateTimeline(plan: CropPlan): Timeline | null {
+function validateTimeline(value: unknown): Timeline | null {
+  const plan = record(value);
+  const source = record(plan?.source);
+  const shots = plan?.shots;
+  const sourceWidth = source?.width;
+  const sourceHeight = source?.height;
   if (
-    !Number.isFinite(plan.source.width) ||
-    !Number.isFinite(plan.source.height) ||
-    !(plan.source.width > 0) ||
-    !(plan.source.height > 0) ||
-    plan.shots.length === 0
+    !source ||
+    !Array.isArray(shots) ||
+    shots.length === 0 ||
+    typeof sourceWidth !== "number" ||
+    typeof sourceHeight !== "number" ||
+    !Number.isFinite(sourceWidth) ||
+    !Number.isFinite(sourceHeight) ||
+    !(sourceWidth > 0) ||
+    !(sourceHeight > 0)
   ) {
+    return null;
+  }
+  const planTyped = value as CropPlan;
+  const cropWidth = cropWidthFor(sourceHeight);
+  if (!Number.isFinite(cropWidth) || cropWidth <= 0 || cropWidth > sourceWidth) {
     return null;
   }
   let previousEnd = Number.NEGATIVE_INFINITY;
   let firstStart = 0;
   let finalEnd = 0;
   let hasTrajectory = false;
-  for (let index = 0; index < plan.shots.length; index++) {
-    const shot = plan.shots[index];
+  for (let index = 0; index < shots.length; index++) {
+    const shot = shots[index];
     if (!finiteShot(shot)) return null;
     const start = roundLayoutTime(shot.start);
     const end = roundLayoutTime(shot.end);
@@ -120,7 +163,44 @@ function validateTimeline(plan: CropPlan): Timeline | null {
     if (start < previousEnd) return null;
     previousEnd = end;
     finalEnd = end;
-    if (shot.layout === "stream" && !finiteStreamGeometry(plan)) return null;
+    if (shot.layout === "center" || shot.layout === "single") {
+      const x = shot.x;
+      if (x < 0 || x + cropWidth > sourceWidth) return null;
+      if (
+        shot.layout === "single" &&
+        shot.xs &&
+        shot.xs.some((key) => key.x < 0 || key.x + cropWidth > sourceWidth)
+      ) {
+        return null;
+      }
+    } else if (shot.layout === "split") {
+      const tileWidth = tileWidthFor(sourceHeight);
+      if (
+        !Number.isFinite(tileWidth) ||
+        tileWidth <= 0 ||
+        tileWidth > sourceWidth ||
+        shot.top.x < 0 ||
+        shot.bottom.x < 0 ||
+        shot.top.x + tileWidth > sourceWidth ||
+        shot.bottom.x + tileWidth > sourceWidth
+      ) {
+        return null;
+      }
+    } else if (
+      !finiteStreamGeometry(planTyped, sourceHeight)
+    ) {
+      return null;
+    } else {
+      const stream = planTyped.stream!;
+      if (
+        shot.cam.x < 0 ||
+        shot.cam.x + stream.camCrop.w > sourceWidth ||
+        shot.content.x < 0 ||
+        shot.content.x + stream.contentCrop.w > sourceWidth
+      ) {
+        return null;
+      }
+    }
     if (shot.layout === "single" && shot.xs && shot.xs.length > 0) {
       hasTrajectory = true;
     }
@@ -200,7 +280,7 @@ function windowsForSample(
         { x: shot.bottom.x, y: 0, w: width, h: plan.source.height },
       ];
     }
-    if (!finiteStreamGeometry(plan)) return null;
+    if (!finiteStreamGeometry(plan, plan.source.height)) return null;
     return [
       {
         x: shot.cam.x,
@@ -231,30 +311,40 @@ export function evaluatePlanCoverage(
   let unmappedSamples = 0;
   let minimumCoverage: number | null = null;
   const timeline = validateTimeline(plan);
-  const validThreshold = Number.isFinite(threshold);
+  const validThreshold =
+    Number.isFinite(threshold) && threshold >= 0 && threshold <= 1;
+  const normalizedThreshold = validThreshold ? threshold : DEFAULT_THRESHOLD;
+  const regionList = Array.isArray(regions) ? regions : [];
 
-  for (const focalRegion of regions) {
-    if (focalRegion.priority !== "mandatory") continue;
-    for (const sample of focalRegion.samples) {
+  for (const rawRegion of regionList) {
+    const focalRegion = record(rawRegion);
+    if (!focalRegion || focalRegion.priority !== "mandatory") continue;
+    if (!Array.isArray(focalRegion.samples)) {
+      unmappedSamples++;
+      continue;
+    }
+    for (const rawSample of focalRegion.samples) {
+      const sample = record(rawSample);
       if (
         !timeline ||
         !validThreshold ||
+        !sample ||
         !finiteBox(sample.box) ||
         !Number.isFinite(sample.t) ||
-        sample.t < timeline.firstStart ||
-        sample.t > timeline.finalEnd
+        (sample.t as number) < timeline.firstStart ||
+        (sample.t as number) > timeline.finalEnd
       ) {
         unmappedSamples++;
         continue;
       }
-      const windows = windowsForSample(plan, timeline, sample.t);
-      if (!windows) {
+      const windows = windowsForSample(plan, timeline, sample.t as number);
+      if (!windows || !windows.every((window) => finiteBox(window))) {
         unmappedSamples++;
         continue;
       }
 
       const coverage = Math.max(
-        ...windows.map((window) => coverageForBox(sample.box, window))
+        ...windows.map((window) => coverageForBox(sample.box as FaceBox, window))
       );
       if (!Number.isFinite(coverage)) {
         unmappedSamples++;
@@ -263,7 +353,7 @@ export function evaluatePlanCoverage(
       evaluatedSamples++;
       minimumCoverage =
         minimumCoverage === null ? coverage : Math.min(minimumCoverage, coverage);
-      if (coverage < threshold) rejectedSamples++;
+      if (coverage + COVERAGE_EPSILON < normalizedThreshold) rejectedSamples++;
     }
   }
 
@@ -275,7 +365,7 @@ export function evaluatePlanCoverage(
         : "pass";
   return {
     status,
-    threshold,
+    threshold: normalizedThreshold,
     minimumCoverage,
     evaluatedSamples,
     rejectedSamples,

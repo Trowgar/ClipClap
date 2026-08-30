@@ -117,6 +117,7 @@ describe("coverageForBox", () => {
     expect(coverageForBox(box(Number.NaN, 0, 10, 10), box(0, 0, 100, 100))).toBe(0);
     expect(coverageForBox(box(0, 0, 10, 10), box(Number.POSITIVE_INFINITY, 0, 100, 100))).toBe(0);
     expect(coverageForBox(box(500, 0, 100, 100), box(28, 0, 562, 100))).toBe(0.9);
+    expect(coverageForBox(box(500.00000000005, 0, 100, 100), box(28, 0, 562, 100))).toBeCloseTo(0.9, 10);
   });
 });
 
@@ -299,6 +300,21 @@ describe("evaluatePlanCoverage", () => {
     });
   });
 
+  it("checks coverage immediately before and after a rounded shot boundary", () => {
+    const roundedBoundary = plan([
+      { start: 0, end: 1.236, layout: "single", x: 0 },
+      { start: 1.236, end: 2, layout: "single", x: 400 },
+    ]);
+    const before = evaluatePlanCoverage(roundedBoundary, [
+      region("before", "mandatory", [{ t: 1.239, box: box(700, 0, 100, 100) }]),
+    ]);
+    const after = evaluatePlanCoverage(roundedBoundary, [
+      region("after", "mandatory", [{ t: 1.241, box: box(700, 0, 100, 100) }]),
+    ]);
+    expect(before).toMatchObject({ status: "fail", evaluatedSamples: 1, rejectedSamples: 1 });
+    expect(after).toMatchObject({ status: "pass", evaluatedSamples: 1, rejectedSamples: 0 });
+  });
+
   it("uses the base crop in a gap rather than inventing missing video", () => {
     const gapped = plan([
       { start: 0, end: 4, layout: "single", x: 0 },
@@ -371,6 +387,7 @@ describe("evaluatePlanCoverage", () => {
     const sample = region("invalid", "mandatory", [{ t: 1, box: box(100, 0, 100, 100) }]);
     expect(evaluatePlanCoverage(staticPlan, [sample], Number.NaN)).toMatchObject({
       status: "not_evaluable",
+      threshold: 0.9,
       unmappedSamples: 1,
     });
     expect(
@@ -399,6 +416,112 @@ describe("evaluatePlanCoverage", () => {
         [sample]
       )
     ).toMatchObject({ status: "not_evaluable", unmappedSamples: 1 });
+
+    for (const invalidThreshold of [-0.01, 1.01, Number.POSITIVE_INFINITY]) {
+      const result = evaluatePlanCoverage(staticPlan, [sample], invalidThreshold);
+      expect(result).toMatchObject({ status: "not_evaluable", threshold: 0.9, unmappedSamples: 1 });
+      expect(Number.isFinite(result.threshold)).toBe(true);
+    }
+  });
+
+  it("fails closed when source or any crop geometry exceeds source bounds", () => {
+    const source = { width: 1000, height: 1000 };
+    const exactCrop = 562;
+    const face = [region("bounded", "mandatory", [{ t: 1, box: box(100, 100, 100, 100) }])];
+    const cases: CropPlan[] = [
+      plan([{ start: 0, end: 10, layout: "center", x: -1 }], undefined, source),
+      plan([{ start: 0, end: 10, layout: "center", x: 500 }], undefined, source),
+      plan([{ start: 0, end: 10, layout: "single", x: 0, xs: [{ t: 0, x: 0 }, { t: 1, x: 500 }] }], undefined, source),
+      plan([{ start: 0, end: 10, layout: "split", top: { x: -1 }, bottom: { x: 0 } }], undefined, source),
+      plan([{ start: 0, end: 10, layout: "split", top: { x: 0 }, bottom: { x: 2000 } }], undefined, source),
+      plan([{ start: 0, end: 10, layout: "center", x: 0 }], undefined, { width: exactCrop - 1, height: 1000 }),
+    ];
+    for (const invalidPlan of cases) {
+      expect(evaluatePlanCoverage(invalidPlan, face)).toMatchObject({
+        status: "not_evaluable",
+        evaluatedSamples: 0,
+        unmappedSamples: 1,
+      });
+    }
+  });
+
+  it("validates stream rectangles, source-sized content visibility, and output heights", () => {
+    const face = [region("stream-face", "mandatory", [{ t: 1, box: box(1100, 900, 100, 100) }])];
+    const validGeometry = {
+      camCrop: { w: 300, h: 200, y: 20 },
+      contentCrop: { w: 800, h: 1000 },
+      outCamH: 500,
+      outContentH: 1420,
+    };
+    const valid = plan(
+      [{ start: 0, end: 10, layout: "stream", cam: { x: 100 }, content: { x: 1000 } }],
+      validGeometry,
+      { width: 3000, height: 1000 }
+    );
+    expect(evaluatePlanCoverage(valid, face)).toMatchObject({ status: "pass", minimumCoverage: 1 });
+
+    const invalidGeometryPlans: CropPlan[] = [
+      plan(valid.shots, { ...validGeometry, camCrop: { ...validGeometry.camCrop, y: -1 } }),
+      plan(valid.shots, { ...validGeometry, camCrop: { ...validGeometry.camCrop, w: 3001 } }),
+      plan(valid.shots, { ...validGeometry, camCrop: { ...validGeometry.camCrop, h: 1001 } }),
+      plan([{ start: 0, end: 10, layout: "stream", cam: { x: -1 }, content: { x: 1000 } }], validGeometry),
+      plan([{ start: 0, end: 10, layout: "stream", cam: { x: 100 }, content: { x: 2500 } }], validGeometry),
+      plan(valid.shots, { ...validGeometry, contentCrop: { w: 800, h: 999 } }),
+      plan(valid.shots, { ...validGeometry, outCamH: 500, outContentH: 1400 }),
+    ];
+    for (const invalidPlan of invalidGeometryPlans) {
+      expect(evaluatePlanCoverage(invalidPlan, face)).toMatchObject({
+        status: "not_evaluable",
+        evaluatedSamples: 0,
+        unmappedSamples: 1,
+      });
+    }
+  });
+
+  it("never throws on deserialized malformed plans, regions, or samples", () => {
+    const validSample = { t: 1, box: box(100, 100, 100, 100), confidence: 1 };
+    const malformedInputs: Array<[unknown, unknown]> = [
+      [{ source: null, shots: null }, [region("r", "mandatory", [{ t: 1, box: box(0, 0, 1, 1) }])]],
+      [{ source: { width: 1000, height: 1000 }, shots: null }, [region("r", "mandatory", [{ t: 1, box: box(0, 0, 1, 1) }])]],
+      [{ source: { width: 1000, height: 1000 }, shots: [null] }, [region("r", "mandatory", [{ t: 1, box: box(0, 0, 1, 1) }])]],
+      [plan([{ start: 0, end: 10, layout: "single", x: 0 }]), [{ id: "r", kind: "face", priority: "mandatory", samples: [null, validSample] }]],
+      [plan([{ start: 0, end: 10, layout: "single", x: 0 }]), [{ id: "r", kind: "face", priority: "mandatory", samples: null }]],
+      [plan([{ start: 0, end: 10, layout: "single", x: 0 }]), null],
+    ];
+    for (const [malformedPlan, malformedRegions] of malformedInputs) {
+      let result: ReturnType<typeof evaluatePlanCoverage> | undefined;
+      expect(() => {
+        result = evaluatePlanCoverage(
+          malformedPlan as CropPlan,
+          malformedRegions as FocalRegionTrack[]
+        );
+      }).not.toThrow();
+      expect(result).toBeDefined();
+      expect(result!.status).toBe("not_evaluable");
+      expect(Number.isFinite(result!.threshold)).toBe(true);
+      expect(Number.isNaN(result!.minimumCoverage ?? 0)).toBe(false);
+    }
+  });
+
+  it("does not mutate deeply frozen plans or regions", () => {
+    const frozenPlan = plan([
+      {
+        start: 0,
+        end: 10,
+        layout: "single",
+        x: 0,
+        xs: [{ t: 0, x: 0 }, { t: 10, x: 400 }],
+      },
+    ], undefined, { width: 3000, height: 1000 });
+    const frozenRegions = [region("frozen", "mandatory", [{ t: 1, box: box(100, 100, 100, 100) }])];
+    const deepFreeze = (value: unknown): void => {
+      if (!value || typeof value !== "object" || Object.isFrozen(value)) return;
+      Object.freeze(value);
+      for (const child of Object.values(value)) deepFreeze(child);
+    };
+    deepFreeze(frozenPlan);
+    deepFreeze(frozenRegions);
+    expect(() => evaluatePlanCoverage(frozenPlan, frozenRegions)).not.toThrow();
   });
 
   it("uses the base crop at the exact final end of split and stream overlays", () => {
