@@ -17,11 +17,9 @@ export interface SafetyPlannerTelemetry {
   minimumCoverage: number | null;
 }
 
-const emptyTelemetry = (input: SafetyPlannerInput): SafetyPlannerTelemetry => ({
+const emptyTelemetry = (): SafetyPlannerTelemetry => ({
   mode: "active",
-  evaluatedShots: input.verdicts.filter(
-    (verdict) => verdict.evaluatedSamples > 0
-  ).length,
+  evaluatedShots: 0,
   safeFitShots: 0,
   coverageFallbacks: 0,
   invalidEvidenceFallbacks: 0,
@@ -86,7 +84,7 @@ export function applySafetyPlanner(
   plan: CropPlan,
   input: SafetyPlannerInput
 ): { plan: CropPlan; telemetry: SafetyPlannerTelemetry } {
-  const telemetry = emptyTelemetry(input);
+  const telemetry = emptyTelemetry();
   const verdicts = new Map<number, ShotSafetyVerdict>();
   for (const verdict of input.verdicts) {
     const inPlan =
@@ -107,6 +105,9 @@ export function applySafetyPlanner(
           : Math.min(telemetry.minimumCoverage, verdict.minimumCoverage as number);
     }
   }
+  telemetry.evaluatedShots = [...verdicts.values()].filter(
+    (verdict) => verdict.evaluatedSamples > 0
+  ).length;
 
   const plannedShots: ShotLayout[] = [];
   for (let shotIndex = 0; shotIndex < plan.shots.length; shotIndex++) {

@@ -15,8 +15,8 @@ const safe = (
   reason: "coverage" | "invalid_evidence"
 ): ShotLayout => ({ start, end, layout: "safe-fit", reason });
 
-const plan = (shots: ShotLayout[]): CropPlan => ({
-  version: 3,
+const plan = (shots: ShotLayout[], version: CropPlan["version"] = 3): CropPlan => ({
+  version,
   engine: "faces",
   source: { width: 1920, height: 1080 },
   shots,
@@ -152,7 +152,7 @@ describe("applySafetyPlanner", () => {
 
   it("preserves references and input objects when no replacement is needed", () => {
     const originalShots = [safe(0, 1, "coverage"), safe(1, 2, "coverage")];
-    const original = plan(originalShots);
+    const original = plan(originalShots, 4);
     const result = applySafetyPlanner(
       original,
       input({
@@ -162,10 +162,26 @@ describe("applySafetyPlanner", () => {
     );
 
     expect(result.plan).toBe(original);
-    expect(result.plan.version).toBe(3);
+    expect(result.plan.version).toBe(4);
     expect(result.plan.shots).toBe(originalShots);
     expect(result.plan.shots).toHaveLength(2);
     expect(result.plan.shots[0]).toBe(originalShots[0]);
+  });
+
+  it("counts only unique valid in-plan evaluated verdict indexes", () => {
+    const result = applySafetyPlanner(
+      plan([shot(0, 1)]),
+      input({
+        verdicts: [
+          verdict(0, "pass", 1),
+          verdict(0, "fail", 0.2),
+          verdict(-1, "pass", 1),
+          verdict(99, "pass", 1),
+        ],
+      })
+    );
+
+    expect(result.telemetry.evaluatedShots).toBe(1);
   });
 
   it("ignores out-of-range evidence indexes and is idempotent", () => {
