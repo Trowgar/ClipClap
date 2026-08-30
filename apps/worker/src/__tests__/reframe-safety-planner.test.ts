@@ -151,7 +151,7 @@ describe("applySafetyPlanner", () => {
   });
 
   it("preserves references and input objects when no replacement is needed", () => {
-    const originalShots = [shot(0, 1), shot(1, 2)];
+    const originalShots = [safe(0, 1, "coverage"), safe(1, 2, "coverage")];
     const original = plan(originalShots);
     const result = applySafetyPlanner(
       original,
@@ -164,6 +164,7 @@ describe("applySafetyPlanner", () => {
     expect(result.plan).toBe(original);
     expect(result.plan.version).toBe(3);
     expect(result.plan.shots).toBe(originalShots);
+    expect(result.plan.shots).toHaveLength(2);
     expect(result.plan.shots[0]).toBe(originalShots[0]);
   });
 

@@ -128,13 +128,14 @@ export function applySafetyPlanner(
     else telemetry.invalidEvidenceFallbacks++;
   }
 
-  const merged = mergeAdjacentSafeFit(plannedShots);
-  if (
-    telemetry.safeFitShots === 0 &&
-    !merged.merged
-  ) {
+  // Existing safe-fit runs are left byte-for-byte alone when this invocation
+  // has no new replacement to apply. This preserves the caller's plan
+  // reference for the no-op case; merging is only normalization around a
+  // newly introduced safe-fit shot.
+  if (telemetry.safeFitShots === 0) {
     return { plan, telemetry };
   }
+  const merged = mergeAdjacentSafeFit(plannedShots);
 
   return {
     plan: {
