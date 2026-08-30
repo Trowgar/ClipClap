@@ -24,11 +24,12 @@ describe("loadAnalyzeConfig", () => {
     expect(cfg.postBoundaryHookMaxPreHookGapSec).toBeUndefined();
   });
 
-  it("defaults safe-end audit off and accepts shadow only", () => {
+  it("accepts exact safe-end audit off or shadow modes only", () => {
     expect(loadAnalyzeConfig({}).safeEndAuditMode).toBe("off");
     expect(loadAnalyzeConfig({ SAFE_END_AUDIT: "  " }).safeEndAuditMode).toBe("off");
+    expect(loadAnalyzeConfig({ SAFE_END_AUDIT: "off" }).safeEndAuditMode).toBe("off");
     expect(loadAnalyzeConfig({ SAFE_END_AUDIT: "shadow" }).safeEndAuditMode).toBe("shadow");
-    for (const value of ["off", "enforce", "Shadow", "1"]) {
+    for (const value of ["enforce", "Shadow", "1"]) {
       expect(() => loadAnalyzeConfig({ SAFE_END_AUDIT: value })).toThrow();
     }
   });

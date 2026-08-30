@@ -51,6 +51,7 @@ describe("computeFingerprint", () => {
       postBoundaryHookGateMode: "off",
       postBoundaryHookMaxDelaySec: null,
       postBoundaryHookMaxPreHookGapSec: null,
+      safeEndAuditMode: baseCfg.safeEndAuditMode,
     });
   });
 

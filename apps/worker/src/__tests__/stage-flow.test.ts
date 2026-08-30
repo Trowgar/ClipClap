@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "crypto";
 
 const mocks = vi.hoisted(() => ({
   startJobStep: vi.fn(),
@@ -135,6 +136,95 @@ function hookGateV2Result() {
     },
   };
   return { highlights, postBoundaryHookGate, result, telemetry };
+}
+
+function safeEndAuditV2Result() {
+  const base = hookGateV2Result();
+  const safeEndAudit = {
+    normal: {
+      evaluated: 1,
+      needs_afterbeat: 0,
+      hard_handoff: 1,
+      audit_failed: 0,
+      records: [{ geometry: { candidateId: "c0" }, outcome: "hard_handoff" }],
+    },
+    rescue: { summary: "not_run", evaluated: 0, records: [] },
+  };
+  const telemetry = { ...base.telemetry, safeEndAudit };
+  return { ...base, result: { ...base.result, telemetry }, telemetry, safeEndAudit };
+}
+
+/** The stage harness's deterministic render-request boundary. It preserves
+ * every persisted highlight field, recursively sorted for a stable hash, while
+ * excluding only analysis telemetry, usage, and job identity metadata. */
+function renderStageBoundaryMock(highlights: unknown) {
+  const renderInput = renderRequestValue(highlights);
+  const artifactRequest = JSON.stringify(renderInput);
+  return {
+    renderRequest: renderInput,
+    cutInputs: (renderInput as Array<{ start: number; end: number }>).map(({ start, end }) => ({ start, end })),
+    artifactRequestHash: createHash("sha256").update(artifactRequest).digest("hex"),
+  };
+}
+
+function renderRequestValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(renderRequestValue);
+  if (value === null || typeof value !== "object") return value;
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => !["telemetry", "usage", "id", "jobId", "userId"].includes(key))
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, nested]) => [key, renderRequestValue(nested)]),
+  );
+}
+
+function persistedHighlights() {
+  return mocks.jobUpdate.mock.calls
+    .map(([write]) => (write.data as { highlights?: unknown }).highlights)
+    .find((highlights) => highlights !== undefined);
+}
+
+function recordedTranscript() {
+  const segments = Array.from({ length: 12 }, (_, index) => {
+    const start = index * 5;
+    return {
+      start,
+      end: start + 4.5,
+      text: `Invented scene sentence ${index}.`,
+      words: [
+        { text: "Invented", start, end: start + 1 },
+        { text: "scene", start: start + 1.1, end: start + 2 },
+        { text: "sentence", start: start + 2.1, end: start + 3 },
+        { text: `${index}.`, start: start + 3.1, end: start + 4.5 },
+      ],
+    };
+  });
+  return { text: segments.map((segment) => segment.text).join(" "), segments, language: "en" };
+}
+
+function recordedV2Client() {
+  const replies: Record<string, unknown> = {
+    scan_candidates: { candidates: [{ start_node: 2, end_node: 4, payoff_node: 3, interest: 0.9, type: "story", thread: null }] },
+    critic_verdicts: { results: [{
+      id: "c0", keep: true, score: 0.8, grounded: true, self_contained: true,
+      start_node: 2, payoff_node: 3, end_node: 4, hook_start_node: 2, hook_end_node: 3,
+      title: "Invented title", description: "Invented description.", title_evidence_nodes: [3],
+      description_evidence_nodes: [3], language: "en",
+    }] },
+    safe_end_audit: { results: [{ id: "c0", outcome: "hard_handoff", reason: "next_question", extendToNode: null }] },
+    clip_finalizer: { clips: [{ id: "c0", verdict: "ship", drop_reason: null, duplicate_of: null, shared_claim: null, title: null, title_evidence_nodes: null, trim_start_node: null }] },
+  };
+  const schemas: string[] = [];
+  const create = vi.fn(async (body: { response_format: { json_schema: { name: string } } }) => {
+    const schema = body.response_format.json_schema.name;
+    schemas.push(schema);
+    return {
+      choices: [{ message: { content: JSON.stringify(replies[schema]), refusal: null }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 1, completion_tokens: 1 },
+    };
+  });
+  return { client: { chat: { completions: { create } } } as never, schemas };
 }
 
 describe("stage handlers", () => {
@@ -347,6 +437,109 @@ describe("stage handlers", () => {
     expect(analyzeWrite?.highlights).toBe(legacyHighlights);
     expect(analyzeWrite?.highlights).not.toBe(v2.highlights);
     expect(mocks.queueAdd).toHaveBeenCalledTimes(1);
+    expect(mocks.queueAdd).toHaveBeenCalledWith("render", {
+      jobId: "job1",
+      userId: "u1",
+      mode: "clips",
+    });
+  });
+
+  it("persists safe-end audit telemetry under direct recall-critic outputJson telemetry", async () => {
+    vi.stubEnv("ANALYZE_ENGINE", "recall-critic");
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      transcriptJson: { text: "", segments: [] },
+      transcriptPartial: false,
+    });
+    const v2 = safeEndAuditV2Result();
+    mocks.analyzeHighlightsV2.mockResolvedValue(v2.result);
+
+    await runAnalyzeStage({ jobId: "job1", userId: "u1" });
+
+    const output = mocks.completeJobStep.mock.calls.find(
+      ([jobId, step]) => jobId === "job1" && step === "ANALYZE",
+    )?.[2] as { telemetry?: { safeEndAudit?: unknown }; shadowV2?: unknown };
+    expect(output.telemetry?.safeEndAudit).toEqual(v2.safeEndAudit);
+    expect(output.shadowV2).toBeUndefined();
+  });
+
+  it("persists safe-end audit telemetry under legacy shadowV2 telemetry without changing V1 highlights", async () => {
+    vi.stubEnv("ANALYZE_ENGINE", "shadow");
+    vi.stubEnv("SAFE_END_AUDIT", "shadow");
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      transcriptPartial: false,
+      sourceDurationSec: 60,
+      transcriptJson: recordedTranscript(),
+    });
+    const legacyHighlights = [{ start: 0, end: 1, title: "Legacy", reason: "V1" }];
+    const { analyzeHighlightsV2: realAnalyzeHighlightsV2 } = await vi.importActual<typeof import("../analyze-v2")>("../analyze-v2");
+    const v2Client = recordedV2Client();
+    mocks.analyzeHighlightsV1.mockResolvedValue(legacyHighlights);
+    mocks.analyzeHighlightsV2.mockImplementationOnce((transcription, options) =>
+      realAnalyzeHighlightsV2(transcription, { ...options, client: v2Client.client, retryDelayMs: 1 }),
+    );
+
+    await runAnalyzeStage({ jobId: "job1", userId: "u1" });
+
+    const output = mocks.completeJobStep.mock.calls.find(
+      ([jobId, step]) => jobId === "job1" && step === "ANALYZE",
+    )?.[2] as {
+      telemetry?: unknown;
+      shadowV2?: { telemetry?: { safeEndAudit?: unknown } };
+    };
+    expect(output.telemetry).toBeUndefined();
+    expect(output.shadowV2?.telemetry?.safeEndAudit).toMatchObject({
+      normal: { evaluated: 1, hard_handoff: 1 },
+    });
+    expect(mocks.analyzeHighlightsV2.mock.calls[0]?.[1]?.cfg.safeEndAuditMode).toBe("shadow");
+    expect(v2Client.schemas).toEqual(["scan_candidates", "critic_verdicts", "safe_end_audit", "clip_finalizer"]);
+    expect(persistedHighlights()).toBe(legacyHighlights);
+    expect(mocks.queueAdd).toHaveBeenCalledWith("render", {
+      jobId: "job1",
+      userId: "u1",
+      mode: "clips",
+    });
+  });
+
+  it("keeps real V2 safe-end shadow render requests, cut inputs, and artifact-request hash identical to off", async () => {
+    vi.stubEnv("ANALYZE_ENGINE", "recall-critic");
+    const job = {
+      id: "job1",
+      transcriptJson: recordedTranscript(),
+      transcriptPartial: false,
+      sourceDurationSec: 60,
+    };
+    const { analyzeHighlightsV2: realAnalyzeHighlightsV2 } = await vi.importActual<typeof import("../analyze-v2")>("../analyze-v2");
+
+    vi.stubEnv("SAFE_END_AUDIT", "off");
+    mocks.jobFind.mockResolvedValue(job);
+    const offClient = recordedV2Client();
+    mocks.analyzeHighlightsV2.mockImplementationOnce((transcription, options) =>
+      realAnalyzeHighlightsV2(transcription, { ...options, client: offClient.client, retryDelayMs: 1 }),
+    );
+    await runAnalyzeStage({ jobId: "job1", userId: "u1" });
+    const offHighlights = persistedHighlights();
+    const offRenderBoundary = renderStageBoundaryMock(offHighlights);
+    expect(mocks.analyzeHighlightsV2.mock.calls[0]?.[1]?.cfg.safeEndAuditMode).toBe("off");
+    expect(offClient.schemas).toEqual(["scan_candidates", "critic_verdicts", "clip_finalizer"]);
+
+    vi.clearAllMocks();
+    mocks.getStageQueue.mockReturnValue({ add: mocks.queueAdd });
+    mocks.jobFind.mockResolvedValue(job);
+    vi.stubEnv("SAFE_END_AUDIT", "shadow");
+    const shadowClient = recordedV2Client();
+    mocks.analyzeHighlightsV2.mockImplementationOnce((transcription, options) =>
+      realAnalyzeHighlightsV2(transcription, { ...options, client: shadowClient.client, retryDelayMs: 1 }),
+    );
+    await runAnalyzeStage({ jobId: "job1", userId: "u1" });
+    const shadowHighlights = persistedHighlights();
+    const shadowRenderBoundary = renderStageBoundaryMock(shadowHighlights);
+
+    expect(mocks.analyzeHighlightsV2.mock.calls[0]?.[1]?.cfg.safeEndAuditMode).toBe("shadow");
+    expect(shadowClient.schemas).toEqual(["scan_candidates", "critic_verdicts", "safe_end_audit", "clip_finalizer"]);
+    expect(shadowHighlights).toEqual(offHighlights);
+    expect(shadowRenderBoundary).toEqual(offRenderBoundary);
     expect(mocks.queueAdd).toHaveBeenCalledWith("render", {
       jobId: "job1",
       userId: "u1",

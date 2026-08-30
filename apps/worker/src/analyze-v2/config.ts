@@ -467,7 +467,7 @@ function parsePostBoundaryHookGate(env: Env): Pick<
 
 function parseSafeEndAuditMode(env: Env): SafeEndAuditMode {
   const raw = env.SAFE_END_AUDIT;
-  if (raw === undefined || raw.trim() === "") return "off";
+  if (raw === undefined || raw.trim() === "" || raw === "off") return "off";
   if (raw === "shadow") return "shadow";
   throw new Error(`Invalid SAFE_END_AUDIT: ${raw}`);
 }

@@ -453,6 +453,10 @@ export interface EngineFingerprint {
   postBoundaryHookMaxPreHookGapSec:
     | NonNullable<AnalyzeConfig["postBoundaryHookMaxPreHookGapSec"]>
     | null;
+  /** Observation-only safe-end audit mode. It is output-invariant but can add
+   * an otherwise invisible LLM call, so replay must distinguish dark from
+   * shadow recordings. */
+  safeEndAuditMode: AnalyzeConfig["safeEndAuditMode"];
 }
 
 export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
@@ -494,6 +498,7 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     postBoundaryHookGateMode: cfg.postBoundaryHookGateMode,
     postBoundaryHookMaxDelaySec: cfg.postBoundaryHookMaxDelaySec ?? null,
     postBoundaryHookMaxPreHookGapSec: cfg.postBoundaryHookMaxPreHookGapSec ?? null,
+    safeEndAuditMode: cfg.safeEndAuditMode,
   };
 }
 

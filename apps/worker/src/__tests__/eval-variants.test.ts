@@ -92,6 +92,24 @@ describe("variant definitions", () => {
     expect(base.engine).toBe("recall-critic");
   });
 
+  it("fingerprints safe-end audit's exact off and shadow modes as distinct JSON-stable variants", () => {
+    const off = computeFingerprint(variantConfig(BASE_VARIANT));
+    const shadow = computeFingerprint({
+      ...variantConfig(BASE_VARIANT),
+      safeEndAuditMode: "shadow",
+    });
+
+    expect(off.safeEndAuditMode).toBe("off");
+    expect(shadow.safeEndAuditMode).toBe("shadow");
+    expect(JSON.parse(JSON.stringify(shadow))).toMatchObject({
+      safeEndAuditMode: "shadow",
+    });
+    expect({ ...shadow, safeEndAuditMode: "off" }).toEqual(off);
+    expect(() => assertFingerprintMatches("safe-end-shadow", shadow, off)).toThrow(
+      /safeEndAuditMode/
+    );
+  });
+
   it("applies overrides on top of the defaults for a named variant", () => {
     const gpt51 = variantConfig("gpt51");
     const defaults = loadAnalyzeConfig({});
