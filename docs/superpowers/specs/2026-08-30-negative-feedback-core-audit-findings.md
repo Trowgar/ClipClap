@@ -1,6 +1,6 @@
 # Negative-feedback core audit findings
 
-**Date:** 2026-08-30  
+**Date:** 2026-08-30
 **Status:** private audit summary; observation rollout remains paused
 
 ## Scope and reconciliation
