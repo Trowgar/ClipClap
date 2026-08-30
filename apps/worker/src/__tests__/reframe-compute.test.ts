@@ -614,6 +614,82 @@ describe("planDetected: stream-layout coverage gate", () => {
     );
   });
 
+  it.each([
+    ["missing", []],
+    ["out-of-range", [{ shotIndex: 2, camRect: null, tracks: [] }]],
+    ["fractional", [{ shotIndex: 0.5, camRect: null, tracks: [] }]],
+    [
+      "count mismatch",
+      [
+        { shotIndex: 0, camRect: null, tracks: [] },
+        { shotIndex: 1, camRect: null, tracks: [] },
+      ],
+    ],
+  ])("fails closed for %s original track-set alignment", (_label, tracksByShot) => {
+    const detection: Detection = {
+      width: 1280,
+      height: 720,
+      candidates: [],
+      shots: [{ start: 0, end: 10 }],
+      tracksByShot,
+    };
+
+    expect(planDetected(detection, { ...cfg, safetyShadow: true }).safetyShadow?.status).toBe(
+      "not_evaluable"
+    );
+  });
+
+  it("preserves invalid original alignment through confirmed cut recovery", () => {
+    const path = (from: number, to: number, x: number) =>
+      Array.from({ length: Math.round((to - from) * 2) }, (_, k) => ({
+        t: from + k * 0.5,
+        x,
+        y: 180,
+        w: 240,
+        h: 240,
+      }));
+    const detection: Detection = {
+      width: 1280,
+      height: 720,
+      candidates: [{ t: 5, score: 0.22 }],
+      shots: [{ start: 0, end: 10 }],
+      // recoverCuts' map would pick the second duplicate and then normalize
+      // its split output to shotIndex 0/1. The original duplicate remains an
+      // invalid safety input and must not become a false PASS.
+      tracksByShot: [
+        { shotIndex: 0, camRect: null, tracks: [] },
+        {
+          shotIndex: 0,
+          camRect: null,
+          tracks: [
+            {
+              id: 40,
+              box: { x: 100, y: 180, w: 240, h: 240 },
+              score: 0.92,
+              samples: 10,
+              mouthActivity: 0.3,
+              path: path(0, 5, 100),
+            },
+            {
+              id: 41,
+              box: { x: 900, y: 180, w: 240, h: 240 },
+              score: 0.92,
+              samples: 10,
+              mouthActivity: 0.3,
+              path: path(5, 10, 900),
+            },
+          ],
+        },
+      ],
+    };
+    const off = planDetected(detection, { ...cfg, cutRecovery: true, safetyShadow: false });
+    const on = planDetected(detection, { ...cfg, cutRecovery: true, safetyShadow: true });
+
+    expect(JSON.stringify(on.plan)).toBe(JSON.stringify(off.plan));
+    expect(on.plan?.shots).toHaveLength(2);
+    expect(on.safetyShadow?.status).toBe("not_evaluable");
+  });
+
   it("(a) virtualCam plan at ~10% coverage re-plans to zero stream shots, stamped and otherwise equal to an explicit stream:false plan", () => {
     const detection = lowHighDetection(1, 9, null);
 

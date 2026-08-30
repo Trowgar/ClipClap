@@ -153,6 +153,24 @@ function streamShotFrac(plan: CropPlan): number {
   return totalSec > 0 ? streamSec / totalSec : 0;
 }
 
+function validTrackSetAlignment(shots: Shot[], trackSets: ShotTracks[]): boolean {
+  if (trackSets.length !== shots.length) return false;
+  const seen = new Set<number>();
+  for (const trackSet of trackSets) {
+    const index = trackSet?.shotIndex;
+    if (
+      !Number.isInteger(index) ||
+      index < 0 ||
+      index >= shots.length ||
+      seen.has(index)
+    ) {
+      return false;
+    }
+    seen.add(index);
+  }
+  return seen.size === shots.length;
+}
+
 /**
  * Pure: the plan for a detection. Cut recovery runs iff cfg.cutRecovery - the
  * ONE place that policy lives. The clip-level cam rect is resolved on the
@@ -160,6 +178,12 @@ function streamShotFrac(plan: CropPlan): number {
  * sub-shots cannot swing resolveCamRect's majority vote.
  */
 export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection {
+  // Validate the detector's original index contract before cut recovery can
+  // map and renumber its output. Recovery may normalize malformed sets into a
+  // shape that looks valid, but that cannot make the original safety evidence
+  // trustworthy.
+  const invalidOriginalAlignment =
+    cfg.safetyShadow && !validTrackSetAlignment(d.shots, d.tracksByShot);
   const cam = resolveCamRect(d.tracksByShot.map((t) => t.camRect), d.width, d.height);
   let shots = d.shots;
   let tracks = d.tracksByShot;
@@ -242,7 +266,7 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
     // malformed alignment is fail-closed rather than risking a plausible
     // pass for regions attached to the wrong shot.
     const tracksByShot = new Map<number, ShotTracks>();
-    let invalidAlignment = tracks.length !== shots.length;
+    let invalidAlignment = invalidOriginalAlignment || tracks.length !== shots.length;
     for (const trackSet of tracks) {
       const index = trackSet?.shotIndex;
       if (
