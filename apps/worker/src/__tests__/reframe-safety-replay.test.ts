@@ -265,6 +265,38 @@ describe("private safety-shadow capture reader", () => {
     expect(
       evaluateSafetyCapture({ ...capture, plan: null })
     ).toBeNull();
+
+    expect(evaluateSafetyCapture({ ...capture, shots: [{ start: 1, end: 10 }] })).toBeNull();
+    expect(evaluateSafetyCapture({ ...capture, shots: [{ start: 0, end: 9 }] })).toBeNull();
+    expect(
+      evaluateSafetyCapture({ ...capture, shots: [{ start: 0, end: 4 }, { start: 5, end: 10 }] })
+    ).toBeNull();
+    expect(evaluateSafetyCapture({ ...capture, clip: { start: 5, end: 15 } })).toMatchObject({ status: "pass" });
+    expect(
+      evaluateSafetyCapture({
+        ...capture,
+        tracks: [{
+          ...capture.tracks[0],
+          tracks: [{
+            ...capture.tracks[0].tracks[0],
+            path: [{ t: 11, x: 760, y: 220, w: 240, h: 240 }],
+          }],
+        }],
+      })
+    ).toBeNull();
+
+    const longShots = Array.from({ length: 91 }, (_, index) => ({ start: index, end: index + 1 }));
+    const longTracks = longShots.map((_, index) => shotTracks(index, []));
+    const longDetection = detection(longShots, longTracks);
+    const longPlan = planDetected(longDetection, baseConfig).plan;
+    expect(longPlan?.shots).toHaveLength(1);
+    expect(evaluateSafetyCapture({
+      shots: longShots,
+      tracks: longTracks,
+      plan: longPlan,
+      source,
+      clip: { start: 0, end: 91 },
+    })).not.toBeNull();
   });
 
   it("reports explicit final-plan telemetry for the gated virtual-camera replay", () => {
@@ -317,6 +349,7 @@ describe("private safety-shadow capture reader", () => {
       raw = capture,
       size = Buffer.byteLength(raw),
       unreadable = false,
+      readValue: string | Buffer = raw,
     ) => {
       const stdout: string[] = [];
       const stderr: string[] = [];
@@ -325,7 +358,7 @@ describe("private safety-shadow capture reader", () => {
           if (unreadable) throw new Error("unreadable");
           return { size };
         },
-        readFile: async () => raw,
+        readFile: async () => readValue,
         stdout: (value) => stdout.push(value),
         stderr: (value) => stderr.push(value),
       });
@@ -353,6 +386,9 @@ describe("private safety-shadow capture reader", () => {
       stdout: "",
       stderr: "capture_invalid\n",
     });
+    await expect(
+      run(["node", "tsx", "case.json"], capture, 1, false, Buffer.alloc((64 << 20) + 1))
+    ).resolves.toMatchObject({ exitCode: 1, stdout: "", stderr: "capture_invalid\n" });
     const valid = await run(["node", "tsx", "case.json"]);
     expect(valid.exitCode).toBe(0);
     expect(valid.stderr).toBe("");

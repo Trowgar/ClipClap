@@ -21,7 +21,7 @@ export interface SafetyCapture {
 
 export interface SafetyShadowIo {
   stat(path: string): Promise<{ size: number }>;
-  readFile(path: string): Promise<string>;
+  readFile(path: string): Promise<string | Buffer>;
   stdout?(value: string): void;
   stderr?(value: string): void;
 }
@@ -33,6 +33,10 @@ export interface SafetyShadowRunResult {
 }
 
 const MAX_CAPTURE_BYTES = 64 * 1024 * 1024;
+/** Raw detector captures may contain more cuts than the final planner keeps;
+ * 1000 is bounded well above realistic clip detection while remaining small
+ * enough to reject pathological JSON before building any regions. */
+const MAX_CAPTURE_SHOTS = 1_000;
 const MAX_CAPTURE_TRACKS = 100_000;
 const MAX_CAPTURE_PATH_SAMPLES = 500_000;
 const TIMELINE_EPSILON = 1e-6;
@@ -70,7 +74,8 @@ function validTimeline(
     if (
       shot.start < -TIMELINE_EPSILON ||
       shot.end > duration + TIMELINE_EPSILON ||
-      shot.start + TIMELINE_EPSILON < previousEnd
+      (previousEnd !== Number.NEGATIVE_INFINITY &&
+        Math.abs(shot.start - previousEnd) > TIMELINE_EPSILON)
     ) return false;
     if (
       envelope &&
@@ -79,7 +84,11 @@ function validTimeline(
     ) return false;
     previousEnd = shot.end;
   }
-  return shots.length > 0;
+  if (shots.length === 0) return false;
+  const first = shots[0] as Shot;
+  const last = shots[shots.length - 1] as Shot;
+  return Math.abs(first.start) <= TIMELINE_EPSILON
+    && Math.abs(last.end - duration) <= TIMELINE_EPSILON;
 }
 
 function validFaceTrack(value: unknown): value is FaceTrack {
@@ -115,6 +124,23 @@ function validPlanEnvelope(value: unknown): value is CropPlan {
     && source.width > 0 && source.height > 0;
 }
 
+function pathsBelongToCaptureShots(capture: SafetyCapture): boolean {
+  for (const trackSet of capture.tracks) {
+    if (
+      !Number.isInteger(trackSet.shotIndex) ||
+      trackSet.shotIndex < 0 ||
+      trackSet.shotIndex >= capture.shots.length
+    ) continue;
+    const shot = capture.shots[trackSet.shotIndex];
+    for (const track of trackSet.tracks) {
+      if (track.path?.some((sample) => sample.t < shot.start || sample.t > shot.end)) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 function validCapture(value: unknown): value is SafetyCapture {
   const capture = record(value);
   const source = record(capture?.source);
@@ -123,9 +149,9 @@ function validCapture(value: unknown): value is SafetyCapture {
     !capture ||
     !Array.isArray(capture.shots) ||
     capture.shots.length === 0 ||
-    capture.shots.length > MAX_PLAN_SHOTS ||
+    capture.shots.length > MAX_CAPTURE_SHOTS ||
     !Array.isArray(capture.tracks) ||
-    capture.tracks.length > MAX_PLAN_SHOTS ||
+    capture.tracks.length > MAX_CAPTURE_SHOTS ||
     !capture.tracks.every(validTrackSet) ||
     (capture.plan !== null && !validPlanEnvelope(capture.plan)) ||
     !source ||
@@ -140,22 +166,24 @@ function validCapture(value: unknown): value is SafetyCapture {
     !validTimeline(capture.shots, clip.end - clip.start)
   ) return false;
 
+  const typedCapture = capture as unknown as SafetyCapture;
   let trackCount = 0;
   let pathSampleCount = 0;
-  for (const trackSet of capture.tracks) {
+  for (const trackSet of typedCapture.tracks) {
     trackCount += trackSet.tracks.length;
     for (const track of trackSet.tracks) {
       pathSampleCount += track.path?.length ?? 0;
     }
   }
   if (trackCount > MAX_CAPTURE_TRACKS || pathSampleCount > MAX_CAPTURE_PATH_SAMPLES) return false;
+  if (!pathsBelongToCaptureShots(typedCapture)) return false;
 
-  if (capture.plan !== null) {
-    const planSource = capture.plan.source;
+  if (typedCapture.plan !== null) {
+    const planSource = typedCapture.plan.source;
     if (planSource.width !== source.width || planSource.height !== source.height) return false;
-    const first = capture.shots[0];
-    const last = capture.shots[capture.shots.length - 1];
-    if (!validTimeline(capture.plan.shots, clip.end - clip.start, { start: first.start, end: last.end })) {
+    const first = typedCapture.shots[0];
+    const last = typedCapture.shots[typedCapture.shots.length - 1];
+    if (!validTimeline(typedCapture.plan.shots, clip.end - clip.start, { start: first.start, end: last.end })) {
       return false;
     }
   }
@@ -242,15 +270,20 @@ export async function runSafetyShadowCli(
   if (!finite(fileSize) || fileSize < 0 || fileSize > MAX_CAPTURE_BYTES) {
     return { exitCode: errorResult(io, "capture_invalid"), stdout: "", stderr: "capture_invalid\n" };
   }
-  let raw: string;
+  let raw: string | Buffer;
   try {
     raw = await io.readFile(argv[2]);
   } catch {
     return { exitCode: errorResult(io, "capture_unreadable"), stdout: "", stderr: "capture_unreadable\n" };
   }
+  const rawBytes = typeof raw === "string" ? Buffer.byteLength(raw, "utf8") : raw.byteLength;
+  if (rawBytes > MAX_CAPTURE_BYTES) {
+    return { exitCode: errorResult(io, "capture_invalid"), stdout: "", stderr: "capture_invalid\n" };
+  }
+  const rawText = typeof raw === "string" ? raw : raw.toString("utf8");
   let value: unknown;
   try {
-    value = JSON.parse(raw);
+    value = JSON.parse(rawText);
   } catch {
     return { exitCode: errorResult(io, "capture_invalid"), stdout: "", stderr: "capture_invalid\n" };
   }
@@ -271,7 +304,11 @@ export async function main(argv: string[] = process.argv): Promise<void> {
   process.exitCode = result.exitCode;
 }
 
-if (typeof require !== "undefined" && require.main === module) {
+if (
+  typeof require !== "undefined" &&
+  typeof module !== "undefined" &&
+  require.main === module
+) {
   void main().catch(() => {
     process.exitCode = 1;
     process.stderr.write("capture_invalid\n");
