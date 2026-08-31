@@ -1,0 +1,538 @@
+import { constants, type Dirent } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  rename,
+  rm,
+  type FileHandle,
+} from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
+
+import { canonicalJson, sha256 } from "../feedback-learning/canonical";
+import { withCorpusLock, type CorpusLockError } from "../feedback-learning/lock";
+
+const DIRECTORY_MODE = 0o700;
+const FILE_MODE = 0o600;
+const BUNDLE_NAMES = ["case", "observation", "decision"] as const;
+const PRIVATE_FILE_NAMES = new Set(["case.json", "transcript.json", "source-or-evidence.mp4", "manifest.json", "results.jsonl", "decision.json", "report.md"]);
+
+export type BundleKind = (typeof BUNDLE_NAMES)[number];
+
+export type QualityPaths = Readonly<{
+  root: string;
+  ledgerDir: string;
+  labelsFile: string;
+  labelsLock: string;
+  casesDir: string;
+  observationsDir: string;
+  decisionsDir: string;
+}>;
+
+export type QualityLabelEvent = Readonly<{
+  eventId: string;
+  [key: string]: unknown;
+}>;
+
+export type QualityStoreFault = Readonly<{
+  scope: "ledger" | "bundle";
+  operation: "write" | "file_fsync" | "close" | "temp_dir_fsync" | "rename" | "parent_fsync";
+  timing: "before" | "after";
+  file?: string;
+}>;
+
+export type PublishBundleInput = Readonly<{
+  kind: BundleKind;
+  id: string;
+  files: Readonly<Record<string, Uint8Array>>;
+  injectFault?: (point: QualityStoreFault) => void | Promise<void>;
+}>;
+
+export type CommitResult =
+  | { status: "committed" }
+  | { status: "noop" }
+  | { status: "committed_durability_uncertain" }
+  | { status: "indeterminate" };
+
+export class QualityStoreError extends Error {
+  readonly code: "invalid_input" | "unsafe_path" | "integrity" | "missing";
+
+  constructor(code: QualityStoreError["code"]) {
+    super(code);
+    this.name = "QualityStoreError";
+    this.code = code;
+  }
+}
+
+export const DEFAULT_QUALITY_ROOT = resolve(__dirname, "../../.corpus/feedback-quality-gate");
+
+const pathForKind: Record<BundleKind, keyof QualityPaths> = {
+  case: "casesDir",
+  observation: "observationsDir",
+  decision: "decisionsDir",
+};
+
+function codeOf(error: unknown): string | undefined {
+  return error && typeof error === "object" && "code" in error && typeof error.code === "string"
+    ? error.code
+    : undefined;
+}
+
+function safeError(code: QualityStoreError["code"]): QualityStoreError {
+  return new QualityStoreError(code);
+}
+
+function validateRoot(root: string): string {
+  if (typeof root !== "string" || root.length === 0 || root.includes("\0")) throw safeError("invalid_input");
+  const name = basename(root);
+  if (!name || name === "." || name === "..") throw safeError("invalid_input");
+  return root;
+}
+
+function validateComponent(value: string): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > 255 ||
+    value === "." ||
+    value === ".." ||
+    value.includes("\0") ||
+    value.includes("/") ||
+    value.includes("\\")
+  ) throw safeError("unsafe_path");
+  return value;
+}
+
+function validateKind(kind: BundleKind): BundleKind {
+  if (!BUNDLE_NAMES.includes(kind)) throw safeError("invalid_input");
+  return kind;
+}
+
+function validateFileName(name: string): string {
+  validateComponent(name);
+  if (!PRIVATE_FILE_NAMES.has(name)) throw safeError("invalid_input");
+  return name;
+}
+
+function ownedPaths(root: string): QualityPaths {
+  return Object.freeze({
+    root,
+    ledgerDir: join(root, "ledger"),
+    labelsFile: join(root, "ledger", "labels.jsonl"),
+    labelsLock: join(root, "ledger", "labels.lock"),
+    casesDir: join(root, "cases"),
+    observationsDir: join(root, "observations"),
+    decisionsDir: join(root, "decisions"),
+  });
+}
+
+function anchoredPath(handle: FileHandle, child?: string): string {
+  const root = `/proc/self/fd/${handle.fd}`;
+  return child === undefined ? root : join(root, child);
+}
+
+async function closeQuietly(handle: FileHandle | undefined): Promise<void> {
+  if (!handle) return;
+  try { await handle.close(); } catch { /* preserve primary result */ }
+}
+
+async function removeQuietly(path: string | undefined): Promise<void> {
+  if (!path) return;
+  try { await rm(path, { recursive: true, force: true }); } catch { /* preserve primary result */ }
+}
+
+async function openDirectory(path: string, missing = false): Promise<FileHandle> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    if (!(await handle.stat()).isDirectory()) throw safeError("unsafe_path");
+    return handle;
+  } catch (error) {
+    await closeQuietly(handle);
+    if (missing && codeOf(error) === "ENOENT") throw safeError("missing");
+    if (error instanceof QualityStoreError) throw error;
+    throw safeError("unsafe_path");
+  }
+}
+
+async function ensureDirectory(path: string): Promise<void> {
+  try {
+    const current = await lstat(path);
+    if (current.isSymbolicLink() || !current.isDirectory()) throw safeError("unsafe_path");
+  } catch (error) {
+    if (codeOf(error) !== "ENOENT") throw error instanceof QualityStoreError ? error : safeError("unsafe_path");
+    try { await mkdir(path, DIRECTORY_MODE); }
+    catch (mkdirError) {
+      if (codeOf(mkdirError) !== "EEXIST") throw safeError("unsafe_path");
+    }
+    const created = await lstat(path);
+    if (created.isSymbolicLink() || !created.isDirectory()) throw safeError("unsafe_path");
+  }
+  const handle = await openDirectory(path);
+  try {
+    await handle.chmod(DIRECTORY_MODE);
+    await handle.sync();
+  } finally { await closeQuietly(handle); }
+}
+
+export async function ensureQualityTree(root = DEFAULT_QUALITY_ROOT): Promise<QualityPaths> {
+  const checkedRoot = validateRoot(root);
+  const paths = ownedPaths(checkedRoot);
+  await ensureDirectory(paths.root);
+  await Promise.all([paths.ledgerDir, paths.casesDir, paths.observationsDir, paths.decisionsDir].map(ensureDirectory));
+  return paths;
+}
+
+function contentBytes(value: unknown): Buffer {
+  try { return Buffer.from(canonicalJson(value), "utf8"); }
+  catch { throw safeError("invalid_input"); }
+}
+
+export function contentId(prefix: "case" | "observation" | "decision", value: unknown): string {
+  if (!BUNDLE_NAMES.includes(prefix)) throw safeError("invalid_input");
+  const canonical = contentBytes(value);
+  return `${prefix}:${sha256(canonical)}`;
+}
+
+async function writeAll(handle: FileHandle, bytes: Uint8Array): Promise<void> {
+  let offset = 0;
+  while (offset < bytes.byteLength) {
+    const result = await handle.write(bytes, offset, bytes.byteLength - offset, offset);
+    if (result.bytesWritten <= 0) throw safeError("integrity");
+    offset += result.bytesWritten;
+  }
+}
+
+async function fault(inject: PublishBundleInput["injectFault"], point: QualityStoreFault): Promise<void> {
+  try { await inject?.(point); }
+  catch { throw safeError("integrity"); }
+}
+
+function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+  return left.byteLength === right.byteLength && left.every((value, index) => value === right[index]);
+}
+
+async function readRegular(path: string): Promise<Uint8Array> {
+  let handle: FileHandle | undefined;
+  try {
+    const current = await lstat(path);
+    if (current.isSymbolicLink() || !current.isFile()) throw safeError("unsafe_path");
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    if (!(await handle.stat()).isFile()) throw safeError("unsafe_path");
+    const bytes = await handle.readFile();
+    return new Uint8Array(bytes);
+  } catch (error) {
+    if (error instanceof QualityStoreError) throw error;
+    throw safeError("unsafe_path");
+  } finally { await closeQuietly(handle); }
+}
+
+async function openTree(root: string): Promise<{ paths: QualityPaths; root: FileHandle; dirs: Record<BundleKind, FileHandle>; ledger: FileHandle }> {
+  const paths = await ensureQualityTree(root);
+  const rootHandle = await openDirectory(paths.root);
+  let ledger: FileHandle | undefined;
+  const dirs: Partial<Record<BundleKind, FileHandle>> = {};
+  try {
+    ledger = await openDirectory(anchoredPath(rootHandle, "ledger"));
+    for (const kind of BUNDLE_NAMES) dirs[kind] = await openDirectory(anchoredPath(rootHandle, kind === "case" ? "cases" : `${kind}s`));
+    return { paths, root: rootHandle, dirs: dirs as Record<BundleKind, FileHandle>, ledger };
+  } catch (error) {
+    await Promise.all(Object.values(dirs).map(closeQuietly));
+    await closeQuietly(ledger);
+    await closeQuietly(rootHandle);
+    throw error;
+  }
+}
+
+async function closeTree(tree: Awaited<ReturnType<typeof openTree>>): Promise<void> {
+  await Promise.all([...Object.values(tree.dirs), tree.ledger, tree.root].map(closeQuietly));
+}
+
+async function entries(handle: FileHandle): Promise<Dirent[]> {
+  try { return await readdir(anchoredPath(handle), { withFileTypes: true }); }
+  catch { throw safeError("unsafe_path"); }
+}
+
+async function existingBundle(
+  parent: FileHandle,
+  id: string,
+  expected: Readonly<Record<string, Uint8Array>>,
+): Promise<"missing" | "noop"> {
+  const path = anchoredPath(parent, id);
+  let current;
+  try { current = await lstat(path); }
+  catch (error) {
+    if (codeOf(error) === "ENOENT") return "missing";
+    throw safeError("unsafe_path");
+  }
+  if (current.isSymbolicLink() || !current.isDirectory()) throw safeError("unsafe_path");
+  const directory = await openDirectory(path);
+  try {
+    const actualEntries = await entries(directory);
+    const names = actualEntries.map((entry) => entry.name).sort();
+    const expectedNames = Object.keys(expected).sort();
+    if (names.length !== expectedNames.length || names.some((name, index) => name !== expectedNames[index])) throw safeError("integrity");
+    for (const name of expectedNames) {
+      validateFileName(name);
+      let actual: Uint8Array;
+      try { actual = await readRegular(anchoredPath(directory, name)); }
+      catch (error) { if (error instanceof QualityStoreError) throw error; throw safeError("unsafe_path"); }
+      if (!bytesEqual(actual, expected[name])) throw safeError("integrity");
+    }
+    await directory.chmod(DIRECTORY_MODE);
+    for (const name of expectedNames) {
+      const file = await open(anchoredPath(directory, name), constants.O_RDONLY | constants.O_NOFOLLOW);
+      try { await file.chmod(FILE_MODE); } finally { await closeQuietly(file); }
+    }
+    return "noop";
+  } finally { await closeQuietly(directory); }
+}
+
+async function writeBundleFile(
+  directory: string,
+  name: string,
+  bytes: Uint8Array,
+  inject: PublishBundleInput["injectFault"],
+): Promise<void> {
+  let handle: FileHandle | undefined;
+  let closed = false;
+  try {
+    handle = await open(join(directory, name), constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY, FILE_MODE);
+    if (!(await handle.stat()).isFile()) throw safeError("unsafe_path");
+    await handle.chmod(FILE_MODE);
+    await fault(inject, { scope: "bundle", operation: "write", timing: "before", file: name });
+    await writeAll(handle, bytes);
+    await fault(inject, { scope: "bundle", operation: "write", timing: "after", file: name });
+    await fault(inject, { scope: "bundle", operation: "file_fsync", timing: "before", file: name });
+    await handle.sync();
+    await fault(inject, { scope: "bundle", operation: "file_fsync", timing: "after", file: name });
+    await fault(inject, { scope: "bundle", operation: "close", timing: "before", file: name });
+    await handle.close();
+    closed = true;
+    await fault(inject, { scope: "bundle", operation: "close", timing: "after", file: name });
+  } finally { if (!closed) await closeQuietly(handle); }
+}
+
+function copyFiles(input: PublishBundleInput): Readonly<Record<string, Uint8Array>> {
+  validateKind(input.kind);
+  validateComponent(input.id);
+  if (!input.files || typeof input.files !== "object" || Array.isArray(input.files)) throw safeError("invalid_input");
+  const result: Record<string, Uint8Array> = Object.create(null);
+  for (const name of Object.keys(input.files)) {
+    validateFileName(name);
+    const descriptor = Object.getOwnPropertyDescriptor(input.files, name);
+    if (!descriptor?.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, "value") || !(descriptor.value instanceof Uint8Array)) throw safeError("invalid_input");
+    result[name] = new Uint8Array(descriptor.value);
+  }
+  if (Object.keys(result).length === 0) throw safeError("invalid_input");
+  return Object.freeze(result);
+}
+
+async function verifyBundle(root: string, kind: BundleKind, id: string, expected: Readonly<Record<string, Uint8Array>>): Promise<boolean> {
+  let tree: Awaited<ReturnType<typeof openTree>> | undefined;
+  let directory: FileHandle | undefined;
+  try {
+    tree = await openTree(root);
+    directory = await openDirectory(anchoredPath(tree.dirs[kind], id), true);
+    const names = (await entries(directory)).map((entry) => entry.name).sort();
+    const expectedNames = Object.keys(expected).sort();
+    if (names.length !== expectedNames.length || names.some((name, index) => name !== expectedNames[index])) return false;
+    for (const name of expectedNames) if (!bytesEqual(await readRegular(anchoredPath(directory, name)), expected[name])) return false;
+    return true;
+  } catch { return false; }
+  finally { await closeQuietly(directory); if (tree) await closeTree(tree); }
+}
+
+export async function publishBundle(input: PublishBundleInput, root = DEFAULT_QUALITY_ROOT): Promise<CommitResult> {
+  const files = copyFiles(input);
+  const paths = await ensureQualityTree(validateRoot(root));
+  try {
+    return await withCorpusLock(paths.labelsLock, async () => {
+      let tree: Awaited<ReturnType<typeof openTree>> | undefined;
+      let tempPath: string | undefined;
+      let renamed = false;
+      let renamePossible = false;
+      try {
+        tree = await openTree(paths.root);
+        const parent = tree.dirs[input.kind];
+        const prior = await existingBundle(parent, input.id, files);
+        if (prior === "noop") return { status: "noop" };
+        tempPath = anchoredPath(parent, `.${input.id}.tmp-${randomBytes(12).toString("hex")}`);
+        await mkdir(tempPath, DIRECTORY_MODE);
+        const tempDirectory = await openDirectory(tempPath);
+        try {
+          await tempDirectory.chmod(DIRECTORY_MODE);
+          for (const name of Object.keys(files)) await writeBundleFile(tempPath, name, files[name], input.injectFault);
+          await fault(input.injectFault, { scope: "bundle", operation: "temp_dir_fsync", timing: "before" });
+          await tempDirectory.sync();
+          await fault(input.injectFault, { scope: "bundle", operation: "temp_dir_fsync", timing: "after" });
+        } finally { await closeQuietly(tempDirectory); }
+        const raced = await existingBundle(parent, input.id, files);
+        if (raced === "noop") return { status: "noop" };
+        await fault(input.injectFault, { scope: "bundle", operation: "rename", timing: "before" });
+        renamePossible = true;
+        await rename(tempPath, anchoredPath(parent, input.id));
+        renamed = true;
+        await fault(input.injectFault, { scope: "bundle", operation: "rename", timing: "after" });
+        await fault(input.injectFault, { scope: "bundle", operation: "parent_fsync", timing: "before" });
+        await parent.sync();
+        await fault(input.injectFault, { scope: "bundle", operation: "parent_fsync", timing: "after" });
+        return { status: "committed" };
+      } catch (error) {
+        if (renamePossible) {
+          return (await verifyBundle(paths.root, input.kind, input.id, files))
+            ? { status: "committed_durability_uncertain" }
+            : { status: "indeterminate" };
+        }
+        if (error instanceof QualityStoreError) throw error;
+        throw safeError("integrity");
+      } finally {
+        if (!renamed) await removeQuietly(tempPath);
+        if (tree) await closeTree(tree);
+      }
+    });
+  } catch (error) {
+    if (error instanceof QualityStoreError) throw error;
+    const code = codeOf(error);
+    if (code === "lock_timeout" || code === "lock_unavailable") throw error as CorpusLockError;
+    throw safeError("integrity");
+  }
+}
+
+function eventIdOf(event: QualityLabelEvent): string {
+  try {
+    if (!event || typeof event !== "object" || typeof event.eventId !== "string" || event.eventId.length === 0) throw safeError("invalid_input");
+    return event.eventId;
+  } catch (error) {
+    if (error instanceof QualityStoreError) throw error;
+    throw safeError("invalid_input");
+  }
+}
+
+async function verifyLabel(root: string, wantedId: string, wantedLine: Buffer): Promise<boolean> {
+  let tree: Awaited<ReturnType<typeof openTree>> | undefined;
+  try {
+    tree = await openTree(root);
+    let bytes: Uint8Array;
+    try { bytes = await readRegular(anchoredPath(tree.ledger, "labels.jsonl")); }
+    catch { return false; }
+    const text = Buffer.from(bytes).toString("utf8");
+    for (const line of text.split("\n")) {
+      if (!line) continue;
+      try {
+        const parsed: unknown = JSON.parse(line);
+        if (parsed && typeof parsed === "object" && (parsed as { eventId?: unknown }).eventId === wantedId) {
+          return Buffer.from(`${canonicalJson(parsed)}\n`).equals(wantedLine);
+        }
+      } catch { return false; }
+    }
+    return false;
+  } catch { return false; }
+  finally { if (tree) await closeTree(tree); }
+}
+
+async function ledgerState(path: string, wantedId: string, wantedLine: Buffer): Promise<{ existing: Uint8Array; noop: boolean }> {
+  let bytes: Uint8Array<ArrayBufferLike> = new Uint8Array();
+  try {
+    const current = await lstat(path);
+    if (current.isSymbolicLink() || !current.isFile()) throw safeError("unsafe_path");
+    bytes = await readRegular(path);
+  } catch (error) {
+    if (codeOf(error) === "ENOENT") bytes = new Uint8Array();
+    else if (!(error instanceof QualityStoreError && error.code === "missing")) throw error;
+  }
+  if (bytes.byteLength === 0) return { existing: bytes, noop: false };
+  const text = Buffer.from(bytes).toString("utf8");
+  if (!text.endsWith("\n")) throw safeError("integrity");
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    let parsed: unknown;
+    try { parsed = JSON.parse(line); } catch { throw safeError("integrity"); }
+    if (!parsed || typeof parsed !== "object" || !Object.prototype.hasOwnProperty.call(parsed, "eventId")) throw safeError("integrity");
+    if ((parsed as { eventId?: unknown }).eventId === wantedId) {
+      let normalized: Buffer;
+      try { normalized = Buffer.from(`${canonicalJson(parsed)}\n`); } catch { throw safeError("integrity"); }
+      if (!bytesEqual(normalized, wantedLine)) throw safeError("integrity");
+      return { existing: bytes, noop: true };
+    }
+  }
+  return { existing: bytes, noop: false };
+}
+
+export async function appendLabelEvent(event: QualityLabelEvent, root = DEFAULT_QUALITY_ROOT): Promise<CommitResult> {
+  const eventId = eventIdOf(event);
+  const line = Buffer.from(`${canonicalJson(event)}\n`);
+  const paths = await ensureQualityTree(validateRoot(root));
+  try {
+    return await withCorpusLock(paths.labelsLock, async () => {
+      let tree: Awaited<ReturnType<typeof openTree>> | undefined;
+      let tempPath: string | undefined;
+      let renamed = false;
+      let renamePossible = false;
+      try {
+        tree = await openTree(paths.root);
+        const current = await ledgerState(anchoredPath(tree.ledger, "labels.jsonl"), eventId, line);
+        if (current.noop) return { status: "noop" };
+        tempPath = anchoredPath(tree.ledger, `.labels.jsonl.tmp-${randomBytes(12).toString("hex")}`);
+        const handle = await open(tempPath, constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY, FILE_MODE);
+        try {
+          if (!(await handle.stat()).isFile()) throw safeError("unsafe_path");
+          await handle.chmod(FILE_MODE);
+          await writeAll(handle, Buffer.concat([Buffer.from(current.existing), line]));
+          await handle.sync();
+          await handle.close();
+        } finally { await closeQuietly(handle); }
+        renamePossible = true;
+        await rename(tempPath, anchoredPath(tree.ledger, "labels.jsonl"));
+        renamed = true;
+        await tree.ledger.sync();
+        return { status: "committed" };
+      } catch (error) {
+        if (renamePossible) {
+          return (await verifyLabel(paths.root, eventId, line))
+            ? { status: "committed_durability_uncertain" }
+            : { status: "indeterminate" };
+        }
+        if (error instanceof QualityStoreError) throw error;
+        throw safeError("integrity");
+      } finally {
+        if (!renamed) await removeQuietly(tempPath);
+        if (tree) await closeTree(tree);
+      }
+    });
+  } catch (error) {
+    if (error instanceof QualityStoreError) throw error;
+    const code = codeOf(error);
+    if (code === "lock_timeout" || code === "lock_unavailable") throw error as CorpusLockError;
+    throw safeError("integrity");
+  }
+}
+
+export async function readBundle(kind: BundleKind, id: string, root = DEFAULT_QUALITY_ROOT): Promise<ReadonlyMap<string, Uint8Array>> {
+  validateKind(kind);
+  validateComponent(id);
+  let tree: Awaited<ReturnType<typeof openTree>> | undefined;
+  let directory: FileHandle | undefined;
+  try {
+    tree = await openTree(validateRoot(root));
+    directory = await openDirectory(anchoredPath(tree.dirs[kind], id), true);
+    const result = new Map<string, Uint8Array>();
+    for (const entry of await entries(directory)) {
+      if (!entry.isFile() || entry.isSymbolicLink()) throw safeError("unsafe_path");
+      validateFileName(entry.name);
+      result.set(entry.name, await readRegular(anchoredPath(directory, entry.name)));
+    }
+    if (result.size === 0) throw safeError("integrity");
+    await directory.chmod(DIRECTORY_MODE);
+    for (const name of result.keys()) {
+      const file = await open(anchoredPath(directory, name), constants.O_RDONLY | constants.O_NOFOLLOW);
+      try { await file.chmod(FILE_MODE); } finally { await closeQuietly(file); }
+    }
+    return result;
+  } catch (error) {
+    if (error instanceof QualityStoreError) throw error;
+    throw safeError("unsafe_path");
+  } finally { await closeQuietly(directory); if (tree) await closeTree(tree); }
+}
