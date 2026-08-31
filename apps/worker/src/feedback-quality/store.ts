@@ -508,7 +508,10 @@ async function verifyBundle(root: string, kind: BundleKind, id: string, expected
     const expectedNames = [...Object.keys(expected), RESERVATION_MARKER, COMMIT_MARKER].sort();
     if (names.length !== expectedNames.length || names.some((name, index) => name !== expectedNames[index])) return false;
     if (!bytesEqual(await readRegular(anchoredPath(directory, COMMIT_MARKER)), COMMIT_MARKER_BYTES)) return false;
-    try { await readReservation(directory); } catch { return false; }
+    try {
+      const reservation = await readReservation(directory);
+      if (reservation.digest !== bundleDigest(expected)) return false;
+    } catch { return false; }
     for (const name of expectedNames) if (name !== COMMIT_MARKER && name !== RESERVATION_MARKER && !bytesEqual(await readRegular(anchoredPath(directory, name)), expected[name])) return false;
     return true;
   } catch { return false; }
@@ -778,7 +781,7 @@ export async function readBundle(kind: BundleKind, id: string, root = DEFAULT_QU
       validateFileName(entry.name);
       result.set(entry.name, await readRegular(anchoredPath(directory, entry.name)));
     }
-    await readReservation(directory);
+    const reservation = await readReservation(directory);
     try {
       const marker = await lstat(anchoredPath(directory, COMMIT_MARKER));
       if (marker.isSymbolicLink() || !marker.isFile()) throw safeError("unsafe_path");
@@ -788,6 +791,9 @@ export async function readBundle(kind: BundleKind, id: string, root = DEFAULT_QU
     }
     if (!bytesEqual(await readRegular(anchoredPath(directory, COMMIT_MARKER)), COMMIT_MARKER_BYTES)) throw safeError("integrity");
     if (result.size === 0) throw safeError("integrity");
+    const actualFiles: Record<string, Uint8Array> = Object.create(null);
+    for (const [name, bytes] of result) actualFiles[name] = bytes;
+    if (reservation.digest !== bundleDigest(actualFiles)) throw safeError("integrity");
     await directory.chmod(DIRECTORY_MODE);
     await restoreOwnedMode(anchoredPath(directory, RESERVATION_MARKER));
     await restoreOwnedMode(anchoredPath(directory, COMMIT_MARKER));

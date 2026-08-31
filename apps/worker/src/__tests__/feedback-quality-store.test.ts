@@ -199,6 +199,17 @@ describe("feedback quality private store", () => {
     expect(mode(await lstat(reservation))).toBe(0o600);
   });
 
+  it("rejects a tampered-but-valid reservation digest on read and noop", async () => {
+    const root = await temporaryRoot();
+    const id = contentId("case", { tamperedReservation: true });
+    const input = bundle("case", id, { "case.json": "safe" });
+    await publishBundle(input, root);
+    const reservation = join(root, "cases", id, ".reservation");
+    await writeFile(reservation, JSON.stringify({ schemaVersion: 1, digest: `sha256:${"a".repeat(64)}`, token: JSON.parse(await readFile(reservation, "utf8")).token }) + "\n", { mode: 0o600 });
+    await expect(readBundle("case", id, root)).rejects.toMatchObject({ code: "integrity" });
+    await expect(publishBundle(input, root)).rejects.toMatchObject({ code: "integrity" });
+  });
+
   it("does not remove a foreign temp file when O_EXCL reports a collision", async () => {
     const root = await temporaryRoot();
     await ensureQualityTree(root);
