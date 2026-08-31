@@ -125,6 +125,10 @@ const REQUIRED_POSITIVE_METRICS: Record<Subsystem, RequiredMetricGroups> = {
     ["sar", "sampleAspectRatio"],
     ["blackTail", "blackTailSeconds", "blackTailSec"],
     ["frozenTail", "frozenTailSeconds", "frozenTailSec"],
+    ["subtitleOverlap", "newSubtitleOverlap"],
+    ["requiredTextClipped"],
+    ["requiredSubjectClipped"],
+    ["focalFailures", "focalFailure"],
   ],
 };
 
@@ -301,6 +305,16 @@ function sumMetric(cases: readonly QualityCaseResult[], names: readonly MetricNa
   return total;
 }
 
+function sameMetricKeys(left: QualityMetrics, right: QualityMetrics): boolean {
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  if (leftKeys.length !== rightKeys.length) return false;
+  for (let index = 0; index < leftKeys.length; index += 1) {
+    if (leftKeys[index] !== rightKeys[index]) return false;
+  }
+  return true;
+}
+
 function aggregate(observation: QualityObservation): GateAggregate {
   const positives = observation.cases.filter((entry) => entry.disposition === "positive");
   const negatives = observation.cases.filter((entry) => entry.disposition === "confirmed_negative");
@@ -455,6 +469,7 @@ export function compareObservations(
       regressions.push("case_mismatch");
       continue;
     }
+    if (!sameMetricKeys(before.metrics, after.metrics)) return failure(["invalid_metric"]);
     if (before.disposition === "positive" && checkHardInvariants(before, after)) regressions.push("hard_invariant_regression");
     if (before.disposition === "confirmed_negative") {
       const prior = numberMetric(before.metrics, ["defectSeverity", "severity"]);

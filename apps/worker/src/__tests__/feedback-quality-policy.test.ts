@@ -47,6 +47,7 @@ const result = (
     outputWidth: 1080,
     outputHeight: 1920,
     sar: 1,
+    focalFailures: 0,
     hardInvariantFailures: 0,
     defectSeverity: disposition === "confirmed_negative" ? 2 : 0,
     ...overrides.metrics,
@@ -247,7 +248,7 @@ describe("feedback quality comparison policy", () => {
     boundary: { approvedMomentRetained: 1, approvedWindowOverlap: 1, boundaryErrors: 0 },
     framing: { approvedMomentRetained: 1, approvedWindowOverlap: 1, focalFailures: 0, requiredTextClipped: 0, requiredSubjectClipped: 0 },
     subtitles: { approvedMomentRetained: 1, approvedWindowOverlap: 1, subtitleOverlap: 0 },
-    render: { approvedMomentRetained: 1, approvedWindowOverlap: 1, hardInvariantFailures: 0, outputWidth: 1080, outputHeight: 1920, sar: 1, blackTailSeconds: 0, frozenTailSeconds: 0 },
+    render: { approvedMomentRetained: 1, approvedWindowOverlap: 1, hardInvariantFailures: 0, outputWidth: 1080, outputHeight: 1920, sar: 1, blackTailSeconds: 0, frozenTailSeconds: 0, subtitleOverlap: 0, requiredTextClipped: 0, requiredSubjectClipped: 0, focalFailures: 0 },
   };
 
   const laneObservation = (subsystem: QualityCaseResult["subsystem"], omit?: keyof QualityMetrics): QualityObservation => {
@@ -277,6 +278,15 @@ describe("feedback quality comparison policy", () => {
     ["framing", "focalFailures"],
     ["subtitles", "subtitleOverlap"],
     ["render", "outputWidth"],
+    ["render", "outputHeight"],
+    ["render", "sar"],
+    ["render", "hardInvariantFailures"],
+    ["render", "blackTailSeconds"],
+    ["render", "frozenTailSeconds"],
+    ["render", "subtitleOverlap"],
+    ["render", "requiredTextClipped"],
+    ["render", "requiredSubjectClipped"],
+    ["render", "focalFailures"],
   ] as const)("rejects a %s lane case missing its relevant metric", (subsystem, metric) => {
     const baseline = laneObservation(subsystem, metric);
     const candidate = { ...baseline, mode: "candidate" as const, observationId: "sha256:" + "4".repeat(64) };
@@ -284,6 +294,30 @@ describe("feedback quality comparison policy", () => {
     expect(compareObservations(baseline, candidate, { ...policy, claim: "non_regression_only" }).reasons).toEqual([
       "invalid_metric",
     ]);
+  });
+
+  it("rejects a matched case when candidate metric keys remove baseline focal evidence", () => {
+    const baseline = observation({
+      cases: observation().cases.map((entry) =>
+        entry.caseVersion === "positive-0"
+          ? { ...entry, metrics: { ...entry.metrics, focalFailures: 1 } }
+          : entry,
+      ),
+    });
+    const candidate = observation({
+      mode: "candidate",
+      observationId: "sha256:" + "4".repeat(64),
+      cases: baseline.cases.map((entry) => {
+        if (entry.caseVersion !== "positive-0") return entry;
+        const { focalFailures: _removed, ...metrics } = entry.metrics;
+        return { ...entry, metrics };
+      }),
+    });
+
+    expect(compareObservations(baseline, candidate, { ...policy, claim: "non_regression_only" })).toMatchObject({
+      verdict: "fail",
+      reasons: ["invalid_metric"],
+    });
   });
 
   it("passes equivalent observations from different valid commits", () => {
