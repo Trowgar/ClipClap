@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmod, link, lstat, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, stat, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -127,6 +127,14 @@ describe("feedback quality private store", () => {
     await expect(publishBundle(bundle("case", id, { "case.json": "PRIVATE_EXTERNAL_BYTES" }), root)).rejects.toMatchObject({ code: "unsafe_path" });
     expect(await readFile(external, "utf8")).toBe("PRIVATE_EXTERNAL_BYTES");
     expect(mode(await lstat(external))).toBe(0o640);
+
+    const externalLock = join(root, "external-lock");
+    await writeFile(externalLock, "PRIVATE_LOCK_BYTES", { mode: 0o640 });
+    await unlink(paths.labelsLock);
+    await link(externalLock, paths.labelsLock);
+    await expect(appendLabelEvent({ eventId: "hardlinked-lock", schemaVersion: 1 }, root)).rejects.toMatchObject({ code: "unsafe_path" });
+    expect(await readFile(externalLock, "utf8")).toBe("PRIVATE_LOCK_BYTES");
+    expect(mode(await lstat(externalLock))).toBe(0o640);
   });
 
   it("rejects an intermediate symlink in the requested root path", async () => {
@@ -148,9 +156,9 @@ describe("feedback quality private store", () => {
       injectFault: async (point) => {
         if (point.scope === "bundle" && point.operation === "reserve" && point.timing === "before") await mkdir(destination, 0o700);
       },
-    }, root)).rejects.toMatchObject({ code: "integrity" });
+    }, root)).resolves.toEqual({ status: "committed" });
     expect(mode(await lstat(destination))).toBe(0o700);
-    expect(await lstat(join(destination, "decision.json")).catch((error: unknown) => (error as NodeJS.ErrnoException).code)).toBe("ENOENT");
+    expect(await readFile(join(destination, "decision.json"), "utf8")).toBe("safe");
   });
 
   it("appends labels atomically, makes exact repeats no-ops, and rejects event collisions", async () => {
@@ -170,6 +178,20 @@ describe("feedback quality private store", () => {
     await chmod(join(root, "ledger", "labels.jsonl"), 0o644);
     await expect(appendLabelEvent(event, root)).resolves.toEqual({ status: "noop" });
     expect(mode(await lstat(join(root, "ledger", "labels.jsonl")))).toBe(0o600);
+  });
+
+  it("restores the owned marker mode on noop and read", async () => {
+    const root = await temporaryRoot();
+    const id = contentId("case", { markerMode: true });
+    const input = bundle("case", id, { "case.json": "safe" });
+    await publishBundle(input, root);
+    const marker = join(root, "cases", id, ".committed");
+    await chmod(marker, 0o644);
+    await expect(publishBundle(input, root)).resolves.toEqual({ status: "noop" });
+    expect(mode(await lstat(marker))).toBe(0o600);
+    await chmod(marker, 0o644);
+    await readBundle("case", id, root);
+    expect(mode(await lstat(marker))).toBe(0o600);
   });
 
   it("does not remove a foreign temp file when O_EXCL reports a collision", async () => {
@@ -205,6 +227,18 @@ describe("feedback quality private store", () => {
       },
     }, root)).rejects.toMatchObject({ code: "integrity" });
     await expect(readBundle("decision", id, root)).rejects.toMatchObject({ code: "missing" });
+    await expect(publishBundle(bundle("decision", id, { "decision.json": "safe" }), root)).resolves.toEqual({ status: "committed" });
+    await expect(readBundle("decision", id, root)).resolves.toHaveProperty("size", 1);
+  });
+
+  it("recovers a reserved bundle after a pre-write fault", async () => {
+    const root = await temporaryRoot();
+    const id = contentId("case", { recovery: "write" });
+    const input = bundle("case", id, { "case.json": "safe" });
+    await expect(publishBundle({ ...input, injectFault: (point) => {
+      if (point.scope === "bundle" && point.operation === "write" && point.timing === "before") throw new Error("injected");
+    } }, root)).rejects.toMatchObject({ code: "integrity" });
+    await expect(publishBundle(input, root)).resolves.toEqual({ status: "committed" });
   });
 
   it.each([
