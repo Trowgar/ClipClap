@@ -170,18 +170,19 @@ describe("feedback quality private store", () => {
     };
     if (label === "before") {
       await expect(appendLabelEvent(event, root, options)).rejects.toMatchObject({ code: "integrity" });
+      await expect(lstat(join(root, "ledger", "labels.jsonl"))).rejects.toMatchObject({ code: "ENOENT" });
     } else {
       await expect(appendLabelEvent(event, root, options)).resolves.toEqual({ status: "committed_durability_uncertain" });
+      const ledger = await readFile(join(root, "ledger", "labels.jsonl"), "utf8");
+      expect(ledger.trim().split("\n")).toHaveLength(1);
+      expect(JSON.parse(ledger)).toEqual(event);
     }
-    expect(String(event)).not.toContain("PRIVATE_FAULT_DETAIL");
   });
 
   it("waits for a real process holding the labels lock before mutating the ledger", async () => {
     const root = await temporaryRoot();
     const paths = await ensureQualityTree(root);
-    const lockModule = join(process.cwd(), "apps/worker/src/feedback-learning/lock.ts");
-    const source = `const { withCorpusLock } = require(${JSON.stringify(lockModule)}); withCorpusLock(${JSON.stringify(paths.labelsLock)}, async () => { console.log("locked"); await new Promise(() => undefined); }).catch(() => process.exitCode = 1);`;
-    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=commonjs", "-e", source], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, NODE_OPTIONS: "" } });
+    const child = spawn("flock", [paths.labelsLock, "-c", "printf READY; sleep 1"], { stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     let errors = "";
     child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); });
@@ -189,29 +190,46 @@ describe("feedback quality private store", () => {
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error(`lock child did not start: ${errors}`)), 2_000);
       child.stdout.on("data", () => {
-        if (output.includes("locked")) { clearTimeout(timer); resolve(); }
+        if (output.includes("READY")) { clearTimeout(timer); resolve(); }
       });
       child.once("error", reject);
     });
-    child.kill("SIGKILL");
+    let settled = false;
+    const pending = appendLabelEvent({ eventId: "contended-event", schemaVersion: 1 }, root).then((result) => {
+      settled = true;
+      return result;
+    }, (error: unknown) => {
+      settled = true;
+      throw error;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(settled).toBe(false);
     await new Promise<void>((resolve) => child.once("exit", () => resolve()));
-    await expect(appendLabelEvent({ eventId: "contended-event", schemaVersion: 1 }, root)).resolves.toEqual({ status: "committed" });
+    await expect(pending).resolves.toEqual({ status: "committed" });
   });
 
-  it("does not leak private values in store errors", async () => {
+  it("redacts private values from an actual injected error and its metadata", async () => {
     const root = await temporaryRoot();
     const privateValue = "PRIVATE_SECRET_VALUE";
-    const id = contentId("case", { privateValue });
-    await mkdir(root, 0o700);
-    await symlink(join(root, "outside-does-not-exist"), join(root, "quality-link"));
+    const privateEventId = "PRIVATE_EVENT_ID";
+    const privateDetail = "PRIVATE_FAULT_DETAIL";
     let error: unknown;
     try {
-      await publishBundle(bundle("case", id, { "case.json": privateValue }), join(root, "quality-link"));
+      await appendLabelEvent(
+        { schemaVersion: 1, eventId: privateEventId, privateValue },
+        root,
+        { injectFault: () => { throw new Error(privateDetail); } },
+      );
     } catch (caught) {
       error = caught;
     }
-    expect(error).toMatchObject({ code: "unsafe_path" });
-    expect(String(error)).not.toContain(privateValue);
-    expect(String(error)).not.toContain(id);
+    expect(error).toMatchObject({ code: "integrity" });
+    const metadata = error && typeof error === "object"
+      ? [String(error), "message" in error ? String(error.message) : "", "stack" in error ? String(error.stack) : "", "cause" in error ? String(error.cause) : ""]
+      : [String(error)];
+    const rendered = metadata.join("\n");
+    expect(rendered).not.toContain(privateValue);
+    expect(rendered).not.toContain(privateEventId);
+    expect(rendered).not.toContain(privateDetail);
   });
 });
