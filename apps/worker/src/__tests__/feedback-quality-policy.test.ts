@@ -239,6 +239,9 @@ describe("feedback quality comparison policy", () => {
   });
 
   it.each([
+    ["approved moment", { approvedMomentRetained: 0 }],
+    ["approved window", { approvedWindowOverlap: 0 }],
+    ["hard invariant counter", { hardInvariantFailures: 1 }],
     ["emptyResult", { emptyResult: 1 }],
     ["zeroClipFalseNegative", { zeroClipFalseNegative: 1 }],
     ["boundaryErrors", { boundaryErrors: 1 }],

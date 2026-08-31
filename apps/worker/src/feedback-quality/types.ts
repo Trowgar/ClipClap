@@ -19,7 +19,6 @@ export type MachineReason =
   | "error_case"
   | "set_mismatch"
   | "mode_mismatch"
-  | "commit_mismatch"
   | "corpus_mismatch"
   | "config_mismatch"
   | "runner_mismatch"
@@ -97,7 +96,7 @@ export interface QualityObservation {
   runnerVersion: number;
   createdAt: string;
   cases: QualityCaseResult[];
-  /** Optional aggregate counters emitted by a runner; case metrics remain authoritative. */
+  /** Optional runner summary; policy validates but never trusts it over case metrics. */
   metrics?: QualityMetrics;
 }
 

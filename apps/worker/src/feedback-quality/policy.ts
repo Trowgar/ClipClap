@@ -27,7 +27,6 @@ const REASON_ORDER: readonly MachineReason[] = [
   "error_case",
   "set_mismatch",
   "mode_mismatch",
-  "commit_mismatch",
   "corpus_mismatch",
   "config_mismatch",
   "runner_mismatch",
@@ -334,6 +333,11 @@ function checkHardInvariants(before: QualityCaseResult, after: QualityCaseResult
   if (nextMoment !== undefined && nextMoment <= 0) return true;
   if (priorMoment !== undefined && nextMoment === undefined) return true;
   if (priorMoment !== undefined && nextMoment !== undefined && nextMoment < priorMoment) return true;
+  const priorWindow = numberMetric(before.metrics, ["approvedWindowOverlap"]);
+  const nextWindow = numberMetric(after.metrics, ["approvedWindowOverlap"]);
+  if (nextWindow !== undefined && nextWindow <= 0) return true;
+  if (priorWindow !== undefined && nextWindow === undefined) return true;
+  if (priorWindow !== undefined && nextWindow !== undefined && nextWindow < priorWindow) return true;
 
   const priorFailures = numberMetric(before.metrics, ["hardInvariantFailures", "invariantFailures"]) ?? 0;
   const nextFailures = numberMetric(after.metrics, ["hardInvariantFailures", "invariantFailures"]);
