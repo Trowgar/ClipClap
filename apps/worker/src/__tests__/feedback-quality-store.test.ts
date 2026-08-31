@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -107,10 +107,50 @@ describe("feedback quality private store", () => {
     const directory = join(paths.casesDir, id);
     await mkdir(directory, 0o700);
     execFileSync("mkfifo", [join(directory, "case.json")]);
+    await writeFile(join(directory, ".committed"), "clipclap-feedback-quality-committed-v1\n", { mode: 0o600 });
     await expect(publishBundle(bundle("case", id, { "case.json": "x" }), root)).rejects.toMatchObject({ code: "unsafe_path" });
 
     execFileSync("mkfifo", [paths.labelsFile]);
     await expect(appendLabelEvent({ eventId: "fifo-event", schemaVersion: 1 }, root)).rejects.toMatchObject({ code: "unsafe_path" });
+  });
+
+  it("rejects hardlinked owned files before chmod/read and leaves the external inode unchanged", async () => {
+    const root = await temporaryRoot();
+    const paths = await ensureQualityTree(root);
+    const id = contentId("case", { hardlink: true });
+    const directory = join(paths.casesDir, id);
+    const external = join(root, "external-case.json");
+    await mkdir(directory, 0o700);
+    await writeFile(external, "PRIVATE_EXTERNAL_BYTES", { mode: 0o640 });
+    await link(external, join(directory, "case.json"));
+    await writeFile(join(directory, ".committed"), "clipclap-feedback-quality-committed-v1\n", { mode: 0o600 });
+    await expect(publishBundle(bundle("case", id, { "case.json": "PRIVATE_EXTERNAL_BYTES" }), root)).rejects.toMatchObject({ code: "unsafe_path" });
+    expect(await readFile(external, "utf8")).toBe("PRIVATE_EXTERNAL_BYTES");
+    expect(mode(await lstat(external))).toBe(0o640);
+  });
+
+  it("rejects an intermediate symlink in the requested root path", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "clipclap-quality-link-root-"));
+    roots.push(parent);
+    const external = join(parent, "external");
+    await mkdir(external, 0o700);
+    await symlink(external, join(parent, "intermediate"));
+    await expect(ensureQualityTree(join(parent, "intermediate", "quality"))).rejects.toMatchObject({ code: "unsafe_path" });
+    expect((await lstat(external)).isDirectory()).toBe(true);
+  });
+
+  it("does not remove a foreign empty destination created at the commit race", async () => {
+    const root = await temporaryRoot();
+    const id = contentId("decision", { race: true });
+    const destination = join(root, "decisions", id);
+    await expect(publishBundle({
+      ...bundle("decision", id, { "decision.json": "safe" }),
+      injectFault: async (point) => {
+        if (point.scope === "bundle" && point.operation === "reserve" && point.timing === "before") await mkdir(destination, 0o700);
+      },
+    }, root)).rejects.toMatchObject({ code: "integrity" });
+    expect(mode(await lstat(destination))).toBe(0o700);
+    expect(await lstat(join(destination, "decision.json")).catch((error: unknown) => (error as NodeJS.ErrnoException).code)).toBe("ENOENT");
   });
 
   it("appends labels atomically, makes exact repeats no-ops, and rejects event collisions", async () => {
@@ -130,6 +170,16 @@ describe("feedback quality private store", () => {
     await chmod(join(root, "ledger", "labels.jsonl"), 0o644);
     await expect(appendLabelEvent(event, root)).resolves.toEqual({ status: "noop" });
     expect(mode(await lstat(join(root, "ledger", "labels.jsonl")))).toBe(0o600);
+  });
+
+  it("does not remove a foreign temp file when O_EXCL reports a collision", async () => {
+    const root = await temporaryRoot();
+    await ensureQualityTree(root);
+    const temp = join(root, "ledger", ".labels.jsonl.tmp-fixed");
+    await writeFile(temp, "PRIVATE_FOREIGN_TEMP", { mode: 0o640 });
+    await expect(appendLabelEvent({ eventId: "temp-collision", schemaVersion: 1 }, root, { tempSuffix: "fixed" })).rejects.toMatchObject({ code: "integrity" });
+    expect(await readFile(temp, "utf8")).toBe("PRIVATE_FOREIGN_TEMP");
+    expect(mode(await lstat(temp))).toBe(0o640);
   });
 
   it("reports uncertain post-rename failures only after verifying the published bytes", async () => {
