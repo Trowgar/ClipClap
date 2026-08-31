@@ -5,6 +5,7 @@ import {
   type GatePolicy,
 } from "../feedback-quality/policy";
 import type {
+  QualityMetrics,
   QualityCaseResult,
   QualityObservation,
 } from "../feedback-quality/types";
@@ -34,6 +35,15 @@ const result = (
   status: "ok",
   metrics: {
     approvedMomentRetained: 1,
+    approvedWindowOverlap: 1,
+    emptyResult: 0,
+    zeroClipFalseNegative: 0,
+    boundaryErrors: 0,
+    blackTailSeconds: 0,
+    frozenTailSeconds: 0,
+    subtitleOverlap: 0,
+    requiredTextClipped: 0,
+    requiredSubjectClipped: 0,
     hardInvariantFailures: 0,
     defectSeverity: disposition === "confirmed_negative" ? 2 : 0,
     ...overrides.metrics,
@@ -203,5 +213,106 @@ describe("feedback quality comparison policy", () => {
       verdict: "fail",
       reasons: ["no_improvement"],
     });
+  });
+
+  it("passes equivalent observations from different valid commits", () => {
+    const baseline = observation();
+    const candidate = observation({
+      mode: "candidate",
+      observationId: "sha256:" + "4".repeat(64),
+      commitSha: "b".repeat(40),
+    });
+
+    expect(compareObservations(baseline, candidate, { ...policy, claim: "non_regression_only" })).toMatchObject({
+      verdict: "pass",
+      reasons: [],
+    });
+  });
+
+  it("rejects a commit identifier that is not a lowercase SHA-1", () => {
+    const malformed = observation({ commitSha: "not-a-commit-sha" });
+    const candidate = observation({ mode: "candidate", observationId: "sha256:" + "4".repeat(64) });
+
+    expect(compareObservations(malformed, candidate, { ...policy, claim: "non_regression_only" }).reasons).toEqual([
+      "invalid_schema",
+    ]);
+  });
+
+  it.each([
+    ["emptyResult", { emptyResult: 1 }],
+    ["zeroClipFalseNegative", { zeroClipFalseNegative: 1 }],
+    ["boundaryErrors", { boundaryErrors: 1 }],
+    ["black tail", { blackTailSeconds: 0.1 }],
+    ["frozen tail", { frozenTailSeconds: 0.1 }],
+    ["subtitle overlap", { subtitleOverlap: 1 }],
+    ["required text clipping", { requiredTextClipped: 1 }],
+    ["required subject clipping", { requiredSubjectClipped: 1 }],
+  ] as const)("fails a positive hard invariant when %s appears", (_name, changed) => {
+    const baseline = observation();
+    const candidate = observation({
+      mode: "candidate",
+      observationId: "sha256:" + "4".repeat(64),
+      cases: baseline.cases.map((entry) =>
+        entry.caseVersion === "positive-0"
+          ? { ...entry, metrics: { ...entry.metrics, ...changed } }
+          : entry,
+      ),
+    });
+
+    expect(compareObservations(baseline, candidate, { ...policy, claim: "non_regression_only" })).toMatchObject({
+      verdict: "fail",
+      reasons: ["hard_invariant_regression"],
+    });
+  });
+
+  it("does not let supplied aggregate metrics hide a case-level negative metric regression", () => {
+    const baseline = observation();
+    const candidate = observation({
+      mode: "candidate",
+      observationId: "sha256:" + "4".repeat(64),
+      metrics: { boundaryErrors: 0 },
+      cases: baseline.cases.map((entry) =>
+        entry.caseVersion === "negative-0"
+          ? { ...entry, metrics: { ...entry.metrics, boundaryErrors: 1 } }
+          : entry,
+      ),
+    });
+
+    expect(compareObservations(baseline, candidate, { ...policy, claim: "non_regression_only" })).toMatchObject({
+      verdict: "fail",
+      reasons: ["aggregate_regression"],
+    });
+  });
+
+  it("keeps QualityMetrics closed at compile time", () => {
+    // @ts-expect-error unknown metrics are not part of the closed contract
+    const invalid: QualityMetrics = { madeUpMetric: 1 };
+    expect(invalid).toEqual({ madeUpMetric: 1 });
+  });
+
+  it("requires positive evidence metrics and confirmed-negative severity", () => {
+    const missingPositiveProof = observation({
+      cases: [
+        result("positive-0", "positive", "selection", { metrics: {} }),
+        ...Array.from({ length: 3 }, (_, i) => result(`positive-${i + 1}`, "positive", "selection")),
+        ...Array.from({ length: 6 }, (_, i) => result(`negative-${i}`, "confirmed_negative", "selection")),
+      ],
+    });
+    const missingNegativeProof = observation({
+      cases: [
+        ...Array.from({ length: 4 }, (_, i) => result(`positive-${i}`, "positive", "selection")),
+        result("negative-0", "confirmed_negative", "selection", { metrics: {} }),
+        ...Array.from({ length: 5 }, (_, i) => result(`negative-${i + 1}`, "confirmed_negative", "selection")),
+      ],
+    });
+
+    const candidateForPositive = { ...missingPositiveProof, mode: "candidate" as const, observationId: "sha256:" + "4".repeat(64) };
+    const candidateForNegative = { ...missingNegativeProof, mode: "candidate" as const, observationId: "sha256:" + "4".repeat(64) };
+    expect(compareObservations(missingPositiveProof, candidateForPositive, { ...policy, claim: "non_regression_only" }).reasons).toEqual([
+      "invalid_metric",
+    ]);
+    expect(compareObservations(missingNegativeProof, candidateForNegative, { ...policy, claim: "non_regression_only" }).reasons).toEqual([
+      "invalid_metric",
+    ]);
   });
 });

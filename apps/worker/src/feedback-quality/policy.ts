@@ -127,28 +127,38 @@ function finiteNonnegative(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
+function validSha1(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{40}$/.test(value);
+}
+
+function validSha256(value: unknown): value is string {
+  return typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value);
+}
+
 function validMetrics(value: unknown): value is QualityMetrics {
   if (!isObject(value) || !ownDataKeys(value, METRIC_KEYS)) return false;
-  for (const key of Object.keys(value)) {
+  const keys = Object.keys(value);
+  if (keys.length === 0) return false;
+  for (const key of keys) {
     if (!finiteNonnegative(value[key])) return false;
   }
   return true;
+}
+
+function hasMetric(metrics: QualityMetrics, names: readonly MetricName[]): boolean {
+  return names.some((name) => Object.prototype.hasOwnProperty.call(metrics, name));
 }
 
 function observationReason(value: unknown, validateMetrics: boolean): MachineReason | undefined {
   if (!isObject(value) || !ownDataKeys(value, OBSERVATION_KEYS) || !ownDataFields(value, ["schemaVersion", "observationId", "mode", "set", "commitSha", "configSha256", "corpusSha256", "runnerVersion", "createdAt", "cases"])) return "invalid_schema";
   if (
     value.schemaVersion !== 1 ||
-    typeof value.observationId !== "string" ||
-    value.observationId.length === 0 ||
+    !validSha256(value.observationId) ||
     (value.mode !== "baseline" && value.mode !== "candidate") ||
     (value.set !== "eval" && value.set !== "holdout") ||
-    typeof value.commitSha !== "string" ||
-    value.commitSha.length === 0 ||
-    typeof value.configSha256 !== "string" ||
-    value.configSha256.length === 0 ||
-    typeof value.corpusSha256 !== "string" ||
-    value.corpusSha256.length === 0 ||
+    !validSha1(value.commitSha) ||
+    !validSha256(value.configSha256) ||
+    !validSha256(value.corpusSha256) ||
     !finiteNonnegative(value.runnerVersion) ||
     !Number.isInteger(value.runnerVersion) ||
     typeof value.createdAt !== "string" ||
@@ -168,6 +178,23 @@ function observationReason(value: unknown, validateMetrics: boolean): MachineRea
       (entry.status !== "ok" && entry.status !== "missing" && entry.status !== "stale" && entry.status !== "error")
     ) return "invalid_schema";
     if (validateMetrics && !validMetrics(entry.metrics)) return "invalid_metric";
+    if (validateMetrics && entry.disposition === "positive") {
+      const metrics = entry.metrics as QualityMetrics;
+      if (
+        !hasMetric(metrics, ["approvedMomentRetained"]) ||
+        !hasMetric(metrics, ["approvedWindowOverlap"]) ||
+        !hasMetric(metrics, ["hardInvariantFailures"]) ||
+        !hasMetric(metrics, ["emptyResult", "empty"]) ||
+        !hasMetric(metrics, ["zeroClipFalseNegative", "zeroClipFalseNegatives"]) ||
+        !hasMetric(metrics, ["boundaryErrors", "boundaryError"]) ||
+        !hasMetric(metrics, ["blackTail", "blackTailSeconds", "blackTailSec"]) ||
+        !hasMetric(metrics, ["frozenTail", "frozenTailSeconds", "frozenTailSec"]) ||
+        !hasMetric(metrics, ["subtitleOverlap", "newSubtitleOverlap"]) ||
+        !hasMetric(metrics, ["requiredTextClipped"]) ||
+        !hasMetric(metrics, ["requiredSubjectClipped"])
+      ) return "invalid_metric";
+    }
+    if (validateMetrics && entry.disposition === "confirmed_negative" && !hasMetric(entry.metrics as QualityMetrics, ["defectSeverity"])) return "invalid_metric";
     if (versions.has(entry.caseVersion)) return "duplicate_case_version";
     versions.add(entry.caseVersion);
   }
@@ -223,7 +250,9 @@ function emptyAggregate(): GateAggregate {
   };
 }
 
-function numberMetric(metrics: QualityMetrics, names: readonly string[]): number | undefined {
+type MetricName = keyof QualityMetrics;
+
+function numberMetric(metrics: QualityMetrics, names: readonly MetricName[]): number | undefined {
   for (const name of names) {
     const value = metrics[name];
     if (value !== undefined) return value;
@@ -231,7 +260,7 @@ function numberMetric(metrics: QualityMetrics, names: readonly string[]): number
   return undefined;
 }
 
-function sumMetric(cases: readonly QualityCaseResult[], names: readonly string[]): number {
+function sumMetric(cases: readonly QualityCaseResult[], names: readonly MetricName[]): number {
   let total = 0;
   for (const entry of cases) total += numberMetric(entry.metrics, names) ?? 0;
   return total;
@@ -240,18 +269,16 @@ function sumMetric(cases: readonly QualityCaseResult[], names: readonly string[]
 function aggregate(observation: QualityObservation): GateAggregate {
   const positives = observation.cases.filter((entry) => entry.disposition === "positive");
   const negatives = observation.cases.filter((entry) => entry.disposition === "confirmed_negative");
-  const top = observation.metrics;
   return {
-    positiveRetention:
-      numberMetric(top ?? {}, ["positiveRetention"]) ??
-      positives.filter((entry) => (numberMetric(entry.metrics, ["approvedMomentRetained", "approvedMoment", "approvedWindowOverlap"]) ?? 0) > 0).length,
-    negativeDefects:
-      numberMetric(top ?? {}, ["negativeDefects"]) ??
-      negatives.filter((entry) => (numberMetric(entry.metrics, ["defectSeverity", "severity"]) ?? 0) > 0).length,
-    zeroClipFalseNegatives: numberMetric(top ?? {}, ["zeroClipFalseNegatives", "zeroClipFalseNegative"]) ?? sumMetric(observation.cases, ["zeroClipFalseNegatives", "zeroClipFalseNegative"]),
-    boundaryErrors: numberMetric(top ?? {}, ["boundaryErrors", "boundaryError"]) ?? sumMetric(observation.cases, ["boundaryErrors", "boundaryError"]),
-    focalFailures: numberMetric(top ?? {}, ["focalFailures", "focalFailure"]) ?? sumMetric(observation.cases, ["focalFailures", "focalFailure"]),
-    subtitleFailures: numberMetric(top ?? {}, ["subtitleFailures", "subtitleFailure"]) ?? sumMetric(observation.cases, ["subtitleFailures", "subtitleFailure"]),
+    positiveRetention: positives.filter((entry) =>
+      (numberMetric(entry.metrics, ["approvedMomentRetained", "approvedMoment"]) ?? 0) > 0 &&
+      (numberMetric(entry.metrics, ["approvedWindowOverlap"]) ?? 0) > 0,
+    ).length,
+    negativeDefects: negatives.filter((entry) => (numberMetric(entry.metrics, ["defectSeverity", "severity"]) ?? 0) > 0).length,
+    zeroClipFalseNegatives: sumMetric(observation.cases, ["zeroClipFalseNegatives", "zeroClipFalseNegative"]),
+    boundaryErrors: sumMetric(observation.cases, ["boundaryErrors", "boundaryError"]),
+    focalFailures: sumMetric(observation.cases, ["focalFailures", "focalFailure"]),
+    subtitleFailures: sumMetric(observation.cases, ["subtitleFailures", "subtitleFailure"]),
   };
 }
 
@@ -263,8 +290,8 @@ function minimumFor(policy: GatePolicy, set: QualityObservation["set"]): { posit
 
 function metricImproved(before: QualityCaseResult, after: QualityCaseResult): boolean {
   const beforePositive = before.disposition === "positive";
-  const higherIsBetter = ["approvedMomentRetained", "approvedMoment", "approvedWindowOverlap"];
-  const lowerIsBetter = [
+  const higherIsBetter: readonly MetricName[] = ["approvedMomentRetained", "approvedMoment", "approvedWindowOverlap"];
+  const lowerIsBetter: readonly MetricName[] = [
     "defectSeverity",
     "severity",
     "hardInvariantFailures",
@@ -317,7 +344,10 @@ function checkHardInvariants(before: QualityCaseResult, after: QualityCaseResult
   const sar = numberMetric(after.metrics, ["sar", "sampleAspectRatio"]);
   if ((width !== undefined && width !== 1080) || (height !== undefined && height !== 1920) || (sar !== undefined && sar !== 1)) return true;
 
-  const hardMetrics: readonly string[][] = [
+  const hardMetrics: readonly MetricName[][] = [
+    ["emptyResult", "empty"],
+    ["zeroClipFalseNegative", "zeroClipFalseNegatives"],
+    ["boundaryErrors", "boundaryError"],
     ["blackTail", "blackTailSeconds", "blackTailSec"],
     ["frozenTail", "frozenTailSeconds", "frozenTailSec"],
     ["subtitleOverlap", "newSubtitleOverlap"],
@@ -363,7 +393,6 @@ export function compareObservations(
   const identityReasons: MachineReason[] = [];
   if (baseline.set !== candidate.set) identityReasons.push("set_mismatch");
   if (baseline.mode !== "baseline" || candidate.mode !== "candidate") identityReasons.push("mode_mismatch");
-  if (baseline.commitSha !== candidate.commitSha) identityReasons.push("commit_mismatch");
   if (baseline.corpusSha256 !== candidate.corpusSha256) identityReasons.push("corpus_mismatch");
   if (baseline.configSha256 !== candidate.configSha256) identityReasons.push("config_mismatch");
   if (baseline.runnerVersion !== candidate.runnerVersion) identityReasons.push("runner_mismatch");
