@@ -56,42 +56,27 @@ const OBSERVATION_KEYS = new Set([
 const CASE_KEYS = new Set(["schemaVersion", "caseVersion", "disposition", "subsystem", "status", "metrics"]);
 const METRIC_KEYS = new Set([
   "approvedMomentRetained",
-  "approvedMoment",
   "approvedWindowOverlap",
   "hardInvariantFailures",
-  "invariantFailures",
   "defectSeverity",
-  "severity",
   "emptyResult",
-  "empty",
   "zeroClipFalseNegative",
-  "zeroClipFalseNegatives",
   "boundaryErrors",
-  "boundaryError",
   "focalFailures",
-  "focalFailure",
   "subtitleFailures",
-  "subtitleFailure",
   "subtitleOverlap",
   "requiredTextClipped",
   "requiredSubjectClipped",
   "outputWidth",
   "outputHeight",
-  "geometryWidth",
-  "geometryHeight",
   "sar",
-  "sampleAspectRatio",
   "durationDrift",
-  "durationDriftSeconds",
   "blackTail",
   "blackTailSeconds",
-  "blackTailSec",
   "frozenTail",
   "frozenTailSeconds",
-  "frozenTailSec",
   "frameCount",
   "clipCount",
-  "newSubtitleOverlap",
   "positiveRetention",
   "negativeDefects",
 ]);
@@ -100,53 +85,38 @@ const MINIMUM_KEYS = new Set(["evalPositive", "evalNegative", "holdoutPositive",
 
 type MetricName = keyof QualityMetrics;
 type RequiredMetricGroups = readonly (readonly MetricName[])[];
-const METRIC_ALIAS_GROUPS: readonly (readonly MetricName[])[] = [
-  ["approvedMomentRetained", "approvedMoment"],
-  ["hardInvariantFailures", "invariantFailures"],
-  ["defectSeverity", "severity"],
-  ["emptyResult", "empty"],
-  ["zeroClipFalseNegative", "zeroClipFalseNegatives"],
-  ["boundaryErrors", "boundaryError"],
-  ["focalFailures", "focalFailure"],
-  ["subtitleOverlap", "newSubtitleOverlap"],
-  ["outputWidth", "geometryWidth"],
-  ["outputHeight", "geometryHeight"],
-  ["sar", "sampleAspectRatio"],
-  ["durationDrift", "durationDriftSeconds"],
-  ["blackTail", "blackTailSeconds", "blackTailSec"],
-  ["frozenTail", "frozenTailSeconds", "frozenTailSec"],
-];
 const REQUIRED_POSITIVE_METRICS: Record<Subsystem, RequiredMetricGroups> = {
   selection: [
     ["approvedMomentRetained"],
     ["approvedWindowOverlap"],
-    ["emptyResult", "empty"],
-    ["zeroClipFalseNegative", "zeroClipFalseNegatives"],
+    ["emptyResult"],
+    ["zeroClipFalseNegative"],
   ],
-  boundary: [["approvedMomentRetained"], ["approvedWindowOverlap"], ["boundaryErrors", "boundaryError"]],
+  boundary: [["approvedMomentRetained"], ["approvedWindowOverlap"], ["boundaryErrors"]],
   framing: [
     ["approvedMomentRetained"],
     ["approvedWindowOverlap"],
-    ["focalFailures", "focalFailure"],
+    ["focalFailures"],
     ["requiredTextClipped"],
     ["requiredSubjectClipped"],
   ],
-  subtitles: [["approvedMomentRetained"], ["approvedWindowOverlap"], ["subtitleOverlap", "newSubtitleOverlap"]],
+  subtitles: [["approvedMomentRetained"], ["approvedWindowOverlap"], ["subtitleOverlap"]],
   render: [
     ["approvedMomentRetained"],
     ["approvedWindowOverlap"],
     ["hardInvariantFailures"],
-    ["outputWidth", "geometryWidth"],
-    ["outputHeight", "geometryHeight"],
-    ["sar", "sampleAspectRatio"],
-    ["blackTail", "blackTailSeconds", "blackTailSec"],
-    ["frozenTail", "frozenTailSeconds", "frozenTailSec"],
-    ["subtitleOverlap", "newSubtitleOverlap"],
+    ["outputWidth"],
+    ["outputHeight"],
+    ["sar"],
+    ["blackTailSeconds"],
+    ["frozenTailSeconds"],
+    ["subtitleOverlap"],
     ["requiredTextClipped"],
     ["requiredSubjectClipped"],
-    ["focalFailures", "focalFailure"],
+    ["focalFailures"],
   ],
 };
+const REQUIRED_RENDER_METRICS: RequiredMetricGroups = REQUIRED_POSITIVE_METRICS.render.slice(2);
 
 function hasOwn(value: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
@@ -178,7 +148,7 @@ function validCasesArray(value: unknown): value is unknown[] {
     if (typeof rawKey !== "string") return false;
     const descriptor = Object.getOwnPropertyDescriptor(value, rawKey);
     if (!descriptor || !descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, "value")) return false;
-    if (!/^(0|[1-9]\d*)$/.test(rawKey)) return false;
+    if (!/^(0|[1-9]\d*)$/.test(rawKey) || Number(rawKey) >= value.length) return false;
   }
   return true;
 }
@@ -213,10 +183,6 @@ function validMetrics(value: unknown): value is QualityMetrics {
   if (!isObject(value) || !ownDataKeys(value, METRIC_KEYS)) return false;
   const keys = Object.keys(value);
   if (keys.length === 0) return false;
-  for (const group of METRIC_ALIAS_GROUPS) {
-    const present = group.filter((name) => Object.prototype.hasOwnProperty.call(value, name));
-    if (present.length > 1 && present.some((name) => value[name] !== value[present[0]])) return false;
-  }
   for (const key of keys) {
     if (!finiteNonnegative(value[key])) return false;
   }
@@ -261,7 +227,11 @@ function observationReason(value: unknown, validateMetrics: boolean): MachineRea
       const required = REQUIRED_POSITIVE_METRICS[entry.subsystem];
       if (required.some((names) => !hasMetric(metrics, names))) return "invalid_metric";
     }
-    if (validateMetrics && entry.disposition === "confirmed_negative" && !hasMetric(entry.metrics as QualityMetrics, ["defectSeverity", "severity"])) return "invalid_metric";
+    if (validateMetrics && entry.disposition !== "exclude" && entry.subsystem === "render") {
+      const metrics = entry.metrics as QualityMetrics;
+      if (REQUIRED_RENDER_METRICS.some((names) => !hasMetric(metrics, names))) return "invalid_metric";
+    }
+    if (validateMetrics && entry.disposition === "confirmed_negative" && !hasMetric(entry.metrics as QualityMetrics, ["defectSeverity"])) return "invalid_metric";
     if (versions.has(entry.caseVersion)) return "duplicate_case_version";
     versions.add(entry.caseVersion);
   }
@@ -348,14 +318,14 @@ function aggregate(observation: QualityObservation): GateAggregate {
   const negatives = active.filter((entry) => entry.disposition === "confirmed_negative");
   return {
     positiveRetention: positives.filter((entry) =>
-      (numberMetric(entry.metrics, ["approvedMomentRetained", "approvedMoment"]) ?? 0) > 0 &&
+      (numberMetric(entry.metrics, ["approvedMomentRetained"]) ?? 0) > 0 &&
       (numberMetric(entry.metrics, ["approvedWindowOverlap"]) ?? 0) > 0,
     ).length,
-    negativeDefects: negatives.filter((entry) => (numberMetric(entry.metrics, ["defectSeverity", "severity"]) ?? 0) > 0).length,
-    zeroClipFalseNegatives: sumMetric(active, ["zeroClipFalseNegatives", "zeroClipFalseNegative"]),
-    boundaryErrors: sumMetric(active, ["boundaryErrors", "boundaryError"]),
-    focalFailures: sumMetric(active, ["focalFailures", "focalFailure"]),
-    subtitleFailures: sumMetric(active, ["subtitleFailures", "subtitleFailure"]),
+    negativeDefects: negatives.filter((entry) => (numberMetric(entry.metrics, ["defectSeverity"]) ?? 0) > 0).length,
+    zeroClipFalseNegatives: sumMetric(active, ["zeroClipFalseNegative"]),
+    boundaryErrors: sumMetric(active, ["boundaryErrors"]),
+    focalFailures: sumMetric(active, ["focalFailures"]),
+    subtitleFailures: sumMetric(active, ["subtitleOverlap"]),
   };
 }
 
@@ -367,33 +337,22 @@ function minimumFor(policy: GatePolicy, set: QualityObservation["set"]): { posit
 
 function metricImproved(before: QualityCaseResult, after: QualityCaseResult): boolean {
   const beforePositive = before.disposition === "positive";
-  const higherIsBetter: readonly MetricName[] = ["approvedMomentRetained", "approvedMoment", "approvedWindowOverlap"];
+  const higherIsBetter: readonly MetricName[] = ["approvedMomentRetained", "approvedWindowOverlap"];
   const lowerIsBetter: readonly MetricName[] = [
     "defectSeverity",
-    "severity",
     "hardInvariantFailures",
-    "invariantFailures",
     "emptyResult",
     "zeroClipFalseNegative",
-    "zeroClipFalseNegatives",
     "boundaryErrors",
-    "boundaryError",
     "focalFailures",
-    "focalFailure",
-    "subtitleFailures",
-    "subtitleFailure",
     "subtitleOverlap",
-    "newSubtitleOverlap",
     "requiredTextClipped",
     "requiredSubjectClipped",
     "durationDrift",
-    "durationDriftSeconds",
     "blackTail",
     "blackTailSeconds",
-    "blackTailSec",
     "frozenTail",
     "frozenTailSeconds",
-    "frozenTailSec",
   ];
   for (const key of higherIsBetter) {
     if (beforePositive && (after.metrics[key] ?? 0) > (before.metrics[key] ?? 0)) return true;
@@ -403,34 +362,40 @@ function metricImproved(before: QualityCaseResult, after: QualityCaseResult): bo
 }
 
 function checkHardInvariants(before: QualityCaseResult, after: QualityCaseResult): boolean {
-  if (after.disposition !== "positive") return false;
-  const priorMoment = numberMetric(before.metrics, ["approvedMomentRetained", "approvedMoment", "approvedWindowOverlap"]);
-  const nextMoment = numberMetric(after.metrics, ["approvedMomentRetained", "approvedMoment", "approvedWindowOverlap"]);
-  if (nextMoment !== undefined && nextMoment <= 0) return true;
-  if (priorMoment !== undefined && nextMoment === undefined) return true;
-  if (priorMoment !== undefined && nextMoment !== undefined && nextMoment < priorMoment) return true;
-  const priorWindow = numberMetric(before.metrics, ["approvedWindowOverlap"]);
-  const nextWindow = numberMetric(after.metrics, ["approvedWindowOverlap"]);
-  if (nextWindow !== undefined && nextWindow <= 0) return true;
-  if (priorWindow !== undefined && nextWindow === undefined) return true;
-  if (priorWindow !== undefined && nextWindow !== undefined && nextWindow < priorWindow) return true;
+  const positive = after.disposition === "positive";
+  const render = after.subsystem === "render";
+  if (!positive && !render) return false;
+  if (positive) {
+    const priorMoment = numberMetric(before.metrics, ["approvedMomentRetained"]);
+    const nextMoment = numberMetric(after.metrics, ["approvedMomentRetained"]);
+    if (nextMoment !== undefined && nextMoment <= 0) return true;
+    if (priorMoment !== undefined && nextMoment === undefined) return true;
+    if (priorMoment !== undefined && nextMoment !== undefined && nextMoment < priorMoment) return true;
+    const priorWindow = numberMetric(before.metrics, ["approvedWindowOverlap"]);
+    const nextWindow = numberMetric(after.metrics, ["approvedWindowOverlap"]);
+    if (nextWindow !== undefined && nextWindow <= 0) return true;
+    if (priorWindow !== undefined && nextWindow === undefined) return true;
+    if (priorWindow !== undefined && nextWindow !== undefined && nextWindow < priorWindow) return true;
+  }
 
-  const priorFailures = numberMetric(before.metrics, ["hardInvariantFailures", "invariantFailures"]) ?? 0;
-  const nextFailures = numberMetric(after.metrics, ["hardInvariantFailures", "invariantFailures"]);
+  const priorFailures = numberMetric(before.metrics, ["hardInvariantFailures"]) ?? 0;
+  const nextFailures = numberMetric(after.metrics, ["hardInvariantFailures"]);
   if (nextFailures !== undefined && (nextFailures > priorFailures || nextFailures > 0)) return true;
 
-  const width = numberMetric(after.metrics, ["outputWidth", "geometryWidth"]);
-  const height = numberMetric(after.metrics, ["outputHeight", "geometryHeight"]);
-  const sar = numberMetric(after.metrics, ["sar", "sampleAspectRatio"]);
-  if ((width !== undefined && width !== 1080) || (height !== undefined && height !== 1920) || (sar !== undefined && sar !== 1)) return true;
+  if (render) {
+    const width = numberMetric(after.metrics, ["outputWidth"]);
+    const height = numberMetric(after.metrics, ["outputHeight"]);
+    const sar = numberMetric(after.metrics, ["sar"]);
+    if (width !== 1080 || height !== 1920 || sar !== 1) return true;
+  }
 
   const hardMetrics: (readonly MetricName[])[] = [
-    ["emptyResult", "empty"],
-    ["zeroClipFalseNegative", "zeroClipFalseNegatives"],
-    ["boundaryErrors", "boundaryError"],
-    ["blackTail", "blackTailSeconds", "blackTailSec"],
-    ["frozenTail", "frozenTailSeconds", "frozenTailSec"],
-    ["subtitleOverlap", "newSubtitleOverlap"],
+    ["emptyResult"],
+    ["zeroClipFalseNegative"],
+    ["boundaryErrors"],
+    ["blackTailSeconds"],
+    ["frozenTailSeconds"],
+    ["subtitleOverlap"],
     ["requiredTextClipped"],
     ["requiredSubjectClipped"],
   ];
@@ -484,7 +449,7 @@ export function compareObservations(
   const baselinePositive = baselineActive.filter((entry) => entry.disposition === "positive").length;
   const baselineNegative = baselineActive.filter((entry) => entry.disposition === "confirmed_negative").length;
   if (baselinePositive < minimum.positive || baselineNegative < minimum.negative) return failure(["insufficient_corpus"]);
-  if (baselineActive.some((entry) => entry.disposition === "positive" && checkHardInvariants(entry, entry))) {
+  if (baselineActive.some((entry) => (entry.disposition === "positive" || entry.subsystem === "render") && checkHardInvariants(entry, entry))) {
     return failure(["hard_invariant_regression"]);
   }
 
@@ -503,10 +468,10 @@ export function compareObservations(
       continue;
     }
     if (!sameMetricKeys(before.metrics, after.metrics)) return failure(["invalid_metric"]);
-    if (before.disposition === "positive" && checkHardInvariants(before, after)) regressions.push("hard_invariant_regression");
+    if ((before.disposition === "positive" || before.subsystem === "render") && checkHardInvariants(before, after)) regressions.push("hard_invariant_regression");
     if (before.disposition === "confirmed_negative") {
-      const prior = numberMetric(before.metrics, ["defectSeverity", "severity"]);
-      const next = numberMetric(after.metrics, ["defectSeverity", "severity"]);
+      const prior = numberMetric(before.metrics, ["defectSeverity"]);
+      const next = numberMetric(after.metrics, ["defectSeverity"]);
       if (prior !== undefined && next === undefined) regressions.push("negative_regression");
       else if ((next ?? 0) > (prior ?? 0)) regressions.push("negative_regression");
     }

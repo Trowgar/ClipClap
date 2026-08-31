@@ -458,6 +458,63 @@ describe("feedback quality comparison policy", () => {
     ]);
   });
 
+  it("rejects alias-only metrics under the canonical evidence schema", () => {
+    const baseline = observation({
+      cases: observation().cases.map((entry) => {
+        if (entry.caseVersion !== "positive-0") return entry;
+        const { emptyResult: _canonical, ...metrics } = entry.metrics;
+        return { ...entry, metrics: { ...metrics, empty: 0 } };
+      }),
+    });
+    const candidate = { ...baseline, mode: "candidate" as const, observationId: "sha256:" + "4".repeat(64) };
+
+    expect(compareObservations(baseline, candidate, { ...policy, claim: "non_regression_only" }).reasons).toEqual([
+      "invalid_metric",
+    ]);
+  });
+
+  it("applies absolute render invariants to confirmed-negative render cases", () => {
+    const renderNegative = {
+      ...result("negative-0", "confirmed_negative", "render"),
+      metrics: {
+        defectSeverity: 2,
+        hardInvariantFailures: 0,
+        outputWidth: 1080,
+        outputHeight: 1920,
+        sar: 1,
+        blackTailSeconds: 1,
+        frozenTailSeconds: 0,
+        subtitleOverlap: 0,
+        requiredTextClipped: 0,
+        requiredSubjectClipped: 0,
+        focalFailures: 0,
+      },
+    };
+    const baseline = observation({
+      cases: observation().cases.map((entry) => (entry.caseVersion === "negative-0" ? renderNegative : entry)),
+    });
+    const candidate = {
+      ...baseline,
+      mode: "candidate" as const,
+      observationId: "sha256:" + "4".repeat(64),
+    };
+
+    expect(compareObservations(baseline, candidate, { ...policy, claim: "non_regression_only" })).toMatchObject({
+      verdict: "fail",
+      reasons: ["hard_invariant_regression"],
+    });
+  });
+
+  it("rejects an enumerable array index outside the canonical case range", () => {
+    const cases = [...observation().cases] as QualityCaseResult[] & Record<string, unknown>;
+    cases["4294967295"] = result("out-of-range", "exclude", "selection");
+    const malformed = observation({ cases });
+
+    expect(compareObservations(malformed, malformed, { ...policy, claim: "non_regression_only" }).reasons).toEqual([
+      "invalid_schema",
+    ]);
+  });
+
   it("passes equivalent observations from different valid commits", () => {
     const baseline = observation();
     const candidate = observation({
