@@ -270,6 +270,38 @@ function reservationBytes(expected: Readonly<Record<string, Uint8Array>>, token:
 type Reservation = Readonly<{ digest: string; token: string }>;
 type BundleResume = Readonly<{ status: "resume"; reservation: Reservation; temps: ReadonlyMap<string, string> }>;
 
+async function inspectTemp(
+  directory: FileHandle,
+  temporaryName: string,
+  finalName: string,
+  expected: Uint8Array,
+): Promise<boolean> {
+  let temporary: FileHandle | undefined;
+  let final: FileHandle | undefined;
+  try {
+    temporary = await open(anchoredPath(directory, temporaryName), constants.O_RDONLY | constants.O_NOFOLLOW);
+    const temporaryStat = await temporary.stat();
+    if (!temporaryStat.isFile() || (temporaryStat.nlink !== 1 && temporaryStat.nlink !== 2)) throw safeError("unsafe_path");
+    if (temporaryStat.nlink === 2) {
+      final = await open(anchoredPath(directory, finalName), constants.O_RDONLY | constants.O_NOFOLLOW);
+      const finalStat = await final.stat();
+      if (!finalStat.isFile() || finalStat.nlink !== 2 || finalStat.dev !== temporaryStat.dev || finalStat.ino !== temporaryStat.ino) throw safeError("integrity");
+      const [temporaryBytes, finalBytes] = await Promise.all([temporary.readFile(), final.readFile()]);
+      if (!bytesEqual(temporaryBytes, expected) || !bytesEqual(finalBytes, expected)) throw safeError("integrity");
+      return true;
+    }
+    const temporaryBytes = await temporary.readFile();
+    if (!bytesEqual(temporaryBytes, expected)) throw safeError("integrity");
+    return false;
+  } catch (error) {
+    if (error instanceof QualityStoreError) throw error;
+    throw safeError("integrity");
+  } finally {
+    await closeQuietly(final);
+    await closeQuietly(temporary);
+  }
+}
+
 async function readReservation(directory: FileHandle): Promise<Reservation> {
   const bytes = await readRegular(anchoredPath(directory, RESERVATION_MARKER));
   try {
@@ -377,8 +409,11 @@ async function existingBundle(
     for (const name of temporaryNames) {
       const match = /^\.([a-z0-9.-]+)\.tmp-([0-9a-f]{32})$/.exec(name);
       if (!match || match[2] !== reservation.token || !Object.prototype.hasOwnProperty.call(expected, match[1])) throw safeError("integrity");
-      const tempBytes = await readRegular(anchoredPath(directory, name));
-      if (!bytesEqual(tempBytes, expected[match[1]])) throw safeError("integrity");
+      const linked = await inspectTemp(directory, name, match[1], expected[match[1]]);
+      if (linked) {
+        await unlink(anchoredPath(directory, name));
+        continue;
+      }
       await restoreOwnedMode(anchoredPath(directory, name));
       ownedTemps.set(match[1], name);
     }
@@ -539,6 +574,7 @@ export async function publishBundle(input: PublishBundleInput, root = DEFAULT_QU
             }
           }
           if (orphan) {
+            await restoreOwnedMode(join(anchoredBundle, orphan));
             await link(join(anchoredBundle, orphan), join(anchoredBundle, name));
             await unlink(join(anchoredBundle, orphan));
             continue;

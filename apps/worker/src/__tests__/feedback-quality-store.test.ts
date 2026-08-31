@@ -285,6 +285,46 @@ describe("feedback quality private store", () => {
     await expect(readFile(foreignTemp, "utf8")).resolves.toBe("foreign");
   });
 
+  it("recovers the exact nlink=2 temp/final pair left by a link-before-unlink crash", async () => {
+    const root = await temporaryRoot();
+    const id = contentId("case", { recovery: "linked-temp" });
+    const input = bundle("case", id, { "case.json": "safe" });
+    await expect(publishBundle({ ...input, injectFault: (point) => {
+      if (point.scope === "bundle" && point.operation === "reserve" && point.timing === "after") throw new Error("injected");
+    } }, root)).rejects.toMatchObject({ code: "integrity" });
+    const reservation = JSON.parse(await readFile(join(root, "cases", id, ".reservation"), "utf8")) as { token: string };
+    const finalPath = join(root, "cases", id, "case.json");
+    const temporaryPath = join(root, "cases", id, `.case.json.tmp-${reservation.token}`);
+    await writeFile(finalPath, "safe", { mode: 0o600 });
+    await link(finalPath, temporaryPath);
+    expect((await lstat(finalPath)).nlink).toBe(2);
+    await expect(publishBundle(input, root)).resolves.toEqual({ status: "committed" });
+    expect((await lstat(finalPath)).nlink).toBe(1);
+    await expect(lstat(temporaryPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects an nlink=2 lookalike whose temp and final inodes differ", async () => {
+    const root = await temporaryRoot();
+    const id = contentId("case", { recovery: "foreign-linked-temp" });
+    const input = bundle("case", id, { "case.json": "safe" });
+    let foreignTemp = "";
+    await expect(publishBundle({ ...input, injectFault: async (point) => {
+      if (point.scope === "bundle" && point.operation === "reserve" && point.timing === "after") {
+        const reservation = JSON.parse(await readFile(join(root, "cases", id, ".reservation"), "utf8")) as { token: string };
+        const finalPath = join(root, "cases", id, "case.json");
+        foreignTemp = join(root, "cases", id, `.case.json.tmp-${reservation.token}`);
+        await writeFile(finalPath, "safe", { mode: 0o600 });
+        const external = join(root, "external-linked-temp");
+        await writeFile(external, "foreign", { mode: 0o640 });
+        await link(external, foreignTemp);
+        throw new Error("injected");
+      }
+    } }, root)).rejects.toMatchObject({ code: "integrity" });
+    await expect(publishBundle(input, root)).rejects.toMatchObject({ code: "integrity" });
+    expect(await readFile(foreignTemp, "utf8")).toBe("foreign");
+    expect(mode(await lstat(foreignTemp))).toBe(0o640);
+  });
+
   it.each([
     ["before", { scope: "ledger", operation: "rename", timing: "before" }],
     ["after", { scope: "ledger", operation: "rename", timing: "after" }],
