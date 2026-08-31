@@ -320,6 +320,109 @@ describe("feedback quality comparison policy", () => {
     });
   });
 
+  it("ignores excluded cases in comparison and improvement claims", () => {
+    const excluded = result("excluded", "exclude", "selection", {
+      metrics: { approvedMomentRetained: 0, emptyResult: 100 },
+    });
+    const baseline = observation({ cases: [...observation().cases, excluded] });
+    const candidate = observation({
+      mode: "candidate",
+      observationId: "sha256:" + "4".repeat(64),
+      cases: [
+        ...observation().cases,
+        { ...excluded, metrics: { approvedMomentRetained: 1, emptyResult: 0 } },
+        result("new-excluded", "exclude", "render", { metrics: { outputWidth: 1 } }),
+      ],
+    });
+
+    expect(compareObservations(baseline, candidate, { ...policy, claim: "non_regression_only" })).toMatchObject({
+      verdict: "pass",
+      reasons: [],
+    });
+    expect(compareObservations(baseline, candidate, policy)).toMatchObject({
+      verdict: "fail",
+      reasons: ["no_improvement"],
+    });
+  });
+
+  it("rejects conflicting aliases instead of silently choosing one", () => {
+    const baseline = observation({
+      cases: observation().cases.map((entry) =>
+        entry.caseVersion === "positive-0"
+          ? { ...entry, metrics: { ...entry.metrics, zeroClipFalseNegatives: 0 } }
+          : entry,
+      ),
+    });
+    const candidate = observation({
+      mode: "candidate",
+      observationId: "sha256:" + "4".repeat(64),
+      cases: baseline.cases.map((entry) =>
+        entry.caseVersion === "positive-0"
+          ? { ...entry, metrics: { ...entry.metrics, zeroClipFalseNegatives: 1 } }
+          : entry,
+      ),
+    });
+
+    expect(compareObservations(baseline, candidate, { ...policy, claim: "non_regression_only" }).reasons).toEqual([
+      "invalid_metric",
+    ]);
+  });
+
+  it("fails an absolute candidate hard invariant even when baseline is already bad", () => {
+    const baseline = observation({
+      cases: observation().cases.map((entry) =>
+        entry.caseVersion === "positive-0"
+          ? { ...entry, metrics: { ...entry.metrics, emptyResult: 1 } }
+          : entry,
+      ),
+    });
+    const candidate = observation({
+      mode: "candidate",
+      observationId: "sha256:" + "4".repeat(64),
+      cases: baseline.cases,
+    });
+
+    expect(compareObservations(baseline, candidate, { ...policy, claim: "non_regression_only" })).toMatchObject({
+      verdict: "fail",
+      reasons: ["hard_invariant_regression"],
+    });
+  });
+
+  it("fails instead of passing when the baseline itself has a hard invariant violation", () => {
+    const baseline = observation({
+      cases: observation().cases.map((entry) =>
+        entry.caseVersion === "positive-0"
+          ? { ...entry, metrics: { ...entry.metrics, emptyResult: 1 } }
+          : entry,
+      ),
+    });
+    const candidate = observation({
+      mode: "candidate",
+      observationId: "sha256:" + "4".repeat(64),
+      cases: baseline.cases.map((entry) =>
+        entry.caseVersion === "positive-0"
+          ? { ...entry, metrics: { ...entry.metrics, emptyResult: 0 } }
+          : entry,
+      ),
+    });
+
+    expect(compareObservations(baseline, candidate, { ...policy, claim: "non_regression_only" })).toMatchObject({
+      verdict: "fail",
+      reasons: ["hard_invariant_regression"],
+    });
+  });
+
+  it("requires canonical timestamps and a non-empty policy version", () => {
+    const baseline = observation({ createdAt: "2026-08-31T00:00:00Z" });
+    const candidate = observation({ mode: "candidate", observationId: "sha256:" + "4".repeat(64) });
+    expect(compareObservations(baseline, candidate, { ...policy, claim: "non_regression_only" }).reasons).toEqual([
+      "invalid_schema",
+    ]);
+    expect(compareObservations(observation(), candidate, { ...policy, policyVersion: "", claim: "non_regression_only" }).reasons).toEqual([
+      "invalid_schema",
+    ]);
+  });
+
   it("passes equivalent observations from different valid commits", () => {
     const baseline = observation();
     const candidate = observation({

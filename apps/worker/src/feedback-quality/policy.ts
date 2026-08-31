@@ -100,6 +100,22 @@ const MINIMUM_KEYS = new Set(["evalPositive", "evalNegative", "holdoutPositive",
 
 type MetricName = keyof QualityMetrics;
 type RequiredMetricGroups = readonly (readonly MetricName[])[];
+const METRIC_ALIAS_GROUPS: readonly (readonly MetricName[])[] = [
+  ["approvedMomentRetained", "approvedMoment"],
+  ["hardInvariantFailures", "invariantFailures"],
+  ["defectSeverity", "severity"],
+  ["emptyResult", "empty"],
+  ["zeroClipFalseNegative", "zeroClipFalseNegatives"],
+  ["boundaryErrors", "boundaryError"],
+  ["focalFailures", "focalFailure"],
+  ["subtitleOverlap", "newSubtitleOverlap"],
+  ["outputWidth", "geometryWidth"],
+  ["outputHeight", "geometryHeight"],
+  ["sar", "sampleAspectRatio"],
+  ["durationDrift", "durationDriftSeconds"],
+  ["blackTail", "blackTailSeconds", "blackTailSec"],
+  ["frozenTail", "frozenTailSeconds", "frozenTailSec"],
+];
 const REQUIRED_POSITIVE_METRICS: Record<Subsystem, RequiredMetricGroups> = {
   selection: [
     ["approvedMomentRetained"],
@@ -187,10 +203,20 @@ function validSha256(value: unknown): value is string {
   return typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value);
 }
 
+function validTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
+}
+
 function validMetrics(value: unknown): value is QualityMetrics {
   if (!isObject(value) || !ownDataKeys(value, METRIC_KEYS)) return false;
   const keys = Object.keys(value);
   if (keys.length === 0) return false;
+  for (const group of METRIC_ALIAS_GROUPS) {
+    const present = group.filter((name) => Object.prototype.hasOwnProperty.call(value, name));
+    if (present.length > 1 && present.some((name) => value[name] !== value[present[0]])) return false;
+  }
   for (const key of keys) {
     if (!finiteNonnegative(value[key])) return false;
   }
@@ -213,7 +239,7 @@ function observationReason(value: unknown, validateMetrics: boolean): MachineRea
     !validSha256(value.corpusSha256) ||
     !finiteNonnegative(value.runnerVersion) ||
     !Number.isInteger(value.runnerVersion) ||
-    typeof value.createdAt !== "string" ||
+    !validTimestamp(value.createdAt) ||
     !validCasesArray(value.cases)
   ) return "invalid_schema";
   if (validateMetrics && hasOwn(value, "metrics") && !validMetrics(value.metrics)) return "invalid_metric";
@@ -235,7 +261,7 @@ function observationReason(value: unknown, validateMetrics: boolean): MachineRea
       const required = REQUIRED_POSITIVE_METRICS[entry.subsystem];
       if (required.some((names) => !hasMetric(metrics, names))) return "invalid_metric";
     }
-    if (validateMetrics && entry.disposition === "confirmed_negative" && !hasMetric(entry.metrics as QualityMetrics, ["defectSeverity"])) return "invalid_metric";
+    if (validateMetrics && entry.disposition === "confirmed_negative" && !hasMetric(entry.metrics as QualityMetrics, ["defectSeverity", "severity"])) return "invalid_metric";
     if (versions.has(entry.caseVersion)) return "duplicate_case_version";
     versions.add(entry.caseVersion);
   }
@@ -247,6 +273,7 @@ function validPolicy(value: unknown): value is GatePolicy {
   if (
     value.schemaVersion !== 1 ||
     typeof value.policyVersion !== "string" ||
+    value.policyVersion.length === 0 ||
     (value.claim !== "improvement" && value.claim !== "non_regression_only") ||
     !isObject(value.minimum) ||
     !ownDataKeys(value.minimum, MINIMUM_KEYS) ||
@@ -316,18 +343,19 @@ function sameMetricKeys(left: QualityMetrics, right: QualityMetrics): boolean {
 }
 
 function aggregate(observation: QualityObservation): GateAggregate {
-  const positives = observation.cases.filter((entry) => entry.disposition === "positive");
-  const negatives = observation.cases.filter((entry) => entry.disposition === "confirmed_negative");
+  const active = observation.cases.filter((entry) => entry.disposition !== "exclude");
+  const positives = active.filter((entry) => entry.disposition === "positive");
+  const negatives = active.filter((entry) => entry.disposition === "confirmed_negative");
   return {
     positiveRetention: positives.filter((entry) =>
       (numberMetric(entry.metrics, ["approvedMomentRetained", "approvedMoment"]) ?? 0) > 0 &&
       (numberMetric(entry.metrics, ["approvedWindowOverlap"]) ?? 0) > 0,
     ).length,
     negativeDefects: negatives.filter((entry) => (numberMetric(entry.metrics, ["defectSeverity", "severity"]) ?? 0) > 0).length,
-    zeroClipFalseNegatives: sumMetric(observation.cases, ["zeroClipFalseNegatives", "zeroClipFalseNegative"]),
-    boundaryErrors: sumMetric(observation.cases, ["boundaryErrors", "boundaryError"]),
-    focalFailures: sumMetric(observation.cases, ["focalFailures", "focalFailure"]),
-    subtitleFailures: sumMetric(observation.cases, ["subtitleFailures", "subtitleFailure"]),
+    zeroClipFalseNegatives: sumMetric(active, ["zeroClipFalseNegatives", "zeroClipFalseNegative"]),
+    boundaryErrors: sumMetric(active, ["boundaryErrors", "boundaryError"]),
+    focalFailures: sumMetric(active, ["focalFailures", "focalFailure"]),
+    subtitleFailures: sumMetric(active, ["subtitleFailures", "subtitleFailure"]),
   };
 }
 
@@ -374,7 +402,7 @@ function metricImproved(before: QualityCaseResult, after: QualityCaseResult): bo
   return false;
 }
 
-function checkHardInvariants(before: QualityCaseResult, after: QualityCaseResult): boolean {
+function checkHardInvariants(before: QualityCaseResult, after: QualityCaseResult, includeBoundary: boolean = true): boolean {
   if (after.disposition !== "positive") return false;
   const priorMoment = numberMetric(before.metrics, ["approvedMomentRetained", "approvedMoment", "approvedWindowOverlap"]);
   const nextMoment = numberMetric(after.metrics, ["approvedMomentRetained", "approvedMoment", "approvedWindowOverlap"]);
@@ -396,21 +424,21 @@ function checkHardInvariants(before: QualityCaseResult, after: QualityCaseResult
   const sar = numberMetric(after.metrics, ["sar", "sampleAspectRatio"]);
   if ((width !== undefined && width !== 1080) || (height !== undefined && height !== 1920) || (sar !== undefined && sar !== 1)) return true;
 
-  const hardMetrics: readonly MetricName[][] = [
+  const hardMetrics: (readonly MetricName[])[] = [
     ["emptyResult", "empty"],
     ["zeroClipFalseNegative", "zeroClipFalseNegatives"],
-    ["boundaryErrors", "boundaryError"],
     ["blackTail", "blackTailSeconds", "blackTailSec"],
     ["frozenTail", "frozenTailSeconds", "frozenTailSec"],
     ["subtitleOverlap", "newSubtitleOverlap"],
     ["requiredTextClipped"],
     ["requiredSubjectClipped"],
   ];
+  if (includeBoundary) hardMetrics.unshift(["boundaryErrors", "boundaryError"]);
   for (const names of hardMetrics) {
     const prior = numberMetric(before.metrics, names);
     const next = numberMetric(after.metrics, names);
     if (prior !== undefined && next === undefined) return true;
-    if (next !== undefined && next > (prior ?? 0)) return true;
+    if (next !== undefined && (next > (prior ?? 0) || next > 0)) return true;
   }
   return false;
 }
@@ -451,12 +479,17 @@ export function compareObservations(
   if (identityReasons.length > 0) return failure(identityReasons);
 
   const minimum = minimumFor(policy, baseline.set);
-  const baselinePositive = baseline.cases.filter((entry) => entry.disposition === "positive").length;
-  const baselineNegative = baseline.cases.filter((entry) => entry.disposition === "confirmed_negative").length;
+  const baselineActive = baseline.cases.filter((entry) => entry.disposition !== "exclude");
+  const candidateActive = candidate.cases.filter((entry) => entry.disposition !== "exclude");
+  const baselinePositive = baselineActive.filter((entry) => entry.disposition === "positive").length;
+  const baselineNegative = baselineActive.filter((entry) => entry.disposition === "confirmed_negative").length;
   if (baselinePositive < minimum.positive || baselineNegative < minimum.negative) return failure(["insufficient_corpus"]);
+  if (baselineActive.some((entry) => entry.disposition === "positive" && checkHardInvariants(entry, entry, false))) {
+    return failure(["hard_invariant_regression"]);
+  }
 
-  const beforeByVersion = new Map(baseline.cases.map((entry) => [entry.caseVersion, entry]));
-  const afterByVersion = new Map(candidate.cases.map((entry) => [entry.caseVersion, entry]));
+  const beforeByVersion = new Map(baselineActive.map((entry) => [entry.caseVersion, entry]));
+  const afterByVersion = new Map(candidateActive.map((entry) => [entry.caseVersion, entry]));
   const regressions: MachineReason[] = [];
   let improvement = false;
   for (const [version, before] of beforeByVersion) {
