@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { sha256 } from "../feedback-learning/canonical";
 import {
   appendLabelEvent,
   contentId,
@@ -68,6 +69,31 @@ describe("feedback quality private store", () => {
     expect(Buffer.from(files.get("manifest.json")!)).toEqual(Buffer.from("manifest"));
     expect(mode(await lstat(join(root, "observations", id)))).toBe(0o700);
     expect(mode(await lstat(join(root, "observations", id, "manifest.json")))).toBe(0o600);
+  });
+
+  it("publishes a file-backed payload with the same logical digest as bytes", async () => {
+    const root = await temporaryRoot();
+    const content = Buffer.from("streamed payload");
+    const id = contentId("case", { fileBacked: true });
+    const spoolDir = await mkdtemp(join(tmpdir(), "clipclap-quality-spool-test-"));
+    roots.push(spoolDir);
+    const spool = join(spoolDir, "artifact.part");
+    await writeFile(spool, content, { mode: 0o600 });
+    const payload = { path: spool, size: content.byteLength, sha256: sha256(content) };
+    await expect(publishBundle(bundle("case", id, { "case.json": content.toString() }), root)).resolves.toEqual({ status: "committed" });
+    await expect(publishBundle({ kind: "case", id, files: { "case.json": payload } }, root)).resolves.toEqual({ status: "noop" });
+    const files = await readBundle("case", id, root);
+    expect(Buffer.from(files.get("case.json")!)).toEqual(content);
+  });
+
+  it("rejects a file-backed payload whose source digest was tampered", async () => {
+    const root = await temporaryRoot();
+    const spoolDir = await mkdtemp(join(tmpdir(), "clipclap-quality-spool-tampered-"));
+    roots.push(spoolDir);
+    const spool = join(spoolDir, "artifact.part");
+    await writeFile(spool, "actual", { mode: 0o600 });
+    const id = contentId("case", { tamperedFile: true });
+    await expect(publishBundle({ kind: "case", id, files: { "case.json": { path: spool, size: 6, sha256: sha256(Buffer.from("wrong")) } } }, root)).rejects.toMatchObject({ code: "integrity" });
   });
 
   it("rejects arbitrary and cross-kind bundle IDs before touching the filesystem", async () => {

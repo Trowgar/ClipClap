@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
+import { lstat } from "node:fs/promises";
 
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import { createPrismaQualityPromotionRepository } from "../feedback-quality/repository";
-import { MAX_EVIDENCE_BYTES, promoteFeedbackCase, retireFeedbackCase, type PromotionDecision, type PromotionDependencies } from "../feedback-quality/promote";
+import { MAX_EVIDENCE_BYTES, MAX_SOURCE_BYTES, promoteFeedbackCase, retireFeedbackCase, type PromotionDecision, type PromotionDependencies } from "../feedback-quality/promote";
 
 const sha = (digit: string) => `sha256:${digit.repeat(64)}` as const;
 const updatedAt = "2026-08-31T12:00:00.000Z";
@@ -75,7 +76,7 @@ describe("quality feedback promotion", () => {
     expect(dependencies.downloadFile).toHaveBeenCalledWith("evidence/clip.mp4", { method: "GET" });
     expect(dependencies.publishCaseAndLabel).toHaveBeenCalledWith(expect.objectContaining({
       label: expect.objectContaining({ disposition: "positive", verdict: "AS_IS" }),
-      files: expect.objectContaining({ "case.json": expect.any(Uint8Array), "transcript.json": expect.any(Uint8Array), "source-or-evidence.mp4": expect.any(Uint8Array) }),
+      files: expect.objectContaining({ "case.json": expect.any(Uint8Array), "transcript.json": expect.any(Uint8Array), "source-or-evidence.mp4": expect.objectContaining({ path: expect.any(String), size: 3, sha256: expect.stringMatching(/^sha256:/) }) }),
     }), "/tmp/quality", expect.any(Function));
   });
 
@@ -204,8 +205,10 @@ describe("quality feedback promotion", () => {
 
   it("cancels an oversized response stream at the byte cap", async () => {
     const cancel = vi.fn(async () => undefined);
+    const oversizedChunk = new Uint8Array(1);
+    Object.defineProperty(oversizedChunk, "byteLength", { value: MAX_EVIDENCE_BYTES + 1 });
     const oversized = new ReadableStream<Uint8Array>({
-      start(controller) { controller.enqueue(new Uint8Array(MAX_EVIDENCE_BYTES + 1)); },
+      start(controller) { controller.enqueue(oversizedChunk); },
       cancel,
     });
     const dependencies = deps({ downloadFile: vi.fn(async () => oversized) });
@@ -216,6 +219,27 @@ describe("quality feedback promotion", () => {
   it("rejects an oversized Buffer before copying it", async () => {
     const dependencies = deps({ downloadFile: vi.fn(async () => Buffer.alloc(MAX_EVIDENCE_BYTES + 1)) });
     await expect(promoteFeedbackCase(decision(), dependencies)).rejects.toMatchObject({ code: "artifact_too_large" });
+  });
+
+  it("bounds a source stream independently of the evidence stream", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const sourceChunk = new Uint8Array(1);
+    Object.defineProperty(sourceChunk, "byteLength", { value: MAX_SOURCE_BYTES + 1 });
+    const sourceStream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(sourceChunk); }, cancel });
+    const dependencies = deps({ downloadFile: vi.fn(async (key: string) => key.startsWith("artifacts/") ? sourceStream : new Uint8Array([1])) });
+    await expect(promoteFeedbackCase(decision({ subsystem: "framing", expected: { approvedMoment: true, completeBoundary: true } }), dependencies)).rejects.toMatchObject({ code: "artifact_too_large" });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("cleans the private spool after successful and failed publication", async () => {
+    let successPath = "";
+    const success = deps({ publishCaseAndLabel: vi.fn(async (input, _root, guard) => { successPath = (input.files["source-or-evidence.mp4"] as { path: string }).path; await guard?.(); return { status: "committed" as const }; }) });
+    await promoteFeedbackCase(decision(), success);
+    await expect(lstat(successPath)).rejects.toMatchObject({ code: "ENOENT" });
+    let failurePath = "";
+    const failure = deps({ publishCaseAndLabel: vi.fn(async (input) => { failurePath = (input.files["source-or-evidence.mp4"] as { path: string }).path; throw new Error("publish failed"); }) });
+    await expect(promoteFeedbackCase(decision(), failure)).rejects.toThrow("publish failed");
+    await expect(lstat(failurePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("materializes a reference-only non-render case without downloading a source artifact", async () => {

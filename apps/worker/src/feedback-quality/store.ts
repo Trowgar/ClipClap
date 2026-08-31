@@ -1,5 +1,5 @@
 import { constants, type Dirent } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   lstat,
   link,
@@ -41,6 +41,15 @@ export type QualityLabelEvent = Readonly<{
   [key: string]: unknown;
 }>;
 
+/** A private, already-spooled artifact. It is copied into the owned corpus;
+ * the external path is never linked into the corpus. */
+export type FileBackedPayload = Readonly<{
+  path: string;
+  size: number;
+  sha256: `sha256:${string}`;
+}>;
+export type BundleFilePayload = Uint8Array | FileBackedPayload;
+
 export type QualityStoreFault = Readonly<{
   scope: "ledger" | "bundle";
   operation: "reserve" | "write" | "file_fsync" | "close" | "temp_dir_fsync" | "rename" | "parent_fsync";
@@ -62,7 +71,7 @@ export type AppendLabelOptions = Readonly<{
 export type PublishBundleInput = Readonly<{
   kind: BundleKind;
   id: string;
-  files: Readonly<Record<string, Uint8Array>>;
+  files: Readonly<Record<string, BundleFilePayload>>;
   injectFault?: QualityStoreFaultInjector;
 }>;
 
@@ -250,6 +259,15 @@ async function writeAll(handle: FileHandle, bytes: Uint8Array): Promise<void> {
   }
 }
 
+async function writeAllAt(handle: FileHandle, bytes: Uint8Array, position: number): Promise<void> {
+  let offset = 0;
+  while (offset < bytes.byteLength) {
+    const result = await handle.write(bytes, offset, bytes.byteLength - offset, position + offset);
+    if (result.bytesWritten <= 0) throw safeError("integrity");
+    offset += result.bytesWritten;
+  }
+}
+
 async function fault(inject: PublishBundleInput["injectFault"], point: QualityStoreFault): Promise<void> {
   try { await inject?.(point); }
   catch { throw safeError("integrity"); }
@@ -259,14 +277,56 @@ function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
   return left.byteLength === right.byteLength && left.every((value, index) => value === right[index]);
 }
 
-function bundleDigest(expected: Readonly<Record<string, Uint8Array>>): string {
-  const captured: Record<string, string> = Object.create(null);
-  for (const name of Object.keys(expected).sort()) captured[name] = Buffer.from(expected[name]).toString("base64");
+type PreparedFile = Readonly<{ bytes?: Uint8Array; file?: FileBackedPayload; size: number; sha256: string }>;
+type PreparedFiles = Readonly<Record<string, PreparedFile>>;
+
+function payloadMetadata(value: BundleFilePayload): PreparedFile {
+  if (value instanceof Uint8Array) {
+    const bytes = new Uint8Array(value);
+    return { bytes, size: bytes.byteLength, sha256: sha256(Buffer.from(bytes)) };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw safeError("invalid_input");
+  const keys = Object.keys(value).sort();
+  if (keys.join(",") !== "path,sha256,size" || typeof value.path !== "string" || value.path.length === 0 || value.path.includes("\0") ||
+      !Number.isSafeInteger(value.size) || value.size < 0 || typeof value.sha256 !== "string" || !/^sha256:[0-9a-f]{64}$/.test(value.sha256)) throw safeError("invalid_input");
+  return { file: value, size: value.size, sha256: value.sha256 };
+}
+
+function bundleDigest(expected: PreparedFiles): string {
+  const captured: Record<string, { size: number; sha256: string }> = Object.create(null);
+  for (const name of Object.keys(expected).sort()) captured[name] = { size: expected[name].size, sha256: expected[name].sha256 };
   return sha256(canonicalJson(captured));
 }
 
-function reservationBytes(expected: Readonly<Record<string, Uint8Array>>, token: string): Buffer {
+function reservationBytes(expected: PreparedFiles, token: string): Buffer {
   return Buffer.from(`${canonicalJson({ schemaVersion: 1, digest: bundleDigest(expected), token })}\n`, "utf8");
+}
+
+async function payloadMatches(path: string, expected: PreparedFile, allowLinked = false): Promise<boolean> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const initial = await handle.stat();
+    if (!initial.isFile() || (initial.nlink !== 1 && !(allowLinked && initial.nlink === 2))) throw safeError("unsafe_path");
+    if (initial.size !== expected.size) return false;
+    const digest = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let size = 0;
+    for (;;) {
+      const read = await handle.read(buffer, 0, buffer.byteLength, null);
+      if (read.bytesRead === 0) break;
+      size += read.bytesRead;
+      if (size > expected.size) return false;
+      digest.update(buffer.subarray(0, read.bytesRead));
+    }
+    const final = await handle.stat();
+    if (!final.isFile() || (final.nlink !== 1 && !(allowLinked && final.nlink === 2)) || final.size !== size) return false;
+    return size === expected.size && `sha256:${digest.digest("hex")}` === expected.sha256;
+  } catch (error) {
+    if (codeOf(error) === "ENOENT") return false;
+    if (error instanceof QualityStoreError) throw error;
+    throw safeError("integrity");
+  } finally { await closeQuietly(handle); }
 }
 
 type Reservation = Readonly<{ digest: string; token: string }>;
@@ -276,24 +336,23 @@ async function inspectTemp(
   directory: FileHandle,
   temporaryName: string,
   finalName: string,
-  expected: Uint8Array,
+  expected: PreparedFile,
 ): Promise<boolean> {
   let temporary: FileHandle | undefined;
   let final: FileHandle | undefined;
   try {
-    temporary = await open(anchoredPath(directory, temporaryName), constants.O_RDONLY | constants.O_NOFOLLOW);
+    temporary = await open(anchoredPath(directory, temporaryName), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const temporaryStat = await temporary.stat();
     if (!temporaryStat.isFile() || (temporaryStat.nlink !== 1 && temporaryStat.nlink !== 2)) throw safeError("unsafe_path");
     if (temporaryStat.nlink === 2) {
-      final = await open(anchoredPath(directory, finalName), constants.O_RDONLY | constants.O_NOFOLLOW);
+      final = await open(anchoredPath(directory, finalName), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       const finalStat = await final.stat();
       if (!finalStat.isFile() || finalStat.nlink !== 2 || finalStat.dev !== temporaryStat.dev || finalStat.ino !== temporaryStat.ino) throw safeError("integrity");
-      const [temporaryBytes, finalBytes] = await Promise.all([temporary.readFile(), final.readFile()]);
-      if (!bytesEqual(temporaryBytes, expected) || !bytesEqual(finalBytes, expected)) throw safeError("integrity");
+      const [temporaryMatch, finalMatch] = await Promise.all([payloadMatches(anchoredPath(directory, temporaryName), expected, true), payloadMatches(anchoredPath(directory, finalName), expected, true)]);
+      if (!temporaryMatch || !finalMatch) throw safeError("integrity");
       return true;
     }
-    const temporaryBytes = await temporary.readFile();
-    if (!bytesEqual(temporaryBytes, expected)) throw safeError("integrity");
+    if (!await payloadMatches(anchoredPath(directory, temporaryName), expected, true)) throw safeError("integrity");
     return false;
   } catch (error) {
     if (error instanceof QualityStoreError) throw error;
@@ -377,7 +436,7 @@ async function entries(handle: FileHandle): Promise<Dirent[]> {
 async function existingBundle(
   parent: FileHandle,
   id: string,
-  expected: Readonly<Record<string, Uint8Array>>,
+  expected: PreparedFiles,
 ): Promise<"missing" | "noop" | BundleResume> {
   const path = anchoredPath(parent, id);
   let current;
@@ -422,10 +481,7 @@ async function existingBundle(
     for (const name of expectedNames) {
       if (!names.includes(name)) continue;
       validateFileName(name);
-      let actual: Uint8Array;
-      try { actual = await readRegular(anchoredPath(directory, name)); }
-      catch (error) { if (error instanceof QualityStoreError) throw error; throw safeError("unsafe_path"); }
-      if (!bytesEqual(actual, expected[name])) throw safeError("integrity");
+      if (!await payloadMatches(anchoredPath(directory, name), expected[name])) throw safeError("integrity");
     }
     await directory.chmod(DIRECTORY_MODE);
     for (const name of expectedNames) {
@@ -460,7 +516,7 @@ async function restoreOwnedMode(path: string): Promise<void> {
 async function writeBundleFile(
   directory: string,
   name: string,
-  bytes: Uint8Array,
+  payload: PreparedFile,
   inject: PublishBundleInput["injectFault"],
   onCreated?: () => void,
 ): Promise<void> {
@@ -473,7 +529,29 @@ async function writeBundleFile(
     if (!stats.isFile() || stats.nlink !== 1) throw safeError("unsafe_path");
     await handle.chmod(FILE_MODE);
     await fault(inject, { scope: "bundle", operation: "write", timing: "before", file: name });
-    await writeAll(handle, bytes);
+    if (payload.bytes) {
+      await writeAll(handle, payload.bytes);
+    } else if (payload.file) {
+      let source: FileHandle | undefined;
+      try {
+        source = await open(payload.file.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+        const sourceStat = await source.stat();
+        if (!sourceStat.isFile() || sourceStat.nlink !== 1 || (sourceStat.mode & 0o7777) !== FILE_MODE || sourceStat.size !== payload.file.size) throw safeError("integrity");
+        const digest = createHash("sha256");
+        const buffer = Buffer.allocUnsafe(64 * 1024);
+        let size = 0;
+        for (;;) {
+          const read = await source.read(buffer, 0, buffer.byteLength, null);
+          if (read.bytesRead === 0) break;
+          size += read.bytesRead;
+          if (size > payload.file.size) throw safeError("integrity");
+          digest.update(buffer.subarray(0, read.bytesRead));
+          await writeAllAt(handle, buffer.subarray(0, read.bytesRead), size - read.bytesRead);
+        }
+        const finalStat = await source.stat();
+        if (finalStat.size !== size || size !== payload.file.size || `sha256:${digest.digest("hex")}` !== payload.file.sha256) throw safeError("integrity");
+      } finally { await closeQuietly(source); }
+    } else throw safeError("invalid_input");
     await fault(inject, { scope: "bundle", operation: "write", timing: "after", file: name });
     await fault(inject, { scope: "bundle", operation: "file_fsync", timing: "before", file: name });
     await handle.sync();
@@ -485,22 +563,22 @@ async function writeBundleFile(
   } finally { if (!closed) await closeQuietly(handle); }
 }
 
-function copyFiles(input: PublishBundleInput): Readonly<Record<string, Uint8Array>> {
+function copyFiles(input: PublishBundleInput): PreparedFiles {
   validateKind(input.kind);
   validateBundleId(input.kind, input.id);
   if (!input.files || typeof input.files !== "object" || Array.isArray(input.files)) throw safeError("invalid_input");
-  const result: Record<string, Uint8Array> = Object.create(null);
+  const result: Record<string, PreparedFile> = Object.create(null);
   for (const name of Object.keys(input.files)) {
     validateFileName(name);
     const descriptor = Object.getOwnPropertyDescriptor(input.files, name);
-    if (!descriptor?.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, "value") || !(descriptor.value instanceof Uint8Array)) throw safeError("invalid_input");
-    result[name] = new Uint8Array(descriptor.value);
+    if (!descriptor?.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, "value")) throw safeError("invalid_input");
+    result[name] = payloadMetadata(descriptor.value as BundleFilePayload);
   }
   if (Object.keys(result).length === 0) throw safeError("invalid_input");
   return Object.freeze(result);
 }
 
-async function verifyBundle(root: string, kind: BundleKind, id: string, expected: Readonly<Record<string, Uint8Array>>): Promise<boolean> {
+async function verifyBundle(root: string, kind: BundleKind, id: string, expected: PreparedFiles): Promise<boolean> {
   let tree: Awaited<ReturnType<typeof openTree>> | undefined;
   let directory: FileHandle | undefined;
   try {
@@ -514,7 +592,7 @@ async function verifyBundle(root: string, kind: BundleKind, id: string, expected
       const reservation = await readReservation(directory);
       if (reservation.digest !== bundleDigest(expected)) return false;
     } catch { return false; }
-    for (const name of expectedNames) if (name !== COMMIT_MARKER && name !== RESERVATION_MARKER && !bytesEqual(await readRegular(anchoredPath(directory, name)), expected[name])) return false;
+    for (const name of expectedNames) if (name !== COMMIT_MARKER && name !== RESERVATION_MARKER && !await payloadMatches(anchoredPath(directory, name), expected[name])) return false;
     return true;
   } catch { return false; }
   finally { await closeQuietly(directory); if (tree) await closeTree(tree); }
@@ -558,7 +636,7 @@ async function publishBundleLocked(input: PublishBundleInput, root: string): Pro
         if (!reservation) {
           const token = randomBytes(16).toString("hex");
           reservation = { digest: bundleDigest(files), token };
-          await writeBundleFile(anchoredBundle, RESERVATION_MARKER, reservationBytes(files, token), input.injectFault);
+          await writeBundleFile(anchoredBundle, RESERVATION_MARKER, payloadMetadata(reservationBytes(files, token)), input.injectFault);
           await bundleDirectory.sync();
           reservationDurable = true;
           await fault(input.injectFault, { scope: "bundle", operation: "reserve", timing: "after" });
@@ -567,8 +645,7 @@ async function publishBundleLocked(input: PublishBundleInput, root: string): Pro
           const orphan = resumeInfo?.temps.get(name);
           if (resume) {
             try {
-              const existing = await readRegular(join(anchoredBundle, name));
-              if (bytesEqual(existing, files[name])) {
+              if (await payloadMatches(join(anchoredBundle, name), files[name])) {
                 if (orphan) await unlink(join(anchoredBundle, orphan));
                 continue;
               }
@@ -594,7 +671,7 @@ async function publishBundleLocked(input: PublishBundleInput, root: string): Pro
         await fault(input.injectFault, { scope: "bundle", operation: "temp_dir_fsync", timing: "after" });
         await fault(input.injectFault, { scope: "bundle", operation: "rename", timing: "before" });
         commitPossible = true;
-        await writeBundleFile(anchoredBundle, COMMIT_MARKER, COMMIT_MARKER_BYTES, input.injectFault);
+          await writeBundleFile(anchoredBundle, COMMIT_MARKER, payloadMetadata(COMMIT_MARKER_BYTES), input.injectFault);
         await bundleDirectory.sync();
         await fault(input.injectFault, { scope: "bundle", operation: "rename", timing: "after" });
         await fault(input.injectFault, { scope: "bundle", operation: "parent_fsync", timing: "before" });
@@ -904,8 +981,8 @@ export async function readBundle(kind: BundleKind, id: string, root = DEFAULT_QU
     }
     if (!bytesEqual(await readRegular(anchoredPath(directory, COMMIT_MARKER)), COMMIT_MARKER_BYTES)) throw safeError("integrity");
     if (result.size === 0) throw safeError("integrity");
-    const actualFiles: Record<string, Uint8Array> = Object.create(null);
-    for (const [name, bytes] of result) actualFiles[name] = bytes;
+    const actualFiles: Record<string, PreparedFile> = Object.create(null);
+    for (const [name, bytes] of result) actualFiles[name] = payloadMetadata(bytes);
     if (reservation.digest !== bundleDigest(actualFiles)) throw safeError("integrity");
     await directory.chmod(DIRECTORY_MODE);
     await restoreOwnedMode(anchoredPath(directory, RESERVATION_MARKER));

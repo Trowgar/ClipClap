@@ -1,7 +1,11 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { constants } from "node:fs";
+import { chmod, mkdtemp, open, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
-import { appendLabelEvent, DEFAULT_QUALITY_ROOT, publishCaseAndLabel, qualityDestination, qualityRetirementTarget, type CommitResult } from "./store";
+import { appendLabelEvent, DEFAULT_QUALITY_ROOT, publishCaseAndLabel, qualityDestination, qualityRetirementTarget, type BundleFilePayload, type CommitResult, type FileBackedPayload } from "./store";
 import type { FeedbackProjection } from "../feedback-learning/types";
 import type { TargetSet, Subsystem } from "./types";
 
@@ -11,8 +15,9 @@ export type EvidenceStatus = "permanent" | "missing";
 
 // Immutable ingestion ceilings: enough for normal review artifacts, bounded
 // before any body is copied into memory.
-export const MAX_EVIDENCE_BYTES = 32 * 1024 * 1024;
-export const MAX_SOURCE_BYTES = 512 * 1024 * 1024;
+export const MAX_EVIDENCE_BYTES = 256 * 1024 * 1024;
+export const MAX_SOURCE_BYTES = 2 * 1024 * 1024 * 1024;
+const SPOOL_FILE_MODE = 0o600;
 
 export interface V1ApprovalIdentity {
   eventId: string;
@@ -108,7 +113,7 @@ export interface MaterializedCase {
 }
 
 export interface PromotionPublishInput {
-  files: Readonly<Record<string, Uint8Array>>;
+  files: Readonly<Record<string, BundleFilePayload>>;
   label: { eventId: string; [key: string]: unknown };
 }
 
@@ -217,54 +222,69 @@ function assertInputs(value: PromotionDecision, snapshot: PromotionSnapshot): vo
   }
   if (!snapshot.feedback.evidenceKey || value.evidence !== "permanent") throw new QualityPromotionError("evidence_missing");
 }
-async function bytesFrom(value: Uint8Array | Buffer | ReadableStream<Uint8Array>, cap: number): Promise<Uint8Array> {
-  if (value instanceof Buffer) {
-    if (value.byteLength > cap) throw new QualityPromotionError("artifact_too_large");
-    return new Uint8Array(value);
-  }
-  if (value instanceof Uint8Array) {
-    if (value.byteLength > cap) throw new QualityPromotionError("artifact_too_large");
-    return new Uint8Array(value);
-  }
-  const reader = value.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  let cancelled = false;
-  const cancel = async (): Promise<void> => {
-    if (cancelled) return;
-    cancelled = true;
-    await reader.cancel();
-  };
-  try {
-    for (;;) {
-      const item = await reader.read();
-      if (item.done) break;
-      if (!(item.value instanceof Uint8Array)) throw new QualityPromotionError("inputs_missing");
-      total += item.value.byteLength;
-      if (!Number.isSafeInteger(total) || total > cap) {
-        await cancel().catch(() => undefined);
-        throw new QualityPromotionError("artifact_too_large");
-      }
-      chunks.push(new Uint8Array(item.value));
-    }
-  } catch (error) {
-    if (!cancelled) await cancel().catch(() => undefined);
-    throw error;
-  } finally {
-    reader.releaseLock();
-  }
-  const result = new Uint8Array(total);
+type SpoolArtifact = FileBackedPayload;
+
+async function writeAt(handle: Awaited<ReturnType<typeof open>>, bytes: Uint8Array, position: number): Promise<void> {
   let offset = 0;
-  for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength; }
-  return result;
+  while (offset < bytes.byteLength) {
+    const result = await handle.write(bytes, offset, bytes.byteLength - offset, position + offset);
+    if (result.bytesWritten <= 0) throw new QualityPromotionError("publication_failed");
+    offset += result.bytesWritten;
+  }
 }
 
-async function downloadBounded(dependencies: PromotionDependencies, key: string, cap: number): Promise<Uint8Array> {
+async function spoolArtifact(value: Uint8Array | Buffer | ReadableStream<Uint8Array>, cap: number, spoolDir: string): Promise<SpoolArtifact> {
+  const path = join(spoolDir, `${randomBytes(16).toString("hex")}.part`);
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  let complete = false;
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let cancelled = false;
+  try {
+    handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY, SPOOL_FILE_MODE);
+    await handle.chmod(SPOOL_FILE_MODE);
+    const digest = createHash("sha256");
+    let size = 0;
+    const append = async (chunk: Uint8Array): Promise<void> => {
+      size += chunk.byteLength;
+      if (!Number.isSafeInteger(size) || size > cap) throw new QualityPromotionError("artifact_too_large");
+      digest.update(Buffer.from(chunk));
+      await writeAt(handle!, chunk, size - chunk.byteLength);
+    };
+    if (value instanceof Buffer || value instanceof Uint8Array) {
+      if (value.byteLength > cap) throw new QualityPromotionError("artifact_too_large");
+      await append(value);
+    } else {
+      reader = value.getReader();
+      for (;;) {
+        const item = await reader.read();
+        if (item.done) break;
+        if (!(item.value instanceof Uint8Array)) throw new QualityPromotionError("inputs_missing");
+        try { await append(item.value); }
+        catch (error) {
+          if (!cancelled) { cancelled = true; await reader.cancel().catch(() => undefined); }
+          throw error;
+        }
+      }
+    }
+    await handle.sync();
+    const stats = await handle.stat();
+    const hash = `sha256:${digest.digest("hex")}` as `sha256:${string}`;
+    if (!stats.isFile() || stats.nlink !== 1 || (stats.mode & 0o7777) !== SPOOL_FILE_MODE || stats.size !== size) throw new QualityPromotionError("publication_failed");
+    complete = true;
+    return { path, size, sha256: hash };
+  } finally {
+    reader?.releaseLock();
+    try { await handle?.close(); } catch { /* cleanup below */ }
+    if (!complete) await rm(path, { force: true }).catch(() => undefined);
+  }
+}
+
+async function downloadBounded(dependencies: PromotionDependencies, key: string, cap: number, spoolDir: string): Promise<SpoolArtifact> {
   if (dependencies.getObjectSize) {
     const size = await dependencies.getObjectSize(key);
     if (size === null || !Number.isSafeInteger(size) || size < 0 || size > cap) throw new QualityPromotionError("artifact_too_large");
   }
-  return bytesFrom(await dependencies.downloadFile(key, { method: "GET" }), cap);
+  return spoolArtifact(await dependencies.downloadFile(key, { method: "GET" }), cap, spoolDir);
 }
 function nowIso(dependencies: PromotionDependencies): string { const date = dependencies.now?.() ?? new Date(); const value = date.toISOString(); if (!validDate(value)) throw new QualityPromotionError("publication_failed"); return value; }
 
@@ -296,24 +316,30 @@ export async function promoteFeedbackCase(rawDecision: PromotionDecision, depend
     }
     assertClassification(value, snapshot);
     assertInputs(value, snapshot);
-    const evidence = await downloadBounded(dependencies, snapshot.feedback.evidenceKey!, MAX_EVIDENCE_BYTES);
-    if (evidence.byteLength === 0) throw new QualityPromotionError("evidence_missing");
-    const needsTranscript = value.subsystem === "selection" || value.subsystem === "boundary";
-    const transcript = needsTranscript ? Buffer.from(canonicalJson(snapshot.job.transcriptJson)) : null;
-    const sourceKey = !needsTranscript && !value.expected.referenceOnly ? (snapshot.job.normalizedArtifactKey ?? snapshot.job.sourceArtifactKey) : null;
-    const source = sourceKey ? await downloadBounded(dependencies, sourceKey, MAX_SOURCE_BYTES) : null;
-    if (sourceKey && (!source || source.byteLength === 0)) throw new QualityPromotionError("inputs_missing");
-    const inputs = { transcriptSha256: transcript ? sha256(transcript) : null, evidenceSha256: sha256(Buffer.from(evidence)), sourceSha256: source ? sha256(Buffer.from(source)) : null, sourceDurationSec: snapshot.job.sourceDurationSec };
-    const caseBody = { schemaVersion: 1 as const, feedbackId: value.feedbackId, clipId: value.clipId, jobId: value.jobId, userId: value.userId, feedbackUpdatedAt: value.feedbackUpdatedAt, snapshotSha256: value.snapshotSha256, candidateVersion: value.candidateVersion, set: value.set, disposition: value.disposition, verdict: value.verdict, subsystem: value.subsystem, confidence: value.confidence, expected: value.expected, inputs };
-    const caseVersion = `case:${sha256(canonicalJson(caseBody))}`;
-    const materialized: MaterializedCase = { ...caseBody, caseVersion };
-    const label = { schemaVersion: 1, eventId: value.eventId, action: "label", occurredAt: nowIso(dependencies), feedbackId: value.feedbackId, feedbackUpdatedAt: value.feedbackUpdatedAt, snapshotSha256: value.snapshotSha256, candidateVersion: value.candidateVersion, caseVersion, set: value.set, disposition: value.disposition, verdict: value.verdict, subsystem: value.subsystem, confidence: value.confidence, expected: value.expected };
-    const publish = dependencies.publishCaseAndLabel ?? ((input, root, beforeLabel) => publishCaseAndLabel({ kind: "case", id: caseVersion, files: input.files }, input.label, root, beforeLabel));
-    const files: Record<string, Uint8Array> = { "case.json": Buffer.from(`${canonicalJson(materialized)}\n`), "source-or-evidence.mp4": source ?? evidence };
-    if (transcript) files["transcript.json"] = new Uint8Array(transcript);
-    const result = await publish({ files, label }, root, () => destinationGuard(value.feedbackId, value.set));
-    if (result.status === "indeterminate") throw new QualityPromotionError("publication_failed");
-    return { status: result.status, eventId: value.eventId, caseVersion };
+    const spoolDir = await mkdtemp(join(tmpdir(), "clipclap-quality-spool-"));
+    try {
+      await chmod(spoolDir, 0o700);
+      const evidence = await downloadBounded(dependencies, snapshot.feedback.evidenceKey!, MAX_EVIDENCE_BYTES, spoolDir);
+      if (evidence.size === 0) throw new QualityPromotionError("evidence_missing");
+      const needsTranscript = value.subsystem === "selection" || value.subsystem === "boundary";
+      const transcript = needsTranscript ? Buffer.from(canonicalJson(snapshot.job.transcriptJson)) : null;
+      const sourceKey = !needsTranscript && !value.expected.referenceOnly ? (snapshot.job.normalizedArtifactKey ?? snapshot.job.sourceArtifactKey) : null;
+      const source = sourceKey ? await downloadBounded(dependencies, sourceKey, MAX_SOURCE_BYTES, spoolDir) : null;
+      if (sourceKey && (!source || source.size === 0)) throw new QualityPromotionError("inputs_missing");
+      const inputs = { transcriptSha256: transcript ? sha256(transcript) : null, evidenceSha256: evidence.sha256, sourceSha256: source ? source.sha256 : null, sourceDurationSec: snapshot.job.sourceDurationSec };
+      const caseBody = { schemaVersion: 1 as const, feedbackId: value.feedbackId, clipId: value.clipId, jobId: value.jobId, userId: value.userId, feedbackUpdatedAt: value.feedbackUpdatedAt, snapshotSha256: value.snapshotSha256, candidateVersion: value.candidateVersion, set: value.set, disposition: value.disposition, verdict: value.verdict, subsystem: value.subsystem, confidence: value.confidence, expected: value.expected, inputs };
+      const caseVersion = `case:${sha256(canonicalJson(caseBody))}`;
+      const materialized: MaterializedCase = { ...caseBody, caseVersion };
+      const label = { schemaVersion: 1, eventId: value.eventId, action: "label", occurredAt: nowIso(dependencies), feedbackId: value.feedbackId, feedbackUpdatedAt: value.feedbackUpdatedAt, snapshotSha256: value.snapshotSha256, candidateVersion: value.candidateVersion, caseVersion, set: value.set, disposition: value.disposition, verdict: value.verdict, subsystem: value.subsystem, confidence: value.confidence, expected: value.expected };
+      const publish = dependencies.publishCaseAndLabel ?? ((input, root, beforeLabel) => publishCaseAndLabel({ kind: "case", id: caseVersion, files: input.files }, input.label, root, beforeLabel));
+      const files: Record<string, BundleFilePayload> = { "case.json": Buffer.from(`${canonicalJson(materialized)}\n`), "source-or-evidence.mp4": source ?? evidence };
+      if (transcript) files["transcript.json"] = new Uint8Array(transcript);
+      const result = await publish({ files, label }, root, () => destinationGuard(value.feedbackId, value.set));
+      if (result.status === "indeterminate") throw new QualityPromotionError("publication_failed");
+      return { status: result.status, eventId: value.eventId, caseVersion };
+    } finally {
+      await rm(spoolDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   };
   if (value.disposition === "positive") {
     if (!dependencies.withV1AuthorityLock) throw new QualityPromotionError("approval_missing");
