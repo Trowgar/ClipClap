@@ -7,6 +7,7 @@ import {
   open,
   readdir,
   rename,
+  rm,
   unlink,
   type FileHandle,
 } from "node:fs/promises";
@@ -18,6 +19,7 @@ import { withCorpusLock, type CorpusLockError } from "../feedback-learning/lock"
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 const COMMIT_MARKER = ".committed";
+const RESERVATION_MARKER = ".reservation";
 const COMMIT_MARKER_BYTES = Buffer.from("clipclap-feedback-quality-committed-v1\n", "utf8");
 const BUNDLE_NAMES = ["case", "observation", "decision"] as const;
 const PRIVATE_FILE_NAMES = new Set(["case.json", "transcript.json", "source-or-evidence.mp4", "manifest.json", "results.jsonl", "decision.json", "report.md"]);
@@ -255,6 +257,34 @@ function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
   return left.byteLength === right.byteLength && left.every((value, index) => value === right[index]);
 }
 
+function bundleDigest(expected: Readonly<Record<string, Uint8Array>>): string {
+  const captured: Record<string, string> = Object.create(null);
+  for (const name of Object.keys(expected).sort()) captured[name] = Buffer.from(expected[name]).toString("base64");
+  return sha256(canonicalJson(captured));
+}
+
+function reservationBytes(expected: Readonly<Record<string, Uint8Array>>, token: string): Buffer {
+  return Buffer.from(`${canonicalJson({ schemaVersion: 1, digest: bundleDigest(expected), token })}\n`, "utf8");
+}
+
+type Reservation = Readonly<{ digest: string; token: string }>;
+type BundleResume = Readonly<{ status: "resume"; reservation: Reservation; temps: ReadonlyMap<string, string> }>;
+
+async function readReservation(directory: FileHandle): Promise<Reservation> {
+  const bytes = await readRegular(anchoredPath(directory, RESERVATION_MARKER));
+  try {
+    const parsed: unknown = JSON.parse(Buffer.from(bytes).toString("utf8"));
+    if (!parsed || typeof parsed !== "object" || Object.keys(parsed).sort().join(",") !== "digest,schemaVersion,token") throw safeError("integrity");
+    const value = parsed as { schemaVersion?: unknown; digest?: unknown; token?: unknown };
+    if (value.schemaVersion !== 1 || typeof value.digest !== "string" || !/^sha256:[0-9a-f]{64}$/.test(value.digest) || typeof value.token !== "string" || !/^[0-9a-f]{32}$/.test(value.token)) throw safeError("integrity");
+    if (!bytesEqual(bytes, Buffer.from(`${canonicalJson(parsed)}\n`, "utf8"))) throw safeError("integrity");
+    return { digest: value.digest, token: value.token };
+  } catch (error) {
+    if (error instanceof QualityStoreError) throw error;
+    throw safeError("integrity");
+  }
+}
+
 async function readRegular(path: string): Promise<Uint8Array> {
   let handle: FileHandle | undefined;
   try {
@@ -314,7 +344,7 @@ async function existingBundle(
   parent: FileHandle,
   id: string,
   expected: Readonly<Record<string, Uint8Array>>,
-): Promise<"missing" | "noop" | "resume"> {
+): Promise<"missing" | "noop" | BundleResume> {
   const path = anchoredPath(parent, id);
   let current;
   try { current = await lstat(path); }
@@ -328,10 +358,30 @@ async function existingBundle(
     const actualEntries = await entries(directory);
     const names = actualEntries.map((entry) => entry.name).sort();
     const expectedNames = Object.keys(expected).sort();
+    let reservation: Reservation;
+    try {
+      const reservationStat = await lstat(anchoredPath(directory, RESERVATION_MARKER));
+      if (reservationStat.isSymbolicLink() || !reservationStat.isFile()) throw safeError("unsafe_path");
+      reservation = await readReservation(directory);
+    } catch (error) {
+      if (codeOf(error) === "ENOENT") throw safeError("integrity");
+      throw error;
+    }
+    if (reservation.digest !== bundleDigest(expected)) throw safeError("integrity");
     const hasMarker = names.includes(COMMIT_MARKER);
-    const allowedNames = hasMarker ? [...expectedNames, COMMIT_MARKER].sort() : expectedNames;
+    const temporaryNames = names.filter((name) => name.startsWith(".") && name.includes(".tmp-"));
+    const allowedNames = hasMarker ? [...expectedNames, COMMIT_MARKER, RESERVATION_MARKER].sort() : [...expectedNames, RESERVATION_MARKER, ...temporaryNames].sort();
     if (names.some((name) => !allowedNames.includes(name))) throw safeError("integrity");
     if (hasMarker && (names.length !== allowedNames.length || !bytesEqual(await readRegular(anchoredPath(directory, COMMIT_MARKER)), COMMIT_MARKER_BYTES))) throw safeError("integrity");
+    const ownedTemps = new Map<string, string>();
+    for (const name of temporaryNames) {
+      const match = /^\.([a-z0-9.-]+)\.tmp-([0-9a-f]{32})$/.exec(name);
+      if (!match || match[2] !== reservation.token || !Object.prototype.hasOwnProperty.call(expected, match[1])) throw safeError("integrity");
+      const tempBytes = await readRegular(anchoredPath(directory, name));
+      if (!bytesEqual(tempBytes, expected[match[1]])) throw safeError("integrity");
+      await restoreOwnedMode(anchoredPath(directory, name));
+      ownedTemps.set(match[1], name);
+    }
     for (const name of expectedNames) {
       if (!names.includes(name)) continue;
       validateFileName(name);
@@ -347,10 +397,12 @@ async function existingBundle(
     }
     if (hasMarker) {
       await restoreOwnedMode(anchoredPath(directory, COMMIT_MARKER));
+      await restoreOwnedMode(anchoredPath(directory, RESERVATION_MARKER));
       if (names.length !== allowedNames.length) throw safeError("integrity");
       return "noop";
     }
-    return "resume";
+    await restoreOwnedMode(anchoredPath(directory, RESERVATION_MARKER));
+    return { status: "resume", reservation, temps: ownedTemps };
   } finally { await closeQuietly(directory); }
 }
 
@@ -418,10 +470,11 @@ async function verifyBundle(root: string, kind: BundleKind, id: string, expected
     tree = await openTree(root);
     directory = await openDirectory(anchoredPath(tree.dirs[kind], id), true);
     const names = (await entries(directory)).map((entry) => entry.name).sort();
-    const expectedNames = [...Object.keys(expected), COMMIT_MARKER].sort();
+    const expectedNames = [...Object.keys(expected), RESERVATION_MARKER, COMMIT_MARKER].sort();
     if (names.length !== expectedNames.length || names.some((name, index) => name !== expectedNames[index])) return false;
     if (!bytesEqual(await readRegular(anchoredPath(directory, COMMIT_MARKER)), COMMIT_MARKER_BYTES)) return false;
-    for (const name of expectedNames) if (name !== COMMIT_MARKER && !bytesEqual(await readRegular(anchoredPath(directory, name)), expected[name])) return false;
+    try { await readReservation(directory); } catch { return false; }
+    for (const name of expectedNames) if (name !== COMMIT_MARKER && name !== RESERVATION_MARKER && !bytesEqual(await readRegular(anchoredPath(directory, name)), expected[name])) return false;
     return true;
   } catch { return false; }
   finally { await closeQuietly(directory); if (tree) await closeTree(tree); }
@@ -439,6 +492,10 @@ export async function publishBundle(input: PublishBundleInput, root = DEFAULT_QU
       let committed = false;
       let commitPossible = false;
       let bundleDirectory: FileHandle | undefined;
+      let createdDestination = false;
+      let reservationDurable = false;
+      let resumeInfo: BundleResume | undefined;
+      let reservation: Reservation | undefined;
       try {
         tree = await openTree(paths.root);
         const parent = tree.dirs[input.kind];
@@ -447,23 +504,44 @@ export async function publishBundle(input: PublishBundleInput, root = DEFAULT_QU
         let resume = false;
         try {
           await mkdir(finalPath, DIRECTORY_MODE);
+          createdDestination = true;
         } catch (error) {
           if (codeOf(error) !== "EEXIST") throw error;
           const prior = await existingBundle(parent, input.id, files);
           if (prior === "noop") return { status: "noop" };
-          resume = prior === "resume";
+          if (prior === "missing") throw safeError("integrity");
+          resumeInfo = prior;
+          resume = true;
+          reservation = prior.reservation;
         }
         bundleDirectory = await openDirectory(finalPath);
         await bundleDirectory.chmod(DIRECTORY_MODE);
         const anchoredBundle = anchoredPath(bundleDirectory);
+        if (!reservation) {
+          const token = randomBytes(16).toString("hex");
+          reservation = { digest: bundleDigest(files), token };
+          await writeBundleFile(anchoredBundle, RESERVATION_MARKER, reservationBytes(files, token), input.injectFault);
+          await bundleDirectory.sync();
+          reservationDurable = true;
+          await fault(input.injectFault, { scope: "bundle", operation: "reserve", timing: "after" });
+        }
         for (const name of Object.keys(files)) {
+          const orphan = resumeInfo?.temps.get(name);
           if (resume) {
             try {
               const existing = await readRegular(join(anchoredBundle, name));
-              if (bytesEqual(existing, files[name])) continue;
+              if (bytesEqual(existing, files[name])) {
+                if (orphan) await unlink(join(anchoredBundle, orphan));
+                continue;
+              }
             } catch (error) {
               if (!(error instanceof QualityStoreError && error.code === "unsafe_path")) throw error;
             }
+          }
+          if (orphan) {
+            await link(join(anchoredBundle, orphan), join(anchoredBundle, name));
+            await unlink(join(anchoredBundle, orphan));
+            continue;
           }
           const temporaryName = `.${name}.tmp-${randomBytes(12).toString("hex")}`;
           const temporaryPath = join(anchoredBundle, temporaryName);
@@ -496,6 +574,9 @@ export async function publishBundle(input: PublishBundleInput, root = DEFAULT_QU
       } finally {
         if (!committed) await Promise.all(createdTemps.map(async (path) => { try { await unlink(path); } catch { /* only our temp */ } }));
         await closeQuietly(bundleDirectory);
+        if (createdDestination && !reservationDurable) {
+          try { await rm(anchoredPath(tree!.dirs[input.kind], input.id), { recursive: true, force: true }); } catch { /* only our unreserved directory */ }
+        }
         if (tree) await closeTree(tree);
       }
     });
@@ -657,10 +738,11 @@ export async function readBundle(kind: BundleKind, id: string, root = DEFAULT_QU
     const result = new Map<string, Uint8Array>();
     for (const entry of await entries(directory)) {
       if (!entry.isFile() || entry.isSymbolicLink()) throw safeError("unsafe_path");
-      if (entry.name === COMMIT_MARKER) continue;
+      if (entry.name === COMMIT_MARKER || entry.name === RESERVATION_MARKER) continue;
       validateFileName(entry.name);
       result.set(entry.name, await readRegular(anchoredPath(directory, entry.name)));
     }
+    await readReservation(directory);
     try {
       const marker = await lstat(anchoredPath(directory, COMMIT_MARKER));
       if (marker.isSymbolicLink() || !marker.isFile()) throw safeError("unsafe_path");
@@ -671,6 +753,7 @@ export async function readBundle(kind: BundleKind, id: string, root = DEFAULT_QU
     if (!bytesEqual(await readRegular(anchoredPath(directory, COMMIT_MARKER)), COMMIT_MARKER_BYTES)) throw safeError("integrity");
     if (result.size === 0) throw safeError("integrity");
     await directory.chmod(DIRECTORY_MODE);
+    await restoreOwnedMode(anchoredPath(directory, RESERVATION_MARKER));
     await restoreOwnedMode(anchoredPath(directory, COMMIT_MARKER));
     for (const name of result.keys()) await restoreOwnedMode(anchoredPath(directory, name));
     return result;

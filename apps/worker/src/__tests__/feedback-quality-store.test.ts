@@ -105,9 +105,9 @@ describe("feedback quality private store", () => {
     const paths = await ensureQualityTree(root);
     const id = contentId("case", { fifo: true });
     const directory = join(paths.casesDir, id);
-    await mkdir(directory, 0o700);
+    await publishBundle(bundle("case", id, { "case.json": "x" }), root);
+    await unlink(join(directory, "case.json"));
     execFileSync("mkfifo", [join(directory, "case.json")]);
-    await writeFile(join(directory, ".committed"), "clipclap-feedback-quality-committed-v1\n", { mode: 0o600 });
     await expect(publishBundle(bundle("case", id, { "case.json": "x" }), root)).rejects.toMatchObject({ code: "unsafe_path" });
 
     execFileSync("mkfifo", [paths.labelsFile]);
@@ -120,10 +120,10 @@ describe("feedback quality private store", () => {
     const id = contentId("case", { hardlink: true });
     const directory = join(paths.casesDir, id);
     const external = join(root, "external-case.json");
-    await mkdir(directory, 0o700);
+    await publishBundle(bundle("case", id, { "case.json": "PRIVATE_EXTERNAL_BYTES" }), root);
     await writeFile(external, "PRIVATE_EXTERNAL_BYTES", { mode: 0o640 });
+    await unlink(join(directory, "case.json"));
     await link(external, join(directory, "case.json"));
-    await writeFile(join(directory, ".committed"), "clipclap-feedback-quality-committed-v1\n", { mode: 0o600 });
     await expect(publishBundle(bundle("case", id, { "case.json": "PRIVATE_EXTERNAL_BYTES" }), root)).rejects.toMatchObject({ code: "unsafe_path" });
     expect(await readFile(external, "utf8")).toBe("PRIVATE_EXTERNAL_BYTES");
     expect(mode(await lstat(external))).toBe(0o640);
@@ -156,9 +156,9 @@ describe("feedback quality private store", () => {
       injectFault: async (point) => {
         if (point.scope === "bundle" && point.operation === "reserve" && point.timing === "before") await mkdir(destination, 0o700);
       },
-    }, root)).resolves.toEqual({ status: "committed" });
+    }, root)).rejects.toMatchObject({ code: "integrity" });
     expect(mode(await lstat(destination))).toBe(0o700);
-    expect(await readFile(join(destination, "decision.json"), "utf8")).toBe("safe");
+    expect(await lstat(join(destination, "decision.json")).catch((error: unknown) => (error as NodeJS.ErrnoException).code)).toBe("ENOENT");
   });
 
   it("appends labels atomically, makes exact repeats no-ops, and rejects event collisions", async () => {
@@ -186,12 +186,17 @@ describe("feedback quality private store", () => {
     const input = bundle("case", id, { "case.json": "safe" });
     await publishBundle(input, root);
     const marker = join(root, "cases", id, ".committed");
+    const reservation = join(root, "cases", id, ".reservation");
     await chmod(marker, 0o644);
+    await chmod(reservation, 0o644);
     await expect(publishBundle(input, root)).resolves.toEqual({ status: "noop" });
     expect(mode(await lstat(marker))).toBe(0o600);
+    expect(mode(await lstat(reservation))).toBe(0o600);
     await chmod(marker, 0o644);
+    await chmod(reservation, 0o644);
     await readBundle("case", id, root);
     expect(mode(await lstat(marker))).toBe(0o600);
+    expect(mode(await lstat(reservation))).toBe(0o600);
   });
 
   it("does not remove a foreign temp file when O_EXCL reports a collision", async () => {
@@ -239,6 +244,45 @@ describe("feedback quality private store", () => {
       if (point.scope === "bundle" && point.operation === "write" && point.timing === "before") throw new Error("injected");
     } }, root)).rejects.toMatchObject({ code: "integrity" });
     await expect(publishBundle(input, root)).resolves.toEqual({ status: "committed" });
+  });
+
+  it("recovers a matching reserved bundle after a post-reservation fault", async () => {
+    const root = await temporaryRoot();
+    const id = contentId("case", { recovery: "reservation" });
+    const input = bundle("case", id, { "case.json": "safe" });
+    await expect(publishBundle({ ...input, injectFault: (point) => {
+      if (point.scope === "bundle" && point.operation === "reserve" && point.timing === "after") throw new Error("injected");
+    } }, root)).rejects.toMatchObject({ code: "integrity" });
+    await expect(publishBundle(input, root)).resolves.toEqual({ status: "committed" });
+  });
+
+  it("resumes an owned orphan temp and rejects a foreign lookalike temp", async () => {
+    const root = await temporaryRoot();
+    const id = contentId("case", { recovery: "orphan" });
+    const input = bundle("case", id, { "case.json": "safe" });
+    let orphanPath = "";
+    await expect(publishBundle({ ...input, injectFault: async (point) => {
+      if (point.scope === "bundle" && point.operation === "reserve" && point.timing === "after") {
+        const reservation = JSON.parse(await readFile(join(root, "cases", id, ".reservation"), "utf8")) as { token: string };
+        orphanPath = join(root, "cases", id, `.case.json.tmp-${reservation.token}`);
+        await writeFile(orphanPath, "safe", { mode: 0o600 });
+        throw new Error("injected");
+      }
+    } }, root)).rejects.toMatchObject({ code: "integrity" });
+    await expect(publishBundle(input, root)).resolves.toEqual({ status: "committed" });
+    await expect(lstat(orphanPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+    const foreignId = contentId("case", { recovery: "foreign-lookalike" });
+    const foreignInput = bundle("case", foreignId, { "case.json": "safe" });
+    const foreignTemp = join(root, "cases", foreignId, `.case.json.tmp-${"f".repeat(32)}`);
+    await expect(publishBundle({ ...foreignInput, injectFault: async (point) => {
+      if (point.scope === "bundle" && point.operation === "reserve" && point.timing === "after") {
+        await writeFile(foreignTemp, "foreign", { mode: 0o600 });
+        throw new Error("injected");
+      }
+    } }, root)).rejects.toMatchObject({ code: "integrity" });
+    await expect(publishBundle(foreignInput, root)).rejects.toMatchObject({ code: "integrity" });
+    await expect(readFile(foreignTemp, "utf8")).resolves.toBe("foreign");
   });
 
   it.each([
