@@ -8,6 +8,7 @@ import type {
   QualityCaseResult,
   QualityMetrics,
   QualityObservation,
+  Subsystem,
 } from "./types";
 
 const REQUIRED_MINIMUM: CorpusMinimum = {
@@ -96,6 +97,36 @@ const METRIC_KEYS = new Set([
 ]);
 const POLICY_KEYS = new Set(["schemaVersion", "policyVersion", "claim", "minimum"]);
 const MINIMUM_KEYS = new Set(["evalPositive", "evalNegative", "holdoutPositive", "holdoutNegative"]);
+
+type MetricName = keyof QualityMetrics;
+type RequiredMetricGroups = readonly (readonly MetricName[])[];
+const REQUIRED_POSITIVE_METRICS: Record<Subsystem, RequiredMetricGroups> = {
+  selection: [
+    ["approvedMomentRetained"],
+    ["approvedWindowOverlap"],
+    ["emptyResult", "empty"],
+    ["zeroClipFalseNegative", "zeroClipFalseNegatives"],
+  ],
+  boundary: [["approvedMomentRetained"], ["approvedWindowOverlap"], ["boundaryErrors", "boundaryError"]],
+  framing: [
+    ["approvedMomentRetained"],
+    ["approvedWindowOverlap"],
+    ["focalFailures", "focalFailure"],
+    ["requiredTextClipped"],
+    ["requiredSubjectClipped"],
+  ],
+  subtitles: [["approvedMomentRetained"], ["approvedWindowOverlap"], ["subtitleOverlap", "newSubtitleOverlap"]],
+  render: [
+    ["approvedMomentRetained"],
+    ["approvedWindowOverlap"],
+    ["hardInvariantFailures"],
+    ["outputWidth", "geometryWidth"],
+    ["outputHeight", "geometryHeight"],
+    ["sar", "sampleAspectRatio"],
+    ["blackTail", "blackTailSeconds", "blackTailSec"],
+    ["frozenTail", "frozenTailSeconds", "frozenTailSec"],
+  ],
+};
 
 function hasOwn(value: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
@@ -197,25 +228,8 @@ function observationReason(value: unknown, validateMetrics: boolean): MachineRea
     if (validateMetrics && !validMetrics(entry.metrics)) return "invalid_metric";
     if (validateMetrics && entry.disposition === "positive") {
       const metrics = entry.metrics as QualityMetrics;
-      if (
-        !hasMetric(metrics, ["approvedMomentRetained"]) ||
-        !hasMetric(metrics, ["approvedWindowOverlap"]) ||
-        !hasMetric(metrics, ["hardInvariantFailures"]) ||
-        !hasMetric(metrics, ["emptyResult", "empty"]) ||
-        !hasMetric(metrics, ["zeroClipFalseNegative", "zeroClipFalseNegatives"]) ||
-        !hasMetric(metrics, ["boundaryErrors", "boundaryError"]) ||
-        !hasMetric(metrics, ["blackTail", "blackTailSeconds", "blackTailSec"]) ||
-        !hasMetric(metrics, ["frozenTail", "frozenTailSeconds", "frozenTailSec"]) ||
-        !hasMetric(metrics, ["subtitleOverlap", "newSubtitleOverlap"]) ||
-        !hasMetric(metrics, ["requiredTextClipped"]) ||
-        !hasMetric(metrics, ["requiredSubjectClipped"])
-      ) return "invalid_metric";
-      if (
-        entry.subsystem === "render" &&
-        (!hasMetric(metrics, ["outputWidth", "geometryWidth"]) ||
-          !hasMetric(metrics, ["outputHeight", "geometryHeight"]) ||
-          !hasMetric(metrics, ["sar", "sampleAspectRatio"]))
-      ) return "invalid_metric";
+      const required = REQUIRED_POSITIVE_METRICS[entry.subsystem];
+      if (required.some((names) => !hasMetric(metrics, names))) return "invalid_metric";
     }
     if (validateMetrics && entry.disposition === "confirmed_negative" && !hasMetric(entry.metrics as QualityMetrics, ["defectSeverity"])) return "invalid_metric";
     if (versions.has(entry.caseVersion)) return "duplicate_case_version";
@@ -272,8 +286,6 @@ function emptyAggregate(): GateAggregate {
     subtitleFailures: 0,
   };
 }
-
-type MetricName = keyof QualityMetrics;
 
 function numberMetric(metrics: QualityMetrics, names: readonly MetricName[]): number | undefined {
   for (const name of names) {
@@ -344,9 +356,7 @@ function metricImproved(before: QualityCaseResult, after: QualityCaseResult): bo
   for (const key of higherIsBetter) {
     if (beforePositive && (after.metrics[key] ?? 0) > (before.metrics[key] ?? 0)) return true;
   }
-  for (const key of lowerIsBetter) {
-    if (!beforePositive && (after.metrics[key] ?? 0) < (before.metrics[key] ?? 0)) return true;
-  }
+  for (const key of lowerIsBetter) if ((after.metrics[key] ?? 0) < (before.metrics[key] ?? 0)) return true;
   return false;
 }
 

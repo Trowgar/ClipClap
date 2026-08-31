@@ -218,6 +218,74 @@ describe("feedback quality comparison policy", () => {
     });
   });
 
+  it("counts a lower positive boundary error as measurable improvement", () => {
+    const baseline = observation({
+      cases: observation().cases.map((entry) =>
+        entry.caseVersion === "positive-0"
+          ? { ...entry, subsystem: "boundary" as const, metrics: { ...entry.metrics, boundaryErrors: 1 } }
+          : entry,
+      ),
+    });
+    const candidate = observation({
+      mode: "candidate",
+      observationId: "sha256:" + "4".repeat(64),
+      cases: baseline.cases.map((entry) =>
+        entry.caseVersion === "positive-0"
+          ? { ...entry, metrics: { ...entry.metrics, boundaryErrors: 0 } }
+          : entry,
+      ),
+    });
+
+    expect(compareObservations(baseline, candidate, policy)).toMatchObject({
+      verdict: "pass",
+      reasons: [],
+    });
+  });
+
+  const laneMetrics: Record<QualityCaseResult["subsystem"], QualityMetrics> = {
+    selection: { approvedMomentRetained: 1, approvedWindowOverlap: 1, emptyResult: 0, zeroClipFalseNegative: 0 },
+    boundary: { approvedMomentRetained: 1, approvedWindowOverlap: 1, boundaryErrors: 0 },
+    framing: { approvedMomentRetained: 1, approvedWindowOverlap: 1, focalFailures: 0, requiredTextClipped: 0, requiredSubjectClipped: 0 },
+    subtitles: { approvedMomentRetained: 1, approvedWindowOverlap: 1, subtitleOverlap: 0 },
+    render: { approvedMomentRetained: 1, approvedWindowOverlap: 1, hardInvariantFailures: 0, outputWidth: 1080, outputHeight: 1920, sar: 1, blackTailSeconds: 0, frozenTailSeconds: 0 },
+  };
+
+  const laneObservation = (subsystem: QualityCaseResult["subsystem"], omit?: keyof QualityMetrics): QualityObservation => {
+    const positiveMetrics = { ...laneMetrics[subsystem] };
+    if (omit !== undefined) delete positiveMetrics[omit];
+    return observation({
+      cases: [
+        ...Array.from({ length: 4 }, (_, i) => result(`positive-${i}`, "positive", subsystem, { metrics: positiveMetrics })),
+        ...Array.from({ length: 6 }, (_, i) => result(`negative-${i}`, "confirmed_negative", "selection", { metrics: { defectSeverity: 2 } })),
+      ],
+    });
+  };
+
+  it.each(Object.keys(laneMetrics) as QualityCaseResult["subsystem"][]) ("accepts the minimal %s lane evidence", (subsystem) => {
+    const baseline = laneObservation(subsystem);
+    const candidate = { ...baseline, mode: "candidate" as const, observationId: "sha256:" + "4".repeat(64) };
+
+    expect(compareObservations(baseline, candidate, { ...policy, claim: "non_regression_only" })).toMatchObject({
+      verdict: "pass",
+      reasons: [],
+    });
+  });
+
+  it.each([
+    ["selection", "emptyResult"],
+    ["boundary", "boundaryErrors"],
+    ["framing", "focalFailures"],
+    ["subtitles", "subtitleOverlap"],
+    ["render", "outputWidth"],
+  ] as const)("rejects a %s lane case missing its relevant metric", (subsystem, metric) => {
+    const baseline = laneObservation(subsystem, metric);
+    const candidate = { ...baseline, mode: "candidate" as const, observationId: "sha256:" + "4".repeat(64) };
+
+    expect(compareObservations(baseline, candidate, { ...policy, claim: "non_regression_only" }).reasons).toEqual([
+      "invalid_metric",
+    ]);
+  });
+
   it("passes equivalent observations from different valid commits", () => {
     const baseline = observation();
     const candidate = observation({
