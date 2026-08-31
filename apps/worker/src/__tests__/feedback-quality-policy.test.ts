@@ -219,7 +219,7 @@ describe("feedback quality comparison policy", () => {
     });
   });
 
-  it("counts a lower positive boundary error as measurable improvement", () => {
+  it("rejects a positive baseline boundary failure even when the candidate repairs it", () => {
     const baseline = observation({
       cases: observation().cases.map((entry) =>
         entry.caseVersion === "positive-0"
@@ -232,6 +232,30 @@ describe("feedback quality comparison policy", () => {
       observationId: "sha256:" + "4".repeat(64),
       cases: baseline.cases.map((entry) =>
         entry.caseVersion === "positive-0"
+          ? { ...entry, metrics: { ...entry.metrics, boundaryErrors: 0 } }
+          : entry,
+      ),
+    });
+
+    expect(compareObservations(baseline, candidate, policy)).toMatchObject({
+      verdict: "fail",
+      reasons: ["hard_invariant_regression"],
+    });
+  });
+
+  it("counts a lower confirmed-negative boundary error as measurable improvement", () => {
+    const baseline = observation({
+      cases: observation().cases.map((entry) =>
+        entry.caseVersion === "negative-0"
+          ? { ...entry, metrics: { ...entry.metrics, boundaryErrors: 1 } }
+          : entry,
+      ),
+    });
+    const candidate = observation({
+      mode: "candidate",
+      observationId: "sha256:" + "4".repeat(64),
+      cases: baseline.cases.map((entry) =>
+        entry.caseVersion === "negative-0"
           ? { ...entry, metrics: { ...entry.metrics, boundaryErrors: 0 } }
           : entry,
       ),
@@ -342,6 +366,17 @@ describe("feedback quality comparison policy", () => {
     expect(compareObservations(baseline, candidate, policy)).toMatchObject({
       verdict: "fail",
       reasons: ["no_improvement"],
+    });
+  });
+
+  it("ignores stale excluded cases after validating their schema and metrics", () => {
+    const excluded = result("excluded-stale", "exclude", "selection", { status: "stale" });
+    const baseline = observation({ cases: [...observation().cases, excluded] });
+    const candidate = observation({ mode: "candidate", observationId: "sha256:" + "4".repeat(64) });
+
+    expect(compareObservations(baseline, candidate, { ...policy, claim: "non_regression_only" })).toMatchObject({
+      verdict: "pass",
+      reasons: [],
     });
   });
 

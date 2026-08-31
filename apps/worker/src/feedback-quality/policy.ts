@@ -402,7 +402,7 @@ function metricImproved(before: QualityCaseResult, after: QualityCaseResult): bo
   return false;
 }
 
-function checkHardInvariants(before: QualityCaseResult, after: QualityCaseResult, includeBoundary: boolean = true): boolean {
+function checkHardInvariants(before: QualityCaseResult, after: QualityCaseResult): boolean {
   if (after.disposition !== "positive") return false;
   const priorMoment = numberMetric(before.metrics, ["approvedMomentRetained", "approvedMoment", "approvedWindowOverlap"]);
   const nextMoment = numberMetric(after.metrics, ["approvedMomentRetained", "approvedMoment", "approvedWindowOverlap"]);
@@ -427,13 +427,13 @@ function checkHardInvariants(before: QualityCaseResult, after: QualityCaseResult
   const hardMetrics: (readonly MetricName[])[] = [
     ["emptyResult", "empty"],
     ["zeroClipFalseNegative", "zeroClipFalseNegatives"],
+    ["boundaryErrors", "boundaryError"],
     ["blackTail", "blackTailSeconds", "blackTailSec"],
     ["frozenTail", "frozenTailSeconds", "frozenTailSec"],
     ["subtitleOverlap", "newSubtitleOverlap"],
     ["requiredTextClipped"],
     ["requiredSubjectClipped"],
   ];
-  if (includeBoundary) hardMetrics.unshift(["boundaryErrors", "boundaryError"]);
   for (const names of hardMetrics) {
     const prior = numberMetric(before.metrics, names);
     const next = numberMetric(after.metrics, names);
@@ -457,7 +457,7 @@ export function compareObservations(
 
   /* Status and identity failures intentionally happen before any metric read. */
   const statusReasons: MachineReason[] = [];
-  for (const entry of [...baseline.cases, ...candidate.cases]) {
+  for (const entry of [...baseline.cases, ...candidate.cases].filter((entry) => entry.disposition !== "exclude")) {
     if (entry.status === "missing") statusReasons.push("missing_case");
     else if (entry.status === "stale") statusReasons.push("stale_case");
     else if (entry.status === "error") statusReasons.push("error_case");
@@ -484,7 +484,7 @@ export function compareObservations(
   const baselinePositive = baselineActive.filter((entry) => entry.disposition === "positive").length;
   const baselineNegative = baselineActive.filter((entry) => entry.disposition === "confirmed_negative").length;
   if (baselinePositive < minimum.positive || baselineNegative < minimum.negative) return failure(["insufficient_corpus"]);
-  if (baselineActive.some((entry) => entry.disposition === "positive" && checkHardInvariants(entry, entry, false))) {
+  if (baselineActive.some((entry) => entry.disposition === "positive" && checkHardInvariants(entry, entry))) {
     return failure(["hard_invariant_regression"]);
   }
 
