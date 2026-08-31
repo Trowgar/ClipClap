@@ -518,23 +518,21 @@ async function verifyBundle(root: string, kind: BundleKind, id: string, expected
   finally { await closeQuietly(directory); if (tree) await closeTree(tree); }
 }
 
-export async function publishBundle(input: PublishBundleInput, root = DEFAULT_QUALITY_ROOT): Promise<CommitResult> {
+async function publishBundleLocked(input: PublishBundleInput, root: string): Promise<CommitResult> {
   const files = copyFiles(input);
   const paths = await ensureQualityTree(validateRoot(root));
   await assertLockSafe(paths.labelsLock);
+  let tree: Awaited<ReturnType<typeof openTree>> | undefined;
+  const createdTemps: string[] = [];
+  let committed = false;
+  let commitPossible = false;
+  let bundleDirectory: FileHandle | undefined;
+  let createdDestination = false;
+  let reservationDurable = false;
+  let resumeInfo: BundleResume | undefined;
+  let reservation: Reservation | undefined;
   try {
-    return await withCorpusLock(paths.labelsLock, async () => {
       await assertLockSafe(paths.labelsLock);
-      let tree: Awaited<ReturnType<typeof openTree>> | undefined;
-      const createdTemps: string[] = [];
-      let committed = false;
-      let commitPossible = false;
-      let bundleDirectory: FileHandle | undefined;
-      let createdDestination = false;
-      let reservationDurable = false;
-      let resumeInfo: BundleResume | undefined;
-      let reservation: Reservation | undefined;
-      try {
         tree = await openTree(paths.root);
         const parent = tree.dirs[input.kind];
         const finalPath = anchoredPath(parent, input.id);
@@ -602,7 +600,7 @@ export async function publishBundle(input: PublishBundleInput, root = DEFAULT_QU
         await fault(input.injectFault, { scope: "bundle", operation: "parent_fsync", timing: "after" });
         committed = true;
         return { status: "committed" };
-      } catch (error) {
+  } catch (error) {
         if (commitPossible) {
           return (await verifyBundle(paths.root, input.kind, input.id, files))
             ? { status: "committed_durability_uncertain" }
@@ -610,15 +608,21 @@ export async function publishBundle(input: PublishBundleInput, root = DEFAULT_QU
         }
         if (error instanceof QualityStoreError) throw error;
         throw safeError("integrity");
-      } finally {
+  } finally {
         if (!committed) await Promise.all(createdTemps.map(async (path) => { try { await unlink(path); } catch { /* only our temp */ } }));
         await closeQuietly(bundleDirectory);
         if (createdDestination && !reservationDurable) {
           try { await rm(anchoredPath(tree!.dirs[input.kind], input.id), { recursive: true, force: true }); } catch { /* only our unreserved directory */ }
         }
         if (tree) await closeTree(tree);
-      }
-    });
+  }
+}
+
+export async function publishBundle(input: PublishBundleInput, root = DEFAULT_QUALITY_ROOT): Promise<CommitResult> {
+  const paths = await ensureQualityTree(validateRoot(root));
+  await assertLockSafe(paths.labelsLock);
+  try {
+    return await withCorpusLock(paths.labelsLock, () => publishBundleLocked(input, paths.root));
   } catch (error) {
     if (error instanceof QualityStoreError) throw error;
     const code = codeOf(error);
@@ -691,7 +695,7 @@ async function restoreLedgerMode(path: string): Promise<void> {
   await restoreOwnedMode(path);
 }
 
-export async function appendLabelEvent(
+async function appendLabelEventLocked(
   event: QualityLabelEvent,
   root = DEFAULT_QUALITY_ROOT,
   options: AppendLabelOptions = {},
@@ -701,7 +705,6 @@ export async function appendLabelEvent(
   const paths = await ensureQualityTree(validateRoot(root));
   await assertLockSafe(paths.labelsLock);
   try {
-    return await withCorpusLock(paths.labelsLock, async () => {
       await assertLockSafe(paths.labelsLock);
       let tree: Awaited<ReturnType<typeof openTree>> | undefined;
       let tempPath: string | undefined;
@@ -757,6 +760,52 @@ export async function appendLabelEvent(
         }
         if (tree) await closeTree(tree);
       }
+    return { status: "indeterminate" };
+  } catch (error) {
+    if (error instanceof QualityStoreError) throw error;
+    const code = codeOf(error);
+    if (code === "lock_timeout" || code === "lock_unavailable") throw error as CorpusLockError;
+    throw safeError("integrity");
+  }
+}
+
+export async function appendLabelEvent(
+  event: QualityLabelEvent,
+  root = DEFAULT_QUALITY_ROOT,
+  options: AppendLabelOptions = {},
+): Promise<CommitResult> {
+  const paths = await ensureQualityTree(validateRoot(root));
+  await assertLockSafe(paths.labelsLock);
+  try {
+    return await withCorpusLock(paths.labelsLock, () => appendLabelEventLocked(event, paths.root, options));
+  } catch (error) {
+    if (error instanceof QualityStoreError) throw error;
+    const code = codeOf(error);
+    if (code === "lock_timeout" || code === "lock_unavailable") throw error as CorpusLockError;
+    throw safeError("integrity");
+  }
+}
+
+/** Publish a case and its active label while holding the single corpus lock.
+ * A crash after the case commit leaves a harmless orphan; retry observes the
+ * content-addressed case and appends the idempotent label event. */
+export async function publishCaseAndLabel(
+  bundle: PublishBundleInput,
+  event: QualityLabelEvent,
+  root = DEFAULT_QUALITY_ROOT,
+): Promise<CommitResult> {
+  const paths = await ensureQualityTree(validateRoot(root));
+  await assertLockSafe(paths.labelsLock);
+  try {
+    return await withCorpusLock(paths.labelsLock, async () => {
+      const published = await publishBundleLocked(bundle, paths.root);
+      if (published.status === "indeterminate") return published;
+      const labelled = await appendLabelEventLocked(event, paths.root);
+      if (labelled.status === "indeterminate") return labelled;
+      if (published.status === "committed_durability_uncertain" || labelled.status === "committed_durability_uncertain") {
+        return { status: "committed_durability_uncertain" };
+      }
+      return published.status === "noop" && labelled.status === "noop" ? { status: "noop" } : { status: "committed" };
     });
   } catch (error) {
     if (error instanceof QualityStoreError) throw error;
