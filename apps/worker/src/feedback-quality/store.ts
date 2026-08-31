@@ -43,11 +43,16 @@ export type QualityStoreFault = Readonly<{
   file?: string;
 }>;
 
+export type QualityStoreFaultInjector = (point: QualityStoreFault) => void | Promise<void>;
+
+/** Optional test-only hooks; omitted by all production callers. */
+export type AppendLabelOptions = Readonly<{ injectFault?: QualityStoreFaultInjector }>;
+
 export type PublishBundleInput = Readonly<{
   kind: BundleKind;
   id: string;
   files: Readonly<Record<string, Uint8Array>>;
-  injectFault?: (point: QualityStoreFault) => void | Promise<void>;
+  injectFault?: QualityStoreFaultInjector;
 }>;
 
 export type CommitResult =
@@ -108,6 +113,12 @@ function validateComponent(value: string): string {
 function validateKind(kind: BundleKind): BundleKind {
   if (!BUNDLE_NAMES.includes(kind)) throw safeError("invalid_input");
   return kind;
+}
+
+function validateBundleId(kind: BundleKind, id: string): string {
+  validateComponent(id);
+  if (!new RegExp(`^${kind}:sha256:[0-9a-f]{64}$`).test(id)) throw safeError("invalid_input");
+  return id;
 }
 
 function validateFileName(name: string): string {
@@ -317,7 +328,7 @@ async function writeBundleFile(
 
 function copyFiles(input: PublishBundleInput): Readonly<Record<string, Uint8Array>> {
   validateKind(input.kind);
-  validateComponent(input.id);
+  validateBundleId(input.kind, input.id);
   if (!input.files || typeof input.files !== "object" || Array.isArray(input.files)) throw safeError("invalid_input");
   const result: Record<string, Uint8Array> = Object.create(null);
   for (const name of Object.keys(input.files)) {
@@ -461,7 +472,24 @@ async function ledgerState(path: string, wantedId: string, wantedLine: Buffer): 
   return { existing: bytes, noop: false };
 }
 
-export async function appendLabelEvent(event: QualityLabelEvent, root = DEFAULT_QUALITY_ROOT): Promise<CommitResult> {
+async function restoreLedgerMode(path: string): Promise<void> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    if (!(await handle.stat()).isFile()) throw safeError("unsafe_path");
+    await handle.chmod(FILE_MODE);
+    await handle.sync();
+  } catch (error) {
+    if (error instanceof QualityStoreError) throw error;
+    throw safeError("unsafe_path");
+  } finally { await closeQuietly(handle); }
+}
+
+export async function appendLabelEvent(
+  event: QualityLabelEvent,
+  root = DEFAULT_QUALITY_ROOT,
+  options: AppendLabelOptions = {},
+): Promise<CommitResult> {
   const eventId = eventIdOf(event);
   const line = Buffer.from(`${canonicalJson(event)}\n`);
   const paths = await ensureQualityTree(validateRoot(root));
@@ -474,20 +502,33 @@ export async function appendLabelEvent(event: QualityLabelEvent, root = DEFAULT_
       try {
         tree = await openTree(paths.root);
         const current = await ledgerState(anchoredPath(tree.ledger, "labels.jsonl"), eventId, line);
-        if (current.noop) return { status: "noop" };
+        if (current.noop) {
+          await restoreLedgerMode(anchoredPath(tree.ledger, "labels.jsonl"));
+          return { status: "noop" };
+        }
         tempPath = anchoredPath(tree.ledger, `.labels.jsonl.tmp-${randomBytes(12).toString("hex")}`);
         const handle = await open(tempPath, constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY, FILE_MODE);
         try {
           if (!(await handle.stat()).isFile()) throw safeError("unsafe_path");
           await handle.chmod(FILE_MODE);
+          await fault(options.injectFault, { scope: "ledger", operation: "write", timing: "before" });
           await writeAll(handle, Buffer.concat([Buffer.from(current.existing), line]));
+          await fault(options.injectFault, { scope: "ledger", operation: "write", timing: "after" });
+          await fault(options.injectFault, { scope: "ledger", operation: "file_fsync", timing: "before" });
           await handle.sync();
+          await fault(options.injectFault, { scope: "ledger", operation: "file_fsync", timing: "after" });
+          await fault(options.injectFault, { scope: "ledger", operation: "close", timing: "before" });
           await handle.close();
+          await fault(options.injectFault, { scope: "ledger", operation: "close", timing: "after" });
         } finally { await closeQuietly(handle); }
+        await fault(options.injectFault, { scope: "ledger", operation: "rename", timing: "before" });
         renamePossible = true;
         await rename(tempPath, anchoredPath(tree.ledger, "labels.jsonl"));
         renamed = true;
+        await fault(options.injectFault, { scope: "ledger", operation: "rename", timing: "after" });
+        await fault(options.injectFault, { scope: "ledger", operation: "parent_fsync", timing: "before" });
         await tree.ledger.sync();
+        await fault(options.injectFault, { scope: "ledger", operation: "parent_fsync", timing: "after" });
         return { status: "committed" };
       } catch (error) {
         if (renamePossible) {
@@ -512,7 +553,7 @@ export async function appendLabelEvent(event: QualityLabelEvent, root = DEFAULT_
 
 export async function readBundle(kind: BundleKind, id: string, root = DEFAULT_QUALITY_ROOT): Promise<ReadonlyMap<string, Uint8Array>> {
   validateKind(kind);
-  validateComponent(id);
+  validateBundleId(kind, id);
   let tree: Awaited<ReturnType<typeof openTree>> | undefined;
   let directory: FileHandle | undefined;
   try {

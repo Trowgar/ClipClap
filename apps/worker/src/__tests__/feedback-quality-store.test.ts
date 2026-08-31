@@ -1,4 +1,4 @@
-import { constants } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
 import { chmod, lstat, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ import {
   ensureQualityTree,
   publishBundle,
   readBundle,
+  type AppendLabelOptions,
   type PublishBundleInput,
 } from "../feedback-quality/store";
 
@@ -69,6 +70,14 @@ describe("feedback quality private store", () => {
     expect(mode(await lstat(join(root, "observations", id, "manifest.json")))).toBe(0o600);
   });
 
+  it("rejects arbitrary and cross-kind bundle IDs before touching the filesystem", async () => {
+    const root = await temporaryRoot();
+    await expect(publishBundle(bundle("case", "case:sha256:bad", { "case.json": "x" }), root)).rejects.toMatchObject({ code: "invalid_input" });
+    await expect(publishBundle(bundle("case", `observation:sha256:${"a".repeat(64)}`, { "case.json": "x" }), root)).rejects.toMatchObject({ code: "invalid_input" });
+    await expect(publishBundle(bundle("case", "../escape", { "case.json": "x" }), root)).rejects.toMatchObject({ code: "unsafe_path" });
+    await expect(publishBundle(bundle("case", `case:sha256:${"A".repeat(64)}`, { "case.json": "x" }), root)).rejects.toMatchObject({ code: "invalid_input" });
+  });
+
   it("refuses a content collision and never overwrites prior bytes", async () => {
     const root = await temporaryRoot();
     const id = contentId("case", { fixed: true });
@@ -91,6 +100,19 @@ describe("feedback quality private store", () => {
     expect(await readFile(external, "utf8")).toBe("PRIVATE_EXTERNAL");
   });
 
+  it("rejects a real FIFO in an existing bundle and in the owned ledger", async () => {
+    const root = await temporaryRoot();
+    const paths = await ensureQualityTree(root);
+    const id = contentId("case", { fifo: true });
+    const directory = join(paths.casesDir, id);
+    await mkdir(directory, 0o700);
+    execFileSync("mkfifo", [join(directory, "case.json")]);
+    await expect(publishBundle(bundle("case", id, { "case.json": "x" }), root)).rejects.toMatchObject({ code: "unsafe_path" });
+
+    execFileSync("mkfifo", [paths.labelsFile]);
+    await expect(appendLabelEvent({ eventId: "fifo-event", schemaVersion: 1 }, root)).rejects.toMatchObject({ code: "unsafe_path" });
+  });
+
   it("appends labels atomically, makes exact repeats no-ops, and rejects event collisions", async () => {
     const root = await temporaryRoot();
     const event = { schemaVersion: 1, eventId: "event-1", disposition: "positive", privateNote: "PRIVATE_NOTE" };
@@ -98,6 +120,15 @@ describe("feedback quality private store", () => {
     expect(await appendLabelEvent({ privateNote: "PRIVATE_NOTE", disposition: "positive", eventId: "event-1", schemaVersion: 1 }, root)).toEqual({ status: "noop" });
     await expect(appendLabelEvent({ ...event, disposition: "exclude" }, root)).rejects.toMatchObject({ code: "integrity" });
     expect(await readFile(join(root, "ledger", "labels.jsonl"), "utf8")).toContain("PRIVATE_NOTE");
+    expect(mode(await lstat(join(root, "ledger", "labels.jsonl")))).toBe(0o600);
+  });
+
+  it("restores the owned ledger mode on an exact noop", async () => {
+    const root = await temporaryRoot();
+    const event = { schemaVersion: 1, eventId: "mode-event", disposition: "positive" };
+    await appendLabelEvent(event, root);
+    await chmod(join(root, "ledger", "labels.jsonl"), 0o644);
+    await expect(appendLabelEvent(event, root)).resolves.toEqual({ status: "noop" });
     expect(mode(await lstat(join(root, "ledger", "labels.jsonl")))).toBe(0o600);
   });
 
@@ -124,6 +155,47 @@ describe("feedback quality private store", () => {
       },
     }, root)).rejects.toMatchObject({ code: "integrity" });
     await expect(readBundle("decision", id, root)).rejects.toMatchObject({ code: "missing" });
+  });
+
+  it.each([
+    ["before", { scope: "ledger", operation: "rename", timing: "before" }],
+    ["after", { scope: "ledger", operation: "rename", timing: "after" }],
+  ] as const)("handles %s-rename ledger faults without leaking event data", async (label, injected) => {
+    const root = await temporaryRoot();
+    const event = { schemaVersion: 1, eventId: `fault-${label}`, privateNote: "PRIVATE_LEDGER_NOTE" };
+    const options: AppendLabelOptions = {
+      injectFault: (point) => {
+        if (JSON.stringify(point) === JSON.stringify(injected)) throw new Error("PRIVATE_FAULT_DETAIL");
+      },
+    };
+    if (label === "before") {
+      await expect(appendLabelEvent(event, root, options)).rejects.toMatchObject({ code: "integrity" });
+    } else {
+      await expect(appendLabelEvent(event, root, options)).resolves.toEqual({ status: "committed_durability_uncertain" });
+    }
+    expect(String(event)).not.toContain("PRIVATE_FAULT_DETAIL");
+  });
+
+  it("waits for a real process holding the labels lock before mutating the ledger", async () => {
+    const root = await temporaryRoot();
+    const paths = await ensureQualityTree(root);
+    const lockModule = join(process.cwd(), "apps/worker/src/feedback-learning/lock.ts");
+    const source = `const { withCorpusLock } = require(${JSON.stringify(lockModule)}); withCorpusLock(${JSON.stringify(paths.labelsLock)}, async () => { console.log("locked"); await new Promise(() => undefined); }).catch(() => process.exitCode = 1);`;
+    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=commonjs", "-e", source], { stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, NODE_OPTIONS: "" } });
+    let output = "";
+    let errors = "";
+    child.stdout.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+    child.stderr.on("data", (chunk: Buffer) => { errors += chunk.toString(); });
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error(`lock child did not start: ${errors}`)), 2_000);
+      child.stdout.on("data", () => {
+        if (output.includes("locked")) { clearTimeout(timer); resolve(); }
+      });
+      child.once("error", reject);
+    });
+    child.kill("SIGKILL");
+    await new Promise<void>((resolve) => child.once("exit", () => resolve()));
+    await expect(appendLabelEvent({ eventId: "contended-event", schemaVersion: 1 }, root)).resolves.toEqual({ status: "committed" });
   });
 
   it("does not leak private values in store errors", async () => {
