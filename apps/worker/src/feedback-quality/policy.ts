@@ -106,10 +106,28 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 function ownDataKeys(value: object, allowed: Set<string>): boolean {
-  for (const key of Object.keys(value)) {
-    if (!allowed.has(key)) return false;
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, "value")) return false;
+  for (const rawKey of Reflect.ownKeys(value)) {
+    if (typeof rawKey !== "string") return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, rawKey);
+    /* Closed JSON contracts do not permit hidden fields or accessors. */
+    if (!descriptor || !descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, "value")) return false;
+    if (!allowed.has(rawKey)) return false;
+  }
+  return true;
+}
+
+function validCasesArray(value: unknown): value is unknown[] {
+  if (!Array.isArray(value)) return false;
+  for (const rawKey of Reflect.ownKeys(value)) {
+    if (rawKey === "length") {
+      const descriptor = Object.getOwnPropertyDescriptor(value, rawKey);
+      if (!descriptor || !Object.prototype.hasOwnProperty.call(descriptor, "value")) return false;
+      continue;
+    }
+    if (typeof rawKey !== "string") return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, rawKey);
+    if (!descriptor || !descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, "value")) return false;
+    if (!/^(0|[1-9]\d*)$/.test(rawKey)) return false;
   }
   return true;
 }
@@ -161,7 +179,7 @@ function observationReason(value: unknown, validateMetrics: boolean): MachineRea
     !finiteNonnegative(value.runnerVersion) ||
     !Number.isInteger(value.runnerVersion) ||
     typeof value.createdAt !== "string" ||
-    !Array.isArray(value.cases)
+    !validCasesArray(value.cases)
   ) return "invalid_schema";
   if (validateMetrics && hasOwn(value, "metrics") && !validMetrics(value.metrics)) return "invalid_metric";
   const versions = new Set<string>();
@@ -191,6 +209,12 @@ function observationReason(value: unknown, validateMetrics: boolean): MachineRea
         !hasMetric(metrics, ["subtitleOverlap", "newSubtitleOverlap"]) ||
         !hasMetric(metrics, ["requiredTextClipped"]) ||
         !hasMetric(metrics, ["requiredSubjectClipped"])
+      ) return "invalid_metric";
+      if (
+        entry.subsystem === "render" &&
+        (!hasMetric(metrics, ["outputWidth", "geometryWidth"]) ||
+          !hasMetric(metrics, ["outputHeight", "geometryHeight"]) ||
+          !hasMetric(metrics, ["sar", "sampleAspectRatio"]))
       ) return "invalid_metric";
     }
     if (validateMetrics && entry.disposition === "confirmed_negative" && !hasMetric(entry.metrics as QualityMetrics, ["defectSeverity"])) return "invalid_metric";

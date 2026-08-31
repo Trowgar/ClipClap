@@ -44,6 +44,9 @@ const result = (
     subtitleOverlap: 0,
     requiredTextClipped: 0,
     requiredSubjectClipped: 0,
+    outputWidth: 1080,
+    outputHeight: 1920,
+    sar: 1,
     hardInvariantFailures: 0,
     defectSeverity: disposition === "confirmed_negative" ? 2 : 0,
     ...overrides.metrics,
@@ -317,5 +320,85 @@ describe("feedback quality comparison policy", () => {
     expect(compareObservations(missingNegativeProof, candidateForNegative, { ...policy, claim: "non_regression_only" }).reasons).toEqual([
       "invalid_metric",
     ]);
+  });
+
+  it("rejects non-enumerable and accessor evidence without invoking getters", () => {
+    let reads = 0;
+    const throwingMetrics = { ...result("seed", "positive", "selection").metrics } as Record<string, unknown>;
+    Object.defineProperty(throwingMetrics, "poison", {
+      enumerable: false,
+      get: () => {
+        reads += 1;
+        throw new Error("getter invoked");
+      },
+    });
+    const accessorObservation = observation({
+      cases: [
+        result("positive-0", "positive", "selection", { metrics: throwingMetrics as never }),
+        ...Array.from({ length: 3 }, (_, i) => result(`positive-${i + 1}`, "positive", "selection")),
+        ...Array.from({ length: 6 }, (_, i) => result(`negative-${i}`, "confirmed_negative", "selection")),
+      ],
+    });
+
+    expect(["invalid_schema", "invalid_metric"]).toContain(
+      compareObservations(accessorObservation, accessorObservation, { ...policy, claim: "non_regression_only" }).reasons[0],
+    );
+    expect(reads).toBe(0);
+
+    let topReads = 0;
+    const topLevel = observation();
+    Object.defineProperty(topLevel, "metrics", {
+      enumerable: false,
+      get: () => {
+        topReads += 1;
+        throw new Error("getter invoked");
+      },
+    });
+    expect(compareObservations(topLevel, topLevel, { ...policy, claim: "non_regression_only" }).reasons).toEqual([
+      "invalid_schema",
+    ]);
+    expect(topReads).toBe(0);
+  });
+
+  it("requires render positives to prove geometry and SAR", () => {
+    const incomplete = observation({
+      cases: [
+        result("positive-0", "positive", "render", { metrics: {
+          approvedMomentRetained: 1,
+          approvedWindowOverlap: 1,
+          hardInvariantFailures: 0,
+          emptyResult: 0,
+          zeroClipFalseNegative: 0,
+          boundaryErrors: 0,
+          blackTailSeconds: 0,
+          frozenTailSeconds: 0,
+          subtitleOverlap: 0,
+          requiredTextClipped: 0,
+          requiredSubjectClipped: 0,
+        } }),
+        ...Array.from({ length: 3 }, (_, i) => result(`positive-${i + 1}`, "positive", "selection")),
+        ...Array.from({ length: 6 }, (_, i) => result(`negative-${i}`, "confirmed_negative", "selection")),
+      ],
+    });
+    const incompleteCandidate = { ...incomplete, mode: "candidate" as const, observationId: "sha256:" + "4".repeat(64) };
+    expect(compareObservations(incomplete, incompleteCandidate, { ...policy, claim: "non_regression_only" }).reasons).toEqual([
+      "invalid_metric",
+    ]);
+
+    const baseline = observation();
+    const candidate = observation({
+      mode: "candidate",
+      observationId: "sha256:" + "4".repeat(64),
+      cases: baseline.cases.map((entry) =>
+        entry.caseVersion === "positive-0"
+          ? { ...entry, subsystem: "render" as const, metrics: { ...entry.metrics, outputWidth: 720 } }
+          : entry,
+      ),
+    });
+    const renderBaseline = { ...baseline, cases: baseline.cases.map((entry) => entry.caseVersion === "positive-0" ? { ...entry, subsystem: "render" as const } : entry) };
+    expect(compareObservations(renderBaseline, candidate, { ...policy, claim: "non_regression_only" })).toMatchObject({
+      verdict: "fail",
+      reasons: ["hard_invariant_regression"],
+    });
   });
 });
