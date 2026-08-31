@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { chmod, lstat, readFile } from "node:fs/promises";
+import { open } from "node:fs/promises";
 
 import { createPrismaQualityPromotionRepository } from "../feedback-quality/repository";
 import { promoteFeedbackCase, retireFeedbackCase, type PromotionDecision, type PromotionDependencies, type PromotionResult } from "../feedback-quality/promote";
@@ -11,6 +11,8 @@ import { resolve } from "node:path";
 
 export type CommandIo = Readonly<{ stdout(line: string): void; stderr(line: string): void }>;
 const processIo: CommandIo = { stdout: (line) => process.stdout.write(`${line}\n`), stderr: (line) => process.stderr.write(`${line}\n`) };
+export const MAX_DECISION_FILE_BYTES = 1 * 1024 * 1024;
+export const MAX_REASON_FILE_BYTES = 64 * 1024;
 
 function safeLog(value: Record<string, unknown>): string {
   const allowed = ["operation", "eventId", "caseVersion", "status", "reason"];
@@ -19,15 +21,46 @@ function safeLog(value: Record<string, unknown>): string {
   return JSON.stringify(result);
 }
 
-async function privateFile(path: string): Promise<Uint8Array> {
-  const stat = await lstat(path);
-  if (stat.isSymbolicLink() || !stat.isFile() || (stat.mode & 0o7777) !== 0o600 || stat.nlink !== 1) throw new Error("private_file_invalid");
-  return new Uint8Array(await readFile(path, { flag: constants.O_RDONLY }));
+export async function readPrivateFile(path: string, maxBytes: number): Promise<Uint8Array> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw new Error();
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const initial = await handle.stat();
+    if (!initial.isFile() || initial.nlink !== 1 || (initial.mode & 0o7777) !== 0o600 || initial.size > maxBytes) throw new Error();
+    const buffer = Buffer.allocUnsafe(maxBytes + 1);
+    let offset = 0;
+    while (offset < buffer.byteLength) {
+      const read = await handle.read(buffer, offset, buffer.byteLength - offset, null);
+      if (read.bytesRead === 0) break;
+      offset += read.bytesRead;
+    }
+    const final = await handle.stat();
+    if (!final.isFile() || final.nlink !== 1 || (final.mode & 0o7777) !== 0o600 || final.size > maxBytes || offset > maxBytes) throw new Error();
+    return new Uint8Array(buffer.subarray(0, offset));
+  } catch {
+    throw new Error("private_file_invalid");
+  } finally {
+    try { await handle?.close(); } catch { /* preserve the private error */ }
+  }
 }
 
-async function readJson(path: string): Promise<unknown> {
-  const bytes = await privateFile(path);
-  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); } catch { throw new Error("decision_file_invalid"); }
+export async function readDecisionFile(path: string): Promise<unknown> {
+  const bytes = await readPrivateFile(path, MAX_DECISION_FILE_BYTES);
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    if (text.length === 0) throw new Error();
+    return JSON.parse(text);
+  } catch { throw new Error("decision_file_invalid"); }
+}
+
+export async function readReasonFile(path: string): Promise<string> {
+  const bytes = await readPrivateFile(path, MAX_REASON_FILE_BYTES);
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    if (text.length === 0) throw new Error();
+    return text;
+  } catch { throw new Error("reason_file_invalid"); }
 }
 
 function parse(argv: readonly string[]): { operation: "promote"; decisionFile: string } | { operation: "retire"; targetEventId: string; reasonFile: string } {
@@ -51,24 +84,24 @@ export async function runFeedbackQualityPromote(argv: readonly string[], depende
   try {
     const result = command.operation === "promote"
       ? await dependencies.execute(await dependencies.readDecision(command.decisionFile) as PromotionDecision)
-      : await dependencies.retire({ action: "retire", targetEventId: command.targetEventId, reason: new TextDecoder("utf-8", { fatal: true }).decode(await privateFile(command.reasonFile)) });
+      : await dependencies.retire({ action: "retire", targetEventId: command.targetEventId, reason: await readReasonFile(command.reasonFile) });
     io[(result.status === "committed" || result.status === "noop" || result.status === "excluded") ? "stdout" : "stderr"](
       safeLog({ operation: command.operation, eventId: result.eventId, ...(result.caseVersion ? { caseVersion: result.caseVersion } : {}), status: result.status }),
     );
     return result.status === "committed" || result.status === "noop" || result.status === "excluded" ? 0 : 1;
   } catch (error) {
-    io.stderr(safeLog({ operation: command.operation, reason: error instanceof Error && ["invalid_decision", "private_file_invalid", "decision_file_invalid"].includes(error.message) ? "invalid_arguments" : "promotion_failed" }));
+    io.stderr(safeLog({ operation: command.operation, reason: error instanceof Error && ["invalid_decision", "private_file_invalid", "decision_file_invalid", "reason_file_invalid"].includes(error.message) ? "invalid_arguments" : "promotion_failed" }));
     return error instanceof Error && error.message === "invalid_arguments" ? 2 : 1;
   }
 }
 
 export async function composeFeedbackQualityPromoteDependencies(): Promise<CommandDependencies> {
-  const [{ prisma }, { downloadFile }] = await Promise.all([import("@clipclap/shared/lib/prisma"), import("@clipclap/shared/lib/r2")]);
+  const [{ prisma }, { downloadFile, getObjectSize }] = await Promise.all([import("@clipclap/shared/lib/prisma"), import("@clipclap/shared/lib/r2")]);
   const repository = createPrismaQualityPromotionRepository(prisma);
   const v1Root = resolve(__dirname, "../../.corpus/feedback-learning");
   const v1Paths = await ensurePrivateTree(v1Root);
   const common: PromotionDependencies = {
-    repository, root: DEFAULT_QUALITY_ROOT, downloadFile,
+    repository, root: DEFAULT_QUALITY_ROOT, downloadFile, getObjectSize,
     // Promotion acquires this V1 lock before the V2 labels lock; do not call
     // any V1 mutator while the V2 lock is held.
     withV1AuthorityLock: <T>(operation: () => Promise<T>) => withCorpusLock(v1Paths.lockFile, operation),
@@ -89,7 +122,7 @@ export async function composeFeedbackQualityPromoteDependencies(): Promise<Comma
     },
   };
   return {
-    readDecision: readJson,
+    readDecision: readDecisionFile,
     execute: (request) => promoteFeedbackCase(request, common),
     retire: (request) => retireFeedbackCase(request, common),
   };

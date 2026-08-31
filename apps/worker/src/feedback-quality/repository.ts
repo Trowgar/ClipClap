@@ -5,6 +5,7 @@ import type { FeedbackProjection } from "../feedback-learning/types";
 import type { ContentHash, PromotionIdentity, PromotionSnapshot, QualityClipProjection, QualityJobProjection } from "./promote";
 
 const TRANSACTION_TIMEOUT_MS = 15_000;
+const MAX_ARTIFACT_KEY_BYTES = 4_096;
 const FEEDBACK_SELECT = {
   id: true, clipId: true, jobId: true, userId: true, surface: true, verdict: true,
   reason: true, note: true, snapshot: true, evidenceKey: true, locale: true, createdAt: true, updatedAt: true,
@@ -41,6 +42,14 @@ function dateIso(value: unknown): string {
   }
 }
 
+function optionalArtifactKey(value: unknown): string | null {
+  if (value === null || value === "") return null;
+  if (typeof value !== "string" || value.includes("\0") || Buffer.byteLength(value, "utf8") > MAX_ARTIFACT_KEY_BYTES) {
+    throw new QualityPromotionRepositoryError("projection_invalid");
+  }
+  return value;
+}
+
 function hashSnapshot(value: unknown): ContentHash {
   try { return sha256(canonicalJson(value)); }
   catch { throw new QualityPromotionRepositoryError("projection_invalid"); }
@@ -54,7 +63,7 @@ function projectionFeedback(raw: unknown): FeedbackProjection {
     throw new QualityPromotionRepositoryError("projection_invalid");
   }
   dateIso(value.updatedAt);
-  return value as unknown as FeedbackProjection;
+  return { ...value, evidenceKey: optionalArtifactKey(value.evidenceKey) } as unknown as FeedbackProjection;
 }
 
 function projectionClip(raw: unknown): QualityClipProjection {
@@ -64,7 +73,9 @@ function projectionClip(raw: unknown): QualityClipProjection {
       typeof value.endTime !== "number" || !Number.isFinite(value.startTime) || !Number.isFinite(value.endTime)) {
     throw new QualityPromotionRepositoryError("projection_invalid");
   }
-  return value as unknown as QualityClipProjection;
+  const storageKey = optionalArtifactKey(value.storageKey);
+  if (storageKey === null) throw new QualityPromotionRepositoryError("projection_invalid");
+  return { ...value, storageKey } as unknown as QualityClipProjection;
 }
 
 function projectionJob(raw: unknown): QualityJobProjection {
@@ -76,7 +87,12 @@ function projectionJob(raw: unknown): QualityJobProjection {
       (value.sourceDurationSec !== null && (typeof value.sourceDurationSec !== "number" || !Number.isFinite(value.sourceDurationSec)))) {
     throw new QualityPromotionRepositoryError("projection_invalid");
   }
-  return value as unknown as QualityJobProjection;
+  return {
+    ...value,
+    sourceKey: optionalArtifactKey(value.sourceKey),
+    sourceArtifactKey: optionalArtifactKey(value.sourceArtifactKey),
+    normalizedArtifactKey: optionalArtifactKey(value.normalizedArtifactKey),
+  } as unknown as QualityJobProjection;
 }
 
 function candidateVersion(input: Pick<PromotionIdentity, "feedbackId" | "feedbackUpdatedAt" | "snapshotSha256">): ContentHash {

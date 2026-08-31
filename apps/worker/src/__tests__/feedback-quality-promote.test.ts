@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import { createPrismaQualityPromotionRepository } from "../feedback-quality/repository";
-import { promoteFeedbackCase, retireFeedbackCase, type PromotionDecision, type PromotionDependencies } from "../feedback-quality/promote";
+import { MAX_EVIDENCE_BYTES, promoteFeedbackCase, retireFeedbackCase, type PromotionDecision, type PromotionDependencies } from "../feedback-quality/promote";
 
 const sha = (digit: string) => `sha256:${digit.repeat(64)}` as const;
 const updatedAt = "2026-08-31T12:00:00.000Z";
@@ -194,6 +194,30 @@ describe("quality feedback promotion", () => {
     expect(dependencies.downloadFile).not.toHaveBeenCalled();
   });
 
+  it("rejects an oversized artifact from HEAD without issuing its GET", async () => {
+    const getObjectSize = vi.fn(async () => MAX_EVIDENCE_BYTES + 1);
+    const dependencies = deps({ getObjectSize });
+    await expect(promoteFeedbackCase(decision(), dependencies)).rejects.toMatchObject({ code: "artifact_too_large" });
+    expect(getObjectSize).toHaveBeenCalledWith("evidence/clip.mp4");
+    expect(dependencies.downloadFile).not.toHaveBeenCalled();
+  });
+
+  it("cancels an oversized response stream at the byte cap", async () => {
+    const cancel = vi.fn(async () => undefined);
+    const oversized = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array(MAX_EVIDENCE_BYTES + 1)); },
+      cancel,
+    });
+    const dependencies = deps({ downloadFile: vi.fn(async () => oversized) });
+    await expect(promoteFeedbackCase(decision(), dependencies)).rejects.toMatchObject({ code: "artifact_too_large" });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an oversized Buffer before copying it", async () => {
+    const dependencies = deps({ downloadFile: vi.fn(async () => Buffer.alloc(MAX_EVIDENCE_BYTES + 1)) });
+    await expect(promoteFeedbackCase(decision(), dependencies)).rejects.toMatchObject({ code: "artifact_too_large" });
+  });
+
   it("materializes a reference-only non-render case without downloading a source artifact", async () => {
     const dependencies = deps({
       repository: { capture: vi.fn(async () => snapshot({ job: { ...snapshot().job, sourceArtifactKey: null, normalizedArtifactKey: null } })) },
@@ -227,5 +251,19 @@ describe("quality promotion repository", () => {
     expect(captured).not.toHaveProperty("v1Approval");
     expect(calls).toEqual(["SET TRANSACTION READ ONLY"]);
     expect(client.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats empty artifact keys as missing instead of selecting them", async () => {
+    const tx: any = {
+      $executeRawUnsafe: vi.fn(async () => 0),
+      clipFeedback: { findUnique: vi.fn(async () => ({ id: "feedback-1", clipId: "clip-1", jobId: "job-1", userId: "user-1", surface: "bot", verdict: "AS_IS", reason: null, note: null, snapshot: { title: "clip" }, evidenceKey: "", locale: null, createdAt: new Date(updatedAt), updatedAt: new Date(updatedAt) })) },
+      clip: { findUnique: vi.fn(async () => ({ id: "clip-1", jobId: "job-1", storageKey: "clips/clip.mp4", duration: 12, startTime: 1, endTime: 7, title: "clip", subtitleTrack: null, cropPlan: null, language: "en", clipKind: "speech", hookStart: 1, hookEnd: 2, payoffAt: 5 })) },
+      job: { findUnique: vi.fn(async () => ({ id: "job-1", userId: "user-1", transcriptJson: { segments: [] }, transcriptPartial: false, sourceKey: "sources/job.mp4", sourceArtifactKey: "source.mp4", normalizedArtifactKey: "", sourceDurationSec: 12 })) },
+    };
+    const repository = createPrismaQualityPromotionRepository({ $transaction: vi.fn(async (callback: (transaction: any) => unknown) => callback(tx)) } as never);
+    const captured = await repository.capture({ feedbackId: "feedback-1", clipId: "clip-1", jobId: "job-1", userId: "user-1", feedbackUpdatedAt: updatedAt, snapshotSha256: snapshotHash, candidateVersion: candidateHash, destination: "eval" });
+    expect(captured.feedback.evidenceKey).toBeNull();
+    expect(captured.job.normalizedArtifactKey).toBeNull();
+    expect(captured.job.sourceArtifactKey).toBe("source.mp4");
   });
 });

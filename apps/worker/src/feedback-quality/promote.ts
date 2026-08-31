@@ -9,6 +9,11 @@ export type ContentHash = `sha256:${string}`;
 export type PromotionCause = "reproducible" | "subjective" | "source" | "missing_evidence";
 export type EvidenceStatus = "permanent" | "missing";
 
+// Immutable ingestion ceilings: enough for normal review artifacts, bounded
+// before any body is copied into memory.
+export const MAX_EVIDENCE_BYTES = 32 * 1024 * 1024;
+export const MAX_SOURCE_BYTES = 512 * 1024 * 1024;
+
 export interface V1ApprovalIdentity {
   eventId: string;
   feedbackId: string;
@@ -113,6 +118,8 @@ export interface PromotionDependencies {
   publishCaseAndLabel?: (input: PromotionPublishInput, root: string, beforeLabel?: () => Promise<void>) => Promise<CommitResult>;
   appendLabelEvent?: typeof appendLabelEvent;
   downloadFile: (key: string, request: { method: "GET" }) => Promise<Uint8Array | Buffer | ReadableStream<Uint8Array>>;
+  /** Read-only HEAD metadata; production rejects unknown/oversized objects before GET. */
+  getObjectSize?: (key: string) => Promise<number | null>;
   /** V1 reviews.lock wrapper. Positive authority must remain held through V2 publication. */
   withV1AuthorityLock?: <T>(operation: () => Promise<T>) => Promise<T>;
   /** Read-only projection of the existing V1 approval ledger. */
@@ -128,7 +135,7 @@ export interface PromotionDependencies {
 export type PromotionResult = Readonly<{ status: CommitResult["status"] | "excluded"; eventId: string; caseVersion?: string }>;
 
 export class QualityPromotionError extends Error {
-  constructor(readonly code: "invalid_decision" | "identity_mismatch" | "approval_missing" | "inputs_missing" | "evidence_missing" | "unsupported_label" | "publication_failed") {
+  constructor(readonly code: "invalid_decision" | "identity_mismatch" | "approval_missing" | "inputs_missing" | "evidence_missing" | "artifact_too_large" | "unsupported_label" | "publication_failed") {
     super(code);
     this.name = "QualityPromotionError";
   }
@@ -210,10 +217,54 @@ function assertInputs(value: PromotionDecision, snapshot: PromotionSnapshot): vo
   }
   if (!snapshot.feedback.evidenceKey || value.evidence !== "permanent") throw new QualityPromotionError("evidence_missing");
 }
-async function bytesFrom(value: Uint8Array | Buffer | ReadableStream<Uint8Array>): Promise<Uint8Array> {
-  if (value instanceof Uint8Array) return new Uint8Array(value);
-  const buffer = await new Response(value as ReadableStream<Uint8Array>).arrayBuffer();
-  return new Uint8Array(buffer);
+async function bytesFrom(value: Uint8Array | Buffer | ReadableStream<Uint8Array>, cap: number): Promise<Uint8Array> {
+  if (value instanceof Buffer) {
+    if (value.byteLength > cap) throw new QualityPromotionError("artifact_too_large");
+    return new Uint8Array(value);
+  }
+  if (value instanceof Uint8Array) {
+    if (value.byteLength > cap) throw new QualityPromotionError("artifact_too_large");
+    return new Uint8Array(value);
+  }
+  const reader = value.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let cancelled = false;
+  const cancel = async (): Promise<void> => {
+    if (cancelled) return;
+    cancelled = true;
+    await reader.cancel();
+  };
+  try {
+    for (;;) {
+      const item = await reader.read();
+      if (item.done) break;
+      if (!(item.value instanceof Uint8Array)) throw new QualityPromotionError("inputs_missing");
+      total += item.value.byteLength;
+      if (!Number.isSafeInteger(total) || total > cap) {
+        await cancel().catch(() => undefined);
+        throw new QualityPromotionError("artifact_too_large");
+      }
+      chunks.push(new Uint8Array(item.value));
+    }
+  } catch (error) {
+    if (!cancelled) await cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { result.set(chunk, offset); offset += chunk.byteLength; }
+  return result;
+}
+
+async function downloadBounded(dependencies: PromotionDependencies, key: string, cap: number): Promise<Uint8Array> {
+  if (dependencies.getObjectSize) {
+    const size = await dependencies.getObjectSize(key);
+    if (size === null || !Number.isSafeInteger(size) || size < 0 || size > cap) throw new QualityPromotionError("artifact_too_large");
+  }
+  return bytesFrom(await dependencies.downloadFile(key, { method: "GET" }), cap);
 }
 function nowIso(dependencies: PromotionDependencies): string { const date = dependencies.now?.() ?? new Date(); const value = date.toISOString(); if (!validDate(value)) throw new QualityPromotionError("publication_failed"); return value; }
 
@@ -245,12 +296,12 @@ export async function promoteFeedbackCase(rawDecision: PromotionDecision, depend
     }
     assertClassification(value, snapshot);
     assertInputs(value, snapshot);
-    const evidence = await bytesFrom(await dependencies.downloadFile(snapshot.feedback.evidenceKey!, { method: "GET" }));
+    const evidence = await downloadBounded(dependencies, snapshot.feedback.evidenceKey!, MAX_EVIDENCE_BYTES);
     if (evidence.byteLength === 0) throw new QualityPromotionError("evidence_missing");
     const needsTranscript = value.subsystem === "selection" || value.subsystem === "boundary";
     const transcript = needsTranscript ? Buffer.from(canonicalJson(snapshot.job.transcriptJson)) : null;
     const sourceKey = !needsTranscript && !value.expected.referenceOnly ? (snapshot.job.normalizedArtifactKey ?? snapshot.job.sourceArtifactKey) : null;
-    const source = sourceKey ? await bytesFrom(await dependencies.downloadFile(sourceKey, { method: "GET" })) : null;
+    const source = sourceKey ? await downloadBounded(dependencies, sourceKey, MAX_SOURCE_BYTES) : null;
     if (sourceKey && (!source || source.byteLength === 0)) throw new QualityPromotionError("inputs_missing");
     const inputs = { transcriptSha256: transcript ? sha256(transcript) : null, evidenceSha256: sha256(Buffer.from(evidence)), sourceSha256: source ? sha256(Buffer.from(source)) : null, sourceDurationSec: snapshot.job.sourceDurationSec };
     const caseBody = { schemaVersion: 1 as const, feedbackId: value.feedbackId, clipId: value.clipId, jobId: value.jobId, userId: value.userId, feedbackUpdatedAt: value.feedbackUpdatedAt, snapshotSha256: value.snapshotSha256, candidateVersion: value.candidateVersion, set: value.set, disposition: value.disposition, verdict: value.verdict, subsystem: value.subsystem, confidence: value.confidence, expected: value.expected, inputs };
