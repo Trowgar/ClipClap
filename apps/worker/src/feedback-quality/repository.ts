@@ -85,7 +85,7 @@ function candidateVersion(input: Pick<PromotionIdentity, "feedbackId" | "feedbac
 
 function assertIdentity(input: PromotionIdentity, feedback: FeedbackProjection): void {
   const currentUpdatedAt = dateIso(feedback.updatedAt);
-  if (feedback.id !== input.feedbackId || currentUpdatedAt !== input.feedbackUpdatedAt ||
+  if (feedback.id !== input.feedbackId || feedback.clipId !== input.clipId || feedback.jobId !== input.jobId || feedback.userId !== input.userId || currentUpdatedAt !== input.feedbackUpdatedAt ||
       hashSnapshot(feedback.snapshot) !== input.snapshotSha256 || candidateVersion(input) !== input.candidateVersion) {
     throw new QualityPromotionRepositoryError("identity_mismatch");
   }
@@ -112,12 +112,12 @@ export function createPrismaQualityPromotionRepository(client: PrismaClient): Qu
           const rawClip = await transaction.clip.findUnique({ where: { id: feedback.clipId }, select: CLIP_SELECT });
           if (rawClip === null) throw new QualityPromotionRepositoryError("clip_missing");
           const clip = projectionClip(rawClip);
-          if (clip.jobId !== feedback.jobId) throw new QualityPromotionRepositoryError("identity_mismatch");
+          if (clip.jobId !== feedback.jobId || clip.id !== input.clipId) throw new QualityPromotionRepositoryError("identity_mismatch");
           const rawJob = await transaction.job.findUnique({ where: { id: feedback.jobId }, select: JOB_SELECT });
           if (rawJob === null) throw new QualityPromotionRepositoryError("job_missing");
           const job = projectionJob(rawJob);
-          if (job.userId !== feedback.userId) throw new QualityPromotionRepositoryError("identity_mismatch");
-          return { feedback, clip, job, v1Approval: input.v1Approval };
+          if (job.userId !== feedback.userId || job.id !== input.jobId) throw new QualityPromotionRepositoryError("identity_mismatch");
+          return { feedback, clip, job };
         }, transactionOptions());
       } catch (error) {
         if (error instanceof QualityPromotionRepositoryError) throw error;

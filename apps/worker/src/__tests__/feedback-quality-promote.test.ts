@@ -17,6 +17,9 @@ function decision(overrides: Partial<PromotionDecision> = {}): PromotionDecision
     feedbackUpdatedAt: updatedAt,
     snapshotSha256: snapshotHash,
     candidateVersion: candidateHash,
+    clipId: "clip-1",
+    jobId: "job-1",
+    userId: "user-1",
     verdict: "AS_IS",
     disposition: "positive",
     set: "eval",
@@ -25,7 +28,6 @@ function decision(overrides: Partial<PromotionDecision> = {}): PromotionDecision
     engineCause: "reproducible",
     evidence: "permanent",
     expected: { approvedMoment: true, completeBoundary: true, sourceWindow: { start: 1, end: 7 } },
-    v1Approval: { eventId: "v1-event-1", feedbackId: "feedback-1", feedbackUpdatedAt: updatedAt, snapshotSha256: snapshotHash, candidateVersion: candidateHash, set: "eval" },
     ...overrides,
   };
 }
@@ -46,7 +48,6 @@ function snapshot(overrides: Record<string, unknown> = {}) {
       transcriptPartial: false, sourceKey: "sources/job.mp4", sourceArtifactKey: "artifacts/job.mp4",
       normalizedArtifactKey: null, sourceDurationSec: 12,
     },
-    v1Approval: null,
     ...overrides,
   };
 }
@@ -54,9 +55,11 @@ function snapshot(overrides: Record<string, unknown> = {}) {
 function deps(overrides: Partial<PromotionDependencies> = {}): PromotionDependencies {
   return {
     repository: { capture: vi.fn(async () => snapshot()) },
+    resolveV1Approval: vi.fn(async () => ({ eventId: "v1-event-1", feedbackId: "feedback-1", clipId: "clip-1", jobId: "job-1", userId: "user-1", feedbackUpdatedAt: updatedAt, snapshotSha256: snapshotHash, candidateVersion: candidateHash, destination: "eval" as const })),
     root: "/tmp/quality",
-    publishCaseAndLabel: vi.fn(async () => ({ status: "committed" as const })),
+    publishCaseAndLabel: vi.fn(async (_input, _root, guard) => { await guard?.(); return { status: "committed" as const }; }),
     appendLabelEvent: vi.fn(async () => ({ status: "committed" as const })),
+    qualityDestinationGuard: vi.fn(async () => undefined),
     downloadFile: vi.fn(async () => new Uint8Array([1, 2, 3])),
     ...overrides,
   };
@@ -71,7 +74,7 @@ describe("quality feedback promotion", () => {
     expect(dependencies.publishCaseAndLabel).toHaveBeenCalledWith(expect.objectContaining({
       label: expect.objectContaining({ disposition: "positive", verdict: "AS_IS" }),
       files: expect.objectContaining({ "case.json": expect.any(Uint8Array), "transcript.json": expect.any(Uint8Array), "source-or-evidence.mp4": expect.any(Uint8Array) }),
-    }), "/tmp/quality");
+    }), "/tmp/quality", expect.any(Function));
   });
 
   it.each([
@@ -81,7 +84,7 @@ describe("quality feedback promotion", () => {
     const result = await promoteFeedbackCase(decision({ verdict: "NO", disposition: "exclude", engineCause: cause, evidence: "missing" }), dependencies);
     expect(result.status).toBe("excluded");
     expect(dependencies.publishCaseAndLabel).not.toHaveBeenCalled();
-    expect(dependencies.appendLabelEvent).toHaveBeenCalledWith(expect.objectContaining({ disposition: "exclude", reason: cause }), "/tmp/quality");
+    expect(dependencies.appendLabelEvent).toHaveBeenCalledWith(expect.objectContaining({ disposition: "exclude", reason: cause }), "/tmp/quality", expect.objectContaining({ beforeCommit: expect.any(Function) }));
     expect(dependencies.downloadFile).not.toHaveBeenCalled();
   });
 
@@ -101,7 +104,14 @@ describe("quality feedback promotion", () => {
     const dependencies = deps({ repository: { capture: vi.fn(async () => snapshot({ feedback: { ...snapshot().feedback, verdict: "EDIT" } })) } });
     const result = await promoteFeedbackCase(decision({ verdict: "EDIT", disposition: "confirmed_negative" }), dependencies);
     expect(result.status).toBe("committed");
-    expect(dependencies.publishCaseAndLabel).toHaveBeenCalledWith(expect.objectContaining({ label: expect.objectContaining({ disposition: "confirmed_negative", verdict: "EDIT" }) }), "/tmp/quality");
+    expect(dependencies.publishCaseAndLabel).toHaveBeenCalledWith(expect.objectContaining({ label: expect.objectContaining({ disposition: "confirmed_negative", verdict: "EDIT" }) }), "/tmp/quality", expect.any(Function));
+  });
+
+  it("promotes a reproducible NO only as a confirmed engine negative", async () => {
+    const dependencies = deps({ repository: { capture: vi.fn(async () => snapshot({ feedback: { ...snapshot().feedback, verdict: "NO" } })) } });
+    const result = await promoteFeedbackCase(decision({ verdict: "NO", disposition: "confirmed_negative" }), dependencies);
+    expect(result.status).toBe("committed");
+    expect(dependencies.publishCaseAndLabel).toHaveBeenCalledWith(expect.objectContaining({ label: expect.objectContaining({ disposition: "confirmed_negative", verdict: "NO" }) }), "/tmp/quality", expect.any(Function));
   });
 
   it("refuses an EDIT/NO labelled as subjective, source-caused, or missing evidence", async () => {
@@ -114,13 +124,42 @@ describe("quality feedback promotion", () => {
 
   it("requires the V1 approval identity to match a positive label exactly", async () => {
     const dependencies = deps();
-    await expect(promoteFeedbackCase(decision({ v1Approval: { ...decision().v1Approval!, set: "holdout" } }), dependencies)).rejects.toMatchObject({ code: "identity_mismatch" });
+    dependencies.resolveV1Approval = vi.fn(async () => ({ eventId: "v1-event-1", feedbackId: "feedback-1", clipId: "clip-1", jobId: "job-1", userId: "user-1", feedbackUpdatedAt: updatedAt, snapshotSha256: snapshotHash, candidateVersion: candidateHash, destination: "holdout" as const }));
+    await expect(promoteFeedbackCase(decision(), dependencies)).rejects.toMatchObject({ code: "identity_mismatch" });
     expect(dependencies.publishCaseAndLabel).not.toHaveBeenCalled();
   });
 
+  it("requires a real V1 approval resolver and checks every approval identity field", async () => {
+    const missing = deps({ resolveV1Approval: vi.fn(async () => null) });
+    await expect(promoteFeedbackCase(decision(), missing)).rejects.toMatchObject({ code: "approval_missing" });
+    const approval = { eventId: "v1-event-1", feedbackId: "feedback-1", clipId: "clip-1", jobId: "job-1", userId: "user-1", feedbackUpdatedAt: updatedAt, snapshotSha256: snapshotHash, candidateVersion: candidateHash, destination: "eval" as const };
+    for (const field of ["feedbackId", "clipId", "jobId", "userId", "feedbackUpdatedAt", "snapshotSha256", "candidateVersion", "destination"] as const) {
+      const wrong = deps({ resolveV1Approval: vi.fn(async () => ({ ...approval, [field]: field === "destination" ? "holdout" : field === "feedbackUpdatedAt" ? "2026-08-31T12:00:01.000Z" : field === "snapshotSha256" || field === "candidateVersion" ? sha("e") : "other-id" } as never)) });
+      await expect(promoteFeedbackCase(decision(), wrong)).rejects.toMatchObject({ code: "identity_mismatch" });
+      expect(wrong.publishCaseAndLabel).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does not download source for selection/boundary when a source key happens to exist", async () => {
+    const dependencies = deps();
+    await promoteFeedbackCase(decision({ subsystem: "boundary" }), dependencies);
+    expect(dependencies.downloadFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not require a transcript for framing when evidence and source are present", async () => {
+    const dependencies = deps({ repository: { capture: vi.fn(async () => snapshot({ job: { ...snapshot().job, transcriptJson: null } })) } });
+    await expect(promoteFeedbackCase(decision({ subsystem: "framing", expected: { approvedMoment: true, completeBoundary: true } }), dependencies)).resolves.toMatchObject({ status: "committed" });
+  });
+
+  it("passes a destination guard into the atomic publisher", async () => {
+    const dependencies = deps();
+    await promoteFeedbackCase(decision(), dependencies);
+    expect(dependencies.publishCaseAndLabel).toHaveBeenCalledWith(expect.anything(), "/tmp/quality", expect.any(Function));
+  });
+
   it("enforces the permanent destination lock before any evidence download", async () => {
-    const dependencies = deps({ existingDestination: vi.fn(async () => "holdout" as const) });
-    await expect(promoteFeedbackCase(decision(), dependencies)).rejects.toMatchObject({ code: "identity_mismatch" });
+    const dependencies = deps({ qualityDestinationGuard: vi.fn(async () => { throw new Error("destination_locked"); }), qualityDestinationPreflight: vi.fn(async () => { throw new Error("destination_locked"); }) });
+    await expect(promoteFeedbackCase(decision(), dependencies)).rejects.toMatchObject({ message: "destination_locked" });
     expect(dependencies.downloadFile).not.toHaveBeenCalled();
   });
 
@@ -137,7 +176,7 @@ describe("quality feedback promotion", () => {
     const append = vi.fn(async () => ({ status: "committed" as const }));
     const result = await retireFeedbackCase({ action: "retire", targetEventId: "review-event-1", reason: "operator correction" }, { root: "/tmp/quality", eventId: () => "retire-event-1", appendLabelEvent: append });
     expect(result).toEqual({ status: "committed", eventId: "retire-event-1" });
-    expect(append).toHaveBeenCalledWith(expect.objectContaining({ action: "retire", operation: "retire", targetEventId: "review-event-1", reason: "operator correction" }), "/tmp/quality");
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({ action: "retire", operation: "retire", targetEventId: "review-event-1", reason: "operator correction" }), "/tmp/quality", expect.objectContaining({ beforeCommit: expect.any(Function) }));
   });
 });
 
@@ -153,7 +192,8 @@ describe("quality promotion repository", () => {
     const client = { $transaction: vi.fn(async (callback: (transaction: any) => unknown) => callback(tx)) };
     const repository = createPrismaQualityPromotionRepository(client as never);
     expect(Object.keys(repository)).toEqual(["capture"]);
-    await repository.capture({ feedbackId: "feedback-1", feedbackUpdatedAt: updatedAt, snapshotSha256: snapshotHash, candidateVersion: candidateHash, v1Approval: null });
+    const captured = await repository.capture({ feedbackId: "feedback-1", clipId: "clip-1", jobId: "job-1", userId: "user-1", feedbackUpdatedAt: updatedAt, snapshotSha256: snapshotHash, candidateVersion: candidateHash, destination: "eval" });
+    expect(captured).not.toHaveProperty("v1Approval");
     expect(calls).toEqual(["SET TRANSACTION READ ONLY"]);
     expect(client.$transaction).toHaveBeenCalledTimes(1);
   });

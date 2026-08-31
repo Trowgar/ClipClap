@@ -55,6 +55,8 @@ export type AppendLabelOptions = Readonly<{
   injectFault?: QualityStoreFaultInjector;
   /** Test-only deterministic temp name; never persisted. */
   tempSuffix?: string;
+  /** Runs under labels.lock immediately before publishing the new ledger bytes. */
+  beforeCommit?: () => void | Promise<void>;
 }>;
 
 export type PublishBundleInput = Readonly<{
@@ -718,6 +720,9 @@ async function appendLabelEventLocked(
           await restoreLedgerMode(anchoredPath(tree.ledger, "labels.jsonl"));
           return { status: "noop" };
         }
+        // Idempotent replays must remain no-ops even when a guard's target has
+        // since changed state; guards protect only a new append.
+        await options.beforeCommit?.();
         const tempSuffix = options.tempSuffix ?? randomBytes(12).toString("hex");
         if (!/^[0-9a-z-]{1,64}$/.test(tempSuffix)) throw safeError("invalid_input");
         tempPath = anchoredPath(tree.ledger, `.labels.jsonl.tmp-${tempSuffix}`);
@@ -786,6 +791,64 @@ export async function appendLabelEvent(
   }
 }
 
+/** Read the permanent destination lock without acquiring labels.lock. Callers
+ * must invoke this only from a callback already holding that lock. */
+export async function qualityDestination(root: string, feedbackId: string): Promise<"eval" | "holdout" | null> {
+  const paths = await ensureQualityTree(validateRoot(root));
+  try {
+    const current = await lstat(paths.labelsFile);
+    if (current.isSymbolicLink() || !current.isFile() || current.nlink !== 1) throw safeError("unsafe_path");
+  } catch (error) {
+    if (codeOf(error) === "ENOENT") return null;
+    if (error instanceof QualityStoreError) throw error;
+    throw safeError("unsafe_path");
+  }
+  const bytes = await readRegular(paths.labelsFile);
+  if (bytes.byteLength === 0 || bytes[bytes.byteLength - 1] !== 0x0a) throw safeError("integrity");
+  let destination: "eval" | "holdout" | null = null;
+  const lines = Buffer.from(bytes).toString("utf8").split("\n");
+  for (const line of lines) {
+    if (!line) continue;
+    let value: unknown;
+    try { value = JSON.parse(line); } catch { throw safeError("integrity"); }
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw safeError("integrity");
+    const record = value as Record<string, unknown>;
+    if (record.action === "retire") {
+      if (typeof record.targetEventId !== "string" || record.targetEventId.length === 0) throw safeError("integrity");
+      continue;
+    }
+    if (record.action !== "label" || typeof record.eventId !== "string" || typeof record.feedbackId !== "string" || (record.set !== "eval" && record.set !== "holdout")) throw safeError("integrity");
+    if (record.feedbackId !== feedbackId) continue;
+    const set = record.set as "eval" | "holdout";
+    if (destination !== null && destination !== set) throw safeError("integrity");
+    destination = set;
+  }
+  return destination;
+}
+
+/** Validate that a correction targets an existing, currently active label.
+ * This is intended for an appendLabelEvent beforeCommit callback. */
+export async function qualityRetirementTarget(root: string, targetEventId: string): Promise<void> {
+  const paths = await ensureQualityTree(validateRoot(root));
+  const bytes = await readRegular(paths.labelsFile);
+  if (bytes.byteLength === 0 || bytes[bytes.byteLength - 1] !== 0x0a) throw safeError("integrity");
+  const labels = new Set<string>();
+  const retired = new Set<string>();
+  for (const line of Buffer.from(bytes).toString("utf8").split("\n")) {
+    if (!line) continue;
+    let value: unknown;
+    try { value = JSON.parse(line); } catch { throw safeError("integrity"); }
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw safeError("integrity");
+    const record = value as Record<string, unknown>;
+    if (record.action === "retire") {
+      if (typeof record.targetEventId !== "string" || record.targetEventId.length === 0) throw safeError("integrity");
+      retired.add(record.targetEventId);
+    } else if (record.action === "label" && typeof record.eventId === "string" && record.eventId.length > 0) labels.add(record.eventId);
+    else throw safeError("integrity");
+  }
+  if (!labels.has(targetEventId) || retired.has(targetEventId)) throw safeError("integrity");
+}
+
 /** Publish a case and its active label while holding the single corpus lock.
  * A crash after the case commit leaves a harmless orphan; retry observes the
  * content-addressed case and appends the idempotent label event. */
@@ -793,6 +856,7 @@ export async function publishCaseAndLabel(
   bundle: PublishBundleInput,
   event: QualityLabelEvent,
   root = DEFAULT_QUALITY_ROOT,
+  beforeLabel?: () => void | Promise<void>,
 ): Promise<CommitResult> {
   const paths = await ensureQualityTree(validateRoot(root));
   await assertLockSafe(paths.labelsLock);
@@ -800,7 +864,7 @@ export async function publishCaseAndLabel(
     return await withCorpusLock(paths.labelsLock, async () => {
       const published = await publishBundleLocked(bundle, paths.root);
       if (published.status === "indeterminate") return published;
-      const labelled = await appendLabelEventLocked(event, paths.root);
+      const labelled = await appendLabelEventLocked(event, paths.root, { beforeCommit: beforeLabel });
       if (labelled.status === "indeterminate") return labelled;
       if (published.status === "committed_durability_uncertain" || labelled.status === "committed_durability_uncertain") {
         return { status: "committed_durability_uncertain" };

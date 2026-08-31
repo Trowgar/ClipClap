@@ -3,10 +3,9 @@ import { chmod, lstat, readFile } from "node:fs/promises";
 
 import { createPrismaQualityPromotionRepository } from "../feedback-quality/repository";
 import { promoteFeedbackCase, retireFeedbackCase, type PromotionDecision, type PromotionDependencies, type PromotionResult } from "../feedback-quality/promote";
-import { DEFAULT_QUALITY_ROOT } from "../feedback-quality/store";
+import { DEFAULT_QUALITY_ROOT, qualityDestination } from "../feedback-quality/store";
 import { foldLedger, parseLedger } from "../feedback-learning/ledger";
 import { ensurePrivateTree, readLedgerSnapshot } from "../feedback-learning/persistence";
-import type { TargetSet } from "../feedback-learning/types";
 import { resolve } from "node:path";
 
 export type CommandIo = Readonly<{ stdout(line: string): void; stderr(line: string): void }>;
@@ -67,12 +66,22 @@ export async function composeFeedbackQualityPromoteDependencies(): Promise<Comma
   const repository = createPrismaQualityPromotionRepository(prisma);
   const common: PromotionDependencies = {
     repository, root: DEFAULT_QUALITY_ROOT, downloadFile,
-    existingDestination: async (feedbackId: string): Promise<TargetSet | null> => {
+    resolveV1Approval: async (identity) => {
       const v1Root = resolve(__dirname, "../../.corpus/feedback-learning");
       const paths = await ensurePrivateTree(v1Root);
       const state = foldLedger(parseLedger(Buffer.from(await readLedgerSnapshot(paths))));
-      for (const event of state.activeDecisions) if (event.action === "approve" && event.feedbackId === feedbackId) return event.set;
+      for (const event of state.activeDecisions) if (event.action === "approve" && event.feedbackId === identity.feedbackId && event.set === identity.destination) {
+        return { eventId: event.eventId, feedbackId: event.feedbackId, clipId: event.clipId, jobId: event.jobId, userId: event.userId, feedbackUpdatedAt: event.feedbackUpdatedAt, snapshotSha256: event.snapshotSha256, candidateVersion: event.candidateVersion, destination: event.set };
+      }
       return null;
+    },
+    qualityDestinationGuard: async (feedbackId, destination) => {
+      const current = await qualityDestination(DEFAULT_QUALITY_ROOT, feedbackId);
+      if (current !== null && current !== destination) throw new Error("destination_locked");
+    },
+    qualityDestinationPreflight: async (feedbackId, destination) => {
+      const current = await qualityDestination(DEFAULT_QUALITY_ROOT, feedbackId);
+      if (current !== null && current !== destination) throw new Error("destination_locked");
     },
   };
   return {
