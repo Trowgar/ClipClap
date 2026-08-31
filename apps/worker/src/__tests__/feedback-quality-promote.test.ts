@@ -8,6 +8,7 @@ const sha = (digit: string) => `sha256:${digit.repeat(64)}` as const;
 const updatedAt = "2026-08-31T12:00:00.000Z";
 const snapshotHash = sha256(canonicalJson({ title: "clip" }));
 const candidateHash = sha256(`feedback-1\n${updatedAt}\n${snapshotHash}`);
+type AuthorityLock = NonNullable<PromotionDependencies["withV1AuthorityLock"]>;
 
 function decision(overrides: Partial<PromotionDecision> = {}): PromotionDecision {
   return {
@@ -55,6 +56,7 @@ function snapshot(overrides: Record<string, unknown> = {}) {
 function deps(overrides: Partial<PromotionDependencies> = {}): PromotionDependencies {
   return {
     repository: { capture: vi.fn(async () => snapshot()) },
+    withV1AuthorityLock: vi.fn(async function <T>(operation: () => Promise<T>): Promise<T> { return operation(); }) as AuthorityLock,
     resolveV1Approval: vi.fn(async () => ({ eventId: "v1-event-1", feedbackId: "feedback-1", clipId: "clip-1", jobId: "job-1", userId: "user-1", feedbackUpdatedAt: updatedAt, snapshotSha256: snapshotHash, candidateVersion: candidateHash, destination: "eval" as const })),
     root: "/tmp/quality",
     publishCaseAndLabel: vi.fn(async (_input, _root, guard) => { await guard?.(); return { status: "committed" as const }; }),
@@ -111,6 +113,7 @@ describe("quality feedback promotion", () => {
     const dependencies = deps({ repository: { capture: vi.fn(async () => snapshot({ feedback: { ...snapshot().feedback, verdict: "NO" } })) } });
     const result = await promoteFeedbackCase(decision({ verdict: "NO", disposition: "confirmed_negative" }), dependencies);
     expect(result.status).toBe("committed");
+    expect(dependencies.withV1AuthorityLock).not.toHaveBeenCalled();
     expect(dependencies.publishCaseAndLabel).toHaveBeenCalledWith(expect.objectContaining({ label: expect.objectContaining({ disposition: "confirmed_negative", verdict: "NO" }) }), "/tmp/quality", expect.any(Function));
   });
 
@@ -138,6 +141,34 @@ describe("quality feedback promotion", () => {
       await expect(promoteFeedbackCase(decision(), wrong)).rejects.toMatchObject({ code: "identity_mismatch" });
       expect(wrong.publishCaseAndLabel).not.toHaveBeenCalled();
     }
+  });
+
+  it("does not read V1 approval until its authority lock is acquired", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const acquired = vi.fn();
+    const dependencies = deps({
+      withV1AuthorityLock: vi.fn(async function <T>(operation: () => Promise<T>): Promise<T> { acquired(); await held; return operation(); }) as AuthorityLock,
+      resolveV1Approval: vi.fn(async () => null),
+    });
+    const pending = promoteFeedbackCase(decision(), dependencies);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(acquired).toHaveBeenCalledOnce();
+    expect(dependencies.resolveV1Approval).not.toHaveBeenCalled();
+    release();
+    await expect(pending).rejects.toMatchObject({ code: "approval_missing" });
+    expect(dependencies.publishCaseAndLabel).not.toHaveBeenCalled();
+  });
+
+  it("holds V1 authority through the guarded V2 publication when approval is unchanged", async () => {
+    const phases: string[] = [];
+    const dependencies = deps({
+      withV1AuthorityLock: vi.fn(async function <T>(operation: () => Promise<T>): Promise<T> { phases.push("v1-acquired"); const result = await operation(); phases.push("v1-released"); return result; }) as AuthorityLock,
+      resolveV1Approval: vi.fn(async () => { phases.push("approval-read"); return { eventId: "v1-event-1", feedbackId: "feedback-1", clipId: "clip-1", jobId: "job-1", userId: "user-1", feedbackUpdatedAt: updatedAt, snapshotSha256: snapshotHash, candidateVersion: candidateHash, destination: "eval" as const }; }),
+      publishCaseAndLabel: vi.fn(async (_input, _root, guard) => { phases.push("v2-publish"); await guard?.(); phases.push("v2-done"); return { status: "committed" as const }; }),
+    });
+    await expect(promoteFeedbackCase(decision(), dependencies)).resolves.toMatchObject({ status: "committed" });
+    expect(phases).toEqual(["v1-acquired", "approval-read", "v2-publish", "v2-done", "v1-released"]);
   });
 
   it("does not download source for selection/boundary when a source key happens to exist", async () => {

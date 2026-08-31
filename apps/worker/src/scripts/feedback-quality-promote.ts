@@ -5,6 +5,7 @@ import { createPrismaQualityPromotionRepository } from "../feedback-quality/repo
 import { promoteFeedbackCase, retireFeedbackCase, type PromotionDecision, type PromotionDependencies, type PromotionResult } from "../feedback-quality/promote";
 import { DEFAULT_QUALITY_ROOT, qualityDestination } from "../feedback-quality/store";
 import { foldLedger, parseLedger } from "../feedback-learning/ledger";
+import { withCorpusLock } from "../feedback-learning/lock";
 import { ensurePrivateTree, readLedgerSnapshot } from "../feedback-learning/persistence";
 import { resolve } from "node:path";
 
@@ -64,12 +65,15 @@ export async function runFeedbackQualityPromote(argv: readonly string[], depende
 export async function composeFeedbackQualityPromoteDependencies(): Promise<CommandDependencies> {
   const [{ prisma }, { downloadFile }] = await Promise.all([import("@clipclap/shared/lib/prisma"), import("@clipclap/shared/lib/r2")]);
   const repository = createPrismaQualityPromotionRepository(prisma);
+  const v1Root = resolve(__dirname, "../../.corpus/feedback-learning");
+  const v1Paths = await ensurePrivateTree(v1Root);
   const common: PromotionDependencies = {
     repository, root: DEFAULT_QUALITY_ROOT, downloadFile,
+    // Promotion acquires this V1 lock before the V2 labels lock; do not call
+    // any V1 mutator while the V2 lock is held.
+    withV1AuthorityLock: <T>(operation: () => Promise<T>) => withCorpusLock(v1Paths.lockFile, operation),
     resolveV1Approval: async (identity) => {
-      const v1Root = resolve(__dirname, "../../.corpus/feedback-learning");
-      const paths = await ensurePrivateTree(v1Root);
-      const state = foldLedger(parseLedger(Buffer.from(await readLedgerSnapshot(paths))));
+      const state = foldLedger(parseLedger(Buffer.from(await readLedgerSnapshot(v1Paths))));
       for (const event of state.activeDecisions) if (event.action === "approve" && event.feedbackId === identity.feedbackId && event.set === identity.destination) {
         return { eventId: event.eventId, feedbackId: event.feedbackId, clipId: event.clipId, jobId: event.jobId, userId: event.userId, feedbackUpdatedAt: event.feedbackUpdatedAt, snapshotSha256: event.snapshotSha256, candidateVersion: event.candidateVersion, destination: event.set };
       }

@@ -113,6 +113,8 @@ export interface PromotionDependencies {
   publishCaseAndLabel?: (input: PromotionPublishInput, root: string, beforeLabel?: () => Promise<void>) => Promise<CommitResult>;
   appendLabelEvent?: typeof appendLabelEvent;
   downloadFile: (key: string, request: { method: "GET" }) => Promise<Uint8Array | Buffer | ReadableStream<Uint8Array>>;
+  /** V1 reviews.lock wrapper. Positive authority must remain held through V2 publication. */
+  withV1AuthorityLock?: <T>(operation: () => Promise<T>) => Promise<T>;
   /** Read-only projection of the existing V1 approval ledger. */
   resolveV1Approval?: (identity: PromotionIdentity) => Promise<V1ApprovalIdentity | null>;
   /** Runs while the quality-store lock is held, before label append. */
@@ -225,39 +227,48 @@ export async function promoteFeedbackCase(rawDecision: PromotionDecision, depend
   const identity: PromotionIdentity = { feedbackId: value.feedbackId, clipId: value.clipId, jobId: value.jobId, userId: value.userId, feedbackUpdatedAt: value.feedbackUpdatedAt, snapshotSha256: value.snapshotSha256, candidateVersion: value.candidateVersion, destination: value.set };
   const snapshot = await dependencies.repository.capture(identity);
   assertSnapshotIdentity(value, snapshot);
-  const approval = value.disposition === "positive" ? await dependencies.resolveV1Approval?.(identity) : null;
+  const publishUnderAuthority = async (): Promise<PromotionResult> => {
+    // Lock order is always V1 reviews.lock -> V2 labels.lock. The authority
+    // read and the guarded V2 append stay in this same critical section.
+    if (value.disposition === "positive") {
+      const approval = await dependencies.resolveV1Approval?.(identity);
+      if (!approval) throw new QualityPromotionError("approval_missing");
+      validateApproval(approval);
+      if (approval.feedbackId !== identity.feedbackId || approval.clipId !== identity.clipId || approval.jobId !== identity.jobId || approval.userId !== identity.userId || approval.feedbackUpdatedAt !== identity.feedbackUpdatedAt || approval.snapshotSha256 !== identity.snapshotSha256 || approval.candidateVersion !== identity.candidateVersion || approval.destination !== identity.destination) throw new QualityPromotionError("identity_mismatch");
+    }
+    await dependencies.qualityDestinationPreflight?.(value.feedbackId, value.set);
+    if (value.disposition === "exclude") {
+      if (snapshot.feedback.verdict !== value.verdict) throw new QualityPromotionError("identity_mismatch");
+      const append = dependencies.appendLabelEvent ?? appendLabelEvent;
+      const result = await append({ schemaVersion: 1, eventId: value.eventId, action: "label", occurredAt: nowIso(dependencies), feedbackId: value.feedbackId, feedbackUpdatedAt: value.feedbackUpdatedAt, snapshotSha256: value.snapshotSha256, candidateVersion: value.candidateVersion, set: value.set, disposition: "exclude", verdict: value.verdict, subsystem: value.subsystem, confidence: value.confidence, reason: value.engineCause }, root, { beforeCommit: () => destinationGuard(value.feedbackId, value.set) });
+      return { status: result.status === "indeterminate" ? "indeterminate" : "excluded", eventId: value.eventId };
+    }
+    assertClassification(value, snapshot);
+    assertInputs(value, snapshot);
+    const evidence = await bytesFrom(await dependencies.downloadFile(snapshot.feedback.evidenceKey!, { method: "GET" }));
+    if (evidence.byteLength === 0) throw new QualityPromotionError("evidence_missing");
+    const needsTranscript = value.subsystem === "selection" || value.subsystem === "boundary";
+    const transcript = needsTranscript ? Buffer.from(canonicalJson(snapshot.job.transcriptJson)) : null;
+    const sourceKey = !needsTranscript && !value.expected.referenceOnly ? (snapshot.job.normalizedArtifactKey ?? snapshot.job.sourceArtifactKey) : null;
+    const source = sourceKey ? await bytesFrom(await dependencies.downloadFile(sourceKey, { method: "GET" })) : null;
+    if (sourceKey && (!source || source.byteLength === 0)) throw new QualityPromotionError("inputs_missing");
+    const inputs = { transcriptSha256: transcript ? sha256(transcript) : null, evidenceSha256: sha256(Buffer.from(evidence)), sourceSha256: source ? sha256(Buffer.from(source)) : null, sourceDurationSec: snapshot.job.sourceDurationSec };
+    const caseBody = { schemaVersion: 1 as const, feedbackId: value.feedbackId, clipId: value.clipId, jobId: value.jobId, userId: value.userId, feedbackUpdatedAt: value.feedbackUpdatedAt, snapshotSha256: value.snapshotSha256, candidateVersion: value.candidateVersion, set: value.set, disposition: value.disposition, verdict: value.verdict, subsystem: value.subsystem, confidence: value.confidence, expected: value.expected, inputs };
+    const caseVersion = `case:${sha256(canonicalJson(caseBody))}`;
+    const materialized: MaterializedCase = { ...caseBody, caseVersion };
+    const label = { schemaVersion: 1, eventId: value.eventId, action: "label", occurredAt: nowIso(dependencies), feedbackId: value.feedbackId, feedbackUpdatedAt: value.feedbackUpdatedAt, snapshotSha256: value.snapshotSha256, candidateVersion: value.candidateVersion, caseVersion, set: value.set, disposition: value.disposition, verdict: value.verdict, subsystem: value.subsystem, confidence: value.confidence, expected: value.expected };
+    const publish = dependencies.publishCaseAndLabel ?? ((input, root, beforeLabel) => publishCaseAndLabel({ kind: "case", id: caseVersion, files: input.files }, input.label, root, beforeLabel));
+    const files: Record<string, Uint8Array> = { "case.json": Buffer.from(`${canonicalJson(materialized)}\n`), "source-or-evidence.mp4": source ?? evidence };
+    if (transcript) files["transcript.json"] = new Uint8Array(transcript);
+    const result = await publish({ files, label }, root, () => destinationGuard(value.feedbackId, value.set));
+    if (result.status === "indeterminate") throw new QualityPromotionError("publication_failed");
+    return { status: result.status, eventId: value.eventId, caseVersion };
+  };
   if (value.disposition === "positive") {
-    if (!approval) throw new QualityPromotionError("approval_missing");
-    validateApproval(approval);
-    if (approval.feedbackId !== identity.feedbackId || approval.clipId !== identity.clipId || approval.jobId !== identity.jobId || approval.userId !== identity.userId || approval.feedbackUpdatedAt !== identity.feedbackUpdatedAt || approval.snapshotSha256 !== identity.snapshotSha256 || approval.candidateVersion !== identity.candidateVersion || approval.destination !== identity.destination) throw new QualityPromotionError("identity_mismatch");
+    if (!dependencies.withV1AuthorityLock) throw new QualityPromotionError("approval_missing");
+    return dependencies.withV1AuthorityLock(publishUnderAuthority);
   }
-  await dependencies.qualityDestinationPreflight?.(value.feedbackId, value.set);
-  if (value.disposition === "exclude") {
-    if (snapshot.feedback.verdict !== value.verdict) throw new QualityPromotionError("identity_mismatch");
-    const append = dependencies.appendLabelEvent ?? appendLabelEvent;
-    const result = await append({ schemaVersion: 1, eventId: value.eventId, action: "label", occurredAt: nowIso(dependencies), feedbackId: value.feedbackId, feedbackUpdatedAt: value.feedbackUpdatedAt, snapshotSha256: value.snapshotSha256, candidateVersion: value.candidateVersion, set: value.set, disposition: "exclude", verdict: value.verdict, subsystem: value.subsystem, confidence: value.confidence, reason: value.engineCause }, root, { beforeCommit: () => destinationGuard(value.feedbackId, value.set) });
-    return { status: result.status === "indeterminate" ? "indeterminate" : "excluded", eventId: value.eventId };
-  }
-  assertClassification(value, snapshot);
-  assertInputs(value, snapshot);
-  const evidence = await bytesFrom(await dependencies.downloadFile(snapshot.feedback.evidenceKey!, { method: "GET" }));
-  if (evidence.byteLength === 0) throw new QualityPromotionError("evidence_missing");
-  const needsTranscript = value.subsystem === "selection" || value.subsystem === "boundary";
-  const transcript = needsTranscript ? Buffer.from(canonicalJson(snapshot.job.transcriptJson)) : null;
-  const sourceKey = !needsTranscript && !value.expected.referenceOnly ? (snapshot.job.normalizedArtifactKey ?? snapshot.job.sourceArtifactKey) : null;
-  const source = sourceKey ? await bytesFrom(await dependencies.downloadFile(sourceKey, { method: "GET" })) : null;
-  if (sourceKey && (!source || source.byteLength === 0)) throw new QualityPromotionError("inputs_missing");
-  const inputs = { transcriptSha256: transcript ? sha256(transcript) : null, evidenceSha256: sha256(Buffer.from(evidence)), sourceSha256: source ? sha256(Buffer.from(source)) : null, sourceDurationSec: snapshot.job.sourceDurationSec };
-  const caseBody = { schemaVersion: 1 as const, feedbackId: value.feedbackId, clipId: value.clipId, jobId: value.jobId, userId: value.userId, feedbackUpdatedAt: value.feedbackUpdatedAt, snapshotSha256: value.snapshotSha256, candidateVersion: value.candidateVersion, set: value.set, disposition: value.disposition, verdict: value.verdict, subsystem: value.subsystem, confidence: value.confidence, expected: value.expected, inputs };
-  const caseVersion = `case:${sha256(canonicalJson(caseBody))}`;
-  const materialized: MaterializedCase = { ...caseBody, caseVersion };
-  const label = { schemaVersion: 1, eventId: value.eventId, action: "label", occurredAt: nowIso(dependencies), feedbackId: value.feedbackId, feedbackUpdatedAt: value.feedbackUpdatedAt, snapshotSha256: value.snapshotSha256, candidateVersion: value.candidateVersion, caseVersion, set: value.set, disposition: value.disposition, verdict: value.verdict, subsystem: value.subsystem, confidence: value.confidence, expected: value.expected };
-  const publish = dependencies.publishCaseAndLabel ?? ((input, root) => publishCaseAndLabel({ kind: "case", id: caseVersion, files: input.files }, input.label, root));
-  const files: Record<string, Uint8Array> = { "case.json": Buffer.from(`${canonicalJson(materialized)}\n`), "source-or-evidence.mp4": source ?? evidence };
-  if (transcript) files["transcript.json"] = new Uint8Array(transcript);
-  const result = await publish({ files, label }, root, () => destinationGuard(value.feedbackId, value.set));
-  if (result.status === "indeterminate") throw new QualityPromotionError("publication_failed");
-  return { status: result.status, eventId: value.eventId, caseVersion };
+  return publishUnderAuthority();
 }
 
 export interface RetirementRequest { action: "retire"; targetEventId: string; reason: string; }
