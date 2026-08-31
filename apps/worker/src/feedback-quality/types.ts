@@ -50,9 +50,7 @@ export interface QualityMetrics {
   outputHeight?: number;
   sar?: number;
   durationDrift?: number;
-  blackTail?: number;
   blackTailSeconds?: number;
-  frozenTail?: number;
   frozenTailSeconds?: number;
   frameCount?: number;
   clipCount?: number;

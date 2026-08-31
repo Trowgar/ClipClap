@@ -71,9 +71,7 @@ const METRIC_KEYS = new Set([
   "outputHeight",
   "sar",
   "durationDrift",
-  "blackTail",
   "blackTailSeconds",
-  "frozenTail",
   "frozenTailSeconds",
   "frameCount",
   "clipCount",
@@ -349,9 +347,7 @@ function metricImproved(before: QualityCaseResult, after: QualityCaseResult): bo
     "requiredTextClipped",
     "requiredSubjectClipped",
     "durationDrift",
-    "blackTail",
     "blackTailSeconds",
-    "frozenTail",
     "frozenTailSeconds",
   ];
   for (const key of higherIsBetter) {

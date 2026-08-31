@@ -473,6 +473,26 @@ describe("feedback quality comparison policy", () => {
     ]);
   });
 
+  it("rejects non-canonical blackTail and frozenTail fields", () => {
+    const baseline = observation({
+      cases: observation().cases.map((entry) =>
+        entry.caseVersion === "positive-0"
+          ? { ...entry, metrics: { ...entry.metrics, blackTail: 0, frozenTail: 0 } }
+          : entry,
+      ),
+    });
+    const candidate = { ...baseline, mode: "candidate" as const, observationId: "sha256:" + "4".repeat(64) };
+
+    expect(compareObservations(baseline, candidate, { ...policy, claim: "non_regression_only" }).reasons).toEqual([
+      "invalid_metric",
+    ]);
+    // @ts-expect-error blackTail is deliberately not part of the canonical metric contract
+    const invalidBlackTail: QualityMetrics = { blackTail: 1 };
+    // @ts-expect-error frozenTail is deliberately not part of the canonical metric contract
+    const invalidFrozenTail: QualityMetrics = { frozenTail: 1 };
+    expect([invalidBlackTail, invalidFrozenTail]).toHaveLength(2);
+  });
+
   it("applies absolute render invariants to confirmed-negative render cases", () => {
     const renderNegative = {
       ...result("negative-0", "confirmed_negative", "render"),
