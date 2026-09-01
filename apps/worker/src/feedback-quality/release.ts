@@ -13,7 +13,8 @@ const HASH = /^sha256:[0-9a-f]{64}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
 const PROJECT = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 const NETWORK = /^[a-z0-9][a-z0-9_.-]{0,127}$/;
-const SERVICES = new Set<WorkerService>(["worker-download", "worker-transcribe", "worker-analyze", "worker-render", "worker-finalize"]);
+const SERVICE_ORDER: readonly WorkerService[] = ["worker-download", "worker-transcribe", "worker-analyze", "worker-render", "worker-finalize"];
+const SERVICES = new Set<WorkerService>(SERVICE_ORDER);
 const EXEC_OPTIONS = { shell: false, timeout: 30_000, maxBuffer: 1024 * 1024 } as const;
 
 export type ImageReference = Readonly<{ repository: string; digest: string }>;
@@ -58,20 +59,20 @@ export function parseImageReference(value: string): ImageReference {
 function composeOverride(services: readonly RollbackService[], network = "clipclap_default"): Buffer {
   const lines = ["services:"];
   for (const item of services) {
-    lines.push(`  ${item.service}:`, `    image: ${item.image}`, "    env_file: ./production.env", "    environment:", `      WORKER_ROLE: ${item.service.slice("worker-".length)}`, "      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json", "    volumes:", "      - type: bind", "        source: ./feedback-quality-config.json", "        target: /run/clipclap/feedback-quality-config.json", "        read_only: true", "    networks:", "      default: null");
+    lines.push(`  ${item.service}:`, `    image: ${item.image}`, "    restart: unless-stopped", "    env_file: ./production.env", "    environment:", `      WORKER_ROLE: ${item.service.slice("worker-".length)}`, "      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json", "    volumes:", "      - type: bind", "        source: ./feedback-quality-config.json", "        target: /run/clipclap/feedback-quality-config.json", "        read_only: true", "    networks:", "      default: null");
   }
   lines.push("networks:", "  default:", "    external: true", `    name: ${network}`);
   return Buffer.from(`${lines.join("\n")}\n`, "utf8");
 }
 
-function rollbackBody(createdAt: string, services: readonly RollbackService[], composeSha256: string, projectName: string, network: string, candidateImage: string) {
+function rollbackBody(createdAt: string, services: readonly RollbackService[], composeSha256: string, projectName: string, network: string, candidateImage: string, snapshotHashes: Readonly<Record<string, string>>) {
   const command = ["docker", "compose", "--project-name", projectName, "-f", "rollback.compose.yml", "up", "-d", "--force-recreate", "--no-build", ...services.map((item) => item.service)];
-  return { createdAt, command, previousCommitSha: services[0].revision, previousImageRef: services[0].image, previousImageDigest: services[0].digest, composeFiles: ["compose.production.yml", "rollback.compose.yml"], composeFilesSha256: composeSha256, services: services.map((item) => item.service), previousImages: services.map((item) => ({ service: item.service, image: item.image, digest: item.digest, revision: item.revision })), projectName, network, candidateImage };
+  return { createdAt, command, previousCommitSha: services[0].revision, previousImageRef: services[0].image, previousImageDigest: services[0].digest, composeFiles: ["compose.production.yml", "rollback.compose.yml", "candidate.compose.yml"], composeFilesSha256: composeSha256, services: services.map((item) => item.service), previousImages: services.map((item) => ({ service: item.service, image: item.image, digest: item.digest, revision: item.revision })), projectName, network, candidateImage, snapshotHashes };
 }
 
 function candidateCompose(services: readonly WorkerService[], image: string, network: string): Buffer {
   const lines = ["services:"];
-  for (const service of services) lines.push(`  ${service}:`, `    image: ${image}`, "    env_file: ./production.env", "    environment:", `      WORKER_ROLE: ${service.slice("worker-".length)}`, "      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json", "      FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID: ${FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID:?release adapter only}", "    volumes:", "      - type: bind", "        source: ./feedback-quality-config.json", "        target: /run/clipclap/feedback-quality-config.json", "        read_only: true", "    networks:", "      default: null");
+  for (const service of services) lines.push(`  ${service}:`, `    image: ${image}`, "    restart: unless-stopped", "    env_file: ./production.env", "    environment:", `      WORKER_ROLE: ${service.slice("worker-".length)}`, "      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json", "      FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID: ${FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID:?release adapter only}", "    volumes:", "      - type: bind", "        source: ./feedback-quality-config.json", "        target: /run/clipclap/feedback-quality-config.json", "        read_only: true", "    networks:", "      default: null");
   lines.push("networks:", "  default:", "    external: true", `    name: ${network}`);
   return Buffer.from(`${lines.join("\n")}\n`, "utf8");
 }
@@ -82,7 +83,7 @@ export async function createProductionRollback(services: readonly WorkerService[
   const candidate = parseImageReference(dependencies.candidateImage);
   const projectName = dependencies.projectName ?? "clipclap";
   const network = dependencies.network ?? "clipclap_default";
-  if (!COMMIT.test(decision.candidateCommitSha) || !PROJECT.test(projectName) || !NETWORK.test(network) || services.length === 0 || services.some((service, index) => !SERVICES.has(service) || (index > 0 && service <= services[index - 1]))) throw new ProductionReleaseError("rollback_invalid");
+  if (!COMMIT.test(decision.candidateCommitSha) || !PROJECT.test(projectName) || !NETWORK.test(network) || services.length === 0 || services.some((service, index) => !SERVICES.has(service) || (index > 0 && SERVICE_ORDER.indexOf(service) <= SERVICE_ORDER.indexOf(services[index - 1])))) throw new ProductionReleaseError("rollback_invalid");
   const inspectedCandidate = await dependencies.inspectImage(dependencies.candidateImage);
   if (inspectedCandidate.digest !== candidate.digest || inspectedCandidate.revision !== decision.candidateCommitSha) throw new ProductionReleaseError("candidate_image_mismatch");
   let compose: Buffer;
@@ -98,11 +99,21 @@ export async function createProductionRollback(services: readonly WorkerService[
   }
   if (/\bbuild\s*:|\.\/apps\/|\.\/packages\//.test(compose.toString("utf8"))) throw new ProductionReleaseError("compose_unavailable");
   const override = composeOverride(old, network);
+  const candidateSnapshot = candidateCompose(services, dependencies.candidateImage, network);
+  const snapshotHashes: Record<string, string> = {
+    "compose.production.yml": sha256(compose),
+    "rollback.compose.yml": sha256(override),
+    "candidate.compose.yml": sha256(candidateSnapshot),
+  };
+  if (dependencies.environment && dependencies.config) {
+    snapshotHashes["production.env"] = sha256(dependencies.environment);
+    snapshotHashes["feedback-quality-config.json"] = sha256(dependencies.config);
+  }
   const composeSha256 = sha256(Buffer.concat([compose, override]));
   const createdAt = new Date().toISOString();
-  const body = rollbackBody(createdAt, old, composeSha256, projectName, network, dependencies.candidateImage);
+  const body = rollbackBody(createdAt, old, composeSha256, projectName, network, dependencies.candidateImage, snapshotHashes);
   const artifact: RollbackArtifact = { schemaVersion: 1, artifactId: contentId("rollback", body), ...body };
-  const result = await dependencies.publishRollback({ rollback: artifact, compose, override, candidate: candidateCompose(services, dependencies.candidateImage, network), environment: dependencies.environment, config: dependencies.config });
+  const result = await dependencies.publishRollback({ rollback: artifact, compose, override, candidate: candidateSnapshot, environment: dependencies.environment, config: dependencies.config });
   if (result.status !== "committed" && result.status !== "noop") throw new ProductionReleaseError("rollback_publish_failed");
   return artifact;
 }
@@ -143,6 +154,18 @@ function parseEnvironment(bytes: Buffer): Record<string, string> {
     output[match[1]] = match[2];
   }
   return output;
+}
+
+async function assertSnapshotIntegrity(artifactId: string, root: string): Promise<void> {
+  let files: ReadonlyMap<string, Uint8Array>;
+  try { files = await readBundle("rollback", artifactId, root); } catch { throw new ProductionReleaseError("rollback_invalid"); }
+  try {
+    const artifact = JSON.parse(Buffer.from(files.get("rollback.json")!).toString("utf8")) as { artifactId?: unknown; snapshotHashes?: unknown };
+    if (artifact.artifactId !== artifactId || !artifact.snapshotHashes || typeof artifact.snapshotHashes !== "object") throw new Error();
+    const hashes = artifact.snapshotHashes as Record<string, unknown>;
+    const names = ["compose.production.yml", "rollback.compose.yml", "candidate.compose.yml", "production.env", "feedback-quality-config.json"];
+    if (JSON.stringify(Object.keys(hashes).sort()) !== JSON.stringify(names) || names.some((name) => typeof hashes[name] !== "string" || hashes[name] !== sha256(Buffer.from(files.get(name)!)))) throw new Error();
+  } catch { throw new ProductionReleaseError("rollback_invalid"); }
 }
 
 async function defaultExec(argv: readonly string[], options: Readonly<{ cwd?: string; env?: Readonly<Record<string, string | undefined>> }> = {}): Promise<{ exitCode: number; stdout: string }> {
@@ -221,6 +244,7 @@ export function createProductionDeployDependencies(candidateImage: string, proje
     },
     spawnProduction: async (_argv, environment) => {
       if (!artifact) throw new ProductionReleaseError("rollback_invalid");
+      await assertSnapshotIntegrity(artifact.artifactId, root);
       const services = _argv.slice(5) as WorkerService[];
       const cwd = resolve(root, "rollbacks", artifact.artifactId);
       const response = await release.exec(["docker", "compose", "--project-name", projectName, "-f", "candidate.compose.yml", "up", "-d", "--force-recreate", "--no-build", ...services], { cwd, env: { FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID: environment.FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID } });
@@ -243,34 +267,37 @@ export function createProductionRollbackDependencies(composeFile = resolve(proce
   return { exec: adapter.exec, inspectService: adapter.inspectService, inspectImage: adapter.inspectImage };
 }
 
-export async function executeRollback(artifactId: string, root: string, dependencies: Pick<ProductionReleaseDependencies, "exec" | "inspectService" | "inspectImage">): Promise<void> {
+export async function executeRollback(artifactId: string, root: string, dependencies?: Pick<ProductionReleaseDependencies, "exec" | "inspectService" | "inspectImage">): Promise<void> {
   let files: ReadonlyMap<string, Uint8Array>;
   try { files = await readBundle("rollback", artifactId, root); } catch { throw new ProductionReleaseError("rollback_invalid"); }
   let rollback: RollbackArtifact & { previousImages?: readonly RollbackService[] };
   try { rollback = JSON.parse(Buffer.from(files.get("rollback.json") ?? []).toString("utf8")); } catch { throw new ProductionReleaseError("rollback_invalid"); }
-  const expectedKeys = ["schemaVersion", "artifactId", "createdAt", "command", "previousCommitSha", "previousImageRef", "previousImageDigest", "composeFiles", "composeFilesSha256", "services", "previousImages", "projectName", "network", "candidateImage"];
-  if (!rollback || rollback.schemaVersion !== 1 || Reflect.ownKeys(rollback).length !== expectedKeys.length || !Reflect.ownKeys(rollback).every((key) => typeof key === "string" && expectedKeys.includes(key)) || rollback.artifactId !== artifactId || !Array.isArray(rollback.command) || rollback.command.some((part) => typeof part !== "string" || /[\0\r\n]/.test(part)) || !Array.isArray(rollback.services) || !Array.isArray(rollback.previousImages) || rollback.previousImages.length !== rollback.services.length || !PROJECT.test(rollback.projectName ?? "") || !NETWORK.test(rollback.network ?? "") || typeof rollback.candidateImage !== "string" || !files.has("compose.production.yml") || !files.has("rollback.compose.yml") || !files.has("candidate.compose.yml") || !files.has("production.env") || !files.has("feedback-quality-config.json")) throw new ProductionReleaseError("rollback_invalid");
+  const expectedKeys = ["schemaVersion", "artifactId", "createdAt", "command", "previousCommitSha", "previousImageRef", "previousImageDigest", "composeFiles", "composeFilesSha256", "services", "previousImages", "projectName", "network", "candidateImage", "snapshotHashes"];
+  if (!rollback || rollback.schemaVersion !== 1 || Reflect.ownKeys(rollback).length !== expectedKeys.length || !Reflect.ownKeys(rollback).every((key) => typeof key === "string" && expectedKeys.includes(key)) || rollback.artifactId !== artifactId || !Array.isArray(rollback.command) || rollback.command.some((part) => typeof part !== "string" || /[\0\r\n]/.test(part)) || !Array.isArray(rollback.services) || !Array.isArray(rollback.previousImages) || rollback.previousImages.length !== rollback.services.length || !PROJECT.test(rollback.projectName ?? "") || !NETWORK.test(rollback.network ?? "") || typeof rollback.candidateImage !== "string" || !files.has("compose.production.yml") || !files.has("rollback.compose.yml") || !files.has("candidate.compose.yml") || !files.has("production.env") || !files.has("feedback-quality-config.json") || !rollback.snapshotHashes || typeof rollback.snapshotHashes !== "object") throw new ProductionReleaseError("rollback_invalid");
   const expectedId = contentId("rollback", (() => { const { schemaVersion: _schema, artifactId: _id, ...body } = rollback; return body; })());
   if (expectedId !== artifactId) throw new ProductionReleaseError("rollback_invalid");
   const argv = rollback.command;
   const serviceNames = rollback.services as WorkerService[];
-  if (serviceNames.length === 0 || serviceNames.some((service, index) => !SERVICES.has(service) || (index > 0 && service <= serviceNames[index - 1])) || JSON.stringify(argv) !== JSON.stringify(["docker", "compose", "--project-name", rollback.projectName, "-f", "rollback.compose.yml", "up", "-d", "--force-recreate", "--no-build", ...serviceNames])) throw new ProductionReleaseError("rollback_invalid");
+  if (serviceNames.length === 0 || serviceNames.some((service, index) => !SERVICES.has(service) || (index > 0 && SERVICE_ORDER.indexOf(service) <= SERVICE_ORDER.indexOf(serviceNames[index - 1]))) || JSON.stringify(argv) !== JSON.stringify(["docker", "compose", "--project-name", rollback.projectName, "-f", "rollback.compose.yml", "up", "-d", "--force-recreate", "--no-build", ...serviceNames])) throw new ProductionReleaseError("rollback_invalid");
   const compose = Buffer.from(files.get("compose.production.yml")!);
   const override = Buffer.from(files.get("rollback.compose.yml")!);
+  const wantedHashes = ["compose.production.yml", "rollback.compose.yml", "candidate.compose.yml", "production.env", "feedback-quality-config.json"];
+  if (JSON.stringify(Object.keys(rollback.snapshotHashes).sort()) !== JSON.stringify(wantedHashes) || wantedHashes.some((name) => rollback.snapshotHashes![name] !== sha256(Buffer.from(files.get(name)!)))) throw new ProductionReleaseError("rollback_invalid");
   if (sha256(Buffer.concat([compose, override])) !== rollback.composeFilesSha256 || !override.equals(composeOverride(rollback.previousImages, rollback.network!)) || !Buffer.from(files.get("candidate.compose.yml")!).equals(candidateCompose(serviceNames, rollback.candidateImage!, rollback.network!)) || /\bbuild\s*:|\.\/apps\/|\.\/packages\//.test(compose.toString("utf8"))) throw new ProductionReleaseError("rollback_invalid");
   try { parseEnvironment(Buffer.from(files.get("production.env")!)); JSON.parse(Buffer.from(files.get("feedback-quality-config.json")!).toString("utf8")); } catch { throw new ProductionReleaseError("rollback_invalid"); }
   for (let index = 0; index < rollback.previousImages.length; index += 1) {
     const expected = rollback.previousImages[index];
     if (!expected || expected.service !== serviceNames[index] || !SERVICES.has(expected.service) || !COMMIT.test(expected.revision) || parseImageReference(expected.image).digest !== expected.digest || !HASH.test(expected.digest)) throw new ProductionReleaseError("rollback_invalid");
   }
+  const bound = dependencies ?? (() => { const adapter = productionAdapter(`local/rollback-placeholder@sha256:${"0".repeat(64)}`, "rollback.compose.yml", root, rollback.projectName!); return { exec: adapter.exec, inspectService: adapter.inspectService, inspectImage: adapter.inspectImage }; })();
   const cwd = resolve(root, "rollbacks", artifactId);
-  const response = await dependencies.exec(argv, { cwd });
+  const response = await bound.exec(argv, { cwd, env: {} });
   if (response.exitCode !== 0) throw new ProductionReleaseError("rollback_process_failed");
   for (const expected of rollback.previousImages) {
     if (!SERVICES.has(expected.service) || parseImageReference(expected.image).digest !== expected.digest) throw new ProductionReleaseError("rollback_invalid");
-    const live = await dependencies.inspectService(expected.service);
+    const live = await bound.inspectService(expected.service);
     if (live.image !== expected.image) throw new ProductionReleaseError("rollback_verify_failed");
-    const inspected = await dependencies.inspectImage(live.image);
+    const inspected = await bound.inspectImage(live.image);
     if (inspected.digest !== expected.digest || inspected.revision !== expected.revision) throw new ProductionReleaseError("rollback_verify_failed");
   }
 }

@@ -146,6 +146,7 @@ export type RollbackArtifact = Readonly<{
   projectName?: string;
   network?: string;
   candidateImage?: string;
+  snapshotHashes?: Readonly<Record<string, string>>;
 }>;
 
 export type DeployResult = Readonly<{
@@ -240,10 +241,10 @@ function validRollback(value: unknown, services: readonly WorkerService[]): valu
   const standardKeys = ["schemaVersion", "artifactId", "createdAt", "command", "previousCommitSha", "previousImageRef", "previousImageDigest", "composeFiles", "composeFilesSha256", "services"];
   const keys = Reflect.ownKeys(item);
   const hasPreviousImages = Object.prototype.hasOwnProperty.call(item, "previousImages");
-  const releaseKeys = ["previousImages", "projectName", "network", "candidateImage"];
+  const releaseKeys = ["previousImages", "projectName", "network", "candidateImage", "snapshotHashes"];
   const exactKeys = keys.length === standardKeys.length + releaseKeys.filter((key) => Object.prototype.hasOwnProperty.call(item, key)).length && keys.every((key) => typeof key === "string" && [...standardKeys, ...releaseKeys].includes(key));
   const oldImagesValid = !hasPreviousImages || (Array.isArray(item.previousImages) && item.previousImages.length === (item.services as unknown[]).length && item.previousImages.every((value) => plain(value) && ownKeys(value, ["service", "image", "digest", "revision"]) && typeof value.service === "string" && SERVICE_ORDER.includes(value.service as WorkerService) && typeof value.image === "string" && value.image.endsWith(`@${value.digest}`) && typeof value.digest === "string" && HASH.test(value.digest) && typeof value.revision === "string" && COMMIT.test(value.revision)));
-  const releaseValid = !hasPreviousImages || (typeof item.projectName === "string" && /^[a-z0-9][a-z0-9_-]{0,62}$/.test(item.projectName) && typeof item.network === "string" && /^[a-z0-9][a-z0-9_.-]{0,127}$/.test(item.network) && typeof item.candidateImage === "string" && item.candidateImage.includes("@sha256:"));
+  const releaseValid = !hasPreviousImages || (typeof item.projectName === "string" && /^[a-z0-9][a-z0-9_-]{0,62}$/.test(item.projectName) && typeof item.network === "string" && /^[a-z0-9][a-z0-9_.-]{0,127}$/.test(item.network) && typeof item.candidateImage === "string" && item.candidateImage.includes("@sha256:") && plain(item.snapshotHashes) && Object.keys(item.snapshotHashes).length === 5 && Object.values(item.snapshotHashes).every((hash) => typeof hash === "string" && HASH.test(hash)));
   const initialValid = exactKeys && oldImagesValid && releaseValid && item.schemaVersion === 1 && typeof item.artifactId === "string" && /^rollback:sha256:[0-9a-f]{64}$/.test(item.artifactId) && utc(item.createdAt) && typeof item.previousCommitSha === "string" && COMMIT.test(item.previousCommitSha) && typeof item.previousImageDigest === "string" && HASH.test(item.previousImageDigest) && typeof item.previousImageRef === "string" && item.previousImageRef.endsWith(`@${item.previousImageDigest}`) && Array.isArray(item.composeFiles) && item.composeFiles.length > 0 && !item.composeFiles.some((file) => typeof file !== "string" || file.length === 0 || file.startsWith("/") || file.includes("\\") || file.includes("\0") || file.split("/").some((segment) => segment === ".." || segment === "") || /[\r\n]/.test(file)) && typeof item.composeFilesSha256 === "string" && HASH.test(item.composeFilesSha256) && Array.isArray(item.services) && !item.services.some((service) => !SERVICE_ORDER.includes(service as WorkerService)) && Array.isArray(item.command) && item.command.length >= 6 && !item.command.some((part) => typeof part !== "string" || part.length === 0 || /[\0\n\r]/.test(part));
   if (!initialValid) return false;
   const checked = item as unknown as RollbackArtifact;
@@ -255,7 +256,7 @@ function validRollback(value: unknown, services: readonly WorkerService[]): valu
   if (checked.command.length <= commandPrefix.length || JSON.stringify(checked.command.slice(0, commandPrefix.length)) !== JSON.stringify(commandPrefix)) return false;
   const targetServices = checked.command.slice(commandPrefix.length);
   const indexes = targetServices.map((service) => SERVICE_ORDER.indexOf(service as WorkerService));
-  const body = { createdAt: checked.createdAt, command: checked.command, previousCommitSha: checked.previousCommitSha, previousImageRef: checked.previousImageRef, previousImageDigest: checked.previousImageDigest, composeFiles: checked.composeFiles, composeFilesSha256: checked.composeFilesSha256, services: checked.services, ...(checked.previousImages === undefined ? {} : { previousImages: checked.previousImages, projectName: checked.projectName, network: checked.network, candidateImage: checked.candidateImage }) };
+  const body = { createdAt: checked.createdAt, command: checked.command, previousCommitSha: checked.previousCommitSha, previousImageRef: checked.previousImageRef, previousImageDigest: checked.previousImageDigest, composeFiles: checked.composeFiles, composeFilesSha256: checked.composeFilesSha256, services: checked.services, ...(checked.previousImages === undefined ? {} : { previousImages: checked.previousImages, projectName: checked.projectName, network: checked.network, candidateImage: checked.candidateImage, snapshotHashes: checked.snapshotHashes }) };
   const valid = targetServices.length > 0 && indexes.every((index) => index >= 0) && indexes.every((index, position) => position === 0 || index > indexes[position - 1]) && new Set(targetServices).size === targetServices.length && JSON.stringify(checked.services) === JSON.stringify(services) && sha256(canonicalJson(body)) === checked.artifactId.slice("rollback:".length) && JSON.stringify(targetServices) === JSON.stringify(services);
   return valid;
 }
@@ -332,18 +333,20 @@ async function defaultCanary(service: WorkerService, expected: Readonly<{ decisi
   const queue = suppliedQueue ?? new Queue(QUEUE_NAMES[stage], { connection: getRedis() });
   const nonce = randomUUID();
   let job: Awaited<ReturnType<typeof queue.add>> | undefined;
+  let terminal = false;
   try {
-    job = await queue.add("feedback-quality-canary", { kind: "feedback-quality-canary", nonce, decisionId: expected.decisionId, rolloutInstanceId: expected.rolloutInstanceId }, { attempts: 1, priority: 0, removeOnComplete: true, removeOnFail: true });
+    job = await queue.add("feedback-quality-canary", { kind: "feedback-quality-canary", nonce, decisionId: expected.decisionId, rolloutInstanceId: expected.rolloutInstanceId }, { attempts: 1, priority: 0, removeOnComplete: { age: 300, count: 100 }, removeOnFail: { age: 300, count: 100 } });
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const current = await queue.getJob(job.id!);
       const state = await current?.getState();
       if (state === "completed") {
+        terminal = true;
         const value = current?.returnvalue as Record<string, unknown> | undefined;
         if (!value || value.kind !== "feedback-quality-canary" || value.nonce !== nonce || value.decisionId !== expected.decisionId || value.rolloutInstanceId !== expected.rolloutInstanceId || value.role !== stage || value.configSha256 !== expected.configSha256 || value.runnerVersion !== expected.runnerVersion || value.commitSha !== expected.commitSha) throw new DeployError("canary_failed");
         return;
       }
-      if (state === "failed") throw new DeployError("canary_failed");
+      if (state === "failed") { terminal = true; throw new DeployError("canary_failed"); }
       if (Date.now() >= deadline) throw new DeployError("canary_failed");
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -353,7 +356,7 @@ async function defaultCanary(service: WorkerService, expected: Readonly<{ decisi
   } finally {
     // Control jobs contain rollout bindings. They are not audit records and
     // must not linger on either a success or a failed attestation.
-    try { const current = await queue.getJob(job?.id ?? ""); await current?.remove(); } catch { /* best-effort cleanup */ }
+    if (terminal) try { const current = await queue.getJob(job?.id ?? ""); await current?.remove(); } catch { /* best-effort cleanup */ }
     if (!suppliedQueue) await queue.close().catch(() => undefined);
   }
 }

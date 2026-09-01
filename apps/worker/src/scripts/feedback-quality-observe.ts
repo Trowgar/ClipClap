@@ -65,7 +65,7 @@ export async function readSecureConfig(path: string): Promise<unknown> {
 
 export async function assertTrackedTreeClean(): Promise<void> {
   try {
-    const { stdout } = await execFileAsync("git", ["status", "--porcelain", "--untracked-files=no"]);
+    const { stdout } = await execFileAsync("git", ["status", "--porcelain", "--untracked-files=no"], { shell: false, timeout: 30_000, maxBuffer: 1024 * 1024 });
     if (stdout.trim()) throw new ObserveCliError("dirty_tree");
   } catch (error) {
     if (error instanceof ObserveCliError) throw error;
