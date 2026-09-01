@@ -3,7 +3,7 @@ import { chmod, open, readFile, stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
-import { contentId, DEFAULT_QUALITY_ROOT, openBundleFile, publishBundle, type BundleKind, type CommitResult, type OpenBundleFile } from "./store";
+import { contentId, DEFAULT_QUALITY_ROOT, listBundleIds, openBundleFile, publishBundle, readBundle, readLabelEvents, type BundleKind, type CommitResult, type OpenBundleFile } from "./store";
 import type { MaterializedCase } from "./promote";
 import type { QualityCaseResult, QualityMetrics, QualityObservation } from "./types";
 
@@ -41,10 +41,62 @@ export type ObserveQualityOptions = Readonly<{
 }>;
 
 export class ObservationError extends Error {
-  constructor(readonly code: "invalid_input" | "environment" | "set" | "fingerprint" | "live_required" | "publish_failed") {
+  constructor(readonly code: "invalid_input" | "environment" | "set" | "fingerprint" | "live_required" | "publish_failed" | "missing" | "stale" | "corpus_mismatch") {
     super(code);
     this.name = "ObservationError";
   }
+}
+
+type LoadedCase = MaterializedCase & { loadStatus?: "missing" | "stale" };
+export type LoadedPrivateCases = Readonly<{ cases: readonly LoadedCase[]; corpusSha256: `sha256:${string}` }>;
+
+function unavailableCase(id: string, set: "eval" | "holdout", event: Readonly<Record<string, unknown>>, loadStatus: "missing" | "stale"): LoadedCase {
+  const disposition = event.disposition === "confirmed_negative" || event.disposition === "exclude" ? event.disposition : "positive";
+  const verdict = event.verdict === "EDIT" || event.verdict === "NO" ? event.verdict : "AS_IS";
+  const subsystem = ["selection", "boundary", "framing", "subtitles", "render"].includes(event.subsystem as string) ? event.subsystem : "render";
+  const zero = "sha256:" + "0".repeat(64) as `sha256:${string}`;
+  return { schemaVersion: 1, caseVersion: id, feedbackId: "unavailable", clipId: "unavailable", jobId: "unavailable", userId: "unavailable", feedbackUpdatedAt: "1970-01-01T00:00:00.000Z", snapshotSha256: zero, candidateVersion: zero, set, disposition, verdict, subsystem: subsystem as LoadedCase["subsystem"], confidence: "medium", expected: { approvedMoment: false, completeBoundary: false }, inputs: { transcriptSha256: null, evidenceSha256: zero, sourceSha256: null, sourceDurationSec: null }, loadStatus };
+}
+
+function parseCase(value: unknown, expectedId: string): MaterializedCase {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ObservationError("invalid_input");
+  const item = value as Record<string, unknown>;
+  if (item.caseVersion !== expectedId || item.schemaVersion !== 1 || typeof item.feedbackId !== "string" || typeof item.clipId !== "string" || typeof item.jobId !== "string" || typeof item.userId !== "string" || (item.set !== "eval" && item.set !== "holdout") || !["positive", "confirmed_negative", "exclude"].includes(item.disposition as string) || !["AS_IS", "EDIT", "NO"].includes(item.verdict as string) || !["selection", "boundary", "framing", "subtitles", "render"].includes(item.subsystem as string) || !item.expected || typeof item.expected !== "object" || !item.inputs || typeof item.inputs !== "object") throw new ObservationError("invalid_input");
+  return item as unknown as MaterializedCase;
+}
+
+/** Read the active label projection and then verify every selected case's
+ * content-addressed bundle. A missing/stale label never becomes a skipped case. */
+export async function loadPrivateCases(set: "eval" | "holdout", root = DEFAULT_QUALITY_ROOT): Promise<LoadedPrivateCases> {
+  const events = await readLabelEvents(root);
+  const retired = new Set(events.filter((item) => item.action === "retire").map((item) => item.targetEventId).filter((item): item is string => typeof item === "string"));
+  const selected = new Map<string, Readonly<Record<string, unknown>>>();
+  for (const event of events) {
+    if (event.action !== "label" || event.set !== set || typeof event.caseVersion !== "string" || typeof event.eventId !== "string" || retired.has(event.eventId)) continue;
+    selected.set(event.caseVersion, event);
+  }
+  const ids = await listBundleIds("case", root);
+  const cases: LoadedCase[] = [];
+  for (const [id] of [...selected.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+    const event = selected.get(id)!;
+    if (!ids.includes(id)) { cases.push(unavailableCase(id, set, event, "missing")); continue; }
+    let bundle: ReadonlyMap<string, Uint8Array>;
+    try { bundle = await readBundle("case", id, root); } catch { cases.push(unavailableCase(id, set, event, "stale")); continue; }
+    const bytes = bundle.get("case.json");
+    if (!bytes) { cases.push(unavailableCase(id, set, event, "missing")); continue; }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
+      const item = parseCase(parsed, id);
+      if (item.set !== set) throw new ObservationError("set");
+      cases.push(item);
+    } catch (error) {
+      if (error instanceof ObservationError && error.code === "set") throw error;
+      cases.push(unavailableCase(id, set, event, "stale"));
+    }
+  }
+  const corpusSha256 = sha256(canonicalJson(cases.map((item) => ({ ...item })).sort((left, right) => left.caseVersion.localeCompare(right.caseVersion))));
+  return { cases: freeze(cases), corpusSha256 };
 }
 
 function freeze<T>(value: T): T {

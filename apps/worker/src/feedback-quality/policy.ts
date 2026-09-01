@@ -80,6 +80,10 @@ const METRIC_KEYS = new Set([
   "lowQuality",
   "rescueCandidates",
   "criticFailures",
+  "hookDelay",
+  "preHookGap",
+  "payoffContainment",
+  "score",
 ]);
 const POLICY_KEYS = new Set(["schemaVersion", "policyVersion", "claim", "minimum"]);
 const MINIMUM_KEYS = new Set(["evalPositive", "evalNegative", "holdoutPositive", "holdoutNegative"]);

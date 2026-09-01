@@ -61,6 +61,10 @@ export interface QualityMetrics {
   lowQuality?: number;
   rescueCandidates?: number;
   criticFailures?: number;
+  hookDelay?: number;
+  preHookGap?: number;
+  payoffContainment?: number;
+  score?: number;
 }
 
 /** One immutable replay result. `caseVersion` is the join key across observations. */

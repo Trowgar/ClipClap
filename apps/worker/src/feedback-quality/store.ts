@@ -22,7 +22,7 @@ const COMMIT_MARKER = ".committed";
 const RESERVATION_MARKER = ".reservation";
 const COMMIT_MARKER_BYTES = Buffer.from("clipclap-feedback-quality-committed-v1\n", "utf8");
 const BUNDLE_NAMES = ["case", "observation", "decision"] as const;
-const PRIVATE_FILE_NAMES = new Set(["case.json", "transcript.json", "source-or-evidence.mp4", "manifest.json", "results.jsonl", "decision.json", "report.md"]);
+const PRIVATE_FILE_NAMES = new Set(["case.json", "transcript.json", "source-or-evidence.mp4", "recorded-responses.json", "manifest.json", "results.jsonl", "decision.json", "report.md"]);
 const MAX_PRIVATE_METADATA_BYTES = 8 * 1024;
 export const MAX_READ_BUNDLE_FILE_BYTES = 256 * 1024 * 1024;
 export const MAX_READ_BUNDLE_TOTAL_BYTES = 512 * 1024 * 1024;
@@ -1186,4 +1186,60 @@ export async function readBundle(kind: BundleKind, id: string, root = DEFAULT_QU
     if (error instanceof QualityStoreError) throw error;
     throw safeError("unsafe_path");
   } finally { await closeQuietly(directory); if (tree) await closeTree(tree); }
+}
+
+/** Enumerate only committed, name-safe bundle directories. The directory is
+ * opened with O_NOFOLLOW and every candidate is checked before it is exposed.
+ * Callers still validate each bundle's manifest through readBundle/openBundleFile. */
+export async function listBundleIds(kind: BundleKind, root = DEFAULT_QUALITY_ROOT): Promise<string[]> {
+  validateKind(kind);
+  let tree: Awaited<ReturnType<typeof openTree>> | undefined;
+  try {
+    tree = await openTree(validateRoot(root));
+    const ids: string[] = [];
+    for (const entry of await entries(tree.dirs[kind])) {
+      if (!entry.isDirectory() || entry.isSymbolicLink()) throw safeError("unsafe_path");
+      try { validateBundleId(kind, entry.name); } catch { throw safeError("unsafe_path"); }
+      const marker = await readPrivateMetadata(join(anchoredPath(tree.dirs[kind], entry.name), COMMIT_MARKER));
+      if (!bytesEqual(marker, COMMIT_MARKER_BYTES)) throw safeError("integrity");
+      ids.push(entry.name);
+    }
+    return ids.sort();
+  } catch (error) {
+    if (error instanceof QualityStoreError) throw error;
+    throw safeError("unsafe_path");
+  } finally { if (tree) await closeTree(tree); }
+}
+
+/** Read the append-only label ledger without returning filesystem paths. */
+export async function readLabelEvents(root = DEFAULT_QUALITY_ROOT): Promise<ReadonlyArray<Readonly<Record<string, unknown>>>> {
+  const paths = await ensureQualityTree(validateRoot(root));
+  await assertLockSafe(paths.labelsLock);
+  try {
+    return await withCorpusLock(paths.labelsLock, async () => {
+      try {
+        const bytes = await readRegular(paths.labelsFile);
+        if (bytes.byteLength === 0) return [];
+        const text = Buffer.from(bytes).toString("utf8");
+        if (!text.endsWith("\n")) throw safeError("integrity");
+        const result: Record<string, unknown>[] = [];
+        for (const line of text.trimEnd().split("\n")) {
+          let value: unknown;
+          try { value = JSON.parse(line); } catch { throw safeError("integrity"); }
+          if (!value || typeof value !== "object" || Array.isArray(value)) throw safeError("integrity");
+          result.push(value as Record<string, unknown>);
+        }
+        return result;
+      } catch (error) {
+        if ((error as { code?: string })?.code === "ENOENT") return [];
+        if (error instanceof QualityStoreError) throw error;
+        throw safeError("integrity");
+      }
+    });
+  } catch (error) {
+    if (error instanceof QualityStoreError) throw error;
+    const code = codeOf(error);
+    if (code === "lock_timeout" || code === "lock_unavailable") throw error as CorpusLockError;
+    throw safeError("integrity");
+  }
 }

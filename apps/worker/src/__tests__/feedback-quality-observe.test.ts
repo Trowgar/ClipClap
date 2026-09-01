@@ -9,7 +9,9 @@ import {
   type ObservationDependencies,
 } from "../feedback-quality/observe";
 import { observeRenderCase } from "../feedback-quality/render-lane";
-import { parseObserveArgs, readSecureConfig } from "../scripts/feedback-quality-observe";
+import { loadPrivateCases } from "../feedback-quality/observe";
+import { appendLabelEvent, publishBundle } from "../feedback-quality/store";
+import { parseObserveArgs, readSecureConfig, runObservationCli, validateObservationConfig } from "../scripts/feedback-quality-observe";
 
 const hash = (n: string) => `sha256:${n.repeat(64).slice(0, 64)}` as `sha256:${string}`;
 const sampleCase = (set: "eval" | "holdout" = "eval"): MaterializedCase => ({
@@ -119,6 +121,48 @@ describe("feedback quality observation runner", () => {
     expect(await readSecureConfig(path)).toEqual({});
     await chmod(path, 0o644);
     await expect(readSecureConfig(path)).rejects.toThrow("insecure_config");
+    await chmod(path, 0o600);
+    await writeFile(path, JSON.stringify({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b") }, engine: {} }), { mode: 0o600 });
+    expect(await readSecureConfig(path)).toMatchObject({ schemaVersion: 1, runnerVersion: 1 });
+    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), engine: {} }, false)).toThrow("fingerprint");
+    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), engine: {} }, true)).not.toThrow();
+  });
+
+  it("loads only active, committed case bundles for the requested set and derives their digest", async () => {
+    const root = await mkdtemp(join(tmpdir(), "quality-observe-corpus-"));
+    const id = `case:${hash("a")}`;
+    await publishBundle({ kind: "case", id, files: { "case.json": Buffer.from(JSON.stringify({ ...sampleCase(), caseVersion: id }) + "\n"), "source-or-evidence.mp4": Buffer.from("video") } }, root);
+    await appendLabelEvent({ schemaVersion: 1, eventId: "event-1", action: "label", caseVersion: id, set: "eval", disposition: "positive" }, root);
+    const loaded = await loadPrivateCases("eval", root);
+    expect(loaded.cases.map((item) => item.caseVersion)).toEqual([id]);
+    expect(loaded.corpusSha256).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect((await loadPrivateCases("holdout", root)).cases).toHaveLength(0);
+  });
+
+  it("fails the production loader closed when a labelled case bundle is missing", async () => {
+    const root = await mkdtemp(join(tmpdir(), "quality-observe-missing-"));
+    await appendLabelEvent({ schemaVersion: 1, eventId: "event-1", action: "label", caseVersion: `case:${hash("a")}`, set: "eval", disposition: "positive" }, root);
+    const loaded = await loadPrivateCases("eval", root);
+    expect(loaded.cases).toHaveLength(1);
+    expect((loaded.cases[0] as { loadStatus?: string }).loadStatus).toBe("missing");
+  });
+
+  it("runs the real CLI loader and persists three independent live records", async () => {
+    const root = await mkdtemp(join(tmpdir(), "quality-observe-cli-"));
+    const id = `case:${hash("a")}`;
+    await publishBundle({ kind: "case", id, files: { "case.json": Buffer.from(JSON.stringify({ ...sampleCase(), caseVersion: id }) + "\n"), "source-or-evidence.mp4": Buffer.from("video") } }, root);
+    await appendLabelEvent({ schemaVersion: 1, eventId: "event-cli", action: "label", caseVersion: id, set: "eval", disposition: "positive" }, root);
+    const configPath = join(root, "config.json");
+    await writeFile(configPath, JSON.stringify({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), engine: {} }), { mode: 0o600 });
+    const attemptNames: string[] = [];
+    let publishedAttempts: readonly unknown[] = [];
+    const observation = await runObservationCli(["--set", "eval", "--mode", "baseline", "--commit", "a".repeat(40), "--config-file", configPath, "--live"], {
+      root,
+      dependencies: { runCase: vi.fn(async (_case, context) => { attemptNames.push(context.attemptName ?? ""); return result; }), publish: vi.fn(async (_observation, attempts) => { publishedAttempts = attempts; return { status: "committed" as const }; }) },
+    });
+    expect(observation.cases).toHaveLength(1);
+    expect(attemptNames).toEqual(["live-1", "live-2", "live-3"]);
+    expect(publishedAttempts.map((item) => (item as { attemptName: string }).attemptName)).toEqual(["live-1", "live-2", "live-3"]);
   });
 
   it("keeps the render lane stage-equivalent and records hard media metrics", async () => {
@@ -137,5 +181,25 @@ describe("feedback quality observation runner", () => {
     });
     expect(order).toEqual(["cues", "crop", "cut"]);
     expect(lane.metrics).toMatchObject({ outputWidth: 1080, outputHeight: 1920, sar: 1, frameCount: 250, hardInvariantFailures: 0 });
+  });
+
+  it("retries a failed filtered encode with legacy crop and probes the private output", async () => {
+    const calls: Array<string | null> = [];
+    let attempt = 0;
+    const copied: string[] = [];
+    const clip = { start: 0, end: 10, title: "x" } as never;
+    const lane = await observeRenderCase({ ...sampleCase(), subsystem: "render" }, {
+      sourcePath: "/private/source.mp4", highlight: clip, transcriptSegments: [], probe: async (path) => {
+        expect(path).toBe("/private/observed.mp4");
+        return { width: 1080, height: 1920, sar: 1, duration: 8, frameCount: 200, blackTailSeconds: 0, frozenTailSeconds: 0, subtitleOverlap: 0, requiredTextClipped: 0, requiredSubjectClipped: 0 };
+      }, privateOutputPath: "/private/observed.mp4", copyOutput: async (_source, destination) => { copied.push(destination); },
+      segmentsToCues: (() => []) as never,
+      computeCropPlan: (async () => ({ plan: { shots: [] } as never, shotCount: 1, detectMs: 1 })) as never,
+      buildFiltergraph: (() => ({ graph: "filtered" })) as never,
+      cutClips: (async (_source: string, _highlights: unknown[], _extra: string | undefined, graph: unknown) => { calls.push(graph ? "filtered" : null); attempt += 1; if (attempt === 1) throw new Error("encode"); return [{ clipPath: "/private/clip.mp4", highlight: clip }]; }) as never,
+    });
+    expect(calls).toEqual(["filtered", null]);
+    expect(copied).toEqual(["/private/observed.mp4"]);
+    expect(lane.metrics).toMatchObject({ durationDrift: 2, approvedWindowOverlap: 0.8 });
   });
 });

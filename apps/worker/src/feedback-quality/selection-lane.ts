@@ -7,6 +7,7 @@ export type SelectionAttempt = Readonly<{
   name: string;
   result: { highlights?: readonly unknown[]; telemetry?: Record<string, unknown> };
 }>;
+export type SelectionResultPayload = SelectionAttempt["result"];
 
 export type SelectionLaneOptions = Readonly<{
   transcript: TranscriptionResult;
@@ -37,6 +38,10 @@ function selectionMetrics(result: SelectionAttempt["result"], qualityCase: Mater
   }
   const telemetry = result.telemetry ?? {};
   const pick = (...keys: string[]) => keys.map((key) => number(telemetry[key])).find((value) => value !== undefined) ?? 0;
+  const first = highlights[0] as { start?: number; end?: number; hookStart?: number; payoffAt?: number; score?: number } | undefined;
+  const hookDelay = first && finite(first.start) && expected ? Math.max(0, first.start - expected.start) : 0;
+  const preHookGap = first && finite(first.start) && finite(first.hookStart) ? Math.max(0, first.hookStart - first.start) : 0;
+  const payoffContainment = first && finite(first.payoffAt) && finite(first.start) && finite(first.end) ? (first.payoffAt >= first.start && first.payoffAt <= first.end ? 1 : 0) : 0;
   return {
     approvedMomentRetained,
     approvedWindowOverlap,
@@ -48,7 +53,11 @@ function selectionMetrics(result: SelectionAttempt["result"], qualityCase: Mater
     lowQuality: pick("lowQuality", "low_quality"),
     rescueCandidates: pick("rescueCandidates", "rescue_candidates"),
     criticFailures: pick("criticFailures", "critic_failures"),
-  } as QualityMetrics;
+    hookDelay,
+    preHookGap,
+    payoffContainment,
+    score: number(first?.score) ?? 0,
+  };
 }
 
 /** Runs the real V2 analyzer through an injected client/options. The adapter
@@ -77,4 +86,3 @@ export async function observeSelectionCase(
     metrics: selectionMetrics(first.result, qualityCase),
   };
 }
-
