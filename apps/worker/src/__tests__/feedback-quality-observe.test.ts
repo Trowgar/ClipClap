@@ -9,6 +9,7 @@ import {
   type ObservationDependencies,
 } from "../feedback-quality/observe";
 import { observeRenderCase } from "../feedback-quality/render-lane";
+import { observeSelectionCase } from "../feedback-quality/selection-lane";
 import { loadPrivateCases } from "../feedback-quality/observe";
 import { appendLabelEvent, publishBundle } from "../feedback-quality/store";
 import { parseObserveArgs, readSecureConfig, runObservationCli, validateObservationConfig } from "../scripts/feedback-quality-observe";
@@ -31,6 +32,7 @@ const sampleCase = (set: "eval" | "holdout" = "eval"): MaterializedCase => ({
   confidence: "high",
   expected: { approvedMoment: true, completeBoundary: true },
   inputs: { transcriptSha256: hash("d"), evidenceSha256: hash("e"), sourceSha256: null, sourceDurationSec: 30 },
+  replay: { highlight: { start: 0, end: 10, title: "sample", hookStart: 1, hookEnd: 2, payoffAt: 5, language: "en", clipKind: "speech" }, subtitleTrack: null, cropPlan: null, renderManifest: null, reframeConfig: null, musicDirection: null, blackTail: null, sourceUrl: null },
 });
 
 const result = {
@@ -41,6 +43,7 @@ const result = {
     emptyResult: 0,
     zeroClipFalseNegative: 0,
   },
+  telemetry: { kept: 1, criticVerdicts: 1, omittedDrops: 0, truncatedDrops: 0, refusalDrops: 0, invariantDrops: 0 },
 };
 
 describe("feedback quality observation runner", () => {
@@ -122,10 +125,10 @@ describe("feedback quality observation runner", () => {
     await chmod(path, 0o644);
     await expect(readSecureConfig(path)).rejects.toThrow("insecure_config");
     await chmod(path, 0o600);
-    await writeFile(path, JSON.stringify({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b") }, engine: {} }), { mode: 0o600 });
+    await writeFile(path, JSON.stringify({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b") }, envAllowlist: [], engine: {} }), { mode: 0o600 });
     expect(await readSecureConfig(path)).toMatchObject({ schemaVersion: 1, runnerVersion: 1 });
-    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), engine: {} }, false)).toThrow("fingerprint");
-    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), engine: {} }, true)).not.toThrow();
+    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), envAllowlist: [], engine: {} }, false)).toThrow("fingerprint");
+    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), envAllowlist: [], engine: {} }, true)).not.toThrow();
   });
 
   it("loads only active, committed case bundles for the requested set and derives their digest", async () => {
@@ -153,7 +156,7 @@ describe("feedback quality observation runner", () => {
     await publishBundle({ kind: "case", id, files: { "case.json": Buffer.from(JSON.stringify({ ...sampleCase(), caseVersion: id }) + "\n"), "source-or-evidence.mp4": Buffer.from("video") } }, root);
     await appendLabelEvent({ schemaVersion: 1, eventId: "event-cli", action: "label", caseVersion: id, set: "eval", disposition: "positive" }, root);
     const configPath = join(root, "config.json");
-    await writeFile(configPath, JSON.stringify({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), engine: {} }), { mode: 0o600 });
+    await writeFile(configPath, JSON.stringify({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), envAllowlist: [], engine: {} }), { mode: 0o600 });
     const attemptNames: string[] = [];
     let publishedAttempts: readonly unknown[] = [];
     const observation = await runObservationCli(["--set", "eval", "--mode", "baseline", "--commit", "a".repeat(40), "--config-file", configPath, "--live"], {
@@ -172,6 +175,7 @@ describe("feedback quality observation runner", () => {
       sourcePath: "/private/source.mp4", highlight: clip, transcriptSegments: [], probe: async () => ({
         width: 1080, height: 1920, sar: 1, duration: 10, frameCount: 250, blackTailSeconds: 0, frozenTailSeconds: 0,
         subtitleOverlap: 0, requiredTextClipped: 0, requiredSubjectClipped: 0, focalFailures: 0,
+        visualMeasured: true,
       }),
       segmentsToCues: (() => { order.push("cues"); return []; }) as never,
       createAssFilter: (async () => { order.push("ass"); return { filter: "ass", assPath: "/private/a.ass" }; }) as never,
@@ -191,7 +195,7 @@ describe("feedback quality observation runner", () => {
     const lane = await observeRenderCase({ ...sampleCase(), subsystem: "render" }, {
       sourcePath: "/private/source.mp4", highlight: clip, transcriptSegments: [], probe: async (path) => {
         expect(path).toBe("/private/observed.mp4");
-        return { width: 1080, height: 1920, sar: 1, duration: 8, frameCount: 200, blackTailSeconds: 0, frozenTailSeconds: 0, subtitleOverlap: 0, requiredTextClipped: 0, requiredSubjectClipped: 0 };
+        return { width: 1080, height: 1920, sar: 1, duration: 8, frameCount: 200, blackTailSeconds: 0, frozenTailSeconds: 0, subtitleOverlap: 0, requiredTextClipped: 0, requiredSubjectClipped: 0, visualMeasured: true };
       }, privateOutputPath: "/private/observed.mp4", copyOutput: async (_source, destination) => { copied.push(destination); },
       segmentsToCues: (() => []) as never,
       computeCropPlan: (async () => ({ plan: { shots: [] } as never, shotCount: 1, detectMs: 1 })) as never,
@@ -201,5 +205,22 @@ describe("feedback quality observation runner", () => {
     expect(calls).toEqual(["filtered", null]);
     expect(copied).toEqual(["/private/observed.mp4"]);
     expect(lane.metrics).toMatchObject({ durationDrift: 2, approvedWindowOverlap: 0.8 });
+  });
+
+  it("uses actual selected highlight metrics and rejects missing production telemetry", async () => {
+    const qualityCase = sampleCase();
+    const transcript = { text: "hello world", segments: [{ start: 0, end: 10, text: "hello world", words: [] }] } as never;
+    await expect(observeSelectionCase(qualityCase, { transcript, analyze: async () => ({ highlights: [{ start: 1, end: 8, hookStart: 3, payoffAt: 6, score: 0.7 }], telemetry: {} }) })).rejects.toThrow("telemetry");
+    const selected = await observeSelectionCase(qualityCase, { transcript, analyze: async () => ({ highlights: [{ start: 1, end: 8, hookStart: 3, payoffAt: 6, score: 0.7, lowQuality: true }], telemetry: { kept: 1, criticVerdicts: 1, omittedDrops: 0, truncatedDrops: 0, refusalDrops: 0, invariantDrops: 0 } }) });
+    expect(selected.metrics).toMatchObject({ hookDelay: 2, payoffContainment: 1, score: 0.7, lowQuality: 1 });
+  });
+
+  it("fails closed when visual probe annotations are unavailable", async () => {
+    const clip = { start: 0, end: 10, title: "x" } as never;
+    await expect(observeRenderCase({ ...sampleCase(), subsystem: "render" }, {
+      sourcePath: "/private/source.mp4", highlight: clip, transcriptSegments: [], probe: async () => ({
+        width: 1080, height: 1920, sar: 1, duration: 10, frameCount: 250, blackTailSeconds: 0, frozenTailSeconds: 0, subtitleOverlap: 0, requiredTextClipped: 0, requiredSubjectClipped: 0, visualMeasured: false,
+      }), segmentsToCues: (() => []) as never, computeCropPlan: (async () => ({ plan: null, shotCount: 0, detectMs: 0 })) as never, cutClips: (async () => [{ clipPath: "/tmp/out.mp4", highlight: clip }]) as never,
+    })).rejects.toThrow("visual probe unavailable");
   });
 });

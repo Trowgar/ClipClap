@@ -2,6 +2,9 @@ import { analyzeHighlightsV2, type AnalyzeV2Options } from "../analyze-v2";
 import type { TranscriptionResult } from "@clipclap/shared";
 import type { MaterializedCase } from "./promote";
 import type { QualityCaseResult, QualityMetrics } from "./types";
+import { buildSentenceGraph } from "../analyze-v2/sentence-graph";
+import { largestPreHookGap } from "../analyze-v2/post-boundary-hook-gate";
+import { loadAnalyzeConfig } from "../analyze-v2/config";
 
 export type SelectionAttempt = Readonly<{
   name: string;
@@ -22,7 +25,7 @@ function finite(value: unknown): value is number {
 
 function number(value: unknown): number | undefined { return finite(value) ? value : undefined; }
 
-function selectionMetrics(result: SelectionAttempt["result"], qualityCase: MaterializedCase): QualityMetrics {
+function selectionMetrics(result: SelectionAttempt["result"], qualityCase: MaterializedCase, options: SelectionLaneOptions): QualityMetrics {
   const highlights = Array.isArray(result.highlights) ? result.highlights : [];
   const expected = qualityCase.expected.sourceWindow;
   const approvedMomentRetained = highlights.length > 0 && qualityCase.expected.approvedMoment ? 1 : 0;
@@ -37,10 +40,23 @@ function selectionMetrics(result: SelectionAttempt["result"], qualityCase: Mater
     approvedWindowOverlap = best;
   }
   const telemetry = result.telemetry ?? {};
+  const requiredTelemetry = ["kept", "criticVerdicts", "omittedDrops", "truncatedDrops", "refusalDrops", "invariantDrops"];
+  if (requiredTelemetry.some((key) => !Object.prototype.hasOwnProperty.call(telemetry, key))) throw new Error("selection telemetry missing");
   const pick = (...keys: string[]) => keys.map((key) => number(telemetry[key])).find((value) => value !== undefined) ?? 0;
-  const first = highlights[0] as { start?: number; end?: number; hookStart?: number; payoffAt?: number; score?: number } | undefined;
-  const hookDelay = first && finite(first.start) && expected ? Math.max(0, first.start - expected.start) : 0;
-  const preHookGap = first && finite(first.start) && finite(first.hookStart) ? Math.max(0, first.hookStart - first.start) : 0;
+  const first = highlights.reduce((best, item) => {
+    const candidate = item as { start?: number; end?: number };
+    if (!finite(candidate.start) || !finite(candidate.end)) return best;
+    if (!best) return item;
+    const prior = best as { start?: number; end?: number };
+    const overlap = expected ? Math.max(0, Math.min(candidate.end, expected.end) - Math.max(candidate.start, expected.start)) : 0;
+    const priorOverlap = expected && finite(prior.start) && finite(prior.end) ? Math.max(0, Math.min(prior.end, expected.end) - Math.max(prior.start, expected.start)) : 0;
+    return overlap > priorOverlap ? item : best;
+  }, undefined as unknown) as { start?: number; end?: number; hookStart?: number; payoffAt?: number; score?: number } | undefined;
+  const hookDelay = first && finite(first.start) && finite(first.hookStart) ? Math.max(0, first.hookStart - first.start) : 0;
+  let preHookGap = 0;
+  if (first && finite(first.start) && finite(first.hookStart)) {
+    try { preHookGap = largestPreHookGap(buildSentenceGraph(options.transcript.segments.length ? options.transcript.segments : [], options.analyzeOptions?.cfg ?? loadAnalyzeConfig()), first.start, first.hookStart); } catch { preHookGap = 0; }
+  }
   const payoffContainment = first && finite(first.payoffAt) && finite(first.start) && finite(first.end) ? (first.payoffAt >= first.start && first.payoffAt <= first.end ? 1 : 0) : 0;
   return {
     approvedMomentRetained,
@@ -50,9 +66,9 @@ function selectionMetrics(result: SelectionAttempt["result"], qualityCase: Mater
     boundaryErrors: pick("boundaryErrors", "boundary_errors"),
     focalFailures: pick("focalFailures", "focal_failures"),
     subtitleFailures: pick("subtitleFailures", "subtitle_failures"),
-    lowQuality: pick("lowQuality", "low_quality"),
-    rescueCandidates: pick("rescueCandidates", "rescue_candidates"),
-    criticFailures: pick("criticFailures", "critic_failures"),
+    lowQuality: highlights.filter((item) => (item as { lowQuality?: unknown }).lowQuality === true).length,
+    rescueCandidates: telemetry.rescue && typeof telemetry.rescue === "object" ? number((telemetry.rescue as Record<string, unknown>).evaluated) ?? 0 : 0,
+    criticFailures: ["omittedDrops", "truncatedDrops", "refusalDrops", "invariantDrops"].reduce((sum, key) => sum + (number(telemetry[key]) ?? 0), 0),
     hookDelay,
     preHookGap,
     payoffContainment,
@@ -83,6 +99,6 @@ export async function observeSelectionCase(
     disposition: qualityCase.disposition,
     subsystem: qualityCase.subsystem,
     status: "ok",
-    metrics: selectionMetrics(first.result, qualityCase),
+    metrics: selectionMetrics(first.result, qualityCase, options),
   };
 }

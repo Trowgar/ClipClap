@@ -48,7 +48,7 @@ function snapshot(overrides: Record<string, unknown> = {}) {
       job: {
       id: "job-1", userId: "user-1", transcriptJson: { segments: [{ start: 0, end: 8, text: "hello" }] },
       transcriptPartial: false, sourceKey: "sources/job.mp4", sourceArtifactKey: "artifacts/job.mp4",
-      normalizedArtifactKey: null, sourceDurationSec: 12,
+      normalizedArtifactKey: null, sourceDurationSec: 12, renderManifest: { reframeConfig: { engine: "off" }, musicDirection: null, blackTail: null },
     },
     ...overrides,
   };
@@ -78,6 +78,9 @@ describe("quality feedback promotion", () => {
       label: expect.objectContaining({ disposition: "positive", verdict: "AS_IS" }),
       files: expect.objectContaining({ "case.json": expect.any(Uint8Array), "transcript.json": expect.any(Uint8Array), "source-or-evidence.mp4": expect.objectContaining({ path: expect.any(String), size: 3, sha256: expect.stringMatching(/^sha256:/) }) }),
     }), "/tmp/quality", expect.any(Function));
+    const published = (dependencies.publishCaseAndLabel as ReturnType<typeof vi.fn>).mock.calls[0][0] as { files: Record<string, Uint8Array> };
+    const materialized = JSON.parse(Buffer.from(published.files["case.json"]).toString("utf8")) as { replay: Record<string, unknown> };
+    expect(materialized.replay).toMatchObject({ highlight: { start: 1, end: 7, hookStart: 1, hookEnd: 2, payoffAt: 5, language: "en", clipKind: "speech" }, subtitleTrack: null, cropPlan: null, renderManifest: { reframeConfig: { engine: "off" } } });
   });
 
   it.each([

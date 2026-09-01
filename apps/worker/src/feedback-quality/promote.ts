@@ -62,13 +62,14 @@ export interface PromotionDecision {
 
 export interface QualityClipProjection {
   id: string; jobId: string; storageKey: string; duration: number; startTime: number; endTime: number;
-  title: string; subtitleTrack: unknown; cropPlan: unknown; language: string | null; clipKind: string | null;
+  title: string; description?: string | null; score?: number | null; lowQuality?: boolean; subtitleTrack: unknown; cropPlan: unknown; language: string | null; clipKind: string | null;
   hookStart: number | null; hookEnd: number | null; payoffAt: number | null;
 }
 
 export interface QualityJobProjection {
   id: string; userId: string; transcriptJson: unknown; transcriptPartial: boolean;
   sourceKey: string | null; sourceArtifactKey: string | null; normalizedArtifactKey: string | null; sourceDurationSec: number | null;
+  sourceUrl?: string | null; renderManifest?: unknown;
 }
 
 export interface PromotionSnapshot {
@@ -109,6 +110,17 @@ export interface MaterializedCase {
     evidenceSha256: ContentHash;
     sourceSha256: ContentHash | null;
     sourceDurationSec: number | null;
+  };
+  /** Immutable delivered metadata. Observation must replay this exact
+   * highlight/render contract; it may not reconstruct one from expectations. */
+  replay: {
+    highlight: {
+      start: number; end: number; title: string; description?: string; score?: number;
+      hookStart?: number; hookEnd?: number; payoffAt?: number; language?: string | null; clipKind?: string | null; lowQuality?: boolean;
+    };
+    sourceUrl?: string | null;
+    subtitleTrack: unknown; cropPlan: unknown; renderManifest: unknown;
+    reframeConfig: unknown; musicDirection: unknown; blackTail: unknown;
   };
 }
 
@@ -346,7 +358,26 @@ export async function promoteFeedbackCase(rawDecision: PromotionDecision, depend
       const source = sourceKey ? await downloadBounded(dependencies, sourceKey, MAX_SOURCE_BYTES, spoolDir) : null;
       if (sourceKey && (!source || source.size === 0)) throw new QualityPromotionError("inputs_missing");
       const inputs = { transcriptSha256: transcript ? sha256(transcript) : null, evidenceSha256: evidence.sha256, sourceSha256: source ? source.sha256 : null, sourceDurationSec: snapshot.job.sourceDurationSec };
-      const caseBody = { schemaVersion: 1 as const, feedbackId: value.feedbackId, clipId: value.clipId, jobId: value.jobId, userId: value.userId, feedbackUpdatedAt: value.feedbackUpdatedAt, snapshotSha256: value.snapshotSha256, candidateVersion: value.candidateVersion, set: value.set, disposition: value.disposition, verdict: value.verdict, subsystem: value.subsystem, confidence: value.confidence, expected: value.expected, inputs };
+      const replay = {
+        highlight: {
+          start: snapshot.clip.startTime, end: snapshot.clip.endTime, title: snapshot.clip.title,
+          ...(snapshot.clip.description == null ? {} : { description: snapshot.clip.description }),
+          ...(snapshot.clip.score == null ? {} : { score: snapshot.clip.score }),
+          ...(snapshot.clip.lowQuality === undefined ? {} : { lowQuality: snapshot.clip.lowQuality }),
+          ...(snapshot.clip.hookStart === null ? {} : { hookStart: snapshot.clip.hookStart }),
+          ...(snapshot.clip.hookEnd === null ? {} : { hookEnd: snapshot.clip.hookEnd }),
+          ...(snapshot.clip.payoffAt === null ? {} : { payoffAt: snapshot.clip.payoffAt }),
+          language: snapshot.clip.language, clipKind: snapshot.clip.clipKind,
+        },
+        subtitleTrack: snapshot.clip.subtitleTrack,
+        cropPlan: snapshot.clip.cropPlan,
+        renderManifest: snapshot.job.renderManifest ?? null,
+        reframeConfig: snapshot.job.renderManifest && typeof snapshot.job.renderManifest === "object" ? (snapshot.job.renderManifest as Record<string, unknown>).reframeConfig ?? null : null,
+        musicDirection: snapshot.job.renderManifest && typeof snapshot.job.renderManifest === "object" ? (snapshot.job.renderManifest as Record<string, unknown>).musicDirection ?? null : null,
+        blackTail: snapshot.job.renderManifest && typeof snapshot.job.renderManifest === "object" ? (snapshot.job.renderManifest as Record<string, unknown>).blackTail ?? null : null,
+        sourceUrl: snapshot.job.sourceUrl ?? null,
+      };
+      const caseBody = { schemaVersion: 1 as const, feedbackId: value.feedbackId, clipId: value.clipId, jobId: value.jobId, userId: value.userId, feedbackUpdatedAt: value.feedbackUpdatedAt, snapshotSha256: value.snapshotSha256, candidateVersion: value.candidateVersion, set: value.set, disposition: value.disposition, verdict: value.verdict, subsystem: value.subsystem, confidence: value.confidence, expected: value.expected, inputs, replay };
       const caseVersion = `case:${sha256(canonicalJson(caseBody))}`;
       const materialized: MaterializedCase = { ...caseBody, caseVersion };
       const label = { schemaVersion: 1, eventId: value.eventId, action: "label", occurredAt: nowIso(dependencies), feedbackId: value.feedbackId, feedbackUpdatedAt: value.feedbackUpdatedAt, snapshotSha256: value.snapshotSha256, candidateVersion: value.candidateVersion, caseVersion, set: value.set, disposition: value.disposition, verdict: value.verdict, subsystem: value.subsystem, confidence: value.confidence, expected: value.expected };

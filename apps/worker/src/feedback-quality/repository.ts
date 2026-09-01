@@ -12,12 +12,12 @@ const FEEDBACK_SELECT = {
 } as const;
 const CLIP_SELECT = {
   id: true, jobId: true, storageKey: true, duration: true, startTime: true, endTime: true,
-  title: true, subtitleTrack: true, cropPlan: true, language: true, clipKind: true,
+  title: true, description: true, score: true, lowQuality: true, subtitleTrack: true, cropPlan: true, language: true, clipKind: true,
   hookStart: true, hookEnd: true, payoffAt: true,
 } as const;
 const JOB_SELECT = {
   id: true, userId: true, transcriptJson: true, transcriptPartial: true,
-  sourceKey: true, sourceArtifactKey: true, normalizedArtifactKey: true, sourceDurationSec: true,
+  sourceUrl: true, sourceKey: true, sourceArtifactKey: true, normalizedArtifactKey: true, sourceDurationSec: true, renderManifest: true,
 } as const;
 
 export class QualityPromotionRepositoryError extends Error {

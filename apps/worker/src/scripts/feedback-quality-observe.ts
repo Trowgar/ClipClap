@@ -10,6 +10,8 @@ import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import { observeSelectionCase, type SelectionResultPayload } from "../feedback-quality/selection-lane";
 import { observeRenderCase } from "../feedback-quality/render-lane";
 import type { Highlight, TranscriptionResult } from "@clipclap/shared";
+import OpenAI from "openai";
+import { analyzeHighlightsV2, type AnalyzeV2Options } from "../analyze-v2";
 
 const execFileAsync = promisify(execFile);
 const HEX40 = /^[0-9a-f]{40}$/;
@@ -30,6 +32,7 @@ export type ObservationConfig = Readonly<{
   promptFingerprint: `sha256:${string}`;
   modelFingerprint: `sha256:${string}`;
   recorded?: Readonly<{ promptFingerprint: `sha256:${string}`; modelFingerprint: `sha256:${string}` }>;
+  envAllowlist: readonly string[];
   engine: Readonly<Record<string, unknown>>;
 }>;
 
@@ -39,8 +42,10 @@ export function validateObservationConfig(value: unknown, live: boolean): Observ
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ObserveCliError("invalid_flag");
   const item = value as Record<string, unknown>;
   const keys = Object.keys(item);
-  const allowed = ["schemaVersion", "runnerVersion", "promptFingerprint", "modelFingerprint", "recorded", "engine"];
-  if (keys.some((key) => !allowed.includes(key)) || item.schemaVersion !== 1 || !Number.isSafeInteger(item.runnerVersion) || (item.runnerVersion as number) < 0 || !hash(item.promptFingerprint) || !hash(item.modelFingerprint) || !item.engine || typeof item.engine !== "object" || Array.isArray(item.engine)) throw new ObserveCliError("invalid_flag");
+  const allowed = ["schemaVersion", "runnerVersion", "promptFingerprint", "modelFingerprint", "recorded", "envAllowlist", "engine"];
+  if (keys.some((key) => !allowed.includes(key)) || item.schemaVersion !== 1 || !Number.isSafeInteger(item.runnerVersion) || (item.runnerVersion as number) < 0 || !hash(item.promptFingerprint) || !hash(item.modelFingerprint) || !Array.isArray(item.envAllowlist) || item.envAllowlist.some((key) => typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) || !item.engine || typeof item.engine !== "object" || Array.isArray(item.engine)) throw new ObserveCliError("invalid_flag");
+  const engine = item.engine as Record<string, unknown>;
+  if (Object.keys(engine).some((key) => !["analyze", "reframe", "musicDirection", "blackTail"].includes(key)) || (engine.analyze !== undefined && (!engine.analyze || typeof engine.analyze !== "object" || Array.isArray(engine.analyze))) || (engine.reframe !== undefined && (!engine.reframe || typeof engine.reframe !== "object" || Array.isArray(engine.reframe))) || (engine.musicDirection !== undefined && (!engine.musicDirection || typeof engine.musicDirection !== "object" || Array.isArray(engine.musicDirection))) || (engine.blackTail !== undefined && (!engine.blackTail || typeof engine.blackTail !== "object" || Array.isArray(engine.blackTail)))) throw new ObserveCliError("invalid_flag");
   if (item.recorded !== undefined) {
     if (!item.recorded || typeof item.recorded !== "object" || Array.isArray(item.recorded)) throw new ObserveCliError("fingerprint");
     const recorded = item.recorded as Record<string, unknown>;
@@ -156,7 +161,7 @@ async function materializeArtifact(id: string, name: string, root: string, direc
 async function probeRenderedMedia(path: string): Promise<{
   width: number; height: number; sar: number; duration: number; frameCount: number;
   blackTailSeconds: number; frozenTailSeconds: number; subtitleOverlap: number;
-  requiredTextClipped: number; requiredSubjectClipped: number; focalFailures: number;
+  requiredTextClipped: number; requiredSubjectClipped: number; focalFailures: number; visualMeasured: boolean;
 }> {
   const probe = await execFileAsync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,sample_aspect_ratio,nb_frames:format=duration", "-of", "json", path], { maxBuffer: 1024 * 1024 });
   const parsed = JSON.parse(probe.stdout) as { streams?: Array<{ width?: number; height?: number; sample_aspect_ratio?: string; nb_frames?: string }>; format?: { duration?: string } };
@@ -189,11 +194,11 @@ async function probeRenderedMedia(path: string): Promise<{
     // focal-marker checks are supplied by the stage's machine-readable probe
     // when available; absent markers are zero, never inferred from expectations.
     blackTailSeconds: blackTail, frozenTailSeconds: frozenTail, subtitleOverlap: 0,
-    requiredTextClipped: 0, requiredSubjectClipped: 0, focalFailures: 0,
+    requiredTextClipped: 0, requiredSubjectClipped: 0, focalFailures: 0, visualMeasured: false,
   };
 }
 
-export function createProductionCaseRunner(root = DEFAULT_QUALITY_ROOT, live = false, config?: ObservationConfig): ObservationCaseRunner {
+export function createProductionCaseRunner(root = DEFAULT_QUALITY_ROOT, live = false, config?: ObservationConfig, environment: Readonly<Record<string, string | undefined>> = {}): ObservationCaseRunner {
   return async (qualityCase, context) => {
     const loadStatus = (qualityCase as MaterializedCase & { loadStatus?: "missing" | "stale" }).loadStatus;
     if (loadStatus) return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: loadStatus, metrics: { hardInvariantFailures: 1 } };
@@ -212,15 +217,27 @@ export function createProductionCaseRunner(root = DEFAULT_QUALITY_ROOT, live = f
           const entry = recording as Record<string, unknown>;
           const recorded = entry.recorded as Record<string, unknown> | undefined;
           if (!config?.recorded || !recorded || recorded.promptFingerprint !== config.recorded.promptFingerprint || recorded.modelFingerprint !== config.recorded.modelFingerprint || !entry.result || typeof entry.result !== "object") return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };
-          return observeSelectionCase(qualityCase, { transcript, attempts: [context.attemptName ?? "recorded"], analyze: async () => entry.result as SelectionResultPayload });
+          return observeSelectionCase(qualityCase, { transcript, attempts: [context.attemptName ?? "recorded"], analyzeOptions: (config?.engine.analyze ?? {}) as AnalyzeV2Options, analyze: async () => entry.result as SelectionResultPayload });
         }
-        return observeSelectionCase(qualityCase, { transcript, attempts: [context.attemptName ?? "live"] });
+        const apiKey = environment.OPENAI_API_KEY;
+        if (!apiKey) return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "error", metrics: { hardInvariantFailures: 1 } };
+        const sourceDurationSec = qualityCase.inputs.sourceDurationSec ?? undefined;
+        const sourceUrl = (qualityCase.replay as { sourceUrl?: string | null }).sourceUrl ?? undefined;
+        const configuredAnalyze = (config?.engine.analyze ?? {}) as AnalyzeV2Options;
+        const analyze = async (value: TranscriptionResult, options: AnalyzeV2Options) => analyzeHighlightsV2(value, { ...configuredAnalyze, ...options, client: new OpenAI({ apiKey }), sourceDurationSec, sourceUrl });
+        return observeSelectionCase(qualityCase, { transcript, attempts: [context.attemptName ?? "live"], analyze, analyzeOptions: configuredAnalyze });
       }
       const window = qualityCase.expected.sourceWindow;
+      const replay = qualityCase.replay;
+      const replayHighlight = replay?.highlight as (Highlight & { clipKind?: string | null }) | undefined;
+      if (!replay || !replayHighlight || !Number.isFinite(replayHighlight.start) || !Number.isFinite(replayHighlight.end) || !replay.reframeConfig || typeof replay.reframeConfig !== "object") return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };
       if (!window || !Number.isFinite(window.start) || !Number.isFinite(window.end)) return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "missing", metrics: { hardInvariantFailures: 1 } };
       const source = await materializeArtifact(qualityCase.caseVersion, "source-or-evidence.mp4", root, temp);
-      const highlight: Highlight = { start: window.start, end: window.end, title: qualityCase.verdict, hookStart: window.start, hookEnd: window.start, payoffAt: window.end };
-      return await observeRenderCase(qualityCase, { sourcePath: source, highlight, transcriptSegments: transcript?.segments ?? [], subtitlesOn: qualityCase.expected.subtitleCoverage !== false, probe: probeRenderedMedia });
+      const musicDirection = (config?.engine.musicDirection ?? replay.musicDirection) && typeof (config?.engine.musicDirection ?? replay.musicDirection) === "object" ? (config?.engine.musicDirection ?? replay.musicDirection) as { topBar: number; bottomBar: number; punchIn: boolean; fades: boolean } : undefined;
+      const blackTailValue = config?.engine.blackTail ?? replay.blackTail;
+      const blackTailTrim = blackTailValue && typeof blackTailValue === "object" && (blackTailValue as { enabled?: unknown }).enabled === true ? { jobId: qualityCase.jobId, clipIndex: 0 } : undefined;
+      const reframeConfig = config?.engine.reframe ?? replay.reframeConfig;
+      return await observeRenderCase(qualityCase, { sourcePath: source, highlight: replayHighlight, transcriptSegments: transcript?.segments ?? [], language: replayHighlight.language, subtitlesOn: replay.subtitleTrack !== null, reframeConfig: reframeConfig as never, musicDirection, musicFades: musicDirection?.fades, blackTailTrim, privateOutputPath: `${temp}/observed-output.mp4`, probe: probeRenderedMedia });
     } finally { await rm(temp, { recursive: true, force: true }).catch(() => undefined); }
   };
 }
@@ -239,11 +256,12 @@ export async function runObservationCli(
   const loaded = input.cases ? { cases: input.cases, corpusSha256: sha256(canonicalJson(input.cases)) } : await loadPrivateCases(args.set, root);
   if (input.corpusSha256 && input.corpusSha256 !== loaded.corpusSha256) throw new ObserveCliError("corpus_mismatch");
   if (input.runnerVersion !== undefined && input.runnerVersion !== config.runnerVersion) throw new ObserveCliError("invalid_flag");
-  const dependencies = input.dependencies ?? { runCase: createProductionCaseRunner(root ?? process.env.QUALITY_ROOT ?? DEFAULT_QUALITY_ROOT, args.live, config) };
+  const environment = input.environment ?? Object.fromEntries(config.envAllowlist.map((key) => [key, process.env[key]]));
+  const dependencies = input.dependencies ?? { runCase: createProductionCaseRunner(root ?? process.env.QUALITY_ROOT ?? DEFAULT_QUALITY_ROOT, args.live, config, environment) };
   const result = await observeQualitySet({
     set: args.set, mode: args.mode, commitSha: args.commit, config, corpusSha256: loaded.corpusSha256,
     runnerVersion: config.runnerVersion, cases: loaded.cases, dependencies, root,
-    environment: input.environment ?? {}, allowedEnvironment: input.allowedEnvironment ?? [], live: args.live,
+    environment, allowedEnvironment: config.envAllowlist, live: args.live,
     promptFingerprint: config.promptFingerprint, modelFingerprint: config.modelFingerprint, recorded: config.recorded,
   } satisfies ObserveQualityOptions);
   console.log(JSON.stringify({ observationId: result.observationId, set: result.set, mode: result.mode, commitSha: result.commitSha, caseCount: result.cases.length }));

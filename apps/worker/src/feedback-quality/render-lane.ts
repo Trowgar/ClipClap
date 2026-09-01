@@ -1,8 +1,10 @@
 import type { Highlight, WhisperSegment } from "@clipclap/shared";
-import { copyFile } from "node:fs/promises";
+import { copyFile, unlink } from "node:fs/promises";
 import { segmentsToCues, createAssFilter } from "../processors/subtitles";
 import { computeCropPlan } from "../reframe";
+import type { ReframeConfig } from "../reframe/config";
 import { buildFiltergraph } from "../reframe/filtergraph";
+import type { MusicDirectionOpts } from "../reframe/types";
 import { cutClips, type CutResult } from "../processors/cut";
 import type { MaterializedCase } from "./promote";
 import type { QualityCaseResult, QualityMetrics } from "./types";
@@ -12,6 +14,7 @@ export type RenderProbe = Readonly<{
   blackTailSeconds: number; frozenTailSeconds: number;
   subtitleOverlap: number; requiredTextClipped: number; requiredSubjectClipped: number;
   focalFailures?: number;
+  visualMeasured: boolean;
 }>;
 
 export type RenderLaneOptions = Readonly<{
@@ -20,7 +23,8 @@ export type RenderLaneOptions = Readonly<{
   transcriptSegments: WhisperSegment[];
   language?: string | null;
   subtitlesOn?: boolean;
-  reframeConfig?: Parameters<typeof computeCropPlan>[3];
+  reframeConfig?: ReframeConfig;
+  musicDirection?: MusicDirectionOpts;
   probe: (path: string, qualityCase: MaterializedCase) => Promise<RenderProbe>;
   segmentsToCues?: typeof segmentsToCues;
   createAssFilter?: typeof createAssFilter;
@@ -44,37 +48,47 @@ export async function observeRenderCase(
   const cropFn = options.computeCropPlan ?? computeCropPlan;
   const graphFn = options.buildFiltergraph ?? buildFiltergraph;
   const cutFn = options.cutClips ?? cutClips;
-  const cues = cuesFn(options.transcriptSegments, options.highlight.start, options.highlight.end, options.language);
   let ass: { filter: string; assPath: string } | undefined;
-  if (options.subtitlesOn !== false && cues.length > 0) ass = await assFn(cues, options.language);
-  const crop = await cropFn(options.sourcePath, options.highlight.start, options.highlight.end, options.reframeConfig);
-  const graph = crop.plan ? graphFn(crop.plan, ass?.filter) : undefined;
-  let cuts: Awaited<ReturnType<typeof cutClips>>;
+  let outputPath: string | undefined;
+  let cutOutputPath: string | undefined;
   try {
-    cuts = await cutFn(options.sourcePath, [options.highlight], ass?.filter, graph ?? null, options.musicFades, options.blackTailTrim);
-  } catch (error) {
-    // Match stages/render.ts: a failed reframe encode retries once with the
-    // legacy crop. The retry is absent when no graph was requested.
-    if (!graph) throw error;
-    cuts = await cutFn(options.sourcePath, [options.highlight], ass?.filter, null, options.musicFades, options.blackTailTrim);
+    const cues = cuesFn(options.transcriptSegments, options.highlight.start, options.highlight.end, options.language);
+    if (options.subtitlesOn !== false && cues.length > 0) ass = await assFn(cues, options.language);
+    const crop = options.reframeConfig?.engine === "off" ? { plan: null, shotCount: 0, detectMs: 0 } : await cropFn(options.sourcePath, options.highlight.start, options.highlight.end, options.reframeConfig);
+    const graph = crop.plan ? graphFn(crop.plan, ass?.filter, options.musicDirection) : undefined;
+    let cuts: Awaited<ReturnType<typeof cutClips>>;
+    try {
+      cuts = await cutFn(options.sourcePath, [options.highlight], ass?.filter, graph ?? null, options.musicFades, options.blackTailTrim);
+    } catch (error) {
+      // Match stages/render.ts: a failed reframe encode retries once with the
+      // legacy crop. The retry is absent when no graph was requested.
+      if (!graph) throw error;
+      cuts = await cutFn(options.sourcePath, [options.highlight], ass?.filter, null, options.musicFades, options.blackTailTrim);
+    }
+    const output = cuts[0] as CutResult | undefined;
+    if (!output?.clipPath) throw new Error("render output missing");
+    cutOutputPath = output.clipPath;
+    outputPath = options.privateOutputPath ?? output.clipPath;
+    if (outputPath !== output.clipPath) await (options.copyOutput ?? copyFile)(output.clipPath, outputPath);
+    const probe = await options.probe(outputPath, qualityCase);
+    if (!probe.visualMeasured) throw new Error("visual probe unavailable");
+    const expectedDuration = Math.max(0.001, options.highlight.end - options.highlight.start);
+    const overlap = Math.max(0, Math.min(1, probe.duration / expectedDuration));
+    const metrics: QualityMetrics = {
+      approvedMomentRetained: qualityCase.expected.approvedMoment && probe.duration > 0 ? 1 : 0,
+      approvedWindowOverlap: qualityCase.expected.approvedMoment ? overlap : 0,
+      hardInvariantFailures: probe.width === 1080 && probe.height === 1920 && probe.sar === 1 ? 0 : 1,
+      outputWidth: probe.width, outputHeight: probe.height, sar: probe.sar,
+      durationDrift: Math.abs(probe.duration - expectedDuration),
+      frameCount: probe.frameCount, blackTailSeconds: probe.blackTailSeconds, frozenTailSeconds: probe.frozenTailSeconds,
+      subtitleOverlap: probe.subtitleOverlap, requiredTextClipped: probe.requiredTextClipped,
+      requiredSubjectClipped: probe.requiredSubjectClipped,
+      focalFailures: probe.focalFailures ?? 0,
+    };
+    return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "ok", metrics };
+  } finally {
+    if (ass?.assPath) await unlink(ass.assPath).catch(() => undefined);
+    if (cutOutputPath) await unlink(cutOutputPath).catch(() => undefined);
+    if (outputPath && outputPath !== cutOutputPath) await unlink(outputPath).catch(() => undefined);
   }
-  const output = cuts[0] as CutResult | undefined;
-  if (!output?.clipPath) throw new Error("render output missing");
-  const outputPath = options.privateOutputPath ?? output.clipPath;
-  if (outputPath !== output.clipPath) await (options.copyOutput ?? copyFile)(output.clipPath, outputPath);
-  const probe = await options.probe(outputPath, qualityCase);
-  const expectedDuration = Math.max(0.001, options.highlight.end - options.highlight.start);
-  const overlap = Math.max(0, Math.min(1, probe.duration / expectedDuration));
-  const metrics: QualityMetrics = {
-    approvedMomentRetained: qualityCase.expected.approvedMoment && probe.duration > 0 ? 1 : 0,
-    approvedWindowOverlap: qualityCase.expected.approvedMoment ? overlap : 0,
-    hardInvariantFailures: probe.width === 1080 && probe.height === 1920 && probe.sar === 1 ? 0 : 1,
-    outputWidth: probe.width, outputHeight: probe.height, sar: probe.sar,
-    durationDrift: Math.abs(probe.duration - expectedDuration),
-    frameCount: probe.frameCount, blackTailSeconds: probe.blackTailSeconds, frozenTailSeconds: probe.frozenTailSeconds,
-    subtitleOverlap: probe.subtitleOverlap, requiredTextClipped: probe.requiredTextClipped,
-    requiredSubjectClipped: probe.requiredSubjectClipped,
-    focalFailures: probe.focalFailures ?? 0,
-  };
-  return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "ok", metrics };
 }

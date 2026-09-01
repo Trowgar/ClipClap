@@ -474,6 +474,15 @@ async function renderClips(
           clipsGenerated,
           clipKeys,
           renderChecks,
+          // Frozen replay contract for private quality observations. These
+          // are the exact job-level inputs used by every clip in this render;
+          // omitting them would force a later observer to consult ambient env.
+          reframeConfig: reframeCfg,
+          musicDirection: musicDirection ?? null,
+          blackTail: {
+            enabled: process.env.RENDER_BLACK_TAIL_TRIM === "on",
+            context: "jobId/clipIndex",
+          },
           reframe: {
             engine: reframeCfg.engine,
             checks: reframeChecks,
