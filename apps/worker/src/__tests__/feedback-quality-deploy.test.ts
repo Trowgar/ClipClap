@@ -173,6 +173,22 @@ describe("feedback quality deployment", () => {
     expect(events).toEqual(["pause", "counts", "counts", "spawn", "health", "canary", "resume"]);
   });
 
+  it("allows only post-fence paused jobs and keeps them held until resume", async () => {
+    let reads = 0;
+    const d = deps({
+      acquireQueueLease: vi.fn(async () => ({
+        drainActive: true,
+        allowPostFencePaused: true,
+        pause: vi.fn(async () => undefined),
+        counts: vi.fn(async () => { reads += 1; return reads === 1 ? { active: 0, waiting: 0, paused: 0 } : { active: 0, waiting: 0, paused: 1 }; }),
+        runCanary: vi.fn(async () => undefined),
+        resume: vi.fn(async () => undefined),
+      })),
+    });
+    const result = await deployWithQualityGate(request({ services: ["worker-analyze"] }), d);
+    expect(result.status).toBe("deployed");
+  });
+
   it("resumes a paused queue when recreate or canary fails", async () => {
     const resume = vi.fn(async () => undefined);
     const d = deps({ acquireQueueLease: vi.fn(async () => ({ pause: vi.fn(async () => undefined), counts: vi.fn(async () => ({ active: 0, waiting: 0 })), resume })), runCanary: vi.fn(async () => { throw new Error("mismatch"); }) });
@@ -209,12 +225,12 @@ describe("feedback quality deployment", () => {
     expect(result.reasons).toContain("invalid_request");
   });
 
-  it("wires runtime commit/config bindings into every worker service", async () => {
+  it("keeps runtime quality bindings out of ordinary dev compose", async () => {
     const compose = await readFile(join(process.cwd(), "docker-compose.yml"), "utf8");
     for (const service of ["worker-download", "worker-transcribe", "worker-analyze", "worker-render", "worker-finalize"]) {
       const section = compose.match(new RegExp(`\\n  ${service}:[\\s\\S]*?(?=\\n  [A-Za-z])`))?.[0] ?? "";
-      expect(section).toContain("GIT_SHA=${GIT_SHA:-}");
-      expect(section).toContain("FEEDBACK_QUALITY_CONFIG_FILE=${FEEDBACK_QUALITY_CONFIG_FILE:-}");
+      expect(section).not.toContain("GIT_SHA=${GIT_SHA:-}");
+      expect(section).not.toContain("FEEDBACK_QUALITY_CONFIG_FILE=${FEEDBACK_QUALITY_CONFIG_FILE:-}");
     }
   });
 

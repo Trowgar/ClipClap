@@ -41,7 +41,7 @@ export function createStageWorker(
     maxStalledCount: 1,
   } as const;
   const processor = async (job: Job, token?: string) => {
-    if (isQualityCanary(job.data)) return runQualityCanary(role, job.data);
+    if (isQualityCanary(job.data)) throw new Error("quality_canary_control_queue_required");
     return dispatchStageJob(role, job.data, job, token);
   };
   const worker = new Worker(
@@ -79,13 +79,13 @@ export function createStageWorker(
   return worker;
 }
 
-type QualityCanaryJob = Readonly<{ kind: "feedback-quality-canary"; nonce: string; decisionId: string }>;
-export type QualityCanaryResponse = Readonly<{ kind: "feedback-quality-canary"; nonce: string; decisionId: string; role: StageName; commitSha: string; configSha256: string; runnerVersion: number }>;
+type QualityCanaryJob = Readonly<{ kind: "feedback-quality-canary"; nonce: string; decisionId: string; rolloutInstanceId: string }>;
+export type QualityCanaryResponse = Readonly<{ kind: "feedback-quality-canary"; nonce: string; decisionId: string; rolloutInstanceId: string; role: StageName; commitSha: string; configSha256: string; runnerVersion: number }>;
 
 function isQualityCanary(value: unknown): value is QualityCanaryJob {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
   const item = value as Record<string, unknown>;
-  return Object.keys(item).length === 3 && item.kind === "feedback-quality-canary" && typeof item.nonce === "string" && item.nonce.length > 0 && typeof item.decisionId === "string";
+  return Object.keys(item).length === 4 && item.kind === "feedback-quality-canary" && typeof item.nonce === "string" && item.nonce.length > 0 && typeof item.decisionId === "string" && typeof item.rolloutInstanceId === "string" && item.rolloutInstanceId.length > 0;
 }
 
 async function runQualityCanary(role: StageName, job: QualityCanaryJob): Promise<QualityCanaryResponse> {
@@ -93,10 +93,25 @@ async function runQualityCanary(role: StageName, job: QualityCanaryJob): Promise
   try {
     const path = process.env.FEEDBACK_QUALITY_CONFIG_FILE;
     if (!path) throw new Error();
-    configSha256 = effectiveConfigDigest(validateSecureConfig(await readSecureConfig(path), true));
+    const config = validateSecureConfig(await readSecureConfig(path), true);
+    const environment = readQualityEnvironmentSnapshot(config.envAllowlist);
+    configSha256 = effectiveConfigDigest(config, environment);
   } catch { /* empty binding deliberately fails deploy verification */ }
   const commitSha = process.env.GIT_SHA ?? "";
-  return { kind: "feedback-quality-canary", nonce: job.nonce, decisionId: job.decisionId, role, commitSha, configSha256, runnerVersion: QUALITY_RUNNER_VERSION };
+  return { kind: "feedback-quality-canary", nonce: job.nonce, decisionId: job.decisionId, rolloutInstanceId: job.rolloutInstanceId, role, commitSha, configSha256, runnerVersion: QUALITY_RUNNER_VERSION };
+}
+
+function readQualityEnvironmentSnapshot(allowlist: readonly string[]): Readonly<Record<string, string | null>> {
+  const encoded = process.env.FEEDBACK_QUALITY_ENV_SNAPSHOT;
+  if (!encoded) return Object.fromEntries(allowlist.map((key) => [key, process.env[key] ?? null]));
+  const parsed: unknown = JSON.parse(encoded);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("quality_environment_snapshot_invalid");
+  const item = parsed as Record<string, unknown>;
+  const keys = Object.keys(item).sort();
+  const expected = [...allowlist].sort();
+  if (JSON.stringify(keys) !== JSON.stringify(expected)) throw new Error("quality_environment_snapshot_keys");
+  if (keys.some((key) => item[key] !== null && typeof item[key] !== "string")) throw new Error("quality_environment_snapshot_value");
+  return item as Readonly<Record<string, string | null>>;
 }
 
 export async function dispatchStageJob(

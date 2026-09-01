@@ -96,7 +96,19 @@ describe("worker role config", () => {
     const completed = (worker as unknown as { on: ReturnType<typeof vi.fn> }).on;
     const handler = completed.mock.calls.find((call: unknown[]) => call[0] === "completed")?.[1] as ((job: unknown) => void) | undefined;
     expect(handler).toBeDefined();
-    await handler!({ data: { kind: "feedback-quality-canary", nonce: "n", decisionId: "d" } });
+    await handler!({ data: { kind: "feedback-quality-canary", nonce: "n", decisionId: "d", rolloutInstanceId: "instance" } });
     expect(mocks.releaseNextQueued).not.toHaveBeenCalled();
+  });
+
+  it("rejects canary work on the primary queue so stale consumers cannot answer", async () => {
+    createStageWorker("finalize");
+    const primaryProcessor = (Worker as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][1] as (job: unknown) => Promise<unknown>;
+    await expect(primaryProcessor({ data: { kind: "feedback-quality-canary", nonce: "n", decisionId: "d", rolloutInstanceId: "instance" } })).rejects.toThrow("control_queue");
+  });
+
+  it("returns the rollout instance from the dedicated canary worker", async () => {
+    createStageWorker("finalize");
+    const controlProcessor = (Worker as unknown as { mock: { calls: unknown[][] } }).mock.calls[1][1] as (job: unknown) => Promise<Record<string, unknown>>;
+    await expect(controlProcessor({ data: { kind: "feedback-quality-canary", nonce: "n", decisionId: "d", rolloutInstanceId: "instance" } })).resolves.toMatchObject({ rolloutInstanceId: "instance", role: "finalize" });
   });
 });

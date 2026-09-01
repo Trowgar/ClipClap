@@ -84,8 +84,6 @@ services:
       - NODE_ENV=${NODE_ENV:-development}
       - WORKER_ROLE=download
       - DOWNLOAD_CONCURRENCY=4
-      - GIT_SHA=${GIT_SHA:-}
-      - FEEDBACK_QUALITY_CONFIG_FILE=${FEEDBACK_QUALITY_CONFIG_FILE:-}
       - CHOKIDAR_USEPOLLING=true
 
   worker-transcribe:
@@ -94,8 +92,6 @@ services:
       - NODE_ENV=${NODE_ENV:-development}
       - WORKER_ROLE=transcribe
       - TRANSCRIBE_CONCURRENCY=2
-      - GIT_SHA=${GIT_SHA:-}
-      - FEEDBACK_QUALITY_CONFIG_FILE=${FEEDBACK_QUALITY_CONFIG_FILE:-}
       - CHOKIDAR_USEPOLLING=true
 
   worker-analyze:
@@ -104,8 +100,6 @@ services:
       - NODE_ENV=${NODE_ENV:-development}
       - WORKER_ROLE=analyze
       - ANALYZE_CONCURRENCY=5
-      - GIT_SHA=${GIT_SHA:-}
-      - FEEDBACK_QUALITY_CONFIG_FILE=${FEEDBACK_QUALITY_CONFIG_FILE:-}
       - CHOKIDAR_USEPOLLING=true
 
   worker-render:
@@ -114,8 +108,6 @@ services:
       - NODE_ENV=${NODE_ENV:-development}
       - WORKER_ROLE=render
       - RENDER_CONCURRENCY=1
-      - GIT_SHA=${GIT_SHA:-}
-      - FEEDBACK_QUALITY_CONFIG_FILE=${FEEDBACK_QUALITY_CONFIG_FILE:-}
       - CHOKIDAR_USEPOLLING=true
 
   worker-finalize:
@@ -124,8 +116,6 @@ services:
       - NODE_ENV=${NODE_ENV:-development}
       - WORKER_ROLE=finalize
       - FINALIZE_CONCURRENCY=3
-      - GIT_SHA=${GIT_SHA:-}
-      - FEEDBACK_QUALITY_CONFIG_FILE=${FEEDBACK_QUALITY_CONFIG_FILE:-}
       - CHOKIDAR_USEPOLLING=true
 
   telegram-bot-api:

@@ -65,11 +65,11 @@ export async function readSecureConfig(path: string): Promise<unknown> {
   } finally { await handle?.close().catch(() => undefined); }
 }
 
-export function effectiveConfigDigest(value: unknown, environment: Readonly<Record<string, string | undefined>> = process.env): `sha256:${string}` {
+export function effectiveConfigDigest(value: unknown, environment: Readonly<Record<string, string | null | undefined>> = process.env): `sha256:${string}` {
   return effectiveConfigDigestWithEnvironment(value, environment);
 }
 
-export function effectiveConfigDigestWithEnvironment(value: unknown, environment: Readonly<Record<string, string | undefined>>): `sha256:${string}` {
+export function effectiveConfigDigestWithEnvironment(value: unknown, environment: Readonly<Record<string, string | null | undefined>>): `sha256:${string}` {
   try {
     const config = validateSecureConfig(value, true);
     const resolvedEnvironment = Object.fromEntries([...config.envAllowlist].sort().map((key) => [key, environment[key] ?? null]));

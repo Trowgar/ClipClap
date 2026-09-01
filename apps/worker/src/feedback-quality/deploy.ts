@@ -94,7 +94,10 @@ export type QueueLease = Readonly<{
   counts: () => Promise<QueueCounts>;
   /** True for the production adapter, which drains active jobs while fenced. */
   drainActive?: boolean;
-  runCanary?: (service: WorkerService, expected: Readonly<{ decisionId: string; commitSha: string; configSha256: string; runnerVersion: number }>) => Promise<void>;
+  /** BullMQ moves jobs added after the fence into paused; they are held until resume. */
+  allowPostFencePaused?: boolean;
+  assertOwnership?: () => Promise<void>;
+  runCanary?: (service: WorkerService, expected: Readonly<{ decisionId: string; commitSha: string; configSha256: string; runnerVersion: number; rolloutInstanceId: string }>) => Promise<void>;
   resume: () => Promise<void>;
 }>;
 export type GitState = Readonly<{ head: string; dirtyTracked: boolean }>;
@@ -109,7 +112,7 @@ export type DeployDependencies = Readonly<{
   gitState?: () => Promise<GitState>;
   configSha256?: () => Promise<string>;
   effectiveConfig?: () => Promise<unknown>;
-  environment?: Readonly<Record<string, string | undefined>>;
+  environment?: Readonly<Record<string, string | null | undefined>>;
   configFile?: string;
   /** Container path for the read-only mounted config in an immutable compose deployment. */
   configFileContainer?: string;
@@ -119,7 +122,7 @@ export type DeployDependencies = Readonly<{
   acquireQueueLease?: (queueName: string) => Promise<QueueLease>;
   spawn?: (argv: readonly string[]) => Promise<ProcessResult>;
   waitForHealthy?: (service: WorkerService) => Promise<void>;
-  runCanary?: (service: WorkerService, expected: Readonly<{ decisionId: string; commitSha: string; configSha256: string; runnerVersion: number }>) => Promise<void>;
+  runCanary?: (service: WorkerService, expected: Readonly<{ decisionId: string; commitSha: string; configSha256: string; runnerVersion: number; rolloutInstanceId: string }>) => Promise<void>;
   prepareRollback?: (services: readonly WorkerService[], decision: GateDeployDecision) => Promise<RollbackArtifact>;
   canaryTimeoutMs?: number;
   appendEvent?: (event: Readonly<Record<string, unknown>>, root: string) => Promise<CommitResult>;
@@ -308,19 +311,19 @@ async function defaultQueueCounts(queueName: string): Promise<QueueCounts> {
   } catch { throw new DeployError("queue_read_failed"); }
 }
 
-async function defaultCanary(service: WorkerService, expected: Readonly<{ decisionId: string; commitSha: string; configSha256: string; runnerVersion: number }>, timeoutMs = 30_000, suppliedQueue?: Queue): Promise<void> {
+async function defaultCanary(service: WorkerService, expected: Readonly<{ decisionId: string; commitSha: string; configSha256: string; runnerVersion: number; rolloutInstanceId: string }>, timeoutMs = 30_000, suppliedQueue?: Queue): Promise<void> {
   const stage = SERVICE_STAGE[service];
   const queue = suppliedQueue ?? new Queue(QUEUE_NAMES[stage], { connection: getRedis() });
   const nonce = randomUUID();
   try {
-    const job = await queue.add("feedback-quality-canary", { kind: "feedback-quality-canary", nonce, decisionId: expected.decisionId }, { attempts: 1, priority: 0, removeOnComplete: false, removeOnFail: false });
+    const job = await queue.add("feedback-quality-canary", { kind: "feedback-quality-canary", nonce, decisionId: expected.decisionId, rolloutInstanceId: expected.rolloutInstanceId }, { attempts: 1, priority: 0, removeOnComplete: false, removeOnFail: false });
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const current = await queue.getJob(job.id!);
       const state = await current?.getState();
       if (state === "completed") {
         const value = current?.returnvalue as Record<string, unknown> | undefined;
-        if (!value || value.kind !== "feedback-quality-canary" || value.nonce !== nonce || value.role !== stage || value.configSha256 !== expected.configSha256 || value.runnerVersion !== expected.runnerVersion || value.commitSha !== expected.commitSha) throw new DeployError("canary_failed");
+        if (!value || value.kind !== "feedback-quality-canary" || value.nonce !== nonce || value.rolloutInstanceId !== expected.rolloutInstanceId || value.role !== stage || value.configSha256 !== expected.configSha256 || value.runnerVersion !== expected.runnerVersion || value.commitSha !== expected.commitSha) throw new DeployError("canary_failed");
         await current?.remove();
         return;
       }
@@ -342,11 +345,40 @@ async function defaultQueueLease(queueName: string, timeoutMs = 30_000): Promise
   const fenceKey = `clipclap:feedback-quality:fence:${queueName}`;
   const fenceToken = randomUUID();
   let fenceHeld = false;
+  let fenceLost = false;
   let paused = false;
+  let heartbeat: ReturnType<typeof setInterval> | undefined;
   const assertFence = async () => {
-    if (!fenceHeld || await redis.get(fenceKey) !== fenceToken) throw new DeployError("queue_read_failed");
+    if (fenceLost || !fenceHeld || await redis.get(fenceKey) !== fenceToken) {
+      fenceLost = true;
+      throw new DeployError("queue_read_failed");
+    }
+  };
+  const renewFence = async () => {
+    if (!fenceHeld || fenceLost) return;
+    const renewed = await redis.eval("if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end", 1, fenceKey, fenceToken, String(Math.max(120_000, timeoutMs * 4)));
+    if (Number(renewed) !== 1) fenceLost = true;
+  };
+  const startHeartbeat = () => {
+    heartbeat = setInterval(() => { void renewFence().catch(() => { fenceLost = true; }); }, Math.max(1_000, Math.floor(Math.max(120_000, timeoutMs * 4) / 3)));
+    heartbeat.unref?.();
+  };
+  const stopHeartbeat = () => { if (heartbeat) clearInterval(heartbeat); heartbeat = undefined; };
+  const readCounts = async (): Promise<QueueCounts> => {
+    const counts = await queue.getJobCounts("active", "waiting", "delayed", "paused", "prioritized", "waiting-children");
+    const result = {
+      active: counts.active ?? 0,
+      waiting: counts.waiting ?? 0,
+      delayed: counts.delayed ?? 0,
+      paused: counts.paused ?? 0,
+      prioritized: counts.prioritized ?? 0,
+      waitingChildren: counts["waiting-children"] ?? 0,
+    };
+    if (!Object.values(result).every((item) => Number.isSafeInteger(item) && item >= 0)) throw new DeployError("queue_read_failed");
+    return result;
   };
   const releaseFence = async () => {
+    stopHeartbeat();
     if (!fenceHeld) return;
     await redis.eval("if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end", 1, fenceKey, fenceToken);
     fenceHeld = false;
@@ -357,26 +389,29 @@ async function defaultQueueLease(queueName: string, timeoutMs = 30_000): Promise
       if (acquired !== "OK") throw new DeployError("queue_read_failed");
       fenceHeld = true;
       try {
+        // Establish the watermark while owning the fence. Existing pending
+        // work is rejected before BullMQ moves waiting jobs to `paused`; jobs
+        // submitted after pause stay fenced and are deliberately held.
+        const before = await readCounts();
+        if (before.waiting !== 0 || before.delayed !== 0 || before.paused !== 0 || before.prioritized !== 0 || before.waitingChildren !== 0) throw new DeployError("queue_nonempty");
         await queue.pause();
         paused = true;
         if (!(await queue.isPaused())) throw new DeployError("queue_read_failed");
+        startHeartbeat();
       }
-      catch (error) { await releaseFence().catch(() => undefined); throw error; }
+      catch (error) {
+        try { if (await queue.isPaused()) { await queue.resume(); if (await queue.isPaused()) throw new DeployError("queue_read_failed"); paused = false; } }
+        catch (recoveryError) { error = recoveryError; }
+        await releaseFence().catch(() => undefined);
+        throw error;
+      }
     },
     drainActive: true,
+    allowPostFencePaused: true,
+    assertOwnership: assertFence,
     counts: async () => {
       await assertFence();
-      const counts = await queue.getJobCounts("active", "waiting", "delayed", "paused", "prioritized", "waiting-children");
-      const result = {
-        active: counts.active ?? 0,
-        waiting: counts.waiting ?? 0,
-        delayed: counts.delayed ?? 0,
-        paused: counts.paused ?? 0,
-        prioritized: counts.prioritized ?? 0,
-        waitingChildren: counts["waiting-children"] ?? 0,
-      };
-      if (!Object.values(result).every((item) => Number.isSafeInteger(item) && item >= 0)) throw new DeployError("queue_read_failed");
-      return result;
+      return readCounts();
     },
     runCanary: async (service, expected) => {
       // Canary traffic has its own control queue. The production queue remains
@@ -402,7 +437,7 @@ async function defaultQueueLease(queueName: string, timeoutMs = 30_000): Promise
   };
 }
 
-async function legacyQueueLease(queueName: string, dependencies: DeployDependencies, service: WorkerService, expected: Readonly<{ decisionId: string; commitSha: string; configSha256: string; runnerVersion: number }>): Promise<QueueLease> {
+async function legacyQueueLease(queueName: string, dependencies: DeployDependencies, service: WorkerService, expected: Readonly<{ decisionId: string; commitSha: string; configSha256: string; runnerVersion: number; rolloutInstanceId: string }>): Promise<QueueLease> {
   const counts = dependencies.queueCounts ?? defaultQueueCounts;
   return {
     drainActive: false,
@@ -458,7 +493,7 @@ export async function deployWithQualityGate(request: DeployRequest, dependencies
   let actualConfigSha256: string | undefined;
   let actualCorpusSha256: string | undefined;
   let actualRunnerVersion: number | undefined;
-  let runtimeEnvironment: Readonly<Record<string, string | undefined>> = dependencies.environment ?? process.env;
+  let runtimeEnvironment: Readonly<Record<string, string | null | undefined>> = dependencies.environment ?? process.env;
   let runtimeConfig: { envAllowlist: readonly string[] } | undefined;
   const now = dependencies.now?.() ?? new Date();
   if (!(now instanceof Date) || !Number.isFinite(now.getTime())) mismatches.push("binding_mismatch");
@@ -519,7 +554,7 @@ export async function deployWithQualityGate(request: DeployRequest, dependencies
   const spawn = dependencies.spawn;
   const health = dependencies.waitForHealthy ?? defaultHealth;
   for (const service of services) {
-    const expected = { decisionId: decision.decisionId, commitSha: decision.candidateCommitSha, configSha256: decision.configSha256, runnerVersion: decision.runnerVersion };
+    const expected = { decisionId: decision.decisionId, commitSha: decision.candidateCommitSha, configSha256: decision.configSha256, runnerVersion: decision.runnerVersion, rolloutInstanceId: randomUUID() };
     let lease: QueueLease | undefined;
     let failure: DeployReason | undefined;
     let phase: "queue" | "spawn" | "health" | "canary" = "queue";
@@ -535,7 +570,7 @@ export async function deployWithQualityGate(request: DeployRequest, dependencies
       let queue: QueueCounts;
       do {
         queue = await lease.counts();
-        const pending = (queue.waiting ?? 0) + (queue.paused ?? 0) + (queue.prioritized ?? 0) + (queue.waitingChildren ?? 0) + (queue.delayed ?? 0);
+        const pending = (queue.waiting ?? 0) + (lease.allowPostFencePaused ? 0 : (queue.paused ?? 0)) + (queue.prioritized ?? 0) + (queue.waitingChildren ?? 0) + (queue.delayed ?? 0);
         if (pending !== 0) { failure = "queue_nonempty"; break; }
         if (!lease.drainActive && queue.active !== 0) { failure = "queue_nonempty"; break; }
         if (queue.active === 0) break;
@@ -550,15 +585,19 @@ export async function deployWithQualityGate(request: DeployRequest, dependencies
           : await defaultSpawn(argv, { env: {
             ...Object.fromEntries((runtimeConfig?.envAllowlist ?? []).map((key) => [key, runtimeEnvironment[key]])),
             GIT_SHA: decision.candidateCommitSha,
+            FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID: expected.rolloutInstanceId,
+            FEEDBACK_QUALITY_ENV_SNAPSHOT: canonicalJson(Object.fromEntries([...(runtimeConfig?.envAllowlist ?? [])].sort().map((key) => [key, runtimeEnvironment[key] ?? null]))),
             FEEDBACK_QUALITY_CONFIG_FILE: dependencies.configFileContainer ?? process.env.FEEDBACK_QUALITY_CONFIG_FILE_CONTAINER,
           } });
         if (commandResult.exitCode !== 0) failure = "process_failed";
         else recreated.push(service);
       }
       if (!failure) {
+        await lease.assertOwnership?.();
         phase = "health";
         await health(service);
         phase = "canary";
+        await lease.assertOwnership?.();
         if (lease.runCanary) await lease.runCanary(service, expected);
         else if (dependencies.runCanary) await dependencies.runCanary(service, expected);
         else await defaultCanary(service, expected, dependencies.canaryTimeoutMs);
