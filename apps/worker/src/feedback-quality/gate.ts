@@ -1,4 +1,4 @@
-import { canonicalJson, sha256 } from "../feedback-learning/canonical";
+import { canonicalJson } from "../feedback-learning/canonical";
 import {
   contentId,
   DEFAULT_QUALITY_ROOT,
@@ -6,7 +6,7 @@ import {
   readBundle,
   type CommitResult,
 } from "./store";
-import { observationIdFor, parseObservationAttempts, readObservationAttempts, type ObservationAttemptRecord, type ObservationIdentityBody } from "./observe";
+import { observationIdFor, parseObservationSnapshot, type ObservationAttemptRecord, type ObservationIdentityBody } from "./observe";
 import { compareObservations, validateQualityCaseResult, validateQualityObservation } from "./policy";
 import type {
   GateAggregate,
@@ -19,18 +19,12 @@ import type {
 } from "./types";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const SHA1 = /^[0-9a-f]{40}$/;
-const SHA256 = /^sha256:[0-9a-f]{64}$/;
 const OBSERVATION_FILES = new Set(["manifest.json", "results.jsonl"]);
 const REASON_ORDER: readonly MachineReason[] = [
   "invalid_schema", "invalid_metric", "duplicate_case_version", "missing_case", "stale_case", "error_case",
   "set_mismatch", "mode_mismatch", "corpus_mismatch", "config_mismatch", "runner_mismatch", "insufficient_corpus",
   "case_mismatch", "positive_regression", "negative_regression", "hard_invariant_regression", "aggregate_regression", "no_improvement",
 ];
-const MANIFEST_KEYS = new Set([
-  "schemaVersion", "observationId", "set", "mode", "live", "commitSha", "configSha256",
-  "corpusSha256", "runnerVersion", "createdAt", "caseVersions", "attemptCount", "attemptsSha256",
-]);
 
 export type DecideGateInput = Readonly<{
   baselineEvalObservationId: string;
@@ -74,8 +68,6 @@ export type GateDecision = Readonly<{
 export type GateDependencies = Readonly<{
   root?: string;
   now?: () => Date;
-  readObservation?: (id: string, root?: string) => Promise<QualityObservation>;
-  readAttempts?: typeof readObservationAttempts;
   readBundle?: typeof readBundle;
   publishDecision?: (decision: GateDecision, report: string, root: string) => Promise<CommitResult>;
   /** Alias kept for thin test/host adapters; production uses publishDecision. */
@@ -103,52 +95,6 @@ const zeroObservation = (id: string, set: "eval" | "holdout", mode: "baseline" |
   schemaVersion: 1, observationId: id, mode, set, commitSha: "0".repeat(40), configSha256: zeroHash(), corpusSha256: zeroHash(), runnerVersion: 0, createdAt: now, cases: [],
 });
 
-function ownKeys(value: Record<string, unknown>, allowed: Set<string>): boolean {
-  return Reflect.ownKeys(value).every((key) => {
-    if (typeof key !== "string" || !allowed.has(key)) return false;
-    const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    return Boolean(descriptor?.enumerable && Object.prototype.hasOwnProperty.call(descriptor, "value"));
-  });
-}
-
-function validTimestamp(value: unknown): value is string {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
-  const parsed = new Date(value);
-  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
-}
-
-function validManifest(value: unknown, id: string): value is Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const manifest = value as Record<string, unknown>;
-  if (!ownKeys(manifest, MANIFEST_KEYS)) return false;
-  return manifest.schemaVersion === 1 && manifest.observationId === id &&
-    (manifest.set === "eval" || manifest.set === "holdout") &&
-    (manifest.mode === "baseline" || manifest.mode === "candidate") && typeof manifest.live === "boolean" &&
-    SHA1.test(String(manifest.commitSha)) && SHA256.test(String(manifest.configSha256)) && SHA256.test(String(manifest.corpusSha256)) &&
-    Number.isSafeInteger(manifest.runnerVersion) && (manifest.runnerVersion as number) >= 0 && validTimestamp(manifest.createdAt) &&
-    Array.isArray(manifest.caseVersions) && manifest.caseVersions.length > 0 && manifest.caseVersions.every((item) => typeof item === "string") &&
-    [...(manifest.caseVersions as string[])].sort().join("\n") === (manifest.caseVersions as string[]).join("\n") &&
-    new Set(manifest.caseVersions as string[]).size === (manifest.caseVersions as string[]).length &&
-    Number.isSafeInteger(manifest.attemptCount) && (manifest.attemptCount as number) > 0 && SHA256.test(String(manifest.attemptsSha256));
-}
-
-function sameJson(left: unknown, right: unknown): boolean {
-  try { return canonicalJson(left) === canonicalJson(right); } catch { return false; }
-}
-
-function firstAttempt(attempts: readonly ObservationAttemptRecord[], caseVersion: string, live: boolean): ObservationAttemptRecord | undefined {
-  const preferred = live ? "live-1" : "recorded";
-  return attempts.find((item) => item.caseVersion === caseVersion && item.attemptName === preferred);
-}
-
-function validResult(result: QualityCaseResult, caseVersion: string): boolean {
-  return result && result.schemaVersion === 1 && result.caseVersion === caseVersion &&
-    (result.disposition === "positive" || result.disposition === "confirmed_negative" || result.disposition === "exclude") &&
-    (result.subsystem === "selection" || result.subsystem === "boundary" || result.subsystem === "framing" || result.subsystem === "subtitles" || result.subsystem === "render") &&
-    (result.status === "ok" || result.status === "missing" || result.status === "stale" || result.status === "error") &&
-    Boolean(result.metrics && typeof result.metrics === "object" && !Array.isArray(result.metrics));
-}
-
 /** Strictly reconstruct an observation body from the two immutable files. */
 async function readStoredObservation(
   id: string,
@@ -157,43 +103,38 @@ async function readStoredObservation(
 ): Promise<{ observation: QualityObservation; attempts: readonly ObservationAttemptRecord[] }> {
   if (!/^observation:sha256:[0-9a-f]{64}$/.test(id)) throw new GateError("observation_invalid");
   let files: ReadonlyMap<string, Uint8Array>;
-  let attempts: readonly ObservationAttemptRecord[];
   try {
     files = await readBundleFn("observation", id, root);
   } catch {
     throw new GateError("observation_invalid");
   }
   if (files.size !== OBSERVATION_FILES.size || [...files.keys()].some((name) => !OBSERVATION_FILES.has(name))) throw new GateError("observation_invalid");
-  try { attempts = parseObservationAttempts(files.get("manifest.json")!, files.get("results.jsonl")!, id); }
+  let snapshot: ReturnType<typeof parseObservationSnapshot>;
+  try { snapshot = parseObservationSnapshot(files.get("manifest.json")!, files.get("results.jsonl")!, id); }
   catch { throw new GateError("observation_invalid"); }
-  let manifest: unknown;
-  try { manifest = JSON.parse(Buffer.from(files.get("manifest.json")!).toString("utf8")); } catch { throw new GateError("observation_invalid"); }
-  if (!validManifest(manifest, id)) throw new GateError("observation_invalid");
-  const caseVersions = manifest.caseVersions as string[];
+  const { manifest, attempts } = snapshot;
+  const caseVersions = [...manifest.caseVersions];
   const results: QualityCaseResult[] = [];
   for (const caseVersion of caseVersions) {
-    const first = firstAttempt(attempts, caseVersion, manifest.live as boolean);
-    if (!first || !validResult(first.result, caseVersion)) throw new GateError("observation_invalid");
+    const preferred = manifest.live ? "live-1" : "recorded";
+    const first = attempts.find((item) => item.caseVersion === caseVersion && item.attemptName === preferred);
+    if (!first) throw new GateError("observation_invalid");
     const all = attempts.filter((item) => item.caseVersion === caseVersion);
     /* Every independently stored result must remain a valid result for the
      * same immutable case. A failed attempt is represented in the body so the
      * policy emits its closed stale/error reason instead of silently skipping. */
-    const inconsistent = all.some((item) => !validResult(item.result, caseVersion) || item.result.status !== "ok" || item.result.disposition !== first.result.disposition || item.result.subsystem !== first.result.subsystem);
+    const inconsistent = all.some((item) => item.result.status !== "ok" || item.result.disposition !== first.result.disposition || item.result.subsystem !== first.result.subsystem);
     results.push(inconsistent ? { ...first.result, status: "error" } : first.result);
   }
-  const body = { schemaVersion: 1 as const, mode: manifest.mode, set: manifest.set, commitSha: manifest.commitSha, configSha256: manifest.configSha256, corpusSha256: manifest.corpusSha256, runnerVersion: manifest.runnerVersion, live: manifest.live, caseVersions, attemptCount: manifest.attemptCount, attemptsSha256: manifest.attemptsSha256, cases: results };
-  if (observationIdFor(body as ObservationIdentityBody) !== id) throw new GateError("observation_invalid");
-  return { observation: Object.freeze({ ...body, observationId: id, createdAt: manifest.createdAt as string }) as QualityObservation, attempts: Object.freeze(attempts) };
+  const body: ObservationIdentityBody = { schemaVersion: 1 as const, mode: manifest.mode, set: manifest.set, commitSha: manifest.commitSha, configSha256: manifest.configSha256, corpusSha256: manifest.corpusSha256, runnerVersion: manifest.runnerVersion, live: manifest.live, caseVersions, attemptCount: manifest.attemptCount, attemptsSha256: manifest.attemptsSha256, cases: results };
+  if (observationIdFor(body) !== id) throw new GateError("observation_invalid");
+  return { observation: Object.freeze({ ...body, observationId: id, createdAt: manifest.createdAt }) as QualityObservation, attempts: Object.freeze(attempts) };
 }
 
 type LoadedObservation = Readonly<{
   observation: QualityObservation;
   attempts: readonly ObservationAttemptRecord[];
 }>;
-
-function syntheticAttempts(observation: QualityObservation): readonly ObservationAttemptRecord[] {
-  return Object.freeze(observation.cases.map((result) => Object.freeze({ caseVersion: result.caseVersion, attemptName: "recorded", result })));
-}
 
 function metricKeys(value: QualityCaseResult): string[] {
   return Object.keys(value.metrics).sort();
@@ -268,16 +209,9 @@ async function loadObservation(
   root: string,
   dependencies: GateDependencies,
 ): Promise<LoadedObservation> {
-  let observation: QualityObservation;
-  let attempts: readonly ObservationAttemptRecord[];
-  if (dependencies.readObservation) {
-    observation = await dependencies.readObservation(id, root);
-    attempts = dependencies.readAttempts ? await dependencies.readAttempts(id, root) : syntheticAttempts(observation);
-  } else {
-    const stored = await readStoredObservation(id, root, dependencies.readBundle ?? readBundle);
-    observation = stored.observation;
-    attempts = stored.attempts;
-  }
+  const stored = await readStoredObservation(id, root, dependencies.readBundle ?? readBundle);
+  const observation = stored.observation;
+  const attempts = stored.attempts;
   if (observation.observationId !== id) throw new GateError("observation_invalid");
   /* Role separation precedes metric inspection: a holdout bundle supplied as
    * eval (or vice versa) is rejected without consulting its measurements. */

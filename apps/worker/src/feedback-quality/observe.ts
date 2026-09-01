@@ -203,30 +203,72 @@ async function readObservationFile(id: string, name: string, root: string): Prom
   } finally { await opened.close(); }
 }
 
-const OBSERVATION_MANIFEST_KEYS = new Set(["schemaVersion", "observationId", "set", "mode", "live", "commitSha", "configSha256", "corpusSha256", "runnerVersion", "createdAt", "caseVersions", "attemptCount", "attemptsSha256"]);
+const OBSERVATION_MANIFEST_KEYS = ["schemaVersion", "observationId", "set", "mode", "live", "commitSha", "configSha256", "corpusSha256", "runnerVersion", "createdAt", "caseVersions", "attemptCount", "attemptsSha256"] as const;
+const OBSERVATION_MANIFEST_KEY_SET = new Set<string>(OBSERVATION_MANIFEST_KEYS);
 
-function parseManifestBytes(bytes: Uint8Array | string, expectedId: string): Record<string, unknown> {
-  let value: unknown;
-  try { value = JSON.parse(typeof bytes === "string" ? bytes : Buffer.from(bytes).toString("utf8")); } catch { throw new ObservationError("invalid_input"); }
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ObservationError("invalid_input");
-  const manifest = value as Record<string, unknown>;
-  const keys = Reflect.ownKeys(manifest);
-  if (keys.some((key) => typeof key !== "string" || !OBSERVATION_MANIFEST_KEYS.has(key))) throw new ObservationError("invalid_input");
-  if (manifest.schemaVersion !== 1 || manifest.observationId !== expectedId || (manifest.set !== "eval" && manifest.set !== "holdout") || (manifest.mode !== "baseline" && manifest.mode !== "candidate") || typeof manifest.live !== "boolean" || !Array.isArray(manifest.caseVersions) || manifest.caseVersions.some((item) => typeof item !== "string") || [...manifest.caseVersions].sort().join("\n") !== manifest.caseVersions.join("\n") || new Set(manifest.caseVersions).size !== manifest.caseVersions.length || !Number.isSafeInteger(manifest.attemptCount) || !validHash(manifest.attemptsSha256) || manifest.attemptsSha256 !== undefined && typeof manifest.attemptsSha256 !== "string") throw new ObservationError("invalid_input");
-  return manifest;
+export type ObservationManifest = Readonly<{
+  schemaVersion: 1;
+  observationId: string;
+  set: "eval" | "holdout";
+  mode: "baseline" | "candidate";
+  live: boolean;
+  commitSha: string;
+  configSha256: `sha256:${string}`;
+  corpusSha256: `sha256:${string}`;
+  runnerVersion: number;
+  createdAt: string;
+  caseVersions: readonly string[];
+  attemptCount: number;
+  attemptsSha256: `sha256:${string}`;
+}>;
+
+function validTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
 }
 
-/** Pure parser for one immutable observation snapshot. */
-export function parseObservationAttempts(manifestBytes: Uint8Array | string, resultsBytes: Uint8Array | string, expectedId: string): readonly ObservationAttemptRecord[] {
+function exactManifestObject(value: unknown): value is Record<string, unknown> {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== OBSERVATION_MANIFEST_KEYS.length) return false;
+    for (const key of keys) {
+      if (typeof key !== "string" || !OBSERVATION_MANIFEST_KEY_SET.has(key)) return false;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, "value")) return false;
+    }
+    return OBSERVATION_MANIFEST_KEYS.every((key) => Object.prototype.hasOwnProperty.call(value, key));
+  } catch {
+    return false;
+  }
+}
+
+function parseManifestBytes(bytes: Uint8Array | string, expectedId: string): ObservationManifest {
+  if (!/^observation:sha256:[0-9a-f]{64}$/.test(expectedId)) throw new ObservationError("invalid_input");
+  let value: unknown;
+  try { value = JSON.parse(typeof bytes === "string" ? bytes : Buffer.from(bytes).toString("utf8")); } catch { throw new ObservationError("invalid_input"); }
+  if (!exactManifestObject(value)) throw new ObservationError("invalid_input");
+  const manifest = value;
+  const cases = manifest.caseVersions;
+  if (manifest.schemaVersion !== 1 || manifest.observationId !== expectedId || (manifest.set !== "eval" && manifest.set !== "holdout") || (manifest.mode !== "baseline" && manifest.mode !== "candidate") || typeof manifest.live !== "boolean" || !COMMIT_RE.test(String(manifest.commitSha)) || !validHash(manifest.configSha256) || !validHash(manifest.corpusSha256) || !Number.isSafeInteger(manifest.runnerVersion) || (manifest.runnerVersion as number) < 0 || !validTimestamp(manifest.createdAt) || !Array.isArray(cases) || cases.length === 0 || cases.some((item) => typeof item !== "string") || [...cases].sort().join("\n") !== cases.join("\n") || new Set(cases).size !== cases.length || !Number.isSafeInteger(manifest.attemptCount) || (manifest.attemptCount as number) <= 0 || !validHash(manifest.attemptsSha256)) throw new ObservationError("invalid_input");
+  return manifest as ObservationManifest;
+}
+
+export type ObservationSnapshot = Readonly<{ manifest: ObservationManifest; attempts: readonly ObservationAttemptRecord[] }>;
+
+/** Parse one exact manifest/results byte snapshot. No caller may supply a
+ * pre-parsed observation or fetch the two artifacts independently. */
+export function parseObservationSnapshot(manifestBytes: Uint8Array | string, resultsBytes: Uint8Array | string, expectedId: string): ObservationSnapshot {
   const manifest = parseManifestBytes(manifestBytes, expectedId);
   const results = typeof resultsBytes === "string" ? resultsBytes : Buffer.from(resultsBytes).toString("utf8");
-  if (!validHash(manifest.attemptsSha256) || manifest.attemptsSha256 !== sha256(results)) throw new ObservationError("invalid_input");
+  if (manifest.attemptsSha256 !== sha256(results)) throw new ObservationError("invalid_input");
   const lines = results.endsWith("\n") ? results.slice(0, -1).split("\n") : [];
   if (lines.length !== manifest.attemptCount || lines.length === 0) throw new ObservationError("invalid_input");
   const attempts: ObservationAttemptRecord[] = [];
   const names = new Set<string>();
   const byCase = new Map<string, Set<string>>();
-  const manifestCases = new Set(manifest.caseVersions as string[]);
+  const manifestCases = new Set(manifest.caseVersions);
   for (const line of lines) {
     let parsed: unknown;
     try { parsed = JSON.parse(line); } catch { throw new ObservationError("invalid_input"); }
@@ -247,7 +289,12 @@ export function parseObservationAttempts(manifestBytes: Uint8Array | string, res
     const expected = manifest.live ? [...LIVE_ATTEMPTS].sort() : ["recorded"];
     if (values.length !== expected.length || values.some((value, index) => value !== expected[index])) throw new ObservationError("invalid_input");
   }
-  return Object.freeze(attempts);
+  return Object.freeze({ manifest, attempts: Object.freeze(attempts) });
+}
+
+/** Pure parser for one immutable observation snapshot. */
+export function parseObservationAttempts(manifestBytes: Uint8Array | string, resultsBytes: Uint8Array | string, expectedId: string): readonly ObservationAttemptRecord[] {
+  return parseObservationSnapshot(manifestBytes, resultsBytes, expectedId).attempts;
 }
 
 /** Typed reader for the complete immutable attempt artifact. Consumers must
@@ -262,7 +309,7 @@ export async function readObservationAttempts(id: string, root = DEFAULT_QUALITY
     throw new ObservationError("invalid_input");
   }
   if (!files.has("manifest.json") || !files.has("results.jsonl")) throw new ObservationError("invalid_input");
-  return parseObservationAttempts(files.get("manifest.json")!, files.get("results.jsonl")!, id);
+  return parseObservationSnapshot(files.get("manifest.json")!, files.get("results.jsonl")!, id).attempts;
 }
 
 function exactAttemptWrapper(value: unknown): value is Record<string, unknown> {

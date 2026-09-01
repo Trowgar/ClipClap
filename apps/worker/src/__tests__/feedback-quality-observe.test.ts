@@ -127,8 +127,17 @@ describe("feedback quality observation runner", () => {
     const id = `observation:sha256:${"a".repeat(64)}`;
     const line = canonicalJson({ caseVersion: "case:unknown", attemptName: "recorded", result: { schemaVersion: 1, caseVersion: "case:unknown", disposition: "positive", subsystem: "selection", status: "ok", metrics: { approvedMomentRetained: 1 } } });
     const results = `${line}\n`;
-    const manifest = { schemaVersion: 1, observationId: id, set: "eval", mode: "baseline", live: false, caseVersions: [sampleCase().caseVersion], commitSha: "a".repeat(40), configSha256: hash("a"), corpusSha256: hash("b"), runnerVersion: 1, attemptCount: 1, attemptsSha256: sha256(results) };
+    const manifest = { schemaVersion: 1, observationId: id, set: "eval", mode: "baseline", live: false, caseVersions: [sampleCase().caseVersion], commitSha: "a".repeat(40), configSha256: hash("a"), corpusSha256: hash("b"), runnerVersion: 1, createdAt: "2026-08-31T00:00:00.000Z", attemptCount: 1, attemptsSha256: sha256(results) };
     await publishBundle({ kind: "observation", id, files: { "manifest.json": Buffer.from(`${canonicalJson(manifest)}\n`), "results.jsonl": Buffer.from(results) } }, root);
+    await expect(readObservationAttempts(id, root)).rejects.toThrow("invalid_input");
+  });
+
+  it("rejects an incomplete manifest before consuming its attempts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "quality-observe-manifest-"));
+    const id = `observation:sha256:${"b".repeat(64)}`;
+    const results = `${canonicalJson({ caseVersion: sampleCase().caseVersion, attemptName: "recorded", result: { schemaVersion: 1, caseVersion: sampleCase().caseVersion, disposition: "positive", subsystem: "selection", status: "ok", metrics: { approvedMomentRetained: 1 } } })}\n`;
+    const manifest = { schemaVersion: 1, observationId: id, set: "eval", mode: "baseline", live: false, caseVersions: [sampleCase().caseVersion], commitSha: "a".repeat(40), configSha256: hash("a"), corpusSha256: hash("b"), runnerVersion: 1, attemptCount: 1, attemptsSha256: sha256(results) };
+    await publishBundle({ kind: "observation", id, files: { "manifest.json": Buffer.from(canonicalJson(manifest)), "results.jsonl": Buffer.from(results) } }, root);
     await expect(readObservationAttempts(id, root)).rejects.toThrow("invalid_input");
   });
 
@@ -137,7 +146,7 @@ describe("feedback quality observation runner", () => {
     const id = `observation:sha256:${"a".repeat(64)}`;
     const result = { schemaVersion: 1, caseVersion: sampleCase().caseVersion, disposition: "positive", subsystem: "selection", status: "ok", metrics: { approvedMomentRetained: 1 } };
     const results = `${canonicalJson({ caseVersion: sampleCase().caseVersion, attemptName: "recorded", result, extra: "reject" })}\n`;
-    const manifest = { schemaVersion: 1, observationId: id, set: "eval", mode: "baseline", live: false, caseVersions: [sampleCase().caseVersion], commitSha: "a".repeat(40), configSha256: hash("a"), corpusSha256: hash("b"), runnerVersion: 1, attemptCount: 1, attemptsSha256: sha256(results) };
+    const manifest = { schemaVersion: 1, observationId: id, set: "eval", mode: "baseline", live: false, caseVersions: [sampleCase().caseVersion], commitSha: "a".repeat(40), configSha256: hash("a"), corpusSha256: hash("b"), runnerVersion: 1, createdAt: "2026-08-31T00:00:00.000Z", attemptCount: 1, attemptsSha256: sha256(results) };
     await publishBundle({ kind: "observation", id, files: { "manifest.json": Buffer.from(`${canonicalJson(manifest)}\n`), "results.jsonl": Buffer.from(results) } }, root);
     await expect(readObservationAttempts(id, root)).rejects.toThrow("invalid_input");
   });

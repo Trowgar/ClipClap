@@ -30,9 +30,27 @@ function snapshot(base: Omit<QualityObservation, "observationId" | "createdAt" |
   return { ...body, observationId: observationIdFor(body), createdAt };
 }
 
+function snapshotAttempts(base: Omit<QualityObservation, "observationId" | "createdAt" | "live" | "caseVersions" | "attemptCount" | "attemptsSha256">, createdAt: string, attempts: readonly ObservationAttemptRecord[]): QualityObservation {
+  const cases = [...base.cases].sort((left, right) => left.caseVersion.localeCompare(right.caseVersion));
+  const names = [...new Set(attempts.map((item) => item.attemptName))].sort();
+  const body = { ...base, live: names.length === 3, caseVersions: cases.map((result) => result.caseVersion), attemptCount: attempts.length, attemptsSha256: sha256(serializeObservationAttempts(attempts)), cases };
+  return { ...body, observationId: observationIdFor(body), createdAt };
+}
+
 function rebuild(source: QualityObservation, mode: "baseline" | "candidate", cases = source.cases, createdAt = source.createdAt, live = false): QualityObservation {
   const { observationId: _id, createdAt: _createdAt, live: _live, caseVersions: _versions, attemptCount: _count, attemptsSha256: _attempts, ...base } = source;
   return snapshot({ ...base, mode, cases }, createdAt, live);
+}
+
+function attemptsFor(item: QualityObservation): readonly ObservationAttemptRecord[] {
+  const names = item.live ? ["live-1", "live-2", "live-3"] : ["recorded"];
+  return item.cases.flatMap((result) => names.map((attemptName) => ({ caseVersion: result.caseVersion, attemptName, result })));
+}
+
+function bundleFor(item: QualityObservation, suppliedAttempts = attemptsFor(item)): ReadonlyMap<string, Uint8Array> {
+  const results = serializeObservationAttempts(suppliedAttempts);
+  const manifest = { schemaVersion: 1, observationId: item.observationId, set: item.set, mode: item.mode, live: item.live === true, commitSha: item.commitSha, configSha256: item.configSha256, corpusSha256: item.corpusSha256, runnerVersion: item.runnerVersion, createdAt: item.createdAt, caseVersions: item.caseVersions ?? item.cases.map((result) => result.caseVersion).sort(), attemptCount: suppliedAttempts.length, attemptsSha256: sha256(results) };
+  return new Map([["manifest.json", Buffer.from(canonicalJson(manifest))], ["results.jsonl", Buffer.from(results)]]) as ReadonlyMap<string, Uint8Array>;
 }
 
 const input = (overrides: Partial<DecideGateInput> = {}): DecideGateInput => ({
@@ -41,10 +59,10 @@ const input = (overrides: Partial<DecideGateInput> = {}): DecideGateInput => ({
   ...overrides,
 });
 
-function deps(observations: Record<string, QualityObservation>, events: string[] = []): GateDependencies {
+function deps(observations: Record<string, QualityObservation>, events: string[] = [], bundles: Record<string, ReadonlyMap<string, Uint8Array>> = {}): GateDependencies {
   return {
     root: "/private/corpus",
-    readObservation: vi.fn(async (id: string) => { events.push(`read:${id}`); const value = observations[id]; if (!value) throw new Error("missing private observation"); return value; }),
+    readBundle: vi.fn(async (_kind: "case" | "observation" | "decision", id: string) => { events.push(`read:${id}`); const value = observations[id]; if (!value) throw new Error("missing private observation"); return bundles[id] ?? bundleFor(value); }),
     publishDecision: vi.fn(async () => ({ status: "committed" as const })),
     now: () => new Date("2026-09-01T12:00:00.000Z"),
   };
@@ -109,12 +127,11 @@ describe("feedback quality gate", () => {
 
   it("fails closed when a non-primary live attempt is malformed", async () => {
     const base = observation("eval", "baseline", 4, 6);
-    const candidate = rebuild(base, "candidate", base.cases, base.createdAt, true);
+    const candidateAttempts = base.cases.flatMap((result) => ["live-1", "live-2", "live-3"].map((attemptName) => ({ caseVersion: result.caseVersion, attemptName, result: (attemptName === "live-2" ? { ...result, metrics: { ...result.metrics, score: "malformed" } } : result) as unknown as QualityCaseResult })));
+    const { observationId: _candidateId, ...candidateBase } = rebuild(base, "candidate", base.cases, base.createdAt, true);
+    const candidate = snapshotAttempts(candidateBase, base.createdAt, candidateAttempts);
     const events: string[] = [];
-    const attempts = (item: QualityObservation): readonly ObservationAttemptRecord[] => item === candidate
-      ? item.cases.map((result) => ["live-1", "live-2", "live-3"].map((attemptName) => ({ caseVersion: result.caseVersion, attemptName, result: attemptName === "live-2" ? { ...result, metrics: { ...result.metrics, score: Number.NaN } } : result }))).flat()
-      : item.cases.map((result) => ({ caseVersion: result.caseVersion, attemptName: "recorded", result }));
-    const dependencies = { ...deps({ [base.observationId]: base, [candidate.observationId]: candidate }, events), readAttempts: vi.fn(async (id: string) => attempts(id === candidate.observationId ? candidate : base)) };
+    const dependencies = deps({ [base.observationId]: base, [candidate.observationId]: candidate }, events, { [candidate.observationId]: bundleFor(candidate, candidateAttempts) });
     const decision = await decideGate(input({ baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId }), dependencies);
     expect(decision.verdict).toBe("fail");
     expect(decision.reasons).toContain("invalid_schema");
@@ -123,15 +140,15 @@ describe("feedback quality gate", () => {
 
   it("requires robust improvement from at least two of three live attempts", async () => {
     const base = observation("eval", "baseline", 4, 6);
-    const candidate = rebuild(base, "candidate", base.cases.map((item) => item.disposition === "positive" ? { ...item, metrics: { ...item.metrics, approvedWindowOverlap: 2 } } : item), base.createdAt, true);
+    const candidateCases = base.cases.map((item) => item.disposition === "positive" ? { ...item, metrics: { ...item.metrics, approvedWindowOverlap: 2 } } : item);
+    const candidateAttempts = candidateCases.flatMap((result) => ["live-1", "live-2", "live-3"].map((attemptName) => ({ caseVersion: result.caseVersion, attemptName, result: result.disposition === "positive" && attemptName === "live-3" ? { ...result, metrics: { ...result.metrics, approvedWindowOverlap: 1 } } : result })));
+    const rebuiltCandidate = rebuild(base, "candidate", candidateCases, base.createdAt, true);
+    const { observationId: _candidateId, ...candidateBase } = rebuiltCandidate;
+    const candidate = snapshotAttempts(candidateBase, base.createdAt, candidateAttempts);
     const holdout = observation("holdout", "baseline", 1, 2);
     const holdoutCandidate = rebuild(holdout, "candidate");
-    const attemptRecords = (item: QualityObservation, live: boolean): readonly ObservationAttemptRecord[] => item.cases.flatMap((result) => (live ? ["live-1", "live-2", "live-3"] : ["recorded"]).map((attemptName) => ({
-      caseVersion: result.caseVersion, attemptName,
-      result: result.disposition === "positive" && attemptName === "live-3" ? { ...result, metrics: { ...result.metrics, approvedWindowOverlap: 1 } } : result,
-    })));
     const map = { [base.observationId]: base, [candidate.observationId]: candidate, [holdout.observationId]: holdout, [holdoutCandidate.observationId]: holdoutCandidate };
-    const dependencies = { ...deps(map), readAttempts: vi.fn(async (id: string) => attemptRecords(map[id as keyof typeof map], id === candidate.observationId || id === holdoutCandidate.observationId)) };
+    const dependencies = deps(map, [], { [candidate.observationId]: bundleFor(candidate, candidateAttempts) });
     const decision = await decideGate(input({ claim: "improvement", policy: { ...policy, claim: "improvement" }, baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId, baselineHoldoutObservationId: holdout.observationId, candidateHoldoutObservationId: holdoutCandidate.observationId }), dependencies);
     expect(decision.verdict).toBe("pass");
     expect(decision.eval.attemptCount).toBe(3);
@@ -177,15 +194,27 @@ describe("feedback quality gate", () => {
     expect(JSON.parse(Buffer.from(bundle.get("decision.json")!).toString("utf8")).decisionId).toBe(decision.decisionId);
   });
 
-  it("rejects an injected observation whose requested ID does not match its canonical body", async () => {
+  it("rejects a bundle whose manifest ID does not match the requested ID", async () => {
     const base = observation("eval", "baseline", 4, 6);
     const candidate = rebuild(base, "candidate");
-    const wrongIdCandidate = { ...candidate, observationId: "observation:" + hash("9") };
-    const dependencies: GateDependencies = {
-      readObservation: vi.fn(async (id: string) => id === base.observationId ? base : wrongIdCandidate),
-      now: () => new Date("2026-09-01T12:00:00.000Z"),
-      publishDecision: vi.fn(async () => ({ status: "committed" as const })),
-    };
+    const wrongManifest = JSON.parse(Buffer.from(bundleFor(candidate).get("manifest.json")!).toString("utf8"));
+    wrongManifest.observationId = "observation:" + hash("9");
+    const wrongBundle = new Map(bundleFor(candidate));
+    wrongBundle.set("manifest.json", Buffer.from(canonicalJson(wrongManifest)));
+    const dependencies = deps({ [base.observationId]: base, [candidate.observationId]: candidate }, [], { [candidate.observationId]: wrongBundle });
+    const decision = await decideGate(input({ baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId }), dependencies);
+    expect(decision.verdict).toBe("fail");
+    expect(decision.reasons).toEqual(["invalid_schema"]);
+  });
+
+  it("rejects attempts bytes changed after the manifest digest was recorded", async () => {
+    const base = observation("eval", "baseline", 4, 6);
+    const candidate = rebuild(base, "candidate");
+    const original = bundleFor(candidate);
+    const changedResults = Buffer.from(Buffer.from(original.get("results.jsonl")!).toString("utf8").replace('"approvedMomentRetained":1', '"approvedMomentRetained":0'));
+    const tampered = new Map(original);
+    tampered.set("results.jsonl", changedResults);
+    const dependencies = deps({ [base.observationId]: base, [candidate.observationId]: candidate }, [], { [candidate.observationId]: tampered });
     const decision = await decideGate(input({ baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId }), dependencies);
     expect(decision.verdict).toBe("fail");
     expect(decision.reasons).toEqual(["invalid_schema"]);
@@ -196,13 +225,7 @@ describe("feedback quality gate", () => {
     const candidateEval = rebuild(baseEval, "candidate");
     const baseHoldout = observation("holdout", "baseline", 1, 2);
     const candidateHoldout = rebuild(baseHoldout, "candidate");
-    const bundle = (item: QualityObservation): ReadonlyMap<string, Uint8Array> => {
-      const attempts = item.cases.map((result) => ({ caseVersion: result.caseVersion, attemptName: "recorded", result }));
-      const results = serializeObservationAttempts(attempts);
-      const manifest = { schemaVersion: 1, observationId: item.observationId, set: item.set, mode: item.mode, live: false, commitSha: item.commitSha, configSha256: item.configSha256, corpusSha256: item.corpusSha256, runnerVersion: item.runnerVersion, createdAt: item.createdAt, caseVersions: item.caseVersions, attemptCount: item.attemptCount, attemptsSha256: item.attemptsSha256 };
-      return new Map([["manifest.json", Buffer.from(canonicalJson(manifest))], ["results.jsonl", Buffer.from(results)]]);
-    };
-    const map = { [baseEval.observationId]: bundle(baseEval), [candidateEval.observationId]: bundle(candidateEval), [baseHoldout.observationId]: bundle(baseHoldout), [candidateHoldout.observationId]: bundle(candidateHoldout) };
+    const map = { [baseEval.observationId]: bundleFor(baseEval), [candidateEval.observationId]: bundleFor(candidateEval), [baseHoldout.observationId]: bundleFor(baseHoldout), [candidateHoldout.observationId]: bundleFor(candidateHoldout) };
     const readBundle = vi.fn(async (_kind: "case" | "observation" | "decision", id: string, _root?: string) => {
       const value = map[id as keyof typeof map];
       if (!value) throw new Error("missing");
