@@ -209,9 +209,9 @@ export async function readObservationAttempts(id: string, root = DEFAULT_QUALITY
   for (const line of lines) {
     let parsed: unknown;
     try { parsed = JSON.parse(line); } catch { throw new ObservationError("invalid_input"); }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new ObservationError("invalid_input");
+    if (!exactAttemptWrapper(parsed)) throw new ObservationError("invalid_input");
     const item = parsed as Record<string, unknown>;
-    if (typeof item.caseVersion !== "string" || !manifestCases.has(item.caseVersion) || typeof item.attemptName !== "string" || names.has(`${item.caseVersion}:${item.attemptName}`) || !item.result || typeof item.result !== "object") throw new ObservationError("invalid_input");
+    if (typeof item.caseVersion !== "string" || !manifestCases.has(item.caseVersion) || typeof item.attemptName !== "string" || item.attemptName.length === 0 || names.has(`${item.caseVersion}:${item.attemptName}`) || !item.result || typeof item.result !== "object") throw new ObservationError("invalid_input");
     const result = item.result as Record<string, unknown>;
     if (result.schemaVersion !== 1 || result.caseVersion !== item.caseVersion || !["positive", "confirmed_negative", "exclude"].includes(result.disposition as string) || !["selection", "boundary", "framing", "subtitles", "render"].includes(result.subsystem as string) || !["ok", "missing", "stale", "error"].includes(result.status as string) || !result.metrics || typeof result.metrics !== "object" || Array.isArray(result.metrics)) throw new ObservationError("invalid_input");
     names.add(`${item.caseVersion}:${item.attemptName}`);
@@ -227,6 +227,22 @@ export async function readObservationAttempts(id: string, root = DEFAULT_QUALITY
     if (values.length !== expected.length || values.some((value, index) => value !== expected[index])) throw new ObservationError("invalid_input");
   }
   return Object.freeze(attempts);
+}
+
+function exactAttemptWrapper(value: unknown): value is Record<string, unknown> {
+  try {
+    if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== 3) return false;
+    for (const key of keys) {
+      if (typeof key !== "string" || !["caseVersion", "attemptName", "result"].includes(key)) return false;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !descriptor.enumerable || !Object.prototype.hasOwnProperty.call(descriptor, "value")) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** Execute one immutable observation. All input cases are visited; an adapter

@@ -292,8 +292,9 @@ function safeNow(dependencies: GateDependencies): Date {
 function countSummary(comparison: GateComparison, baseline: QualityObservation, candidate: QualityObservation, baselineLoaded?: LoadedObservation, candidateLoaded?: LoadedObservation): GateSetSummary {
   const count = (observation: QualityObservation, disposition: "positive" | "confirmed_negative") => observation.cases.filter((item) => item.disposition === disposition).length;
   const candidateAttempts = candidateLoaded?.attempts ?? [];
+  const attemptCount = candidateAttempts.length > 0 ? new Set(candidateAttempts.map((item) => item.attemptName)).size : 1;
   const varianceCaseCount = candidateAttempts.length > 0 ? (() => { try { return envelope(candidateLoaded!).varianceCaseCount; } catch { return 0; } })() : 0;
-  return { positiveCount: count(candidate, "positive"), negativeCount: count(candidate, "confirmed_negative"), attemptCount: candidateAttempts.length || 1, varianceCaseCount, baseline: comparison.baseline, candidate: comparison.candidate };
+  return { positiveCount: count(candidate, "positive"), negativeCount: count(candidate, "confirmed_negative"), attemptCount, varianceCaseCount, baseline: comparison.baseline, candidate: comparison.candidate };
 }
 
 function attemptObservation(observation: QualityObservation, attempts: readonly ObservationAttemptRecord[], attemptName: string): QualityObservation {

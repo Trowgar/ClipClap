@@ -132,6 +132,16 @@ describe("feedback quality observation runner", () => {
     await expect(readObservationAttempts(id, root)).rejects.toThrow("invalid_input");
   });
 
+  it("rejects an observation attempt wrapper with extra enumerable data", async () => {
+    const root = await mkdtemp(join(tmpdir(), "quality-observe-wrapper-"));
+    const id = `observation:sha256:${"a".repeat(64)}`;
+    const result = { schemaVersion: 1, caseVersion: sampleCase().caseVersion, disposition: "positive", subsystem: "selection", status: "ok", metrics: { approvedMomentRetained: 1 } };
+    const results = `${canonicalJson({ caseVersion: sampleCase().caseVersion, attemptName: "recorded", result, extra: "reject" })}\n`;
+    const manifest = { schemaVersion: 1, observationId: id, set: "eval", mode: "baseline", live: false, caseVersions: [sampleCase().caseVersion], commitSha: "a".repeat(40), configSha256: hash("a"), corpusSha256: hash("b"), runnerVersion: 1, attemptCount: 1, attemptsSha256: sha256(results) };
+    await publishBundle({ kind: "observation", id, files: { "manifest.json": Buffer.from(`${canonicalJson(manifest)}\n`), "results.jsonl": Buffer.from(results) } }, root);
+    await expect(readObservationAttempts(id, root)).rejects.toThrow("invalid_input");
+  });
+
   it("publishes missing input as an error result instead of silently skipping the case", async () => {
     const publish = vi.fn(async () => ({ status: "committed" as const }));
     const observation = await observeQualitySet({
