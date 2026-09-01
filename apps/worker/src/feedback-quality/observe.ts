@@ -162,7 +162,7 @@ async function publishDefault(observation: QualityObservation, attempts: readonl
   const names = new Set(attempts.map((item) => item.attemptName));
   const live = names.size === 3 && LIVE_ATTEMPTS.every((name) => names.has(name));
   const caseVersions = [...new Set(observation.cases.map((item) => item.caseVersion))].sort();
-  const manifest = { schemaVersion: 1, observationId: observation.observationId, set: observation.set, mode: observation.mode, live, commitSha: observation.commitSha, configSha256: observation.configSha256, corpusSha256: observation.corpusSha256, runnerVersion: observation.runnerVersion, caseVersions, attemptCount: attempts.length, attemptsSha256: sha256(results) };
+  const manifest = { schemaVersion: 1, observationId: observation.observationId, set: observation.set, mode: observation.mode, live, commitSha: observation.commitSha, configSha256: observation.configSha256, corpusSha256: observation.corpusSha256, runnerVersion: observation.runnerVersion, createdAt: observation.createdAt, caseVersions, attemptCount: attempts.length, attemptsSha256: sha256(results) };
   return publishBundle({ kind: "observation", id: observation.observationId, files: { "manifest.json": Buffer.from(canonicalJson(manifest) + "\n"), "results.jsonl": Buffer.from(results) } }, root);
 }
 

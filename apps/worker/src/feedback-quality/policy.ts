@@ -179,6 +179,14 @@ function validSha256(value: unknown): value is string {
   return typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value);
 }
 
+/* Store content IDs carry their bundle kind (`observation:sha256:...`), while
+ * the original pure-policy fixtures use a bare digest. Accept both closed
+ * spellings at this boundary; the private store still requires the prefixed
+ * canonical ID and the gate verifies that ID independently. */
+function validObservationId(value: unknown): value is string {
+  return validSha256(value) || (typeof value === "string" && /^observation:sha256:[0-9a-f]{64}$/.test(value));
+}
+
 function validTimestamp(value: unknown): value is string {
   if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
   const parsed = new Date(value);
@@ -203,7 +211,7 @@ function observationReason(value: unknown, validateMetrics: boolean): MachineRea
   if (!isObject(value) || !ownDataKeys(value, OBSERVATION_KEYS) || !ownDataFields(value, ["schemaVersion", "observationId", "mode", "set", "commitSha", "configSha256", "corpusSha256", "runnerVersion", "createdAt", "cases"])) return "invalid_schema";
   if (
     value.schemaVersion !== 1 ||
-    !validSha256(value.observationId) ||
+    !validObservationId(value.observationId) ||
     (value.mode !== "baseline" && value.mode !== "candidate") ||
     (value.set !== "eval" && value.set !== "holdout") ||
     !validSha1(value.commitSha) ||
