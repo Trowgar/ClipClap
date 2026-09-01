@@ -91,7 +91,9 @@ describe("feedback quality gate", () => {
 
   it("does not read holdout after an eval regression", async () => {
     const base = observation("eval", "baseline", 4, 6);
-    const candidate = rebuild(base, "candidate", base.cases.slice(1));
+    const removedPositive = base.cases.find((item) => item.disposition === "positive");
+    expect(removedPositive).toBeDefined();
+    const candidate = rebuild(base, "candidate", base.cases.filter((item) => item.caseVersion !== removedPositive!.caseVersion));
     const ids = input({ baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId });
     const events: string[] = [];
     const dependencies = deps({ [base.observationId]: base, [candidate.observationId]: candidate }, events);
@@ -128,7 +130,7 @@ describe("feedback quality gate", () => {
   it("fails closed when a non-primary live attempt is malformed", async () => {
     const base = observation("eval", "baseline", 4, 6);
     const candidateAttempts = base.cases.flatMap((result) => ["live-1", "live-2", "live-3"].map((attemptName) => ({ caseVersion: result.caseVersion, attemptName, result: (attemptName === "live-2" ? { ...result, metrics: { ...result.metrics, score: "malformed" } } : result) as unknown as QualityCaseResult })));
-    const { observationId: _candidateId, ...candidateBase } = rebuild(base, "candidate", base.cases, base.createdAt, true);
+    const { observationId: _candidateId, createdAt: _candidateCreatedAt, ...candidateBase } = rebuild(base, "candidate", base.cases, base.createdAt, true);
     const candidate = snapshotAttempts(candidateBase, base.createdAt, candidateAttempts);
     const events: string[] = [];
     const dependencies = deps({ [base.observationId]: base, [candidate.observationId]: candidate }, events, { [candidate.observationId]: bundleFor(candidate, candidateAttempts) });
@@ -143,7 +145,7 @@ describe("feedback quality gate", () => {
     const candidateCases = base.cases.map((item) => item.disposition === "positive" ? { ...item, metrics: { ...item.metrics, approvedWindowOverlap: 2 } } : item);
     const candidateAttempts = candidateCases.flatMap((result) => ["live-1", "live-2", "live-3"].map((attemptName) => ({ caseVersion: result.caseVersion, attemptName, result: result.disposition === "positive" && attemptName === "live-3" ? { ...result, metrics: { ...result.metrics, approvedWindowOverlap: 1 } } : result })));
     const rebuiltCandidate = rebuild(base, "candidate", candidateCases, base.createdAt, true);
-    const { observationId: _candidateId, ...candidateBase } = rebuiltCandidate;
+    const { observationId: _candidateId, createdAt: _candidateCreatedAt, ...candidateBase } = rebuiltCandidate;
     const candidate = snapshotAttempts(candidateBase, base.createdAt, candidateAttempts);
     const holdout = observation("holdout", "baseline", 1, 2);
     const holdoutCandidate = rebuild(holdout, "candidate");
@@ -152,6 +154,8 @@ describe("feedback quality gate", () => {
     const decision = await decideGate(input({ claim: "improvement", policy: { ...policy, claim: "improvement" }, baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId, baselineHoldoutObservationId: holdout.observationId, candidateHoldoutObservationId: holdoutCandidate.observationId }), dependencies);
     expect(decision.verdict).toBe("pass");
     expect(decision.eval.attemptCount).toBe(3);
+    expect(decision.eval.varianceCaseCount).toBeGreaterThan(0);
+    expect(dependencies.readBundle).toHaveBeenCalledTimes(4);
   });
 
   it("expires no later than the oldest observation plus 24 hours", async () => {
