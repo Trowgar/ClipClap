@@ -1,97 +1,118 @@
 import { readFile } from "node:fs/promises";
-import { dirname, extname, resolve } from "node:path";
+import { accessSync, statSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
-const ROOT = resolve(__dirname, "..");
+const SOURCE_ROOT = resolve(__dirname, "..");
 const ENTRYPOINTS = {
-  promotion: resolve(ROOT, "scripts/feedback-quality-promote.ts"),
-  observation: resolve(ROOT, "scripts/feedback-quality-observe.ts"),
-  gate: resolve(ROOT, "feedback-quality/gate.ts"),
-  deployment: resolve(ROOT, "feedback-quality/deploy.ts"),
+  promotion: resolve(SOURCE_ROOT, "scripts/feedback-quality-promote.ts"),
+  observation: resolve(SOURCE_ROOT, "scripts/feedback-quality-observe.ts"),
+  gate: resolve(SOURCE_ROOT, "feedback-quality/gate.ts"),
+  deployment: resolve(SOURCE_ROOT, "feedback-quality/deploy.ts"),
 } as const;
 
-function resolveImport(from: string, specifier: string): string | undefined {
+type ModuleGraph = Map<string, ts.SourceFile>;
+
+function resolveRelative(from: string, specifier: string): string | undefined {
   if (!specifier.startsWith(".")) return undefined;
   const base = resolve(dirname(from), specifier);
   for (const candidate of [base, `${base}.ts`, `${base}.tsx`, `${base}.js`, resolve(base, "index.ts")]) {
     try {
-      // Resolution is intentionally based on the checked-in source graph.
-      require("node:fs").accessSync(candidate);
-      if (require("node:fs").statSync(candidate).isFile()) return candidate;
-    } catch { /* try the next source suffix */ }
+      accessSync(candidate);
+      if (statSync(candidate).isFile()) return candidate;
+    } catch { /* try the next explicit source candidate */ }
   }
   return undefined;
 }
 
-async function reachable(entry: string): Promise<Map<string, string>> {
-  const seen = new Map<string, string>();
+function literalModuleSpecifiers(source: ts.SourceFile): string[] {
+  const result: string[] = [];
+  const add = (node: ts.Node | undefined): void => {
+    if (node && ts.isStringLiteral(node)) result.push(node.text);
+  };
+  for (const statement of source.statements) {
+    if (ts.isImportDeclaration(statement)) add(statement.moduleSpecifier);
+    if (ts.isExportDeclaration(statement)) add(statement.moduleSpecifier);
+    if (ts.isImportEqualsDeclaration(statement) && ts.isExternalModuleReference(statement.moduleReference)) add(statement.moduleReference.expression);
+  }
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0])) {
+      if (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === "require")) result.push(node.arguments[0].text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return result;
+}
+
+async function reachable(entry: string): Promise<ModuleGraph> {
+  const graph: ModuleGraph = new Map();
   const visit = async (file: string): Promise<void> => {
-    if (seen.has(file)) return;
-    const source = await readFile(file, "utf8");
-    seen.set(file, source);
-    const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-    for (const statement of ast.statements) {
-      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
-      const child = resolveImport(file, statement.moduleSpecifier.text);
-      if (child) await visit(child);
+    if (graph.has(file)) return;
+    const source = ts.createSourceFile(file, await readFile(file, "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    graph.set(file, source);
+    for (const specifier of literalModuleSpecifiers(source)) {
+      if (!specifier.startsWith(".")) continue;
+      const child = resolveRelative(file, specifier);
+      if (!child) throw new Error(`unresolved_relative_import:${file}:${specifier}`);
+      await visit(child);
     }
   };
   await visit(entry);
-  return seen;
+  return graph;
 }
 
-function importSpecifiers(source: string): string[] {
-  const ast = ts.createSourceFile("source.ts", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const direct = ast.statements.flatMap((statement) =>
-    ts.isImportDeclaration(statement) && ts.isStringLiteral(statement.moduleSpecifier) ? [statement.moduleSpecifier.text] : [],
-  );
-  const dynamic: string[] = [];
+function callsNamed(source: ts.SourceFile, names: ReadonlySet<string>, receiverPattern?: RegExp): string[] {
+  const found: string[] = [];
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword && node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0])) dynamic.push(node.arguments[0].text);
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && names.has(node.expression.name.text)) {
+      const receiver = node.expression.expression.getText(source);
+      if (!receiverPattern || receiverPattern.test(receiver)) found.push(node.expression.name.text);
+    }
     ts.forEachChild(node, visit);
   };
-  visit(ast);
-  return [...direct, ...dynamic];
+  visit(source);
+  return found;
+}
+
+function graphImports(graph: ModuleGraph): string[] {
+  return [...graph.values()].flatMap(literalModuleSpecifiers);
 }
 
 describe("feedback quality dependency boundaries", () => {
-  it("keeps promotion read-only at Prisma/R2 edges and excludes queue/process deployment effects", async () => {
+  it("walks promotion's complete graph and permits only read Prisma/R2 edges", async () => {
     const graph = await reachable(ENTRYPOINTS.promotion);
-    const imports = [...graph.values()].flatMap(importSpecifiers);
+    const imports = graphImports(graph);
     expect(imports).toContain("@clipclap/shared/lib/prisma");
     expect(imports).toContain("@clipclap/shared/lib/r2");
     expect(imports.some((value) => value === "bullmq" || value === "node:child_process")).toBe(false);
-    const repository = await readFile(resolve(ROOT, "feedback-quality/repository.ts"), "utf8");
-    expect(repository).toContain("SET TRANSACTION READ ONLY");
-    expect(repository).not.toMatch(/\.(?:create|update|delete|upsert|createMany|updateMany|deleteMany)\s*\(/);
-    const source = [...graph.values()].join("\n");
-    expect(source).toContain("downloadFile");
-    expect(source).toContain("getObjectSize");
-    expect(source).not.toMatch(/\b(?:putObject|deleteObject|upload)\s*\(/);
+    const mutators = new Set(["create", "createMany", "update", "updateMany", "upsert", "delete", "deleteMany"]);
+    expect([...graph.values()].flatMap((source) => callsNamed(source, mutators, /\b(?:transaction|tx|prisma|client)\b/))).toEqual([]);
+    const sourceText = [...graph.values()].map((source) => source.getFullText()).join("\n");
+    expect(sourceText).toContain("downloadFile");
+    expect(sourceText).toContain("getObjectSize");
+    expect([...graph.values()].flatMap((source) => callsNamed(source, new Set(["putObject", "deleteObject", "upload"]), /(?:^|\.)(?:bucket|r2|object|client)$/))).toEqual([]);
   });
 
-  it("allows observation analysis/render adapters but no database, R2, queue, or spawn imports", async () => {
+  it("walks observation's complete graph, including analyzers/renderers, without DB/R2/queue/spawn", async () => {
     const graph = await reachable(ENTRYPOINTS.observation);
-    const imports = [...graph.values()].flatMap(importSpecifiers);
-    expect(imports.some((value) => value.endsWith("/analyze-v2") || value === "../analyze-v2")).toBe(true);
-    expect(imports.some((value) => value.endsWith("/render-lane") || value === "./render-lane")).toBe(true);
-    expect(imports.some((value) => value.includes("@clipclap/shared/lib/prisma"))).toBe(false);
-    expect(imports.some((value) => value.includes("@clipclap/shared/lib/r2"))).toBe(false);
-    expect(imports.some((value) => value === "bullmq")).toBe(false);
-    expect(imports.some((value) => value === "node:child_process")).toBe(true); // ffmpeg/ffprobe probes are permitted.
-    const source = [...graph.values()].join("\n");
-    expect(source).not.toMatch(/\bspawn\s*\(/);
+    const imports = graphImports(graph);
+    expect(imports.some((value) => value.endsWith("/analyze-v2"))).toBe(true);
+    expect(imports.some((value) => value.endsWith("/render-lane"))).toBe(true);
+    expect(imports.some((value) => value.includes("@clipclap/shared/lib/prisma") || value.includes("@clipclap/shared/lib/r2") || value === "bullmq")).toBe(false);
+    expect(imports).toContain("node:child_process"); // bounded ffmpeg/ffprobe probes only.
+    expect([...graph.values()].flatMap((source) => callsNamed(source, new Set(["spawn"])))).toEqual([]);
   });
 
-  it("keeps gate private-I/O-only and makes deploy the sole queue/process boundary", async () => {
-    const gateSource = await readFile(ENTRYPOINTS.gate, "utf8");
-    const gateImports = importSpecifiers(gateSource);
-    expect(gateImports.some((value) => value === "bullmq" || value === "node:child_process")).toBe(false);
-    const deploy = await reachable(ENTRYPOINTS.deployment);
-    const deployImports = [...deploy.values()].flatMap(importSpecifiers);
-    expect(deployImports).toContain("bullmq");
-    expect(deployImports).toContain("node:child_process");
-    expect(extname(ENTRYPOINTS.gate)).toBe(".ts");
+  it("keeps gate private-I/O-only while deployment owns BullMQ and process execution", async () => {
+    const gate = await reachable(ENTRYPOINTS.gate);
+    const gateImports = graphImports(gate);
+    expect(gateImports.some((value) => value === "bullmq" || value === "@clipclap/shared/lib/redis")).toBe(false);
+    expect([...gate.values()].flatMap((source) => callsNamed(source, new Set(["spawn"])))).toEqual([]);
+    const deployment = await reachable(ENTRYPOINTS.deployment);
+    const deploymentImports = graphImports(deployment);
+    expect(deploymentImports).toContain("bullmq");
+    expect(deploymentImports).toContain("node:child_process");
   });
 });

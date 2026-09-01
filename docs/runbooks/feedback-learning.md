@@ -103,6 +103,12 @@ it must not be baked into an image or copied into git. Back up the complete
 including `ledger`, `cases`, `observations`, and `decisions`. Preserve `0700` directories and `0600`
 files. There is no supported partial restore or cross-host reconciliation.
 
+The current development `docker-compose.yml` is not a production rollout adapter: it bind-mounts
+source and has no immutable image/config mount for this gate. The deploy command therefore fails
+closed unless an explicit injected production adapter or container-side config path is supplied.
+An immutable production compose/image adapter, including rollback artifact preparation, remains
+pending; a local dev compose run is not deployment evidence.
+
 ### Promote reviewed cases
 
 Export and review feedback through the V1 workflow above. Only deterministic `AS_IS` positives and
@@ -144,6 +150,12 @@ Record the four safe observation IDs printed by the command. Do not copy case te
 source keys, or model responses into shell history, tickets, or logs. An observation is immutable;
 rerunning an identical command is a safe content-addressed no-op.
 
+Path variables are currently CLI-specific: `feedback-quality-observe` reads `QUALITY_ROOT`; the gate
+and deploy CLIs read `FEEDBACK_QUALITY_ROOT` and fall back to their private default (the gate also
+accepts `QUALITY_ROOT` through its fallback). Promotion uses its compiled worker private default and
+does not consume either root variable. Set the actual path expected by each command explicitly; do
+not assume `.env.example` alone configures every CLI.
+
 ### Evaluate and authorize
 
 Run eval first. Holdout is read only after eval passes. The gate binds all observations to commit,
@@ -174,8 +186,10 @@ Inspect startup logs and one canary job end-to-end (delivery included) before pr
 rollout produces a private report and must be investigated; do not continue manually around a failed
 service. Roll back using the recorded rollback artifact and verify the canary again.
 
-An override requires a nonempty private `0600` reason file. It is an append-only audit event, does
-not turn a failed quality comparison into a pass, and should be used only under incident authority:
+An override requires a nonempty private `0600` reason file. It is an append-only audit event and may
+bypass `decision_not_pass`, expiry, and binding mismatches, but it does not bypass malformed
+decisions, invalid reason files, queue checks, rollback preparation, health/canary failures, or
+event durability. Use it only under incident authority:
 
 ```bash
 npm run feedback-quality-deploy -w @clipclap/worker -- --decision <decision-id> --service worker-analyze --override-reason-file /trusted/private/override-reason.txt
