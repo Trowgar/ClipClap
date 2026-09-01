@@ -144,6 +144,16 @@ describe("quality feedback promotion", () => {
     }
   });
 
+  it("rejects accessor-backed or non-plain decisions without invoking getters", async () => {
+    let reads = 0;
+    const accessor = decision();
+    Object.defineProperty(accessor, "expected", { enumerable: true, get: () => { reads += 1; return decision().expected; } });
+    await expect(promoteFeedbackCase(accessor, deps())).rejects.toMatchObject({ code: "invalid_decision" });
+    expect(reads).toBe(0);
+    const inherited = Object.assign(Object.create({ inherited: true }), decision());
+    await expect(promoteFeedbackCase(inherited, deps())).rejects.toMatchObject({ code: "invalid_decision" });
+  });
+
   it("does not read V1 approval until its authority lock is acquired", async () => {
     let release!: () => void;
     const held = new Promise<void>((resolve) => { release = resolve; });

@@ -154,25 +154,43 @@ const EXPECTED_KEYS = ["approvedMoment", "completeBoundary", "sourceWindow", "re
 
 function ownKeys(value: object, keys: readonly string[]): boolean {
   const actual = Reflect.ownKeys(value);
-  return actual.length === keys.length && actual.every((key) => typeof key === "string" && keys.includes(key));
+  return actual.length === keys.length && actual.every((key) => {
+    if (typeof key !== "string" || !keys.includes(key)) return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor?.enumerable === true && Object.prototype.hasOwnProperty.call(descriptor, "value");
+  });
 }
 function hash(value: unknown): value is ContentHash { return typeof value === "string" && HASH.test(value); }
 function nonempty(value: unknown): value is string { return typeof value === "string" && UUIDISH.test(value); }
 function validDate(value: unknown): value is string { if (typeof value !== "string") return false; const date = new Date(value); return Number.isFinite(date.getTime()) && date.toISOString() === value; }
-function object(value: unknown): Record<string, unknown> { if (value === null || typeof value !== "object" || Array.isArray(value)) throw new QualityPromotionError("invalid_decision"); return value as Record<string, unknown>; }
+function object(value: unknown): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw new QualityPromotionError("invalid_decision");
+  return value as Record<string, unknown>;
+}
+function array(value: unknown): readonly unknown[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || !Number.isSafeInteger(value.length) || value.length < 0) throw new QualityPromotionError("invalid_decision");
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (key === "length") continue;
+    if (typeof key !== "string" || !/^\d+$/.test(key) || descriptors[key].enumerable !== true || !Object.prototype.hasOwnProperty.call(descriptors[key], "value")) throw new QualityPromotionError("invalid_decision");
+  }
+  if (Object.keys(descriptors).filter((key) => key !== "length").length !== value.length) throw new QualityPromotionError("invalid_decision");
+  return value;
+}
 function expected(value: unknown): PromotionExpected {
   const raw = object(value);
   if (!ownKeys(raw, EXPECTED_KEYS.filter((key) => Object.prototype.hasOwnProperty.call(raw, key) || key === "approvedMoment" || key === "completeBoundary")) ||
       typeof raw.approvedMoment !== "boolean" || typeof raw.completeBoundary !== "boolean") throw new QualityPromotionError("invalid_decision");
   if (raw.sourceWindow !== undefined) {
     const window = object(raw.sourceWindow);
-    if (Object.keys(window).some((key) => !["start", "end", "forbidden"].includes(key)) || typeof window.start !== "number" || typeof window.end !== "number" || !Number.isFinite(window.start) || !Number.isFinite(window.end) || window.start < 0 || window.end <= window.start) throw new QualityPromotionError("invalid_decision");
+    if (!ownKeys(window, ["start", "end", ...(Object.prototype.hasOwnProperty.call(window, "forbidden") ? ["forbidden"] : [])]) ||
+        typeof window.start !== "number" || typeof window.end !== "number" || !Number.isFinite(window.start) || !Number.isFinite(window.end) || window.start < 0 || window.end <= window.start) throw new QualityPromotionError("invalid_decision");
     if (window.forbidden !== undefined) {
-      if (!Array.isArray(window.forbidden) || window.forbidden.some((entry) => {
-        if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return true;
-        const item = entry as Record<string, unknown>;
-        return Object.keys(item).some((key) => key !== "start" && key !== "end") || typeof item.start !== "number" || typeof item.end !== "number" || !Number.isFinite(item.start) || !Number.isFinite(item.end) || item.start < 0 || item.end <= item.start;
-      })) throw new QualityPromotionError("invalid_decision");
+      const forbidden = array(window.forbidden);
+      for (const entry of forbidden) {
+        const item = object(entry);
+        if (!ownKeys(item, ["start", "end"]) || typeof item.start !== "number" || typeof item.end !== "number" || !Number.isFinite(item.start) || !Number.isFinite(item.end) || item.start < 0 || item.end <= item.start) throw new QualityPromotionError("invalid_decision");
+      }
     }
   }
   return raw as unknown as PromotionExpected;

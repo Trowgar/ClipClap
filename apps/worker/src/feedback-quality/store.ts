@@ -23,8 +23,11 @@ const RESERVATION_MARKER = ".reservation";
 const COMMIT_MARKER_BYTES = Buffer.from("clipclap-feedback-quality-committed-v1\n", "utf8");
 const BUNDLE_NAMES = ["case", "observation", "decision"] as const;
 const PRIVATE_FILE_NAMES = new Set(["case.json", "transcript.json", "source-or-evidence.mp4", "manifest.json", "results.jsonl", "decision.json", "report.md"]);
+const MAX_PRIVATE_METADATA_BYTES = 8 * 1024;
 export const MAX_READ_BUNDLE_FILE_BYTES = 256 * 1024 * 1024;
 export const MAX_READ_BUNDLE_TOTAL_BYTES = 512 * 1024 * 1024;
+export const MAX_STREAM_BUNDLE_FILE_BYTES = 2 * 1024 * 1024 * 1024;
+export const MAX_STREAM_BUNDLE_TOTAL_BYTES = 3 * 1024 * 1024 * 1024;
 
 export type BundleKind = (typeof BUNDLE_NAMES)[number];
 
@@ -331,12 +334,13 @@ async function payloadMatches(path: string, expected: PreparedFile, allowLinked 
   } finally { await closeQuietly(handle); }
 }
 
-async function fileMetadata(path: string): Promise<{ size: number; sha256: `sha256:${string}` }> {
+async function fileMetadata(path: string, maxSize = MAX_STREAM_BUNDLE_FILE_BYTES): Promise<{ size: number; sha256: `sha256:${string}` }> {
   let handle: FileHandle | undefined;
   try {
     handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const initial = await handle.stat();
     if (!initial.isFile() || initial.nlink !== 1 || (initial.mode & 0o7777) !== FILE_MODE) throw safeError("unsafe_path");
+    if (initial.size > maxSize) throw safeError("too_large");
     const digest = createHash("sha256");
     const buffer = Buffer.allocUnsafe(64 * 1024);
     let size = 0;
@@ -390,7 +394,7 @@ async function inspectTemp(
 }
 
 async function readReservation(directory: FileHandle): Promise<Reservation> {
-  const bytes = await readRegular(anchoredPath(directory, RESERVATION_MARKER));
+  const bytes = await readPrivateMetadata(anchoredPath(directory, RESERVATION_MARKER));
   try {
     const parsed: unknown = JSON.parse(Buffer.from(bytes).toString("utf8"));
     if (!parsed || typeof parsed !== "object" || Object.keys(parsed).sort().join(",") !== "digest,schemaVersion,token") throw safeError("integrity");
@@ -443,6 +447,23 @@ async function readRegularCapped(path: string, cap: number): Promise<Uint8Array>
   } finally { await closeQuietly(handle); }
 }
 
+async function readPrivateMetadata(path: string): Promise<Uint8Array> {
+  return readRegularCapped(path, MAX_PRIVATE_METADATA_BYTES);
+}
+
+async function regularFileSize(path: string): Promise<number> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stats = await handle.stat();
+    if (!stats.isFile() || stats.nlink !== 1 || (stats.mode & 0o7777) !== FILE_MODE) throw safeError("unsafe_path");
+    return stats.size;
+  } catch (error) {
+    if (error instanceof QualityStoreError) throw error;
+    throw safeError("unsafe_path");
+  } finally { await closeQuietly(handle); }
+}
+
 export type OpenBundleFile = Readonly<{
   size: number;
   sha256: Promise<`sha256:${string}`>;
@@ -464,14 +485,24 @@ export async function openBundleFile(kind: BundleKind, id: string, name: string,
     tree = await openTree(validateRoot(root));
     directory = await openDirectory(anchoredPath(tree.dirs[kind], id), true);
     const reservation = await readReservation(directory);
-    const marker = await readRegular(anchoredPath(directory, COMMIT_MARKER));
+    const marker = await readPrivateMetadata(anchoredPath(directory, COMMIT_MARKER));
     if (!bytesEqual(marker, COMMIT_MARKER_BYTES)) throw safeError("integrity");
     const manifest: Record<string, { size: number; sha256: `sha256:${string}` }> = Object.create(null);
-    for (const entry of await entries(directory)) {
+    const bundleEntries = await entries(directory);
+    const sizes: Record<string, number> = Object.create(null);
+    let totalSize = 0;
+    for (const entry of bundleEntries) {
       if (entry.name === COMMIT_MARKER || entry.name === RESERVATION_MARKER) continue;
       validateFileName(entry.name);
       if (!entry.isFile() || entry.isSymbolicLink()) throw safeError("unsafe_path");
-      manifest[entry.name] = await fileMetadata(anchoredPath(directory, entry.name));
+      const size = await regularFileSize(anchoredPath(directory, entry.name));
+      if (size > MAX_STREAM_BUNDLE_FILE_BYTES || totalSize > MAX_STREAM_BUNDLE_TOTAL_BYTES - size) throw safeError("too_large");
+      sizes[entry.name] = size;
+      totalSize += size;
+    }
+    for (const entry of bundleEntries) {
+      if (entry.name === COMMIT_MARKER || entry.name === RESERVATION_MARKER) continue;
+      manifest[entry.name] = await fileMetadata(anchoredPath(directory, entry.name), sizes[entry.name]);
     }
     const orderedManifest: Record<string, { size: number; sha256: `sha256:${string}` }> = Object.create(null);
     for (const key of Object.keys(manifest).sort()) orderedManifest[key] = manifest[key];
@@ -618,7 +649,7 @@ async function existingBundle(
     const temporaryNames = names.filter((name) => name.startsWith(".") && name.includes(".tmp-"));
     const allowedNames = hasMarker ? [...expectedNames, COMMIT_MARKER, RESERVATION_MARKER].sort() : [...expectedNames, RESERVATION_MARKER, ...temporaryNames].sort();
     if (names.some((name) => !allowedNames.includes(name))) throw safeError("integrity");
-    if (hasMarker && (names.length !== allowedNames.length || !bytesEqual(await readRegular(anchoredPath(directory, COMMIT_MARKER)), COMMIT_MARKER_BYTES))) throw safeError("integrity");
+    if (hasMarker && (names.length !== allowedNames.length || !bytesEqual(await readPrivateMetadata(anchoredPath(directory, COMMIT_MARKER)), COMMIT_MARKER_BYTES))) throw safeError("integrity");
     const ownedTemps = new Map<string, string>();
     for (const name of temporaryNames) {
       const match = /^\.([a-z0-9.-]+)\.tmp-([0-9a-f]{32})$/.exec(name);
@@ -740,7 +771,7 @@ async function verifyBundle(root: string, kind: BundleKind, id: string, expected
     const names = (await entries(directory)).map((entry) => entry.name).sort();
     const expectedNames = [...Object.keys(expected), RESERVATION_MARKER, COMMIT_MARKER].sort();
     if (names.length !== expectedNames.length || names.some((name, index) => name !== expectedNames[index])) return false;
-    if (!bytesEqual(await readRegular(anchoredPath(directory, COMMIT_MARKER)), COMMIT_MARKER_BYTES)) return false;
+    if (!bytesEqual(await readPrivateMetadata(anchoredPath(directory, COMMIT_MARKER)), COMMIT_MARKER_BYTES)) return false;
     try {
       const reservation = await readReservation(directory);
       if (reservation.digest !== bundleDigest(expected)) return false;
@@ -1139,7 +1170,7 @@ export async function readBundle(kind: BundleKind, id: string, root = DEFAULT_QU
       if (codeOf(error) === "ENOENT") throw safeError("missing");
       throw error;
     }
-    if (!bytesEqual(await readRegular(anchoredPath(directory, COMMIT_MARKER)), COMMIT_MARKER_BYTES)) throw safeError("integrity");
+    if (!bytesEqual(await readPrivateMetadata(anchoredPath(directory, COMMIT_MARKER)), COMMIT_MARKER_BYTES)) throw safeError("integrity");
     if (result.size === 0) throw safeError("integrity");
     const actualFiles: Record<string, PreparedFile> = Object.create(null);
     for (const [name, bytes] of result) actualFiles[name] = payloadMetadata(bytes);

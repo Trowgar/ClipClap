@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { sha256 } from "../feedback-learning/canonical";
+import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import {
   appendLabelEvent,
   contentId,
   ensureQualityTree,
   MAX_READ_BUNDLE_FILE_BYTES,
+  MAX_STREAM_BUNDLE_FILE_BYTES,
+  MAX_STREAM_BUNDLE_TOTAL_BYTES,
   openBundleFile,
   publishBundle,
   readBundle,
@@ -138,6 +140,60 @@ describe("feedback quality private store", () => {
     await writeFile(file, "", { mode: 0o600 });
     await truncate(file, MAX_READ_BUNDLE_FILE_BYTES + 1);
     await expect(readBundle("case", id, root)).rejects.toMatchObject({ code: "too_large" });
+  });
+
+  it("refuses a sparse streaming file over the streaming cap before hashing it", async () => {
+    const root = await temporaryRoot();
+    const id = contentId("case", { oversizedStream: true });
+    const paths = await ensureQualityTree(root);
+    const directory = join(paths.casesDir, id);
+    await mkdir(directory, 0o700);
+    await writeFile(join(directory, "case.json"), "", { mode: 0o600 });
+    await truncate(join(directory, "case.json"), MAX_STREAM_BUNDLE_FILE_BYTES + 1);
+    await writeFile(join(directory, ".committed"), "clipclap-feedback-quality-committed-v1\n", { mode: 0o600 });
+    await writeFile(join(directory, ".reservation"), `${canonicalJson({ schemaVersion: 1, digest: sha256("placeholder"), token: "0".repeat(32) })}\n`, { mode: 0o600 });
+    await expect(openBundleFile("case", id, "case.json", root)).rejects.toMatchObject({ code: "too_large" });
+  });
+
+  it("refuses a streaming bundle over the total cap before hashing any file", async () => {
+    const root = await temporaryRoot();
+    const id = contentId("case", { oversizedStreamTotal: true });
+    const paths = await ensureQualityTree(root);
+    const directory = join(paths.casesDir, id);
+    await mkdir(directory, 0o700);
+    const perFile = MAX_STREAM_BUNDLE_FILE_BYTES - 1;
+    for (const name of ["case.json", "transcript.json"]) {
+      await writeFile(join(directory, name), "", { mode: 0o600 });
+      await truncate(join(directory, name), perFile);
+    }
+    await writeFile(join(directory, ".committed"), "clipclap-feedback-quality-committed-v1\n", { mode: 0o600 });
+    await writeFile(join(directory, ".reservation"), `${canonicalJson({ schemaVersion: 1, digest: sha256("placeholder"), token: "0".repeat(32) })}\n`, { mode: 0o600 });
+    await expect(openBundleFile("case", id, "case.json", root)).rejects.toMatchObject({ code: "too_large" });
+    expect(MAX_STREAM_BUNDLE_TOTAL_BYTES).toBeLessThan(perFile * 2);
+  });
+
+  it("caps sparse commit and reservation metadata before reading it", async () => {
+    const openRoot = await temporaryRoot();
+    const openId = contentId("case", { oversizedCommitMetadata: true });
+    const openPaths = await ensureQualityTree(openRoot);
+    const openDirectory = join(openPaths.casesDir, openId);
+    await mkdir(openDirectory, 0o700);
+    await writeFile(join(openDirectory, "case.json"), "x", { mode: 0o600 });
+    await writeFile(join(openDirectory, ".reservation"), `${canonicalJson({ schemaVersion: 1, digest: sha256("placeholder"), token: "0".repeat(32) })}\n`, { mode: 0o600 });
+    await writeFile(join(openDirectory, ".committed"), "", { mode: 0o600 });
+    await truncate(join(openDirectory, ".committed"), 8 * 1024 + 1);
+    await expect(openBundleFile("case", openId, "case.json", openRoot)).rejects.toMatchObject({ code: "too_large" });
+
+    const readRoot = await temporaryRoot();
+    const readId = contentId("case", { oversizedReservationMetadata: true });
+    const readPaths = await ensureQualityTree(readRoot);
+    const readDirectory = join(readPaths.casesDir, readId);
+    await mkdir(readDirectory, 0o700);
+    await writeFile(join(readDirectory, "case.json"), "x", { mode: 0o600 });
+    await writeFile(join(readDirectory, ".committed"), "clipclap-feedback-quality-committed-v1\n", { mode: 0o600 });
+    await writeFile(join(readDirectory, ".reservation"), "", { mode: 0o600 });
+    await truncate(join(readDirectory, ".reservation"), 8 * 1024 + 1);
+    await expect(readBundle("case", readId, readRoot)).rejects.toMatchObject({ code: "too_large" });
   });
 
   it("refuses a content collision and never overwrites prior bytes", async () => {
