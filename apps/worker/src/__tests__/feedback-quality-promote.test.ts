@@ -231,6 +231,19 @@ describe("quality feedback promotion", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
+  it("cancels the reader when a response chunk is invalid or read rejects", async () => {
+    const invalidCancel = vi.fn(async () => undefined);
+    const invalid = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue("not bytes" as never); }, cancel: invalidCancel });
+    const invalidDeps = deps({ downloadFile: vi.fn(async () => invalid) });
+    await expect(promoteFeedbackCase(decision(), invalidDeps)).rejects.toMatchObject({ code: "inputs_missing" });
+    expect(invalidCancel).toHaveBeenCalledOnce();
+    const rejectedCancel = vi.fn(async () => undefined);
+    const rejected = { getReader: () => ({ read: vi.fn(async () => { throw new Error("read failed"); }), cancel: rejectedCancel, releaseLock: vi.fn() }) } as unknown as ReadableStream<Uint8Array>;
+    const rejectedDeps = deps({ downloadFile: vi.fn(async () => rejected) });
+    await expect(promoteFeedbackCase(decision(), rejectedDeps)).rejects.toThrow("read failed");
+    expect(rejectedCancel).toHaveBeenCalledOnce();
+  });
+
   it("cleans the private spool after successful and failed publication", async () => {
     let successPath = "";
     const success = deps({ publishCaseAndLabel: vi.fn(async (input, _root, guard) => { successPath = (input.files["source-or-evidence.mp4"] as { path: string }).path; await guard?.(); return { status: "committed" as const }; }) });

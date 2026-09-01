@@ -1,5 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
-import { chmod, link, lstat, mkdir, mkdtemp, readFile, stat, symlink, unlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, stat, symlink, truncate, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,6 +9,8 @@ import {
   appendLabelEvent,
   contentId,
   ensureQualityTree,
+  MAX_READ_BUNDLE_FILE_BYTES,
+  openBundleFile,
   publishBundle,
   readBundle,
   type AppendLabelOptions,
@@ -102,6 +104,40 @@ describe("feedback quality private store", () => {
     await expect(publishBundle(bundle("case", `observation:sha256:${"a".repeat(64)}`, { "case.json": "x" }), root)).rejects.toMatchObject({ code: "invalid_input" });
     await expect(publishBundle(bundle("case", "../escape", { "case.json": "x" }), root)).rejects.toMatchObject({ code: "unsafe_path" });
     await expect(publishBundle(bundle("case", `case:sha256:${"A".repeat(64)}`, { "case.json": "x" }), root)).rejects.toMatchObject({ code: "invalid_input" });
+  });
+
+  it("pure-validates file-backed payload metadata before creating the root", async () => {
+    const root = await temporaryRoot();
+    const id = contentId("case", { pure: true });
+    await expect(publishBundle({ kind: "case", id, files: { "case.json": { path: "", size: 1, sha256: "sha256:bad" } } }, root)).rejects.toMatchObject({ code: "invalid_input" });
+    await expect(lstat(root)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("opens a committed bundle file as a pinned streaming reader and hashes it", async () => {
+    const root = await temporaryRoot();
+    const id = contentId("case", { streamingRead: true });
+    const content = Buffer.from("stream me");
+    await publishBundle(bundle("case", id, { "case.json": content.toString() }), root);
+    const opened = await openBundleFile("case", id, "case.json", root);
+    const reader = opened.stream.getReader();
+    const chunks: Uint8Array[] = [];
+    for (;;) { const item = await reader.read(); if (item.done) break; chunks.push(item.value); }
+    await reader.releaseLock();
+    await opened.close();
+    expect(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)))).toEqual(content);
+    expect(await opened.sha256).toBe(sha256(content));
+  });
+
+  it("refuses a sparse bundle file over the read cap before allocating it", async () => {
+    const root = await temporaryRoot();
+    const id = contentId("case", { oversizedRead: true });
+    const paths = await ensureQualityTree(root);
+    const directory = join(paths.casesDir, id);
+    await mkdir(directory, 0o700);
+    const file = join(directory, "case.json");
+    await writeFile(file, "", { mode: 0o600 });
+    await truncate(file, MAX_READ_BUNDLE_FILE_BYTES + 1);
+    await expect(readBundle("case", id, root)).rejects.toMatchObject({ code: "too_large" });
   });
 
   it("refuses a content collision and never overwrites prior bytes", async () => {

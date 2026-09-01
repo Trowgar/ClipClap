@@ -255,15 +255,16 @@ async function spoolArtifact(value: Uint8Array | Buffer | ReadableStream<Uint8Ar
       await append(value);
     } else {
       reader = value.getReader();
-      for (;;) {
-        const item = await reader.read();
-        if (item.done) break;
-        if (!(item.value instanceof Uint8Array)) throw new QualityPromotionError("inputs_missing");
-        try { await append(item.value); }
-        catch (error) {
-          if (!cancelled) { cancelled = true; await reader.cancel().catch(() => undefined); }
-          throw error;
+      try {
+        for (;;) {
+          const item = await reader.read();
+          if (item.done) break;
+          if (!(item.value instanceof Uint8Array)) throw new QualityPromotionError("inputs_missing");
+          await append(item.value);
         }
+      } catch (error) {
+        if (!cancelled) { cancelled = true; await reader.cancel().catch(() => undefined); }
+        throw error;
       }
     }
     await handle.sync();

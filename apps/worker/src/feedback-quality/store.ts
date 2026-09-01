@@ -23,6 +23,8 @@ const RESERVATION_MARKER = ".reservation";
 const COMMIT_MARKER_BYTES = Buffer.from("clipclap-feedback-quality-committed-v1\n", "utf8");
 const BUNDLE_NAMES = ["case", "observation", "decision"] as const;
 const PRIVATE_FILE_NAMES = new Set(["case.json", "transcript.json", "source-or-evidence.mp4", "manifest.json", "results.jsonl", "decision.json", "report.md"]);
+export const MAX_READ_BUNDLE_FILE_BYTES = 256 * 1024 * 1024;
+export const MAX_READ_BUNDLE_TOTAL_BYTES = 512 * 1024 * 1024;
 
 export type BundleKind = (typeof BUNDLE_NAMES)[number];
 
@@ -82,7 +84,7 @@ export type CommitResult =
   | { status: "indeterminate" };
 
 export class QualityStoreError extends Error {
-  readonly code: "invalid_input" | "unsafe_path" | "integrity" | "missing";
+  readonly code: "invalid_input" | "unsafe_path" | "integrity" | "missing" | "too_large";
 
   constructor(code: QualityStoreError["code"]) {
     super(code);
@@ -287,7 +289,7 @@ function payloadMetadata(value: BundleFilePayload): PreparedFile {
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) throw safeError("invalid_input");
   const keys = Object.keys(value).sort();
-  if (keys.join(",") !== "path,sha256,size" || typeof value.path !== "string" || value.path.length === 0 || value.path.includes("\0") ||
+  if (keys.join(",") !== "path,sha256,size" || typeof value.path !== "string" || value.path.length === 0 || value.path.length > 4096 || value.path.includes("\0") ||
       !Number.isSafeInteger(value.size) || value.size < 0 || typeof value.sha256 !== "string" || !/^sha256:[0-9a-f]{64}$/.test(value.sha256)) throw safeError("invalid_input");
   return { file: value, size: value.size, sha256: value.sha256 };
 }
@@ -324,6 +326,30 @@ async function payloadMatches(path: string, expected: PreparedFile, allowLinked 
     return size === expected.size && `sha256:${digest.digest("hex")}` === expected.sha256;
   } catch (error) {
     if (codeOf(error) === "ENOENT") return false;
+    if (error instanceof QualityStoreError) throw error;
+    throw safeError("integrity");
+  } finally { await closeQuietly(handle); }
+}
+
+async function fileMetadata(path: string): Promise<{ size: number; sha256: `sha256:${string}` }> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const initial = await handle.stat();
+    if (!initial.isFile() || initial.nlink !== 1 || (initial.mode & 0o7777) !== FILE_MODE) throw safeError("unsafe_path");
+    const digest = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let size = 0;
+    for (;;) {
+      const read = await handle.read(buffer, 0, buffer.byteLength, null);
+      if (read.bytesRead === 0) break;
+      size += read.bytesRead;
+      digest.update(buffer.subarray(0, read.bytesRead));
+    }
+    const final = await handle.stat();
+    if (!final.isFile() || final.nlink !== 1 || (final.mode & 0o7777) !== FILE_MODE || final.size !== size) throw safeError("integrity");
+    return { size, sha256: `sha256:${digest.digest("hex")}` as `sha256:${string}` };
+  } catch (error) {
     if (error instanceof QualityStoreError) throw error;
     throw safeError("integrity");
   } finally { await closeQuietly(handle); }
@@ -392,6 +418,133 @@ async function readRegular(path: string): Promise<Uint8Array> {
     if (error instanceof QualityStoreError) throw error;
     throw safeError("unsafe_path");
   } finally { await closeQuietly(handle); }
+}
+
+async function readRegularCapped(path: string, cap: number): Promise<Uint8Array> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stats = await handle.stat();
+    if (!stats.isFile() || stats.nlink !== 1) throw safeError("unsafe_path");
+    if (stats.size > cap) throw safeError("too_large");
+    const bytes = Buffer.allocUnsafe(stats.size);
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const result = await handle.read(bytes, offset, bytes.byteLength - offset, null);
+      if (result.bytesRead === 0) break;
+      offset += result.bytesRead;
+    }
+    const final = await handle.stat();
+    if (!final.isFile() || final.nlink !== 1 || final.size > cap || final.size !== offset) throw safeError(final.size > cap ? "too_large" : "integrity");
+    return new Uint8Array(bytes.subarray(0, offset));
+  } catch (error) {
+    if (error instanceof QualityStoreError) throw error;
+    throw safeError("unsafe_path");
+  } finally { await closeQuietly(handle); }
+}
+
+export type OpenBundleFile = Readonly<{
+  size: number;
+  sha256: Promise<`sha256:${string}`>;
+  stream: ReadableStream<Uint8Array>;
+  close(): Promise<void>;
+}>;
+
+/** Open one committed corpus file without exposing its filesystem path. The
+ * descriptor remains pinned while the caller consumes the stream. */
+export async function openBundleFile(kind: BundleKind, id: string, name: string, root = DEFAULT_QUALITY_ROOT): Promise<OpenBundleFile> {
+  validateKind(kind);
+  validateBundleId(kind, id);
+  validateFileName(name);
+  if (name === COMMIT_MARKER || name === RESERVATION_MARKER) throw safeError("invalid_input");
+  let tree: Awaited<ReturnType<typeof openTree>> | undefined;
+  let directory: FileHandle | undefined;
+  let handle: FileHandle | undefined;
+  try {
+    tree = await openTree(validateRoot(root));
+    directory = await openDirectory(anchoredPath(tree.dirs[kind], id), true);
+    const reservation = await readReservation(directory);
+    const marker = await readRegular(anchoredPath(directory, COMMIT_MARKER));
+    if (!bytesEqual(marker, COMMIT_MARKER_BYTES)) throw safeError("integrity");
+    const manifest: Record<string, { size: number; sha256: `sha256:${string}` }> = Object.create(null);
+    for (const entry of await entries(directory)) {
+      if (entry.name === COMMIT_MARKER || entry.name === RESERVATION_MARKER) continue;
+      validateFileName(entry.name);
+      if (!entry.isFile() || entry.isSymbolicLink()) throw safeError("unsafe_path");
+      manifest[entry.name] = await fileMetadata(anchoredPath(directory, entry.name));
+    }
+    const orderedManifest: Record<string, { size: number; sha256: `sha256:${string}` }> = Object.create(null);
+    for (const key of Object.keys(manifest).sort()) orderedManifest[key] = manifest[key];
+    if (reservation.digest !== sha256(canonicalJson(orderedManifest)) || !Object.prototype.hasOwnProperty.call(manifest, name)) throw safeError("integrity");
+    handle = await open(anchoredPath(directory, name), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stats = await handle.stat();
+    if (!stats.isFile() || stats.nlink !== 1 || (stats.mode & 0o7777) !== FILE_MODE) throw safeError("unsafe_path");
+    const size = stats.size;
+    if (size !== manifest[name].size) throw safeError("integrity");
+    const expectedSha256 = manifest[name].sha256;
+    const pinned = handle;
+    handle = undefined;
+    let closed = false;
+    let complete = false;
+    let consumed = 0;
+    let finalized = false;
+    let resolveDigest!: (value: `sha256:${string}`) => void;
+    let rejectDigest!: (reason?: unknown) => void;
+    const digestPromise = new Promise<`sha256:${string}`>((resolveDigestValue, rejectDigestValue) => { resolveDigest = resolveDigestValue; rejectDigest = rejectDigestValue; });
+    const digest = createHash("sha256");
+    const finish = (success: boolean, reason?: unknown, value?: `sha256:${string}`): void => {
+      if (finalized) return;
+      finalized = true;
+      if (success) resolveDigest(value ?? (`sha256:${digest.digest("hex")}` as `sha256:${string}`));
+      else rejectDigest(reason ?? new Error("stream_closed"));
+    };
+    const close = async (): Promise<void> => {
+      if (closed) return;
+      closed = true;
+      if (!complete) finish(false);
+      await closeQuietly(pinned);
+    };
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (closed) { controller.close(); return; }
+        try {
+          const buffer = Buffer.allocUnsafe(64 * 1024);
+          const result = await pinned.read(buffer, 0, buffer.byteLength, null);
+          if (result.bytesRead === 0) {
+            const actual = `sha256:${digest.digest("hex")}` as `sha256:${string}`;
+            if (consumed !== size || actual !== expectedSha256) {
+              complete = true;
+              finish(false, safeError("integrity"));
+              controller.error(safeError("integrity"));
+              await close();
+              return;
+            }
+            complete = true;
+            finish(true, undefined, actual);
+            controller.close();
+            await close();
+            return;
+          }
+          if (consumed + result.bytesRead > size) throw safeError("integrity");
+          consumed += result.bytesRead;
+          digest.update(buffer.subarray(0, result.bytesRead));
+          controller.enqueue(new Uint8Array(buffer.subarray(0, result.bytesRead)));
+        } catch (error) {
+          finish(false);
+          await close();
+          controller.error(error);
+        }
+      },
+      async cancel() { await close(); },
+    });
+    return { size, sha256: digestPromise, stream, close };
+  } catch (error) {
+    await closeQuietly(handle);
+    throw error;
+  } finally {
+    await closeQuietly(directory);
+    if (tree) await closeTree(tree);
+  }
 }
 
 async function openTree(root: string): Promise<{ paths: QualityPaths; root: FileHandle; dirs: Record<BundleKind, FileHandle>; ledger: FileHandle }> {
@@ -598,8 +751,8 @@ async function verifyBundle(root: string, kind: BundleKind, id: string, expected
   finally { await closeQuietly(directory); if (tree) await closeTree(tree); }
 }
 
-async function publishBundleLocked(input: PublishBundleInput, root: string): Promise<CommitResult> {
-  const files = copyFiles(input);
+async function publishBundleLocked(input: PublishBundleInput, root: string, prepared = copyFiles(input)): Promise<CommitResult> {
+  const files = prepared;
   const paths = await ensureQualityTree(validateRoot(root));
   await assertLockSafe(paths.labelsLock);
   let tree: Awaited<ReturnType<typeof openTree>> | undefined;
@@ -698,10 +851,11 @@ async function publishBundleLocked(input: PublishBundleInput, root: string): Pro
 }
 
 export async function publishBundle(input: PublishBundleInput, root = DEFAULT_QUALITY_ROOT): Promise<CommitResult> {
+  const prepared = copyFiles(input);
   const paths = await ensureQualityTree(validateRoot(root));
   await assertLockSafe(paths.labelsLock);
   try {
-    return await withCorpusLock(paths.labelsLock, () => publishBundleLocked(input, paths.root));
+    return await withCorpusLock(paths.labelsLock, () => publishBundleLocked(input, paths.root, prepared));
   } catch (error) {
     if (error instanceof QualityStoreError) throw error;
     const code = codeOf(error);
@@ -935,11 +1089,12 @@ export async function publishCaseAndLabel(
   root = DEFAULT_QUALITY_ROOT,
   beforeLabel?: () => void | Promise<void>,
 ): Promise<CommitResult> {
+  const prepared = copyFiles(bundle);
   const paths = await ensureQualityTree(validateRoot(root));
   await assertLockSafe(paths.labelsLock);
   try {
     return await withCorpusLock(paths.labelsLock, async () => {
-      const published = await publishBundleLocked(bundle, paths.root);
+      const published = await publishBundleLocked(bundle, paths.root, prepared);
       if (published.status === "indeterminate") return published;
       const labelled = await appendLabelEventLocked(event, paths.root, { beforeCommit: beforeLabel });
       if (labelled.status === "indeterminate") return labelled;
@@ -965,11 +1120,16 @@ export async function readBundle(kind: BundleKind, id: string, root = DEFAULT_QU
     tree = await openTree(validateRoot(root));
     directory = await openDirectory(anchoredPath(tree.dirs[kind], id), true);
     const result = new Map<string, Uint8Array>();
+    let totalBytes = 0;
     for (const entry of await entries(directory)) {
       if (!entry.isFile() || entry.isSymbolicLink()) throw safeError("unsafe_path");
       if (entry.name === COMMIT_MARKER || entry.name === RESERVATION_MARKER) continue;
       validateFileName(entry.name);
-      result.set(entry.name, await readRegular(anchoredPath(directory, entry.name)));
+      const remaining = MAX_READ_BUNDLE_TOTAL_BYTES - totalBytes;
+      if (remaining < 0) throw safeError("too_large");
+      const bytes = await readRegularCapped(anchoredPath(directory, entry.name), Math.min(MAX_READ_BUNDLE_FILE_BYTES, remaining));
+      totalBytes += bytes.byteLength;
+      result.set(entry.name, bytes);
     }
     const reservation = await readReservation(directory);
     try {
