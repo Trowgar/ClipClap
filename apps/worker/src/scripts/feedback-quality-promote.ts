@@ -21,6 +21,16 @@ function safeLog(value: Record<string, unknown>): string {
   return JSON.stringify(result);
 }
 
+function safeErrorMessage(value: unknown): string | undefined {
+  try {
+    if ((typeof value !== "object" && typeof value !== "function") || value === null) return undefined;
+    const message = Reflect.get(value as object, "message");
+    return typeof message === "string" ? message : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function readPrivateFile(path: string, maxBytes: number): Promise<Uint8Array> {
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
@@ -74,58 +84,89 @@ type CommandDependencies = Readonly<{
   execute(request: PromotionDecision): Promise<PromotionResult>;
   retire(request: { action: "retire"; targetEventId: string; reason: string }): Promise<PromotionResult>;
   readDecision(path: string): Promise<unknown>;
+  disconnect(): Promise<void>;
   io?: CommandIo;
 }>;
+
+type CommandOutcome = Readonly<{ code: number; stream: "stdout" | "stderr"; line: string }>;
+
+async function finishOutcome(operation: "promote" | "retire", outcome: CommandOutcome, dependencies: CommandDependencies, io: CommandIo): Promise<number> {
+  let final = outcome;
+  try {
+    await dependencies.disconnect();
+  } catch {
+    if (outcome.code === 0) final = { code: 1, stream: "stderr", line: safeLog({ operation, reason: "disconnect_failed" }) };
+  }
+  io[final.stream](final.line);
+  return final.code;
+}
 
 export async function runFeedbackQualityPromote(argv: readonly string[], dependencies: CommandDependencies): Promise<number> {
   const io = dependencies.io ?? processIo;
   let command: ReturnType<typeof parse>;
-  try { command = parse(argv); } catch { io.stderr(safeLog({ operation: "promote", reason: "invalid_arguments" })); return 2; }
+  try { command = parse(argv); }
+  catch { return finishOutcome("promote", { code: 2, stream: "stderr", line: safeLog({ operation: "promote", reason: "invalid_arguments" }) }, dependencies, io); }
   try {
     const result = command.operation === "promote"
       ? await dependencies.execute(await dependencies.readDecision(command.decisionFile) as PromotionDecision)
       : await dependencies.retire({ action: "retire", targetEventId: command.targetEventId, reason: await readReasonFile(command.reasonFile) });
-    io[(result.status === "committed" || result.status === "noop" || result.status === "excluded") ? "stdout" : "stderr"](
-      safeLog({ operation: command.operation, eventId: result.eventId, ...(result.caseVersion ? { caseVersion: result.caseVersion } : {}), status: result.status }),
-    );
-    return result.status === "committed" || result.status === "noop" || result.status === "excluded" ? 0 : 1;
+    const success = result.status === "committed" || result.status === "noop" || result.status === "excluded";
+    return finishOutcome(command.operation, { code: success ? 0 : 1, stream: success ? "stdout" : "stderr", line: safeLog({ operation: command.operation, eventId: result.eventId, ...(result.caseVersion ? { caseVersion: result.caseVersion } : {}), status: result.status }) }, dependencies, io);
   } catch (error) {
-    io.stderr(safeLog({ operation: command.operation, reason: error instanceof Error && ["invalid_decision", "private_file_invalid", "decision_file_invalid", "reason_file_invalid"].includes(error.message) ? "invalid_arguments" : "promotion_failed" }));
-    return error instanceof Error && error.message === "invalid_arguments" ? 2 : 1;
+    const message = safeErrorMessage(error);
+    return finishOutcome(command.operation, { code: message === "invalid_arguments" ? 2 : 1, stream: "stderr", line: safeLog({ operation: command.operation, reason: message && ["invalid_decision", "private_file_invalid", "decision_file_invalid", "reason_file_invalid"].includes(message) ? "invalid_arguments" : "promotion_failed" }) }, dependencies, io);
   }
 }
 
-export async function composeFeedbackQualityPromoteDependencies(): Promise<CommandDependencies> {
-  const [{ prisma }, { downloadFile, getObjectSize }] = await Promise.all([import("@clipclap/shared/lib/prisma"), import("@clipclap/shared/lib/r2")]);
-  const repository = createPrismaQualityPromotionRepository(prisma);
+const defaultCompositionLoaders = {
+  loadR2: () => import("@clipclap/shared/lib/r2"),
+  ensureTree: ensurePrivateTree,
+};
+type CompositionLoaders = typeof defaultCompositionLoaders;
+type PromotionPrisma = Parameters<typeof createPrismaQualityPromotionRepository>[0];
+
+export async function composeFeedbackQualityPromoteDependenciesWithPrisma(prisma: PromotionPrisma, overrides: Partial<CompositionLoaders> = {}): Promise<CommandDependencies> {
+  const loaders = { ...defaultCompositionLoaders, ...overrides };
   const v1Root = resolve(__dirname, "../../.corpus/feedback-learning");
-  const v1Paths = await ensurePrivateTree(v1Root);
-  const common: PromotionDependencies = {
-    repository, root: DEFAULT_QUALITY_ROOT, downloadFile, getObjectSize,
-    // Promotion acquires this V1 lock before the V2 labels lock; do not call
-    // any V1 mutator while the V2 lock is held.
-    withV1AuthorityLock: <T>(operation: () => Promise<T>) => withCorpusLock(v1Paths.lockFile, operation),
-    resolveV1Approval: async (identity) => {
-      const state = foldLedger(parseLedger(Buffer.from(await readLedgerSnapshot(v1Paths))));
-      for (const event of state.activeDecisions) if (event.action === "approve" && event.feedbackId === identity.feedbackId && event.set === identity.destination) {
-        return { eventId: event.eventId, feedbackId: event.feedbackId, clipId: event.clipId, jobId: event.jobId, userId: event.userId, feedbackUpdatedAt: event.feedbackUpdatedAt, snapshotSha256: event.snapshotSha256, candidateVersion: event.candidateVersion, destination: event.set };
-      }
-      return null;
-    },
-    qualityDestinationGuard: async (feedbackId, destination) => {
-      const current = await qualityDestination(DEFAULT_QUALITY_ROOT, feedbackId);
-      if (current !== null && current !== destination) throw new Error("destination_locked");
-    },
-    qualityDestinationPreflight: async (feedbackId, destination) => {
-      const current = await qualityDestination(DEFAULT_QUALITY_ROOT, feedbackId);
-      if (current !== null && current !== destination) throw new Error("destination_locked");
-    },
-  };
-  return {
-    readDecision: readDecisionFile,
-    execute: (request) => promoteFeedbackCase(request, common),
-    retire: (request) => retireFeedbackCase(request, common),
-  };
+  try {
+    const [{ downloadFile, getObjectSize }, v1Paths] = await Promise.all([loaders.loadR2(), loaders.ensureTree(v1Root)]);
+    const repository = createPrismaQualityPromotionRepository(prisma);
+    const common: PromotionDependencies = {
+      repository, root: DEFAULT_QUALITY_ROOT, downloadFile, getObjectSize,
+      // Promotion acquires this V1 lock before the V2 labels lock; do not call
+      // any V1 mutator while the V2 lock is held.
+      withV1AuthorityLock: <T>(operation: () => Promise<T>) => withCorpusLock(v1Paths.lockFile, operation),
+      resolveV1Approval: async (identity) => {
+        const state = foldLedger(parseLedger(Buffer.from(await readLedgerSnapshot(v1Paths))));
+        for (const event of state.activeDecisions) if (event.action === "approve" && event.feedbackId === identity.feedbackId && event.set === identity.destination) {
+          return { eventId: event.eventId, feedbackId: event.feedbackId, clipId: event.clipId, jobId: event.jobId, userId: event.userId, feedbackUpdatedAt: event.feedbackUpdatedAt, snapshotSha256: event.snapshotSha256, candidateVersion: event.candidateVersion, destination: event.set };
+        }
+        return null;
+      },
+      qualityDestinationGuard: async (feedbackId, destination) => {
+        const current = await qualityDestination(DEFAULT_QUALITY_ROOT, feedbackId);
+        if (current !== null && current !== destination) throw new Error("destination_locked");
+      },
+      qualityDestinationPreflight: async (feedbackId, destination) => {
+        const current = await qualityDestination(DEFAULT_QUALITY_ROOT, feedbackId);
+        if (current !== null && current !== destination) throw new Error("destination_locked");
+      },
+    };
+    return {
+      readDecision: readDecisionFile,
+      execute: (request) => promoteFeedbackCase(request, common),
+      retire: (request) => retireFeedbackCase(request, common),
+      disconnect: () => prisma.$disconnect(),
+    };
+  } catch (error) {
+    try { await prisma.$disconnect(); } catch { /* preserve the composition failure */ }
+    throw error;
+  }
+}
+
+export async function composeFeedbackQualityPromoteDependencies(overrides: Partial<CompositionLoaders> = {}): Promise<CommandDependencies> {
+  const [{ prisma }] = await Promise.all([import("@clipclap/shared/lib/prisma")]);
+  return composeFeedbackQualityPromoteDependenciesWithPrisma(prisma, overrides);
 }
 
 export async function main(argv: readonly string[] = process.argv.slice(2), io: CommandIo = processIo): Promise<number> {

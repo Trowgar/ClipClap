@@ -119,6 +119,7 @@ function semanticAliases(source: ts.SourceFile): SemanticAliases {
     ts.forEachChild(node, visit);
   };
   visit(source);
+  propagateLocalAliases(source, aliases);
   return aliases;
 }
 
@@ -136,6 +137,7 @@ function propagatedSemanticAliases(graph: ModuleGraph): Map<string, SemanticAlia
     let changed = false;
     for (const [file, source] of graph) {
       const local = aliases.get(file)!;
+      if (propagateLocalAliases(source, local)) changed = true;
       for (const statement of source.statements) {
         if (!ts.isImportDeclaration(statement) || !statement.moduleSpecifier || !ts.isStringLiteral(statement.moduleSpecifier) || !statement.moduleSpecifier.text.startsWith(".")) continue;
         const targetFile = resolveRelative(file, statement.moduleSpecifier.text);
@@ -207,6 +209,42 @@ function receiverBase(node: ts.Expression): string | undefined {
   return undefined;
 }
 
+function propagateLocalAliases(source: ts.SourceFile, aliases: SemanticAliases): boolean {
+  const callables = new Map<string, readonly ts.ParameterDeclaration[]>();
+  const collect = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name) callables.set(node.name.text, node.parameters);
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) callables.set(node.name.text, node.initializer.parameters);
+    ts.forEachChild(node, collect);
+  };
+  collect(source);
+  let anyChanged = false;
+  for (let round = 0; round <= source.statements.length + callables.size; round += 1) {
+    let changed = false;
+    const addFrom = (target: string, expression: ts.Expression): void => {
+      const base = receiverBase(expression);
+      if (!base) return;
+      for (const kind of ["prisma", "r2", "process"] as const) if (aliases[kind].has(base) && !aliases[kind].has(target)) {
+        aliases[kind].add(target); changed = true; anyChanged = true;
+      }
+    };
+    const visit = (node: ts.Node): void => {
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) addFrom(node.name.text, node.initializer);
+      if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isIdentifier(node.left)) addFrom(node.left.text, node.right);
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+        const parameters = callables.get(node.expression.text);
+        if (parameters) for (let index = 0; index < Math.min(parameters.length, node.arguments.length); index += 1) {
+          const parameter = parameters[index];
+          if (ts.isIdentifier(parameter.name)) addFrom(parameter.name.text, node.arguments[index]);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+    if (!changed) break;
+  }
+  return anyChanged;
+}
+
 function callsNamed(source: ts.SourceFile, names: ReadonlySet<string>, receiverPattern?: RegExp, aliases?: ReadonlySet<string>): string[] {
   const found: string[] = [];
   const visit = (node: ts.Node): void => {
@@ -218,6 +256,11 @@ function callsNamed(source: ts.SourceFile, names: ReadonlySet<string>, receiverP
         if ((!receiverPattern || receiverPattern.test(receiver)) && (!aliases || aliased)) found.push(node.expression.name.text);
       }
       if (ts.isPropertyAccessExpression(node.expression) && aliases?.has(receiverBase(node.expression.expression) ?? "") && !names.has(node.expression.name.text)) found.push(node.expression.name.text);
+      if (ts.isElementAccessExpression(node.expression) && aliases?.has(receiverBase(node.expression.expression) ?? "")) {
+        const argument = node.expression.argumentExpression;
+        const name = argument && (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) ? argument.text : "<dynamic>";
+        found.push(name);
+      }
     }
     ts.forEachChild(node, visit);
   };
@@ -245,8 +288,10 @@ describe("feedback quality dependency boundaries", () => {
     expect(imports).toContain("@clipclap/shared/lib/r2");
     expect(imports.some((value) => value === "bullmq" || value === "node:child_process")).toBe(false);
     const mutators = new Set(["create", "createMany", "update", "updateMany", "upsert", "delete", "deleteMany"]);
-    expect(graphSemanticCalls(graph, mutators, "prisma")).toEqual([]);
+    expect([...new Set(graphSemanticCalls(graph, mutators, "prisma"))]).toEqual(["$disconnect"]);
     const sourceText = [...graph.values()].map((source) => source.getFullText()).join("\n");
+    const directPrismaCalls = [...sourceText.matchAll(/\bprisma\.([A-Za-z_$][\w$]*)\s*\(/g)].map((match) => match[1]);
+    expect([...new Set(directPrismaCalls)]).toEqual(["$disconnect"]);
     expect(sourceText).toContain("downloadFile");
     expect(sourceText).toContain("getObjectSize");
     expect(graphSemanticCalls(graph, new Set(["putObject", "deleteObject", "upload"]), "r2")).toEqual([]);
@@ -309,6 +354,19 @@ describe("feedback quality dependency boundaries", () => {
       expect(graphSemanticCalls(graph, new Set(["putObject"]), "r2")).toContain("write");
       expect(graphSemanticCalls(graph, new Set(["putObject"]), "r2")).toContain("renamed");
       expect(graphSemanticCalls(graph, new Set(["putObject"]), "r2")).toContain("starWrite");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("taints local Prisma aliases, bracket calls, and dynamic method access", async () => {
+    const root = await mkdtemp(resolve(SOURCE_ROOT, "../../../../tmp-feedback-quality-prisma-aliases-"));
+    try {
+      const entry = resolve(root, "entry.ts");
+      await writeFile(entry, 'import { prisma } from "@clipclap/shared/lib/prisma"; const p = prisma; p.create({}); prisma["update"]({}); const method = "delete"; prisma[method]({}); let assigned: typeof prisma; assigned = prisma; assigned.delete({}); function write(client: typeof prisma) { client.upsert({}); } write(prisma);\n');
+      const graph = await reachable(entry);
+      const calls = graphSemanticCalls(graph, new Set(["create", "update", "delete", "upsert"]), "prisma");
+      expect(calls).toEqual(expect.arrayContaining(["create", "update", "<dynamic>", "delete", "upsert"]));
     } finally {
       await rm(root, { recursive: true, force: true });
     }

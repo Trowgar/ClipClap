@@ -476,6 +476,13 @@ describe("feedback quality deployment", () => {
     }
   });
 
+  it("keeps the private feedback corpus out of every Docker build context", async () => {
+    const dockerignore = await readFile(join(__dirname, "../../../../.dockerignore"), "utf8");
+    const patterns = dockerignore.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    expect(patterns).toContain("apps/worker/.corpus");
+    expect(patterns).not.toContain("./apps/worker/.corpus");
+  });
+
   it("binds every allowlisted environment value, including an explicit missing null", () => {
     const config = { schemaVersion: 1, runnerVersion: 2, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), envAllowlist: ["ENGINE_FLAG", "MISSING_FLAG"], engine: {} };
     const first = effectiveConfigDigest(config, { ENGINE_FLAG: "on" });
