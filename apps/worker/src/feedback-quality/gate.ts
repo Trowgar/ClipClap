@@ -6,7 +6,7 @@ import {
   readBundle,
   type CommitResult,
 } from "./store";
-import { readObservationAttempts, type ObservationAttemptRecord } from "./observe";
+import { observationIdFor, parseObservationAttempts, readObservationAttempts, type ObservationAttemptRecord, type ObservationIdentityBody } from "./observe";
 import { compareObservations, validateQualityCaseResult, validateQualityObservation } from "./policy";
 import type {
   GateAggregate,
@@ -154,18 +154,18 @@ async function readStoredObservation(
   id: string,
   root: string,
   readBundleFn: typeof readBundle,
-  readAttemptsFn: typeof readObservationAttempts,
-): Promise<QualityObservation> {
+): Promise<{ observation: QualityObservation; attempts: readonly ObservationAttemptRecord[] }> {
   if (!/^observation:sha256:[0-9a-f]{64}$/.test(id)) throw new GateError("observation_invalid");
   let files: ReadonlyMap<string, Uint8Array>;
   let attempts: readonly ObservationAttemptRecord[];
   try {
     files = await readBundleFn("observation", id, root);
-    attempts = await readAttemptsFn(id, root);
   } catch {
     throw new GateError("observation_invalid");
   }
   if (files.size !== OBSERVATION_FILES.size || [...files.keys()].some((name) => !OBSERVATION_FILES.has(name))) throw new GateError("observation_invalid");
+  try { attempts = parseObservationAttempts(files.get("manifest.json")!, files.get("results.jsonl")!, id); }
+  catch { throw new GateError("observation_invalid"); }
   let manifest: unknown;
   try { manifest = JSON.parse(Buffer.from(files.get("manifest.json")!).toString("utf8")); } catch { throw new GateError("observation_invalid"); }
   if (!validManifest(manifest, id)) throw new GateError("observation_invalid");
@@ -181,9 +181,9 @@ async function readStoredObservation(
     const inconsistent = all.some((item) => !validResult(item.result, caseVersion) || item.result.status !== "ok" || item.result.disposition !== first.result.disposition || item.result.subsystem !== first.result.subsystem);
     results.push(inconsistent ? { ...first.result, status: "error" } : first.result);
   }
-  const body = { schemaVersion: 1 as const, mode: manifest.mode, set: manifest.set, commitSha: manifest.commitSha, configSha256: manifest.configSha256, corpusSha256: manifest.corpusSha256, runnerVersion: manifest.runnerVersion, cases: results } as QualityObservation;
-  if (contentId("observation", body) !== id) throw new GateError("observation_invalid");
-  return Object.freeze({ ...body, observationId: id, createdAt: manifest.createdAt as string });
+  const body = { schemaVersion: 1 as const, mode: manifest.mode, set: manifest.set, commitSha: manifest.commitSha, configSha256: manifest.configSha256, corpusSha256: manifest.corpusSha256, runnerVersion: manifest.runnerVersion, live: manifest.live, caseVersions, attemptCount: manifest.attemptCount, attemptsSha256: manifest.attemptsSha256, cases: results };
+  if (observationIdFor(body as ObservationIdentityBody) !== id) throw new GateError("observation_invalid");
+  return { observation: Object.freeze({ ...body, observationId: id, createdAt: manifest.createdAt as string }) as QualityObservation, attempts: Object.freeze(attempts) };
 }
 
 type LoadedObservation = Readonly<{
@@ -232,6 +232,7 @@ function envelope(loaded: LoadedObservation): LoadedObservation & { varianceCase
   const liveNames = ["live-1", "live-2", "live-3"];
   const expectedReplayNames = expectedNameList.some((name) => name.startsWith("live-")) ? liveNames : ["recorded"];
   if (!equalKeys(expectedReplayNames, expectedNameList)) throw new GateError("observation_invalid");
+  if (observation.live !== (expectedReplayNames.length === 3)) throw new GateError("observation_invalid");
   if (byCase.size !== observation.cases.length || [...byCase.keys()].some((key) => !observation.cases.some((item) => item.caseVersion === key))) throw new GateError("observation_invalid");
   const cases: QualityCaseResult[] = [];
   let varianceCaseCount = 0;
@@ -267,18 +268,24 @@ async function loadObservation(
   root: string,
   dependencies: GateDependencies,
 ): Promise<LoadedObservation> {
-  const reader = dependencies.readObservation ?? ((value: string, readRoot?: string) => readStoredObservation(value, readRoot ?? root, dependencies.readBundle ?? readBundle, dependencies.readAttempts ?? readObservationAttempts));
-  const observation = await reader(id, root);
+  let observation: QualityObservation;
+  let attempts: readonly ObservationAttemptRecord[];
+  if (dependencies.readObservation) {
+    observation = await dependencies.readObservation(id, root);
+    attempts = dependencies.readAttempts ? await dependencies.readAttempts(id, root) : syntheticAttempts(observation);
+  } else {
+    const stored = await readStoredObservation(id, root, dependencies.readBundle ?? readBundle);
+    observation = stored.observation;
+    attempts = stored.attempts;
+  }
+  if (observation.observationId !== id) throw new GateError("observation_invalid");
   /* Role separation precedes metric inspection: a holdout bundle supplied as
    * eval (or vice versa) is rejected without consulting its measurements. */
   if (validateQualityObservation(observation, false)) throw new GateError("observation_invalid");
   if (observation.set !== expectedSet) throw new GateError("set_mismatch");
-  if (validateQualityObservation(observation, true)) throw new GateError("observation_invalid");
-  const attempts = dependencies.readAttempts
-    ? await dependencies.readAttempts(id, root)
-    : dependencies.readObservation
-      ? syntheticAttempts(observation)
-      : await readObservationAttempts(id, root);
+  if (validateQualityObservation(observation, true, true)) throw new GateError("observation_invalid");
+  const { observationId: _observationId, createdAt: _createdAt, ...identityBody } = observation;
+  if (observationIdFor(identityBody as ObservationIdentityBody) !== id) throw new GateError("observation_invalid");
   return envelope({ observation, attempts });
 }
 
@@ -436,5 +443,3 @@ export async function decideGate(input: DecideGateInput, dependencies: GateDepen
   if (published.status !== "committed" && published.status !== "noop") throw new GateError("publish_failed");
   return decision;
 }
-
-export { readStoredObservation };

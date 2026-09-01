@@ -51,6 +51,10 @@ const OBSERVATION_KEYS = new Set([
   "runnerVersion",
   "createdAt",
   "cases",
+  "live",
+  "caseVersions",
+  "attemptCount",
+  "attemptsSha256",
   "metrics",
 ]);
 const CASE_KEYS = new Set(["schemaVersion", "caseVersion", "disposition", "subsystem", "status", "metrics"]);
@@ -207,7 +211,7 @@ function hasMetric(metrics: QualityMetrics, names: readonly MetricName[]): boole
   return names.some((name) => Object.prototype.hasOwnProperty.call(metrics, name));
 }
 
-function observationReason(value: unknown, validateMetrics: boolean): MachineReason | undefined {
+function observationReason(value: unknown, validateMetrics: boolean, requireSnapshot = false): MachineReason | undefined {
   if (!isObject(value) || !ownDataKeys(value, OBSERVATION_KEYS) || !ownDataFields(value, ["schemaVersion", "observationId", "mode", "set", "commitSha", "configSha256", "corpusSha256", "runnerVersion", "createdAt", "cases"])) return "invalid_schema";
   if (
     value.schemaVersion !== 1 ||
@@ -222,6 +226,14 @@ function observationReason(value: unknown, validateMetrics: boolean): MachineRea
     !validTimestamp(value.createdAt) ||
     !validCasesArray(value.cases)
   ) return "invalid_schema";
+  const hasSnapshotMetadata = hasOwn(value, "live") || hasOwn(value, "caseVersions") || hasOwn(value, "attemptCount") || hasOwn(value, "attemptsSha256");
+  if (requireSnapshot || hasSnapshotMetadata) {
+    const caseEntries = value.cases as Array<Record<string, unknown>>;
+    if (typeof value.live !== "boolean" || !validCasesArray(value.caseVersions) || value.caseVersions.some((item) => typeof item !== "string") ||
+      [...value.caseVersions].sort().join("\n") !== value.caseVersions.join("\n") || new Set(value.caseVersions).size !== value.caseVersions.length ||
+      !Number.isSafeInteger(value.attemptCount) || (value.attemptCount as number) <= 0 || !validSha256(value.attemptsSha256) ||
+      value.caseVersions.length !== value.cases.length || value.caseVersions.some((item, index) => item !== caseEntries[index]?.caseVersion)) return "invalid_schema";
+  }
   if (validateMetrics && hasOwn(value, "metrics") && !validMetrics(value.metrics)) return "invalid_metric";
   const versions = new Set<string>();
   for (const entry of value.cases) {
@@ -255,8 +267,8 @@ function observationReason(value: unknown, validateMetrics: boolean): MachineRea
 /** Validate the closed observation contract without applying corpus minima or
  * comparing it to another run. Gate readers use this for every independent
  * live attempt, not only the first result. */
-export function validateQualityObservation(value: unknown, validateMetrics = true): MachineReason | undefined {
-  return observationReason(value, validateMetrics);
+export function validateQualityObservation(value: unknown, validateMetrics = true, requireSnapshot = false): MachineReason | undefined {
+  return observationReason(value, validateMetrics, requireSnapshot);
 }
 
 /** Validate one case result with the same lane-specific evidence rules used by

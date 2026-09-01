@@ -90,6 +90,12 @@ export interface QualityObservation {
   runnerVersion: number;
   createdAt: string;
   cases: QualityCaseResult[];
+  /** Complete immutable attempt snapshot metadata. Legacy pure-policy
+   * fixtures may omit these; persisted gate observations must provide them. */
+  live?: boolean;
+  caseVersions?: string[];
+  attemptCount?: number;
+  attemptsSha256?: string;
   /** Optional runner summary; policy validates but never trusts it over case metrics. */
   metrics?: QualityMetrics;
 }

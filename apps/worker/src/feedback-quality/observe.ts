@@ -158,12 +158,29 @@ function assertResult(value: ObservationAdapterResult, qualityCase: Materialized
 }
 
 async function publishDefault(observation: QualityObservation, attempts: readonly ObservationAttemptRecord[], root: string): Promise<CommitResult> {
-  const results = attempts.map((item) => canonicalJson(item)).join("\n") + "\n";
+  const results = serializeObservationAttempts(attempts);
   const names = new Set(attempts.map((item) => item.attemptName));
   const live = names.size === 3 && LIVE_ATTEMPTS.every((name) => names.has(name));
   const caseVersions = [...new Set(observation.cases.map((item) => item.caseVersion))].sort();
   const manifest = { schemaVersion: 1, observationId: observation.observationId, set: observation.set, mode: observation.mode, live, commitSha: observation.commitSha, configSha256: observation.configSha256, corpusSha256: observation.corpusSha256, runnerVersion: observation.runnerVersion, createdAt: observation.createdAt, caseVersions, attemptCount: attempts.length, attemptsSha256: sha256(results) };
   return publishBundle({ kind: "observation", id: observation.observationId, files: { "manifest.json": Buffer.from(canonicalJson(manifest) + "\n"), "results.jsonl": Buffer.from(results) } }, root);
+}
+
+export function serializeObservationAttempts(attempts: readonly ObservationAttemptRecord[]): string {
+  return attempts.map((item) => canonicalJson(item)).join("\n") + "\n";
+}
+
+export type ObservationIdentityBody = Omit<QualityObservation, "observationId" | "createdAt"> & {
+  live: boolean;
+  caseVersions: string[];
+  attemptCount: number;
+  attemptsSha256: `sha256:${string}`;
+};
+
+/** Shared canonical identity helper. The complete attempts artifact is part
+ * of the digest, so changing any live-2/live-3 result changes the ID. */
+export function observationIdFor(body: ObservationIdentityBody): string {
+  return contentId("observation", body);
 }
 
 async function readObservationFile(id: string, name: string, root: string): Promise<string> {
@@ -186,20 +203,24 @@ async function readObservationFile(id: string, name: string, root: string): Prom
   } finally { await opened.close(); }
 }
 
-/** Typed reader for the complete immutable attempt artifact. Consumers must
- * use this API rather than `QualityObservation.cases`, which intentionally
- * contains only the first result for policy compatibility. */
-export async function readObservationAttempts(id: string, root = DEFAULT_QUALITY_ROOT): Promise<readonly ObservationAttemptRecord[]> {
-  let manifest: Record<string, unknown>;
-  let results: string;
-  try {
-    manifest = JSON.parse(await readObservationFile(id, "manifest.json", root)) as Record<string, unknown>;
-    results = await readObservationFile(id, "results.jsonl", root);
-  } catch (error) {
-    if (error instanceof ObservationError) throw error;
-    throw new ObservationError("invalid_input");
-  }
-  if (manifest.schemaVersion !== 1 || manifest.observationId !== id || (manifest.set !== "eval" && manifest.set !== "holdout") || (manifest.mode !== "baseline" && manifest.mode !== "candidate") || typeof manifest.live !== "boolean" || !Array.isArray(manifest.caseVersions) || manifest.caseVersions.some((item) => typeof item !== "string") || [...manifest.caseVersions].sort().join("\n") !== manifest.caseVersions.join("\n") || new Set(manifest.caseVersions).size !== manifest.caseVersions.length || !Number.isSafeInteger(manifest.attemptCount) || !validHash(manifest.attemptsSha256) || manifest.attemptsSha256 !== sha256(results)) throw new ObservationError("invalid_input");
+const OBSERVATION_MANIFEST_KEYS = new Set(["schemaVersion", "observationId", "set", "mode", "live", "commitSha", "configSha256", "corpusSha256", "runnerVersion", "createdAt", "caseVersions", "attemptCount", "attemptsSha256"]);
+
+function parseManifestBytes(bytes: Uint8Array | string, expectedId: string): Record<string, unknown> {
+  let value: unknown;
+  try { value = JSON.parse(typeof bytes === "string" ? bytes : Buffer.from(bytes).toString("utf8")); } catch { throw new ObservationError("invalid_input"); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ObservationError("invalid_input");
+  const manifest = value as Record<string, unknown>;
+  const keys = Reflect.ownKeys(manifest);
+  if (keys.some((key) => typeof key !== "string" || !OBSERVATION_MANIFEST_KEYS.has(key))) throw new ObservationError("invalid_input");
+  if (manifest.schemaVersion !== 1 || manifest.observationId !== expectedId || (manifest.set !== "eval" && manifest.set !== "holdout") || (manifest.mode !== "baseline" && manifest.mode !== "candidate") || typeof manifest.live !== "boolean" || !Array.isArray(manifest.caseVersions) || manifest.caseVersions.some((item) => typeof item !== "string") || [...manifest.caseVersions].sort().join("\n") !== manifest.caseVersions.join("\n") || new Set(manifest.caseVersions).size !== manifest.caseVersions.length || !Number.isSafeInteger(manifest.attemptCount) || !validHash(manifest.attemptsSha256) || manifest.attemptsSha256 !== undefined && typeof manifest.attemptsSha256 !== "string") throw new ObservationError("invalid_input");
+  return manifest;
+}
+
+/** Pure parser for one immutable observation snapshot. */
+export function parseObservationAttempts(manifestBytes: Uint8Array | string, resultsBytes: Uint8Array | string, expectedId: string): readonly ObservationAttemptRecord[] {
+  const manifest = parseManifestBytes(manifestBytes, expectedId);
+  const results = typeof resultsBytes === "string" ? resultsBytes : Buffer.from(resultsBytes).toString("utf8");
+  if (!validHash(manifest.attemptsSha256) || manifest.attemptsSha256 !== sha256(results)) throw new ObservationError("invalid_input");
   const lines = results.endsWith("\n") ? results.slice(0, -1).split("\n") : [];
   if (lines.length !== manifest.attemptCount || lines.length === 0) throw new ObservationError("invalid_input");
   const attempts: ObservationAttemptRecord[] = [];
@@ -227,6 +248,21 @@ export async function readObservationAttempts(id: string, root = DEFAULT_QUALITY
     if (values.length !== expected.length || values.some((value, index) => value !== expected[index])) throw new ObservationError("invalid_input");
   }
   return Object.freeze(attempts);
+}
+
+/** Typed reader for the complete immutable attempt artifact. Consumers must
+ * use this API rather than `QualityObservation.cases`, which intentionally
+ * contains only the first result for policy compatibility. */
+export async function readObservationAttempts(id: string, root = DEFAULT_QUALITY_ROOT): Promise<readonly ObservationAttemptRecord[]> {
+  let files: ReadonlyMap<string, Uint8Array>;
+  try {
+    files = await readBundle("observation", id, root);
+  } catch (error) {
+    if (error instanceof ObservationError) throw error;
+    throw new ObservationError("invalid_input");
+  }
+  if (!files.has("manifest.json") || !files.has("results.jsonl")) throw new ObservationError("invalid_input");
+  return parseObservationAttempts(files.get("manifest.json")!, files.get("results.jsonl")!, id);
 }
 
 function exactAttemptWrapper(value: unknown): value is Record<string, unknown> {
@@ -266,8 +302,11 @@ export async function observeQualitySet(options: ObserveQualityOptions): Promise
     }
     results.push(first!);
   }
-  const body = { schemaVersion: 1 as const, mode: options.mode, set: options.set, commitSha: options.commitSha, configSha256: sha256(canonicalJson(options.config)), corpusSha256: options.corpusSha256, runnerVersion: options.runnerVersion, cases: results };
-  const observation = freeze({ ...body, observationId: contentId("observation", body), createdAt: new Date().toISOString() } as QualityObservation);
+  const orderedResults = [...results].sort((left, right) => left.caseVersion.localeCompare(right.caseVersion));
+  const caseVersions = orderedResults.map((item) => item.caseVersion);
+  const resultsBytes = serializeObservationAttempts(attempts);
+  const body: ObservationIdentityBody = { schemaVersion: 1 as const, mode: options.mode, set: options.set, commitSha: options.commitSha, configSha256: sha256(canonicalJson(options.config)), corpusSha256: options.corpusSha256, runnerVersion: options.runnerVersion, live: options.live === true, caseVersions, attemptCount: attempts.length, attemptsSha256: sha256(resultsBytes), cases: orderedResults };
+  const observation = freeze({ ...body, observationId: observationIdFor(body), createdAt: new Date().toISOString() } as QualityObservation);
   const publish = options.dependencies.publish ?? ((value, records) => publishDefault(value, records, options.root ?? DEFAULT_QUALITY_ROOT));
   const outcome = await publish(observation, attempts);
   if (outcome.status === "indeterminate") throw new ObservationError("publish_failed");

@@ -6,6 +6,7 @@ import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import { contentId, publishBundle, readBundle } from "../feedback-quality/store";
 import { decideGate, type GateDependencies, type DecideGateInput } from "../feedback-quality/gate";
 import type { ObservationAttemptRecord } from "../feedback-quality/observe";
+import { observationIdFor, serializeObservationAttempts } from "../feedback-quality/observe";
 import type { GatePolicy, QualityCaseResult, QualityObservation } from "../feedback-quality/types";
 
 const hash = (seed: string) => `sha256:${seed.repeat(64).slice(0, 64)}` as `sha256:${string}`;
@@ -18,8 +19,20 @@ function observation(set: "eval" | "holdout", mode: "baseline" | "candidate", po
   const cases: QualityCaseResult[] = [];
   for (let index = 0; index < positiveCount; index += 1) cases.push({ schemaVersion: 1, caseVersion: `case:${hash(`p${index}`)}`, disposition: "positive", subsystem: "selection", status: "ok", metrics: metric(true) });
   for (let index = 0; index < negativeCount; index += 1) cases.push({ schemaVersion: 1, caseVersion: `case:${hash(`n${index}`)}`, disposition: "confirmed_negative", subsystem: "boundary", status: "ok", metrics: metric(false) });
-  const body = { schemaVersion: 1 as const, mode, set, commitSha: "a".repeat(40), configSha256: hash("c"), corpusSha256: hash("d"), runnerVersion: 1, cases };
-  return { ...body, observationId: contentId("observation", body), createdAt };
+  return snapshot({ schemaVersion: 1 as const, mode, set, commitSha: "a".repeat(40), configSha256: hash("c"), corpusSha256: hash("d"), runnerVersion: 1, cases }, createdAt);
+}
+
+function snapshot(base: Omit<QualityObservation, "observationId" | "createdAt" | "live" | "caseVersions" | "attemptCount" | "attemptsSha256">, createdAt: string, live = false): QualityObservation {
+  const cases = [...base.cases].sort((left, right) => left.caseVersion.localeCompare(right.caseVersion));
+  const names = live ? ["live-1", "live-2", "live-3"] : ["recorded"];
+  const attempts = cases.flatMap((result) => names.map((attemptName) => ({ caseVersion: result.caseVersion, attemptName, result })));
+  const body = { ...base, live, caseVersions: cases.map((result) => result.caseVersion), attemptCount: attempts.length, attemptsSha256: sha256(serializeObservationAttempts(attempts)) };
+  return { ...body, observationId: observationIdFor(body), createdAt };
+}
+
+function rebuild(source: QualityObservation, mode: "baseline" | "candidate", cases = source.cases, createdAt = source.createdAt, live = false): QualityObservation {
+  const { observationId: _id, createdAt: _createdAt, live: _live, caseVersions: _versions, attemptCount: _count, attemptsSha256: _attempts, ...base } = source;
+  return snapshot({ ...base, mode, cases }, createdAt, live);
 }
 
 const input = (overrides: Partial<DecideGateInput> = {}): DecideGateInput => ({
@@ -43,9 +56,9 @@ describe("feedback quality gate", () => {
 
   it("compares eval before it reads holdout and publishes a canonical passing decision", async () => {
     const baseEval = observation("eval", "baseline", 4, 6);
-    const candidateEval = { ...baseEval, mode: "candidate" as const, observationId: "observation:" + hash("5") };
+    const candidateEval = rebuild(baseEval, "candidate");
     const baseHoldout = observation("holdout", "baseline", 1, 2);
-    const candidateHoldout = { ...baseHoldout, mode: "candidate" as const, observationId: "observation:" + hash("6") };
+    const candidateHoldout = rebuild(baseHoldout, "candidate");
     const ids = input({ baselineEvalObservationId: baseEval.observationId, candidateEvalObservationId: candidateEval.observationId, baselineHoldoutObservationId: baseHoldout.observationId, candidateHoldoutObservationId: candidateHoldout.observationId });
     const events: string[] = [];
     const dependencies = deps(Object.fromEntries([[baseEval.observationId, baseEval], [candidateEval.observationId, candidateEval], [baseHoldout.observationId, baseHoldout], [candidateHoldout.observationId, candidateHoldout]]), events);
@@ -60,7 +73,7 @@ describe("feedback quality gate", () => {
 
   it("does not read holdout after an eval regression", async () => {
     const base = observation("eval", "baseline", 4, 6);
-    const candidate = { ...base, mode: "candidate" as const, observationId: "observation:" + hash("7"), cases: base.cases.slice(1) };
+    const candidate = rebuild(base, "candidate", base.cases.slice(1));
     const ids = input({ baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId });
     const events: string[] = [];
     const dependencies = deps({ [base.observationId]: base, [candidate.observationId]: candidate }, events);
@@ -72,7 +85,7 @@ describe("feedback quality gate", () => {
 
   it("rejects holdout observations supplied in the eval role before metrics", async () => {
     const base = observation("holdout", "baseline", 4, 6);
-    const candidate = { ...base, mode: "candidate" as const, observationId: "observation:" + hash("7") };
+    const candidate = rebuild(base, "candidate");
     const events: string[] = [];
     const dependencies = deps({ [base.observationId]: base, [candidate.observationId]: candidate }, events);
     const decision = await decideGate(input({ baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId }), dependencies);
@@ -83,9 +96,9 @@ describe("feedback quality gate", () => {
 
   it("rejects eval observations supplied in the holdout role", async () => {
     const baseEval = observation("eval", "baseline", 4, 6);
-    const candidateEval = { ...baseEval, mode: "candidate" as const, observationId: "observation:" + hash("7") };
+    const candidateEval = rebuild(baseEval, "candidate");
     const baseHoldout = observation("eval", "baseline", 1, 2);
-    const candidateHoldout = { ...baseHoldout, mode: "candidate" as const, observationId: "observation:" + hash("8") };
+    const candidateHoldout = rebuild(baseHoldout, "candidate");
     const events: string[] = [];
     const map = { [baseEval.observationId]: baseEval, [candidateEval.observationId]: candidateEval, [baseHoldout.observationId]: baseHoldout, [candidateHoldout.observationId]: candidateHoldout };
     const decision = await decideGate(input({ baselineEvalObservationId: baseEval.observationId, candidateEvalObservationId: candidateEval.observationId, baselineHoldoutObservationId: baseHoldout.observationId, candidateHoldoutObservationId: candidateHoldout.observationId }), deps(map, events));
@@ -96,7 +109,7 @@ describe("feedback quality gate", () => {
 
   it("fails closed when a non-primary live attempt is malformed", async () => {
     const base = observation("eval", "baseline", 4, 6);
-    const candidate = { ...base, mode: "candidate" as const, observationId: "observation:" + hash("7") };
+    const candidate = rebuild(base, "candidate", base.cases, base.createdAt, true);
     const events: string[] = [];
     const attempts = (item: QualityObservation): readonly ObservationAttemptRecord[] => item === candidate
       ? item.cases.map((result) => ["live-1", "live-2", "live-3"].map((attemptName) => ({ caseVersion: result.caseVersion, attemptName, result: attemptName === "live-2" ? { ...result, metrics: { ...result.metrics, score: Number.NaN } } : result }))).flat()
@@ -110,9 +123,9 @@ describe("feedback quality gate", () => {
 
   it("requires robust improvement from at least two of three live attempts", async () => {
     const base = observation("eval", "baseline", 4, 6);
-    const candidate = { ...base, mode: "candidate" as const, observationId: "observation:" + hash("7"), cases: base.cases.map((item) => item.disposition === "positive" ? { ...item, metrics: { ...item.metrics, approvedWindowOverlap: 2 } } : item) };
+    const candidate = rebuild(base, "candidate", base.cases.map((item) => item.disposition === "positive" ? { ...item, metrics: { ...item.metrics, approvedWindowOverlap: 2 } } : item), base.createdAt, true);
     const holdout = observation("holdout", "baseline", 1, 2);
-    const holdoutCandidate = { ...holdout, mode: "candidate" as const, observationId: "observation:" + hash("8") };
+    const holdoutCandidate = rebuild(holdout, "candidate");
     const attemptRecords = (item: QualityObservation, live: boolean): readonly ObservationAttemptRecord[] => item.cases.flatMap((result) => (live ? ["live-1", "live-2", "live-3"] : ["recorded"]).map((attemptName) => ({
       caseVersion: result.caseVersion, attemptName,
       result: result.disposition === "positive" && attemptName === "live-3" ? { ...result, metrics: { ...result.metrics, approvedWindowOverlap: 1 } } : result,
@@ -126,9 +139,9 @@ describe("feedback quality gate", () => {
 
   it("expires no later than the oldest observation plus 24 hours", async () => {
     const base = observation("eval", "baseline", 4, 6, "2026-09-01T00:00:00.000Z");
-    const candidate = { ...base, mode: "candidate" as const, observationId: "observation:" + hash("7") };
+    const candidate = rebuild(base, "candidate");
     const holdout = observation("holdout", "baseline", 1, 2, "2026-09-01T06:00:00.000Z");
-    const holdoutCandidate = { ...holdout, mode: "candidate" as const, observationId: "observation:" + hash("8") };
+    const holdoutCandidate = rebuild(holdout, "candidate");
     const map = { [base.observationId]: base, [candidate.observationId]: candidate, [holdout.observationId]: holdout, [holdoutCandidate.observationId]: holdoutCandidate };
     const dependencies = { ...deps(map), now: () => new Date("2026-09-01T12:00:00.000Z") };
     const decision = await decideGate(input({ baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId, baselineHoldoutObservationId: holdout.observationId, candidateHoldoutObservationId: holdoutCandidate.observationId }), dependencies);
@@ -139,9 +152,9 @@ describe("feedback quality gate", () => {
     ["missing observation", async () => decideGate(input(), deps({})), "invalid_schema"],
     ["expired decision", async () => {
       const base = observation("eval", "baseline", 4, 6, "2026-08-30T00:00:00.000Z");
-      const candidate = { ...base, mode: "candidate" as const, observationId: "observation:" + hash("8") };
+      const candidate = rebuild(base, "candidate", base.cases, "2026-08-30T00:00:00.000Z");
       const holdout = observation("holdout", "baseline", 1, 2, "2026-08-30T00:00:00.000Z");
-      const holdoutCandidate = { ...holdout, mode: "candidate" as const, observationId: "observation:" + hash("9") };
+      const holdoutCandidate = rebuild(holdout, "candidate", holdout.cases, "2026-08-30T00:00:00.000Z");
       return decideGate(input({ baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId, baselineHoldoutObservationId: holdout.observationId, candidateHoldoutObservationId: holdoutCandidate.observationId }), deps({ [base.observationId]: base, [candidate.observationId]: candidate, [holdout.observationId]: holdout, [holdoutCandidate.observationId]: holdoutCandidate }));
     }, "stale_case"],
   ])("fails closed for %s", async (_name, run, reason) => expect((await run()).reasons).toContain(reason));
@@ -149,9 +162,9 @@ describe("feedback quality gate", () => {
   it("redacts private values from decision report and uses atomic decision bundle", async () => {
     const root = await mkdtemp(join(tmpdir(), "quality-gate-")).then((value) => { roots.push(value); return value; });
     const base = observation("eval", "baseline", 4, 6);
-    const candidate = { ...base, mode: "candidate" as const, observationId: "observation:" + hash("a") };
+    const candidate = rebuild(base, "candidate");
     const holdout = observation("holdout", "baseline", 1, 2);
-    const holdoutCandidate = { ...holdout, mode: "candidate" as const, observationId: "observation:" + hash("b") };
+    const holdoutCandidate = rebuild(holdout, "candidate");
     const { publishDecision: _mockPublish, ...readerDependencies } = deps({ [base.observationId]: base, [candidate.observationId]: candidate, [holdout.observationId]: holdout, [holdoutCandidate.observationId]: holdoutCandidate });
     const decision = await decideGate(input({ baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId, baselineHoldoutObservationId: holdout.observationId, candidateHoldoutObservationId: holdoutCandidate.observationId }), { ...readerDependencies, root });
     const bundle = await readBundle("decision", decision.decisionId, root);
@@ -162,5 +175,41 @@ describe("feedback quality gate", () => {
     expect(report).not.toContain("case:");
     expect((await stat(join(root, "decisions", decision.decisionId, "decision.json"))).mode & 0o777).toBe(0o600);
     expect(JSON.parse(Buffer.from(bundle.get("decision.json")!).toString("utf8")).decisionId).toBe(decision.decisionId);
+  });
+
+  it("rejects an injected observation whose requested ID does not match its canonical body", async () => {
+    const base = observation("eval", "baseline", 4, 6);
+    const candidate = rebuild(base, "candidate");
+    const wrongIdCandidate = { ...candidate, observationId: "observation:" + hash("9") };
+    const dependencies: GateDependencies = {
+      readObservation: vi.fn(async (id: string) => id === base.observationId ? base : wrongIdCandidate),
+      now: () => new Date("2026-09-01T12:00:00.000Z"),
+      publishDecision: vi.fn(async () => ({ status: "committed" as const })),
+    };
+    const decision = await decideGate(input({ baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId }), dependencies);
+    expect(decision.verdict).toBe("fail");
+    expect(decision.reasons).toEqual(["invalid_schema"]);
+  });
+
+  it("reads each immutable observation bundle once, so a swapped second snapshot cannot be consumed", async () => {
+    const baseEval = observation("eval", "baseline", 4, 6);
+    const candidateEval = rebuild(baseEval, "candidate");
+    const baseHoldout = observation("holdout", "baseline", 1, 2);
+    const candidateHoldout = rebuild(baseHoldout, "candidate");
+    const bundle = (item: QualityObservation): ReadonlyMap<string, Uint8Array> => {
+      const attempts = item.cases.map((result) => ({ caseVersion: result.caseVersion, attemptName: "recorded", result }));
+      const results = serializeObservationAttempts(attempts);
+      const manifest = { schemaVersion: 1, observationId: item.observationId, set: item.set, mode: item.mode, live: false, commitSha: item.commitSha, configSha256: item.configSha256, corpusSha256: item.corpusSha256, runnerVersion: item.runnerVersion, createdAt: item.createdAt, caseVersions: item.caseVersions, attemptCount: item.attemptCount, attemptsSha256: item.attemptsSha256 };
+      return new Map([["manifest.json", Buffer.from(canonicalJson(manifest))], ["results.jsonl", Buffer.from(results)]]);
+    };
+    const map = { [baseEval.observationId]: bundle(baseEval), [candidateEval.observationId]: bundle(candidateEval), [baseHoldout.observationId]: bundle(baseHoldout), [candidateHoldout.observationId]: bundle(candidateHoldout) };
+    const readBundle = vi.fn(async (_kind: "case" | "observation" | "decision", id: string, _root?: string) => {
+      const value = map[id as keyof typeof map];
+      if (!value) throw new Error("missing");
+      return value;
+    });
+    const decision = await decideGate(input({ baselineEvalObservationId: baseEval.observationId, candidateEvalObservationId: candidateEval.observationId, baselineHoldoutObservationId: baseHoldout.observationId, candidateHoldoutObservationId: candidateHoldout.observationId }), { readBundle, now: () => new Date("2026-09-01T12:00:00.000Z"), publishDecision: vi.fn(async () => ({ status: "committed" as const })) });
+    expect(decision.verdict).toBe("pass");
+    expect(readBundle).toHaveBeenCalledTimes(4);
   });
 });
