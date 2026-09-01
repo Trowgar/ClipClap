@@ -150,7 +150,7 @@ describe("feedback quality observation runner", () => {
     const root = await mkdtemp(join(tmpdir(), "quality-observe-corpus-"));
     const { caseVersion: _ignored, ...body } = sampleCase();
     const id = contentId("case", body);
-    await publishBundle({ kind: "case", id, files: { "case.json": Buffer.from(JSON.stringify({ ...body, caseVersion: id }) + "\n"), "source-or-evidence.mp4": Buffer.from("video") } }, root);
+    await publishBundle({ kind: "case", id, files: { "case.json": Buffer.from(JSON.stringify({ ...body, caseVersion: id }) + "\n"), "evidence.mp4": Buffer.from("video") } }, root);
     await appendLabelEvent({ schemaVersion: 1, eventId: "event-1", action: "label", caseVersion: id, set: "eval", disposition: "positive" }, root);
     const loaded = await loadPrivateCases("eval", root);
     expect(loaded.cases.map((item) => item.caseVersion)).toEqual([id]);
@@ -166,6 +166,15 @@ describe("feedback quality observation runner", () => {
     expect((loaded.cases[0] as { loadStatus?: string }).loadStatus).toBe("missing");
   });
 
+  it("marks legacy overloaded source-or-evidence bundles stale instead of guessing its role", async () => {
+    const root = await mkdtemp(join(tmpdir(), "quality-observe-legacy-artifact-"));
+    const { caseVersion: _ignored, ...body } = sampleCase();
+    const id = contentId("case", body);
+    await publishBundle({ kind: "case", id, files: { "case.json": Buffer.from(JSON.stringify({ ...body, caseVersion: id }) + "\n"), "source-or-evidence.mp4": Buffer.from("legacy") } }, root);
+    await appendLabelEvent({ schemaVersion: 1, eventId: "event-legacy", action: "label", caseVersion: id, set: "eval", disposition: "positive" }, root);
+    expect((await loadPrivateCases("eval", root)).cases[0]).toMatchObject({ caseVersion: id, loadStatus: "stale" });
+  });
+
   it("marks a content-tampered case stale even when its directory name is unchanged", async () => {
     const root = await mkdtemp(join(tmpdir(), "quality-observe-tampered-"));
     const { caseVersion: _ignored, ...body } = sampleCase();
@@ -179,7 +188,7 @@ describe("feedback quality observation runner", () => {
     const root = await mkdtemp(join(tmpdir(), "quality-observe-cli-"));
     const { caseVersion: _ignored, ...body } = sampleCase();
     const id = contentId("case", body);
-    await publishBundle({ kind: "case", id, files: { "case.json": Buffer.from(JSON.stringify({ ...body, caseVersion: id }) + "\n"), "source-or-evidence.mp4": Buffer.from("video") } }, root);
+    await publishBundle({ kind: "case", id, files: { "case.json": Buffer.from(JSON.stringify({ ...body, caseVersion: id }) + "\n"), "evidence.mp4": Buffer.from("video") } }, root);
     await appendLabelEvent({ schemaVersion: 1, eventId: "event-cli", action: "label", caseVersion: id, set: "eval", disposition: "positive" }, root);
     const configPath = join(root, "config.json");
     await writeFile(configPath, JSON.stringify({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), envAllowlist: [], engine: {} }), { mode: 0o600 });

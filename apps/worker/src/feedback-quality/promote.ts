@@ -424,7 +424,12 @@ export async function promoteFeedbackCase(rawDecision: PromotionDecision, depend
       const materialized: MaterializedCase = { ...caseBody, caseVersion };
       const label = { schemaVersion: 1, eventId: value.eventId, action: "label", occurredAt: nowIso(dependencies), feedbackId: value.feedbackId, feedbackUpdatedAt: value.feedbackUpdatedAt, snapshotSha256: value.snapshotSha256, candidateVersion: value.candidateVersion, caseVersion, set: value.set, disposition: value.disposition, verdict: value.verdict, subsystem: value.subsystem, confidence: value.confidence, expected: value.expected };
       const publish = dependencies.publishCaseAndLabel ?? ((input, root, beforeLabel) => publishCaseAndLabel({ kind: "case", id: caseVersion, files: input.files }, input.label, root, beforeLabel));
-      const files: Record<string, BundleFilePayload> = { "case.json": Buffer.from(`${canonicalJson(materialized)}\n`), "source-or-evidence.mp4": source ?? evidence };
+      // Evidence is the immutable delivered clip used as replay ground truth;
+      // source is the exact input consumed by the production render. They are
+      // intentionally separate even when an upstream system happened to use
+      // the same bytes for both.
+      const files: Record<string, BundleFilePayload> = { "case.json": Buffer.from(`${canonicalJson(materialized)}\n`), "evidence.mp4": evidence };
+      if (source) files["source.mp4"] = source;
       if (transcript) files["transcript.json"] = new Uint8Array(transcript);
       const result = await publish({ files, label }, root, () => destinationGuard(value.feedbackId, value.set));
       if (result.status === "indeterminate") throw new QualityPromotionError("publication_failed");

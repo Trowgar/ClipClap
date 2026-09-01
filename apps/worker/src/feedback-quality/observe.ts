@@ -67,6 +67,17 @@ function parseCase(value: unknown, expectedId: string): MaterializedCase {
   return item as unknown as MaterializedCase;
 }
 
+function caseArtifactsValid(bundle: ReadonlyMap<string, Uint8Array>, qualityCase: MaterializedCase): boolean {
+  // The legacy overloaded artifact is deliberately never interpreted: its
+  // role cannot be inferred safely after publication.
+  if (bundle.has("source-or-evidence.mp4") || !bundle.has("evidence.mp4")) return false;
+  const sourceHash = qualityCase.inputs?.sourceSha256;
+  if (sourceHash !== null && !validHash(sourceHash)) return false;
+  if (sourceHash === null && bundle.has("source.mp4")) return false;
+  if (sourceHash !== null && !bundle.has("source.mp4")) return false;
+  return true;
+}
+
 /** Read the active label projection and then verify every selected case's
  * content-addressed bundle. A missing/stale label never becomes a skipped case. */
 export async function loadPrivateCases(set: "eval" | "holdout", root = DEFAULT_QUALITY_ROOT): Promise<LoadedPrivateCases> {
@@ -91,6 +102,7 @@ export async function loadPrivateCases(set: "eval" | "holdout", root = DEFAULT_Q
       parsed = JSON.parse(Buffer.from(bytes).toString("utf8"));
       const item = parseCase(parsed, id);
       if (item.set !== set) throw new ObservationError("set");
+      if (!caseArtifactsValid(bundle, item)) throw new ObservationError("invalid_input");
       cases.push(item);
     } catch (error) {
       if (error instanceof ObservationError && error.code === "set") throw error;

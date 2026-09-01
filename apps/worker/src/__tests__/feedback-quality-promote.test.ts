@@ -81,11 +81,26 @@ describe("quality feedback promotion", () => {
     expect(dependencies.downloadFile).toHaveBeenCalledWith("evidence/clip.mp4", { method: "GET" });
     expect(dependencies.publishCaseAndLabel).toHaveBeenCalledWith(expect.objectContaining({
       label: expect.objectContaining({ disposition: "positive", verdict: "AS_IS" }),
-      files: expect.objectContaining({ "case.json": expect.any(Uint8Array), "transcript.json": expect.any(Uint8Array), "source-or-evidence.mp4": expect.objectContaining({ path: expect.any(String), size: 3, sha256: expect.stringMatching(/^sha256:/) }) }),
+      files: expect.objectContaining({ "case.json": expect.any(Uint8Array), "transcript.json": expect.any(Uint8Array), "evidence.mp4": expect.objectContaining({ path: expect.any(String), size: 3, sha256: expect.stringMatching(/^sha256:/) }) }),
     }), "/tmp/quality", expect.any(Function));
     const published = (dependencies.publishCaseAndLabel as ReturnType<typeof vi.fn>).mock.calls[0][0] as { files: Record<string, Uint8Array> };
     const materialized = JSON.parse(Buffer.from(published.files["case.json"]).toString("utf8")) as { replay: Record<string, unknown> };
     expect(materialized.replay).toMatchObject({ highlight: { start: 1, end: 7, hookStart: 1, hookEnd: 2, payoffAt: 5, language: "en", clipKind: "speech" }, subtitleTrack: null, cropPlan: null, renderManifest: { reframeConfig: { engine: "off" } } });
+  });
+
+  it("publishes evidence and replay source as distinct immutable artifacts with separate digests", async () => {
+    let files: Record<string, unknown> = {};
+    const dependencies = deps({
+      downloadFile: vi.fn(async (key: string) => key === "evidence/clip.mp4" ? Buffer.from("delivered-evidence") : Buffer.from("replay-source")),
+      publishCaseAndLabel: vi.fn(async (input) => { files = input.files as Record<string, unknown>; return { status: "committed" as const }; }),
+    });
+    await promoteFeedbackCase(decision({ subsystem: "framing", expected: { approvedMoment: true, completeBoundary: true, visualSamples: [visualSample] } }), dependencies);
+    expect(Object.keys(files)).toEqual(expect.arrayContaining(["case.json", "evidence.mp4", "source.mp4"]));
+    expect(files).not.toHaveProperty("source-or-evidence.mp4");
+    const body = JSON.parse(Buffer.from(files["case.json"] as Uint8Array).toString("utf8")) as { inputs: { evidenceSha256: string; sourceSha256: string } };
+    expect(body.inputs.evidenceSha256).toBe(sha256(Buffer.from("delivered-evidence")));
+    expect(body.inputs.sourceSha256).toBe(sha256(Buffer.from("replay-source")));
+    expect((files["evidence.mp4"] as { sha256: string }).sha256).not.toBe((files["source.mp4"] as { sha256: string }).sha256);
   });
 
   it.each([
@@ -264,11 +279,11 @@ describe("quality feedback promotion", () => {
 
   it("cleans the private spool after successful and failed publication", async () => {
     let successPath = "";
-    const success = deps({ publishCaseAndLabel: vi.fn(async (input, _root, guard) => { successPath = (input.files["source-or-evidence.mp4"] as { path: string }).path; await guard?.(); return { status: "committed" as const }; }) });
+    const success = deps({ publishCaseAndLabel: vi.fn(async (input, _root, guard) => { successPath = (input.files["evidence.mp4"] as { path: string }).path; await guard?.(); return { status: "committed" as const }; }) });
     await promoteFeedbackCase(decision(), success);
     await expect(lstat(successPath)).rejects.toMatchObject({ code: "ENOENT" });
     let failurePath = "";
-    const failure = deps({ publishCaseAndLabel: vi.fn(async (input) => { failurePath = (input.files["source-or-evidence.mp4"] as { path: string }).path; throw new Error("publish failed"); }) });
+    const failure = deps({ publishCaseAndLabel: vi.fn(async (input) => { failurePath = (input.files["evidence.mp4"] as { path: string }).path; throw new Error("publish failed"); }) });
     await expect(promoteFeedbackCase(decision(), failure)).rejects.toThrow("publish failed");
     await expect(lstat(failurePath)).rejects.toMatchObject({ code: "ENOENT" });
   });

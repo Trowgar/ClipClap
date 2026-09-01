@@ -240,8 +240,9 @@ export function createProductionCaseRunner(root = DEFAULT_QUALITY_ROOT, live = f
       const replayHighlight = replay?.highlight as (Highlight & { clipKind?: string | null }) | undefined;
       if (!replay || !replayHighlight || !Number.isFinite(replayHighlight.start) || !Number.isFinite(replayHighlight.end) || !replay.reframeConfig || typeof replay.reframeConfig !== "object") return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };
       if (!window || !Number.isFinite(window.start) || !Number.isFinite(window.end)) return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "missing", metrics: { hardInvariantFailures: 1 } };
-      const source = await materializeArtifact(qualityCase.caseVersion, "source-or-evidence.mp4", root, temp, "source.mp4", qualityCase.inputs.evidenceSha256);
-      const immutableReferencePath = await materializeArtifact(qualityCase.caseVersion, "source-or-evidence.mp4", root, temp, "immutable-evidence.mp4", qualityCase.inputs.evidenceSha256);
+      if (!qualityCase.inputs.sourceSha256) return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };
+      const immutableReferencePath = await materializeArtifact(qualityCase.caseVersion, "evidence.mp4", root, temp, "immutable-evidence.mp4", qualityCase.inputs.evidenceSha256);
+      const source = await materializeArtifact(qualityCase.caseVersion, "source.mp4", root, temp, "source.mp4", qualityCase.inputs.sourceSha256);
       const musicDirection = (config?.engine.musicDirection ?? replay.musicDirection) && typeof (config?.engine.musicDirection ?? replay.musicDirection) === "object" ? (config?.engine.musicDirection ?? replay.musicDirection) as { topBar: number; bottomBar: number; punchIn: boolean; fades: boolean } : undefined;
       const blackTailValue = config?.engine.blackTail ?? replay.blackTail;
       const blackTailTrim = blackTailValue && typeof blackTailValue === "object" && (blackTailValue as { enabled?: unknown }).enabled === true ? { jobId: qualityCase.jobId, clipIndex: 0 } : undefined;
