@@ -236,11 +236,9 @@ export function createProductionCaseRunner(root = DEFAULT_QUALITY_ROOT, live = f
         const analyze = async (value: TranscriptionResult, options: AnalyzeV2Options) => analyzeHighlightsV2(value, { ...configuredAnalyze, ...options, client: new OpenAI({ apiKey }), sourceDurationSec, sourceUrl });
         return observeSelectionCase(qualityCase, { transcript, attempts: [context.attemptName ?? "live"], analyze, analyzeOptions: configuredAnalyze });
       }
-      const window = qualityCase.expected.sourceWindow;
       const replay = qualityCase.replay;
       const replayHighlight = replay?.highlight as (Highlight & { clipKind?: string | null }) | undefined;
       if (!replay || !replayHighlight || !Number.isFinite(replayHighlight.start) || !Number.isFinite(replayHighlight.end) || (!qualityCase.expected.referenceOnly && (!replay.reframeConfig || typeof replay.reframeConfig !== "object"))) return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };
-      if (!window || !Number.isFinite(window.start) || !Number.isFinite(window.end)) return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "missing", metrics: { hardInvariantFailures: 1 } };
       if (qualityCase.expected.referenceOnly) {
         if (!["framing", "subtitles", "render"].includes(qualityCase.subsystem) || !qualityCase.replay.cropPlan || typeof qualityCase.replay.cropPlan !== "object") return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };
         if (qualityCase.expected.visualSamples.some((sample) => sample.expectedSubtitleText.trim().length > 0)) return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };

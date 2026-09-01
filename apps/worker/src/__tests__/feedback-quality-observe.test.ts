@@ -257,7 +257,8 @@ describe("feedback quality observation runner", () => {
   it("renders the visual reference with the same crop plan but without ASS", async () => {
     const graphs: Array<string | undefined> = [];
     let cuts = 0;
-    const qualityCase = { ...sampleCase(), subsystem: "render" as const, expected: { ...sampleCase().expected, visualSamples: [{ timestamp: 1, expectedSubtitleText: "", requiredSubjectBoxes: [], requiredTextBoxes: [], protectedExistingCaptionBoxes: [] }] } };
+    const { sourceWindow: _sourceWindow, ...visualExpected } = sampleCase().expected;
+    const qualityCase = { ...sampleCase(), subsystem: "render" as const, expected: { ...visualExpected, visualSamples: [{ timestamp: 1, expectedSubtitleText: "", requiredSubjectBoxes: [], requiredTextBoxes: [], protectedExistingCaptionBoxes: [] }] } };
     await observeRenderCase(qualityCase, {
       sourcePath: "/private/source.mp4", immutableReferencePath: "/private/evidence.mp4", highlight: { start: 0, end: 2, title: "x" } as never, transcriptSegments: [],
       segmentsToCues: (() => [{ start: 0, end: 2, text: "hello" }]) as never,
