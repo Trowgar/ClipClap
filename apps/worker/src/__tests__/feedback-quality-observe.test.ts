@@ -11,7 +11,7 @@ import {
 } from "../feedback-quality/observe";
 import { observeRenderCase } from "../feedback-quality/render-lane";
 import { observeSelectionCase } from "../feedback-quality/selection-lane";
-import { loadPrivateCases } from "../feedback-quality/observe";
+import { deriveQualityCorpusDigest, loadPrivateCases } from "../feedback-quality/observe";
 import { appendLabelEvent, contentId, publishBundle, readBundle } from "../feedback-quality/store";
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import { parseObserveArgs, readSecureConfig, runObservationCli, validateObservationConfig } from "../scripts/feedback-quality-observe";
@@ -192,7 +192,10 @@ describe("feedback quality observation runner", () => {
     const loaded = await loadPrivateCases("eval", root);
     expect(loaded.cases.map((item) => item.caseVersion)).toEqual([id]);
     expect(loaded.corpusSha256).toMatch(/^sha256:[0-9a-f]{64}$/);
-    expect((await loadPrivateCases("holdout", root)).cases).toHaveLength(0);
+    const holdout = await loadPrivateCases("holdout", root);
+    expect(holdout.cases).toHaveLength(0);
+    expect(holdout.corpusSha256).toBe(loaded.corpusSha256);
+    expect(await deriveQualityCorpusDigest(root)).toBe(loaded.corpusSha256);
   });
 
   it("fails the production loader closed when a labelled case bundle is missing", async () => {

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import { contentId, publishBundle, readBundle } from "../feedback-quality/store";
-import { decideGate, type GateDependencies, type DecideGateInput } from "../feedback-quality/gate";
+import { decideGate, readGateDecision, type GateDependencies, type DecideGateInput } from "../feedback-quality/gate";
 import type { ObservationAttemptRecord } from "../feedback-quality/observe";
 import { observationIdFor, serializeObservationAttempts } from "../feedback-quality/observe";
 import type { GatePolicy, QualityCaseResult, QualityObservation } from "../feedback-quality/types";
@@ -196,6 +196,7 @@ describe("feedback quality gate", () => {
     expect(report).not.toContain("case:");
     expect((await stat(join(root, "decisions", decision.decisionId, "decision.json"))).mode & 0o777).toBe(0o600);
     expect(JSON.parse(Buffer.from(bundle.get("decision.json")!).toString("utf8")).decisionId).toBe(decision.decisionId);
+    expect((await readGateDecision(decision.decisionId, root, new Date("2026-09-01T12:00:00.000Z"))).decisionId).toBe(decision.decisionId);
   });
 
   it("rejects a bundle whose manifest ID does not match the requested ID", async () => {

@@ -11,6 +11,7 @@ import { runDownloadStage } from "./stages/download";
 import { runFinalizeStage } from "./stages/finalize";
 import { runRenderStage } from "./stages/render";
 import { runTranscribeStage } from "./stages/transcribe";
+import { effectiveConfigDigest, QUALITY_RUNNER_VERSION, readSecureConfig, validateSecureConfig } from "./feedback-quality/config";
 
 const DEFAULT_CONCURRENCY: Record<StageName, number> = {
   download: 4,
@@ -34,7 +35,10 @@ export function createStageWorker(
   const role = parseWorkerRole(roleValue);
   const worker = new Worker(
     getQueueNameForStage(role),
-    async (job, token) => dispatchStageJob(role, job.data, job, token),
+    async (job, token) => {
+      if (isQualityCanary(job.data)) return runQualityCanary(role, job.data);
+      return dispatchStageJob(role, job.data, job, token);
+    },
     {
       connection: getRedis(),
       concurrency: getWorkerConcurrency(role),
@@ -46,14 +50,34 @@ export function createStageWorker(
 
   worker.on("completed", (job) => {
     console.log(`[${role}] completed ${job.id}`);
-    void maybeReleaseAfterStageEvent(role, "completed", job);
+    if (!isQualityCanary(job.data)) void maybeReleaseAfterStageEvent(role, "completed", job);
   });
   worker.on("failed", (job, err) => {
     console.error(`[${role}] failed ${job?.id}:`, err.message);
-    void maybeReleaseAfterStageEvent(role, "failed", job ?? undefined);
+    if (!isQualityCanary(job?.data)) void maybeReleaseAfterStageEvent(role, "failed", job ?? undefined);
   });
 
   return worker;
+}
+
+type QualityCanaryJob = Readonly<{ kind: "feedback-quality-canary"; nonce: string; decisionId: string }>;
+export type QualityCanaryResponse = Readonly<{ kind: "feedback-quality-canary"; nonce: string; decisionId: string; role: StageName; commitSha: string; configSha256: string; runnerVersion: number }>;
+
+function isQualityCanary(value: unknown): value is QualityCanaryJob {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const item = value as Record<string, unknown>;
+  return Object.keys(item).length === 3 && item.kind === "feedback-quality-canary" && typeof item.nonce === "string" && item.nonce.length > 0 && typeof item.decisionId === "string";
+}
+
+async function runQualityCanary(role: StageName, job: QualityCanaryJob): Promise<QualityCanaryResponse> {
+  let configSha256 = "";
+  try {
+    const path = process.env.FEEDBACK_QUALITY_CONFIG_FILE;
+    if (!path) throw new Error();
+    configSha256 = effectiveConfigDigest(validateSecureConfig(await readSecureConfig(path), true));
+  } catch { /* empty binding deliberately fails deploy verification */ }
+  const commitSha = process.env.GIT_SHA ?? "";
+  return { kind: "feedback-quality-canary", nonce: job.nonce, decisionId: job.decisionId, role, commitSha, configSha256, runnerVersion: QUALITY_RUNNER_VERSION };
 }
 
 export async function dispatchStageJob(

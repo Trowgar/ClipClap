@@ -3,6 +3,7 @@ import { chmod, open, readFile, stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
+import { QUALITY_RUNNER_VERSION } from "./config";
 import { contentId, DEFAULT_QUALITY_ROOT, listBundleIds, openBundleFile, publishBundle, readBundle, readLabelEvents, type BundleKind, type CommitResult, type OpenBundleFile } from "./store";
 import type { MaterializedCase } from "./promote";
 import type { QualityCaseResult, QualityMetrics, QualityObservation } from "./types";
@@ -51,6 +52,8 @@ export class ObservationError extends Error {
 type LoadedCase = MaterializedCase & { loadStatus?: "missing" | "stale" };
 export type LoadedPrivateCases = Readonly<{ cases: readonly LoadedCase[]; corpusSha256: `sha256:${string}` }>;
 
+type LoadedCaseSet = readonly LoadedCase[];
+
 function unavailableCase(id: string, set: "eval" | "holdout", event: Readonly<Record<string, unknown>>, loadStatus: "missing" | "stale"): LoadedCase {
   const disposition = event.disposition === "confirmed_negative" || event.disposition === "exclude" ? event.disposition : "positive";
   const verdict = event.verdict === "EDIT" || event.verdict === "NO" ? event.verdict : "AS_IS";
@@ -81,7 +84,7 @@ function caseArtifactsValid(bundle: ReadonlyMap<string, Uint8Array>, qualityCase
 
 /** Read the active label projection and then verify every selected case's
  * content-addressed bundle. A missing/stale label never becomes a skipped case. */
-export async function loadPrivateCases(set: "eval" | "holdout", root = DEFAULT_QUALITY_ROOT): Promise<LoadedPrivateCases> {
+async function loadPrivateCaseSet(set: "eval" | "holdout", root = DEFAULT_QUALITY_ROOT): Promise<LoadedCaseSet> {
   const events = await readLabelEvents(root);
   const retired = new Set(events.filter((item) => item.action === "retire").map((item) => item.targetEventId).filter((item): item is string => typeof item === "string"));
   const selected = new Map<string, Readonly<Record<string, unknown>>>();
@@ -110,8 +113,20 @@ export async function loadPrivateCases(set: "eval" | "holdout", root = DEFAULT_Q
       cases.push(unavailableCase(id, set, event, "stale"));
     }
   }
-  const corpusSha256 = sha256(canonicalJson(cases.map((item) => ({ ...item })).sort((left, right) => left.caseVersion.localeCompare(right.caseVersion))));
-  return { cases: freeze(cases), corpusSha256 };
+  return freeze(cases);
+}
+
+/** Content identity of the complete active corpus. Eval and holdout are views
+ * over this same digest; changing either side invalidates every decision. */
+export async function deriveQualityCorpusDigest(root = DEFAULT_QUALITY_ROOT): Promise<`sha256:${string}`> {
+  const [evalCases, holdoutCases] = await Promise.all([loadPrivateCaseSet("eval", root), loadPrivateCaseSet("holdout", root)]);
+  const all = [...evalCases, ...holdoutCases].sort((left, right) => left.caseVersion.localeCompare(right.caseVersion));
+  return sha256(canonicalJson(all.map((item) => ({ ...item }))));
+}
+
+export async function loadPrivateCases(set: "eval" | "holdout", root = DEFAULT_QUALITY_ROOT): Promise<LoadedPrivateCases> {
+  const cases = await loadPrivateCaseSet(set, root);
+  return { cases, corpusSha256: await deriveQualityCorpusDigest(root) };
 }
 
 function freeze<T>(value: T): T {
@@ -137,7 +152,7 @@ function validateEnvironment(environment: Readonly<Record<string, string | undef
 }
 
 function validateOptions(options: ObserveQualityOptions): void {
-  if (!COMMIT_RE.test(options.commitSha) || !validHash(options.corpusSha256) || !Number.isSafeInteger(options.runnerVersion) || options.runnerVersion < 0) throw new ObservationError("invalid_input");
+  if (!COMMIT_RE.test(options.commitSha) || !validHash(options.corpusSha256) || options.runnerVersion !== QUALITY_RUNNER_VERSION) throw new ObservationError("invalid_input");
   if (!options.cases.length || new Set(options.cases.map((item) => item.caseVersion)).size !== options.cases.length) throw new ObservationError("invalid_input");
   for (const item of options.cases) if (item.set !== options.set) throw new ObservationError("set");
   validateEnvironment(options.environment, options.allowedEnvironment);

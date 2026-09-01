@@ -7,6 +7,7 @@ import { observeQualitySet, type ObservationDependencies, type ObserveQualityOpt
 import { loadPrivateCases, openQualityArtifact, type ObservationCaseRunner } from "../feedback-quality/observe";
 import type { MaterializedCase } from "../feedback-quality/promote";
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
+import { validateSecureConfig, readSecureConfig as readSecureConfigFile, type ObservationConfig, QUALITY_RUNNER_VERSION } from "../feedback-quality/config";
 import { observeSelectionCase, type SelectionResultPayload } from "../feedback-quality/selection-lane";
 import { observeRenderCase } from "../feedback-quality/render-lane";
 import { segmentsToCues } from "../processors/subtitles";
@@ -17,7 +18,7 @@ import { analyzeHighlightsV2, type AnalyzeV2Options } from "../analyze-v2";
 
 const execFileAsync = promisify(execFile);
 const HEX40 = /^[0-9a-f]{40}$/;
-const MAX_CONFIG_BYTES = 8 * 1024 * 1024;
+const hash = (value: unknown): value is `sha256:${string}` => typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value);
 
 export type ObserveCliArgs = Readonly<{ set: "eval" | "holdout"; mode: "baseline" | "candidate"; commit: string; configFile: string; live: boolean }>;
 
@@ -28,34 +29,12 @@ export class ObserveCliError extends Error {
   }
 }
 
-export type ObservationConfig = Readonly<{
-  schemaVersion: 1;
-  runnerVersion: number;
-  promptFingerprint: `sha256:${string}`;
-  modelFingerprint: `sha256:${string}`;
-  requestFingerprint: `sha256:${string}`;
-  recorded?: Readonly<{ promptFingerprint: `sha256:${string}`; modelFingerprint: `sha256:${string}`; requestFingerprint: `sha256:${string}` }>;
-  envAllowlist: readonly string[];
-  engine: Readonly<Record<string, unknown>>;
-}>;
-
-function hash(value: unknown): value is `sha256:${string}` { return typeof value === "string" && /^sha256:[0-9a-f]{64}$/.test(value); }
+export type { ObservationConfig } from "../feedback-quality/config";
+export { QUALITY_RUNNER_VERSION } from "../feedback-quality/config";
 
 export function validateObservationConfig(value: unknown, live: boolean): ObservationConfig {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ObserveCliError("invalid_flag");
-  const item = value as Record<string, unknown>;
-  const keys = Object.keys(item);
-  const allowed = ["schemaVersion", "runnerVersion", "promptFingerprint", "modelFingerprint", "requestFingerprint", "recorded", "envAllowlist", "engine"];
-  if (keys.some((key) => !allowed.includes(key)) || item.schemaVersion !== 1 || !Number.isSafeInteger(item.runnerVersion) || (item.runnerVersion as number) < 0 || !hash(item.promptFingerprint) || !hash(item.modelFingerprint) || !hash(item.requestFingerprint) || !Array.isArray(item.envAllowlist) || item.envAllowlist.some((key) => typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) || !item.engine || typeof item.engine !== "object" || Array.isArray(item.engine)) throw new ObserveCliError("invalid_flag");
-  const engine = item.engine as Record<string, unknown>;
-  if (Object.keys(engine).some((key) => !["analyze", "reframe", "musicDirection", "blackTail"].includes(key)) || (engine.analyze !== undefined && (!engine.analyze || typeof engine.analyze !== "object" || Array.isArray(engine.analyze))) || (engine.reframe !== undefined && (!engine.reframe || typeof engine.reframe !== "object" || Array.isArray(engine.reframe))) || (engine.musicDirection !== undefined && (!engine.musicDirection || typeof engine.musicDirection !== "object" || Array.isArray(engine.musicDirection))) || (engine.blackTail !== undefined && (!engine.blackTail || typeof engine.blackTail !== "object" || Array.isArray(engine.blackTail)))) throw new ObserveCliError("invalid_flag");
-  if (item.recorded !== undefined) {
-    if (!item.recorded || typeof item.recorded !== "object" || Array.isArray(item.recorded)) throw new ObserveCliError("fingerprint");
-    const recorded = item.recorded as Record<string, unknown>;
-    if (Object.keys(recorded).some((key) => key !== "promptFingerprint" && key !== "modelFingerprint" && key !== "requestFingerprint") || !hash(recorded.promptFingerprint) || !hash(recorded.modelFingerprint) || !hash(recorded.requestFingerprint)) throw new ObserveCliError("fingerprint");
-  }
-  if (!live && item.recorded === undefined) throw new ObserveCliError("fingerprint");
-  return item as ObservationConfig;
+  try { return validateSecureConfig(value, live); }
+  catch (error) { throw new ObserveCliError(error instanceof Error && error.message === "fingerprint" ? "fingerprint" : "invalid_flag"); }
 }
 
 export function parseObserveArgs(argv: readonly string[]): ObserveCliArgs {
@@ -80,25 +59,8 @@ export function parseObserveArgs(argv: readonly string[]): ObserveCliArgs {
 }
 
 export async function readSecureConfig(path: string): Promise<unknown> {
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  try {
-    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-    const info = await handle.stat();
-    if (!info.isFile() || info.nlink !== 1 || (info.mode & 0o7777) !== 0o600 || info.size > MAX_CONFIG_BYTES) throw new ObserveCliError("insecure_config");
-    const bytes = Buffer.allocUnsafe(info.size);
-    let offset = 0;
-    while (offset < bytes.length) {
-      const read = await handle.read(bytes, offset, bytes.length - offset, null);
-      if (!read.bytesRead) break;
-      offset += read.bytesRead;
-    }
-    const final = await handle.stat();
-    if (offset !== info.size || final.size !== info.size || final.nlink !== 1) throw new ObserveCliError("insecure_config");
-    try { return JSON.parse(bytes.toString("utf8")); } catch { throw new ObserveCliError("invalid_flag"); }
-  } catch (error) {
-    if (error instanceof ObserveCliError) throw error;
-    throw new ObserveCliError("insecure_config");
-  } finally { await handle?.close().catch(() => undefined); }
+  try { return await readSecureConfigFile(path); }
+  catch (error) { throw new ObserveCliError(error instanceof Error && error.message === "invalid" ? "invalid_flag" : "insecure_config"); }
 }
 
 export async function assertTrackedTreeClean(): Promise<void> {
@@ -281,10 +243,11 @@ export async function runObservationCli(
   // adapters are the bounded test seam and cannot publish to production.
   if (!input.dependencies) await assertTrackedTreeClean();
   const config = validateObservationConfig(await readSecureConfig(args.configFile), args.live);
+  if (config.runnerVersion !== QUALITY_RUNNER_VERSION) throw new ObserveCliError("invalid_flag");
   const root = input.root;
   const loaded = input.cases ? { cases: input.cases, corpusSha256: sha256(canonicalJson(input.cases)) } : await loadPrivateCases(args.set, root);
   if (input.corpusSha256 && input.corpusSha256 !== loaded.corpusSha256) throw new ObserveCliError("corpus_mismatch");
-  if (input.runnerVersion !== undefined && input.runnerVersion !== config.runnerVersion) throw new ObserveCliError("invalid_flag");
+  if (input.runnerVersion !== undefined && input.runnerVersion !== QUALITY_RUNNER_VERSION) throw new ObserveCliError("invalid_flag");
   const environment = input.environment ?? Object.fromEntries(config.envAllowlist.map((key) => [key, process.env[key]]));
   const dependencies = input.dependencies ?? { runCase: createProductionCaseRunner(root ?? process.env.QUALITY_ROOT ?? DEFAULT_QUALITY_ROOT, args.live, config, environment) };
   const result = await observeQualitySet({

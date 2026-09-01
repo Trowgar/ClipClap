@@ -51,6 +51,7 @@ function deps(overrides: Partial<DeployDependencies> = {}): DeployDependencies {
     spawn: vi.fn(async () => ({ exitCode: 0 })),
     waitForHealthy: vi.fn(async () => undefined),
     runCanary: vi.fn(async () => undefined),
+    prepareRollback: vi.fn(async () => ({ schemaVersion: 1 as const, artifactId: `rollback:${hash("artifact")}`, createdAt: "2026-09-01T12:00:00.000Z", immutable: true as const, verified: true as const, command: ["docker", "compose", "up", "-d", "--force-recreate", "worker-analyze", "worker-render"], previousCommitSha: "b".repeat(40) })),
     appendEvent: vi.fn(async () => ({ status: "committed" as const })),
     ...overrides,
   };
@@ -68,7 +69,39 @@ describe("feedback quality deployment", () => {
     expect(d.spawn).toHaveBeenNthCalledWith(2, ["docker", "compose", "up", "-d", "--force-recreate", "worker-render"]);
     expect(d.queueCounts).toHaveBeenCalledWith("video-analyze");
     expect(d.queueCounts).toHaveBeenCalledWith("video-render");
-    expect(d.appendEvent).toHaveBeenCalledTimes(1);
+    expect(d.appendEvent).toHaveBeenCalledTimes(2);
+    expect(result.rollbackArtifactId).toContain("rollback:");
+    expect(result.rollbackCommand).toContain("docker compose up -d --force-recreate");
+  });
+
+  it("fails before any mutation when no immutable rollback artifact is available", async () => {
+    const d = deps({ prepareRollback: vi.fn(async () => { throw new Error("bind-mounted compose has no previous image"); }) });
+    const result = await deployWithQualityGate(request(), d);
+    expect(result.status).toBe("failed");
+    expect(result.reasons).toContain("rollback_unavailable");
+    expect(d.spawn).not.toHaveBeenCalled();
+  });
+
+  it("uses the private corpus/config adapters and ignores legacy digest environment variables", async () => {
+    const previousConfig = process.env.FEEDBACK_QUALITY_CONFIG_SHA256;
+    const previousCorpus = process.env.FEEDBACK_QUALITY_CORPUS_SHA256;
+    process.env.FEEDBACK_QUALITY_CONFIG_SHA256 = hash("wrong-config");
+    process.env.FEEDBACK_QUALITY_CORPUS_SHA256 = hash("wrong-corpus");
+    try {
+      const d = deps({
+        configSha256: undefined,
+        corpusSha256: undefined,
+        effectiveConfig: vi.fn(async () => ({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), envAllowlist: [], engine: {} })),
+        root: "/private/corpus",
+      });
+      const result = await deployWithQualityGate(request(), d);
+      expect(result.status).toBe("failed");
+      expect(result.reasons).toContain("binding_mismatch");
+      expect(d.spawn).not.toHaveBeenCalled();
+    } finally {
+      if (previousConfig === undefined) delete process.env.FEEDBACK_QUALITY_CONFIG_SHA256; else process.env.FEEDBACK_QUALITY_CONFIG_SHA256 = previousConfig;
+      if (previousCorpus === undefined) delete process.env.FEEDBACK_QUALITY_CORPUS_SHA256; else process.env.FEEDBACK_QUALITY_CORPUS_SHA256 = previousCorpus;
+    }
   });
 
   it.each([
@@ -105,29 +138,45 @@ describe("feedback quality deployment", () => {
     const d = deps({ waitForHealthy: vi.fn(async (service: string) => { if (service === "worker-render") throw new Error("private health detail"); }) });
     const result = await deployWithQualityGate(request(), d);
     expect(result.status).toBe("failed");
-    expect(result.recreatedServices).toEqual(["worker-analyze"]);
+    expect(result.recreatedServices).toEqual(["worker-analyze", "worker-render"]);
     expect(d.spawn).toHaveBeenCalledTimes(2);
     expect(d.runCanary).toHaveBeenCalledTimes(1);
-    expect(d.appendEvent).not.toHaveBeenCalled();
+    expect(d.appendEvent).toHaveBeenCalledTimes(1);
     expect(result.rollbackCommand).toContain("worker-analyze");
     expect(JSON.stringify(result)).not.toContain("private health detail");
+  });
+
+  it("stops and reports a canary binding mismatch without continuing to the next worker", async () => {
+    const d = deps({ runCanary: vi.fn(async (service: string) => { if (service === "worker-analyze") throw new Error("wrong config"); }) });
+    const result = await deployWithQualityGate(request(), d);
+    expect(result.status).toBe("failed");
+    expect(result.reasons).toEqual(["canary_failed"]);
+    expect(result.recreatedServices).toEqual(["worker-analyze"]);
+    expect(d.spawn).toHaveBeenCalledTimes(1);
+  });
+
+  it("validates request arrays before inspecting service values", async () => {
+    const result = await deployWithQualityGate({ decisionId: decision().decisionId, services: "worker-analyze" as unknown as readonly string[] }, deps());
+    expect(result.status).toBe("failed");
+    expect(result.reasons).toContain("invalid_request");
   });
 
   it("requires a real private 0600 reason and audits exact override mismatches before deploying", async () => {
     const root = await mkdtemp(join(tmpdir(), "quality-deploy-")); roots.push(root);
     const reasonPath = join(root, "reason.txt");
     await writeFile(reasonPath, "incident review approved\n", { mode: 0o600 });
-    const item = decision({ expiresAt: "2026-08-31T00:00:00.000Z" });
+    const item = decision({ createdAt: "2026-08-30T00:00:00.000Z", expiresAt: "2026-08-31T00:00:00.000Z" });
     const events: unknown[] = [];
     const d = deps({ root, readDecision: vi.fn(async () => item), appendEvent: vi.fn(async (event) => { events.push(event); return { status: "committed" as const }; }) });
     const result = await deployWithQualityGate({ decisionId: item.decisionId, services: ["worker-analyze"], overrideReasonFile: reasonPath }, d);
     expect(result.status).toBe("deployed");
     expect(result.overridden).toBe(true);
-    expect(events).toHaveLength(2);
+    expect(events).toHaveLength(3);
     expect((events[0] as Record<string, unknown>).type).toBe("quality_rollout_override");
     expect((events[0] as Record<string, unknown>).decisionId).toBe(item.decisionId);
     expect((events[0] as Record<string, unknown>).reason).toContain("incident review");
-    expect((events[1] as Record<string, unknown>).type).toBe("quality_rollout");
+    expect((events[1] as Record<string, unknown>).type).toBe("quality_rollback_artifact");
+    expect((events[2] as Record<string, unknown>).type).toBe("quality_rollout");
   });
 
   it("rejects a symlink or non-0600 override reason", async () => {

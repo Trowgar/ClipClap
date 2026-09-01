@@ -20,7 +20,7 @@ import type {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const OBSERVATION_FILES = new Set(["manifest.json", "results.jsonl"]);
-const REASON_ORDER: readonly MachineReason[] = [
+export const GATE_REASON_ORDER: readonly MachineReason[] = [
   "invalid_schema", "invalid_metric", "duplicate_case_version", "missing_case", "stale_case", "error_case",
   "set_mismatch", "mode_mismatch", "corpus_mismatch", "config_mismatch", "runner_mismatch", "insufficient_corpus",
   "case_mismatch", "positive_regression", "negative_regression", "hard_invariant_regression", "aggregate_regression", "no_improvement",
@@ -279,7 +279,7 @@ function identityReasons(left: QualityObservation, right: QualityObservation): M
   return reasons;
 }
 
-function redactedReport(decision: Omit<GateDecision, "decisionId"> & { decisionId: string }): string {
+export function redactedReport(decision: Omit<GateDecision, "decisionId"> & { decisionId: string }): string {
   return [
     "# Feedback quality gate",
     "",
@@ -295,6 +295,60 @@ function redactedReport(decision: Omit<GateDecision, "decisionId"> & { decisionI
     `decision: ${decision.decisionId}`,
     "",
   ].join("\n");
+}
+
+function exactObject(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  const actual = Reflect.ownKeys(value);
+  return actual.length === keys.length && actual.every((key) => {
+    if (typeof key !== "string" || !keys.includes(key)) return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor?.enumerable === true && Object.prototype.hasOwnProperty.call(descriptor, "value");
+  });
+}
+
+function strictDate(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) return false;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) && date.toISOString() === value;
+}
+
+const DECISION_KEYS = ["schemaVersion", "decisionId", "claim", "policyVersion", "candidateCommitSha", "configSha256", "corpusSha256", "runnerVersion", "baselineEvalObservationId", "candidateEvalObservationId", "baselineHoldoutObservationId", "candidateHoldoutObservationId", "createdAt", "expiresAt", "eval", "holdout", "verdict", "reasons"] as const;
+const SUMMARY_KEYS = ["positiveCount", "negativeCount", "attemptCount", "varianceCaseCount", "baseline", "candidate"] as const;
+const AGGREGATE_KEYS = ["positiveRetention", "negativeDefects", "zeroClipFalseNegatives", "boundaryErrors", "focalFailures", "subtitleFailures"] as const;
+
+function validAggregate(value: unknown): boolean {
+  return exactObject(value, AGGREGATE_KEYS) && AGGREGATE_KEYS.every((key) => typeof value[key] === "number" && Number.isFinite(value[key]) && value[key] >= 0);
+}
+
+function validSummary(value: unknown): value is GateSetSummary {
+  return exactObject(value, SUMMARY_KEYS) && ["positiveCount", "negativeCount", "attemptCount", "varianceCaseCount"].every((key) => Number.isSafeInteger(value[key]) && (value[key] as number) >= 0) && validAggregate(value.baseline) && validAggregate(value.candidate);
+}
+
+/** One strict reader shared by deploy and operator tooling. It verifies the
+ * content-addressed decision, closed reasons, temporal bounds, and its
+ * redacted report as one immutable bundle. */
+export async function readGateDecision(id: string, root = DEFAULT_QUALITY_ROOT, now = new Date()): Promise<GateDecision> {
+  if (!/^decision:sha256:[0-9a-f]{64}$/.test(id) || !(now instanceof Date) || !Number.isFinite(now.getTime())) throw new GateError("invalid_input");
+  let files: ReadonlyMap<string, Uint8Array>;
+  try { files = await readBundle("decision", id, root); } catch { throw new GateError("invalid_input"); }
+  if (files.size !== 2 || !files.has("decision.json") || !files.has("report.md")) throw new GateError("invalid_input");
+  let parsed: unknown;
+  try { parsed = JSON.parse(Buffer.from(files.get("decision.json")!).toString("utf8")); } catch { throw new GateError("invalid_input"); }
+  const parsedReasons = exactObject(parsed, DECISION_KEYS) && Array.isArray(parsed.reasons) ? parsed.reasons : undefined;
+  if (!exactObject(parsed, DECISION_KEYS) || parsed.schemaVersion !== 1 || parsed.decisionId !== id ||
+      (parsed.claim !== "improvement" && parsed.claim !== "non_regression_only") || typeof parsed.policyVersion !== "string" || parsed.policyVersion.length === 0 ||
+      typeof parsed.candidateCommitSha !== "string" || !/^[0-9a-f]{40}$/.test(parsed.candidateCommitSha) || typeof parsed.configSha256 !== "string" || !/^sha256:[0-9a-f]{64}$/.test(parsed.configSha256) || typeof parsed.corpusSha256 !== "string" || !/^sha256:[0-9a-f]{64}$/.test(parsed.corpusSha256) || !Number.isSafeInteger(parsed.runnerVersion) || (parsed.runnerVersion as number) < 0 ||
+      ![parsed.baselineEvalObservationId, parsed.candidateEvalObservationId, parsed.baselineHoldoutObservationId, parsed.candidateHoldoutObservationId].every((value) => typeof value === "string" && /^observation:sha256:[0-9a-f]{64}$/.test(value)) || !strictDate(parsed.createdAt) || !strictDate(parsed.expiresAt) || !validSummary(parsed.eval) || !validSummary(parsed.holdout) || (parsed.verdict !== "pass" && parsed.verdict !== "fail") || !parsedReasons || parsedReasons.some((reason) => typeof reason !== "string" || !GATE_REASON_ORDER.includes(reason as MachineReason)) || new Set(parsedReasons).size !== parsedReasons.length || [...parsedReasons].sort((left, right) => GATE_REASON_ORDER.indexOf(left as MachineReason) - GATE_REASON_ORDER.indexOf(right as MachineReason)).some((value, index) => value !== parsedReasons[index])) throw new GateError("invalid_input");
+  const created = new Date(parsed.createdAt as string).getTime();
+  const expires = new Date(parsed.expiresAt as string).getTime();
+  if (created > now.getTime() || expires <= created || expires > created + DAY_MS || (parsed.verdict === "pass" && parsedReasons.length !== 0) || (parsed.verdict === "fail" && parsedReasons.length === 0)) throw new GateError("invalid_input");
+  const { decisionId: _id, ...body } = parsed as unknown as GateDecision;
+  if (contentId("decision", body) !== id) throw new GateError("invalid_input");
+  const report = Buffer.from(files.get("report.md")!).toString("utf8");
+  const decision = parsed as unknown as GateDecision;
+  if (report !== redactedReport(decision)) throw new GateError("invalid_input");
+  return decision;
 }
 
 function decisionBody(input: DecideGateInput, claim: QualityClaim, now: string, expiresAt: string, candidate: QualityObservation, evalSummary: GateSetSummary, holdoutSummary: GateSetSummary, verdict: "pass" | "fail", reasons: MachineReason[]) {
@@ -365,7 +419,7 @@ export async function decideGate(input: DecideGateInput, dependencies: GateDepen
     }
   }
   const present = new Set(reasons);
-  reasons = REASON_ORDER.filter((reason) => present.has(reason));
+  reasons = GATE_REASON_ORDER.filter((reason) => present.has(reason));
   const verdict = reasons.length === 0 ? "pass" : "fail";
   const expiryCandidates = [nowDate.getTime(), ...loadedForExpiry.map((item) => new Date(item.observation.createdAt).getTime()).filter((value) => Number.isFinite(value))].map((value) => value + DAY_MS);
   const expiresAt = new Date(Math.min(...expiryCandidates)).toISOString();

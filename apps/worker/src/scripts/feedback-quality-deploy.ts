@@ -39,7 +39,7 @@ export function parseDeployArgs(argv: readonly string[]): DeployCliArgs {
 }
 
 function safeLog(value: Record<string, unknown>): string {
-  const allowed = ["operation", "decisionId", "status", "verdict", "overridden", "services", "recreatedServices", "reasons"];
+  const allowed = ["operation", "decisionId", "status", "verdict", "overridden", "services", "recreatedServices", "reasons", "rollbackArtifactId", "rollbackCommand"];
   const output: Record<string, unknown> = {};
   for (const key of allowed) if (Object.prototype.hasOwnProperty.call(value, key)) output[key] = value[key];
   return JSON.stringify(output);
@@ -51,7 +51,7 @@ export async function runFeedbackQualityDeploy(argv: readonly string[], dependen
   try { args = parseDeployArgs(argv); }
   catch { io.stderr(safeLog({ operation: "deploy", status: "failed", reasons: ["invalid_request"] })); return 2; }
   const result = await deployWithQualityGate(args, { ...dependencies, root: dependencies.root ?? process.env.FEEDBACK_QUALITY_ROOT ?? DEFAULT_QUALITY_ROOT });
-  const line = safeLog({ operation: "deploy", decisionId: result.decisionId, status: result.status, verdict: result.verdict, overridden: result.overridden, services: result.services, recreatedServices: result.recreatedServices, reasons: result.reasons });
+  const line = safeLog({ operation: "deploy", decisionId: result.decisionId, status: result.status, verdict: result.verdict, overridden: result.overridden, services: result.services, recreatedServices: result.recreatedServices, reasons: result.reasons, rollbackArtifactId: result.rollbackArtifactId, rollbackCommand: result.rollbackCommand });
   io[result.status === "deployed" ? "stdout" : "stderr"](line);
   return result.status === "deployed" ? 0 : 1;
 }
