@@ -163,7 +163,7 @@ async function assertSnapshotIntegrity(artifactId: string, root: string): Promis
     const artifact = JSON.parse(Buffer.from(files.get("rollback.json")!).toString("utf8")) as { artifactId?: unknown; snapshotHashes?: unknown };
     if (artifact.artifactId !== artifactId || !artifact.snapshotHashes || typeof artifact.snapshotHashes !== "object") throw new Error();
     const hashes = artifact.snapshotHashes as Record<string, unknown>;
-    const names = ["compose.production.yml", "rollback.compose.yml", "candidate.compose.yml", "production.env", "feedback-quality-config.json"];
+    const names = ["candidate.compose.yml", "compose.production.yml", "feedback-quality-config.json", "production.env", "rollback.compose.yml"];
     if (JSON.stringify(Object.keys(hashes).sort()) !== JSON.stringify(names) || names.some((name) => typeof hashes[name] !== "string" || hashes[name] !== sha256(Buffer.from(files.get(name)!)))) throw new Error();
   } catch { throw new ProductionReleaseError("rollback_invalid"); }
 }
@@ -281,8 +281,10 @@ export async function executeRollback(artifactId: string, root: string, dependen
   if (serviceNames.length === 0 || serviceNames.some((service, index) => !SERVICES.has(service) || (index > 0 && SERVICE_ORDER.indexOf(service) <= SERVICE_ORDER.indexOf(serviceNames[index - 1]))) || JSON.stringify(argv) !== JSON.stringify(["docker", "compose", "--project-name", rollback.projectName, "-f", "rollback.compose.yml", "up", "-d", "--force-recreate", "--no-build", ...serviceNames])) throw new ProductionReleaseError("rollback_invalid");
   const compose = Buffer.from(files.get("compose.production.yml")!);
   const override = Buffer.from(files.get("rollback.compose.yml")!);
-  const wantedHashes = ["compose.production.yml", "rollback.compose.yml", "candidate.compose.yml", "production.env", "feedback-quality-config.json"];
+  const wantedHashes = ["candidate.compose.yml", "compose.production.yml", "feedback-quality-config.json", "production.env", "rollback.compose.yml"];
   if (JSON.stringify(Object.keys(rollback.snapshotHashes).sort()) !== JSON.stringify(wantedHashes) || wantedHashes.some((name) => rollback.snapshotHashes![name] !== sha256(Buffer.from(files.get(name)!)))) throw new ProductionReleaseError("rollback_invalid");
+  try { parseImageReference(rollback.candidateImage!); } catch { throw new ProductionReleaseError("rollback_invalid"); }
+  if (JSON.stringify(rollback.composeFiles) !== JSON.stringify(["compose.production.yml", "rollback.compose.yml", "candidate.compose.yml"])) throw new ProductionReleaseError("rollback_invalid");
   if (sha256(Buffer.concat([compose, override])) !== rollback.composeFilesSha256 || !override.equals(composeOverride(rollback.previousImages, rollback.network!)) || !Buffer.from(files.get("candidate.compose.yml")!).equals(candidateCompose(serviceNames, rollback.candidateImage!, rollback.network!)) || /\bbuild\s*:|\.\/apps\/|\.\/packages\//.test(compose.toString("utf8"))) throw new ProductionReleaseError("rollback_invalid");
   try { parseEnvironment(Buffer.from(files.get("production.env")!)); JSON.parse(Buffer.from(files.get("feedback-quality-config.json")!).toString("utf8")); } catch { throw new ProductionReleaseError("rollback_invalid"); }
   for (let index = 0; index < rollback.previousImages.length; index += 1) {

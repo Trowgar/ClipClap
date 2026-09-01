@@ -69,6 +69,25 @@ describe("immutable production release adapter", () => {
     expect(sha256(canonicalJson(body))).toMatch(/^sha256:/);
   });
 
+  it("executes a validated standalone rollback bundle with no ambient project", async () => {
+    const root = await mkdtemp(join(tmpdir(), "quality-release-")); roots.push(root);
+    const old = `registry.example/clipclap-worker@${digest("old")}`;
+    const candidate = `registry.example/clipclap-worker@${digest("candidate")}`;
+    const env = Buffer.from("ENGINE_FLAG=on\n");
+    const config = Buffer.from(JSON.stringify({ schemaVersion: 1, runnerVersion: 2, promptFingerprint: digest("p"), modelFingerprint: digest("m"), requestFingerprint: digest("r"), envAllowlist: ["ENGINE_FLAG"], engine: {} }));
+    const published = await createProductionRollback(["worker-analyze"], { candidateCommitSha: commit }, {
+      root, candidateImage: candidate, composeFile: "docker-compose.production.yml", projectName: "clipclap", network: "clipclap_default", environment: env, config,
+      readCompose: async () => Buffer.from("services: {}\n"),
+      inspectImage: async (reference) => ({ reference, digest: parseImageReference(reference).digest, revision: reference === candidate ? commit : "b".repeat(40) }),
+      inspectService: async () => ({ image: old }),
+      publishRollback: async (bundle) => publishBundle({ kind: "rollback", id: bundle.rollback.artifactId, files: { "rollback.json": Buffer.from(JSON.stringify(bundle.rollback)), "compose.production.yml": bundle.compose, "rollback.compose.yml": bundle.override, "candidate.compose.yml": bundle.candidate!, "production.env": bundle.environment!, "feedback-quality-config.json": bundle.config! } }, root),
+      exec: async () => ({ exitCode: 0, stdout: "" }),
+    });
+    const exec = vi.fn(async () => ({ exitCode: 0, stdout: "" }));
+    await executeRollback(published.artifactId, root, { exec, inspectService: async () => ({ image: old }), inspectImage: async (reference) => ({ reference, digest: parseImageReference(reference).digest, revision: "b".repeat(40) }) });
+    expect(exec).toHaveBeenCalledWith(published.command, expect.objectContaining({ cwd: expect.stringContaining(published.artifactId), env: {} }));
+  });
+
   it("rejects a tampered rollback argv before process execution", async () => {
     const root = await mkdtemp(join(tmpdir(), "quality-release-")); roots.push(root);
     const body = { createdAt: "2026-09-01T00:00:00.000Z", command: ["sh", "-c", "unsafe"], previousCommitSha: "b".repeat(40), previousImageRef: `repo@${digest("old")}`, previousImageDigest: digest("old"), composeFiles: ["compose.production.yml", "rollback.compose.yml"], composeFilesSha256: digest("compose"), services: ["worker-analyze"] as const, previousImages: [{ service: "worker-analyze" as const, image: `repo@${digest("old")}`, digest: digest("old"), revision: "b".repeat(40) }] };
