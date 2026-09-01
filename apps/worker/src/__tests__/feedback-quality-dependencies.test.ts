@@ -72,16 +72,16 @@ async function reachable(entry: string): Promise<ModuleGraph> {
   return graph;
 }
 
-type SemanticAliases = Readonly<{ prisma: ReadonlySet<string>; r2: ReadonlySet<string> }>;
+type SemanticAliases = Readonly<{ prisma: ReadonlySet<string>; r2: ReadonlySet<string>; process: ReadonlySet<string> }>;
 
 function bindingName(name: ts.BindingName): string | undefined {
   return ts.isIdentifier(name) ? name.text : undefined;
 }
 
 function semanticAliases(source: ts.SourceFile): { prisma: Set<string>; r2: Set<string> } {
-  const aliases = { prisma: new Set<string>(), r2: new Set<string>() };
+  const aliases = { prisma: new Set<string>(), r2: new Set<string>(), process: new Set<string>() };
   const addImport = (moduleName: string, name: string): void => {
-    const target = moduleName.includes("/prisma") ? aliases.prisma : moduleName.includes("/r2") ? aliases.r2 : undefined;
+    const target = moduleName.includes("/prisma") ? aliases.prisma : moduleName.includes("/r2") ? aliases.r2 : moduleName === "node:child_process" || moduleName === "child_process" ? aliases.process : undefined;
     if (target) target.add(name);
   };
   for (const statement of source.statements) {
@@ -99,7 +99,7 @@ function semanticAliases(source: ts.SourceFile): { prisma: Set<string>; r2: Set<
         const element = node.name.elements[index];
         const moduleName = imports[index];
         if (!element || !moduleName || !ts.isBindingElement(element) || !ts.isObjectBindingPattern(element.name)) continue;
-        const target = moduleName.includes("/prisma") ? aliases.prisma : moduleName.includes("/r2") ? aliases.r2 : undefined;
+        const target = moduleName.includes("/prisma") ? aliases.prisma : moduleName.includes("/r2") ? aliases.r2 : moduleName === "node:child_process" || moduleName === "child_process" ? aliases.process : undefined;
         if (!target) continue;
         for (const property of element.name.elements) {
           const local = bindingName(property.name);
@@ -182,14 +182,14 @@ describe("feedback quality dependency boundaries", () => {
     expect(imports.some((value) => value.endsWith("/render-lane"))).toBe(true);
     expect(imports.some((value) => value.includes("@clipclap/shared/lib/prisma") || value.includes("@clipclap/shared/lib/r2") || value === "bullmq")).toBe(false);
     expect(imports).toContain("node:child_process"); // bounded ffmpeg/ffprobe probes only.
-    expect([...graph.values()].flatMap((source) => callsNamed(source, new Set(["spawn"]), undefined, new Set(["spawn"])))).toEqual([]);
+    expect(graphSemanticCalls(graph, new Set(["spawn"]), "process")).toEqual([]);
   });
 
   it("keeps gate private-I/O-only while deployment owns BullMQ and process execution", async () => {
     const gate = await reachable(ENTRYPOINTS.gate);
     const gateImports = graphImports(gate);
     expect(gateImports.some((value) => value === "bullmq" || value === "@clipclap/shared/lib/redis")).toBe(false);
-    expect([...gate.values()].flatMap((source) => callsNamed(source, new Set(["spawn"]), undefined, new Set(["spawn"])))).toEqual([]);
+    expect(graphSemanticCalls(gate, new Set(["spawn"]), "process")).toEqual([]);
     const deployment = await reachable(ENTRYPOINTS.deployment);
     const deploymentImports = graphImports(deployment);
     expect(deploymentImports).toContain("bullmq");
