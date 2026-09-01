@@ -33,7 +33,7 @@ export type ObservationConfig = Readonly<{
   runnerVersion: number;
   promptFingerprint: `sha256:${string}`;
   modelFingerprint: `sha256:${string}`;
-  recorded?: Readonly<{ promptFingerprint: `sha256:${string}`; modelFingerprint: `sha256:${string}` }>;
+  recorded?: Readonly<{ promptFingerprint: `sha256:${string}`; modelFingerprint: `sha256:${string}`; requestFingerprint?: `sha256:${string}` }>;
   envAllowlist: readonly string[];
   engine: Readonly<Record<string, unknown>>;
 }>;
@@ -51,7 +51,7 @@ export function validateObservationConfig(value: unknown, live: boolean): Observ
   if (item.recorded !== undefined) {
     if (!item.recorded || typeof item.recorded !== "object" || Array.isArray(item.recorded)) throw new ObserveCliError("fingerprint");
     const recorded = item.recorded as Record<string, unknown>;
-    if (Object.keys(recorded).some((key) => key !== "promptFingerprint" && key !== "modelFingerprint") || !hash(recorded.promptFingerprint) || !hash(recorded.modelFingerprint)) throw new ObserveCliError("fingerprint");
+    if (Object.keys(recorded).some((key) => key !== "promptFingerprint" && key !== "modelFingerprint" && key !== "requestFingerprint") || !hash(recorded.promptFingerprint) || !hash(recorded.modelFingerprint) || (recorded.requestFingerprint !== undefined && !hash(recorded.requestFingerprint))) throw new ObserveCliError("fingerprint");
   }
   if (!live && item.recorded === undefined) throw new ObserveCliError("fingerprint");
   return item as ObservationConfig;
@@ -110,7 +110,7 @@ export async function assertTrackedTreeClean(): Promise<void> {
   }
 }
 
-async function readArtifactJson(kind: "case", id: string, name: string, root: string): Promise<unknown> {
+async function readArtifactJson(kind: "case", id: string, name: string, root: string, expectedSha256?: string): Promise<unknown> {
   const opened = await openQualityArtifact(kind, id, name, root);
   try {
     const reader = opened.stream.getReader();
@@ -125,6 +125,8 @@ async function readArtifactJson(kind: "case", id: string, name: string, root: st
         chunks.push(item.value);
       }
     } finally { reader.releaseLock(); }
+    const digest = await opened.sha256;
+    if (expectedSha256 && digest !== expectedSha256) throw new ObserveCliError("missing");
     return JSON.parse(Buffer.concat(chunks.map((item) => Buffer.from(item))).toString("utf8"));
   } finally { await opened.close(); }
 }
@@ -217,15 +219,16 @@ export function createProductionCaseRunner(root = DEFAULT_QUALITY_ROOT, live = f
     const temp = await mkdtemp("/tmp/clipclap-quality-observe-");
     try {
       let transcript: TranscriptionResult | undefined;
-      try { transcript = await readArtifactJson("case", qualityCase.caseVersion, "transcript.json", root) as TranscriptionResult; } catch { transcript = undefined; }
+      try { transcript = await readArtifactJson("case", qualityCase.caseVersion, "transcript.json", root, qualityCase.inputs.transcriptSha256 ?? undefined) as TranscriptionResult; } catch { transcript = undefined; }
       if (qualityCase.subsystem === "selection" || qualityCase.subsystem === "boundary") {
         if (!transcript?.segments || !Array.isArray(transcript.segments)) return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "missing", metrics: { hardInvariantFailures: 1 } };
         if (!live) {
+          if (!qualityCase.inputs.recordedResponsesSha256) return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };
           let recording: unknown;
-          try { recording = await readArtifactJson("case", qualityCase.caseVersion, "recorded-responses.json", root); } catch { return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "missing", metrics: { hardInvariantFailures: 1 } }; }
+          try { recording = await readArtifactJson("case", qualityCase.caseVersion, "recorded-responses.json", root, qualityCase.inputs.recordedResponsesSha256 ?? undefined); } catch { return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "missing", metrics: { hardInvariantFailures: 1 } }; }
           const entry = recording as Record<string, unknown>;
           const recorded = entry.recorded as Record<string, unknown> | undefined;
-          if (!config?.recorded || !recorded || recorded.promptFingerprint !== config.recorded.promptFingerprint || recorded.modelFingerprint !== config.recorded.modelFingerprint || !entry.result || typeof entry.result !== "object") return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };
+          if (!config?.recorded || !recorded || !hash(recorded.promptFingerprint) || !hash(recorded.modelFingerprint) || !hash(recorded.requestFingerprint) || recorded.promptFingerprint !== config.recorded.promptFingerprint || recorded.modelFingerprint !== config.recorded.modelFingerprint || (config.recorded.requestFingerprint !== undefined && recorded.requestFingerprint !== config.recorded.requestFingerprint) || !entry.result || typeof entry.result !== "object") return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };
           return observeSelectionCase(qualityCase, { transcript, attempts: [context.attemptName ?? "recorded"], analyzeOptions: (config?.engine.analyze ?? {}) as AnalyzeV2Options, analyze: async () => entry.result as SelectionResultPayload });
         }
         const apiKey = environment.OPENAI_API_KEY;

@@ -131,7 +131,7 @@ function normalizedText(value: unknown): string {
 async function assertFrame(exec: VisualProbeExec, path: string, timestamp: number): Promise<void> {
   let result: { stdout: string; stderr: string };
   try {
-    result = await exec("ffprobe", ["-show_entries", "stream=width,height,nb_read_frames", "-v", "error", "-ss", String(timestamp), "-i", path, "-select_streams", "v:0", "-read_intervals", "0%+0.05", "-count_frames", "-of", "json"]);
+    result = await exec("ffprobe", ["-show_entries", "stream=width,height,nb_read_frames", "-v", "error", "-ss", String(timestamp), "-i", path, "-select_streams", "v:0", "-read_intervals", "0%+0.05", "-count_frames", "-of", "json"], { timeout: 15_000, maxBuffer: 2 * 1024 * 1024 });
   } catch { throw new Error("visual probe frame unavailable"); }
   let parsed: { streams?: Array<{ width?: number; height?: number; nb_read_frames?: string }> };
   try { parsed = JSON.parse(result.stdout) as typeof parsed; } catch { throw new Error("visual probe frame parse failed"); }
@@ -150,13 +150,15 @@ function parseSimilarity(output: string): number {
 
 async function compareFrames(exec: VisualProbeExec, actualPath: string, referencePath: string, timestamp: number, ignoredBoxes: readonly PixelBox[] = []): Promise<FrameComparison> {
   const masks = ignoredBoxes.map((box) => `drawbox=x=${Math.round(box.x)}:y=${Math.round(box.y)}:w=${Math.round(box.w)}:h=${Math.round(box.h)}:color=black:t=fill`).join(",");
-  const filter = masks ? `[0:v]${masks}[a];[1:v]${masks}[b];[a][b]blend=all_mode=difference,bbox,ssim=stats_file=-` : "[0:v][1:v]blend=all_mode=difference,bbox,ssim=stats_file=-";
-  let result: { stdout: string; stderr: string };
+  const prefix = masks ? `[0:v]${masks}[a];[1:v]${masks}[b];` : "";
+  const inputs = masks ? "[a][b]" : "[0:v][1:v]";
+  let similarity: { stdout: string; stderr: string };
+  let difference: { stdout: string; stderr: string };
   try {
-    result = await exec("ffmpeg", ["-nostdin", "-v", "info", "-ss", String(timestamp), "-i", actualPath, "-ss", String(timestamp), "-i", referencePath, "-filter_complex", filter, "-frames:v", "1", "-f", "null", "-"]);
+    similarity = await exec("ffmpeg", ["-nostdin", "-v", "info", "-ss", String(timestamp), "-i", actualPath, "-ss", String(timestamp), "-i", referencePath, "-filter_complex", `${prefix}${inputs}ssim=stats_file=-`, "-frames:v", "1", "-f", "null", "-"], { timeout: 15_000, maxBuffer: 2 * 1024 * 1024 });
+    difference = await exec("ffmpeg", ["-nostdin", "-v", "info", "-ss", String(timestamp), "-i", actualPath, "-ss", String(timestamp), "-i", referencePath, "-filter_complex", `${prefix}${inputs}blend=all_mode=difference,bbox`, "-frames:v", "1", "-f", "null", "-"], { timeout: 15_000, maxBuffer: 2 * 1024 * 1024 });
   } catch { throw new Error("visual comparison unavailable"); }
-  const output = `${result.stdout}\n${result.stderr}`;
-  return { similarity: parseSimilarity(output), difference: parseBbox(output) };
+  return { similarity: parseSimilarity(`${similarity.stdout}\n${similarity.stderr}`), difference: parseBbox(`${difference.stdout}\n${difference.stderr}`) };
 }
 
 /** Measures the frozen visual contract against actual sampled output. No
@@ -216,7 +218,7 @@ export async function measureVisualReplay(path: string, input: VisualProbeInput)
       contentMismatch += 1;
     }
     const protectedBoxes = sample.protectedExistingCaptionBoxes.flatMap((box) => maps.map(({ map }) => map(box)));
-    if (subtitleComparison.difference && protectedBoxes.some((box) => overlap(subtitleComparison.difference!, box) > 0)) throw new Error("visual subtitle overlaps protected caption");
+    if (subtitleComparison.difference && protectedBoxes.some((box) => overlap(subtitleComparison.difference!, box) > 0)) subtitleOverlap += 1;
     const subjectFailures = sample.requiredSubjectBoxes.filter((box) => annotatedVisibility(box, maps, input.cropPlan?.source ?? null) < 0.9).length;
     const textFailures = sample.requiredTextBoxes.filter((box) => annotatedVisibility(box, maps, input.cropPlan?.source ?? null) < 0.9).length;
     requiredSubjectClipped += subjectFailures;

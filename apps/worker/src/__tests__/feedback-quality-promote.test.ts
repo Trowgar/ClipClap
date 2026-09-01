@@ -30,6 +30,7 @@ function decision(overrides: Partial<PromotionDecision> = {}): PromotionDecision
     confidence: "high",
     engineCause: "reproducible",
     evidence: "permanent",
+    recordedResponses: { promptFingerprint: sha("1"), modelFingerprint: sha("2"), requestFingerprint: sha("3"), result: { highlights: [] } },
     expected: { approvedMoment: true, completeBoundary: true, sourceWindow: { start: 1, end: 7 }, visualSamples: [] },
     ...overrides,
   };
@@ -74,6 +75,10 @@ describe("quality feedback promotion", () => {
     await expect(promoteFeedbackCase(decision({ subsystem: "render", expected: { approvedMoment: true, completeBoundary: true, visualSamples: [] } }), deps())).rejects.toMatchObject({ code: "invalid_decision" });
   });
 
+  it("rejects deterministic selection promotion without recorded responses", async () => {
+    await expect(promoteFeedbackCase(decision({ recordedResponses: undefined }), deps())).rejects.toMatchObject({ code: "invalid_decision" });
+  });
+
   it("rejects reference-only visual promotion without a frozen crop plan", async () => {
     await expect(promoteFeedbackCase(decision({ subsystem: "framing", expected: { approvedMoment: true, completeBoundary: true, referenceOnly: true, visualSamples: [visualSample] } }), deps())).rejects.toMatchObject({ code: "unsupported_label" });
   });
@@ -85,7 +90,7 @@ describe("quality feedback promotion", () => {
     expect(dependencies.downloadFile).toHaveBeenCalledWith("evidence/clip.mp4", { method: "GET" });
     expect(dependencies.publishCaseAndLabel).toHaveBeenCalledWith(expect.objectContaining({
       label: expect.objectContaining({ disposition: "positive", verdict: "AS_IS" }),
-      files: expect.objectContaining({ "case.json": expect.any(Uint8Array), "transcript.json": expect.any(Uint8Array), "evidence.mp4": expect.objectContaining({ path: expect.any(String), size: 3, sha256: expect.stringMatching(/^sha256:/) }) }),
+      files: expect.objectContaining({ "case.json": expect.any(Uint8Array), "transcript.json": expect.any(Uint8Array), "recorded-responses.json": expect.any(Uint8Array), "evidence.mp4": expect.objectContaining({ path: expect.any(String), size: 3, sha256: expect.stringMatching(/^sha256:/) }) }),
     }), "/tmp/quality", expect.any(Function));
     const published = (dependencies.publishCaseAndLabel as ReturnType<typeof vi.fn>).mock.calls[0][0] as { files: Record<string, Uint8Array> };
     const materialized = JSON.parse(Buffer.from(published.files["case.json"]).toString("utf8")) as { replay: Record<string, unknown> };

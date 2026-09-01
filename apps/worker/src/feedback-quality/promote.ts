@@ -31,6 +31,13 @@ export interface V1ApprovalIdentity {
   destination: TargetSet;
 }
 
+export interface RecordedResponses {
+  promptFingerprint: ContentHash;
+  modelFingerprint: ContentHash;
+  requestFingerprint: ContentHash;
+  result: Readonly<Record<string, unknown>>;
+}
+
 export interface PromotionExpected {
   approvedMoment: boolean;
   completeBoundary: boolean;
@@ -78,6 +85,8 @@ export interface PromotionDecision {
   engineCause: PromotionCause;
   evidence: EvidenceStatus;
   expected: PromotionExpected;
+  /** Deterministic review response required for selection/boundary replay. */
+  recordedResponses?: RecordedResponses;
 }
 
 export interface QualityClipProjection {
@@ -130,6 +139,7 @@ export interface MaterializedCase {
     evidenceSha256: ContentHash;
     sourceSha256: ContentHash | null;
     sourceDurationSec: number | null;
+    recordedResponsesSha256: ContentHash | null;
   };
   /** Immutable delivered metadata. Observation must replay this exact
    * highlight/render contract; it may not reconstruct one from expectations. */
@@ -181,7 +191,7 @@ export class QualityPromotionError extends Error {
 const HASH = /^sha256:[0-9a-f]{64}$/;
 const UUIDISH = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SUBSYSTEMS: readonly Subsystem[] = ["selection", "boundary", "framing", "subtitles", "render"];
-const TOP_KEYS = ["schemaVersion", "eventId", "feedbackId", "clipId", "jobId", "userId", "feedbackUpdatedAt", "snapshotSha256", "candidateVersion", "verdict", "disposition", "set", "subsystem", "confidence", "engineCause", "evidence", "expected"];
+const TOP_KEYS = ["schemaVersion", "eventId", "feedbackId", "clipId", "jobId", "userId", "feedbackUpdatedAt", "snapshotSha256", "candidateVersion", "verdict", "disposition", "set", "subsystem", "confidence", "engineCause", "evidence", "expected", "recordedResponses"];
 const EXPECTED_KEYS = ["approvedMoment", "completeBoundary", "sourceWindow", "referenceOnly", "focalCoverage", "subtitleCoverage", "visualSamples"];
 
 function ownKeys(value: object, keys: readonly string[]): boolean {
@@ -245,14 +255,22 @@ function expected(value: unknown): PromotionExpected {
   }
   return raw as unknown as PromotionExpected;
 }
+function recordedResponses(value: unknown): RecordedResponses {
+  const raw = object(value);
+  if (!ownKeys(raw, ["promptFingerprint", "modelFingerprint", "requestFingerprint", "result"]) || !hash(raw.promptFingerprint) || !hash(raw.modelFingerprint) || !hash(raw.requestFingerprint) || !raw.result || typeof raw.result !== "object" || Array.isArray(raw.result)) throw new QualityPromotionError("invalid_decision");
+  return raw as unknown as RecordedResponses;
+}
 function validateDecision(raw: PromotionDecision): PromotionDecision {
   const value = object(raw);
-  if (!ownKeys(value, TOP_KEYS) || value.schemaVersion !== 1 || !nonempty(value.eventId) || !nonempty(value.feedbackId) || !nonempty(value.clipId) || !nonempty(value.jobId) || !nonempty(value.userId) || !validDate(value.feedbackUpdatedAt) ||
+  const topKeys = TOP_KEYS.filter((key) => Object.prototype.hasOwnProperty.call(value, key) || key !== "recordedResponses");
+  if (!ownKeys(value, topKeys) || value.schemaVersion !== 1 || !nonempty(value.eventId) || !nonempty(value.feedbackId) || !nonempty(value.clipId) || !nonempty(value.jobId) || !nonempty(value.userId) || !validDate(value.feedbackUpdatedAt) ||
       !hash(value.snapshotSha256) || !hash(value.candidateVersion) || !["AS_IS", "EDIT", "NO"].includes(value.verdict as string) ||
       !["positive", "confirmed_negative", "exclude"].includes(value.disposition as string) || !["eval", "holdout"].includes(value.set as string) ||
       !SUBSYSTEMS.includes(value.subsystem as Subsystem) || !["high", "medium"].includes(value.confidence as string) ||
       !["reproducible", "subjective", "source", "missing_evidence"].includes(value.engineCause as string) || !["permanent", "missing"].includes(value.evidence as string)) throw new QualityPromotionError("invalid_decision");
   expected(value.expected);
+  if (value.recordedResponses !== undefined) recordedResponses(value.recordedResponses);
+  if ((value.subsystem === "selection" || value.subsystem === "boundary") && value.recordedResponses === undefined) throw new QualityPromotionError("invalid_decision");
   const expectedValue = value.expected as PromotionExpected;
   if (["framing", "subtitles", "render"].includes(value.subsystem as string) && expectedValue.visualSamples.length === 0) throw new QualityPromotionError("invalid_decision");
   if (value.subsystem === "framing" && !expectedValue.visualSamples.some((sample) => sample.requiredSubjectBoxes.length > 0)) throw new QualityPromotionError("invalid_decision");
@@ -398,10 +416,12 @@ export async function promoteFeedbackCase(rawDecision: PromotionDecision, depend
       if (evidence.size === 0) throw new QualityPromotionError("evidence_missing");
       const needsTranscript = value.subsystem === "selection" || value.subsystem === "boundary";
       const transcript = needsTranscript ? Buffer.from(canonicalJson(snapshot.job.transcriptJson)) : null;
+      const recorded = needsTranscript ? value.recordedResponses : undefined;
+      const recordedBytes = recorded ? Buffer.from(`${canonicalJson({ recorded: { promptFingerprint: recorded.promptFingerprint, modelFingerprint: recorded.modelFingerprint, requestFingerprint: recorded.requestFingerprint }, result: recorded.result })}\n`) : null;
       const sourceKey = !needsTranscript && !value.expected.referenceOnly ? (snapshot.job.normalizedArtifactKey ?? snapshot.job.sourceArtifactKey) : null;
       const source = sourceKey ? await downloadBounded(dependencies, sourceKey, MAX_SOURCE_BYTES, spoolDir) : null;
       if (sourceKey && (!source || source.size === 0)) throw new QualityPromotionError("inputs_missing");
-      const inputs = { transcriptSha256: transcript ? sha256(transcript) : null, evidenceSha256: evidence.sha256, sourceSha256: source ? source.sha256 : null, sourceDurationSec: snapshot.job.sourceDurationSec };
+      const inputs = { transcriptSha256: transcript ? sha256(transcript) : null, evidenceSha256: evidence.sha256, sourceSha256: source ? source.sha256 : null, sourceDurationSec: snapshot.job.sourceDurationSec, recordedResponsesSha256: recordedBytes ? sha256(recordedBytes) : null };
       const replay = {
         highlight: {
           start: snapshot.clip.startTime, end: snapshot.clip.endTime, title: snapshot.clip.title,
@@ -432,6 +452,7 @@ export async function promoteFeedbackCase(rawDecision: PromotionDecision, depend
       // the same bytes for both.
       const files: Record<string, BundleFilePayload> = { "case.json": Buffer.from(`${canonicalJson(materialized)}\n`), "evidence.mp4": evidence };
       if (source) files["source.mp4"] = source;
+      if (recordedBytes) files["recorded-responses.json"] = recordedBytes;
       if (transcript) files["transcript.json"] = new Uint8Array(transcript);
       const result = await publish({ files, label }, root, () => destinationGuard(value.feedbackId, value.set));
       if (result.status === "indeterminate") throw new QualityPromotionError("publication_failed");

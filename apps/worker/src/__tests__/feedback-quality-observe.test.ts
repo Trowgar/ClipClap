@@ -34,7 +34,7 @@ const sampleCase = (set: "eval" | "holdout" = "eval"): MaterializedCase => ({
   subsystem: "selection",
   confidence: "high",
   expected: { approvedMoment: true, completeBoundary: true, visualSamples: [] },
-  inputs: { transcriptSha256: hash("d"), evidenceSha256: hash("e"), sourceSha256: null, sourceDurationSec: 30 },
+  inputs: { transcriptSha256: hash("d"), evidenceSha256: hash("e"), sourceSha256: null, sourceDurationSec: 30, recordedResponsesSha256: null },
   replay: { highlight: { start: 0, end: 10, title: "sample", hookStart: 1, hookEnd: 2, payoffAt: 5, language: "en", clipKind: "speech" }, subtitleTrack: null, cropPlan: null, renderManifest: null, reframeConfig: null, musicDirection: null, blackTail: null, sourceUrl: null },
 });
 
@@ -313,8 +313,9 @@ describe("feedback quality observation runner", () => {
     const exec: VisualProbeExec = vi.fn(async (_file: string, args: readonly string[]) => {
       calls.push([...args]);
       if (args[0] === "-show_entries") return { stdout: JSON.stringify({ streams: [{ width: 1080, height: 1920, nb_read_frames: "1" }] }), stderr: "" };
-      if (args.some((arg) => arg.includes("blend="))) return { stdout: "SSIM Y:1.000000 (inf)\n", stderr: "n:0 x1:600 x2:800 y1:192 y2:384\n" };
-      return { stdout: "n:0 x1:600 x2:800 y1:192 y2:384\n", stderr: "" };
+      if (args.some((arg) => arg.includes("ssim="))) return { stdout: "SSIM Y:1.000000 (inf)\n", stderr: "" };
+      if (args.some((arg) => arg.includes("blend="))) return { stdout: "", stderr: "n:0 x1:600 x2:800 y1:192 y2:384\n" };
+      return { stdout: "", stderr: "" };
     });
     const result = await measureVisualReplay("/tmp/render.mp4", {
       cropPlan: { version: 1, engine: "faces", source: { width: 1920, height: 1080 }, shots: [{ start: 0, end: 2, layout: "single", x: 420 }] },
@@ -338,8 +339,9 @@ describe("feedback quality observation runner", () => {
   it("reports each annotated visual violation instead of defaulting it to zero", async () => {
     const exec: VisualProbeExec = vi.fn(async (_file: string, args: readonly string[]) => {
       if (args[0] === "-show_entries") return { stdout: JSON.stringify({ streams: [{ width: 1080, height: 1920, nb_read_frames: "1" }] }), stderr: "" };
-      if (args.some((arg) => arg.includes("blend="))) return { stdout: "SSIM Y:0.100000 (0.1)\n", stderr: "" };
-      return { stdout: "n:0 x1:0 x2:1000 y1:0 y2:1000\n", stderr: "" };
+      if (args.some((arg) => arg.includes("ssim="))) return { stdout: "SSIM Y:0.100000 (0.1)\n", stderr: "" };
+      if (args.some((arg) => arg.includes("blend="))) return { stdout: "", stderr: "n:0 x1:0 x2:1000 y1:0 y2:1000\n" };
+      return { stdout: "", stderr: "" };
     });
     const result = await measureVisualReplay("/tmp/render.mp4", {
       cropPlan: { version: 1, engine: "faces", source: { width: 1920, height: 1080 }, shots: [{ start: 0, end: 2, layout: "single", x: 0 }] },
@@ -347,7 +349,7 @@ describe("feedback quality observation runner", () => {
       immutableReferencePath: "/tmp/evidence.mp4",
       highlightStart: 0,
       assPath: "/tmp/subtitles.ass",
-      samples: [{ timestamp: 1, expectedSubtitleText: "", requiredSubjectBoxes: [{ x: .9, y: .2, w: .1, h: .1 }], requiredTextBoxes: [{ x: .9, y: .2, w: .1, h: .1 }], protectedExistingCaptionBoxes: [{ x: .5, y: .5, w: .2, h: .2 }] }],
+      samples: [{ timestamp: 1, expectedSubtitleText: "", requiredSubjectBoxes: [{ x: .9, y: .2, w: .1, h: .1 }], requiredTextBoxes: [{ x: .9, y: .2, w: .1, h: .1 }], protectedExistingCaptionBoxes: [{ x: .1, y: .1, w: .2, h: .2 }] }],
       exec,
     });
     expect(result.requiredSubjectClipped).toBeGreaterThan(0);
@@ -355,6 +357,7 @@ describe("feedback quality observation runner", () => {
     expect(result.focalFailures).toBeGreaterThan(0);
     expect(result.contentMatch).toBe(0);
     expect(result.approvedMomentRetained).toBe(0);
+    expect(result.subtitleOverlap).toBeGreaterThan(0);
   });
 
   it("fails when a required visual annotation or probe is unavailable", async () => {
@@ -364,12 +367,15 @@ describe("feedback quality observation runner", () => {
 
   it("anchors retained content to immutable evidence, not the generated no-ASS reference", async () => {
     let comparisons = 0;
+    const calls: Array<[string, readonly string[]]> = [];
     const exec: VisualProbeExec = vi.fn(async (_file: string, args: readonly string[]) => {
+      calls.push([_file, args]);
       if (args[0] === "-show_entries") return { stdout: JSON.stringify({ streams: [{ width: 1080, height: 1920, nb_read_frames: "1" }] }), stderr: "" };
-      if (args.some((arg) => arg.includes("blend="))) {
+      if (args.some((arg) => arg.includes("ssim="))) {
         comparisons += 1;
         return { stdout: `SSIM Y:${comparisons === 1 ? "0.100000" : "1.000000"}`, stderr: "" };
       }
+      if (args.some((arg) => arg.includes("blend="))) return { stdout: "", stderr: "" };
       return { stdout: "", stderr: "" };
     });
     const result = await measureVisualReplay("/tmp/candidate.mp4", {
@@ -377,13 +383,13 @@ describe("feedback quality observation runner", () => {
       samples: [{ timestamp: 0, expectedSubtitleText: "", requiredSubjectBoxes: [], requiredTextBoxes: [], protectedExistingCaptionBoxes: [] }], exec,
     });
     expect(result.contentMatch).toBe(0);
-    expect(exec).toHaveBeenCalledWith("ffmpeg", expect.arrayContaining(["/tmp/immutable-evidence.mp4"]));
+    expect(calls.some(([file, args]) => file === "ffmpeg" && args.includes("/tmp/immutable-evidence.mp4"))).toBe(true);
   });
 
   it("rejects a rendered cue whose text differs from frozen review text", async () => {
     const exec: VisualProbeExec = vi.fn(async (_file: string, args: readonly string[]) => args[0] === "-show_entries"
       ? { stdout: JSON.stringify({ streams: [{ width: 1080, height: 1920, nb_read_frames: "1" }] }), stderr: "" }
-      : { stdout: "SSIM Y:1.000000", stderr: "n:0 x1:500 x2:700 y1:300 y2:400" });
+      : args.some((arg) => arg.includes("ssim=")) ? { stdout: "SSIM Y:1.000000", stderr: "" } : { stdout: "", stderr: "n:0 x1:500 x2:700 y1:300 y2:400" });
     await expect(measureVisualReplay("/tmp/candidate.mp4", {
       referencePath: "/tmp/no-ass.mp4", immutableReferencePath: "/tmp/evidence.mp4", highlightStart: 0, cropPlan: null, assPath: "/tmp/candidate.ass",
       cues: [{ start: 0, end: 1, text: "wrong" }], samples: [{ timestamp: 0, expectedSubtitleText: "expected", requiredSubjectBoxes: [], requiredTextBoxes: [], protectedExistingCaptionBoxes: [] }], exec,
@@ -394,8 +400,8 @@ describe("feedback quality observation runner", () => {
     let comparisons = 0;
     const exec: VisualProbeExec = vi.fn(async (_file: string, args: readonly string[]) => {
       if (args[0] === "-show_entries") return { stdout: JSON.stringify({ streams: [{ width: 1080, height: 1920, nb_read_frames: "1" }] }), stderr: "" };
-      comparisons += 1;
-      return { stdout: "SSIM Y:0.990000", stderr: comparisons === 2 ? "n:0 x1:500 x2:700 y1:300 y2:400" : "" };
+      if (args.some((arg) => arg.includes("ssim="))) { comparisons += 1; return { stdout: "SSIM Y:0.990000", stderr: "" }; }
+      return { stdout: "", stderr: comparisons === 2 ? "n:0 x1:500 x2:700 y1:300 y2:400" : "" };
     });
     const result = await measureVisualReplay("/tmp/candidate.mp4", {
       referencePath: "/tmp/no-ass.mp4", immutableReferencePath: "/tmp/evidence.mp4", highlightStart: 0, cropPlan: null, assPath: "/tmp/candidate.ass",
