@@ -104,10 +104,28 @@ including `ledger`, `cases`, `observations`, and `decisions`. Preserve `0700` di
 files. There is no supported partial restore or cross-host reconciliation.
 
 The current development `docker-compose.yml` is not a production rollout adapter: it bind-mounts
-source and has no immutable image/config mount for this gate. The deploy command therefore fails
-closed unless an explicit injected production adapter or container-side config path is supplied.
-An immutable production compose/image adapter, including rollback artifact preparation, remains
-pending; a local dev compose run is not deployment evidence.
+source and has no immutable image/config mount for this gate. Use the release CLI and the checked-in
+`docker-compose.production.yml`; a local dev compose run is not deployment evidence. The current
+release adapter still has known integration gaps (for example, deployment depends on a host Docker
+environment and the production image/config contract); treat any nonzero release/rollback result as
+a hard stop until those gaps are corrected.
+
+The release host must provide these private inputs before invoking the CLI:
+
+- `FEEDBACK_QUALITY_ROOT`: private corpus/decision/rollback store root.
+- `FEEDBACK_QUALITY_CONFIG_HOST`: host path to the `0600` quality config JSON. It is mounted read-only
+  at `/run/clipclap/feedback-quality-config.json` and workers receive that container path through
+  `FEEDBACK_QUALITY_CONFIG_FILE`.
+- `CLIPCLAP_PRODUCTION_ENV_FILE`: host path to the `0600` production env file, mounted as
+  `./production.env` by the production compose adapter.
+- `CLIPCLAP_PRODUCTION_NETWORK`: existing external Docker network (defaults to `clipclap_default`).
+- `CLIPCLAP_PRODUCTION_PROJECT`: project name required by the rollback CLI and rollback artifact.
+
+Build and push an immutable worker image first, record its `repo@sha256:<digest>` reference, and
+ensure its OCI revision label is the 40-character candidate commit. The release adapter verifies the
+candidate digest/revision and captures the pre-rollout image digests, production env, config, and
+compose material into an immutable private rollback artifact before recreating any worker. The
+artifact is durable only after its ledger event commits.
 
 ### Promote reviewed cases
 
@@ -174,17 +192,27 @@ private corpus.
 ### Queue preflight, canary, and rollout
 
 Only deploy a non-expired passing decision whose candidate commit/config/corpus match the current
-checkout. Verify the effective environment, then name each worker explicitly. The deploy command
-checks the corresponding BullMQ queue immediately before each service, recreates workers in order,
-waits for startup/canary evidence, and stops on the first failure:
+checkout. Verify the effective environment, then name each worker explicitly. The release CLI wraps
+the deploy command, checks the corresponding BullMQ queue immediately before each service, creates
+the rollback artifact, recreates workers in order, waits for startup/canary evidence, and stops on
+the first failure:
 
 ```bash
-npm run feedback-quality-deploy -w @clipclap/worker -- --decision <decision-id> --service worker-analyze --service worker-render
+npm run feedback-quality-release -w @clipclap/worker -- --image registry.example/clipclap-worker@sha256:<immutable-digest> --project clipclap --decision <decision-id> --service worker-analyze --service worker-render
 ```
 
 Inspect startup logs and one canary job end-to-end (delivery included) before proceeding. A partial
 rollout produces a private report and must be investigated; do not continue manually around a failed
-service. Roll back using the recorded rollback artifact and verify the canary again.
+service. Roll back using the recorded rollback artifact and verify the canary again:
+
+```bash
+npm run feedback-quality-rollback -w @clipclap/worker -- --rollback <rollback-artifact-id>
+```
+
+Rollback uses the artifact's immutable compose/config/env material and requires
+`FEEDBACK_QUALITY_ROOT`, `CLIPCLAP_PRODUCTION_PROJECT`, and the host Docker network/config paths
+to remain available. Verify every restored service's image digest and OCI revision before reopening
+queues.
 
 An override requires a nonempty private `0600` reason file. It is an append-only audit event and may
 bypass `decision_not_pass`, expiry, and binding mismatches, but it does not bypass malformed
