@@ -85,3 +85,102 @@ V1 has no built-in backup, replication, restore, or cross-host reconciliation. B
 private `.corpus/feedback-learning` tree as one protected unit while no command is running. Keep the
 backup private, preserve modes, and do not commit it. A partial copy of exports without the ledger, or
 the ledger without exports, is not a supported restore.
+
+## Feedback quality gate V2
+
+V2 is a private, fail-closed replay gate. It consumes reviewed V1 approvals and never writes customer
+rows, changes analyzer settings, or promotes a candidate by itself. Run all commands from the
+repository root on the trusted host. Use a separate private root and keep it mode `0700`:
+
+```bash
+install -d -m 0700 apps/worker/.corpus/feedback-quality-gate
+```
+
+Before the first production run, rebuild the worker image so `fs-ext` and the current Prisma Client
+are installed. The host and image must use Node 20. The private root must be mounted into the worker;
+it must not be baked into an image or copied into git. Back up the complete
+`apps/worker/.corpus/feedback-quality-gate` tree as one protected unit while no command is running,
+including `ledger`, `cases`, `observations`, and `decisions`. Preserve `0700` directories and `0600`
+files. There is no supported partial restore or cross-host reconciliation.
+
+### Promote reviewed cases
+
+Export and review feedback through the V1 workflow above. Only deterministic `AS_IS` positives and
+confirmed engine-caused `EDIT`/`NO` negatives with complete evidence belong in V2. Put the private
+promotion decision JSON in a regular `0600` file; the command rejects symlinks, special files, wrong
+modes, stale identities, missing transcript/source artifacts, and subjective or source-caused rows:
+
+```bash
+npm run feedback-quality-promote -w @clipclap/worker -- promote --decision-file /trusted/private/quality-decision.json
+```
+
+Retire an active case only with a private nonempty `0600` reason file. Retirement is an append-only
+audit event and does not move a feedback ID between eval and holdout:
+
+```bash
+npm run feedback-quality-promote -w @clipclap/worker -- retire --target-event <event-id> --reason-file /trusted/private/retirement-reason.txt
+```
+
+The case ledger is content-addressed and private. A case is selected into exactly one immutable lane:
+the minimum eval corpus is four positives and six negatives; holdout is one positive and two
+negatives. Keep the holdout assignments private and do not use them to tune a candidate.
+
+### Observe baseline and candidate
+
+Prepare a private `0600` observation config containing the reviewed prompt/model/request fingerprints
+and the explicit environment allowlist. Run the current worker commit as a baseline, then run the
+candidate at the same commit/config/corpus/runner version. Run both eval and holdout; replayed
+observations use recorded responses, while a prompt/model/request fingerprint change requires
+`--live` (three independently stored live attempts):
+
+```bash
+npm run feedback-quality-observe -w @clipclap/worker -- --set eval --mode baseline --commit "$(git rev-parse HEAD)" --config-file /trusted/private/quality-config.json
+npm run feedback-quality-observe -w @clipclap/worker -- --set eval --mode candidate --commit "$(git rev-parse HEAD)" --config-file /trusted/private/quality-config.json
+npm run feedback-quality-observe -w @clipclap/worker -- --set holdout --mode baseline --commit "$(git rev-parse HEAD)" --config-file /trusted/private/quality-config.json
+npm run feedback-quality-observe -w @clipclap/worker -- --set holdout --mode candidate --commit "$(git rev-parse HEAD)" --config-file /trusted/private/quality-config.json
+```
+
+Record the four safe observation IDs printed by the command. Do not copy case text, transcripts,
+source keys, or model responses into shell history, tickets, or logs. An observation is immutable;
+rerunning an identical command is a safe content-addressed no-op.
+
+### Evaluate and authorize
+
+Run eval first. Holdout is read only after eval passes. The gate binds all observations to commit,
+effective config, complete corpus, and runner version; it expires a decision after 24 hours (or the
+earliest observation expiry). Any missing, stale, uncertain, mismatched, or invalid state exits
+nonzero and leaves deployment unauthorized:
+
+```bash
+npm run feedback-quality-gate -w @clipclap/worker -- --baseline-eval <id> --candidate-eval <id> --baseline-holdout <id> --candidate-holdout <id> --claim non-regression
+```
+
+Keep the resulting decision ID and its redacted report. Reports contain only machine reasons,
+digests, counts, and observation/decision IDs; private feedback identity and media remain in the
+private corpus.
+
+### Queue preflight, canary, and rollout
+
+Only deploy a non-expired passing decision whose candidate commit/config/corpus match the current
+checkout. Verify the effective environment, then name each worker explicitly. The deploy command
+checks the corresponding BullMQ queue immediately before each service, recreates workers in order,
+waits for startup/canary evidence, and stops on the first failure:
+
+```bash
+npm run feedback-quality-deploy -w @clipclap/worker -- --decision <decision-id> --service worker-analyze --service worker-render
+```
+
+Inspect startup logs and one canary job end-to-end (delivery included) before proceeding. A partial
+rollout produces a private report and must be investigated; do not continue manually around a failed
+service. Roll back using the recorded rollback artifact and verify the canary again.
+
+An override requires a nonempty private `0600` reason file. It is an append-only audit event, does
+not turn a failed quality comparison into a pass, and should be used only under incident authority:
+
+```bash
+npm run feedback-quality-deploy -w @clipclap/worker -- --decision <decision-id> --service worker-analyze --override-reason-file /trusted/private/override-reason.txt
+```
+
+Never retry a command after `durability_uncertain` or `commit_indeterminate` without inspecting the
+private store and ledger. Exact content-addressed replays are safe; an integrity mismatch is a hard
+stop. A failing or expired quality decision leaves production unchanged.
