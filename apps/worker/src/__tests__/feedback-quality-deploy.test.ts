@@ -7,6 +7,35 @@ import { contentId } from "../feedback-quality/store";
 import { deployWithQualityGate, type DeployDependencies, type DeployRequest, type GateDeployDecision, type WorkerService } from "../feedback-quality/deploy";
 import { effectiveConfigDigest } from "../feedback-quality/config";
 
+const redisHarness = vi.hoisted(() => ({
+  clients: [] as Array<{ get: ReturnType<typeof vi.fn>; set: ReturnType<typeof vi.fn>; eval: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }>,
+  create: undefined as undefined | (() => { get: ReturnType<typeof vi.fn>; set: ReturnType<typeof vi.fn>; eval: ReturnType<typeof vi.fn>; disconnect: ReturnType<typeof vi.fn> }),
+}));
+const queueHarness = vi.hoisted(() => ({
+  queues: [] as Array<Record<string, unknown>>,
+  create: undefined as undefined | ((name: string) => Record<string, unknown>),
+}));
+
+vi.mock("@clipclap/shared/lib/redis", () => ({
+  createQualityRedis: () => {
+    if (!redisHarness.create) throw new Error("unexpected quality Redis client");
+    const client = redisHarness.create();
+    redisHarness.clients.push(client);
+    return client;
+  },
+}));
+
+vi.mock("bullmq", () => ({
+  Queue: class {
+    constructor(name: string) {
+      if (!queueHarness.create) throw new Error(`unexpected quality queue: ${name}`);
+      const queue = queueHarness.create(name);
+      queueHarness.queues.push(queue);
+      return queue;
+    }
+  },
+}));
+
 const hash = (seed: string) => sha256(seed);
 const commit = "a".repeat(40);
 
@@ -64,9 +93,79 @@ function deps(overrides: Partial<DeployDependencies> = {}): DeployDependencies {
   };
 }
 
+function never<T>(): Promise<T> { return new Promise<T>(() => undefined); }
+
+async function boundedResult<T>(operation: Promise<T>, milliseconds = 150): Promise<T | "timed_out"> {
+  return Promise.race([operation, new Promise<"timed_out">((resolve) => setTimeout(() => resolve("timed_out"), milliseconds))]);
+}
+
+function installQualityRedisHarness(options: { loseOwnership?: boolean; countsHang?: boolean; pauseHangs?: boolean } = {}) {
+  let paused = false;
+  let fenceToken: string | undefined;
+  const resume = vi.fn(async () => { paused = false; });
+  redisHarness.clients = [];
+  queueHarness.queues = [];
+  redisHarness.create = () => ({
+    get: vi.fn(async () => options.loseOwnership ? "other-rollout" : fenceToken ?? null),
+    set: vi.fn(async (_key: string, value: string) => { fenceToken = value; return "OK"; }),
+    eval: vi.fn(async () => 1),
+    disconnect: vi.fn(),
+  });
+  queueHarness.create = (name) => ({
+    getJobCounts: vi.fn(() => options.countsHang ? never() : Promise.resolve({ active: 0, waiting: 0, delayed: 0, paused: 0, prioritized: 0, "waiting-children": 0 })),
+    isPaused: vi.fn(async () => paused),
+    pause: vi.fn(async () => { paused = true; if (options.pauseHangs) return never<void>(); }),
+    resume,
+    add: vi.fn(),
+    getJob: vi.fn(),
+    close: vi.fn(async () => undefined),
+    name,
+  });
+  return { resume, isPaused: () => paused };
+}
+
 describe("feedback quality deployment", () => {
   const roots: string[] = [];
   afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+
+  it("bounds a never-resolving quality lease read and never spawns", async () => {
+    installQualityRedisHarness({ countsHang: true });
+    const spawn = vi.fn(async () => ({ exitCode: 0 }));
+    const d = deps({
+      redisOperationTimeoutMs: 10,
+      spawn,
+      queueCounts: undefined,
+      runCanary: undefined,
+    });
+    const outcome = await boundedResult(deployWithQualityGate(request({ services: ["worker-analyze"] }), d));
+    expect(outcome).not.toBe("timed_out");
+    expect(outcome).toMatchObject({ status: "failed", reasons: ["queue_read_failed"] });
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("recovers a server-applied pause when the pause reply times out, audits it, and closes quality clients", async () => {
+    const harness = installQualityRedisHarness({ pauseHangs: true });
+    const spawn = vi.fn(async () => ({ exitCode: 0 }));
+    const d = deps({ redisOperationTimeoutMs: 10, spawn, queueCounts: undefined, runCanary: undefined });
+    const outcome = await boundedResult(deployWithQualityGate(request({ services: ["worker-analyze"] }), d));
+    expect(outcome).toMatchObject({ status: "failed", reasons: ["queue_read_failed"] });
+    expect(harness.isPaused()).toBe(false);
+    expect(harness.resume).toHaveBeenCalledOnce();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(d.appendEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "quality_rollout_failed", phase: "queue", leaseRecovery: "recovered" }), "/private/corpus");
+    expect(redisHarness.clients).toHaveLength(2);
+    expect(redisHarness.clients.every((client) => client.disconnect.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("does not resume a paused queue after recovery finds a different lease owner", async () => {
+    const harness = installQualityRedisHarness({ loseOwnership: true, pauseHangs: true });
+    const d = deps({ redisOperationTimeoutMs: 10, queueCounts: undefined, runCanary: undefined });
+    const outcome = await boundedResult(deployWithQualityGate(request({ services: ["worker-analyze"] }), d));
+    expect(outcome).toMatchObject({ status: "failed", reasons: ["queue_read_failed"] });
+    expect(harness.isPaused()).toBe(true);
+    expect(harness.resume).not.toHaveBeenCalled();
+    expect(d.appendEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "quality_rollout_failed", phase: "queue", leaseRecovery: "ownership_lost" }), "/private/corpus");
+  });
 
   it("recreates explicitly named workers in order with an argv-only docker command", async () => {
     const d = deps();
