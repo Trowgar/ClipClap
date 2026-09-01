@@ -21,13 +21,15 @@ export type RenderProbe = Readonly<{
 
 export type RenderLaneOptions = Readonly<{
   sourcePath: string;
+  /** Immutable delivered evidence used as visual ground truth. */
+  immutableReferencePath?: string;
   highlight: Highlight;
   transcriptSegments: WhisperSegment[];
   language?: string | null;
   subtitlesOn?: boolean;
   reframeConfig?: ReframeConfig;
   musicDirection?: MusicDirectionOpts;
-  probe: (path: string, qualityCase: MaterializedCase, context?: Readonly<{ cropPlan: CropPlan | null; assPath?: string; cues: readonly unknown[]; samples: MaterializedCase["expected"]["visualSamples"]; referencePath: string; highlightStart: number }>) => Promise<RenderProbe>;
+  probe: (path: string, qualityCase: MaterializedCase, context?: Readonly<{ cropPlan: CropPlan | null; assPath?: string; cues: readonly unknown[]; samples: MaterializedCase["expected"]["visualSamples"]; referencePath: string; immutableReferencePath: string; highlightStart: number }>) => Promise<RenderProbe>;
   segmentsToCues?: typeof segmentsToCues;
   createAssFilter?: typeof createAssFilter;
   computeCropPlan?: typeof computeCropPlan;
@@ -81,6 +83,7 @@ export async function observeRenderCase(
     // finally; pixel comparison can therefore distinguish wrong content from
     // a duration-preserving render.
     if (qualityCase.expected.visualSamples.length > 0) {
+      if (!options.immutableReferencePath) throw new Error("visual immutable reference missing");
       const referenceGraph = crop.plan ? graphFn(crop.plan, undefined, options.musicDirection) : undefined;
       const referenceCuts = await cutWithFallback(undefined, referenceGraph);
       const reference = referenceCuts[0] as CutResult | undefined;
@@ -88,7 +91,7 @@ export async function observeRenderCase(
       referenceCutPath = reference.clipPath;
       referencePath = reference.clipPath;
     } else referencePath = outputPath;
-    const probe = await options.probe(outputPath, qualityCase, { cropPlan: crop.plan, assPath: ass?.assPath, cues, samples: qualityCase.expected.visualSamples, referencePath, highlightStart: options.highlight.start });
+    const probe = await options.probe(outputPath, qualityCase, { cropPlan: crop.plan, assPath: ass?.assPath, cues, samples: qualityCase.expected.visualSamples, referencePath, immutableReferencePath: options.immutableReferencePath ?? outputPath, highlightStart: options.highlight.start });
     if (!probe.visualMeasured) throw new Error("visual probe unavailable");
     const expectedDuration = Math.max(0.001, options.highlight.end - options.highlight.start);
     const overlap = probe.approvedWindowOverlap;

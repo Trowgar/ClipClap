@@ -9,7 +9,7 @@ const sha = (digit: string) => `sha256:${digit.repeat(64)}` as const;
 const updatedAt = "2026-08-31T12:00:00.000Z";
 const snapshotHash = sha256(canonicalJson({ title: "clip" }));
 const candidateHash = sha256(`feedback-1\n${updatedAt}\n${snapshotHash}`);
-const visualSample = { timestamp: 0, requiredSubjectBoxes: [{ x: 0.1, y: 0.1, w: 0.1, h: 0.1 }], requiredTextBoxes: [], protectedExistingCaptionBoxes: [] } as const;
+const visualSample = { timestamp: 0, expectedSubtitleText: "", requiredSubjectBoxes: [{ x: 0.1, y: 0.1, w: 0.1, h: 0.1 }], requiredTextBoxes: [], protectedExistingCaptionBoxes: [] } as const;
 type AuthorityLock = NonNullable<PromotionDependencies["withV1AuthorityLock"]>;
 
 function decision(overrides: Partial<PromotionDecision> = {}): PromotionDecision {

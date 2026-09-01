@@ -237,9 +237,9 @@ describe("feedback quality observation runner", () => {
   it("renders the visual reference with the same crop plan but without ASS", async () => {
     const graphs: Array<string | undefined> = [];
     let cuts = 0;
-    const qualityCase = { ...sampleCase(), subsystem: "render" as const, expected: { ...sampleCase().expected, visualSamples: [{ timestamp: 1, requiredSubjectBoxes: [], requiredTextBoxes: [], protectedExistingCaptionBoxes: [] }] } };
+    const qualityCase = { ...sampleCase(), subsystem: "render" as const, expected: { ...sampleCase().expected, visualSamples: [{ timestamp: 1, expectedSubtitleText: "", requiredSubjectBoxes: [], requiredTextBoxes: [], protectedExistingCaptionBoxes: [] }] } };
     await observeRenderCase(qualityCase, {
-      sourcePath: "/private/source.mp4", highlight: { start: 0, end: 2, title: "x" } as never, transcriptSegments: [],
+      sourcePath: "/private/source.mp4", immutableReferencePath: "/private/evidence.mp4", highlight: { start: 0, end: 2, title: "x" } as never, transcriptSegments: [],
       segmentsToCues: (() => [{ start: 0, end: 2, text: "hello" }]) as never,
       createAssFilter: (async () => ({ filter: "ass-filter", assPath: "/tmp/a.ass" })) as never,
       computeCropPlan: (async () => ({ plan: { version: 1, engine: "faces", source: { width: 1920, height: 1080 }, shots: [{ start: 0, end: 2, layout: "single", x: 420 }] }, shotCount: 1, detectMs: 1 })) as never,
@@ -252,9 +252,9 @@ describe("feedback quality observation runner", () => {
   });
 
   it("fails the render gate for wrong content even when duration and geometry match", async () => {
-    const qualityCase = { ...sampleCase(), subsystem: "render" as const, expected: { ...sampleCase().expected, visualSamples: [{ timestamp: 1, requiredSubjectBoxes: [], requiredTextBoxes: [], protectedExistingCaptionBoxes: [] }] } };
+    const qualityCase = { ...sampleCase(), subsystem: "render" as const, expected: { ...sampleCase().expected, visualSamples: [{ timestamp: 1, expectedSubtitleText: "", requiredSubjectBoxes: [], requiredTextBoxes: [], protectedExistingCaptionBoxes: [] }] } };
     const result = await observeRenderCase(qualityCase, {
-      sourcePath: "/private/source.mp4", highlight: { start: 0, end: 2, title: "x" } as never, transcriptSegments: [],
+      sourcePath: "/private/source.mp4", immutableReferencePath: "/private/evidence.mp4", highlight: { start: 0, end: 2, title: "x" } as never, transcriptSegments: [],
       segmentsToCues: (() => []) as never,
       computeCropPlan: (async () => ({ plan: null, shotCount: 0, detectMs: 0 })) as never,
       cutClips: (async () => [{ clipPath: "/tmp/wrong-content.mp4", highlight: { start: 0, end: 2, title: "x" } }]) as never,
@@ -298,17 +298,18 @@ describe("feedback quality observation runner", () => {
     const result = await measureVisualReplay("/tmp/render.mp4", {
       cropPlan: { version: 1, engine: "faces", source: { width: 1920, height: 1080 }, shots: [{ start: 0, end: 2, layout: "single", x: 420 }] },
       referencePath: "/tmp/reference.mp4",
+      immutableReferencePath: "/tmp/evidence.mp4",
       highlightStart: 0,
-      cues: [{ start: 0, end: 2 }],
+      cues: [{ start: 0, end: 2, text: "hello" }],
       assPath: "/tmp/subtitles.ass",
-      samples: [{ timestamp: 1, requiredSubjectBoxes: [{ x: .4, y: .2, w: .1, h: .1 }], requiredTextBoxes: [{ x: .4, y: .1, w: .1, h: .1 }], protectedExistingCaptionBoxes: [{ x: .4, y: .1, w: .1, h: .1 }] }],
+      samples: [{ timestamp: 1, expectedSubtitleText: "hello", expectedSubtitleBox: { x: .5, y: .08, w: .3, h: .15 }, requiredSubjectBoxes: [{ x: .4, y: .2, w: .1, h: .1 }], requiredTextBoxes: [{ x: .4, y: .1, w: .1, h: .1 }], protectedExistingCaptionBoxes: [] }],
       exec,
     });
     expect(result.visualMeasured).toBe(true);
     expect(result.requiredSubjectClipped).toBe(0);
     expect(result.requiredTextClipped).toBe(0);
     expect(result.focalFailures).toBe(0);
-    expect(result.subtitleOverlap).toBeGreaterThan(0);
+    expect(result.subtitleOverlap).toBe(0);
     expect(calls.some((args) => args.includes("/tmp/render.mp4"))).toBe(true);
     expect(calls.some((args) => args.some((arg) => arg.includes("blend=all_mode=difference")))).toBe(true);
   });
@@ -322,9 +323,10 @@ describe("feedback quality observation runner", () => {
     const result = await measureVisualReplay("/tmp/render.mp4", {
       cropPlan: { version: 1, engine: "faces", source: { width: 1920, height: 1080 }, shots: [{ start: 0, end: 2, layout: "single", x: 0 }] },
       referencePath: "/tmp/reference.mp4",
+      immutableReferencePath: "/tmp/evidence.mp4",
       highlightStart: 0,
       assPath: "/tmp/subtitles.ass",
-      samples: [{ timestamp: 1, requiredSubjectBoxes: [{ x: .9, y: .2, w: .1, h: .1 }], requiredTextBoxes: [{ x: .9, y: .2, w: .1, h: .1 }], protectedExistingCaptionBoxes: [{ x: .5, y: .5, w: .2, h: .2 }] }],
+      samples: [{ timestamp: 1, expectedSubtitleText: "", requiredSubjectBoxes: [{ x: .9, y: .2, w: .1, h: .1 }], requiredTextBoxes: [{ x: .9, y: .2, w: .1, h: .1 }], protectedExistingCaptionBoxes: [{ x: .5, y: .5, w: .2, h: .2 }] }],
       exec,
     });
     expect(result.requiredSubjectClipped).toBeGreaterThan(0);
@@ -335,7 +337,50 @@ describe("feedback quality observation runner", () => {
   });
 
   it("fails when a required visual annotation or probe is unavailable", async () => {
-    await expect(measureVisualReplay("/tmp/render.mp4", { referencePath: "/tmp/reference.mp4", highlightStart: 0, cropPlan: null, samples: [], exec: vi.fn() })).rejects.toThrow("visual annotation");
-    await expect(measureVisualReplay("/tmp/render.mp4", { referencePath: "/tmp/reference.mp4", highlightStart: 0, cropPlan: null, samples: [{ timestamp: 0, requiredSubjectBoxes: [], requiredTextBoxes: [], protectedExistingCaptionBoxes: [] }], exec: vi.fn(async () => { throw new Error("ffmpeg missing"); }) })).rejects.toThrow("visual probe");
+    await expect(measureVisualReplay("/tmp/render.mp4", { referencePath: "/tmp/reference.mp4", immutableReferencePath: "/tmp/evidence.mp4", highlightStart: 0, cropPlan: null, samples: [], exec: vi.fn() })).rejects.toThrow("visual annotation");
+    await expect(measureVisualReplay("/tmp/render.mp4", { referencePath: "/tmp/reference.mp4", immutableReferencePath: "/tmp/evidence.mp4", highlightStart: 0, cropPlan: null, samples: [{ timestamp: 0, expectedSubtitleText: "", requiredSubjectBoxes: [], requiredTextBoxes: [], protectedExistingCaptionBoxes: [] }], exec: vi.fn(async () => { throw new Error("ffmpeg missing"); }) })).rejects.toThrow("visual probe");
+  });
+
+  it("anchors retained content to immutable evidence, not the generated no-ASS reference", async () => {
+    let comparisons = 0;
+    const exec: VisualProbeExec = vi.fn(async (_file: string, args: readonly string[]) => {
+      if (args[0] === "-show_entries") return { stdout: JSON.stringify({ streams: [{ width: 1080, height: 1920, nb_read_frames: "1" }] }), stderr: "" };
+      if (args.some((arg) => arg.includes("blend="))) {
+        comparisons += 1;
+        return { stdout: `SSIM Y:${comparisons === 1 ? "0.100000" : "1.000000"}`, stderr: "" };
+      }
+      return { stdout: "", stderr: "" };
+    });
+    const result = await measureVisualReplay("/tmp/candidate.mp4", {
+      referencePath: "/tmp/generated-no-ass.mp4", immutableReferencePath: "/tmp/immutable-evidence.mp4", highlightStart: 0, cropPlan: null,
+      samples: [{ timestamp: 0, expectedSubtitleText: "", requiredSubjectBoxes: [], requiredTextBoxes: [], protectedExistingCaptionBoxes: [] }], exec,
+    });
+    expect(result.contentMatch).toBe(0);
+    expect(exec).toHaveBeenCalledWith("ffmpeg", expect.arrayContaining(["/tmp/immutable-evidence.mp4"]));
+  });
+
+  it("rejects a rendered cue whose text differs from frozen review text", async () => {
+    const exec: VisualProbeExec = vi.fn(async (_file: string, args: readonly string[]) => args[0] === "-show_entries"
+      ? { stdout: JSON.stringify({ streams: [{ width: 1080, height: 1920, nb_read_frames: "1" }] }), stderr: "" }
+      : { stdout: "SSIM Y:1.000000", stderr: "n:0 x1:500 x2:700 y1:300 y2:400" });
+    await expect(measureVisualReplay("/tmp/candidate.mp4", {
+      referencePath: "/tmp/no-ass.mp4", immutableReferencePath: "/tmp/evidence.mp4", highlightStart: 0, cropPlan: null, assPath: "/tmp/candidate.ass",
+      cues: [{ start: 0, end: 1, text: "wrong" }], samples: [{ timestamp: 0, expectedSubtitleText: "expected", requiredSubjectBoxes: [], requiredTextBoxes: [], protectedExistingCaptionBoxes: [] }], exec,
+    })).rejects.toThrow("subtitle text mismatch");
+  });
+
+  it("accepts correctly placed frozen subtitle text with content matching evidence", async () => {
+    let comparisons = 0;
+    const exec: VisualProbeExec = vi.fn(async (_file: string, args: readonly string[]) => {
+      if (args[0] === "-show_entries") return { stdout: JSON.stringify({ streams: [{ width: 1080, height: 1920, nb_read_frames: "1" }] }), stderr: "" };
+      comparisons += 1;
+      return { stdout: "SSIM Y:0.990000", stderr: comparisons === 2 ? "n:0 x1:500 x2:700 y1:300 y2:400" : "" };
+    });
+    const result = await measureVisualReplay("/tmp/candidate.mp4", {
+      referencePath: "/tmp/no-ass.mp4", immutableReferencePath: "/tmp/evidence.mp4", highlightStart: 0, cropPlan: null, assPath: "/tmp/candidate.ass",
+      cues: [{ start: 0, end: 1, text: "{\\b1}Expected" }], samples: [{ timestamp: 0, expectedSubtitleText: "expected", expectedSubtitleBox: { x: .4, y: .1, w: .3, h: .2 }, requiredSubjectBoxes: [], requiredTextBoxes: [], protectedExistingCaptionBoxes: [] }], exec,
+    });
+    expect(result.visualMeasured).toBe(true);
+    expect(result.contentMatch).toBe(1);
   });
 });

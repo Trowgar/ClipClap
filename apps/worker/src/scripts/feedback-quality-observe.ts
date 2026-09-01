@@ -128,9 +128,9 @@ async function readArtifactJson(kind: "case", id: string, name: string, root: st
   } finally { await opened.close(); }
 }
 
-async function materializeArtifact(id: string, name: string, root: string, directory: string): Promise<string> {
+async function materializeArtifact(id: string, name: string, root: string, directory: string, destinationName = name, expectedSha256?: string): Promise<string> {
   const opened = await openQualityArtifact("case", id, name, root);
-  const path = `${directory}/${name.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+  const path = `${directory}/${destinationName.replace(/[^A-Za-z0-9._-]/g, "_")}`;
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY, 0o600);
@@ -151,7 +151,8 @@ async function materializeArtifact(id: string, name: string, root: string, direc
     const info = await handle.stat();
     if (!info.isFile() || info.nlink !== 1 || (info.mode & 0o7777) !== 0o600 || info.size !== opened.size) throw new ObserveCliError("missing");
     await handle.close(); handle = undefined;
-    await opened.sha256;
+    const digest = await opened.sha256;
+    if (expectedSha256 && digest !== expectedSha256) throw new ObserveCliError("missing");
     return path;
   } finally {
     await handle?.close().catch(() => undefined);
@@ -159,7 +160,7 @@ async function materializeArtifact(id: string, name: string, root: string, direc
   }
 }
 
-async function probeRenderedMedia(path: string, context: Readonly<{ cropPlan: import("../reframe/types").CropPlan | null; assPath?: string; cues: readonly unknown[]; samples: readonly import("../feedback-quality/promote").VisualSample[]; referencePath: string; highlightStart: number }>): Promise<{
+async function probeRenderedMedia(path: string, context: Readonly<{ cropPlan: import("../reframe/types").CropPlan | null; assPath?: string; cues: readonly unknown[]; samples: readonly import("../feedback-quality/promote").VisualSample[]; referencePath: string; immutableReferencePath: string; highlightStart: number; contentThreshold?: number }>): Promise<{
   width: number; height: number; sar: number; duration: number; frameCount: number;
   approvedMomentRetained: number; approvedWindowOverlap: number; contentMatch: number;
   blackTailSeconds: number; frozenTailSeconds: number; subtitleOverlap: number;
@@ -193,7 +194,7 @@ async function probeRenderedMedia(path: string, context: Readonly<{ cropPlan: im
     const result = await execFileAsync(file, [...args], { ...(options ?? {}) } as never);
     return { stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
   };
-  const visual = await measureVisualReplay(path, { referencePath: context.referencePath, highlightStart: context.highlightStart, cropPlan: context.cropPlan, assPath: context.assPath, cues: context.cues, samples: context.samples, exec: visualExec });
+  const visual = await measureVisualReplay(path, { referencePath: context.referencePath, immutableReferencePath: context.immutableReferencePath, highlightStart: context.highlightStart, cropPlan: context.cropPlan, assPath: context.assPath, cues: context.cues, samples: context.samples, contentThreshold: context.contentThreshold, exec: visualExec });
   return {
     width: stream.width, height: stream.height, sar: sarDen ? sarNum / sarDen : 0,
     duration, frameCount: Number(stream.nb_frames ?? 0),
@@ -239,12 +240,13 @@ export function createProductionCaseRunner(root = DEFAULT_QUALITY_ROOT, live = f
       const replayHighlight = replay?.highlight as (Highlight & { clipKind?: string | null }) | undefined;
       if (!replay || !replayHighlight || !Number.isFinite(replayHighlight.start) || !Number.isFinite(replayHighlight.end) || !replay.reframeConfig || typeof replay.reframeConfig !== "object") return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };
       if (!window || !Number.isFinite(window.start) || !Number.isFinite(window.end)) return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "missing", metrics: { hardInvariantFailures: 1 } };
-      const source = await materializeArtifact(qualityCase.caseVersion, "source-or-evidence.mp4", root, temp);
+      const source = await materializeArtifact(qualityCase.caseVersion, "source-or-evidence.mp4", root, temp, "source.mp4", qualityCase.inputs.evidenceSha256);
+      const immutableReferencePath = await materializeArtifact(qualityCase.caseVersion, "source-or-evidence.mp4", root, temp, "immutable-evidence.mp4", qualityCase.inputs.evidenceSha256);
       const musicDirection = (config?.engine.musicDirection ?? replay.musicDirection) && typeof (config?.engine.musicDirection ?? replay.musicDirection) === "object" ? (config?.engine.musicDirection ?? replay.musicDirection) as { topBar: number; bottomBar: number; punchIn: boolean; fades: boolean } : undefined;
       const blackTailValue = config?.engine.blackTail ?? replay.blackTail;
       const blackTailTrim = blackTailValue && typeof blackTailValue === "object" && (blackTailValue as { enabled?: unknown }).enabled === true ? { jobId: qualityCase.jobId, clipIndex: 0 } : undefined;
       const reframeConfig = config?.engine.reframe ?? replay.reframeConfig;
-      return await observeRenderCase(qualityCase, { sourcePath: source, highlight: replayHighlight, transcriptSegments: transcript?.segments ?? [], language: replayHighlight.language, subtitlesOn: replay.subtitleTrack !== null, reframeConfig: reframeConfig as never, musicDirection, musicFades: musicDirection?.fades, blackTailTrim, privateOutputPath: `${temp}/observed-output.mp4`, probe: (path, _case, context) => probeRenderedMedia(path, context!) });
+      return await observeRenderCase(qualityCase, { sourcePath: source, immutableReferencePath, highlight: replayHighlight, transcriptSegments: transcript?.segments ?? [], language: replayHighlight.language, subtitlesOn: replay.subtitleTrack !== null, reframeConfig: reframeConfig as never, musicDirection, musicFades: musicDirection?.fades, blackTailTrim, privateOutputPath: `${temp}/observed-output.mp4`, probe: (path, _case, context) => probeRenderedMedia(path, { ...context!, contentThreshold: qualityCase.disposition === "confirmed_negative" ? 0.9 : 0.98 }) });
     } finally { await rm(temp, { recursive: true, force: true }).catch(() => undefined); }
   };
 }

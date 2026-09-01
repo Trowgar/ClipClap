@@ -51,6 +51,10 @@ export interface VisualBox {
 
 export interface VisualSample {
   timestamp: number;
+  /** Normalized cue text frozen at review time; empty means no subtitle cue. */
+  expectedSubtitleText: string;
+  /** Optional normalized output-space safe region for the generated cue. */
+  expectedSubtitleBox?: VisualBox;
   requiredSubjectBoxes: readonly VisualBox[];
   requiredTextBoxes: readonly VisualBox[];
   protectedExistingCaptionBoxes: readonly VisualBox[];
@@ -224,7 +228,12 @@ function expected(value: unknown): PromotionExpected {
   if (!Array.isArray(raw.visualSamples) || raw.visualSamples.length > 64) throw new QualityPromotionError("invalid_decision");
   for (const sample of raw.visualSamples) {
     const item = object(sample);
-    if (!ownKeys(item, ["timestamp", "requiredSubjectBoxes", "requiredTextBoxes", "protectedExistingCaptionBoxes"]) || typeof item.timestamp !== "number" || !Number.isFinite(item.timestamp) || item.timestamp < 0) throw new QualityPromotionError("invalid_decision");
+    const sampleKeys = ["timestamp", "expectedSubtitleText", ...(Object.prototype.hasOwnProperty.call(item, "expectedSubtitleBox") ? ["expectedSubtitleBox"] : []), "requiredSubjectBoxes", "requiredTextBoxes", "protectedExistingCaptionBoxes"];
+    if (!ownKeys(item, sampleKeys) || typeof item.timestamp !== "number" || !Number.isFinite(item.timestamp) || item.timestamp < 0 || typeof item.expectedSubtitleText !== "string") throw new QualityPromotionError("invalid_decision");
+    if (item.expectedSubtitleBox !== undefined) {
+      const box = object(item.expectedSubtitleBox);
+      if (!ownKeys(box, ["x", "y", "w", "h"]) || [box.x, box.y, box.w, box.h].some((part) => typeof part !== "number" || !Number.isFinite(part)) || (box.x as number) < 0 || (box.y as number) < 0 || (box.w as number) <= 0 || (box.h as number) <= 0 || (box.x as number) + (box.w as number) > 1 || (box.y as number) + (box.h as number) > 1) throw new QualityPromotionError("invalid_decision");
+    }
     for (const key of ["requiredSubjectBoxes", "requiredTextBoxes", "protectedExistingCaptionBoxes"] as const) {
       const boxes = array(item[key]);
       for (const box of boxes) {
