@@ -169,8 +169,11 @@ async function probeRenderedMedia(path: string): Promise<{
     const result = await execFileAsync("ffmpeg", ["-nostdin", "-v", "info", "-i", path, "-vf", "blackdetect=d=0.1,freezedetect=n=0.003:d=0.5", "-an", "-f", "null", "-"], { timeout: 15_000, maxBuffer: 2 * 1024 * 1024 });
     diagnostics = `${result.stderr ?? ""}\n${result.stdout ?? ""}`;
   } catch (error) {
-    if ((error as { killed?: boolean })?.killed) throw new ObserveCliError("missing");
-    diagnostics = String((error as { stderr?: string })?.stderr ?? "");
+    // A failed/timed-out diagnostics probe cannot be interpreted as a clean
+    // render. Let the observer publish an error result instead of turning an
+    // unavailable black/freeze measurement into a zero.
+    void error;
+    throw new ObserveCliError("missing");
   }
   const blackTail = [...diagnostics.matchAll(/black_start:([\d.]+).*?black_end:([\d.]+).*?black_duration:([\d.]+)/g)]
     .map((match) => ({ end: Number(match[2]), duration: Number(match[3]) }))
