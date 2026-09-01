@@ -52,6 +52,8 @@ describe("immutable production release adapter", () => {
         expect(bundle.rollback.command).toEqual(["docker", "compose", "--project-name", "clipclap", "-f", "rollback.compose.yml", "up", "-d", "--force-recreate", "--no-build", "worker-analyze", "worker-render"]);
         expect(bundle.rollback.previousImages?.map((item) => item.image)).toEqual([old, old]);
         expect(bundle.override.toString("utf8")).toContain("env_file: ./production.env");
+        expect(bundle.override.toString("utf8")).toContain("NODE_ENV: production");
+        expect(bundle.candidate?.toString("utf8")).toContain("NODE_ENV: production");
         expect(bundle.override.toString("utf8")).toContain("source: ./feedback-quality-config.json");
         return { status: "committed" as const };
       }),
@@ -60,6 +62,44 @@ describe("immutable production release adapter", () => {
     const rollback = await createProductionRollback(["worker-analyze", "worker-render"], { candidateCommitSha: commit }, dependencies);
     expect(rollback.command).toEqual(["docker", "compose", "--project-name", "clipclap", "-f", "rollback.compose.yml", "up", "-d", "--force-recreate", "--no-build", "worker-analyze", "worker-render"]);
     expect(calls).toEqual([]);
+  });
+
+  it.each(["TOKEN=$SECRET", "TOKEN=${SECRET}", "TOKEN=\"quoted\"", "TOKEN=slash\\value", " TOKEN=value", "export TOKEN=value", "TOKEN=value # comment"])("rejects Compose-interpreted production.env syntax %s", async (line) => {
+    const candidate = `registry.example/clipclap-worker@${digest("candidate")}`;
+    await expect(createProductionRollback(["worker-analyze"], { candidateCommitSha: commit }, {
+      root: "/private/corpus", candidateImage: candidate, composeFile: "docker-compose.production.yml", environment: Buffer.from(`${line}\n`), config: Buffer.from("{}"),
+      readCompose: async () => Buffer.from("services: {}\n"),
+      inspectImage: async (reference) => ({ reference, digest: parseImageReference(reference).digest, revision: commit }),
+      inspectService: async () => ({ image: candidate }),
+      publishRollback: async () => ({ status: "committed" as const }),
+      exec: async () => ({ exitCode: 0, stdout: "" }),
+    })).rejects.toThrow("compose_unavailable");
+  });
+
+  it("binds literal production.env bytes without reading an ambient value", async () => {
+    const candidate = `registry.example/clipclap-worker@${digest("candidate")}`;
+    const old = `registry.example/clipclap-worker@${digest("old")}`;
+    const environment = Buffer.from("ENGINE_FLAG=literal-value\n");
+    const previous = process.env.ENGINE_FLAG;
+    process.env.ENGINE_FLAG = "ambient-value";
+    try {
+      await createProductionRollback(["worker-analyze"], { candidateCommitSha: commit }, {
+        root: "/private/corpus", candidateImage: candidate, composeFile: "docker-compose.production.yml", environment, config: Buffer.from("{}"),
+        readCompose: async () => Buffer.from("services: {}\n"),
+        inspectImage: async (reference) => ({ reference, digest: parseImageReference(reference).digest, revision: reference === candidate ? commit : "b".repeat(40) }),
+        inspectService: async () => ({ image: old }),
+        publishRollback: async (bundle) => {
+          expect(bundle.environment).toEqual(environment);
+          expect(bundle.rollback.snapshotHashes?.["production.env"]).toBe(sha256(environment));
+          expect(bundle.candidate?.toString("utf8")).not.toContain("ambient-value");
+          return { status: "committed" as const };
+        },
+        exec: async () => ({ exitCode: 0, stdout: "" }),
+      });
+    } finally {
+      if (previous === undefined) delete process.env.ENGINE_FLAG;
+      else process.env.ENGINE_FLAG = previous;
+    }
   });
 
   it("refuses a mismatched candidate OCI revision before reading current services", async () => {

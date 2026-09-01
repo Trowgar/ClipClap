@@ -58,7 +58,7 @@ export function parseImageReference(value: string): ImageReference {
 function composeOverride(services: readonly RollbackService[], network = "clipclap_default"): Buffer {
   const lines = ["services:"];
   for (const item of services) {
-    lines.push(`  ${item.service}:`, `    image: ${item.image}`, "    restart: unless-stopped", "    env_file: ./production.env", "    environment:", `      WORKER_ROLE: ${item.service.slice("worker-".length)}`, "      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json", "    volumes:", "      - type: bind", "        source: ./feedback-quality-config.json", "        target: /run/clipclap/feedback-quality-config.json", "        read_only: true", "    networks:", "      default: null");
+    lines.push(`  ${item.service}:`, `    image: ${item.image}`, "    restart: unless-stopped", "    env_file: ./production.env", "    environment:", "      NODE_ENV: production", `      WORKER_ROLE: ${item.service.slice("worker-".length)}`, "      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json", "    volumes:", "      - type: bind", "        source: ./feedback-quality-config.json", "        target: /run/clipclap/feedback-quality-config.json", "        read_only: true", "    networks:", "      default: null");
   }
   lines.push("networks:", "  default:", "    external: true", `    name: ${network}`);
   return Buffer.from(`${lines.join("\n")}\n`, "utf8");
@@ -71,7 +71,7 @@ function rollbackBody(createdAt: string, services: readonly RollbackService[], c
 
 function candidateCompose(services: readonly WorkerService[], image: string, network: string): Buffer {
   const lines = ["services:"];
-  for (const service of services) lines.push(`  ${service}:`, `    image: ${image}`, "    restart: unless-stopped", "    env_file: ./production.env", "    environment:", `      WORKER_ROLE: ${service.slice("worker-".length)}`, "      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json", "      FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID: ${FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID:?release adapter only}", "    volumes:", "      - type: bind", "        source: ./feedback-quality-config.json", "        target: /run/clipclap/feedback-quality-config.json", "        read_only: true", "    networks:", "      default: null");
+  for (const service of services) lines.push(`  ${service}:`, `    image: ${image}`, "    restart: unless-stopped", "    env_file: ./production.env", "    environment:", "      NODE_ENV: production", `      WORKER_ROLE: ${service.slice("worker-".length)}`, "      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json", "      FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID: ${FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID:?release adapter only}", "    volumes:", "      - type: bind", "        source: ./feedback-quality-config.json", "        target: /run/clipclap/feedback-quality-config.json", "        read_only: true", "    networks:", "      default: null");
   lines.push("networks:", "  default:", "    external: true", `    name: ${network}`);
   return Buffer.from(`${lines.join("\n")}\n`, "utf8");
 }
@@ -147,10 +147,12 @@ async function readPrivateSnapshot(path: string): Promise<Buffer> {
 
 function parseEnvironment(bytes: Buffer): Record<string, string> {
   const output: Record<string, string> = Object.create(null);
-  for (const line of bytes.toString("utf8").split("\n")) {
-    if (!line || line.startsWith("#")) continue;
+  const lines = bytes.toString("utf8").split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  if (lines.length === 0) throw new ProductionReleaseError("compose_unavailable");
+  for (const line of lines) {
     const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
-    if (!match || Object.prototype.hasOwnProperty.call(output, match[1]) || reservedEnvironmentKey(match[1])) throw new ProductionReleaseError("compose_unavailable");
+    if (!match || Object.prototype.hasOwnProperty.call(output, match[1]) || reservedEnvironmentKey(match[1]) || !/^[A-Za-z0-9._~:/?&@=+,%!-]*$/.test(match[2])) throw new ProductionReleaseError("compose_unavailable");
     output[match[1]] = match[2];
   }
   return output;

@@ -99,11 +99,12 @@ async function boundedResult<T>(operation: Promise<T>, milliseconds = 150): Prom
   return Promise.race([operation, new Promise<"timed_out">((resolve) => setTimeout(() => resolve("timed_out"), milliseconds))]);
 }
 
-function installQualityRedisHarness(options: { loseOwnership?: boolean; countsHang?: boolean; pauseHangs?: boolean; latePause?: boolean; resumeHangsAfterNewOwner?: boolean; canaryAddHangs?: boolean } = {}) {
+function installQualityRedisHarness(options: { loseOwnership?: boolean; countsHang?: boolean; pauseHangs?: boolean; latePause?: boolean; resumeHangsAfterNewOwner?: boolean; canaryAddHangs?: boolean; canaryAddRejects?: boolean; canaryAppearsAfterFirstRead?: boolean; resumeAlreadyApplied?: boolean } = {}) {
   let paused = false;
   let fenceToken: string | undefined;
   let pauseOwner: string | undefined;
   let resumeScriptCalls = 0;
+  let canaryReads = 0;
   const canaryJob = { getState: vi.fn(async () => "waiting"), remove: vi.fn(async () => undefined) };
   const resume = vi.fn(async () => { paused = false; });
   redisHarness.clients = [];
@@ -127,6 +128,10 @@ function installQualityRedisHarness(options: { loseOwnership?: boolean; countsHa
           paused = false; pauseOwner = undefined; fenceToken = undefined; return 1;
         };
         resumeScriptCalls += 1;
+        if (options.resumeAlreadyApplied && resumeScriptCalls === 1) {
+          paused = false; pauseOwner = undefined; fenceToken = undefined;
+          return never<number>();
+        }
         if (options.resumeHangsAfterNewOwner && resumeScriptCalls === 1) {
           fenceToken = "other-rollout";
           setTimeout(apply, 30);
@@ -149,8 +154,17 @@ function installQualityRedisHarness(options: { loseOwnership?: boolean; countsHa
       if (options.resumeHangsAfterNewOwner) { setTimeout(() => { paused = false; }, 30); return never<void>(); }
       return resume();
     }),
-    add: vi.fn(() => options.canaryAddHangs && name.endsWith(":quality-canary") ? never() : Promise.resolve({ id: "added" })),
-    getJob: vi.fn(() => options.canaryAddHangs && name.endsWith(":quality-canary") ? Promise.resolve(canaryJob) : Promise.resolve(undefined)),
+    add: vi.fn(() => {
+      if (name.endsWith(":quality-canary") && options.canaryAddRejects) return Promise.reject(new Error("connection reset"));
+      return options.canaryAddHangs && name.endsWith(":quality-canary") ? never() : Promise.resolve({ id: "added" });
+    }),
+    getJob: vi.fn(() => {
+      if (name.endsWith(":quality-canary") && (options.canaryAddHangs || options.canaryAddRejects)) {
+        canaryReads += 1;
+        return Promise.resolve(options.canaryAppearsAfterFirstRead && canaryReads === 1 ? undefined : canaryJob);
+      }
+      return Promise.resolve(undefined);
+    }),
     close: vi.fn(async () => undefined),
     name,
     keys: { wait: `bull:${name}:wait`, paused: `bull:${name}:paused`, meta: `bull:${name}:meta`, prioritized: `bull:${name}:prioritized`, events: `bull:${name}:events`, delayed: `bull:${name}:delayed`, marker: `bull:${name}:marker` },
@@ -230,6 +244,24 @@ describe("feedback quality deployment", () => {
     const jobId = add.mock.calls[0][2].jobId;
     expect(jobId).toMatch(/^quality-canary-[0-9a-f-]{36}$/);
     expect(queues.slice(1).some((queue) => (queue.getJob as ReturnType<typeof vi.fn>).mock.calls.some(([id]) => id === jobId))).toBe(true);
+  });
+
+  it.each(["timeout", "rejection"])("stabilizes an ambiguous canary add after %s and removes a late waiting job", async (kind) => {
+    installQualityRedisHarness({ canaryAddHangs: kind === "timeout", canaryAddRejects: kind === "rejection", canaryAppearsAfterFirstRead: true });
+    const d = deps({ redisOperationTimeoutMs: 10, queueCounts: undefined, runCanary: undefined });
+    const outcome = await boundedResult(deployWithQualityGate(request({ services: ["worker-analyze"] }), d), 250);
+    expect(outcome).toMatchObject({ status: "failed", reasons: ["canary_failed"] });
+    const queues = queueHarness.queues.filter((queue) => String(queue.name).endsWith(":quality-canary"));
+    expect(queues.slice(1).some((queue) => (queue.getJob as ReturnType<typeof vi.fn>).mock.calls.length >= 2)).toBe(true);
+  });
+
+  it("audits a lost resume reply as already recovered when fresh state is definitely unpaused", async () => {
+    const harness = installQualityRedisHarness({ resumeAlreadyApplied: true });
+    const d = deps({ redisOperationTimeoutMs: 10, queueCounts: undefined, runCanary: undefined, waitForHealthy: vi.fn(async () => { throw new Error("health failed"); }) });
+    const outcome = await boundedResult(deployWithQualityGate(request({ services: ["worker-analyze"] }), d));
+    expect(outcome).toMatchObject({ status: "failed", reasons: ["health_failed"] });
+    expect(harness.isPaused()).toBe(false);
+    expect(d.appendEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "quality_rollout_failed", leaseRecovery: "recovered" }), "/private/corpus");
   });
 
   it("recreates explicitly named workers in order with an argv-only docker command", async () => {

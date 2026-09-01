@@ -432,13 +432,27 @@ async function defaultQueueCounts(queueName: string, timeoutMs = DEFAULT_REDIS_O
 async function cleanupCanaryAfterAddTimeout(queueName: string, jobId: string, timeoutMs: number): Promise<void> {
   const redis = createQualityRedis();
   const queue = new Queue(queueName, { connection: redis });
+  // A disconnect can make add's outcome ambiguous: the server may apply it
+  // after the caller gets a transport error. Keep a fresh, bounded client
+  // around long enough for Redis/BullMQ state to stabilize before declaring
+  // the deterministic job id absent.
+  const deadline = Date.now() + timeoutMs * 2;
   try {
-    const current = await boundedQualityOperation(() => queue.getJob(jobId), timeoutMs, "canary_failed");
-    if (!current) return;
-    const state = await boundedQualityOperation(() => current.getState(), timeoutMs, "canary_failed");
-    // An active canary may already be returning its attestation; retention
-    // removes it at terminal state. Removing any other state is safe.
-    if (state !== "active") await boundedQualityOperation(() => current.remove(), timeoutMs, "canary_failed");
+    for (;;) {
+      const current = await boundedQualityOperation(() => queue.getJob(jobId), timeoutMs, "canary_failed");
+      if (current) {
+        const state = await boundedQualityOperation(() => current.getState(), timeoutMs, "canary_failed");
+        // An active canary may still complete its attestation. Retain it only
+        // while active; a later terminal state is removed by this recovery
+        // loop, and retention bounds the remaining active control job.
+        if (state !== "active") {
+          await boundedQualityOperation(() => current.remove(), timeoutMs, "canary_failed");
+          return;
+        }
+      }
+      if (Date.now() >= deadline) return;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(25, Math.max(1, deadline - Date.now()))));
+    }
   } catch { /* bounded best-effort cleanup */ }
   finally { await closeQualityResources([queue], [redis], timeoutMs); }
 }
@@ -469,7 +483,10 @@ async function defaultCanary(service: WorkerService, expected: Readonly<{ decisi
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   } catch (error) {
-    if (error instanceof QualityOperationTimeoutError && job === undefined) {
+    if (job === undefined) {
+      // Close the source connection before looking up the deterministic ID on
+      // a fresh client. This prevents an in-flight add from sharing recovery's
+      // socket and applies to every ambiguous add failure, not just timeouts.
       onTimeout?.();
       await cleanupCanaryAfterAddTimeout(queueName, jobId, operationTimeoutMs);
     }
@@ -557,7 +574,24 @@ async function defaultQueueLease(queueName: string, timeoutMs = 30_000, operatio
     try {
       recoveryRedis = createQualityRedis();
       const recovered = await fencedResume(recoveryRedis, queue, fenceKey, pauseOwnerKey, fenceToken, operationTimeoutMs);
-      if (recovered === 0) recoveryStatus = "ownership_lost";
+      if (recovered === 0) {
+        const [currentFence, currentPauseOwner, currentlyPaused] = await Promise.all([
+          boundedQualityOperation(() => recoveryRedis!.get(fenceKey), operationTimeoutMs),
+          boundedQualityOperation(() => recoveryRedis!.get(pauseOwnerKey), operationTimeoutMs),
+          boundedQualityOperation(() => queue.isPaused(), operationTimeoutMs),
+        ]);
+        // The original resume may have committed before its reply was lost.
+        // Treat that exact, fully-observed state as recovery, but never infer
+        // ownership loss away when another rollout's fence is present.
+        if (currentFence === null && currentPauseOwner === null && !currentlyPaused) {
+          paused = false;
+          recoveryStatus = "recovered";
+        } else if (currentFence !== null && currentFence !== fenceToken) {
+          recoveryStatus = "ownership_lost";
+        } else {
+          recoveryStatus = "recovery_failed";
+        }
+      }
       else if (recovered < 0) recoveryStatus = "recovery_failed";
       else { paused = false; recoveryStatus = "recovered"; }
     } catch {
