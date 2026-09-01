@@ -70,6 +70,30 @@ describe("feedback quality gate", () => {
     expect(events).toEqual([`read:${base.observationId}`, `read:${candidate.observationId}`]);
   });
 
+  it("rejects holdout observations supplied in the eval role before metrics", async () => {
+    const base = observation("holdout", "baseline", 4, 6);
+    const candidate = { ...base, mode: "candidate" as const, observationId: "observation:" + hash("7") };
+    const events: string[] = [];
+    const dependencies = deps({ [base.observationId]: base, [candidate.observationId]: candidate }, events);
+    const decision = await decideGate(input({ baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId }), dependencies);
+    expect(decision.verdict).toBe("fail");
+    expect(decision.reasons).toEqual(["set_mismatch"]);
+    expect(events).toEqual([`read:${base.observationId}`, `read:${candidate.observationId}`]);
+  });
+
+  it("rejects eval observations supplied in the holdout role", async () => {
+    const baseEval = observation("eval", "baseline", 4, 6);
+    const candidateEval = { ...baseEval, mode: "candidate" as const, observationId: "observation:" + hash("7") };
+    const baseHoldout = observation("eval", "baseline", 1, 2);
+    const candidateHoldout = { ...baseHoldout, mode: "candidate" as const, observationId: "observation:" + hash("8") };
+    const events: string[] = [];
+    const map = { [baseEval.observationId]: baseEval, [candidateEval.observationId]: candidateEval, [baseHoldout.observationId]: baseHoldout, [candidateHoldout.observationId]: candidateHoldout };
+    const decision = await decideGate(input({ baselineEvalObservationId: baseEval.observationId, candidateEvalObservationId: candidateEval.observationId, baselineHoldoutObservationId: baseHoldout.observationId, candidateHoldoutObservationId: candidateHoldout.observationId }), deps(map, events));
+    expect(decision.verdict).toBe("fail");
+    expect(decision.reasons).toEqual(["set_mismatch"]);
+    expect(events).toEqual([`read:${baseEval.observationId}`, `read:${candidateEval.observationId}`, `read:${baseHoldout.observationId}`]);
+  });
+
   it("fails closed when a non-primary live attempt is malformed", async () => {
     const base = observation("eval", "baseline", 4, 6);
     const candidate = { ...base, mode: "candidate" as const, observationId: "observation:" + hash("7") };

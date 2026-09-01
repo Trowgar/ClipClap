@@ -83,7 +83,7 @@ export type GateDependencies = Readonly<{
 }>;
 
 export class GateError extends Error {
-  constructor(readonly code: "invalid_input" | "observation_invalid" | "publish_failed") {
+  constructor(readonly code: "invalid_input" | "observation_invalid" | "set_mismatch" | "publish_failed") {
     super(code);
     this.name = "GateError";
   }
@@ -263,11 +263,16 @@ function envelope(loaded: LoadedObservation): LoadedObservation & { varianceCase
 
 async function loadObservation(
   id: string,
+  expectedSet: "eval" | "holdout",
   root: string,
   dependencies: GateDependencies,
 ): Promise<LoadedObservation> {
   const reader = dependencies.readObservation ?? ((value: string, readRoot?: string) => readStoredObservation(value, readRoot ?? root, dependencies.readBundle ?? readBundle, dependencies.readAttempts ?? readObservationAttempts));
   const observation = await reader(id, root);
+  /* Role separation precedes metric inspection: a holdout bundle supplied as
+   * eval (or vice versa) is rejected without consulting its measurements. */
+  if (validateQualityObservation(observation, false)) throw new GateError("observation_invalid");
+  if (observation.set !== expectedSet) throw new GateError("set_mismatch");
   if (validateQualityObservation(observation, true)) throw new GateError("observation_invalid");
   const attempts = dependencies.readAttempts
     ? await dependencies.readAttempts(id, root)
@@ -306,7 +311,8 @@ function staleObservation(observation: QualityObservation, now: Date): boolean {
   return new Date(observation.createdAt).getTime() + DAY_MS <= now.getTime();
 }
 
-function compareLoadedPair(baseline: LoadedObservation, candidate: LoadedObservation, policy: GatePolicy, claim: QualityClaim): GateComparison {
+function compareLoadedPair(baseline: LoadedObservation, candidate: LoadedObservation, expectedSet: "eval" | "holdout", policy: GatePolicy, claim: QualityClaim): GateComparison {
+  if (baseline.observation.set !== expectedSet || candidate.observation.set !== expectedSet) return { verdict: "fail", reasons: ["set_mismatch"], baseline: emptyAggregate(), candidate: emptyAggregate() };
   const baselineObservation = baseline.observation;
   const candidateEnvelope = candidate.observation;
   const nonRegression = compareObservations(baselineObservation, candidateEnvelope, { ...policy, claim: "non_regression_only" });
@@ -389,13 +395,13 @@ export async function decideGate(input: DecideGateInput, dependencies: GateDepen
   let candidateEvalLoaded = fallback(1);
   let evalComparison: GateComparison = { verdict: "fail", reasons: ["invalid_schema"], baseline: emptyAggregate(), candidate: emptyAggregate() };
   try {
-    baselineEvalLoaded = await loadObservation(ids[0], root, dependencies);
-    candidateEvalLoaded = await loadObservation(ids[1], root, dependencies);
+    baselineEvalLoaded = await loadObservation(ids[0], "eval", root, dependencies);
+    candidateEvalLoaded = await loadObservation(ids[1], "eval", root, dependencies);
     evalComparison = [baselineEvalLoaded.observation, candidateEvalLoaded.observation].some((item) => staleObservation(item, nowDate))
       ? { verdict: "fail", reasons: ["stale_case"], baseline: emptyAggregate(), candidate: emptyAggregate() }
-      : compareLoadedPair(baselineEvalLoaded, candidateEvalLoaded, input.policy, claim);
-  } catch {
-    evalComparison = { verdict: "fail", reasons: ["invalid_schema"], baseline: emptyAggregate(), candidate: emptyAggregate() };
+      : compareLoadedPair(baselineEvalLoaded, candidateEvalLoaded, "eval", input.policy, claim);
+  } catch (error) {
+    evalComparison = { verdict: "fail", reasons: [error instanceof GateError && error.code === "set_mismatch" ? "set_mismatch" : "invalid_schema"], baseline: emptyAggregate(), candidate: emptyAggregate() };
   }
   const evalSummary = countSummary(evalComparison, baselineEvalLoaded.observation, candidateEvalLoaded.observation, baselineEvalLoaded, candidateEvalLoaded);
   let holdoutSummary = emptySummary();
@@ -404,17 +410,17 @@ export async function decideGate(input: DecideGateInput, dependencies: GateDepen
   const loadedForExpiry: LoadedObservation[] = [baselineEvalLoaded, candidateEvalLoaded];
   if (evalComparison.verdict === "pass") {
     try {
-      const baselineHoldoutLoaded = await loadObservation(input.baselineHoldoutObservationId, root, dependencies);
-      const candidateHoldoutLoaded = await loadObservation(input.candidateHoldoutObservationId, root, dependencies);
+      const baselineHoldoutLoaded = await loadObservation(input.baselineHoldoutObservationId, "holdout", root, dependencies);
+      const candidateHoldoutLoaded = await loadObservation(input.candidateHoldoutObservationId, "holdout", root, dependencies);
       loadedForExpiry.push(baselineHoldoutLoaded, candidateHoldoutLoaded);
       const baselineHoldout = baselineHoldoutLoaded.observation;
       const candidateHoldout = candidateHoldoutLoaded.observation;
       const stale = [baselineHoldout, candidateHoldout].some((item) => staleObservation(item, nowDate));
-      const holdoutComparison = stale ? { verdict: "fail" as const, reasons: ["stale_case" as MachineReason], baseline: emptyAggregate(), candidate: emptyAggregate() } : compareLoadedPair(baselineHoldoutLoaded, candidateHoldoutLoaded, input.policy, "non_regression_only");
+      const holdoutComparison = stale ? { verdict: "fail" as const, reasons: ["stale_case" as MachineReason], baseline: emptyAggregate(), candidate: emptyAggregate() } : compareLoadedPair(baselineHoldoutLoaded, candidateHoldoutLoaded, "holdout", input.policy, "non_regression_only");
       holdoutSummary = countSummary(holdoutComparison, baselineHoldout, candidateHoldout, baselineHoldoutLoaded, candidateHoldoutLoaded);
       reasons = [...reasons, ...holdoutComparison.reasons, ...identityReasons(candidateEvalLoaded.observation, candidateHoldout), ...identityReasons(baselineEvalLoaded.observation, baselineHoldout)];
-    } catch {
-      reasons.push("invalid_schema");
+    } catch (error) {
+      reasons.push(error instanceof GateError && error.code === "set_mismatch" ? "set_mismatch" : "invalid_schema");
     }
   }
   const present = new Set(reasons);
