@@ -15,7 +15,6 @@ const PROJECT = /^[a-z0-9][a-z0-9_-]{0,62}$/;
 const NETWORK = /^[a-z0-9][a-z0-9_.-]{0,127}$/;
 const SERVICE_ORDER: readonly WorkerService[] = ["worker-download", "worker-transcribe", "worker-analyze", "worker-render", "worker-finalize"];
 const SERVICES = new Set<WorkerService>(SERVICE_ORDER);
-const EXEC_OPTIONS = { shell: false, timeout: 30_000, maxBuffer: 1024 * 1024 } as const;
 
 export type ImageReference = Readonly<{ repository: string; digest: string }>;
 export type ImageInspection = Readonly<{ reference: string; digest: string; revision: string }>;
@@ -106,6 +105,7 @@ export async function createProductionRollback(services: readonly WorkerService[
     "candidate.compose.yml": sha256(candidateSnapshot),
   };
   if (dependencies.environment && dependencies.config) {
+    parseEnvironment(dependencies.environment);
     snapshotHashes["production.env"] = sha256(dependencies.environment);
     snapshotHashes["feedback-quality-config.json"] = sha256(dependencies.config);
   }
@@ -150,10 +150,15 @@ function parseEnvironment(bytes: Buffer): Record<string, string> {
   for (const line of bytes.toString("utf8").split("\n")) {
     if (!line || line.startsWith("#")) continue;
     const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(line);
-    if (!match || Object.prototype.hasOwnProperty.call(output, match[1])) throw new ProductionReleaseError("compose_unavailable");
+    if (!match || Object.prototype.hasOwnProperty.call(output, match[1]) || reservedEnvironmentKey(match[1])) throw new ProductionReleaseError("compose_unavailable");
     output[match[1]] = match[2];
   }
   return output;
+}
+
+function reservedEnvironmentKey(key: string): boolean {
+  return key === "CLIPCLAP_OCI_REVISION" || key === "GIT_SHA" || key === "WORKER_ROLE" || key === "NODE_ENV" || key.startsWith("FEEDBACK_QUALITY_") ||
+    key.startsWith("COMPOSE_") || key.startsWith("DOCKER_");
 }
 
 async function assertSnapshotIntegrity(artifactId: string, root: string): Promise<void> {
@@ -170,7 +175,7 @@ async function assertSnapshotIntegrity(artifactId: string, root: string): Promis
 
 async function defaultExec(argv: readonly string[], options: Readonly<{ cwd?: string; env?: Readonly<Record<string, string | undefined>> }> = {}): Promise<{ exitCode: number; stdout: string }> {
   try {
-    const response = await execFileAsync(argv[0], argv.slice(1), { ...EXEC_OPTIONS, cwd: options.cwd, env: options.env ? { ...process.env, ...options.env } : process.env });
+    const response = await execFileAsync(argv[0], argv.slice(1), { shell: false, timeout: 30_000, maxBuffer: 1024 * 1024, cwd: options.cwd, env: options.env ? { ...process.env, ...options.env } : process.env });
     return { exitCode: 0, stdout: String(response.stdout ?? "") };
   } catch (error) {
     const output = error && typeof error === "object" && "stdout" in error ? String((error as { stdout?: unknown }).stdout ?? "") : "";

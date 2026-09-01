@@ -19,7 +19,6 @@ import {
 } from "./store";
 
 const execFileAsync = promisify(execFile);
-const EXEC_OPTIONS = { shell: false, timeout: 30_000, maxBuffer: 1024 * 1024 } as const;
 const COMMIT = /^[0-9a-f]{40}$/;
 const HASH = /^sha256:[0-9a-f]{64}$/;
 const DECISION_ID = /^decision:sha256:[0-9a-f]{64}$/;
@@ -40,6 +39,46 @@ const REASONS = [
 ] as const;
 const DEFAULT_REDIS_OPERATION_TIMEOUT_MS = 5_000;
 const internallyBoundedLeases = new WeakSet<QueueLease>();
+// BullMQ 5.73.0 pause-7.lua semantics, with the quality fence and owner
+// marker checked in the same Redis transaction. A timed-out client cannot
+// later change queue state once recovery has invalidated its token.
+const FENCED_PAUSE_LUA = `-- quality-fenced-pause
+if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end
+if redis.call('hexists', KEYS[5], 'paused') == 1 then return -1 end
+if redis.call('exists', KEYS[3]) == 1 then redis.call('rename', KEYS[3], KEYS[4]) end
+redis.call('hset', KEYS[5], 'paused', 1)
+redis.call('set', KEYS[2], ARGV[1], 'PX', ARGV[2])
+redis.call('del', KEYS[9])
+redis.call('xadd', KEYS[7], '*', 'event', 'paused')
+return 1`;
+const FENCED_RESUME_LUA = `-- quality-fenced-resume
+if redis.call('get', KEYS[1]) ~= ARGV[1] then return 0 end
+if redis.call('get', KEYS[2]) ~= ARGV[1] then
+  redis.call('del', KEYS[1])
+  if redis.call('hexists', KEYS[5], 'paused') == 1 then return -1 end
+  return 2
+end
+local hasJobs = redis.call('exists', KEYS[4]) == 1
+if hasJobs then redis.call('rename', KEYS[4], KEYS[3]) end
+redis.call('hdel', KEYS[5], 'paused')
+if hasJobs or redis.call('zcard', KEYS[6]) > 0 then
+  redis.call('zadd', KEYS[9], 0, '0')
+else
+  local next = redis.call('zrange', KEYS[8], 0, 0, 'WITHSCORES')
+  if next[2] then redis.call('zadd', KEYS[9], tonumber(next[2]) / 0x1000, '1') end
+end
+redis.call('xadd', KEYS[7], '*', 'event', 'resumed')
+redis.call('del', KEYS[2])
+redis.call('del', KEYS[1])
+return 1`;
+const FENCE_RELEASE_LUA = `-- quality-fence-release
+if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) end
+return 0`;
+const FENCE_RENEW_LUA = `-- quality-fence-renew
+if redis.call('get', KEYS[1]) ~= ARGV[1] or redis.call('get', KEYS[2]) ~= ARGV[1] then return 0 end
+redis.call('pexpire', KEYS[1], ARGV[2])
+redis.call('pexpire', KEYS[2], ARGV[2])
+return 1`;
 
 export type DeployReason = (typeof REASONS)[number];
 export type WorkerService = (typeof SERVICE_ORDER)[number];
@@ -174,6 +213,8 @@ export class DeployError extends Error {
   }
 }
 
+class QualityOperationTimeoutError extends DeployError {}
+
 function ownKeys(value: object, expected: readonly string[]): boolean {
   const keys = Reflect.ownKeys(value);
   return keys.length === expected.length && keys.every((key) => {
@@ -299,8 +340,8 @@ async function defaultReadDecision(id: string, root: string): Promise<GateDeploy
 
 async function defaultGitState(): Promise<GitState> {
   try {
-    const head = (await execFileAsync("git", ["rev-parse", "HEAD"], EXEC_OPTIONS)).stdout.trim();
-    const dirtyTracked = Boolean((await execFileAsync("git", ["status", "--porcelain", "--untracked-files=no"], EXEC_OPTIONS)).stdout.trim());
+    const head = (await execFileAsync("git", ["rev-parse", "HEAD"], { shell: false, timeout: 30_000, maxBuffer: 1024 * 1024 })).stdout.trim();
+    const dirtyTracked = Boolean((await execFileAsync("git", ["status", "--porcelain", "--untracked-files=no"], { shell: false, timeout: 30_000, maxBuffer: 1024 * 1024 })).stdout.trim());
     if (!COMMIT.test(head)) throw new Error();
     return { head, dirtyTracked };
   } catch { throw new DeployError("binding_mismatch"); }
@@ -324,7 +365,7 @@ function boundedQualityOperation<T>(operation: () => Promise<T>, timeoutMs: numb
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      reject(new DeployError(code));
+      reject(new QualityOperationTimeoutError(code));
     }, timeoutMs);
     Promise.resolve().then(operation).then(
       (value) => {
@@ -346,6 +387,22 @@ function boundedQualityOperation<T>(operation: () => Promise<T>, timeoutMs: numb
 async function closeQualityResources(queues: readonly Queue[], clients: readonly ReturnType<typeof createQualityRedis>[], timeoutMs: number): Promise<void> {
   await Promise.all(queues.map((queue) => boundedQualityOperation(() => queue.close(), timeoutMs).catch(() => undefined)));
   for (const client of clients) client.disconnect();
+}
+
+function queueFenceKeys(queue: Queue, fenceKey: string, pauseOwnerKey: string): readonly string[] {
+  const keys = queue.keys;
+  if (!keys.wait || !keys.paused || !keys.meta || !keys.prioritized || !keys.events || !keys.delayed || !keys.marker) throw new DeployError("queue_read_failed");
+  return [fenceKey, pauseOwnerKey, keys.wait, keys.paused, keys.meta, keys.prioritized, keys.events, keys.delayed, keys.marker];
+}
+
+async function fencedPause(redis: ReturnType<typeof createQualityRedis>, queue: Queue, fenceKey: string, pauseOwnerKey: string, token: string, leaseMs: number, timeoutMs: number): Promise<number> {
+  const keys = queueFenceKeys(queue, fenceKey, pauseOwnerKey);
+  return Number(await boundedQualityOperation(() => redis.eval(FENCED_PAUSE_LUA, keys.length, ...keys, token, String(leaseMs)), timeoutMs));
+}
+
+async function fencedResume(redis: ReturnType<typeof createQualityRedis>, queue: Queue, fenceKey: string, pauseOwnerKey: string, token: string, timeoutMs: number): Promise<number> {
+  const keys = queueFenceKeys(queue, fenceKey, pauseOwnerKey);
+  return Number(await boundedQualityOperation(() => redis.eval(FENCED_RESUME_LUA, keys.length, ...keys, token), timeoutMs));
 }
 
 async function defaultQueueCounts(queueName: string, timeoutMs = DEFAULT_REDIS_OPERATION_TIMEOUT_MS): Promise<QueueCounts> {
@@ -372,15 +429,31 @@ async function defaultQueueCounts(queueName: string, timeoutMs = DEFAULT_REDIS_O
   finally { if (queue && redis) await closeQualityResources([queue], [redis], timeoutMs); else redis?.disconnect(); }
 }
 
-async function defaultCanary(service: WorkerService, expected: Readonly<{ decisionId: string; commitSha: string; configSha256: string; runnerVersion: number; rolloutInstanceId: string }>, timeoutMs = 30_000, suppliedQueue?: Queue, operationTimeoutMs = DEFAULT_REDIS_OPERATION_TIMEOUT_MS): Promise<void> {
+async function cleanupCanaryAfterAddTimeout(queueName: string, jobId: string, timeoutMs: number): Promise<void> {
+  const redis = createQualityRedis();
+  const queue = new Queue(queueName, { connection: redis });
+  try {
+    const current = await boundedQualityOperation(() => queue.getJob(jobId), timeoutMs, "canary_failed");
+    if (!current) return;
+    const state = await boundedQualityOperation(() => current.getState(), timeoutMs, "canary_failed");
+    // An active canary may already be returning its attestation; retention
+    // removes it at terminal state. Removing any other state is safe.
+    if (state !== "active") await boundedQualityOperation(() => current.remove(), timeoutMs, "canary_failed");
+  } catch { /* bounded best-effort cleanup */ }
+  finally { await closeQualityResources([queue], [redis], timeoutMs); }
+}
+
+async function defaultCanary(service: WorkerService, expected: Readonly<{ decisionId: string; commitSha: string; configSha256: string; runnerVersion: number; rolloutInstanceId: string }>, timeoutMs = 30_000, suppliedQueue?: Queue, operationTimeoutMs = DEFAULT_REDIS_OPERATION_TIMEOUT_MS, onTimeout?: () => void): Promise<void> {
   const stage = SERVICE_STAGE[service];
+  const queueName = suppliedQueue ? `${QUEUE_NAMES[stage]}:quality-canary` : QUEUE_NAMES[stage];
   const redis = suppliedQueue ? undefined : createQualityRedis();
-  const queue = suppliedQueue ?? new Queue(QUEUE_NAMES[stage], { connection: redis! });
+  const queue = suppliedQueue ?? new Queue(queueName, { connection: redis! });
   const nonce = randomUUID();
+  const jobId = `quality-canary-${nonce}`;
   let job: Awaited<ReturnType<typeof queue.add>> | undefined;
   let terminal = false;
   try {
-    job = await boundedQualityOperation(() => queue.add("feedback-quality-canary", { kind: "feedback-quality-canary", nonce, decisionId: expected.decisionId, rolloutInstanceId: expected.rolloutInstanceId }, { attempts: 1, priority: 0, removeOnComplete: { age: 300, count: 100 }, removeOnFail: { age: 300, count: 100 } }), operationTimeoutMs, "canary_failed");
+    job = await boundedQualityOperation(() => queue.add("feedback-quality-canary", { kind: "feedback-quality-canary", nonce, decisionId: expected.decisionId, rolloutInstanceId: expected.rolloutInstanceId }, { jobId, attempts: 1, priority: 0, removeOnComplete: { age: 300, count: 100 }, removeOnFail: { age: 300, count: 100 } }), operationTimeoutMs, "canary_failed");
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const current = await boundedQualityOperation(() => queue.getJob(job!.id!), operationTimeoutMs, "canary_failed");
@@ -396,6 +469,10 @@ async function defaultCanary(service: WorkerService, expected: Readonly<{ decisi
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   } catch (error) {
+    if (error instanceof QualityOperationTimeoutError && job === undefined) {
+      onTimeout?.();
+      await cleanupCanaryAfterAddTimeout(queueName, jobId, operationTimeoutMs);
+    }
     if (error instanceof DeployError) throw error;
     throw new DeployError("canary_failed");
   } finally {
@@ -415,12 +492,16 @@ async function defaultQueueLease(queueName: string, timeoutMs = 30_000, operatio
   const queue = new Queue(queueName, { connection: redis });
   const canaryQueue = new Queue(`${queueName}:quality-canary`, { connection: redis });
   const fenceKey = `clipclap:feedback-quality:fence:${queueName}`;
+  const pauseOwnerKey = `clipclap:feedback-quality:pause-owner:${queueName}`;
   const fenceToken = randomUUID();
+  const fenceLeaseMs = Math.max(120_000, timeoutMs * 4);
   let fenceHeld = false;
   let fenceLost = false;
   let paused = false;
+  let pauseRequested = false;
   let wasPaused = false;
   let closed = false;
+  let redisDisconnected = false;
   let recoveryStatus: LeaseRecoveryStatus = "not_needed";
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   const assertFence = async () => {
@@ -431,7 +512,7 @@ async function defaultQueueLease(queueName: string, timeoutMs = 30_000, operatio
   };
   const renewFence = async () => {
     if (!fenceHeld || fenceLost) return;
-    const renewed = await boundedQualityOperation(() => redis.eval("if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('pexpire', KEYS[1], ARGV[2]) else return 0 end", 1, fenceKey, fenceToken, String(Math.max(120_000, timeoutMs * 4))), operationTimeoutMs);
+    const renewed = await boundedQualityOperation(() => redis.eval(FENCE_RENEW_LUA, 2, fenceKey, pauseOwnerKey, fenceToken, String(fenceLeaseMs)), operationTimeoutMs);
     if (Number(renewed) !== 1) fenceLost = true;
   };
   const startHeartbeat = () => {
@@ -455,37 +536,34 @@ async function defaultQueueLease(queueName: string, timeoutMs = 30_000, operatio
   const releaseFence = async () => {
     stopHeartbeat();
     if (!fenceHeld) return;
-    try { await boundedQualityOperation(() => redis.eval("if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end", 1, fenceKey, fenceToken), operationTimeoutMs); }
+    try { await boundedQualityOperation(() => redis.eval(FENCE_RELEASE_LUA, 1, fenceKey, fenceToken), operationTimeoutMs); }
     finally { fenceHeld = false; }
+  };
+  const disconnectRedis = () => {
+    if (redisDisconnected) return;
+    redisDisconnected = true;
+    stopHeartbeat();
+    redis.disconnect();
   };
   const close = async () => {
     if (closed) return;
     closed = true;
-    await closeQualityResources([canaryQueue, queue], [redis], operationTimeoutMs);
+    await Promise.all([canaryQueue, queue].map((item) => boundedQualityOperation(() => item.close(), operationTimeoutMs).catch(() => undefined)));
+    disconnectRedis();
   };
   const recoverPause = async () => {
-    if (!paused || wasPaused) return;
+    if (!pauseRequested || wasPaused) return;
     let recoveryRedis: ReturnType<typeof createQualityRedis> | undefined;
-    let recoveryQueue: Queue | undefined;
     try {
       recoveryRedis = createQualityRedis();
-      recoveryQueue = new Queue(queueName, { connection: recoveryRedis });
-      const owner = await boundedQualityOperation(() => recoveryRedis!.get(fenceKey), operationTimeoutMs);
-      if (owner !== fenceToken) {
-        recoveryStatus = "ownership_lost";
-        return;
-      }
-      if (await boundedQualityOperation(() => recoveryQueue!.isPaused(), operationTimeoutMs)) {
-        await boundedQualityOperation(() => recoveryQueue!.resume(), operationTimeoutMs);
-        if (await boundedQualityOperation(() => recoveryQueue!.isPaused(), operationTimeoutMs)) throw new DeployError("queue_read_failed");
-      }
-      paused = false;
-      recoveryStatus = "recovered";
+      const recovered = await fencedResume(recoveryRedis, queue, fenceKey, pauseOwnerKey, fenceToken, operationTimeoutMs);
+      if (recovered === 0) recoveryStatus = "ownership_lost";
+      else if (recovered < 0) recoveryStatus = "recovery_failed";
+      else { paused = false; recoveryStatus = "recovered"; }
     } catch {
       recoveryStatus = "recovery_failed";
     } finally {
-      if (recoveryQueue && recoveryRedis) await closeQualityResources([recoveryQueue], [recoveryRedis], operationTimeoutMs);
-      else recoveryRedis?.disconnect();
+      recoveryRedis?.disconnect();
     }
   };
   const lease: QueueLease = {
@@ -493,7 +571,7 @@ async function defaultQueueLease(queueName: string, timeoutMs = 30_000, operatio
       try {
         wasPaused = await boundedQualityOperation(() => queue.isPaused(), operationTimeoutMs);
         if (wasPaused) throw new DeployError("queue_read_failed");
-        const acquired = await boundedQualityOperation(() => redis.set(fenceKey, fenceToken, "PX", Math.max(120_000, timeoutMs * 4), "NX"), operationTimeoutMs);
+        const acquired = await boundedQualityOperation(() => redis.set(fenceKey, fenceToken, "PX", fenceLeaseMs, "NX"), operationTimeoutMs);
         if (acquired !== "OK") throw new DeployError("queue_read_failed");
         fenceHeld = true;
         // Establish the watermark while owning the fence. Existing pending
@@ -503,15 +581,18 @@ async function defaultQueueLease(queueName: string, timeoutMs = 30_000, operatio
         // execution fence, so jobs submitted after pause remain held.
         const before = await readCounts();
         if (before.waiting !== 0 || before.delayed !== 0 || before.paused !== 0 || before.prioritized !== 0 || before.waitingChildren !== 0) throw new DeployError("queue_nonempty");
-        if (await boundedQualityOperation(() => queue.isPaused(), operationTimeoutMs)) throw new DeployError("queue_read_failed");
+        pauseRequested = true;
+        const applied = await fencedPause(redis, queue, fenceKey, pauseOwnerKey, fenceToken, fenceLeaseMs, operationTimeoutMs);
+        if (applied !== 1) throw new DeployError("queue_read_failed");
         paused = true;
-        await boundedQualityOperation(() => queue.pause(), operationTimeoutMs);
-        if (!(await boundedQualityOperation(() => queue.isPaused(), operationTimeoutMs))) throw new DeployError("queue_read_failed");
         startHeartbeat();
       }
       catch (error) {
+        // The socket is closed before recovery. Any command which reaches Redis
+        // afterwards must pass the token check, and recovery invalidates it.
+        if (pauseRequested) disconnectRedis();
         await recoverPause();
-        await releaseFence().catch(() => undefined);
+        if (!redisDisconnected) await releaseFence().catch(() => undefined);
         await close();
         throw error;
       }
@@ -527,7 +608,7 @@ async function defaultQueueLease(queueName: string, timeoutMs = 30_000, operatio
       // Canary traffic has its own control queue. The production queue remains
       // fenced for the whole recreate/health/canary sequence.
       await assertFence();
-      await defaultCanary(service, expected, timeoutMs, canaryQueue, operationTimeoutMs);
+      await defaultCanary(service, expected, timeoutMs, canaryQueue, operationTimeoutMs, disconnectRedis);
     },
     resume: async () => {
       try {
@@ -537,14 +618,22 @@ async function defaultQueueLease(queueName: string, timeoutMs = 30_000, operatio
         }
         await assertFence();
         if (paused && !wasPaused) {
-          await boundedQualityOperation(() => queue.resume(), operationTimeoutMs);
-          if (await boundedQualityOperation(() => queue.isPaused(), operationTimeoutMs)) throw new DeployError("queue_read_failed");
+          const resumed = await fencedResume(redis, queue, fenceKey, pauseOwnerKey, fenceToken, operationTimeoutMs);
+          if (resumed === 0) { recoveryStatus = "ownership_lost"; throw new DeployError("queue_read_failed"); }
+          if (resumed < 0) throw new DeployError("queue_read_failed");
           paused = false;
           recoveryStatus = "resumed";
         }
       }
+      catch (error) {
+        if (paused) {
+          disconnectRedis();
+          await recoverPause();
+        }
+        throw error;
+      }
       finally {
-        await releaseFence().catch(() => undefined);
+        if (!redisDisconnected) await releaseFence().catch(() => undefined);
         await close();
       }
     },
@@ -567,7 +656,7 @@ async function legacyQueueLease(queueName: string, dependencies: DeployDependenc
 
 async function defaultSpawn(argv: readonly string[], options?: SpawnOptions): Promise<ProcessResult> {
   if (argv.length !== 6 || argv[0] !== "docker" || argv[1] !== "compose" || argv[2] !== "up" || argv[3] !== "-d" || argv[4] !== "--force-recreate" || !SERVICE_ORDER.includes(argv[5] as WorkerService)) throw new DeployError("invalid_request");
-  try { await execFileAsync(argv[0], argv.slice(1), { ...EXEC_OPTIONS, env: options ? { ...process.env, ...options.env } : process.env }); return { exitCode: 0 }; }
+  try { await execFileAsync(argv[0], argv.slice(1), { shell: false, timeout: 30_000, maxBuffer: 1024 * 1024, env: options ? { ...process.env, ...options.env } : process.env }); return { exitCode: 0 }; }
   catch { return { exitCode: 1 }; }
 }
 

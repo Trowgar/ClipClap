@@ -18,6 +18,18 @@ const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
 describe("immutable production release adapter", () => {
+  it.each(["CLIPCLAP_OCI_REVISION", "GIT_SHA", "FEEDBACK_QUALITY_CONFIG_FILE", "WORKER_ROLE", "NODE_ENV", "COMPOSE_PROJECT_NAME"])("rejects reserved production.env key %s before creating a candidate", async (key) => {
+    const candidate = `registry.example/clipclap-worker@${digest("candidate")}`;
+    await expect(createProductionRollback(["worker-analyze"], { candidateCommitSha: commit }, {
+      root: "/private/corpus", candidateImage: candidate, composeFile: "docker-compose.production.yml", environment: Buffer.from(`${key}=override\n`), config: Buffer.from("{}"),
+      readCompose: async () => Buffer.from("services: {}\n"),
+      inspectImage: async (reference) => ({ reference, digest: parseImageReference(reference).digest, revision: commit }),
+      inspectService: async () => ({ image: candidate }),
+      publishRollback: async () => ({ status: "committed" as const }),
+      exec: async () => ({ exitCode: 0, stdout: "" }),
+    })).rejects.toThrow("compose_unavailable");
+  });
+
   it("requires a digest-pinned candidate with the decision OCI revision", () => {
     expect(parseImageReference(`registry.example/clipclap-worker@${digest("candidate")}`)).toEqual({
       repository: "registry.example/clipclap-worker", digest: digest("candidate"),

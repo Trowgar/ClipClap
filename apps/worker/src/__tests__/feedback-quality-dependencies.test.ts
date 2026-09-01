@@ -72,7 +72,7 @@ async function reachable(entry: string): Promise<ModuleGraph> {
   return graph;
 }
 
-type SemanticAliases = Readonly<{ prisma: ReadonlySet<string>; r2: ReadonlySet<string>; process: ReadonlySet<string> }>;
+type SemanticAliases = { prisma: Set<string>; r2: Set<string>; process: Set<string> };
 
 function bindingName(name: ts.BindingName): string | undefined {
   return ts.isIdentifier(name) ? name.text : undefined;
