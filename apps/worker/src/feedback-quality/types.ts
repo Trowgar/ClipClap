@@ -56,6 +56,11 @@ export interface QualityMetrics {
   clipCount?: number;
   positiveRetention?: number;
   negativeDefects?: number;
+  /** Selection-only telemetry, kept numeric so observations stay closed and
+   * deterministic while retaining rescue/critic diagnostics. */
+  lowQuality?: number;
+  rescueCandidates?: number;
+  criticFailures?: number;
 }
 
 /** One immutable replay result. `caseVersion` is the join key across observations. */

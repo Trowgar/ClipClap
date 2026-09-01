@@ -77,6 +77,9 @@ const METRIC_KEYS = new Set([
   "clipCount",
   "positiveRetention",
   "negativeDefects",
+  "lowQuality",
+  "rescueCandidates",
+  "criticFailures",
 ]);
 const POLICY_KEYS = new Set(["schemaVersion", "policyVersion", "claim", "minimum"]);
 const MINIMUM_KEYS = new Set(["evalPositive", "evalNegative", "holdoutPositive", "holdoutNegative"]);

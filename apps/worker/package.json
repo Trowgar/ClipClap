@@ -17,7 +17,8 @@
     "backfill:thumbnails": "tsx src/scripts/backfill-thumbnails.ts",
     "feedback-learning-export": "tsx src/scripts/feedback-learning-export.ts",
     "feedback-learning-review": "tsx src/scripts/feedback-learning-review.ts",
-    "feedback-quality-promote": "tsx src/scripts/feedback-quality-promote.ts"
+    "feedback-quality-promote": "tsx src/scripts/feedback-quality-promote.ts",
+    "feedback-quality-observe": "tsx src/scripts/feedback-quality-observe.ts"
   },
   "dependencies": {
     "@clipclap/shared": "*",
