@@ -57,7 +57,8 @@ describe("feedback quality observation runner", () => {
       set: "eval", mode: "baseline", commitSha: "a".repeat(40), config: {},
       corpusSha256: hash("f"), runnerVersion: 1, cases: [sampleCase()], dependencies: deps,
       environment: { OPENAI_API_KEY: "secret", QUALITY_ALLOWED: "yes" },
-      allowedEnvironment: ["QUALITY_ALLOWED"],
+      allowedEnvironment: ["QUALITY_ALLOWED"], promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"),
+      recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c") },
     })).rejects.toThrow("environment");
     expect(runCase).not.toHaveBeenCalled();
   });
@@ -67,7 +68,8 @@ describe("feedback quality observation runner", () => {
     await expect(observeQualitySet({
       set: "eval", mode: "baseline", commitSha: "a".repeat(40), config: {},
       corpusSha256: hash("f"), runnerVersion: 1, cases: [sampleCase("holdout")],
-      dependencies: { runCase }, environment: {}, allowedEnvironment: [],
+      dependencies: { runCase }, environment: {}, allowedEnvironment: [], promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"),
+      recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c") },
     })).rejects.toThrow("set");
   });
 
@@ -76,11 +78,13 @@ describe("feedback quality observation runner", () => {
     const base = {
       set: "eval" as const, mode: "candidate" as const, commitSha: "a".repeat(40), config: {},
       corpusSha256: hash("f"), runnerVersion: 1, cases: [sampleCase()], dependencies: { runCase },
-      environment: {}, allowedEnvironment: [], promptFingerprint: hash("a"), modelFingerprint: hash("b"),
+      environment: {}, allowedEnvironment: [], promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"),
     };
-    await expect(observeQualitySet({ ...base, recorded: { promptFingerprint: hash("c"), modelFingerprint: hash("b") } }))
+    await expect(observeQualitySet({ ...base, recorded: { promptFingerprint: hash("c"), modelFingerprint: hash("b"), requestFingerprint: hash("c") } }))
       .rejects.toThrow("live");
-    await expect(observeQualitySet({ ...base, recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b") }, promptFingerprint: hash("d") }))
+    await expect(observeQualitySet({ ...base, recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c") }, promptFingerprint: hash("d") }))
+      .rejects.toThrow("live");
+    await expect(observeQualitySet({ ...base, recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("d") } }))
       .rejects.toThrow("live");
   });
 
@@ -97,7 +101,7 @@ describe("feedback quality observation runner", () => {
     const observation = await observeQualitySet({
       set: "eval", mode: "baseline", commitSha: "a".repeat(40), config: {},
       corpusSha256: hash("f"), runnerVersion: 1, cases: [sampleCase()], dependencies: { runCase, publish },
-      environment: {}, allowedEnvironment: [], live: true, promptFingerprint: hash("a"), modelFingerprint: hash("b"),
+      environment: {}, allowedEnvironment: [], live: true, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"),
     });
     expect(names).toEqual(["live-1", "live-2", "live-3"]);
     expect(observation.cases[0].metrics).toEqual(result.metrics);
@@ -109,7 +113,7 @@ describe("feedback quality observation runner", () => {
     const root = await mkdtemp(join(tmpdir(), "quality-observe-attempts-"));
     const observation = await observeQualitySet({
       set: "eval", mode: "baseline", commitSha: "a".repeat(40), config: {}, corpusSha256: hash("f"), runnerVersion: 1,
-      cases: [sampleCase()], root, live: true, promptFingerprint: hash("a"), modelFingerprint: hash("b"), environment: {}, allowedEnvironment: [],
+      cases: [sampleCase()], root, live: true, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), environment: {}, allowedEnvironment: [],
       dependencies: { runCase: vi.fn(async () => result) },
     });
     const attempts = await readObservationAttempts(observation.observationId, root);
@@ -134,7 +138,8 @@ describe("feedback quality observation runner", () => {
       set: "eval", mode: "baseline", commitSha: "a".repeat(40), config: {},
       corpusSha256: hash("f"), runnerVersion: 1, cases: [sampleCase()], dependencies: {
         publish, runCase: vi.fn(async () => { throw new Error("input missing"); }),
-      }, environment: {}, allowedEnvironment: [],
+      }, environment: {}, allowedEnvironment: [], promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"),
+      recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c") },
     });
     expect(observation.cases[0].status).toBe("error");
     expect(publish).toHaveBeenCalledOnce();
@@ -151,10 +156,12 @@ describe("feedback quality observation runner", () => {
     await chmod(path, 0o644);
     await expect(readSecureConfig(path)).rejects.toThrow("insecure_config");
     await chmod(path, 0o600);
-    await writeFile(path, JSON.stringify({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b") }, envAllowlist: [], engine: {} }), { mode: 0o600 });
+    await writeFile(path, JSON.stringify({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c") }, envAllowlist: [], engine: {} }), { mode: 0o600 });
     expect(await readSecureConfig(path)).toMatchObject({ schemaVersion: 1, runnerVersion: 1 });
-    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), envAllowlist: [], engine: {} }, false)).toThrow("fingerprint");
-    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), envAllowlist: [], engine: {} }, true)).not.toThrow();
+    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), envAllowlist: [], engine: {} }, false)).toThrow("invalid_flag");
+    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), envAllowlist: [], engine: {} }, true)).not.toThrow();
+    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), envAllowlist: [], engine: {} }, true)).toThrow("invalid_flag");
+    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b") }, envAllowlist: [], engine: {} }, false)).toThrow("fingerprint");
   });
 
   it("loads only active, committed case bundles for the requested set and derives their digest", async () => {
@@ -202,7 +209,7 @@ describe("feedback quality observation runner", () => {
     await publishBundle({ kind: "case", id, files: { "case.json": Buffer.from(JSON.stringify({ ...body, caseVersion: id }) + "\n"), "evidence.mp4": Buffer.from("video") } }, root);
     await appendLabelEvent({ schemaVersion: 1, eventId: "event-cli", action: "label", caseVersion: id, set: "eval", disposition: "positive" }, root);
     const configPath = join(root, "config.json");
-    await writeFile(configPath, JSON.stringify({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), envAllowlist: [], engine: {} }), { mode: 0o600 });
+    await writeFile(configPath, JSON.stringify({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), envAllowlist: [], engine: {} }), { mode: 0o600 });
     const attemptNames: string[] = [];
     let publishedAttempts: readonly unknown[] = [];
     const observation = await runObservationCli(["--set", "eval", "--mode", "baseline", "--commit", "a".repeat(40), "--config-file", configPath, "--live"], {
@@ -310,8 +317,10 @@ describe("feedback quality observation runner", () => {
 
   it("measures annotated subject/text boxes and subtitle overlap from sampled frames", async () => {
     const calls: string[][] = [];
-    const exec: VisualProbeExec = vi.fn(async (_file: string, args: readonly string[]) => {
+    const options: Array<Readonly<Record<string, unknown>> | undefined> = [];
+    const exec: VisualProbeExec = vi.fn(async (_file: string, args: readonly string[], requestOptions) => {
       calls.push([...args]);
+      options.push(requestOptions);
       if (args[0] === "-show_entries") return { stdout: JSON.stringify({ streams: [{ width: 1080, height: 1920, nb_read_frames: "1" }] }), stderr: "" };
       if (args.some((arg) => arg.includes("ssim="))) return { stdout: "SSIM Y:1.000000 (inf)\n", stderr: "" };
       if (args.some((arg) => arg.includes("blend="))) return { stdout: "", stderr: "n:0 x1:600 x2:800 y1:192 y2:384\n" };
@@ -334,6 +343,8 @@ describe("feedback quality observation runner", () => {
     expect(result.subtitleOverlap).toBe(0);
     expect(calls.some((args) => args.includes("/tmp/render.mp4"))).toBe(true);
     expect(calls.some((args) => args.some((arg) => arg.includes("blend=all_mode=difference")))).toBe(true);
+    expect(options.length).toBeGreaterThan(0);
+    expect(options.every((item) => item?.timeout === 15_000 && item.maxBuffer === 2 * 1024 * 1024)).toBe(true);
   });
 
   it("reports each annotated visual violation instead of defaulting it to zero", async () => {

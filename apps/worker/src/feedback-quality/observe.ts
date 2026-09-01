@@ -35,9 +35,10 @@ export type ObserveQualityOptions = Readonly<{
   environment: Readonly<Record<string, string | undefined>>;
   allowedEnvironment: readonly string[];
   live?: boolean;
-  promptFingerprint?: `sha256:${string}`;
-  modelFingerprint?: `sha256:${string}`;
-  recorded?: Readonly<{ promptFingerprint: `sha256:${string}`; modelFingerprint: `sha256:${string}` }>;
+  promptFingerprint: `sha256:${string}`;
+  modelFingerprint: `sha256:${string}`;
+  requestFingerprint: `sha256:${string}`;
+  recorded?: Readonly<{ promptFingerprint: `sha256:${string}`; modelFingerprint: `sha256:${string}`; requestFingerprint: `sha256:${string}` }>;
 }>;
 
 export class ObservationError extends Error {
@@ -140,11 +141,12 @@ function validateOptions(options: ObserveQualityOptions): void {
   if (!options.cases.length || new Set(options.cases.map((item) => item.caseVersion)).size !== options.cases.length) throw new ObservationError("invalid_input");
   for (const item of options.cases) if (item.set !== options.set) throw new ObservationError("set");
   validateEnvironment(options.environment, options.allowedEnvironment);
-  if (options.promptFingerprint !== undefined && !validHash(options.promptFingerprint)) throw new ObservationError("fingerprint");
-  if (options.modelFingerprint !== undefined && !validHash(options.modelFingerprint)) throw new ObservationError("fingerprint");
-  if (options.recorded && (!validHash(options.recorded.promptFingerprint) || !validHash(options.recorded.modelFingerprint))) throw new ObservationError("fingerprint");
-  if (options.live && (!options.promptFingerprint || !options.modelFingerprint)) throw new ObservationError("fingerprint");
-  if (options.recorded && !options.live && (options.promptFingerprint !== options.recorded.promptFingerprint || options.modelFingerprint !== options.recorded.modelFingerprint)) throw new ObservationError("live_required");
+  if (!validHash(options.promptFingerprint) || !validHash(options.modelFingerprint) || !validHash(options.requestFingerprint)) throw new ObservationError("fingerprint");
+  if (!options.live && !options.recorded) throw new ObservationError("fingerprint");
+  if (options.recorded && (!validHash(options.recorded.promptFingerprint) || !validHash(options.recorded.modelFingerprint) || !validHash(options.recorded.requestFingerprint))) throw new ObservationError("fingerprint");
+  // Deterministic replay is valid only for the exact reviewed request shape.
+  // Any prompt/model/request drift must be evaluated as a live observation.
+  if (options.recorded && !options.live && (options.promptFingerprint !== options.recorded.promptFingerprint || options.modelFingerprint !== options.recorded.modelFingerprint || options.requestFingerprint !== options.recorded.requestFingerprint)) throw new ObservationError("live_required");
 }
 
 function assertResult(value: ObservationAdapterResult, qualityCase: MaterializedCase): QualityCaseResult {

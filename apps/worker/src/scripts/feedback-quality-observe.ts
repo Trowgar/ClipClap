@@ -33,7 +33,8 @@ export type ObservationConfig = Readonly<{
   runnerVersion: number;
   promptFingerprint: `sha256:${string}`;
   modelFingerprint: `sha256:${string}`;
-  recorded?: Readonly<{ promptFingerprint: `sha256:${string}`; modelFingerprint: `sha256:${string}`; requestFingerprint?: `sha256:${string}` }>;
+  requestFingerprint: `sha256:${string}`;
+  recorded?: Readonly<{ promptFingerprint: `sha256:${string}`; modelFingerprint: `sha256:${string}`; requestFingerprint: `sha256:${string}` }>;
   envAllowlist: readonly string[];
   engine: Readonly<Record<string, unknown>>;
 }>;
@@ -44,14 +45,14 @@ export function validateObservationConfig(value: unknown, live: boolean): Observ
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ObserveCliError("invalid_flag");
   const item = value as Record<string, unknown>;
   const keys = Object.keys(item);
-  const allowed = ["schemaVersion", "runnerVersion", "promptFingerprint", "modelFingerprint", "recorded", "envAllowlist", "engine"];
-  if (keys.some((key) => !allowed.includes(key)) || item.schemaVersion !== 1 || !Number.isSafeInteger(item.runnerVersion) || (item.runnerVersion as number) < 0 || !hash(item.promptFingerprint) || !hash(item.modelFingerprint) || !Array.isArray(item.envAllowlist) || item.envAllowlist.some((key) => typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) || !item.engine || typeof item.engine !== "object" || Array.isArray(item.engine)) throw new ObserveCliError("invalid_flag");
+  const allowed = ["schemaVersion", "runnerVersion", "promptFingerprint", "modelFingerprint", "requestFingerprint", "recorded", "envAllowlist", "engine"];
+  if (keys.some((key) => !allowed.includes(key)) || item.schemaVersion !== 1 || !Number.isSafeInteger(item.runnerVersion) || (item.runnerVersion as number) < 0 || !hash(item.promptFingerprint) || !hash(item.modelFingerprint) || !hash(item.requestFingerprint) || !Array.isArray(item.envAllowlist) || item.envAllowlist.some((key) => typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) || !item.engine || typeof item.engine !== "object" || Array.isArray(item.engine)) throw new ObserveCliError("invalid_flag");
   const engine = item.engine as Record<string, unknown>;
   if (Object.keys(engine).some((key) => !["analyze", "reframe", "musicDirection", "blackTail"].includes(key)) || (engine.analyze !== undefined && (!engine.analyze || typeof engine.analyze !== "object" || Array.isArray(engine.analyze))) || (engine.reframe !== undefined && (!engine.reframe || typeof engine.reframe !== "object" || Array.isArray(engine.reframe))) || (engine.musicDirection !== undefined && (!engine.musicDirection || typeof engine.musicDirection !== "object" || Array.isArray(engine.musicDirection))) || (engine.blackTail !== undefined && (!engine.blackTail || typeof engine.blackTail !== "object" || Array.isArray(engine.blackTail)))) throw new ObserveCliError("invalid_flag");
   if (item.recorded !== undefined) {
     if (!item.recorded || typeof item.recorded !== "object" || Array.isArray(item.recorded)) throw new ObserveCliError("fingerprint");
     const recorded = item.recorded as Record<string, unknown>;
-    if (Object.keys(recorded).some((key) => key !== "promptFingerprint" && key !== "modelFingerprint" && key !== "requestFingerprint") || !hash(recorded.promptFingerprint) || !hash(recorded.modelFingerprint) || (recorded.requestFingerprint !== undefined && !hash(recorded.requestFingerprint))) throw new ObserveCliError("fingerprint");
+    if (Object.keys(recorded).some((key) => key !== "promptFingerprint" && key !== "modelFingerprint" && key !== "requestFingerprint") || !hash(recorded.promptFingerprint) || !hash(recorded.modelFingerprint) || !hash(recorded.requestFingerprint)) throw new ObserveCliError("fingerprint");
   }
   if (!live && item.recorded === undefined) throw new ObserveCliError("fingerprint");
   return item as ObservationConfig;
@@ -169,7 +170,7 @@ async function probeRenderedMedia(path: string, context: Readonly<{ cropPlan: im
   blackTailSeconds: number; frozenTailSeconds: number; subtitleOverlap: number;
   requiredTextClipped: number; requiredSubjectClipped: number; focalFailures: number; visualMeasured: boolean;
 }> {
-  const probe = await execFileAsync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,sample_aspect_ratio,nb_frames:format=duration", "-of", "json", path], { maxBuffer: 1024 * 1024 });
+  const probe = await execFileAsync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,sample_aspect_ratio,nb_frames:format=duration", "-of", "json", path], { timeout: 15_000, maxBuffer: 1024 * 1024 });
   const parsed = JSON.parse(probe.stdout) as { streams?: Array<{ width?: number; height?: number; sample_aspect_ratio?: string; nb_frames?: string }>; format?: { duration?: string } };
   const stream = parsed.streams?.[0];
   if (!stream?.width || !stream.height) throw new ObserveCliError("missing");
@@ -228,7 +229,7 @@ export function createProductionCaseRunner(root = DEFAULT_QUALITY_ROOT, live = f
           try { recording = await readArtifactJson("case", qualityCase.caseVersion, "recorded-responses.json", root, qualityCase.inputs.recordedResponsesSha256 ?? undefined); } catch { return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "missing", metrics: { hardInvariantFailures: 1 } }; }
           const entry = recording as Record<string, unknown>;
           const recorded = entry.recorded as Record<string, unknown> | undefined;
-          if (!config?.recorded || !recorded || !hash(recorded.promptFingerprint) || !hash(recorded.modelFingerprint) || !hash(recorded.requestFingerprint) || recorded.promptFingerprint !== config.recorded.promptFingerprint || recorded.modelFingerprint !== config.recorded.modelFingerprint || (config.recorded.requestFingerprint !== undefined && recorded.requestFingerprint !== config.recorded.requestFingerprint) || !entry.result || typeof entry.result !== "object") return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };
+          if (!config?.recorded || !recorded || !hash(recorded.promptFingerprint) || !hash(recorded.modelFingerprint) || !hash(recorded.requestFingerprint) || recorded.promptFingerprint !== config.recorded.promptFingerprint || recorded.modelFingerprint !== config.recorded.modelFingerprint || recorded.requestFingerprint !== config.recorded.requestFingerprint || !entry.result || typeof entry.result !== "object") return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };
           return observeSelectionCase(qualityCase, { transcript, attempts: [context.attemptName ?? "recorded"], analyzeOptions: (config?.engine.analyze ?? {}) as AnalyzeV2Options, analyze: async () => entry.result as SelectionResultPayload });
         }
         const apiKey = environment.OPENAI_API_KEY;
@@ -290,7 +291,7 @@ export async function runObservationCli(
     set: args.set, mode: args.mode, commitSha: args.commit, config, corpusSha256: loaded.corpusSha256,
     runnerVersion: config.runnerVersion, cases: loaded.cases, dependencies, root,
     environment, allowedEnvironment: config.envAllowlist, live: args.live,
-    promptFingerprint: config.promptFingerprint, modelFingerprint: config.modelFingerprint, recorded: config.recorded,
+    promptFingerprint: config.promptFingerprint, modelFingerprint: config.modelFingerprint, requestFingerprint: config.requestFingerprint, recorded: config.recorded,
   } satisfies ObserveQualityOptions);
   console.log(JSON.stringify({ observationId: result.observationId, set: result.set, mode: result.mode, commitSha: result.commitSha, caseCount: result.cases.length }));
   return result;
