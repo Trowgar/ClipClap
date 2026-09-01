@@ -159,8 +159,9 @@ async function materializeArtifact(id: string, name: string, root: string, direc
   }
 }
 
-async function probeRenderedMedia(path: string, context: Readonly<{ cropPlan: import("../reframe/types").CropPlan | null; assPath?: string; cues: readonly unknown[]; samples: readonly import("../feedback-quality/promote").VisualSample[] }>): Promise<{
+async function probeRenderedMedia(path: string, context: Readonly<{ cropPlan: import("../reframe/types").CropPlan | null; assPath?: string; cues: readonly unknown[]; samples: readonly import("../feedback-quality/promote").VisualSample[]; referencePath: string; highlightStart: number }>): Promise<{
   width: number; height: number; sar: number; duration: number; frameCount: number;
+  approvedMomentRetained: number; approvedWindowOverlap: number; contentMatch: number;
   blackTailSeconds: number; frozenTailSeconds: number; subtitleOverlap: number;
   requiredTextClipped: number; requiredSubjectClipped: number; focalFailures: number; visualMeasured: boolean;
 }> {
@@ -192,10 +193,11 @@ async function probeRenderedMedia(path: string, context: Readonly<{ cropPlan: im
     const result = await execFileAsync(file, [...args], { ...(options ?? {}) } as never);
     return { stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
   };
-  const visual = await measureVisualReplay(path, { cropPlan: context.cropPlan, assPath: context.assPath, samples: context.samples, exec: visualExec });
+  const visual = await measureVisualReplay(path, { referencePath: context.referencePath, highlightStart: context.highlightStart, cropPlan: context.cropPlan, assPath: context.assPath, cues: context.cues, samples: context.samples, exec: visualExec });
   return {
     width: stream.width, height: stream.height, sar: sarDen ? sarNum / sarDen : 0,
     duration, frameCount: Number(stream.nb_frames ?? 0),
+    approvedMomentRetained: visual.approvedMomentRetained, approvedWindowOverlap: visual.approvedWindowOverlap, contentMatch: visual.contentMatch,
     blackTailSeconds: blackTail, frozenTailSeconds: frozenTail,
     subtitleOverlap: visual.subtitleOverlap, requiredTextClipped: visual.requiredTextClipped,
     requiredSubjectClipped: visual.requiredSubjectClipped, focalFailures: visual.focalFailures,

@@ -5,6 +5,8 @@ import type { VisualBox, VisualSample } from "./promote";
 export type VisualProbeExec = (file: string, args: readonly string[], options?: Readonly<Record<string, unknown>>) => Promise<{ stdout: string; stderr: string }>;
 
 export type VisualProbeInput = Readonly<{
+  referencePath: string;
+  highlightStart: number;
   cropPlan: CropPlan | null;
   assPath?: string;
   cues?: readonly unknown[];
@@ -13,6 +15,9 @@ export type VisualProbeInput = Readonly<{
 }>;
 
 export type VisualProbeResult = Readonly<{
+  approvedMomentRetained: number;
+  approvedWindowOverlap: number;
+  contentMatch: number;
   subtitleOverlap: number;
   requiredTextClipped: number;
   requiredSubjectClipped: number;
@@ -61,6 +66,13 @@ function sourceToCrop(box: VisualBox, source: { width: number; height: number },
   return { x: (sourceBox.x - x) * OUT_W / width, y: outY + (sourceBox.y - y) * outHeight / height, w: sourceBox.w * OUT_W / width, h: sourceBox.h * outHeight / height };
 }
 
+function sourceToContain(box: VisualBox, source: { width: number; height: number }): PixelBox {
+  const scale = Math.min(OUT_W / source.width, OUT_H / source.height);
+  const renderedWidth = source.width * scale;
+  const renderedHeight = source.height * scale;
+  return { x: box.x * renderedWidth + (OUT_W - renderedWidth) / 2, y: box.y * renderedHeight + (OUT_H - renderedHeight) / 2, w: box.w * renderedWidth, h: box.h * renderedHeight };
+}
+
 function mapsFor(plan: CropPlan | null, timestamp: number): Array<{ map: (box: VisualBox) => PixelBox }> {
   if (!plan) return [{ map: (box) => sourceToCrop(box, { width: OUT_W, height: OUT_H }, 0, 0, OUT_W, OUT_H) }];
   if (!plan.source || !Number.isFinite(plan.source.width) || !Number.isFinite(plan.source.height) || plan.source.width <= 0 || plan.source.height <= 0) throw new Error("invalid visual crop plan");
@@ -68,7 +80,7 @@ function mapsFor(plan: CropPlan | null, timestamp: number): Array<{ map: (box: V
   const shot = plan.shots.find((candidate) => timestamp >= candidate.start && timestamp < candidate.end) ?? plan.shots[plan.shots.length - 1];
   if (!shot) throw new Error("visual crop plan has no shot");
   const center = Math.max(0, (source.width - cropWidthFor(source.height)) / 2);
-  if (shot.layout === "safe-fit") return [{ map: (box) => sourceToCrop(box, source, 0, 0, source.width, source.height) }];
+  if (shot.layout === "safe-fit") return [{ map: (box) => sourceToContain(box, source) }];
   if (shot.layout === "split") {
     const tile = tileWidthFor(source.height);
     return [
@@ -106,7 +118,7 @@ function parseBbox(output: string): PixelBox | null {
 async function assertFrame(exec: VisualProbeExec, path: string, timestamp: number): Promise<void> {
   let result: { stdout: string; stderr: string };
   try {
-    result = await exec("ffprobe", ["-show_entries", "stream=width,height,nb_read_frames", "-v", "error", "-ss", String(timestamp), "-i", path, "-select_streams", "v:0", "-read_intervals", `${timestamp}%+0.05`, "-count_frames", "-of", "json"]);
+    result = await exec("ffprobe", ["-show_entries", "stream=width,height,nb_read_frames", "-v", "error", "-ss", String(timestamp), "-i", path, "-select_streams", "v:0", "-read_intervals", "0%+0.05", "-count_frames", "-of", "json"]);
   } catch { throw new Error("visual probe frame unavailable"); }
   let parsed: { streams?: Array<{ width?: number; height?: number; nb_read_frames?: string }> };
   try { parsed = JSON.parse(result.stdout) as typeof parsed; } catch { throw new Error("visual probe frame parse failed"); }
@@ -114,38 +126,63 @@ async function assertFrame(exec: VisualProbeExec, path: string, timestamp: numbe
   if (stream?.width !== OUT_W || stream.height !== OUT_H || Number(stream.nb_read_frames ?? 0) < 1) throw new Error("visual probe frame geometry failed");
 }
 
-async function subtitleBbox(exec: VisualProbeExec, assPath: string, timestamp: number): Promise<PixelBox | null> {
+type FrameComparison = Readonly<{ similarity: number; difference: PixelBox | null }>;
+
+function parseSimilarity(output: string): number {
+  const match = output.match(/SSIM\s+Y\s*:\s*([0-9]+(?:\.[0-9]+)?)/i);
+  const value = match ? Number(match[1]) : NaN;
+  if (!Number.isFinite(value) || value < 0 || value > 1) throw new Error("visual comparison unavailable");
+  return value;
+}
+
+async function compareFrames(exec: VisualProbeExec, actualPath: string, referencePath: string, timestamp: number): Promise<FrameComparison> {
   let result: { stdout: string; stderr: string };
-  try { result = await exec("ffmpeg", ["-nostdin", "-v", "info", "-f", "lavfi", "-i", "color=c=black:s=1080x1920:r=30", "-vf", `ass=filename=${assPath},select=gte(t\\,${timestamp}),bbox`, "-frames:v", "1", "-f", "null", "-"]); } catch { throw new Error("visual subtitle probe unavailable"); }
-  return parseBbox(`${result.stdout}\n${result.stderr}`);
+  try {
+    result = await exec("ffmpeg", ["-nostdin", "-v", "info", "-ss", String(timestamp), "-i", actualPath, "-ss", String(timestamp), "-i", referencePath, "-filter_complex", "[0:v][1:v]blend=all_mode=difference,bbox,ssim=stats_file=-", "-frames:v", "1", "-f", "null", "-"]);
+  } catch { throw new Error("visual comparison unavailable"); }
+  const output = `${result.stdout}\n${result.stderr}`;
+  return { similarity: parseSimilarity(output), difference: parseBbox(output) };
 }
 
 /** Measures the frozen visual contract against actual sampled output. No
  * annotation, frame, geometry, or ASS probe failure is converted into zero. */
 export async function measureVisualReplay(path: string, input: VisualProbeInput): Promise<VisualProbeResult> {
   if (!input.samples.length) throw new Error("visual annotation unavailable");
+  if (!Number.isFinite(input.highlightStart) || input.highlightStart < 0 || !input.referencePath) throw new Error("visual reference unavailable");
   if (!input.cropPlan && input.samples.some((sample) => sample.requiredSubjectBoxes.length > 0 || sample.requiredTextBoxes.length > 0 || sample.protectedExistingCaptionBoxes.length > 0)) throw new Error("visual crop plan unavailable");
   let subtitleOverlap = 0;
   let requiredTextClipped = 0;
   let requiredSubjectClipped = 0;
+  let contentMismatch = 0;
+  let sampledSimilarity = 1;
   for (const sample of input.samples) {
     if (!Number.isFinite(sample.timestamp) || sample.timestamp < 0) throw new Error("invalid visual annotation");
+    const relativeTimestamp = sample.timestamp - input.highlightStart;
+    if (relativeTimestamp < 0) throw new Error("visual sample outside highlight");
     for (const box of [...sample.requiredSubjectBoxes, ...sample.requiredTextBoxes, ...sample.protectedExistingCaptionBoxes]) finiteBox(box);
-    await assertFrame(input.exec, path, sample.timestamp);
-    const maps = mapsFor(input.cropPlan, sample.timestamp);
+    await assertFrame(input.exec, path, relativeTimestamp);
+    await assertFrame(input.exec, input.referencePath, relativeTimestamp);
+    const comparison = await compareFrames(input.exec, path, input.referencePath, relativeTimestamp);
+    sampledSimilarity = Math.min(sampledSimilarity, comparison.similarity);
+    const cues = input.cues ?? [];
+    const activeCue = cues.some((cue) => {
+      if (!cue || typeof cue !== "object") return false;
+      const item = cue as { start?: unknown; end?: unknown };
+      return typeof item.start === "number" && typeof item.end === "number" && relativeTimestamp >= item.start && relativeTimestamp < item.end;
+    });
+    if (activeCue && !comparison.difference) throw new Error("visual subtitle pixels unavailable");
+    if (!activeCue && comparison.similarity < 0.98) contentMismatch += 1;
+    const maps = mapsFor(input.cropPlan, relativeTimestamp);
     const subjectFailures = sample.requiredSubjectBoxes.filter((box) => annotatedVisibility(box, maps, input.cropPlan?.source ?? null) < 0.9).length;
     const textFailures = sample.requiredTextBoxes.filter((box) => annotatedVisibility(box, maps, input.cropPlan?.source ?? null) < 0.9).length;
     requiredSubjectClipped += subjectFailures;
     requiredTextClipped += textFailures;
-    if (input.assPath) {
-      const rendered = await subtitleBbox(input.exec, input.assPath, sample.timestamp);
-      if (!rendered) {
-        if (sample.requiredTextBoxes.length > 0) throw new Error("visual subtitle probe unavailable");
-      } else {
-        const protectedBoxes = sample.protectedExistingCaptionBoxes.flatMap((box) => maps.map(({ map }) => map(box)));
-        subtitleOverlap += protectedBoxes.some((box) => overlap(rendered, box) > 0) ? 1 : 0;
-      }
-    } else if (sample.requiredTextBoxes.length > 0) throw new Error("visual subtitle annotation unavailable");
+    if (activeCue && !input.assPath) throw new Error("visual subtitle annotation unavailable");
+    if (activeCue && comparison.difference) {
+      const protectedBoxes = [...sample.protectedExistingCaptionBoxes, ...sample.requiredTextBoxes].flatMap((box) => maps.map(({ map }) => map(box)));
+      subtitleOverlap += protectedBoxes.some((box) => overlap(comparison.difference!, box) > 0) ? 1 : 0;
+    }
   }
-  return { subtitleOverlap, requiredTextClipped, requiredSubjectClipped, focalFailures: requiredSubjectClipped, visualMeasured: true };
+  const contentMatch = contentMismatch === 0 ? 1 : 0;
+  return { subtitleOverlap, requiredTextClipped, requiredSubjectClipped, focalFailures: requiredSubjectClipped, approvedMomentRetained: contentMatch, approvedWindowOverlap: sampledSimilarity, contentMatch, visualMeasured: true };
 }

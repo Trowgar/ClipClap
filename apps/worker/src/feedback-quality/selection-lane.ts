@@ -25,6 +25,35 @@ function finite(value: unknown): value is number {
 
 function number(value: unknown): number | undefined { return finite(value) ? value : undefined; }
 
+function selectedHighlight(highlights: readonly unknown[], expected: MaterializedCase["expected"]["sourceWindow"]): { start: number; end: number; hookStart: number; payoffAt: number; score: number; lowQuality?: boolean } | undefined {
+  const valid = highlights.filter((item): item is Record<string, unknown> => {
+    if (!item || typeof item !== "object") return false;
+    const value = item as Record<string, unknown>;
+    return finite(value.start) && finite(value.end);
+  });
+  const first = valid.reduce<Record<string, unknown> | undefined>((best, item) => {
+    if (!best || !expected) return best ?? item;
+    const overlap = Math.max(0, Math.min(item.end as number, expected.end) - Math.max(item.start as number, expected.start));
+    const priorOverlap = Math.max(0, Math.min(best.end as number, expected.end) - Math.max(best.start as number, expected.start));
+    return overlap > priorOverlap ? item : best;
+  }, undefined);
+  if (!first || !finite(first.start) || !finite(first.end) || !finite(first.hookStart) || !finite(first.payoffAt) || typeof first.score !== "number" || !Number.isFinite(first.score)) throw new Error("selection highlight fields missing");
+  return first as unknown as { start: number; end: number; hookStart: number; payoffAt: number; score: number; lowQuality?: boolean };
+}
+
+function deterministicBoundaryErrors(highlight: { start: number; end: number }, qualityCase: MaterializedCase, transcript: TranscriptionResult): number {
+  const duration = qualityCase.inputs.sourceDurationSec;
+  const segments = transcript.segments.filter((segment) => finite(segment.start) && finite(segment.end) && segment.end >= segment.start);
+  const transcriptStart = segments.length ? Math.min(...segments.map((segment) => segment.start)) : 0;
+  const transcriptEnd = segments.length ? Math.max(...segments.map((segment) => segment.end)) : duration ?? 0;
+  let errors = 0;
+  if (highlight.start < 0 || highlight.end <= highlight.start || (duration !== null && duration !== undefined && highlight.end > duration)) errors += 1;
+  if (highlight.start < transcriptStart || highlight.end > transcriptEnd) errors += 1;
+  const expected = qualityCase.expected.sourceWindow;
+  if (qualityCase.expected.completeBoundary && expected && (highlight.start > expected.start || highlight.end < expected.end)) errors += 1;
+  return errors;
+}
+
 function selectionMetrics(result: SelectionAttempt["result"], qualityCase: MaterializedCase, options: SelectionLaneOptions): QualityMetrics {
   const highlights = Array.isArray(result.highlights) ? result.highlights : [];
   const expected = qualityCase.expected.sourceWindow;
@@ -42,47 +71,30 @@ function selectionMetrics(result: SelectionAttempt["result"], qualityCase: Mater
   const telemetry = result.telemetry ?? {};
   const requiredTelemetry = ["kept", "criticVerdicts", "omittedDrops", "truncatedDrops", "refusalDrops", "invariantDrops"];
   if (requiredTelemetry.some((key) => !Object.prototype.hasOwnProperty.call(telemetry, key))) throw new Error("selection telemetry missing");
-  const pickRequired = (...keys: string[]) => {
-    const value = keys.map((key) => number(telemetry[key])).find((item) => item !== undefined);
-    if (value === undefined) throw new Error("selection telemetry missing");
-    return value;
-  };
-  const boundaryErrors = pickRequired("boundaryErrors", "boundary_errors");
-  const focalFailures = pickRequired("focalFailures", "focal_failures");
-  const subtitleFailures = pickRequired("subtitleFailures", "subtitle_failures");
-  const first = highlights.reduce((best, item) => {
-    const candidate = item as { start?: number; end?: number };
-    if (!finite(candidate.start) || !finite(candidate.end)) return best;
-    if (!best) return item;
-    const prior = best as { start?: number; end?: number };
-    const overlap = expected ? Math.max(0, Math.min(candidate.end, expected.end) - Math.max(candidate.start, expected.start)) : 0;
-    const priorOverlap = expected && finite(prior.start) && finite(prior.end) ? Math.max(0, Math.min(prior.end, expected.end) - Math.max(prior.start, expected.start)) : 0;
-    return overlap > priorOverlap ? item : best;
-  }, undefined as unknown) as { start?: number; end?: number; hookStart?: number; payoffAt?: number; score?: number } | undefined;
-  const hookDelay = first && finite(first.start) && finite(first.hookStart) ? Math.max(0, first.hookStart - first.start) : 0;
+  const first = highlights.length ? selectedHighlight(highlights, expected) : undefined;
+  const hookDelay = first ? first.hookStart - first.start : 0;
   let preHookGap = 0;
-  if (first && finite(first.start) && finite(first.hookStart)) {
+  if (first) {
     try {
       preHookGap = largestPreHookGap(buildSentenceGraph(options.transcript.segments.length ? options.transcript.segments : [], options.analyzeOptions?.cfg ?? loadAnalyzeConfig()), first.start, first.hookStart);
       if (!Number.isFinite(preHookGap) || preHookGap < 0) throw new Error("invalid pre-hook gap");
     } catch { throw new Error("selection pre-hook gap unavailable"); }
   }
-  const payoffContainment = first && finite(first.payoffAt) && finite(first.start) && finite(first.end) ? (first.payoffAt >= first.start && first.payoffAt <= first.end ? 1 : 0) : 0;
+  const payoffContainment = first ? (first.payoffAt >= first.start && first.payoffAt <= first.end ? 1 : 0) : 0;
+  const boundaryErrors = first ? deterministicBoundaryErrors(first, qualityCase, options.transcript) : highlights.length;
   return {
     approvedMomentRetained,
     approvedWindowOverlap,
     emptyResult: highlights.length === 0 ? 1 : 0,
     zeroClipFalseNegative: qualityCase.expected.approvedMoment && highlights.length === 0 ? 1 : 0,
     boundaryErrors,
-    focalFailures,
-    subtitleFailures,
     lowQuality: highlights.filter((item) => (item as { lowQuality?: unknown }).lowQuality === true).length,
     rescueCandidates: telemetry.rescue && typeof telemetry.rescue === "object" ? number((telemetry.rescue as Record<string, unknown>).evaluated) ?? 0 : 0,
     criticFailures: ["omittedDrops", "truncatedDrops", "refusalDrops", "invariantDrops"].reduce((sum, key) => sum + (number(telemetry[key]) ?? 0), 0),
     hookDelay,
     preHookGap,
     payoffContainment,
-    score: number(first?.score) ?? 0,
+    score: first?.score ?? 0,
   };
 }
 
