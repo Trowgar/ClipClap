@@ -78,7 +78,7 @@ describe("feedback quality gate", () => {
     const decision = await decideGate(input({ baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId }), dependencies);
     expect(decision.verdict).toBe("fail");
     expect(decision.reasons).toEqual(["set_mismatch"]);
-    expect(events).toEqual([`read:${base.observationId}`, `read:${candidate.observationId}`]);
+    expect(events).toEqual([`read:${base.observationId}`]);
   });
 
   it("rejects eval observations supplied in the holdout role", async () => {
