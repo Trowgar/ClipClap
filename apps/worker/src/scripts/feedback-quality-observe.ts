@@ -163,13 +163,29 @@ async function probeRenderedMedia(path: string): Promise<{
   const stream = parsed.streams?.[0];
   if (!stream?.width || !stream.height) throw new ObserveCliError("missing");
   const [sarNum, sarDen] = String(stream.sample_aspect_ratio ?? "1:1").split(":").map(Number);
+  const duration = Number(parsed.format?.duration ?? 0);
+  let diagnostics = "";
+  try {
+    const result = await execFileAsync("ffmpeg", ["-nostdin", "-v", "info", "-i", path, "-vf", "blackdetect=d=0.1,freezedetect=n=0.003:d=0.5", "-an", "-f", "null", "-"], { timeout: 15_000, maxBuffer: 2 * 1024 * 1024 });
+    diagnostics = `${result.stderr ?? ""}\n${result.stdout ?? ""}`;
+  } catch (error) {
+    if ((error as { killed?: boolean })?.killed) throw new ObserveCliError("missing");
+    diagnostics = String((error as { stderr?: string })?.stderr ?? "");
+  }
+  const blackTail = [...diagnostics.matchAll(/black_start:([\d.]+).*?black_end:([\d.]+).*?black_duration:([\d.]+)/g)]
+    .map((match) => ({ end: Number(match[2]), duration: Number(match[3]) }))
+    .filter((item) => duration - item.end <= 0.12)
+    .reduce((max, item) => Math.max(max, item.duration), 0);
+  const frozenTail = [...diagnostics.matchAll(/freeze_start:([\d.]+)/g)]
+    .map((match) => Math.max(0, duration - Number(match[1])))
+    .reduce((max, value) => Math.max(max, value), 0);
   return {
     width: stream.width, height: stream.height, sar: sarDen ? sarNum / sarDen : 0,
-    duration: Number(parsed.format?.duration ?? 0), frameCount: Number(stream.nb_frames ?? 0),
+    duration, frameCount: Number(stream.nb_frames ?? 0),
     // The encode probe is deliberately run on the actual output. Subtitle and
     // focal-marker checks are supplied by the stage's machine-readable probe
     // when available; absent markers are zero, never inferred from expectations.
-    blackTailSeconds: 0, frozenTailSeconds: 0, subtitleOverlap: 0,
+    blackTailSeconds: blackTail, frozenTailSeconds: frozenTail, subtitleOverlap: 0,
     requiredTextClipped: 0, requiredSubjectClipped: 0, focalFailures: 0,
   };
 }
