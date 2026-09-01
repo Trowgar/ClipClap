@@ -143,6 +143,9 @@ export type RollbackArtifact = Readonly<{
   composeFilesSha256: string;
   services: readonly WorkerService[];
   previousImages?: readonly Readonly<{ service: WorkerService; image: string; digest: string; revision: string }>[];
+  projectName?: string;
+  network?: string;
+  candidateImage?: string;
 }>;
 
 export type DeployResult = Readonly<{
@@ -237,18 +240,22 @@ function validRollback(value: unknown, services: readonly WorkerService[]): valu
   const standardKeys = ["schemaVersion", "artifactId", "createdAt", "command", "previousCommitSha", "previousImageRef", "previousImageDigest", "composeFiles", "composeFilesSha256", "services"];
   const keys = Reflect.ownKeys(item);
   const hasPreviousImages = Object.prototype.hasOwnProperty.call(item, "previousImages");
-  const exactKeys = keys.length === standardKeys.length + (hasPreviousImages ? 1 : 0) && keys.every((key) => typeof key === "string" && [...standardKeys, "previousImages"].includes(key));
+  const releaseKeys = ["previousImages", "projectName", "network", "candidateImage"];
+  const exactKeys = keys.length === standardKeys.length + releaseKeys.filter((key) => Object.prototype.hasOwnProperty.call(item, key)).length && keys.every((key) => typeof key === "string" && [...standardKeys, ...releaseKeys].includes(key));
   const oldImagesValid = !hasPreviousImages || (Array.isArray(item.previousImages) && item.previousImages.length === (item.services as unknown[]).length && item.previousImages.every((value) => plain(value) && ownKeys(value, ["service", "image", "digest", "revision"]) && typeof value.service === "string" && SERVICE_ORDER.includes(value.service as WorkerService) && typeof value.image === "string" && value.image.endsWith(`@${value.digest}`) && typeof value.digest === "string" && HASH.test(value.digest) && typeof value.revision === "string" && COMMIT.test(value.revision)));
-  const initialValid = exactKeys && oldImagesValid && item.schemaVersion === 1 && typeof item.artifactId === "string" && /^rollback:sha256:[0-9a-f]{64}$/.test(item.artifactId) && utc(item.createdAt) && typeof item.previousCommitSha === "string" && COMMIT.test(item.previousCommitSha) && typeof item.previousImageDigest === "string" && HASH.test(item.previousImageDigest) && typeof item.previousImageRef === "string" && item.previousImageRef.endsWith(`@${item.previousImageDigest}`) && Array.isArray(item.composeFiles) && item.composeFiles.length > 0 && !item.composeFiles.some((file) => typeof file !== "string" || file.length === 0 || file.startsWith("/") || file.includes("\\") || file.includes("\0") || file.split("/").some((segment) => segment === ".." || segment === "") || /[\r\n]/.test(file)) && typeof item.composeFilesSha256 === "string" && HASH.test(item.composeFilesSha256) && Array.isArray(item.services) && !item.services.some((service) => !SERVICE_ORDER.includes(service as WorkerService)) && Array.isArray(item.command) && item.command.length >= 6 && !item.command.some((part) => typeof part !== "string" || part.length === 0 || /[\0\n\r]/.test(part));
+  const releaseValid = !hasPreviousImages || (typeof item.projectName === "string" && /^[a-z0-9][a-z0-9_-]{0,62}$/.test(item.projectName) && typeof item.network === "string" && /^[a-z0-9][a-z0-9_.-]{0,127}$/.test(item.network) && typeof item.candidateImage === "string" && item.candidateImage.includes("@sha256:"));
+  const initialValid = exactKeys && oldImagesValid && releaseValid && item.schemaVersion === 1 && typeof item.artifactId === "string" && /^rollback:sha256:[0-9a-f]{64}$/.test(item.artifactId) && utc(item.createdAt) && typeof item.previousCommitSha === "string" && COMMIT.test(item.previousCommitSha) && typeof item.previousImageDigest === "string" && HASH.test(item.previousImageDigest) && typeof item.previousImageRef === "string" && item.previousImageRef.endsWith(`@${item.previousImageDigest}`) && Array.isArray(item.composeFiles) && item.composeFiles.length > 0 && !item.composeFiles.some((file) => typeof file !== "string" || file.length === 0 || file.startsWith("/") || file.includes("\\") || file.includes("\0") || file.split("/").some((segment) => segment === ".." || segment === "") || /[\r\n]/.test(file)) && typeof item.composeFilesSha256 === "string" && HASH.test(item.composeFilesSha256) && Array.isArray(item.services) && !item.services.some((service) => !SERVICE_ORDER.includes(service as WorkerService)) && Array.isArray(item.command) && item.command.length >= 6 && !item.command.some((part) => typeof part !== "string" || part.length === 0 || /[\0\n\r]/.test(part));
   if (!initialValid) return false;
   const checked = item as unknown as RollbackArtifact;
   const composeArgs: string[] = [];
   for (const file of checked.composeFiles) composeArgs.push("-f", file);
-  const commandPrefix = ["docker", "compose", ...composeArgs, "up", "-d", "--force-recreate", "--no-build"];
+  const commandPrefix = checked.previousImages === undefined
+    ? ["docker", "compose", ...composeArgs, "up", "-d", "--force-recreate", "--no-build"]
+    : ["docker", "compose", "--project-name", checked.projectName!, ...composeArgs, "up", "-d", "--force-recreate", "--no-build"];
   if (checked.command.length <= commandPrefix.length || JSON.stringify(checked.command.slice(0, commandPrefix.length)) !== JSON.stringify(commandPrefix)) return false;
   const targetServices = checked.command.slice(commandPrefix.length);
   const indexes = targetServices.map((service) => SERVICE_ORDER.indexOf(service as WorkerService));
-  const body = { createdAt: checked.createdAt, command: checked.command, previousCommitSha: checked.previousCommitSha, previousImageRef: checked.previousImageRef, previousImageDigest: checked.previousImageDigest, composeFiles: checked.composeFiles, composeFilesSha256: checked.composeFilesSha256, services: checked.services, ...(checked.previousImages === undefined ? {} : { previousImages: checked.previousImages }) };
+  const body = { createdAt: checked.createdAt, command: checked.command, previousCommitSha: checked.previousCommitSha, previousImageRef: checked.previousImageRef, previousImageDigest: checked.previousImageDigest, composeFiles: checked.composeFiles, composeFilesSha256: checked.composeFilesSha256, services: checked.services, ...(checked.previousImages === undefined ? {} : { previousImages: checked.previousImages, projectName: checked.projectName, network: checked.network, candidateImage: checked.candidateImage }) };
   const valid = targetServices.length > 0 && indexes.every((index) => index >= 0) && indexes.every((index, position) => position === 0 || index > indexes[position - 1]) && new Set(targetServices).size === targetServices.length && JSON.stringify(checked.services) === JSON.stringify(services) && sha256(canonicalJson(body)) === checked.artifactId.slice("rollback:".length) && JSON.stringify(targetServices) === JSON.stringify(services);
   return valid;
 }
@@ -326,7 +333,7 @@ async function defaultCanary(service: WorkerService, expected: Readonly<{ decisi
   const nonce = randomUUID();
   let job: Awaited<ReturnType<typeof queue.add>> | undefined;
   try {
-    job = await queue.add("feedback-quality-canary", { kind: "feedback-quality-canary", nonce, decisionId: expected.decisionId, rolloutInstanceId: expected.rolloutInstanceId }, { attempts: 1, priority: 0, removeOnComplete: false, removeOnFail: false });
+    job = await queue.add("feedback-quality-canary", { kind: "feedback-quality-canary", nonce, decisionId: expected.decisionId, rolloutInstanceId: expected.rolloutInstanceId }, { attempts: 1, priority: 0, removeOnComplete: true, removeOnFail: true });
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const current = await queue.getJob(job.id!);

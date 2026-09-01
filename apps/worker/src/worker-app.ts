@@ -96,27 +96,15 @@ async function runQualityCanary(role: StageName, job: QualityCanaryJob, startupR
     const path = process.env.FEEDBACK_QUALITY_CONFIG_FILE;
     if (!path) throw new Error();
     const config = validateSecureConfig(await readSecureConfig(path), true);
-    const environment = readQualityEnvironmentSnapshot(config.envAllowlist);
-    configSha256 = effectiveConfigDigest(config, environment);
+    // The immutable release bundle supplies the private env_file. Compute the
+    // digest from the process environment actually seen by this worker; never
+    // carry a secret-bearing environment snapshot through an env variable.
+    configSha256 = effectiveConfigDigest(config, process.env);
   } catch { /* empty binding deliberately fails deploy verification */ }
   // This value is baked at image build time from the OCI revision label. The
   // release adapter never injects a mutable Git SHA into a worker container.
   const commitSha = process.env.CLIPCLAP_OCI_REVISION ?? "";
   return { kind: "feedback-quality-canary", nonce: job.nonce, decisionId: job.decisionId, rolloutInstanceId: startupRolloutInstanceId, role, commitSha, configSha256, runnerVersion: QUALITY_RUNNER_VERSION };
-}
-
-function readQualityEnvironmentSnapshot(allowlist: readonly string[]): Readonly<Record<string, string | null>> {
-  const encoded = process.env.FEEDBACK_QUALITY_ENV_SNAPSHOT;
-  if (!encoded) throw new Error("quality_environment_snapshot_missing");
-  const parsed: unknown = JSON.parse(encoded);
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("quality_environment_snapshot_invalid");
-  const item = parsed as Record<string, unknown>;
-  const keys = Object.keys(item).sort();
-  const expected = [...allowlist].sort();
-  if (JSON.stringify(keys) !== JSON.stringify(expected)) throw new Error("quality_environment_snapshot_keys");
-  if (keys.some((key) => item[key] !== null && typeof item[key] !== "string")) throw new Error("quality_environment_snapshot_value");
-  if (keys.some((key) => item[key] !== (process.env[key] ?? null))) throw new Error("quality_environment_snapshot_drift");
-  return item as Readonly<Record<string, string | null>>;
 }
 
 export async function dispatchStageJob(
