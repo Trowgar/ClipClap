@@ -33,6 +33,7 @@ export function createStageWorker(
   roleValue = process.env.WORKER_ROLE
 ): Worker {
   const role = parseWorkerRole(roleValue);
+  const startupRolloutInstanceId = process.env.FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID ?? "";
   const workerOptions = {
     connection: getRedis(),
     concurrency: getWorkerConcurrency(role),
@@ -57,7 +58,7 @@ export function createStageWorker(
     `${getQueueNameForStage(role)}:quality-canary`,
     async (job) => {
       if (!isQualityCanary(job.data)) throw new Error("quality_canary_required");
-      return runQualityCanary(role, job.data);
+      return runQualityCanary(role, job.data, startupRolloutInstanceId);
     },
     { ...workerOptions, concurrency: 1 }
   );
@@ -88,7 +89,8 @@ function isQualityCanary(value: unknown): value is QualityCanaryJob {
   return Object.keys(item).length === 4 && item.kind === "feedback-quality-canary" && typeof item.nonce === "string" && item.nonce.length > 0 && typeof item.decisionId === "string" && typeof item.rolloutInstanceId === "string" && item.rolloutInstanceId.length > 0;
 }
 
-async function runQualityCanary(role: StageName, job: QualityCanaryJob): Promise<QualityCanaryResponse> {
+async function runQualityCanary(role: StageName, job: QualityCanaryJob, startupRolloutInstanceId: string): Promise<QualityCanaryResponse> {
+  if (!startupRolloutInstanceId || job.rolloutInstanceId !== startupRolloutInstanceId) throw new Error("quality_canary_instance_mismatch");
   let configSha256 = "";
   try {
     const path = process.env.FEEDBACK_QUALITY_CONFIG_FILE;
@@ -98,12 +100,12 @@ async function runQualityCanary(role: StageName, job: QualityCanaryJob): Promise
     configSha256 = effectiveConfigDigest(config, environment);
   } catch { /* empty binding deliberately fails deploy verification */ }
   const commitSha = process.env.GIT_SHA ?? "";
-  return { kind: "feedback-quality-canary", nonce: job.nonce, decisionId: job.decisionId, rolloutInstanceId: job.rolloutInstanceId, role, commitSha, configSha256, runnerVersion: QUALITY_RUNNER_VERSION };
+  return { kind: "feedback-quality-canary", nonce: job.nonce, decisionId: job.decisionId, rolloutInstanceId: startupRolloutInstanceId, role, commitSha, configSha256, runnerVersion: QUALITY_RUNNER_VERSION };
 }
 
 function readQualityEnvironmentSnapshot(allowlist: readonly string[]): Readonly<Record<string, string | null>> {
   const encoded = process.env.FEEDBACK_QUALITY_ENV_SNAPSHOT;
-  if (!encoded) return Object.fromEntries(allowlist.map((key) => [key, process.env[key] ?? null]));
+  if (!encoded) throw new Error("quality_environment_snapshot_missing");
   const parsed: unknown = JSON.parse(encoded);
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("quality_environment_snapshot_invalid");
   const item = parsed as Record<string, unknown>;
@@ -111,6 +113,7 @@ function readQualityEnvironmentSnapshot(allowlist: readonly string[]): Readonly<
   const expected = [...allowlist].sort();
   if (JSON.stringify(keys) !== JSON.stringify(expected)) throw new Error("quality_environment_snapshot_keys");
   if (keys.some((key) => item[key] !== null && typeof item[key] !== "string")) throw new Error("quality_environment_snapshot_value");
+  if (keys.some((key) => item[key] !== (process.env[key] ?? null))) throw new Error("quality_environment_snapshot_drift");
   return item as Readonly<Record<string, string | null>>;
 }
 

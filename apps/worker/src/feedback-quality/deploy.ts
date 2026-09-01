@@ -347,6 +347,7 @@ async function defaultQueueLease(queueName: string, timeoutMs = 30_000): Promise
   let fenceHeld = false;
   let fenceLost = false;
   let paused = false;
+  let wasPaused = false;
   let heartbeat: ReturnType<typeof setInterval> | undefined;
   const assertFence = async () => {
     if (fenceLost || !fenceHeld || await redis.get(fenceKey) !== fenceToken) {
@@ -385,22 +386,27 @@ async function defaultQueueLease(queueName: string, timeoutMs = 30_000): Promise
   };
   return {
     pause: async () => {
+      wasPaused = await queue.isPaused();
+      if (wasPaused) throw new DeployError("queue_read_failed");
       const acquired = await redis.set(fenceKey, fenceToken, "PX", Math.max(120_000, timeoutMs * 4), "NX");
       if (acquired !== "OK") throw new DeployError("queue_read_failed");
       fenceHeld = true;
       try {
         // Establish the watermark while owning the fence. Existing pending
-        // work is rejected before BullMQ moves waiting jobs to `paused`; jobs
-        // submitted after pause stay fenced and are deliberately held.
+        // work is rejected before BullMQ moves waiting jobs to `paused`.
+        // The Redis token serializes deployers only; it does not claim that
+        // producers authenticate against it. BullMQ's global pause is the
+        // execution fence, so jobs submitted after pause remain held.
         const before = await readCounts();
         if (before.waiting !== 0 || before.delayed !== 0 || before.paused !== 0 || before.prioritized !== 0 || before.waitingChildren !== 0) throw new DeployError("queue_nonempty");
-        await queue.pause();
+        if (await queue.isPaused()) throw new DeployError("queue_read_failed");
         paused = true;
+        await queue.pause();
         if (!(await queue.isPaused())) throw new DeployError("queue_read_failed");
         startHeartbeat();
       }
       catch (error) {
-        try { if (await queue.isPaused()) { await queue.resume(); if (await queue.isPaused()) throw new DeployError("queue_read_failed"); paused = false; } }
+        try { if (!wasPaused && paused && await queue.isPaused()) { await queue.resume(); if (await queue.isPaused()) throw new DeployError("queue_read_failed"); paused = false; } }
         catch (recoveryError) { error = recoveryError; }
         await releaseFence().catch(() => undefined);
         throw error;
@@ -422,7 +428,7 @@ async function defaultQueueLease(queueName: string, timeoutMs = 30_000): Promise
     resume: async () => {
       try {
         await assertFence();
-        if (paused) {
+        if (paused && !wasPaused) {
           await queue.resume();
           if (await queue.isPaused()) throw new DeployError("queue_read_failed");
           paused = false;
@@ -578,26 +584,26 @@ export async function deployWithQualityGate(request: DeployRequest, dependencies
         await new Promise((resolve) => setTimeout(resolve, 100));
       } while (true);
       if (!failure) {
-        phase = "spawn";
         const argv = ["docker", "compose", "up", "-d", "--force-recreate", service] as const;
-        const commandResult = dependencies.spawn
-          ? await dependencies.spawn(argv)
-          : await defaultSpawn(argv, { env: {
+        const spawnOperation = dependencies.spawn ?? ((args: readonly string[]) => defaultSpawn(args, { env: {
             ...Object.fromEntries((runtimeConfig?.envAllowlist ?? []).map((key) => [key, runtimeEnvironment[key]])),
             GIT_SHA: decision.candidateCommitSha,
             FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID: expected.rolloutInstanceId,
             FEEDBACK_QUALITY_ENV_SNAPSHOT: canonicalJson(Object.fromEntries([...(runtimeConfig?.envAllowlist ?? [])].sort().map((key) => [key, runtimeEnvironment[key] ?? null]))),
             FEEDBACK_QUALITY_CONFIG_FILE: dependencies.configFileContainer ?? process.env.FEEDBACK_QUALITY_CONFIG_FILE_CONTAINER,
-          } });
+        } }));
+        phase = "spawn";
+        if (lease.assertOwnership) await lease.assertOwnership().catch(() => { throw new DeployError("queue_read_failed"); });
+        const commandResult = await spawnOperation(argv);
         if (commandResult.exitCode !== 0) failure = "process_failed";
         else recreated.push(service);
       }
       if (!failure) {
-        await lease.assertOwnership?.();
+        if (lease.assertOwnership) await lease.assertOwnership().catch(() => { throw new DeployError("queue_read_failed"); });
         phase = "health";
         await health(service);
         phase = "canary";
-        await lease.assertOwnership?.();
+        if (lease.assertOwnership) await lease.assertOwnership().catch(() => { throw new DeployError("queue_read_failed"); });
         if (lease.runCanary) await lease.runCanary(service, expected);
         else if (dependencies.runCanary) await dependencies.runCanary(service, expected);
         else await defaultCanary(service, expected, dependencies.canaryTimeoutMs);

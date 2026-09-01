@@ -107,8 +107,16 @@ describe("worker role config", () => {
   });
 
   it("returns the rollout instance from the dedicated canary worker", async () => {
+    process.env.FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID = "instance";
     createStageWorker("finalize");
     const controlProcessor = (Worker as unknown as { mock: { calls: unknown[][] } }).mock.calls[1][1] as (job: unknown) => Promise<Record<string, unknown>>;
     await expect(controlProcessor({ data: { kind: "feedback-quality-canary", nonce: "n", decisionId: "d", rolloutInstanceId: "instance" } })).resolves.toMatchObject({ rolloutInstanceId: "instance", role: "finalize" });
+  });
+
+  it("rejects a canary from an older worker instance", async () => {
+    process.env.FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID = "new-instance";
+    createStageWorker("finalize");
+    const controlProcessor = (Worker as unknown as { mock: { calls: unknown[][] } }).mock.calls[1][1] as (job: unknown) => Promise<unknown>;
+    await expect(controlProcessor({ data: { kind: "feedback-quality-canary", nonce: "n", decisionId: "d", rolloutInstanceId: "old-instance" } })).rejects.toThrow("instance_mismatch");
   });
 });

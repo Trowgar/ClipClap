@@ -189,6 +189,23 @@ describe("feedback quality deployment", () => {
     expect(result.status).toBe("deployed");
   });
 
+  it("fails closed without spawning when ownership is lost after drain", async () => {
+    const spawn = vi.fn(async () => ({ exitCode: 0 }));
+    const d = deps({
+      spawn,
+      acquireQueueLease: vi.fn(async () => ({
+        pause: vi.fn(async () => undefined),
+        counts: vi.fn(async () => ({ active: 0, waiting: 0 })),
+        assertOwnership: vi.fn(async () => { throw new Error("redis unavailable"); }),
+        resume: vi.fn(async () => undefined),
+      })),
+    });
+    const result = await deployWithQualityGate(request({ services: ["worker-analyze"] }), d);
+    expect(result.status).toBe("failed");
+    expect(result.reasons).toContain("queue_read_failed");
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
   it("resumes a paused queue when recreate or canary fails", async () => {
     const resume = vi.fn(async () => undefined);
     const d = deps({ acquireQueueLease: vi.fn(async () => ({ pause: vi.fn(async () => undefined), counts: vi.fn(async () => ({ active: 0, waiting: 0 })), resume })), runCanary: vi.fn(async () => { throw new Error("mismatch"); }) });
