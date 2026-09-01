@@ -34,6 +34,8 @@ export type GateVerdict = "pass" | "fail";
 
 /** Numeric observations are intentionally flat and finite for deterministic comparison. */
 export interface QualityMetrics {
+  /** Reference-only observations are valid baselines but never evidence of improvement. */
+  referenceOnly?: number;
   approvedMomentRetained?: number;
   approvedWindowOverlap?: number;
   hardInvariantFailures?: number;

@@ -55,6 +55,7 @@ const OBSERVATION_KEYS = new Set([
 ]);
 const CASE_KEYS = new Set(["schemaVersion", "caseVersion", "disposition", "subsystem", "status", "metrics"]);
 const METRIC_KEYS = new Set([
+  "referenceOnly",
   "approvedMomentRetained",
   "approvedWindowOverlap",
   "hardInvariantFailures",
@@ -341,6 +342,7 @@ function minimumFor(policy: GatePolicy, set: QualityObservation["set"]): { posit
 }
 
 function metricImproved(before: QualityCaseResult, after: QualityCaseResult): boolean {
+  if ((before.metrics.referenceOnly ?? 0) > 0 || (after.metrics.referenceOnly ?? 0) > 0) return false;
   const beforePositive = before.disposition === "positive";
   const higherIsBetter: readonly MetricName[] = ["approvedMomentRetained", "approvedWindowOverlap"];
   const lowerIsBetter: readonly MetricName[] = [

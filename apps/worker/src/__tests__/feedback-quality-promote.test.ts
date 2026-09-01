@@ -74,6 +74,10 @@ describe("quality feedback promotion", () => {
     await expect(promoteFeedbackCase(decision({ subsystem: "render", expected: { approvedMoment: true, completeBoundary: true, visualSamples: [] } }), deps())).rejects.toMatchObject({ code: "invalid_decision" });
   });
 
+  it("rejects reference-only visual promotion without a frozen crop plan", async () => {
+    await expect(promoteFeedbackCase(decision({ subsystem: "framing", expected: { approvedMoment: true, completeBoundary: true, referenceOnly: true, visualSamples: [visualSample] } }), deps())).rejects.toMatchObject({ code: "unsupported_label" });
+  });
+
   it("promotes only an exact, replayable AS_IS identity and downloads evidence with GET", async () => {
     const dependencies = deps();
     const result = await promoteFeedbackCase(decision(), dependencies);

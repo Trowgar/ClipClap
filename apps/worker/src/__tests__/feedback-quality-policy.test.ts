@@ -267,6 +267,12 @@ describe("feedback quality comparison policy", () => {
     });
   });
 
+  it("does not count reference-only observations as measurable improvement", () => {
+    const baseline = observation({ cases: observation().cases.map((entry) => entry.caseVersion === "positive-0" ? { ...entry, metrics: { ...entry.metrics, referenceOnly: 1 } } : entry) });
+    const candidate = observation({ mode: "candidate", observationId: "sha256:" + "4".repeat(64), cases: baseline.cases.map((entry) => entry.caseVersion === "positive-0" ? { ...entry, metrics: { ...entry.metrics, approvedWindowOverlap: 2 } } : entry) });
+    expect(compareObservations(baseline, candidate, { ...policy, claim: "improvement" })).toMatchObject({ verdict: "fail", reasons: ["no_improvement"] });
+  });
+
   const laneMetrics: Record<QualityCaseResult["subsystem"], QualityMetrics> = {
     selection: { approvedMomentRetained: 1, approvedWindowOverlap: 1, emptyResult: 0, zeroClipFalseNegative: 0 },
     boundary: { approvedMomentRetained: 1, approvedWindowOverlap: 1, boundaryErrors: 0 },

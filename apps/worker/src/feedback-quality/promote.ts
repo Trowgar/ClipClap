@@ -389,6 +389,8 @@ export async function promoteFeedbackCase(rawDecision: PromotionDecision, depend
     }
     assertClassification(value, snapshot);
     assertInputs(value, snapshot);
+    if (value.expected.referenceOnly && value.expected.visualSamples.some((sample) => sample.expectedSubtitleText.trim().length > 0)) throw new QualityPromotionError("unsupported_label");
+    if (value.expected.referenceOnly && value.expected.visualSamples.length > 0 && (!snapshot.clip.cropPlan || typeof snapshot.clip.cropPlan !== "object")) throw new QualityPromotionError("unsupported_label");
     const spoolDir = await mkdtemp(join(tmpdir(), "clipclap-quality-spool-"));
     try {
       await chmod(spoolDir, 0o700);

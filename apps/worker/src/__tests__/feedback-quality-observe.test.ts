@@ -13,6 +13,7 @@ import { observeRenderCase } from "../feedback-quality/render-lane";
 import { observeSelectionCase } from "../feedback-quality/selection-lane";
 import { loadPrivateCases } from "../feedback-quality/observe";
 import { appendLabelEvent, contentId, publishBundle, readBundle } from "../feedback-quality/store";
+import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import { parseObserveArgs, readSecureConfig, runObservationCli, validateObservationConfig } from "../scripts/feedback-quality-observe";
 import { measureVisualReplay, type VisualProbeExec } from "../feedback-quality/visual-probe";
 
@@ -114,7 +115,17 @@ describe("feedback quality observation runner", () => {
     const attempts = await readObservationAttempts(observation.observationId, root);
     expect(attempts).toHaveLength(3);
     expect(attempts.map((item) => item.attemptName)).toEqual(["live-1", "live-2", "live-3"]);
-    expect(JSON.parse(Buffer.from((await readBundle("observation", observation.observationId, root)).get("manifest.json")!).toString("utf8"))).toMatchObject({ live: true, mode: "baseline", attemptCount: 3 });
+    expect(JSON.parse(Buffer.from((await readBundle("observation", observation.observationId, root)).get("manifest.json")!).toString("utf8"))).toMatchObject({ live: true, mode: "baseline", caseVersions: [sampleCase().caseVersion], attemptCount: 3 });
+  });
+
+  it("rejects an observation result for a case outside the manifest membership set", async () => {
+    const root = await mkdtemp(join(tmpdir(), "quality-observe-membership-"));
+    const id = `observation:sha256:${"a".repeat(64)}`;
+    const line = canonicalJson({ caseVersion: "case:unknown", attemptName: "recorded", result: { schemaVersion: 1, caseVersion: "case:unknown", disposition: "positive", subsystem: "selection", status: "ok", metrics: { approvedMomentRetained: 1 } } });
+    const results = `${line}\n`;
+    const manifest = { schemaVersion: 1, observationId: id, set: "eval", mode: "baseline", live: false, caseVersions: [sampleCase().caseVersion], commitSha: "a".repeat(40), configSha256: hash("a"), corpusSha256: hash("b"), runnerVersion: 1, attemptCount: 1, attemptsSha256: sha256(results) };
+    await publishBundle({ kind: "observation", id, files: { "manifest.json": Buffer.from(`${canonicalJson(manifest)}\n`), "results.jsonl": Buffer.from(results) } }, root);
+    await expect(readObservationAttempts(id, root)).rejects.toThrow("invalid_input");
   });
 
   it("publishes missing input as an error result instead of silently skipping the case", async () => {

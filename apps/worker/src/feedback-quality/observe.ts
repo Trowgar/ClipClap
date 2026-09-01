@@ -159,7 +159,8 @@ async function publishDefault(observation: QualityObservation, attempts: readonl
   const results = attempts.map((item) => canonicalJson(item)).join("\n") + "\n";
   const names = new Set(attempts.map((item) => item.attemptName));
   const live = names.size === 3 && LIVE_ATTEMPTS.every((name) => names.has(name));
-  const manifest = { schemaVersion: 1, observationId: observation.observationId, set: observation.set, mode: observation.mode, live, commitSha: observation.commitSha, configSha256: observation.configSha256, corpusSha256: observation.corpusSha256, runnerVersion: observation.runnerVersion, attemptCount: attempts.length, attemptsSha256: sha256(results) };
+  const caseVersions = [...new Set(observation.cases.map((item) => item.caseVersion))].sort();
+  const manifest = { schemaVersion: 1, observationId: observation.observationId, set: observation.set, mode: observation.mode, live, commitSha: observation.commitSha, configSha256: observation.configSha256, corpusSha256: observation.corpusSha256, runnerVersion: observation.runnerVersion, caseVersions, attemptCount: attempts.length, attemptsSha256: sha256(results) };
   return publishBundle({ kind: "observation", id: observation.observationId, files: { "manifest.json": Buffer.from(canonicalJson(manifest) + "\n"), "results.jsonl": Buffer.from(results) } }, root);
 }
 
@@ -196,18 +197,19 @@ export async function readObservationAttempts(id: string, root = DEFAULT_QUALITY
     if (error instanceof ObservationError) throw error;
     throw new ObservationError("invalid_input");
   }
-  if (manifest.schemaVersion !== 1 || manifest.observationId !== id || (manifest.mode !== "baseline" && manifest.mode !== "candidate") || typeof manifest.live !== "boolean" || !Number.isSafeInteger(manifest.attemptCount) || !validHash(manifest.attemptsSha256) || manifest.attemptsSha256 !== sha256(results)) throw new ObservationError("invalid_input");
+  if (manifest.schemaVersion !== 1 || manifest.observationId !== id || (manifest.set !== "eval" && manifest.set !== "holdout") || (manifest.mode !== "baseline" && manifest.mode !== "candidate") || typeof manifest.live !== "boolean" || !Array.isArray(manifest.caseVersions) || manifest.caseVersions.some((item) => typeof item !== "string") || [...manifest.caseVersions].sort().join("\n") !== manifest.caseVersions.join("\n") || new Set(manifest.caseVersions).size !== manifest.caseVersions.length || !Number.isSafeInteger(manifest.attemptCount) || !validHash(manifest.attemptsSha256) || manifest.attemptsSha256 !== sha256(results)) throw new ObservationError("invalid_input");
   const lines = results.endsWith("\n") ? results.slice(0, -1).split("\n") : [];
   if (lines.length !== manifest.attemptCount || lines.length === 0) throw new ObservationError("invalid_input");
   const attempts: ObservationAttemptRecord[] = [];
   const names = new Set<string>();
   const byCase = new Map<string, Set<string>>();
+  const manifestCases = new Set(manifest.caseVersions as string[]);
   for (const line of lines) {
     let parsed: unknown;
     try { parsed = JSON.parse(line); } catch { throw new ObservationError("invalid_input"); }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new ObservationError("invalid_input");
     const item = parsed as Record<string, unknown>;
-    if (typeof item.caseVersion !== "string" || typeof item.attemptName !== "string" || names.has(`${item.caseVersion}:${item.attemptName}`) || !item.result || typeof item.result !== "object") throw new ObservationError("invalid_input");
+    if (typeof item.caseVersion !== "string" || !manifestCases.has(item.caseVersion) || typeof item.attemptName !== "string" || names.has(`${item.caseVersion}:${item.attemptName}`) || !item.result || typeof item.result !== "object") throw new ObservationError("invalid_input");
     const result = item.result as Record<string, unknown>;
     if (result.schemaVersion !== 1 || result.caseVersion !== item.caseVersion || !["positive", "confirmed_negative", "exclude"].includes(result.disposition as string) || !["selection", "boundary", "framing", "subtitles", "render"].includes(result.subsystem as string) || !["ok", "missing", "stale", "error"].includes(result.status as string) || !result.metrics || typeof result.metrics !== "object" || Array.isArray(result.metrics)) throw new ObservationError("invalid_input");
     names.add(`${item.caseVersion}:${item.attemptName}`);
@@ -216,6 +218,7 @@ export async function readObservationAttempts(id: string, root = DEFAULT_QUALITY
     byCase.set(item.caseVersion, caseNames);
     attempts.push(Object.freeze({ caseVersion: item.caseVersion, attemptName: item.attemptName, result: result as unknown as QualityCaseResult }));
   }
+  if (byCase.size !== manifestCases.size || [...byCase.keys()].some((caseVersion) => !manifestCases.has(caseVersion))) throw new ObservationError("invalid_input");
   for (const caseNames of byCase.values()) {
     const values = [...caseNames].sort();
     const expected = manifest.live ? [...LIVE_ATTEMPTS].sort() : ["recorded"];

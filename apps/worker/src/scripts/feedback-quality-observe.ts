@@ -9,6 +9,7 @@ import type { MaterializedCase } from "../feedback-quality/promote";
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import { observeSelectionCase, type SelectionResultPayload } from "../feedback-quality/selection-lane";
 import { observeRenderCase } from "../feedback-quality/render-lane";
+import { segmentsToCues } from "../processors/subtitles";
 import { measureVisualReplay, type VisualProbeExec } from "../feedback-quality/visual-probe";
 import type { Highlight, TranscriptionResult } from "@clipclap/shared";
 import OpenAI from "openai";
@@ -238,8 +239,22 @@ export function createProductionCaseRunner(root = DEFAULT_QUALITY_ROOT, live = f
       const window = qualityCase.expected.sourceWindow;
       const replay = qualityCase.replay;
       const replayHighlight = replay?.highlight as (Highlight & { clipKind?: string | null }) | undefined;
-      if (!replay || !replayHighlight || !Number.isFinite(replayHighlight.start) || !Number.isFinite(replayHighlight.end) || !replay.reframeConfig || typeof replay.reframeConfig !== "object") return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };
+      if (!replay || !replayHighlight || !Number.isFinite(replayHighlight.start) || !Number.isFinite(replayHighlight.end) || (!qualityCase.expected.referenceOnly && (!replay.reframeConfig || typeof replay.reframeConfig !== "object"))) return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };
       if (!window || !Number.isFinite(window.start) || !Number.isFinite(window.end)) return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "missing", metrics: { hardInvariantFailures: 1 } };
+      if (qualityCase.expected.referenceOnly) {
+        if (!["framing", "subtitles", "render"].includes(qualityCase.subsystem) || !qualityCase.replay.cropPlan || typeof qualityCase.replay.cropPlan !== "object") return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };
+        if (qualityCase.expected.visualSamples.some((sample) => sample.expectedSubtitleText.trim().length > 0)) return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };
+        const evidencePath = await materializeArtifact(qualityCase.caseVersion, "evidence.mp4", root, temp, "immutable-evidence.mp4", qualityCase.inputs.evidenceSha256);
+        const cues = segmentsToCues(transcript?.segments ?? [], replayHighlight.start, replayHighlight.end, replayHighlight.language);
+        const probe = await probeRenderedMedia(evidencePath, { cropPlan: qualityCase.replay.cropPlan as import("../reframe/types").CropPlan, cues, samples: qualityCase.expected.visualSamples, referencePath: evidencePath, immutableReferencePath: evidencePath, highlightStart: replayHighlight.start });
+        const expectedDuration = Math.max(0.001, replayHighlight.end - replayHighlight.start);
+        return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "ok", metrics: {
+          referenceOnly: 1, approvedMomentRetained: qualityCase.expected.approvedMoment ? probe.approvedMomentRetained : 0, approvedWindowOverlap: qualityCase.expected.approvedMoment ? probe.approvedWindowOverlap : 0,
+          hardInvariantFailures: probe.width === 1080 && probe.height === 1920 && probe.sar === 1 && probe.contentMatch === 1 && probe.requiredSubjectClipped === 0 && probe.requiredTextClipped === 0 ? 0 : 1,
+          outputWidth: probe.width, outputHeight: probe.height, sar: probe.sar, durationDrift: Math.abs(probe.duration - expectedDuration), frameCount: probe.frameCount, blackTailSeconds: probe.blackTailSeconds, frozenTailSeconds: probe.frozenTailSeconds,
+          subtitleOverlap: probe.subtitleOverlap, requiredTextClipped: probe.requiredTextClipped, requiredSubjectClipped: probe.requiredSubjectClipped, focalFailures: probe.focalFailures,
+        } };
+      }
       if (!qualityCase.inputs.sourceSha256) return { schemaVersion: 1, caseVersion: qualityCase.caseVersion, disposition: qualityCase.disposition, subsystem: qualityCase.subsystem, status: "stale", metrics: { hardInvariantFailures: 1 } };
       const immutableReferencePath = await materializeArtifact(qualityCase.caseVersion, "evidence.mp4", root, temp, "immutable-evidence.mp4", qualityCase.inputs.evidenceSha256);
       const source = await materializeArtifact(qualityCase.caseVersion, "source.mp4", root, temp, "source.mp4", qualityCase.inputs.sourceSha256);
