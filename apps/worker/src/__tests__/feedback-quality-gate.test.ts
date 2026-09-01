@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import { contentId, publishBundle, readBundle } from "../feedback-quality/store";
 import { decideGate, type GateDependencies, type DecideGateInput } from "../feedback-quality/gate";
+import type { ObservationAttemptRecord } from "../feedback-quality/observe";
 import type { GatePolicy, QualityCaseResult, QualityObservation } from "../feedback-quality/types";
 
 const hash = (seed: string) => `sha256:${seed.repeat(64).slice(0, 64)}` as `sha256:${string}`;
@@ -69,6 +70,47 @@ describe("feedback quality gate", () => {
     expect(events).toEqual([`read:${base.observationId}`, `read:${candidate.observationId}`]);
   });
 
+  it("fails closed when a non-primary live attempt is malformed", async () => {
+    const base = observation("eval", "baseline", 4, 6);
+    const candidate = { ...base, mode: "candidate" as const, observationId: "observation:" + hash("7") };
+    const events: string[] = [];
+    const attempts = (item: QualityObservation): readonly ObservationAttemptRecord[] => item === candidate
+      ? item.cases.map((result) => ["live-1", "live-2", "live-3"].map((attemptName) => ({ caseVersion: result.caseVersion, attemptName, result: attemptName === "live-2" ? { ...result, metrics: { ...result.metrics, score: Number.NaN } } : result }))).flat()
+      : item.cases.map((result) => ({ caseVersion: result.caseVersion, attemptName: "recorded", result }));
+    const dependencies = { ...deps({ [base.observationId]: base, [candidate.observationId]: candidate }, events), readAttempts: vi.fn(async (id: string) => attempts(id === candidate.observationId ? candidate : base)) };
+    const decision = await decideGate(input({ baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId }), dependencies);
+    expect(decision.verdict).toBe("fail");
+    expect(decision.reasons).toContain("invalid_schema");
+    expect(events).toEqual([`read:${base.observationId}`, `read:${candidate.observationId}`]);
+  });
+
+  it("requires robust improvement from at least two of three live attempts", async () => {
+    const base = observation("eval", "baseline", 4, 6);
+    const candidate = { ...base, mode: "candidate" as const, observationId: "observation:" + hash("7"), cases: base.cases.map((item) => item.disposition === "positive" ? { ...item, metrics: { ...item.metrics, approvedWindowOverlap: 2 } } : item) };
+    const holdout = observation("holdout", "baseline", 1, 2);
+    const holdoutCandidate = { ...holdout, mode: "candidate" as const, observationId: "observation:" + hash("8") };
+    const attemptRecords = (item: QualityObservation, live: boolean): readonly ObservationAttemptRecord[] => item.cases.flatMap((result) => (live ? ["live-1", "live-2", "live-3"] : ["recorded"]).map((attemptName) => ({
+      caseVersion: result.caseVersion, attemptName,
+      result: result.disposition === "positive" && attemptName === "live-3" ? { ...result, metrics: { ...result.metrics, approvedWindowOverlap: 1 } } : result,
+    })));
+    const map = { [base.observationId]: base, [candidate.observationId]: candidate, [holdout.observationId]: holdout, [holdoutCandidate.observationId]: holdoutCandidate };
+    const dependencies = { ...deps(map), readAttempts: vi.fn(async (id: string) => attemptRecords(map[id as keyof typeof map], id === candidate.observationId || id === holdoutCandidate.observationId)) };
+    const decision = await decideGate(input({ claim: "improvement", policy: { ...policy, claim: "improvement" }, baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId, baselineHoldoutObservationId: holdout.observationId, candidateHoldoutObservationId: holdoutCandidate.observationId }), dependencies);
+    expect(decision.verdict).toBe("pass");
+    expect(decision.eval.attemptCount).toBe(3);
+  });
+
+  it("expires no later than the oldest observation plus 24 hours", async () => {
+    const base = observation("eval", "baseline", 4, 6, "2026-09-01T00:00:00.000Z");
+    const candidate = { ...base, mode: "candidate" as const, observationId: "observation:" + hash("7") };
+    const holdout = observation("holdout", "baseline", 1, 2, "2026-09-01T06:00:00.000Z");
+    const holdoutCandidate = { ...holdout, mode: "candidate" as const, observationId: "observation:" + hash("8") };
+    const map = { [base.observationId]: base, [candidate.observationId]: candidate, [holdout.observationId]: holdout, [holdoutCandidate.observationId]: holdoutCandidate };
+    const dependencies = { ...deps(map), now: () => new Date("2026-09-01T12:00:00.000Z") };
+    const decision = await decideGate(input({ baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId, baselineHoldoutObservationId: holdout.observationId, candidateHoldoutObservationId: holdoutCandidate.observationId }), dependencies);
+    expect(decision.expiresAt).toBe("2026-09-02T00:00:00.000Z");
+  });
+
   it.each([
     ["missing observation", async () => decideGate(input(), deps({})), "invalid_schema"],
     ["expired decision", async () => {
@@ -86,7 +128,8 @@ describe("feedback quality gate", () => {
     const candidate = { ...base, mode: "candidate" as const, observationId: "observation:" + hash("a") };
     const holdout = observation("holdout", "baseline", 1, 2);
     const holdoutCandidate = { ...holdout, mode: "candidate" as const, observationId: "observation:" + hash("b") };
-    const decision = await decideGate(input({ baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId, baselineHoldoutObservationId: holdout.observationId, candidateHoldoutObservationId: holdoutCandidate.observationId }), { ...deps({ [base.observationId]: base, [candidate.observationId]: candidate, [holdout.observationId]: holdout, [holdoutCandidate.observationId]: holdoutCandidate }), root });
+    const { publishDecision: _mockPublish, ...readerDependencies } = deps({ [base.observationId]: base, [candidate.observationId]: candidate, [holdout.observationId]: holdout, [holdoutCandidate.observationId]: holdoutCandidate });
+    const decision = await decideGate(input({ baselineEvalObservationId: base.observationId, candidateEvalObservationId: candidate.observationId, baselineHoldoutObservationId: holdout.observationId, candidateHoldoutObservationId: holdoutCandidate.observationId }), { ...readerDependencies, root });
     const bundle = await readBundle("decision", decision.decisionId, root);
     expect(bundle.has("decision.json")).toBe(true);
     expect(bundle.has("report.md")).toBe(true);

@@ -252,6 +252,31 @@ function observationReason(value: unknown, validateMetrics: boolean): MachineRea
   return undefined;
 }
 
+/** Validate the closed observation contract without applying corpus minima or
+ * comparing it to another run. Gate readers use this for every independent
+ * live attempt, not only the first result. */
+export function validateQualityObservation(value: unknown, validateMetrics = true): MachineReason | undefined {
+  return observationReason(value, validateMetrics);
+}
+
+/** Validate one case result with the same lane-specific evidence rules used by
+ * the comparison policy. */
+export function validateQualityCaseResult(value: unknown): MachineReason | undefined {
+  const result = observationReason({
+    schemaVersion: 1,
+    observationId: "sha256:" + "0".repeat(64),
+    mode: "baseline",
+    set: "eval",
+    commitSha: "0".repeat(40),
+    configSha256: "sha256:" + "0".repeat(64),
+    corpusSha256: "sha256:" + "0".repeat(64),
+    runnerVersion: 0,
+    createdAt: "2026-08-31T00:00:00.000Z",
+    cases: [value],
+  }, true);
+  return result;
+}
+
 function validPolicy(value: unknown): value is GatePolicy {
   if (!isObject(value) || !ownDataKeys(value, POLICY_KEYS) || !ownDataFields(value, ["schemaVersion", "policyVersion", "claim", "minimum"])) return false;
   if (

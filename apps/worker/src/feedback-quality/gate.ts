@@ -7,7 +7,7 @@ import {
   type CommitResult,
 } from "./store";
 import { readObservationAttempts, type ObservationAttemptRecord } from "./observe";
-import { compareObservations } from "./policy";
+import { compareObservations, validateQualityCaseResult, validateQualityObservation } from "./policy";
 import type {
   GateAggregate,
   GatePolicy,
@@ -44,6 +44,8 @@ export type DecideGateInput = Readonly<{
 export type GateSetSummary = Readonly<{
   positiveCount: number;
   negativeCount: number;
+  attemptCount: number;
+  varianceCaseCount: number;
   baseline: GateAggregate;
   candidate: GateAggregate;
 }>;
@@ -95,7 +97,7 @@ const emptyAggregate = (): GateAggregate => ({
   focalFailures: 0,
   subtitleFailures: 0,
 });
-const emptySummary = (): GateSetSummary => ({ positiveCount: 0, negativeCount: 0, baseline: emptyAggregate(), candidate: emptyAggregate() });
+const emptySummary = (): GateSetSummary => ({ positiveCount: 0, negativeCount: 0, attemptCount: 0, varianceCaseCount: 0, baseline: emptyAggregate(), candidate: emptyAggregate() });
 const zeroHash = (): `sha256:${string}` => `sha256:${"0".repeat(64)}`;
 const zeroObservation = (id: string, set: "eval" | "holdout", mode: "baseline" | "candidate", now: string): QualityObservation => ({
   schemaVersion: 1, observationId: id, mode, set, commitSha: "0".repeat(40), configSha256: zeroHash(), corpusSha256: zeroHash(), runnerVersion: 0, createdAt: now, cases: [],
@@ -184,6 +186,97 @@ async function readStoredObservation(
   return Object.freeze({ ...body, observationId: id, createdAt: manifest.createdAt as string });
 }
 
+type LoadedObservation = Readonly<{
+  observation: QualityObservation;
+  attempts: readonly ObservationAttemptRecord[];
+}>;
+
+function syntheticAttempts(observation: QualityObservation): readonly ObservationAttemptRecord[] {
+  return Object.freeze(observation.cases.map((result) => Object.freeze({ caseVersion: result.caseVersion, attemptName: "recorded", result })));
+}
+
+function metricKeys(value: QualityCaseResult): string[] {
+  return Object.keys(value.metrics).sort();
+}
+
+function equalKeys(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((key, index) => key === right[index]);
+}
+
+function numericMetric(value: QualityCaseResult, key: string): number {
+  const metric = value.metrics[key as keyof typeof value.metrics];
+  return typeof metric === "number" ? metric : 0;
+}
+
+const HIGHER_IS_BETTER = new Set(["approvedMomentRetained", "approvedWindowOverlap", "positiveRetention", "payoffContainment", "score"]);
+const HARD_EXACT = new Set(["outputWidth", "outputHeight", "sar"]);
+
+/** Validate every attempt and collapse it to a conservative envelope. The
+ * envelope is only used for the ordinary non-regression comparison; claim
+ * improvement is checked independently against each live attempt below. */
+function envelope(loaded: LoadedObservation): LoadedObservation & { varianceCaseCount: number; attemptCount: number } {
+  const { observation, attempts } = loaded;
+  if (!Array.isArray(attempts) || attempts.length === 0) throw new GateError("observation_invalid");
+  const byCase = new Map<string, ObservationAttemptRecord[]>();
+  for (const attempt of attempts) {
+    if (!attempt || typeof attempt !== "object" || typeof attempt.caseVersion !== "string" || typeof attempt.attemptName !== "string" || !attempt.result || typeof attempt.result !== "object") throw new GateError("observation_invalid");
+    if (validateQualityCaseResult(attempt.result)) throw new GateError("observation_invalid");
+    const expected = observation.cases.find((item) => item.caseVersion === attempt.caseVersion);
+    if (!expected || expected.disposition !== attempt.result.disposition || expected.subsystem !== attempt.result.subsystem) throw new GateError("observation_invalid");
+    const group = byCase.get(attempt.caseVersion) ?? [];
+    group.push(attempt);
+    byCase.set(attempt.caseVersion, group);
+  }
+  const expectedNames = new Set(attempts.map((item) => item.attemptName));
+  const expectedNameList = [...expectedNames].sort();
+  const liveNames = ["live-1", "live-2", "live-3"];
+  const expectedReplayNames = expectedNameList.some((name) => name.startsWith("live-")) ? liveNames : ["recorded"];
+  if (!equalKeys(expectedReplayNames, expectedNameList)) throw new GateError("observation_invalid");
+  if (byCase.size !== observation.cases.length || [...byCase.keys()].some((key) => !observation.cases.some((item) => item.caseVersion === key))) throw new GateError("observation_invalid");
+  const cases: QualityCaseResult[] = [];
+  let varianceCaseCount = 0;
+  for (const base of observation.cases) {
+    const group = byCase.get(base.caseVersion);
+    if (!group || group.length !== expectedNames.size) throw new GateError("observation_invalid");
+    const actualNames = group.map((item) => item.attemptName).sort();
+    if (!equalKeys(expectedNameList, actualNames)) throw new GateError("observation_invalid");
+    const first = group[0].result;
+    const keys = metricKeys(first);
+    if (group.some((item) => !equalKeys(keys, metricKeys(item.result)))) throw new GateError("observation_invalid");
+    const metrics: Record<string, number> = {};
+    for (const key of keys) {
+      const values = group.map((item) => numericMetric(item.result, key));
+      if (values.some((value) => value !== values[0])) varianceCaseCount += 1;
+      if (HARD_EXACT.has(key) && values.some((value) => value !== values[0])) throw new GateError("observation_invalid");
+      metrics[key] = HIGHER_IS_BETTER.has(key) ? Math.min(...values) : Math.max(...values);
+    }
+    const anyFailure = group.some((item) => item.result.status !== "ok");
+    cases.push({ ...first, status: anyFailure ? "error" : first.status, metrics });
+  }
+  return {
+    observation: Object.freeze({ ...observation, cases: Object.freeze(cases) }) as unknown as QualityObservation,
+    attempts,
+    varianceCaseCount,
+    attemptCount: expectedNames.size,
+  };
+}
+
+async function loadObservation(
+  id: string,
+  root: string,
+  dependencies: GateDependencies,
+): Promise<LoadedObservation> {
+  const reader = dependencies.readObservation ?? ((value: string, readRoot?: string) => readStoredObservation(value, readRoot ?? root, dependencies.readBundle ?? readBundle, dependencies.readAttempts ?? readObservationAttempts));
+  const observation = await reader(id, root);
+  if (validateQualityObservation(observation, true)) throw new GateError("observation_invalid");
+  const attempts = dependencies.readAttempts
+    ? await dependencies.readAttempts(id, root)
+    : dependencies.readObservation
+      ? syntheticAttempts(observation)
+      : await readObservationAttempts(id, root);
+  return envelope({ observation, attempts });
+}
+
 function normalizeClaim(claim: DecideGateInput["claim"]): QualityClaim {
   if (claim === "non-regression") return "non_regression_only";
   if (claim === "improvement" || claim === "non_regression_only") return claim;
@@ -196,9 +289,37 @@ function safeNow(dependencies: GateDependencies): Date {
   return now;
 }
 
-function countSummary(comparison: GateComparison, baseline: QualityObservation, candidate: QualityObservation): GateSetSummary {
+function countSummary(comparison: GateComparison, baseline: QualityObservation, candidate: QualityObservation, baselineLoaded?: LoadedObservation, candidateLoaded?: LoadedObservation): GateSetSummary {
   const count = (observation: QualityObservation, disposition: "positive" | "confirmed_negative") => observation.cases.filter((item) => item.disposition === disposition).length;
-  return { positiveCount: count(candidate, "positive"), negativeCount: count(candidate, "confirmed_negative"), baseline: comparison.baseline, candidate: comparison.candidate };
+  const candidateAttempts = candidateLoaded?.attempts ?? [];
+  const varianceCaseCount = candidateAttempts.length > 0 ? (() => { try { return envelope(candidateLoaded!).varianceCaseCount; } catch { return 0; } })() : 0;
+  return { positiveCount: count(candidate, "positive"), negativeCount: count(candidate, "confirmed_negative"), attemptCount: candidateAttempts.length || 1, varianceCaseCount, baseline: comparison.baseline, candidate: comparison.candidate };
+}
+
+function attemptObservation(observation: QualityObservation, attempts: readonly ObservationAttemptRecord[], attemptName: string): QualityObservation {
+  const byCase = new Map(attempts.filter((item) => item.attemptName === attemptName).map((item) => [item.caseVersion, item.result]));
+  return { ...observation, cases: observation.cases.map((item) => byCase.get(item.caseVersion) ?? { ...item, status: "error" }) };
+}
+
+function staleObservation(observation: QualityObservation, now: Date): boolean {
+  return new Date(observation.createdAt).getTime() + DAY_MS <= now.getTime();
+}
+
+function compareLoadedPair(baseline: LoadedObservation, candidate: LoadedObservation, policy: GatePolicy, claim: QualityClaim): GateComparison {
+  const baselineObservation = baseline.observation;
+  const candidateEnvelope = candidate.observation;
+  const nonRegression = compareObservations(baselineObservation, candidateEnvelope, { ...policy, claim: "non_regression_only" });
+  if (nonRegression.verdict === "fail") return nonRegression;
+  const candidateNames = [...new Set(candidate.attempts.map((item) => item.attemptName))];
+  if (claim === "non_regression_only") return nonRegression;
+  if (candidateNames.length <= 1) return compareObservations(baselineObservation, candidateEnvelope, { ...policy, claim: "improvement" });
+  let improved = 0;
+  for (const attemptName of candidateNames) {
+    const attempt = attemptObservation(candidateEnvelope, candidate.attempts, attemptName);
+    const result = compareObservations(baselineObservation, attempt, { ...policy, claim: "improvement" });
+    if (result.verdict === "pass") improved += 1;
+  }
+  return improved >= 2 ? nonRegression : { ...nonRegression, verdict: "fail", reasons: ["no_improvement"] };
 }
 
 function identityReasons(left: QualityObservation, right: QualityObservation): MachineReason[] {
@@ -261,34 +382,36 @@ export async function decideGate(input: DecideGateInput, dependencies: GateDepen
   const root = dependencies.root ?? DEFAULT_QUALITY_ROOT;
   const nowDate = safeNow(dependencies);
   const now = nowDate.toISOString();
-  const expiresAt = new Date(nowDate.getTime() + DAY_MS).toISOString();
-  const read = dependencies.readObservation ?? ((id: string, readRoot?: string) => readStoredObservation(id, readRoot ?? root, dependencies.readBundle ?? readBundle, dependencies.readAttempts ?? readObservationAttempts));
   const ids = [input.baselineEvalObservationId, input.candidateEvalObservationId, input.baselineHoldoutObservationId, input.candidateHoldoutObservationId];
-  let baselineEval = zeroObservation(input.baselineEvalObservationId, "eval", "baseline", now);
-  let candidateEval = zeroObservation(input.candidateEvalObservationId, "eval", "candidate", now);
+  const fallback = (index: number): LoadedObservation => ({ observation: zeroObservation(ids[index], index % 2 === 0 ? "eval" : "holdout", index === 0 || index === 2 ? "baseline" : "candidate", now), attempts: [] });
+  let baselineEvalLoaded = fallback(0);
+  let candidateEvalLoaded = fallback(1);
   let evalComparison: GateComparison = { verdict: "fail", reasons: ["invalid_schema"], baseline: emptyAggregate(), candidate: emptyAggregate() };
-  let extraReasons: MachineReason[] = [];
   try {
-    baselineEval = await read(ids[0], root);
-    candidateEval = await read(ids[1], root);
-    if ([baselineEval, candidateEval].some((item) => new Date(item.createdAt).getTime() + DAY_MS <= nowDate.getTime())) extraReasons.push("stale_case");
-    evalComparison = extraReasons.length ? { verdict: "fail", reasons: extraReasons, baseline: emptyAggregate(), candidate: emptyAggregate() } : compareObservations(baselineEval, candidateEval, { ...input.policy, claim });
+    baselineEvalLoaded = await loadObservation(ids[0], root, dependencies);
+    candidateEvalLoaded = await loadObservation(ids[1], root, dependencies);
+    evalComparison = [baselineEvalLoaded.observation, candidateEvalLoaded.observation].some((item) => staleObservation(item, nowDate))
+      ? { verdict: "fail", reasons: ["stale_case"], baseline: emptyAggregate(), candidate: emptyAggregate() }
+      : compareLoadedPair(baselineEvalLoaded, candidateEvalLoaded, input.policy, claim);
   } catch {
     evalComparison = { verdict: "fail", reasons: ["invalid_schema"], baseline: emptyAggregate(), candidate: emptyAggregate() };
   }
-  const evalSummary = countSummary(evalComparison, baselineEval, candidateEval);
+  const evalSummary = countSummary(evalComparison, baselineEvalLoaded.observation, candidateEvalLoaded.observation, baselineEvalLoaded, candidateEvalLoaded);
   let holdoutSummary = emptySummary();
   let reasons = [...evalComparison.reasons];
-  let candidateForBinding = candidateEval;
+  let candidateForBinding = candidateEvalLoaded.observation;
+  const loadedForExpiry: LoadedObservation[] = [baselineEvalLoaded, candidateEvalLoaded];
   if (evalComparison.verdict === "pass") {
     try {
-      const baselineHoldout = await read(input.baselineHoldoutObservationId, root);
-      const candidateHoldout = await read(input.candidateHoldoutObservationId, root);
-      candidateForBinding = candidateEval;
-      const stale = [baselineHoldout, candidateHoldout].some((item) => new Date(item.createdAt).getTime() + DAY_MS <= nowDate.getTime());
-      const holdoutComparison = stale ? { verdict: "fail" as const, reasons: ["stale_case" as MachineReason], baseline: emptyAggregate(), candidate: emptyAggregate() } : compareObservations(baselineHoldout, candidateHoldout, { ...input.policy, claim });
-      holdoutSummary = countSummary(holdoutComparison, baselineHoldout, candidateHoldout);
-      reasons = [...reasons, ...holdoutComparison.reasons, ...identityReasons(candidateEval, candidateHoldout), ...identityReasons(baselineEval, baselineHoldout)];
+      const baselineHoldoutLoaded = await loadObservation(input.baselineHoldoutObservationId, root, dependencies);
+      const candidateHoldoutLoaded = await loadObservation(input.candidateHoldoutObservationId, root, dependencies);
+      loadedForExpiry.push(baselineHoldoutLoaded, candidateHoldoutLoaded);
+      const baselineHoldout = baselineHoldoutLoaded.observation;
+      const candidateHoldout = candidateHoldoutLoaded.observation;
+      const stale = [baselineHoldout, candidateHoldout].some((item) => staleObservation(item, nowDate));
+      const holdoutComparison = stale ? { verdict: "fail" as const, reasons: ["stale_case" as MachineReason], baseline: emptyAggregate(), candidate: emptyAggregate() } : compareLoadedPair(baselineHoldoutLoaded, candidateHoldoutLoaded, input.policy, "non_regression_only");
+      holdoutSummary = countSummary(holdoutComparison, baselineHoldout, candidateHoldout, baselineHoldoutLoaded, candidateHoldoutLoaded);
+      reasons = [...reasons, ...holdoutComparison.reasons, ...identityReasons(candidateEvalLoaded.observation, candidateHoldout), ...identityReasons(baselineEvalLoaded.observation, baselineHoldout)];
     } catch {
       reasons.push("invalid_schema");
     }
@@ -296,6 +419,8 @@ export async function decideGate(input: DecideGateInput, dependencies: GateDepen
   const present = new Set(reasons);
   reasons = REASON_ORDER.filter((reason) => present.has(reason));
   const verdict = reasons.length === 0 ? "pass" : "fail";
+  const expiryCandidates = [nowDate.getTime(), ...loadedForExpiry.map((item) => new Date(item.observation.createdAt).getTime()).filter((value) => Number.isFinite(value))].map((value) => value + DAY_MS);
+  const expiresAt = new Date(Math.min(...expiryCandidates)).toISOString();
   const base = decisionBody(input, claim, now, expiresAt, candidateForBinding, evalSummary, holdoutSummary, verdict, reasons);
   const decision = Object.freeze({ ...base, decisionId: contentId("decision", base) }) as GateDecision;
   const report = redactedReport(decision);

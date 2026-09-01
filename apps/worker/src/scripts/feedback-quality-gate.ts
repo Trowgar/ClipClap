@@ -79,7 +79,7 @@ export async function runFeedbackQualityGate(
 }
 
 async function main(): Promise<void> {
-  await runFeedbackQualityGate(process.argv.slice(2), { root: process.env.FEEDBACK_QUALITY_ROOT ?? process.env.QUALITY_ROOT ?? DEFAULT_QUALITY_ROOT });
+  process.exitCode = await runFeedbackQualityGate(process.argv.slice(2), { root: process.env.FEEDBACK_QUALITY_ROOT ?? process.env.QUALITY_ROOT ?? DEFAULT_QUALITY_ROOT });
 }
 
 if (require.main === module) main().catch(() => { process.exitCode = 1; });
