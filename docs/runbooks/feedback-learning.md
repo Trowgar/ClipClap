@@ -97,8 +97,9 @@ install -d -m 0700 apps/worker/.corpus/feedback-quality-gate
 ```
 
 Before the first production run, rebuild the worker image so `fs-ext` and the current Prisma Client
-are installed. The host and image must use Node 20. The private root must be mounted into the worker;
-it must not be baked into an image or copied into git. Back up the complete
+are installed. The host and image must use Node 20. The private root is host-side release state; it
+is not mounted into production workers, must not be baked into an image, and must not be copied into
+git. Back up the complete
 `apps/worker/.corpus/feedback-quality-gate` tree as one protected unit while no command is running,
 including `ledger`, `cases`, `observations`, and `decisions`. Preserve `0700` directories and `0600`
 files. There is no supported partial restore or cross-host reconciliation.
@@ -113,11 +114,13 @@ a hard stop until those gaps are corrected.
 The release host must provide these private inputs before invoking the CLI:
 
 - `FEEDBACK_QUALITY_ROOT`: private corpus/decision/rollback store root.
-- `FEEDBACK_QUALITY_CONFIG_HOST`: host path to the `0600` quality config JSON. It is mounted read-only
-  at `/run/clipclap/feedback-quality-config.json` and workers receive that container path through
+- `FEEDBACK_QUALITY_CONFIG_HOST`: host path to the `0600` quality config JSON. The release reads it
+  once, snapshots it into the private rollback bundle, and bind-mounts that bundle snapshot read-only
+  at `/run/clipclap/feedback-quality-config.json`; workers receive that container path through
   `FEEDBACK_QUALITY_CONFIG_FILE`.
-- `CLIPCLAP_PRODUCTION_ENV_FILE`: host path to the `0600` production env file, mounted as
-  `./production.env` by the production compose adapter.
+- `CLIPCLAP_PRODUCTION_ENV_FILE`: host path to the `0600` production env file. The release reads it
+  once and snapshots it into the private rollback bundle; the production compose `env_file` consumes
+  the bundle snapshot from the rollback working directory (it is not a host-path mount).
 - `CLIPCLAP_PRODUCTION_NETWORK`: existing external Docker network (defaults to `clipclap_default`).
 - `CLIPCLAP_PRODUCTION_PROJECT`: project name required by the rollback CLI and rollback artifact.
 

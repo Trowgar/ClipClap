@@ -107,6 +107,15 @@ function semanticAliases(source: ts.SourceFile): SemanticAliases {
         }
       }
     }
+    if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) && node.initializer && ts.isCallExpression(node.initializer) && ts.isIdentifier(node.initializer.expression) && node.initializer.expression.text === "require" && node.initializer.arguments.length === 1) {
+      const moduleName = moduleLiteral(node.initializer.arguments[0], "require");
+      const kind = moduleKind(moduleName);
+      const target = kind ? aliases[kind] : undefined;
+      if (target) for (const element of node.name.elements) {
+        const local = bindingName(element.name);
+        if (local) target.add(local);
+      }
+    }
     ts.forEachChild(node, visit);
   };
   visit(source);
@@ -132,25 +141,43 @@ function propagatedSemanticAliases(graph: ModuleGraph): Map<string, SemanticAlia
         const targetFile = resolveRelative(file, statement.moduleSpecifier.text);
         const target = targetFile ? aliases.get(targetFile) : undefined;
         if (!target) continue;
+        if (statement.importClause?.name) {
+          for (const kind of ["prisma", "r2", "process"] as const) if ((target[kind].has("default") || target[kind].has("*")) && !local[kind].has(statement.importClause.name.text)) { local[kind].add(statement.importClause.name.text); changed = true; }
+        }
         const bindings = statement.importClause?.namedBindings;
         if (bindings && ts.isNamespaceImport(bindings)) {
           for (const kind of ["prisma", "r2", "process"] as const) if (target[kind].size > 0 && !local[kind].has(bindings.name.text)) { local[kind].add(bindings.name.text); changed = true; }
         }
         if (bindings && ts.isNamedImports(bindings)) for (const item of bindings.elements) {
           const imported = item.propertyName?.text ?? item.name.text;
-          for (const kind of ["prisma", "r2", "process"] as const) if (target[kind].has(imported) && !local[kind].has(item.name.text)) { local[kind].add(item.name.text); changed = true; }
+          for (const kind of ["prisma", "r2", "process"] as const) if ((target[kind].has(imported) || target[kind].has("*")) && !local[kind].has(item.name.text)) { local[kind].add(item.name.text); changed = true; }
         }
       }
       for (const statement of source.statements) {
-        if (!ts.isExportDeclaration(statement) || !ts.isNamedExports(statement.exportClause)) continue;
+        if (!ts.isExportDeclaration(statement)) continue;
         const moduleName = statement.moduleSpecifier && (ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : undefined);
         const target = moduleName?.startsWith(".") ? aliases.get(resolveRelative(file, moduleName) ?? "") : undefined;
         const externalKind = moduleName ? moduleKind(moduleName) : undefined;
+        if (!statement.exportClause) {
+          for (const kind of ["prisma", "r2", "process"] as const) {
+            const tainted = externalKind === kind || (target?.[kind].size ?? 0) > 0;
+            if (tainted && !local[kind].has("*")) { local[kind].add("*"); changed = true; }
+          }
+          continue;
+        }
+        if (ts.isNamespaceExport(statement.exportClause)) {
+          for (const kind of ["prisma", "r2", "process"] as const) {
+            const tainted = externalKind === kind || (target?.[kind].size ?? 0) > 0;
+            if (tainted && !local[kind].has(statement.exportClause.name.text)) { local[kind].add(statement.exportClause.name.text); changed = true; }
+          }
+          continue;
+        }
+        if (!ts.isNamedExports(statement.exportClause)) continue;
         for (const item of statement.exportClause.elements) {
           const imported = item.propertyName?.text ?? item.name.text;
           const exported = item.name.text;
           for (const kind of ["prisma", "r2", "process"] as const) {
-            const tainted = externalKind === kind || target?.[kind].has(imported) || (!moduleName && local[kind].has(imported));
+            const tainted = externalKind === kind || target?.[kind].has(imported) || target?.[kind].has("*") || (!moduleName && (local[kind].has(imported) || local[kind].has("*")));
             if (tainted && !local[kind].has(exported)) { local[kind].add(exported); changed = true; }
           }
         }
@@ -266,10 +293,22 @@ describe("feedback quality dependency boundaries", () => {
       const entry = resolve(root, "entry.ts");
       await writeFile(resolve(root, "process-wrapper.ts"), 'import { spawn as localSpawn } from "node:child_process"; export { localSpawn as launch };\n');
       await writeFile(resolve(root, "r2-wrapper.ts"), 'export { putObject as write } from "@clipclap/shared/lib/r2";\n');
-      await writeFile(entry, 'import { launch } from "./process-wrapper"; import { write } from "./r2-wrapper"; launch("cmd"); write("key");\n');
+      await writeFile(resolve(root, "process-star.ts"), 'export * from "./process-wrapper";\n');
+      await writeFile(resolve(root, "process-namespace.ts"), 'export * as childProcess from "./process-wrapper";\n');
+      await writeFile(resolve(root, "process-default.ts"), 'import { spawn as localSpawn } from "node:child_process"; export { localSpawn as default };\n');
+      await writeFile(resolve(root, "process-require.ts"), 'const { spawn: launch } = require("node:child_process"); export { launch };\n');
+      await writeFile(resolve(root, "r2-renamed.ts"), 'export { write as renamed } from "./r2-wrapper";\n');
+      await writeFile(resolve(root, "r2-star.ts"), 'export * from "./r2-wrapper";\n');
+      await writeFile(resolve(root, "r2-namespace.ts"), 'export * as storage from "./r2-wrapper";\n');
+      await writeFile(entry, 'import { launch } from "./process-wrapper"; import { launch as starLaunch } from "./process-star"; import { childProcess } from "./process-namespace"; import defaultLaunch from "./process-default"; import { launch as requireLaunch } from "./process-require"; import { write } from "./r2-wrapper"; import { renamed } from "./r2-renamed"; import { write as starWrite } from "./r2-star"; import { storage } from "./r2-namespace"; launch("cmd"); starLaunch("cmd"); childProcess.launch("cmd"); defaultLaunch("cmd"); requireLaunch("cmd"); write("key"); renamed("key"); starWrite("key"); storage.write("key");\n');
       const graph = await reachable(entry);
       expect(graphSemanticCalls(graph, new Set(["spawn"]), "process")).toContain("launch");
+      expect(graphSemanticCalls(graph, new Set(["spawn"]), "process")).toContain("starLaunch");
+      expect(graphSemanticCalls(graph, new Set(["spawn"]), "process")).toContain("defaultLaunch");
+      expect(graphSemanticCalls(graph, new Set(["spawn"]), "process")).toContain("requireLaunch");
       expect(graphSemanticCalls(graph, new Set(["putObject"]), "r2")).toContain("write");
+      expect(graphSemanticCalls(graph, new Set(["putObject"]), "r2")).toContain("renamed");
+      expect(graphSemanticCalls(graph, new Set(["putObject"]), "r2")).toContain("starWrite");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
