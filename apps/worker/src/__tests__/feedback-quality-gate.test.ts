@@ -26,7 +26,7 @@ function snapshot(base: Omit<QualityObservation, "observationId" | "createdAt" |
   const cases = [...base.cases].sort((left, right) => left.caseVersion.localeCompare(right.caseVersion));
   const names = live ? ["live-1", "live-2", "live-3"] : ["recorded"];
   const attempts = cases.flatMap((result) => names.map((attemptName) => ({ caseVersion: result.caseVersion, attemptName, result })));
-  const body = { ...base, live, caseVersions: cases.map((result) => result.caseVersion), attemptCount: attempts.length, attemptsSha256: sha256(serializeObservationAttempts(attempts)) };
+  const body = { ...base, live, caseVersions: cases.map((result) => result.caseVersion), attemptCount: attempts.length, attemptsSha256: sha256(serializeObservationAttempts(attempts)), cases };
   return { ...body, observationId: observationIdFor(body), createdAt };
 }
 
