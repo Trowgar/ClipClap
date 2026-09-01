@@ -466,6 +466,16 @@ async function defaultCanary(service: WorkerService, expected: Readonly<{ decisi
   const jobId = `quality-canary-${nonce}`;
   let job: Awaited<ReturnType<typeof queue.add>> | undefined;
   let terminal = false;
+  let sourceDisconnected = false;
+  const disconnectSource = () => {
+    if (sourceDisconnected) return;
+    sourceDisconnected = true;
+    // A lease-owned canary shares its connection with queue control; the
+    // lease callback is idempotent and disconnects it before recovery. A
+    // standalone canary owns its connection directly.
+    try { onTimeout?.(); } catch { /* cleanup still uses a fresh client */ }
+    if (!onTimeout) redis?.disconnect();
+  };
   try {
     job = await boundedQualityOperation(() => queue.add("feedback-quality-canary", { kind: "feedback-quality-canary", nonce, decisionId: expected.decisionId, rolloutInstanceId: expected.rolloutInstanceId }, { jobId, attempts: 1, priority: 0, removeOnComplete: { age: 300, count: 100 }, removeOnFail: { age: 300, count: 100 } }), operationTimeoutMs, "canary_failed");
     const deadline = Date.now() + timeoutMs;
@@ -483,11 +493,12 @@ async function defaultCanary(service: WorkerService, expected: Readonly<{ decisi
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   } catch (error) {
-    if (job === undefined) {
+    if (!terminal) {
       // Close the source connection before looking up the deterministic ID on
       // a fresh client. This prevents an in-flight add from sharing recovery's
-      // socket and applies to every ambiguous add failure, not just timeouts.
-      onTimeout?.();
+      // socket and also removes a known non-terminal job after polling or the
+      // overall canary deadline fails.
+      disconnectSource();
       await cleanupCanaryAfterAddTimeout(queueName, jobId, operationTimeoutMs);
     }
     if (error instanceof DeployError) throw error;
@@ -499,7 +510,10 @@ async function defaultCanary(service: WorkerService, expected: Readonly<{ decisi
       const current = await boundedQualityOperation(() => queue.getJob(job?.id ?? ""), operationTimeoutMs, "canary_failed");
       if (current) await boundedQualityOperation(() => current.remove(), operationTimeoutMs, "canary_failed");
     } catch { /* best-effort cleanup */ }
-    if (!suppliedQueue && redis) await closeQualityResources([queue], [redis], operationTimeoutMs);
+    if (!suppliedQueue && redis) {
+      await boundedQualityOperation(() => queue.close(), operationTimeoutMs).catch(() => undefined);
+      if (!sourceDisconnected) redis.disconnect();
+    }
   }
 }
 
@@ -575,15 +589,17 @@ async function defaultQueueLease(queueName: string, timeoutMs = 30_000, operatio
       recoveryRedis = createQualityRedis();
       const recovered = await fencedResume(recoveryRedis, queue, fenceKey, pauseOwnerKey, fenceToken, operationTimeoutMs);
       if (recovered === 0) {
-        const [currentFence, currentPauseOwner, currentlyPaused] = await Promise.all([
+        const metaKey = queue.keys.meta;
+        if (!metaKey) throw new DeployError("queue_read_failed");
+        const [currentFence, currentPauseOwner, pausedMeta] = await Promise.all([
           boundedQualityOperation(() => recoveryRedis!.get(fenceKey), operationTimeoutMs),
           boundedQualityOperation(() => recoveryRedis!.get(pauseOwnerKey), operationTimeoutMs),
-          boundedQualityOperation(() => queue.isPaused(), operationTimeoutMs),
+          boundedQualityOperation(() => recoveryRedis!.hexists(metaKey, "paused"), operationTimeoutMs),
         ]);
         // The original resume may have committed before its reply was lost.
         // Treat that exact, fully-observed state as recovery, but never infer
         // ownership loss away when another rollout's fence is present.
-        if (currentFence === null && currentPauseOwner === null && !currentlyPaused) {
+        if (currentFence === null && currentPauseOwner === null && Number(pausedMeta) === 0) {
           paused = false;
           recoveryStatus = "recovered";
         } else if (currentFence !== null && currentFence !== fenceToken) {
