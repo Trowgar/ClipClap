@@ -55,7 +55,7 @@ function unavailableCase(id: string, set: "eval" | "holdout", event: Readonly<Re
   const verdict = event.verdict === "EDIT" || event.verdict === "NO" ? event.verdict : "AS_IS";
   const subsystem = ["selection", "boundary", "framing", "subtitles", "render"].includes(event.subsystem as string) ? event.subsystem : "render";
   const zero = "sha256:" + "0".repeat(64) as `sha256:${string}`;
-  return { schemaVersion: 1, caseVersion: id, feedbackId: "unavailable", clipId: "unavailable", jobId: "unavailable", userId: "unavailable", feedbackUpdatedAt: "1970-01-01T00:00:00.000Z", snapshotSha256: zero, candidateVersion: zero, set, disposition, verdict, subsystem: subsystem as LoadedCase["subsystem"], confidence: "medium", expected: { approvedMoment: false, completeBoundary: false }, inputs: { transcriptSha256: null, evidenceSha256: zero, sourceSha256: null, sourceDurationSec: null }, replay: { highlight: { start: 0, end: 0, title: "unavailable" }, subtitleTrack: null, cropPlan: null, renderManifest: null, reframeConfig: null, musicDirection: null, blackTail: null, sourceUrl: null }, loadStatus };
+  return { schemaVersion: 1, caseVersion: id, feedbackId: "unavailable", clipId: "unavailable", jobId: "unavailable", userId: "unavailable", feedbackUpdatedAt: "1970-01-01T00:00:00.000Z", snapshotSha256: zero, candidateVersion: zero, set, disposition, verdict, subsystem: subsystem as LoadedCase["subsystem"], confidence: "medium", expected: { approvedMoment: false, completeBoundary: false, visualSamples: [] }, inputs: { transcriptSha256: null, evidenceSha256: zero, sourceSha256: null, sourceDurationSec: null }, replay: { highlight: { start: 0, end: 0, title: "unavailable" }, subtitleTrack: null, cropPlan: null, renderManifest: null, reframeConfig: null, musicDirection: null, blackTail: null, sourceUrl: null }, loadStatus };
 }
 
 function parseCase(value: unknown, expectedId: string): MaterializedCase {
@@ -142,9 +142,61 @@ function assertResult(value: ObservationAdapterResult, qualityCase: Materialized
 }
 
 async function publishDefault(observation: QualityObservation, attempts: readonly ObservationAttemptRecord[], root: string): Promise<CommitResult> {
-  const manifest = { schemaVersion: 1, observationId: observation.observationId, set: observation.set, mode: observation.mode, commitSha: observation.commitSha, configSha256: observation.configSha256, corpusSha256: observation.corpusSha256, runnerVersion: observation.runnerVersion, attemptCount: attempts.length };
   const results = attempts.map((item) => canonicalJson(item)).join("\n") + "\n";
+  const manifest = { schemaVersion: 1, observationId: observation.observationId, set: observation.set, mode: observation.mode, commitSha: observation.commitSha, configSha256: observation.configSha256, corpusSha256: observation.corpusSha256, runnerVersion: observation.runnerVersion, attemptCount: attempts.length, attemptsSha256: sha256(results) };
   return publishBundle({ kind: "observation", id: observation.observationId, files: { "manifest.json": Buffer.from(canonicalJson(manifest) + "\n"), "results.jsonl": Buffer.from(results) } }, root);
+}
+
+async function readObservationFile(id: string, name: string, root: string): Promise<string> {
+  const opened = await openBundleFile("observation", id, name, root);
+  try {
+    const reader = opened.stream.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      for (;;) {
+        const item = await reader.read();
+        if (item.done) break;
+        size += item.value.byteLength;
+        if (size > 32 * 1024 * 1024) throw new ObservationError("invalid_input");
+        chunks.push(item.value);
+      }
+    } finally { reader.releaseLock(); }
+    await opened.sha256;
+    return Buffer.concat(chunks.map((item) => Buffer.from(item))).toString("utf8");
+  } finally { await opened.close(); }
+}
+
+/** Typed reader for the complete immutable attempt artifact. Consumers must
+ * use this API rather than `QualityObservation.cases`, which intentionally
+ * contains only the first result for policy compatibility. */
+export async function readObservationAttempts(id: string, root = DEFAULT_QUALITY_ROOT): Promise<readonly ObservationAttemptRecord[]> {
+  let manifest: Record<string, unknown>;
+  let results: string;
+  try {
+    manifest = JSON.parse(await readObservationFile(id, "manifest.json", root)) as Record<string, unknown>;
+    results = await readObservationFile(id, "results.jsonl", root);
+  } catch (error) {
+    if (error instanceof ObservationError) throw error;
+    throw new ObservationError("invalid_input");
+  }
+  if (manifest.schemaVersion !== 1 || manifest.observationId !== id || !Number.isSafeInteger(manifest.attemptCount) || !validHash(manifest.attemptsSha256) || manifest.attemptsSha256 !== sha256(results)) throw new ObservationError("invalid_input");
+  const lines = results.endsWith("\n") ? results.slice(0, -1).split("\n") : [];
+  if (lines.length !== manifest.attemptCount || lines.length === 0) throw new ObservationError("invalid_input");
+  const attempts: ObservationAttemptRecord[] = [];
+  const names = new Set<string>();
+  for (const line of lines) {
+    let parsed: unknown;
+    try { parsed = JSON.parse(line); } catch { throw new ObservationError("invalid_input"); }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new ObservationError("invalid_input");
+    const item = parsed as Record<string, unknown>;
+    if (typeof item.caseVersion !== "string" || typeof item.attemptName !== "string" || names.has(`${item.caseVersion}:${item.attemptName}`) || !item.result || typeof item.result !== "object") throw new ObservationError("invalid_input");
+    const result = item.result as Record<string, unknown>;
+    if (result.schemaVersion !== 1 || result.caseVersion !== item.caseVersion || !["positive", "confirmed_negative", "exclude"].includes(result.disposition as string) || !["selection", "boundary", "framing", "subtitles", "render"].includes(result.subsystem as string) || !["ok", "missing", "stale", "error"].includes(result.status as string) || !result.metrics || typeof result.metrics !== "object" || Array.isArray(result.metrics)) throw new ObservationError("invalid_input");
+    names.add(`${item.caseVersion}:${item.attemptName}`);
+    attempts.push(Object.freeze({ caseVersion: item.caseVersion, attemptName: item.attemptName, result: result as unknown as QualityCaseResult }));
+  }
+  return Object.freeze(attempts);
 }
 
 /** Execute one immutable observation. All input cases are visited; an adapter

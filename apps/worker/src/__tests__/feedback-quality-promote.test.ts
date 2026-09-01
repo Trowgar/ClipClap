@@ -9,6 +9,7 @@ const sha = (digit: string) => `sha256:${digit.repeat(64)}` as const;
 const updatedAt = "2026-08-31T12:00:00.000Z";
 const snapshotHash = sha256(canonicalJson({ title: "clip" }));
 const candidateHash = sha256(`feedback-1\n${updatedAt}\n${snapshotHash}`);
+const visualSample = { timestamp: 0, requiredSubjectBoxes: [{ x: 0.1, y: 0.1, w: 0.1, h: 0.1 }], requiredTextBoxes: [], protectedExistingCaptionBoxes: [] } as const;
 type AuthorityLock = NonNullable<PromotionDependencies["withV1AuthorityLock"]>;
 
 function decision(overrides: Partial<PromotionDecision> = {}): PromotionDecision {
@@ -29,7 +30,7 @@ function decision(overrides: Partial<PromotionDecision> = {}): PromotionDecision
     confidence: "high",
     engineCause: "reproducible",
     evidence: "permanent",
-    expected: { approvedMoment: true, completeBoundary: true, sourceWindow: { start: 1, end: 7 } },
+    expected: { approvedMoment: true, completeBoundary: true, sourceWindow: { start: 1, end: 7 }, visualSamples: [] },
     ...overrides,
   };
 }
@@ -69,6 +70,10 @@ function deps(overrides: Partial<PromotionDependencies> = {}): PromotionDependen
 }
 
 describe("quality feedback promotion", () => {
+  it("rejects visual cases without frozen review annotations", async () => {
+    await expect(promoteFeedbackCase(decision({ subsystem: "render", expected: { approvedMoment: true, completeBoundary: true, visualSamples: [] } }), deps())).rejects.toMatchObject({ code: "invalid_decision" });
+  });
+
   it("promotes only an exact, replayable AS_IS identity and downloads evidence with GET", async () => {
     const dependencies = deps();
     const result = await promoteFeedbackCase(decision(), dependencies);
@@ -193,7 +198,7 @@ describe("quality feedback promotion", () => {
 
   it("does not require a transcript for framing when evidence and source are present", async () => {
     const dependencies = deps({ repository: { capture: vi.fn(async () => snapshot({ job: { ...snapshot().job, transcriptJson: null } })) } });
-    await expect(promoteFeedbackCase(decision({ subsystem: "framing", expected: { approvedMoment: true, completeBoundary: true } }), dependencies)).resolves.toMatchObject({ status: "committed" });
+    await expect(promoteFeedbackCase(decision({ subsystem: "framing", expected: { approvedMoment: true, completeBoundary: true, visualSamples: [visualSample] } }), dependencies)).resolves.toMatchObject({ status: "committed" });
   });
 
   it("passes a destination guard into the atomic publisher", async () => {
@@ -240,7 +245,7 @@ describe("quality feedback promotion", () => {
     Object.defineProperty(sourceChunk, "byteLength", { value: MAX_SOURCE_BYTES + 1 });
     const sourceStream = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(sourceChunk); }, cancel });
     const dependencies = deps({ downloadFile: vi.fn(async (key: string) => key.startsWith("artifacts/") ? sourceStream : new Uint8Array([1])) });
-    await expect(promoteFeedbackCase(decision({ subsystem: "framing", expected: { approvedMoment: true, completeBoundary: true } }), dependencies)).rejects.toMatchObject({ code: "artifact_too_large" });
+    await expect(promoteFeedbackCase(decision({ subsystem: "framing", expected: { approvedMoment: true, completeBoundary: true, visualSamples: [visualSample] } }), dependencies)).rejects.toMatchObject({ code: "artifact_too_large" });
     expect(cancel).toHaveBeenCalledOnce();
   });
 
@@ -272,7 +277,7 @@ describe("quality feedback promotion", () => {
     const dependencies = deps({
       repository: { capture: vi.fn(async () => snapshot({ job: { ...snapshot().job, sourceArtifactKey: null, normalizedArtifactKey: null } })) },
     });
-    const result = await promoteFeedbackCase(decision({ subsystem: "selection", expected: { approvedMoment: true, completeBoundary: true, sourceWindow: { start: 1, end: 7 }, referenceOnly: true } }), dependencies);
+    const result = await promoteFeedbackCase(decision({ subsystem: "selection", expected: { approvedMoment: true, completeBoundary: true, sourceWindow: { start: 1, end: 7 }, referenceOnly: true, visualSamples: [] } }), dependencies);
     expect(result.status).toBe("committed");
     expect(dependencies.downloadFile).toHaveBeenCalledTimes(1);
   });

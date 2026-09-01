@@ -8,6 +8,7 @@ import type { MusicDirectionOpts } from "../reframe/types";
 import { cutClips, type CutResult } from "../processors/cut";
 import type { MaterializedCase } from "./promote";
 import type { QualityCaseResult, QualityMetrics } from "./types";
+import type { CropPlan } from "../reframe/types";
 
 export type RenderProbe = Readonly<{
   width: number; height: number; sar: number; duration: number; frameCount: number;
@@ -25,7 +26,7 @@ export type RenderLaneOptions = Readonly<{
   subtitlesOn?: boolean;
   reframeConfig?: ReframeConfig;
   musicDirection?: MusicDirectionOpts;
-  probe: (path: string, qualityCase: MaterializedCase) => Promise<RenderProbe>;
+  probe: (path: string, qualityCase: MaterializedCase, context?: Readonly<{ cropPlan: CropPlan | null; assPath?: string; cues: readonly unknown[]; samples: MaterializedCase["expected"]["visualSamples"] }>) => Promise<RenderProbe>;
   segmentsToCues?: typeof segmentsToCues;
   createAssFilter?: typeof createAssFilter;
   computeCropPlan?: typeof computeCropPlan;
@@ -70,7 +71,7 @@ export async function observeRenderCase(
     cutOutputPath = output.clipPath;
     outputPath = options.privateOutputPath ?? output.clipPath;
     if (outputPath !== output.clipPath) await (options.copyOutput ?? copyFile)(output.clipPath, outputPath);
-    const probe = await options.probe(outputPath, qualityCase);
+    const probe = await options.probe(outputPath, qualityCase, { cropPlan: crop.plan, assPath: ass?.assPath, cues, samples: qualityCase.expected.visualSamples });
     if (!probe.visualMeasured) throw new Error("visual probe unavailable");
     const expectedDuration = Math.max(0.001, options.highlight.end - options.highlight.start);
     const overlap = Math.max(0, Math.min(1, probe.duration / expectedDuration));

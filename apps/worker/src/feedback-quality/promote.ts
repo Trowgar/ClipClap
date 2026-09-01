@@ -38,6 +38,22 @@ export interface PromotionExpected {
   referenceOnly?: boolean;
   focalCoverage?: boolean;
   subtitleCoverage?: boolean;
+  /** Review-time, source-space visual ground truth frozen with the case. */
+  visualSamples: readonly VisualSample[];
+}
+
+export interface VisualBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface VisualSample {
+  timestamp: number;
+  requiredSubjectBoxes: readonly VisualBox[];
+  requiredTextBoxes: readonly VisualBox[];
+  protectedExistingCaptionBoxes: readonly VisualBox[];
 }
 
 export interface PromotionDecision {
@@ -162,7 +178,7 @@ const HASH = /^sha256:[0-9a-f]{64}$/;
 const UUIDISH = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const SUBSYSTEMS: readonly Subsystem[] = ["selection", "boundary", "framing", "subtitles", "render"];
 const TOP_KEYS = ["schemaVersion", "eventId", "feedbackId", "clipId", "jobId", "userId", "feedbackUpdatedAt", "snapshotSha256", "candidateVersion", "verdict", "disposition", "set", "subsystem", "confidence", "engineCause", "evidence", "expected"];
-const EXPECTED_KEYS = ["approvedMoment", "completeBoundary", "sourceWindow", "referenceOnly", "focalCoverage", "subtitleCoverage"];
+const EXPECTED_KEYS = ["approvedMoment", "completeBoundary", "sourceWindow", "referenceOnly", "focalCoverage", "subtitleCoverage", "visualSamples"];
 
 function ownKeys(value: object, keys: readonly string[]): boolean {
   const actual = Reflect.ownKeys(value);
@@ -205,6 +221,19 @@ function expected(value: unknown): PromotionExpected {
       }
     }
   }
+  if (!Array.isArray(raw.visualSamples) || raw.visualSamples.length > 64) throw new QualityPromotionError("invalid_decision");
+  for (const sample of raw.visualSamples) {
+    const item = object(sample);
+    if (!ownKeys(item, ["timestamp", "requiredSubjectBoxes", "requiredTextBoxes", "protectedExistingCaptionBoxes"]) || typeof item.timestamp !== "number" || !Number.isFinite(item.timestamp) || item.timestamp < 0) throw new QualityPromotionError("invalid_decision");
+    for (const key of ["requiredSubjectBoxes", "requiredTextBoxes", "protectedExistingCaptionBoxes"] as const) {
+      const boxes = array(item[key]);
+      for (const box of boxes) {
+        const b = object(box);
+        const x = b.x, y = b.y, w = b.w, h = b.h;
+        if (!ownKeys(b, ["x", "y", "w", "h"]) || [x, y, w, h].some((part) => typeof part !== "number" || !Number.isFinite(part)) || (x as number) < 0 || (y as number) < 0 || (w as number) <= 0 || (h as number) <= 0 || (x as number) + (w as number) > 1 || (y as number) + (h as number) > 1) throw new QualityPromotionError("invalid_decision");
+      }
+    }
+  }
   return raw as unknown as PromotionExpected;
 }
 function validateDecision(raw: PromotionDecision): PromotionDecision {
@@ -215,6 +244,10 @@ function validateDecision(raw: PromotionDecision): PromotionDecision {
       !SUBSYSTEMS.includes(value.subsystem as Subsystem) || !["high", "medium"].includes(value.confidence as string) ||
       !["reproducible", "subjective", "source", "missing_evidence"].includes(value.engineCause as string) || !["permanent", "missing"].includes(value.evidence as string)) throw new QualityPromotionError("invalid_decision");
   expected(value.expected);
+  const expectedValue = value.expected as PromotionExpected;
+  if (["framing", "subtitles", "render"].includes(value.subsystem as string) && expectedValue.visualSamples.length === 0) throw new QualityPromotionError("invalid_decision");
+  if (value.subsystem === "framing" && !expectedValue.visualSamples.some((sample) => sample.requiredSubjectBoxes.length > 0)) throw new QualityPromotionError("invalid_decision");
+  if (value.subsystem === "subtitles" && !expectedValue.visualSamples.some((sample) => sample.requiredTextBoxes.length > 0)) throw new QualityPromotionError("invalid_decision");
   return value as unknown as PromotionDecision;
 }
 function validateApproval(raw: unknown): V1ApprovalIdentity {

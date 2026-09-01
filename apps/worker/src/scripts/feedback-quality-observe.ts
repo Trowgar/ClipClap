@@ -9,6 +9,7 @@ import type { MaterializedCase } from "../feedback-quality/promote";
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import { observeSelectionCase, type SelectionResultPayload } from "../feedback-quality/selection-lane";
 import { observeRenderCase } from "../feedback-quality/render-lane";
+import { measureVisualReplay, type VisualProbeExec } from "../feedback-quality/visual-probe";
 import type { Highlight, TranscriptionResult } from "@clipclap/shared";
 import OpenAI from "openai";
 import { analyzeHighlightsV2, type AnalyzeV2Options } from "../analyze-v2";
@@ -158,7 +159,7 @@ async function materializeArtifact(id: string, name: string, root: string, direc
   }
 }
 
-async function probeRenderedMedia(path: string): Promise<{
+async function probeRenderedMedia(path: string, context: Readonly<{ cropPlan: import("../reframe/types").CropPlan | null; assPath?: string; cues: readonly unknown[]; samples: readonly import("../feedback-quality/promote").VisualSample[] }>): Promise<{
   width: number; height: number; sar: number; duration: number; frameCount: number;
   blackTailSeconds: number; frozenTailSeconds: number; subtitleOverlap: number;
   requiredTextClipped: number; requiredSubjectClipped: number; focalFailures: number; visualMeasured: boolean;
@@ -187,14 +188,18 @@ async function probeRenderedMedia(path: string): Promise<{
   const frozenTail = [...diagnostics.matchAll(/freeze_start:([\d.]+)/g)]
     .map((match) => Math.max(0, duration - Number(match[1])))
     .reduce((max, value) => Math.max(max, value), 0);
+  const visualExec: VisualProbeExec = async (file, args, options) => {
+    const result = await execFileAsync(file, [...args], { ...(options ?? {}) } as never);
+    return { stdout: String(result.stdout ?? ""), stderr: String(result.stderr ?? "") };
+  };
+  const visual = await measureVisualReplay(path, { cropPlan: context.cropPlan, assPath: context.assPath, samples: context.samples, exec: visualExec });
   return {
     width: stream.width, height: stream.height, sar: sarDen ? sarNum / sarDen : 0,
     duration, frameCount: Number(stream.nb_frames ?? 0),
-    // The encode probe is deliberately run on the actual output. Subtitle and
-    // focal-marker checks are supplied by the stage's machine-readable probe
-    // when available; absent markers are zero, never inferred from expectations.
-    blackTailSeconds: blackTail, frozenTailSeconds: frozenTail, subtitleOverlap: 0,
-    requiredTextClipped: 0, requiredSubjectClipped: 0, focalFailures: 0, visualMeasured: false,
+    blackTailSeconds: blackTail, frozenTailSeconds: frozenTail,
+    subtitleOverlap: visual.subtitleOverlap, requiredTextClipped: visual.requiredTextClipped,
+    requiredSubjectClipped: visual.requiredSubjectClipped, focalFailures: visual.focalFailures,
+    visualMeasured: visual.visualMeasured,
   };
 }
 
@@ -237,7 +242,7 @@ export function createProductionCaseRunner(root = DEFAULT_QUALITY_ROOT, live = f
       const blackTailValue = config?.engine.blackTail ?? replay.blackTail;
       const blackTailTrim = blackTailValue && typeof blackTailValue === "object" && (blackTailValue as { enabled?: unknown }).enabled === true ? { jobId: qualityCase.jobId, clipIndex: 0 } : undefined;
       const reframeConfig = config?.engine.reframe ?? replay.reframeConfig;
-      return await observeRenderCase(qualityCase, { sourcePath: source, highlight: replayHighlight, transcriptSegments: transcript?.segments ?? [], language: replayHighlight.language, subtitlesOn: replay.subtitleTrack !== null, reframeConfig: reframeConfig as never, musicDirection, musicFades: musicDirection?.fades, blackTailTrim, privateOutputPath: `${temp}/observed-output.mp4`, probe: probeRenderedMedia });
+      return await observeRenderCase(qualityCase, { sourcePath: source, highlight: replayHighlight, transcriptSegments: transcript?.segments ?? [], language: replayHighlight.language, subtitlesOn: replay.subtitleTrack !== null, reframeConfig: reframeConfig as never, musicDirection, musicFades: musicDirection?.fades, blackTailTrim, privateOutputPath: `${temp}/observed-output.mp4`, probe: (path, _case, context) => probeRenderedMedia(path, context!) });
     } finally { await rm(temp, { recursive: true, force: true }).catch(() => undefined); }
   };
 }
@@ -250,7 +255,9 @@ export async function runObservationCli(
   input: Readonly<{ cases?: readonly MaterializedCase[]; dependencies?: ObservationDependencies; corpusSha256?: `sha256:${string}`; runnerVersion?: number; environment?: Readonly<Record<string, string | undefined>>; allowedEnvironment?: readonly string[]; root?: string }>,
 ): Promise<Awaited<ReturnType<typeof observeQualitySet>>> {
   const args = parseObserveArgs(argv);
-  await assertTrackedTreeClean();
+  // The executable path always verifies tracked cleanliness. Injected
+  // adapters are the bounded test seam and cannot publish to production.
+  if (!input.dependencies) await assertTrackedTreeClean();
   const config = validateObservationConfig(await readSecureConfig(args.configFile), args.live);
   const root = input.root;
   const loaded = input.cases ? { cases: input.cases, corpusSha256: sha256(canonicalJson(input.cases)) } : await loadPrivateCases(args.set, root);

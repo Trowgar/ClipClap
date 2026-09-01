@@ -42,7 +42,14 @@ function selectionMetrics(result: SelectionAttempt["result"], qualityCase: Mater
   const telemetry = result.telemetry ?? {};
   const requiredTelemetry = ["kept", "criticVerdicts", "omittedDrops", "truncatedDrops", "refusalDrops", "invariantDrops"];
   if (requiredTelemetry.some((key) => !Object.prototype.hasOwnProperty.call(telemetry, key))) throw new Error("selection telemetry missing");
-  const pick = (...keys: string[]) => keys.map((key) => number(telemetry[key])).find((value) => value !== undefined) ?? 0;
+  const pickRequired = (...keys: string[]) => {
+    const value = keys.map((key) => number(telemetry[key])).find((item) => item !== undefined);
+    if (value === undefined) throw new Error("selection telemetry missing");
+    return value;
+  };
+  const boundaryErrors = pickRequired("boundaryErrors", "boundary_errors");
+  const focalFailures = pickRequired("focalFailures", "focal_failures");
+  const subtitleFailures = pickRequired("subtitleFailures", "subtitle_failures");
   const first = highlights.reduce((best, item) => {
     const candidate = item as { start?: number; end?: number };
     if (!finite(candidate.start) || !finite(candidate.end)) return best;
@@ -55,7 +62,10 @@ function selectionMetrics(result: SelectionAttempt["result"], qualityCase: Mater
   const hookDelay = first && finite(first.start) && finite(first.hookStart) ? Math.max(0, first.hookStart - first.start) : 0;
   let preHookGap = 0;
   if (first && finite(first.start) && finite(first.hookStart)) {
-    try { preHookGap = largestPreHookGap(buildSentenceGraph(options.transcript.segments.length ? options.transcript.segments : [], options.analyzeOptions?.cfg ?? loadAnalyzeConfig()), first.start, first.hookStart); } catch { preHookGap = 0; }
+    try {
+      preHookGap = largestPreHookGap(buildSentenceGraph(options.transcript.segments.length ? options.transcript.segments : [], options.analyzeOptions?.cfg ?? loadAnalyzeConfig()), first.start, first.hookStart);
+      if (!Number.isFinite(preHookGap) || preHookGap < 0) throw new Error("invalid pre-hook gap");
+    } catch { throw new Error("selection pre-hook gap unavailable"); }
   }
   const payoffContainment = first && finite(first.payoffAt) && finite(first.start) && finite(first.end) ? (first.payoffAt >= first.start && first.payoffAt <= first.end ? 1 : 0) : 0;
   return {
@@ -63,9 +73,9 @@ function selectionMetrics(result: SelectionAttempt["result"], qualityCase: Mater
     approvedWindowOverlap,
     emptyResult: highlights.length === 0 ? 1 : 0,
     zeroClipFalseNegative: qualityCase.expected.approvedMoment && highlights.length === 0 ? 1 : 0,
-    boundaryErrors: pick("boundaryErrors", "boundary_errors"),
-    focalFailures: pick("focalFailures", "focal_failures"),
-    subtitleFailures: pick("subtitleFailures", "subtitle_failures"),
+    boundaryErrors,
+    focalFailures,
+    subtitleFailures,
     lowQuality: highlights.filter((item) => (item as { lowQuality?: unknown }).lowQuality === true).length,
     rescueCandidates: telemetry.rescue && typeof telemetry.rescue === "object" ? number((telemetry.rescue as Record<string, unknown>).evaluated) ?? 0 : 0,
     criticFailures: ["omittedDrops", "truncatedDrops", "refusalDrops", "invariantDrops"].reduce((sum, key) => sum + (number(telemetry[key]) ?? 0), 0),

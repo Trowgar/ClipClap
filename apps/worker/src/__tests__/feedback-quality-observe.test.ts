@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { MaterializedCase } from "../feedback-quality/promote";
 import {
   observeQualitySet,
+  readObservationAttempts,
   type ObservationCaseRunner,
   type ObservationDependencies,
 } from "../feedback-quality/observe";
@@ -13,6 +14,7 @@ import { observeSelectionCase } from "../feedback-quality/selection-lane";
 import { loadPrivateCases } from "../feedback-quality/observe";
 import { appendLabelEvent, publishBundle } from "../feedback-quality/store";
 import { parseObserveArgs, readSecureConfig, runObservationCli, validateObservationConfig } from "../scripts/feedback-quality-observe";
+import { measureVisualReplay, type VisualProbeExec } from "../feedback-quality/visual-probe";
 
 const hash = (n: string) => `sha256:${n.repeat(64).slice(0, 64)}` as `sha256:${string}`;
 const sampleCase = (set: "eval" | "holdout" = "eval"): MaterializedCase => ({
@@ -30,7 +32,7 @@ const sampleCase = (set: "eval" | "holdout" = "eval"): MaterializedCase => ({
   verdict: "AS_IS",
   subsystem: "selection",
   confidence: "high",
-  expected: { approvedMoment: true, completeBoundary: true },
+  expected: { approvedMoment: true, completeBoundary: true, visualSamples: [] },
   inputs: { transcriptSha256: hash("d"), evidenceSha256: hash("e"), sourceSha256: null, sourceDurationSec: 30 },
   replay: { highlight: { start: 0, end: 10, title: "sample", hookStart: 1, hookEnd: 2, payoffAt: 5, language: "en", clipKind: "speech" }, subtitleTrack: null, cropPlan: null, renderManifest: null, reframeConfig: null, musicDirection: null, blackTail: null, sourceUrl: null },
 });
@@ -100,6 +102,18 @@ describe("feedback quality observation runner", () => {
     expect(observation.cases[0].metrics).toEqual(result.metrics);
     expect(publish).toHaveBeenCalledTimes(1);
     expect(Object.isFrozen(observation)).toBe(true);
+  });
+
+  it("publishes and reads all named attempts with a verified artifact digest", async () => {
+    const root = await mkdtemp(join(tmpdir(), "quality-observe-attempts-"));
+    const observation = await observeQualitySet({
+      set: "eval", mode: "baseline", commitSha: "a".repeat(40), config: {}, corpusSha256: hash("f"), runnerVersion: 1,
+      cases: [sampleCase()], root, live: true, promptFingerprint: hash("a"), modelFingerprint: hash("b"), environment: {}, allowedEnvironment: [],
+      dependencies: { runCase: vi.fn(async () => result) },
+    });
+    const attempts = await readObservationAttempts(observation.observationId, root);
+    expect(attempts).toHaveLength(3);
+    expect(attempts.map((item) => item.attemptName)).toEqual(["live-1", "live-2", "live-3"]);
   });
 
   it("publishes missing input as an error result instead of silently skipping the case", async () => {
@@ -211,8 +225,9 @@ describe("feedback quality observation runner", () => {
     const qualityCase = sampleCase();
     const transcript = { text: "hello world", segments: [{ start: 0, end: 10, text: "hello world", words: [] }] } as never;
     await expect(observeSelectionCase(qualityCase, { transcript, analyze: async () => ({ highlights: [{ start: 1, end: 8, hookStart: 3, payoffAt: 6, score: 0.7 }], telemetry: {} }) })).rejects.toThrow("telemetry");
-    const selected = await observeSelectionCase(qualityCase, { transcript, analyze: async () => ({ highlights: [{ start: 1, end: 8, hookStart: 3, payoffAt: 6, score: 0.7, lowQuality: true }], telemetry: { kept: 1, criticVerdicts: 1, omittedDrops: 0, truncatedDrops: 0, refusalDrops: 0, invariantDrops: 0 } }) });
+    const selected = await observeSelectionCase(qualityCase, { transcript, analyze: async () => ({ highlights: [{ start: 1, end: 8, hookStart: 3, payoffAt: 6, score: 0.7, lowQuality: true }], telemetry: { kept: 1, criticVerdicts: 1, omittedDrops: 0, truncatedDrops: 0, refusalDrops: 0, invariantDrops: 0, boundaryErrors: 0, focalFailures: 0, subtitleFailures: 0 } }) });
     expect(selected.metrics).toMatchObject({ hookDelay: 2, payoffContainment: 1, score: 0.7, lowQuality: 1 });
+    await expect(observeSelectionCase(qualityCase, { transcript, analyze: async () => ({ highlights: [{ start: 1, end: 8, hookStart: 3 }], telemetry: { kept: 1, criticVerdicts: 1, omittedDrops: 0, truncatedDrops: 0, refusalDrops: 0, invariantDrops: 0, boundaryErrors: 0 } }) })).rejects.toThrow("telemetry");
   });
 
   it("fails closed when visual probe annotations are unavailable", async () => {
@@ -222,5 +237,48 @@ describe("feedback quality observation runner", () => {
         width: 1080, height: 1920, sar: 1, duration: 10, frameCount: 250, blackTailSeconds: 0, frozenTailSeconds: 0, subtitleOverlap: 0, requiredTextClipped: 0, requiredSubjectClipped: 0, visualMeasured: false,
       }), segmentsToCues: (() => []) as never, computeCropPlan: (async () => ({ plan: null, shotCount: 0, detectMs: 0 })) as never, cutClips: (async () => [{ clipPath: "/tmp/out.mp4", highlight: clip }]) as never,
     })).rejects.toThrow("visual probe unavailable");
+  });
+
+  it("measures annotated subject/text boxes and subtitle overlap from sampled frames", async () => {
+    const calls: string[][] = [];
+    const exec: VisualProbeExec = vi.fn(async (_file, args) => {
+      calls.push([...args]);
+      if (args[0] === "-show_entries") return { stdout: JSON.stringify({ streams: [{ width: 1080, height: 1920, nb_read_frames: "1" }] }), stderr: "" };
+      return { stdout: "n:0 x1:600 x2:800 y1:192 y2:384\n", stderr: "" };
+    });
+    const result = await measureVisualReplay("/tmp/render.mp4", {
+      cropPlan: { version: 1, engine: "faces", source: { width: 1920, height: 1080 }, shots: [{ start: 0, end: 2, layout: "single", x: 420 }] },
+      assPath: "/tmp/subtitles.ass",
+      samples: [{ timestamp: 1, requiredSubjectBoxes: [{ x: .4, y: .2, w: .1, h: .1 }], requiredTextBoxes: [{ x: .4, y: .1, w: .1, h: .1 }], protectedExistingCaptionBoxes: [{ x: .4, y: .1, w: .1, h: .1 }] }],
+      exec,
+    });
+    expect(result.visualMeasured).toBe(true);
+    expect(result.requiredSubjectClipped).toBe(0);
+    expect(result.requiredTextClipped).toBe(0);
+    expect(result.focalFailures).toBe(0);
+    expect(result.subtitleOverlap).toBeGreaterThan(0);
+    expect(calls.some((args) => args.includes("/tmp/render.mp4"))).toBe(true);
+    expect(calls.some((args) => args.some((arg) => arg.includes("ass=filename=/tmp/subtitles.ass")))).toBe(true);
+  });
+
+  it("reports each annotated visual violation instead of defaulting it to zero", async () => {
+    const exec: VisualProbeExec = vi.fn(async (_file, args) => {
+      if (args[0] === "-show_entries") return { stdout: JSON.stringify({ streams: [{ width: 1080, height: 1920, nb_read_frames: "1" }] }), stderr: "" };
+      return { stdout: "n:0 x1:0 x2:1000 y1:0 y2:1000\n", stderr: "" };
+    });
+    const result = await measureVisualReplay("/tmp/render.mp4", {
+      cropPlan: { version: 1, engine: "faces", source: { width: 1920, height: 1080 }, shots: [{ start: 0, end: 2, layout: "single", x: 0 }] },
+      assPath: "/tmp/subtitles.ass",
+      samples: [{ timestamp: 1, requiredSubjectBoxes: [{ x: .9, y: .2, w: .1, h: .1 }], requiredTextBoxes: [{ x: .9, y: .2, w: .1, h: .1 }], protectedExistingCaptionBoxes: [{ x: .5, y: .5, w: .2, h: .2 }] }],
+      exec,
+    });
+    expect(result.requiredSubjectClipped).toBeGreaterThan(0);
+    expect(result.requiredTextClipped).toBeGreaterThan(0);
+    expect(result.focalFailures).toBeGreaterThan(0);
+  });
+
+  it("fails when a required visual annotation or probe is unavailable", async () => {
+    await expect(measureVisualReplay("/tmp/render.mp4", { cropPlan: null, samples: [], exec: vi.fn() })).rejects.toThrow("visual annotation");
+    await expect(measureVisualReplay("/tmp/render.mp4", { cropPlan: null, samples: [{ timestamp: 0, requiredSubjectBoxes: [], requiredTextBoxes: [], protectedExistingCaptionBoxes: [] }], exec: vi.fn(async () => { throw new Error("ffmpeg missing"); }) })).rejects.toThrow("visual probe");
   });
 });
