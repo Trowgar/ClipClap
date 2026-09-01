@@ -37,14 +37,16 @@ describe("immutable production release adapter", () => {
       inspectImage: vi.fn(async (ref) => ({ reference: ref, digest: parseImageReference(ref).digest, revision: ref === candidate ? commit : "b".repeat(40) })),
       inspectService: vi.fn(async () => ({ image: old })),
       publishRollback: vi.fn(async (bundle: import("../feedback-quality/release").ProductionRollbackBundle) => {
-        expect(bundle.rollback.command).toEqual(["docker", "compose", "--project-name", "clipclap", "-f", "compose.production.yml", "-f", "rollback.compose.yml", "up", "-d", "--force-recreate", "--no-build", "worker-analyze", "worker-render"]);
+        expect(bundle.rollback.command).toEqual(["docker", "compose", "--project-name", "clipclap", "-f", "rollback.compose.yml", "up", "-d", "--force-recreate", "--no-build", "worker-analyze", "worker-render"]);
         expect(bundle.rollback.previousImages?.map((item) => item.image)).toEqual([old, old]);
+        expect(bundle.override.toString("utf8")).toContain("env_file: ./production.env");
+        expect(bundle.override.toString("utf8")).toContain("source: ./feedback-quality-config.json");
         return { status: "committed" as const };
       }),
       exec: vi.fn(async (argv) => { calls.push([...argv]); return { exitCode: 0, stdout: "" }; }),
     };
     const rollback = await createProductionRollback(["worker-analyze", "worker-render"], { candidateCommitSha: commit }, dependencies);
-    expect(rollback.command).toEqual(["docker", "compose", "--project-name", "clipclap", "-f", "compose.production.yml", "-f", "rollback.compose.yml", "up", "-d", "--force-recreate", "--no-build", "worker-analyze", "worker-render"]);
+    expect(rollback.command).toEqual(["docker", "compose", "--project-name", "clipclap", "-f", "rollback.compose.yml", "up", "-d", "--force-recreate", "--no-build", "worker-analyze", "worker-render"]);
     expect(calls).toEqual([]);
   });
 

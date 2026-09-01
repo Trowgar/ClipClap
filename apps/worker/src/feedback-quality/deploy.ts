@@ -251,7 +251,7 @@ function validRollback(value: unknown, services: readonly WorkerService[]): valu
   for (const file of checked.composeFiles) composeArgs.push("-f", file);
   const commandPrefix = checked.previousImages === undefined
     ? ["docker", "compose", ...composeArgs, "up", "-d", "--force-recreate", "--no-build"]
-    : ["docker", "compose", "--project-name", checked.projectName!, ...composeArgs, "up", "-d", "--force-recreate", "--no-build"];
+    : ["docker", "compose", "--project-name", checked.projectName!, "-f", "rollback.compose.yml", "up", "-d", "--force-recreate", "--no-build"];
   if (checked.command.length <= commandPrefix.length || JSON.stringify(checked.command.slice(0, commandPrefix.length)) !== JSON.stringify(commandPrefix)) return false;
   const targetServices = checked.command.slice(commandPrefix.length);
   const indexes = targetServices.map((service) => SERVICE_ORDER.indexOf(service as WorkerService));
@@ -618,7 +618,6 @@ export async function deployWithQualityGate(request: DeployRequest, dependencies
         const environment = {
             ...Object.fromEntries((runtimeConfig?.envAllowlist ?? []).map((key) => [key, runtimeEnvironment[key]])),
             FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID: expected.rolloutInstanceId,
-            FEEDBACK_QUALITY_ENV_SNAPSHOT: canonicalJson(Object.fromEntries([...(runtimeConfig?.envAllowlist ?? [])].sort().map((key) => [key, runtimeEnvironment[key] ?? null]))),
             FEEDBACK_QUALITY_CONFIG_FILE: dependencies.configFileContainer ?? process.env.FEEDBACK_QUALITY_CONFIG_FILE_CONTAINER,
         };
         const spawnOperation = dependencies.spawnProduction
