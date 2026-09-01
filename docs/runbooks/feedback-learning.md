@@ -220,7 +220,7 @@ decisions, invalid reason files, queue checks, rollback preparation, health/cana
 event durability. Use it only under incident authority:
 
 ```bash
-npm run feedback-quality-deploy -w @clipclap/worker -- --decision <decision-id> --service worker-analyze --override-reason-file /trusted/private/override-reason.txt
+npm run feedback-quality-release -w @clipclap/worker -- --image registry.example/clipclap-worker@sha256:<immutable-digest> --project clipclap --decision <decision-id> --service worker-analyze --override-reason-file /trusted/private/override-reason.txt
 ```
 
 Never retry a command after `durability_uncertain` or `commit_indeterminate` without inspecting the
