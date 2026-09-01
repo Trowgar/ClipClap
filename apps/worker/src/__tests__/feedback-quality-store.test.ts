@@ -130,6 +130,24 @@ describe("feedback quality private store", () => {
     expect(await opened.sha256).toBe(sha256(content));
   });
 
+  it("restores private marker modes after streaming validation", async () => {
+    const root = await temporaryRoot();
+    const id = contentId("case", { restoreStreamingMarkers: true });
+    await publishBundle(bundle("case", id, { "case.json": "stream me" }), root);
+    const directory = join(root, "cases", id);
+    await chmod(join(directory, ".reservation"), 0o644);
+    await chmod(join(directory, ".committed"), 0o644);
+    const opened = await openBundleFile("case", id, "case.json", root);
+    expect(mode(await lstat(join(directory, ".reservation")))).toBe(0o600);
+    expect(mode(await lstat(join(directory, ".committed")))).toBe(0o600);
+    const reader = opened.stream.getReader();
+    await reader.read();
+    await reader.read();
+    reader.releaseLock();
+    await opened.close();
+    await expect(opened.sha256).resolves.toBe(sha256(Buffer.from("stream me")));
+  });
+
   it("refuses a sparse bundle file over the read cap before allocating it", async () => {
     const root = await temporaryRoot();
     const id = contentId("case", { oversizedRead: true });

@@ -513,6 +513,8 @@ export async function openBundleFile(kind: BundleKind, id: string, name: string,
     const size = stats.size;
     if (size !== manifest[name].size) throw safeError("integrity");
     const expectedSha256 = manifest[name].sha256;
+    await restoreOwnedMode(anchoredPath(directory, RESERVATION_MARKER));
+    await restoreOwnedMode(anchoredPath(directory, COMMIT_MARKER));
     const pinned = handle;
     handle = undefined;
     let closed = false;
