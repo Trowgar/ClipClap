@@ -80,7 +80,7 @@ describe("worker role config", () => {
     createStageWorker("render");
 
     expect(Worker).toHaveBeenCalledWith(
-      "video-render:quality-canary",
+      "video-render-quality-canary",
       expect.any(Function),
       expect.objectContaining({ concurrency: 1 })
     );

@@ -164,11 +164,11 @@ function installQualityRedisHarness(options: { loseOwnership?: boolean; countsHa
       return resume();
     }),
     add: vi.fn(() => {
-      if (name.endsWith(":quality-canary") && options.canaryAddRejects) return Promise.reject(new Error("connection reset"));
-      return options.canaryAddHangs && name.endsWith(":quality-canary") ? never() : Promise.resolve({ id: "added" });
+      if (name.endsWith("-quality-canary") && options.canaryAddRejects) return Promise.reject(new Error("connection reset"));
+      return options.canaryAddHangs && name.endsWith("-quality-canary") ? never() : Promise.resolve({ id: "added" });
     }),
     getJob: vi.fn(() => {
-      if (name.endsWith(":quality-canary") && (options.canaryAddHangs || options.canaryAddRejects || options.canaryWaitingAfterAdd)) {
+      if (name.endsWith("-quality-canary") && (options.canaryAddHangs || options.canaryAddRejects || options.canaryWaitingAfterAdd)) {
         canaryReads += 1;
         return Promise.resolve(options.canaryAppearsAfterFirstRead && canaryReads === 1 ? undefined : canaryJob);
       }
@@ -258,7 +258,7 @@ describe("feedback quality deployment", () => {
     const d = deps({ redisOperationTimeoutMs: 10, queueCounts: undefined, runCanary: undefined });
     const outcome = await boundedResult(deployWithQualityGate(request({ services: ["worker-analyze"] }), d));
     expect(outcome).toMatchObject({ status: "failed", reasons: ["canary_failed"] });
-    const queues = queueHarness.queues.filter((queue) => String(queue.name).endsWith(":quality-canary"));
+    const queues = queueHarness.queues.filter((queue) => String(queue.name).endsWith("-quality-canary"));
     const add = queues[0].add as ReturnType<typeof vi.fn>;
     const jobId = add.mock.calls[0][2].jobId;
     expect(jobId).toMatch(/^quality-canary-[0-9a-f-]{36}$/);
@@ -270,7 +270,7 @@ describe("feedback quality deployment", () => {
     const d = deps({ redisOperationTimeoutMs: 10, queueCounts: undefined, runCanary: undefined });
     const outcome = await boundedResult(deployWithQualityGate(request({ services: ["worker-analyze"] }), d), 250);
     expect(outcome).toMatchObject({ status: "failed", reasons: ["canary_failed"] });
-    const queues = queueHarness.queues.filter((queue) => String(queue.name).endsWith(":quality-canary"));
+    const queues = queueHarness.queues.filter((queue) => String(queue.name).endsWith("-quality-canary"));
     expect(queues.slice(1).some((queue) => (queue.getJob as ReturnType<typeof vi.fn>).mock.calls.length >= 2)).toBe(true);
   });
 

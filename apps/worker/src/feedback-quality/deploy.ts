@@ -9,6 +9,7 @@ import { Queue } from "bullmq";
 import { createQualityRedis } from "@clipclap/shared/lib/redis";
 import { deriveQualityCorpusDigest } from "./observe";
 import { effectiveConfigDigest, QUALITY_RUNNER_VERSION, readSecureConfig, validateSecureConfig } from "./config";
+import { qualityCanaryQueueName } from "./queue-name";
 import { GATE_REASON_ORDER, readGateDecision } from "./gate";
 import type { GateAggregate } from "./types";
 import {
@@ -459,7 +460,7 @@ async function cleanupCanaryAfterAddTimeout(queueName: string, jobId: string, ti
 
 async function defaultCanary(service: WorkerService, expected: Readonly<{ decisionId: string; commitSha: string; configSha256: string; runnerVersion: number; rolloutInstanceId: string }>, timeoutMs = 30_000, suppliedQueue?: Queue, operationTimeoutMs = DEFAULT_REDIS_OPERATION_TIMEOUT_MS, onTimeout?: () => void): Promise<void> {
   const stage = SERVICE_STAGE[service];
-  const queueName = suppliedQueue ? `${QUEUE_NAMES[stage]}:quality-canary` : QUEUE_NAMES[stage];
+  const queueName = suppliedQueue ? qualityCanaryQueueName(QUEUE_NAMES[stage]) : QUEUE_NAMES[stage];
   const redis = suppliedQueue ? undefined : createQualityRedis();
   const queue = suppliedQueue ?? new Queue(queueName, { connection: redis! });
   const nonce = randomUUID();
@@ -521,7 +522,7 @@ async function defaultQueueLease(queueName: string, timeoutMs = 30_000, operatio
   if (!Object.values(QUEUE_NAMES).includes(queueName as (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES])) throw new DeployError("queue_read_failed");
   const redis = createQualityRedis();
   const queue = new Queue(queueName, { connection: redis });
-  const canaryQueue = new Queue(`${queueName}:quality-canary`, { connection: redis });
+  const canaryQueue = new Queue(qualityCanaryQueueName(queueName), { connection: redis });
   const fenceKey = `clipclap:feedback-quality:fence:${queueName}`;
   const pauseOwnerKey = `clipclap:feedback-quality:pause-owner:${queueName}`;
   const fenceToken = randomUUID();

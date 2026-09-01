@@ -12,6 +12,7 @@ import { runFinalizeStage } from "./stages/finalize";
 import { runRenderStage } from "./stages/render";
 import { runTranscribeStage } from "./stages/transcribe";
 import { effectiveConfigDigest, QUALITY_RUNNER_VERSION, readSecureConfig, validateSecureConfig } from "./feedback-quality/config";
+import { qualityCanaryQueueName } from "./feedback-quality/queue-name";
 
 const DEFAULT_CONCURRENCY: Record<StageName, number> = {
   download: 4,
@@ -55,7 +56,7 @@ export function createStageWorker(
   // queue fenced during recreate/health/canary and prevents a canary from
   // competing with (or releasing) ordinary user jobs.
   const canaryWorker = new Worker(
-    `${getQueueNameForStage(role)}:quality-canary`,
+    qualityCanaryQueueName(getQueueNameForStage(role)),
     async (job) => {
       if (!isQualityCanary(job.data)) throw new Error("quality_canary_required");
       return runQualityCanary(role, job.data, startupRolloutInstanceId);
