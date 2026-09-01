@@ -19,6 +19,7 @@ import {
 } from "./store";
 
 const execFileAsync = promisify(execFile);
+const EXEC_OPTIONS = { shell: false, timeout: 30_000, maxBuffer: 1024 * 1024 } as const;
 const COMMIT = /^[0-9a-f]{40}$/;
 const HASH = /^sha256:[0-9a-f]{64}$/;
 const DECISION_ID = /^decision:sha256:[0-9a-f]{64}$/;
@@ -121,6 +122,8 @@ export type DeployDependencies = Readonly<{
   queueCounts?: (queueName: string) => Promise<QueueCounts>;
   acquireQueueLease?: (queueName: string) => Promise<QueueLease>;
   spawn?: (argv: readonly string[]) => Promise<ProcessResult>;
+  /** Production-only adapter: receives the immutable compose environment. */
+  spawnProduction?: (argv: readonly string[], environment: Readonly<Record<string, string | undefined>>) => Promise<ProcessResult>;
   waitForHealthy?: (service: WorkerService) => Promise<void>;
   runCanary?: (service: WorkerService, expected: Readonly<{ decisionId: string; commitSha: string; configSha256: string; runnerVersion: number; rolloutInstanceId: string }>) => Promise<void>;
   prepareRollback?: (services: readonly WorkerService[], decision: GateDeployDecision) => Promise<RollbackArtifact>;
@@ -139,6 +142,7 @@ export type RollbackArtifact = Readonly<{
   composeFiles: readonly string[];
   composeFilesSha256: string;
   services: readonly WorkerService[];
+  previousImages?: readonly Readonly<{ service: WorkerService; image: string; digest: string; revision: string }>[];
 }>;
 
 export type DeployResult = Readonly<{
@@ -149,7 +153,7 @@ export type DeployResult = Readonly<{
   services: readonly WorkerService[];
   recreatedServices: readonly WorkerService[];
   reasons: readonly DeployReason[];
-  rollbackCommand?: string;
+  rollbackArgv?: readonly string[];
   rollbackArtifactId?: string;
 }>;
 
@@ -224,13 +228,18 @@ function validServices(requested: readonly string[]): requested is readonly Work
 }
 
 function result(request: DeployRequest, services: readonly WorkerService[], reasons: readonly DeployReason[], recreated: readonly WorkerService[] = [], overridden = false, rollback?: RollbackArtifact): DeployResult {
-  return Object.freeze({ status: "failed" as const, verdict: "fail" as const, decisionId: request.decisionId, overridden, services, recreatedServices: recreated, reasons: [...new Set(reasons)], rollbackCommand: rollback?.command.join(" ") ?? (recreated.length ? `docker compose up -d --force-recreate ${recreated.join(" ")}` : undefined), rollbackArtifactId: rollback?.artifactId });
+  return Object.freeze({ status: "failed" as const, verdict: "fail" as const, decisionId: request.decisionId, overridden, services, recreatedServices: recreated, reasons: [...new Set(reasons)], ...(rollback ? { rollbackArgv: [...rollback.command], rollbackArtifactId: rollback.artifactId } : {}) });
 }
 
 function validRollback(value: unknown, services: readonly WorkerService[]): value is RollbackArtifact {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const item = value as Record<string, unknown>;
-  const initialValid = ownKeys(item, ["schemaVersion", "artifactId", "createdAt", "command", "previousCommitSha", "previousImageRef", "previousImageDigest", "composeFiles", "composeFilesSha256", "services"]) && item.schemaVersion === 1 && typeof item.artifactId === "string" && /^rollback:sha256:[0-9a-f]{64}$/.test(item.artifactId) && utc(item.createdAt) && typeof item.previousCommitSha === "string" && COMMIT.test(item.previousCommitSha) && typeof item.previousImageDigest === "string" && HASH.test(item.previousImageDigest) && typeof item.previousImageRef === "string" && item.previousImageRef === `clipclap-worker@${item.previousImageDigest}` && Array.isArray(item.composeFiles) && item.composeFiles.length > 0 && !item.composeFiles.some((file) => typeof file !== "string" || file.length === 0 || file.startsWith("/") || file.includes("\\") || file.includes("\0") || file.split("/").some((segment) => segment === ".." || segment === "") || /[\r\n]/.test(file)) && typeof item.composeFilesSha256 === "string" && HASH.test(item.composeFilesSha256) && Array.isArray(item.services) && !item.services.some((service) => !SERVICE_ORDER.includes(service as WorkerService)) && Array.isArray(item.command) && item.command.length >= 6 && !item.command.some((part) => typeof part !== "string" || part.length === 0 || /[\0\n\r]/.test(part));
+  const standardKeys = ["schemaVersion", "artifactId", "createdAt", "command", "previousCommitSha", "previousImageRef", "previousImageDigest", "composeFiles", "composeFilesSha256", "services"];
+  const keys = Reflect.ownKeys(item);
+  const hasPreviousImages = Object.prototype.hasOwnProperty.call(item, "previousImages");
+  const exactKeys = keys.length === standardKeys.length + (hasPreviousImages ? 1 : 0) && keys.every((key) => typeof key === "string" && [...standardKeys, "previousImages"].includes(key));
+  const oldImagesValid = !hasPreviousImages || (Array.isArray(item.previousImages) && item.previousImages.length === (item.services as unknown[]).length && item.previousImages.every((value) => plain(value) && ownKeys(value, ["service", "image", "digest", "revision"]) && typeof value.service === "string" && SERVICE_ORDER.includes(value.service as WorkerService) && typeof value.image === "string" && value.image.endsWith(`@${value.digest}`) && typeof value.digest === "string" && HASH.test(value.digest) && typeof value.revision === "string" && COMMIT.test(value.revision)));
+  const initialValid = exactKeys && oldImagesValid && item.schemaVersion === 1 && typeof item.artifactId === "string" && /^rollback:sha256:[0-9a-f]{64}$/.test(item.artifactId) && utc(item.createdAt) && typeof item.previousCommitSha === "string" && COMMIT.test(item.previousCommitSha) && typeof item.previousImageDigest === "string" && HASH.test(item.previousImageDigest) && typeof item.previousImageRef === "string" && item.previousImageRef.endsWith(`@${item.previousImageDigest}`) && Array.isArray(item.composeFiles) && item.composeFiles.length > 0 && !item.composeFiles.some((file) => typeof file !== "string" || file.length === 0 || file.startsWith("/") || file.includes("\\") || file.includes("\0") || file.split("/").some((segment) => segment === ".." || segment === "") || /[\r\n]/.test(file)) && typeof item.composeFilesSha256 === "string" && HASH.test(item.composeFilesSha256) && Array.isArray(item.services) && !item.services.some((service) => !SERVICE_ORDER.includes(service as WorkerService)) && Array.isArray(item.command) && item.command.length >= 6 && !item.command.some((part) => typeof part !== "string" || part.length === 0 || /[\0\n\r]/.test(part));
   if (!initialValid) return false;
   const checked = item as unknown as RollbackArtifact;
   const composeArgs: string[] = [];
@@ -239,7 +248,7 @@ function validRollback(value: unknown, services: readonly WorkerService[]): valu
   if (checked.command.length <= commandPrefix.length || JSON.stringify(checked.command.slice(0, commandPrefix.length)) !== JSON.stringify(commandPrefix)) return false;
   const targetServices = checked.command.slice(commandPrefix.length);
   const indexes = targetServices.map((service) => SERVICE_ORDER.indexOf(service as WorkerService));
-  const body = { createdAt: checked.createdAt, command: checked.command, previousCommitSha: checked.previousCommitSha, previousImageRef: checked.previousImageRef, previousImageDigest: checked.previousImageDigest, composeFiles: checked.composeFiles, composeFilesSha256: checked.composeFilesSha256, services: checked.services };
+  const body = { createdAt: checked.createdAt, command: checked.command, previousCommitSha: checked.previousCommitSha, previousImageRef: checked.previousImageRef, previousImageDigest: checked.previousImageDigest, composeFiles: checked.composeFiles, composeFilesSha256: checked.composeFilesSha256, services: checked.services, ...(checked.previousImages === undefined ? {} : { previousImages: checked.previousImages }) };
   const valid = targetServices.length > 0 && indexes.every((index) => index >= 0) && indexes.every((index, position) => position === 0 || index > indexes[position - 1]) && new Set(targetServices).size === targetServices.length && JSON.stringify(checked.services) === JSON.stringify(services) && sha256(canonicalJson(body)) === checked.artifactId.slice("rollback:".length) && JSON.stringify(targetServices) === JSON.stringify(services);
   return valid;
 }
@@ -276,8 +285,8 @@ async function defaultReadDecision(id: string, root: string): Promise<GateDeploy
 
 async function defaultGitState(): Promise<GitState> {
   try {
-    const head = (await execFileAsync("git", ["rev-parse", "HEAD"])).stdout.trim();
-    const dirtyTracked = Boolean((await execFileAsync("git", ["status", "--porcelain", "--untracked-files=no"])).stdout.trim());
+    const head = (await execFileAsync("git", ["rev-parse", "HEAD"], EXEC_OPTIONS)).stdout.trim();
+    const dirtyTracked = Boolean((await execFileAsync("git", ["status", "--porcelain", "--untracked-files=no"], EXEC_OPTIONS)).stdout.trim());
     if (!COMMIT.test(head)) throw new Error();
     return { head, dirtyTracked };
   } catch { throw new DeployError("binding_mismatch"); }
@@ -315,16 +324,16 @@ async function defaultCanary(service: WorkerService, expected: Readonly<{ decisi
   const stage = SERVICE_STAGE[service];
   const queue = suppliedQueue ?? new Queue(QUEUE_NAMES[stage], { connection: getRedis() });
   const nonce = randomUUID();
+  let job: Awaited<ReturnType<typeof queue.add>> | undefined;
   try {
-    const job = await queue.add("feedback-quality-canary", { kind: "feedback-quality-canary", nonce, decisionId: expected.decisionId, rolloutInstanceId: expected.rolloutInstanceId }, { attempts: 1, priority: 0, removeOnComplete: false, removeOnFail: false });
+    job = await queue.add("feedback-quality-canary", { kind: "feedback-quality-canary", nonce, decisionId: expected.decisionId, rolloutInstanceId: expected.rolloutInstanceId }, { attempts: 1, priority: 0, removeOnComplete: false, removeOnFail: false });
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const current = await queue.getJob(job.id!);
       const state = await current?.getState();
       if (state === "completed") {
         const value = current?.returnvalue as Record<string, unknown> | undefined;
-        if (!value || value.kind !== "feedback-quality-canary" || value.nonce !== nonce || value.rolloutInstanceId !== expected.rolloutInstanceId || value.role !== stage || value.configSha256 !== expected.configSha256 || value.runnerVersion !== expected.runnerVersion || value.commitSha !== expected.commitSha) throw new DeployError("canary_failed");
-        await current?.remove();
+        if (!value || value.kind !== "feedback-quality-canary" || value.nonce !== nonce || value.decisionId !== expected.decisionId || value.rolloutInstanceId !== expected.rolloutInstanceId || value.role !== stage || value.configSha256 !== expected.configSha256 || value.runnerVersion !== expected.runnerVersion || value.commitSha !== expected.commitSha) throw new DeployError("canary_failed");
         return;
       }
       if (state === "failed") throw new DeployError("canary_failed");
@@ -334,7 +343,12 @@ async function defaultCanary(service: WorkerService, expected: Readonly<{ decisi
   } catch (error) {
     if (error instanceof DeployError) throw error;
     throw new DeployError("canary_failed");
-  } finally { if (!suppliedQueue) await queue.close().catch(() => undefined); }
+  } finally {
+    // Control jobs contain rollout bindings. They are not audit records and
+    // must not linger on either a success or a failed attestation.
+    try { const current = await queue.getJob(job?.id ?? ""); await current?.remove(); } catch { /* best-effort cleanup */ }
+    if (!suppliedQueue) await queue.close().catch(() => undefined);
+  }
 }
 
 async function defaultQueueLease(queueName: string, timeoutMs = 30_000): Promise<QueueLease> {
@@ -456,7 +470,7 @@ async function legacyQueueLease(queueName: string, dependencies: DeployDependenc
 
 async function defaultSpawn(argv: readonly string[], options?: SpawnOptions): Promise<ProcessResult> {
   if (argv.length !== 6 || argv[0] !== "docker" || argv[1] !== "compose" || argv[2] !== "up" || argv[3] !== "-d" || argv[4] !== "--force-recreate" || !SERVICE_ORDER.includes(argv[5] as WorkerService)) throw new DeployError("invalid_request");
-  try { await execFileAsync(argv[0], argv.slice(1), { shell: false, env: options ? { ...process.env, ...options.env } : process.env }); return { exitCode: 0 }; }
+  try { await execFileAsync(argv[0], argv.slice(1), { ...EXEC_OPTIONS, env: options ? { ...process.env, ...options.env } : process.env }); return { exitCode: 0 }; }
   catch { return { exitCode: 1 }; }
 }
 
@@ -464,7 +478,7 @@ async function defaultHealth(service: WorkerService): Promise<void> {
   const deadline = Date.now() + 30_000;
   for (;;) {
     try {
-      const result = await execFileAsync("docker", ["compose", "ps", "--format", "json", "--status", "running", service], { shell: false, timeout: 5_000 });
+      const result = await execFileAsync("docker", ["compose", "ps", "--format", "json", "--status", "running", service], { shell: false, timeout: 5_000, maxBuffer: 1024 * 1024 });
       const output = String(result.stdout ?? "");
       if (output.includes(service) && !/"Health"\s*:\s*"unhealthy"|health[=: ]+unhealthy/i.test(output)) return;
     } catch { /* bounded retry */ }
@@ -557,12 +571,21 @@ export async function deployWithQualityGate(request: DeployRequest, dependencies
     if (persisted.status !== "committed" && persisted.status !== "noop") return result(request, services, ["event_failed"], [], overridden);
   } catch (error) { return result(request, services, [error instanceof DeployError ? error.code : "rollback_unavailable"], [], overridden); }
   const recreated: WorkerService[] = [];
+  const auditedFailure = async (failure: DeployReason, phase: string, leaseRecovered: boolean): Promise<DeployResult> => {
+    const event = { schemaVersion: 1, type: "quality_rollout_failed", eventId: randomUUID(), decisionId: request.decisionId, operator: dependencies.operator ?? process.env.USER ?? "unknown", at: (dependencies.now?.() ?? new Date()).toISOString(), services: [...services], recreatedServices: [...recreated], phase, reason: failure, leaseRecovered, rollbackArtifactId: rollback.artifactId };
+    try {
+      const committed = await (dependencies.appendEvent ?? appendDefault)(event, root);
+      if (committed.status !== "committed" && committed.status !== "noop") return result(request, services, ["event_failed"], recreated, overridden, rollback);
+    } catch { return result(request, services, ["event_failed"], recreated, overridden, rollback); }
+    return result(request, services, [failure], recreated, overridden, rollback);
+  };
   const spawn = dependencies.spawn;
   const health = dependencies.waitForHealthy ?? defaultHealth;
   for (const service of services) {
     const expected = { decisionId: decision.decisionId, commitSha: decision.candidateCommitSha, configSha256: decision.configSha256, runnerVersion: decision.runnerVersion, rolloutInstanceId: randomUUID() };
     let lease: QueueLease | undefined;
     let failure: DeployReason | undefined;
+    let leaseRecovered = false;
     let phase: "queue" | "spawn" | "health" | "canary" = "queue";
     try {
       const queueName = QUEUE_NAMES[SERVICE_STAGE[service]];
@@ -585,13 +608,15 @@ export async function deployWithQualityGate(request: DeployRequest, dependencies
       } while (true);
       if (!failure) {
         const argv = ["docker", "compose", "up", "-d", "--force-recreate", service] as const;
-        const spawnOperation = dependencies.spawn ?? ((args: readonly string[]) => defaultSpawn(args, { env: {
+        const environment = {
             ...Object.fromEntries((runtimeConfig?.envAllowlist ?? []).map((key) => [key, runtimeEnvironment[key]])),
-            GIT_SHA: decision.candidateCommitSha,
             FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID: expected.rolloutInstanceId,
             FEEDBACK_QUALITY_ENV_SNAPSHOT: canonicalJson(Object.fromEntries([...(runtimeConfig?.envAllowlist ?? [])].sort().map((key) => [key, runtimeEnvironment[key] ?? null]))),
             FEEDBACK_QUALITY_CONFIG_FILE: dependencies.configFileContainer ?? process.env.FEEDBACK_QUALITY_CONFIG_FILE_CONTAINER,
-        } }));
+        };
+        const spawnOperation = dependencies.spawnProduction
+          ? (args: readonly string[]) => dependencies.spawnProduction!(args, environment)
+          : dependencies.spawn ?? ((args: readonly string[]) => defaultSpawn(args, { env: environment }));
         phase = "spawn";
         if (lease.assertOwnership) await lease.assertOwnership().catch(() => { throw new DeployError("queue_read_failed"); });
         const commandResult = await spawnOperation(argv);
@@ -616,18 +641,18 @@ export async function deployWithQualityGate(request: DeployRequest, dependencies
       else failure = "queue_read_failed";
     } finally {
       if (lease) {
-        try { await lease.resume(); }
+        try { await lease.resume(); leaseRecovered = true; }
         catch { failure ??= "queue_read_failed"; }
       }
     }
-    if (failure) return result(request, services, [failure], recreated, overridden, rollback);
+    if (failure) return auditedFailure(failure, phase, leaseRecovered);
   }
   const event = { schemaVersion: 1, type: "quality_rollout", eventId: randomUUID(), decisionId: request.decisionId, operator: dependencies.operator ?? process.env.USER ?? "unknown", at: now.toISOString(), services: [...services], recreatedServices: [...recreated], overridden, rollbackArtifactId: rollback.artifactId, rollbackCommand: [...rollback.command], actualCommitSha: actualCommitSha ?? decision.candidateCommitSha, actualConfigSha256: actualConfigSha256 ?? decision.configSha256, actualCorpusSha256: actualCorpusSha256 ?? decision.corpusSha256, actualRunnerVersion: actualRunnerVersion ?? decision.runnerVersion };
   try {
     const committed = await (dependencies.appendEvent ?? appendDefault)(event, root);
     if (committed.status !== "committed" && committed.status !== "noop") return result(request, services, ["event_failed"], recreated, overridden, rollback);
   } catch { return result(request, services, ["event_failed"], recreated, overridden, rollback); }
-  return Object.freeze({ status: "deployed" as const, verdict: "pass" as const, decisionId: request.decisionId, overridden, services: [...services], recreatedServices: [...recreated], reasons: [] as const, rollbackArtifactId: rollback.artifactId, rollbackCommand: rollback.command.join(" ") });
+  return Object.freeze({ status: "deployed" as const, verdict: "pass" as const, decisionId: request.decisionId, overridden, services: [...services], recreatedServices: [...recreated], reasons: [] as const, rollbackArtifactId: rollback.artifactId, rollbackArgv: [...rollback.command] });
 }
 
 export { SERVICE_ORDER as ALLOWED_WORKER_SERVICES };

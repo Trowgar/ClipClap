@@ -65,10 +65,11 @@ export type GateDecision = Readonly<{
   reasons: MachineReason[];
 }>;
 
+type GateBundleReader = (kind: "observation" | "decision", id: string, root?: string) => ReturnType<typeof readBundle>;
 export type GateDependencies = Readonly<{
   root?: string;
   now?: () => Date;
-  readBundle?: typeof readBundle;
+  readBundle?: GateBundleReader;
   publishDecision?: (decision: GateDecision, report: string, root: string) => Promise<CommitResult>;
   /** Alias kept for thin test/host adapters; production uses publishDecision. */
   publish?: (decision: GateDecision, report: string, root: string) => Promise<CommitResult>;
@@ -99,7 +100,7 @@ const zeroObservation = (id: string, set: "eval" | "holdout", mode: "baseline" |
 async function readStoredObservation(
   id: string,
   root: string,
-  readBundleFn: typeof readBundle,
+  readBundleFn: GateBundleReader,
 ): Promise<{ observation: QualityObservation; attempts: readonly ObservationAttemptRecord[] }> {
   if (!/^observation:sha256:[0-9a-f]{64}$/.test(id)) throw new GateError("observation_invalid");
   let files: ReadonlyMap<string, Uint8Array>;

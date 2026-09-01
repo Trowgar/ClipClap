@@ -50,6 +50,7 @@ describe("worker role config", () => {
     delete process.env.WORKER_CONCURRENCY;
     delete process.env.RENDER_CONCURRENCY;
     delete process.env.DOWNLOAD_CONCURRENCY;
+    delete process.env.CLIPCLAP_OCI_REVISION;
   });
 
   it("uses CPU-safe concurrency for render", () => {
@@ -108,9 +109,10 @@ describe("worker role config", () => {
 
   it("returns the rollout instance from the dedicated canary worker", async () => {
     process.env.FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID = "instance";
+    process.env.CLIPCLAP_OCI_REVISION = "a".repeat(40);
     createStageWorker("finalize");
     const controlProcessor = (Worker as unknown as { mock: { calls: unknown[][] } }).mock.calls[1][1] as (job: unknown) => Promise<Record<string, unknown>>;
-    await expect(controlProcessor({ data: { kind: "feedback-quality-canary", nonce: "n", decisionId: "d", rolloutInstanceId: "instance" } })).resolves.toMatchObject({ rolloutInstanceId: "instance", role: "finalize" });
+    await expect(controlProcessor({ data: { kind: "feedback-quality-canary", nonce: "n", decisionId: "d", rolloutInstanceId: "instance" } })).resolves.toMatchObject({ rolloutInstanceId: "instance", role: "finalize", commitSha: "a".repeat(40) });
   });
 
   it("rejects a canary from an older worker instance", async () => {

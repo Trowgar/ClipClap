@@ -20,7 +20,9 @@
     "feedback-quality-promote": "tsx src/scripts/feedback-quality-promote.ts",
     "feedback-quality-observe": "tsx src/scripts/feedback-quality-observe.ts",
     "feedback-quality-gate": "tsx src/scripts/feedback-quality-gate.ts",
-    "feedback-quality-deploy": "tsx src/scripts/feedback-quality-deploy.ts"
+    "feedback-quality-deploy": "tsx src/scripts/feedback-quality-deploy.ts",
+    "feedback-quality-release": "tsx src/scripts/feedback-quality-release.ts",
+    "feedback-quality-rollback": "tsx src/scripts/feedback-quality-rollback.ts"
   },
   "dependencies": {
     "@clipclap/shared": "*",

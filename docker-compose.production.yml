@@ -1,0 +1,72 @@
+# Immutable worker rollout only. The release adapter invokes this file with an
+# image reference of the form repository@sha256:..., never a tag. It has no
+# build stanza and no source bind mounts.
+x-worker-production: &worker-production
+  image: ${CLIPCLAP_WORKER_IMAGE:?set repository@sha256 digest}
+  env_file: ${CLIPCLAP_PRODUCTION_ENV_FILE:?set private production env file}
+  restart: unless-stopped
+  environment:
+    NODE_ENV: production
+    FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json
+    FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID: ${FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID:?release adapter only}
+    FEEDBACK_QUALITY_ENV_SNAPSHOT: ${FEEDBACK_QUALITY_ENV_SNAPSHOT:?release adapter only}
+  volumes:
+    - type: bind
+      source: ${FEEDBACK_QUALITY_CONFIG_HOST:?private 0600 config file}
+      target: /run/clipclap/feedback-quality-config.json
+      read_only: true
+
+services:
+  worker-download:
+    <<: *worker-production
+    environment:
+      NODE_ENV: production
+      WORKER_ROLE: download
+      DOWNLOAD_CONCURRENCY: "4"
+      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json
+      FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID: ${FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID:?release adapter only}
+      FEEDBACK_QUALITY_ENV_SNAPSHOT: ${FEEDBACK_QUALITY_ENV_SNAPSHOT:?release adapter only}
+  worker-transcribe:
+    <<: *worker-production
+    environment:
+      NODE_ENV: production
+      WORKER_ROLE: transcribe
+      TRANSCRIBE_CONCURRENCY: "2"
+      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json
+      FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID: ${FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID:?release adapter only}
+      FEEDBACK_QUALITY_ENV_SNAPSHOT: ${FEEDBACK_QUALITY_ENV_SNAPSHOT:?release adapter only}
+  worker-analyze:
+    <<: *worker-production
+    environment:
+      NODE_ENV: production
+      WORKER_ROLE: analyze
+      ANALYZE_CONCURRENCY: "5"
+      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json
+      FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID: ${FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID:?release adapter only}
+      FEEDBACK_QUALITY_ENV_SNAPSHOT: ${FEEDBACK_QUALITY_ENV_SNAPSHOT:?release adapter only}
+  worker-render:
+    <<: *worker-production
+    environment:
+      NODE_ENV: production
+      WORKER_ROLE: render
+      RENDER_CONCURRENCY: "1"
+      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json
+      FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID: ${FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID:?release adapter only}
+      FEEDBACK_QUALITY_ENV_SNAPSHOT: ${FEEDBACK_QUALITY_ENV_SNAPSHOT:?release adapter only}
+  worker-finalize:
+    <<: *worker-production
+    environment:
+      NODE_ENV: production
+      WORKER_ROLE: finalize
+      FINALIZE_CONCURRENCY: "3"
+      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json
+      FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID: ${FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID:?release adapter only}
+      FEEDBACK_QUALITY_ENV_SNAPSHOT: ${FEEDBACK_QUALITY_ENV_SNAPSHOT:?release adapter only}
+
+# This is deliberately the already-running ClipClap network. The release file
+# owns worker containers only, so it cannot build, restart, or accidentally
+# recreate database/Redis/source services.
+networks:
+  default:
+    external: true
+    name: ${CLIPCLAP_PRODUCTION_NETWORK:?set existing ClipClap compose network}

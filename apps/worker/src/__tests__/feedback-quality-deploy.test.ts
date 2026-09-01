@@ -78,7 +78,7 @@ describe("feedback quality deployment", () => {
     expect(d.queueCounts).toHaveBeenCalledWith("video-render");
     expect(d.appendEvent).toHaveBeenCalledTimes(2);
     expect(result.rollbackArtifactId).toContain("rollback:");
-    expect(result.rollbackCommand).toContain("docker compose -f rollback.compose.yml up -d --force-recreate --no-build");
+    expect(result.rollbackArgv).toEqual(expect.arrayContaining(["docker", "compose", "-f", "rollback.compose.yml", "--no-build"]));
   });
 
   it("fails before any mutation when no immutable rollback artifact is available", async () => {
@@ -222,8 +222,9 @@ describe("feedback quality deployment", () => {
     expect(result.recreatedServices).toEqual(["worker-analyze", "worker-render"]);
     expect(d.spawn).toHaveBeenCalledTimes(2);
     expect(d.runCanary).toHaveBeenCalledTimes(1);
-    expect(d.appendEvent).toHaveBeenCalledTimes(1);
-    expect(result.rollbackCommand).toContain("worker-analyze");
+    expect(d.appendEvent).toHaveBeenCalledTimes(2);
+    expect((d.appendEvent as ReturnType<typeof vi.fn>).mock.calls[1][0]).toMatchObject({ type: "quality_rollout_failed", phase: "health", recreatedServices: ["worker-analyze", "worker-render"], leaseRecovered: true });
+    expect(result.rollbackArgv).toContain("worker-analyze");
     expect(JSON.stringify(result)).not.toContain("private health detail");
   });
 

@@ -21,8 +21,8 @@ const FILE_MODE = 0o600;
 const COMMIT_MARKER = ".committed";
 const RESERVATION_MARKER = ".reservation";
 const COMMIT_MARKER_BYTES = Buffer.from("clipclap-feedback-quality-committed-v1\n", "utf8");
-const BUNDLE_NAMES = ["case", "observation", "decision"] as const;
-const PRIVATE_FILE_NAMES = new Set(["case.json", "transcript.json", "evidence.mp4", "source.mp4", "source-or-evidence.mp4", "recorded-responses.json", "manifest.json", "results.jsonl", "decision.json", "report.md"]);
+const BUNDLE_NAMES = ["case", "observation", "decision", "rollback"] as const;
+const PRIVATE_FILE_NAMES = new Set(["case.json", "transcript.json", "evidence.mp4", "source.mp4", "source-or-evidence.mp4", "recorded-responses.json", "manifest.json", "results.jsonl", "decision.json", "report.md", "rollback.json", "compose.production.yml", "rollback.compose.yml"]);
 const MAX_PRIVATE_METADATA_BYTES = 8 * 1024;
 export const MAX_READ_BUNDLE_FILE_BYTES = 256 * 1024 * 1024;
 export const MAX_READ_BUNDLE_TOTAL_BYTES = 512 * 1024 * 1024;
@@ -39,6 +39,7 @@ export type QualityPaths = Readonly<{
   casesDir: string;
   observationsDir: string;
   decisionsDir: string;
+  rollbacksDir: string;
 }>;
 
 export type QualityLabelEvent = Readonly<{
@@ -155,6 +156,7 @@ function ownedPaths(root: string): QualityPaths {
     casesDir: join(root, "cases"),
     observationsDir: join(root, "observations"),
     decisionsDir: join(root, "decisions"),
+    rollbacksDir: join(root, "rollbacks"),
   });
 }
 
@@ -240,7 +242,7 @@ export async function ensureQualityTree(root = DEFAULT_QUALITY_ROOT): Promise<Qu
   await assertNoSymlinkComponents(checkedRoot);
   const paths = ownedPaths(checkedRoot);
   await ensureDirectory(paths.root);
-  await Promise.all([paths.ledgerDir, paths.casesDir, paths.observationsDir, paths.decisionsDir].map(ensureDirectory));
+  await Promise.all([paths.ledgerDir, paths.casesDir, paths.observationsDir, paths.decisionsDir, paths.rollbacksDir].map(ensureDirectory));
   return paths;
 }
 
@@ -249,7 +251,7 @@ function contentBytes(value: unknown): Buffer {
   catch { throw safeError("invalid_input"); }
 }
 
-export function contentId(prefix: "case" | "observation" | "decision", value: unknown): string {
+export function contentId(prefix: "case" | "observation" | "decision" | "rollback", value: unknown): string {
   if (!BUNDLE_NAMES.includes(prefix)) throw safeError("invalid_input");
   const canonical = contentBytes(value);
   return `${prefix}:${sha256(canonical)}`;

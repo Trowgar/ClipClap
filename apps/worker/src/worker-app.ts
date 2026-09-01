@@ -99,7 +99,9 @@ async function runQualityCanary(role: StageName, job: QualityCanaryJob, startupR
     const environment = readQualityEnvironmentSnapshot(config.envAllowlist);
     configSha256 = effectiveConfigDigest(config, environment);
   } catch { /* empty binding deliberately fails deploy verification */ }
-  const commitSha = process.env.GIT_SHA ?? "";
+  // This value is baked at image build time from the OCI revision label. The
+  // release adapter never injects a mutable Git SHA into a worker container.
+  const commitSha = process.env.CLIPCLAP_OCI_REVISION ?? "";
   return { kind: "feedback-quality-canary", nonce: job.nonce, decisionId: job.decisionId, rolloutInstanceId: startupRolloutInstanceId, role, commitSha, configSha256, runnerVersion: QUALITY_RUNNER_VERSION };
 }
 
