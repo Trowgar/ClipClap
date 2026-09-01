@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import { contentId } from "../feedback-quality/store";
-import { deployWithQualityGate, type DeployDependencies, type DeployRequest, type GateDeployDecision } from "../feedback-quality/deploy";
+import { deployWithQualityGate, type DeployDependencies, type DeployRequest, type GateDeployDecision, type WorkerService } from "../feedback-quality/deploy";
+import { effectiveConfigDigest } from "../feedback-quality/config";
 
 const hash = (seed: string) => sha256(seed);
 const commit = "a".repeat(40);
@@ -17,7 +18,7 @@ function decision(overrides: Partial<GateDeployDecision> = {}): GateDeployDecisi
     candidateCommitSha: commit,
     configSha256: hash("config"),
     corpusSha256: hash("corpus"),
-    runnerVersion: 1,
+    runnerVersion: 2,
     baselineEvalObservationId: `observation:${hash("be")}`,
     candidateEvalObservationId: `observation:${hash("ce")}`,
     baselineHoldoutObservationId: `observation:${hash("bh")}`,
@@ -37,6 +38,12 @@ function request(overrides: Partial<DeployRequest> = {}): DeployRequest {
   return { decisionId: decision().decisionId, services: ["worker-analyze", "worker-render"], ...overrides };
 }
 
+function rollbackArtifact(services: readonly WorkerService[] = ["worker-analyze", "worker-render"]) {
+  const composeFiles = ["rollback.compose.yml"];
+  const body = { createdAt: "2026-09-01T12:00:00.000Z", command: ["docker", "compose", "-f", ...composeFiles, "up", "-d", "--force-recreate", "--no-build", ...services], previousCommitSha: "b".repeat(40), previousImageRef: `clipclap-worker@${hash("image")}`, previousImageDigest: hash("image"), composeFiles, composeFilesSha256: hash("compose"), services };
+  return { schemaVersion: 1 as const, artifactId: `rollback:${sha256(canonicalJson(body))}`, ...body };
+}
+
 function deps(overrides: Partial<DeployDependencies> = {}): DeployDependencies {
   const item = decision();
   return {
@@ -51,7 +58,7 @@ function deps(overrides: Partial<DeployDependencies> = {}): DeployDependencies {
     spawn: vi.fn(async () => ({ exitCode: 0 })),
     waitForHealthy: vi.fn(async () => undefined),
     runCanary: vi.fn(async () => undefined),
-    prepareRollback: vi.fn(async () => ({ schemaVersion: 1 as const, artifactId: `rollback:${hash("artifact")}`, createdAt: "2026-09-01T12:00:00.000Z", immutable: true as const, verified: true as const, command: ["docker", "compose", "up", "-d", "--force-recreate", "worker-analyze", "worker-render"], previousCommitSha: "b".repeat(40) })),
+    prepareRollback: vi.fn(async (services) => rollbackArtifact(services)),
     appendEvent: vi.fn(async () => ({ status: "committed" as const })),
     ...overrides,
   };
@@ -71,7 +78,7 @@ describe("feedback quality deployment", () => {
     expect(d.queueCounts).toHaveBeenCalledWith("video-render");
     expect(d.appendEvent).toHaveBeenCalledTimes(2);
     expect(result.rollbackArtifactId).toContain("rollback:");
-    expect(result.rollbackCommand).toContain("docker compose up -d --force-recreate");
+    expect(result.rollbackCommand).toContain("docker compose -f rollback.compose.yml up -d --force-recreate --no-build");
   });
 
   it("fails before any mutation when no immutable rollback artifact is available", async () => {
@@ -80,6 +87,19 @@ describe("feedback quality deployment", () => {
     expect(result.status).toBe("failed");
     expect(result.reasons).toContain("rollback_unavailable");
     expect(d.spawn).not.toHaveBeenCalled();
+  });
+
+  it("rejects a fake rollback artifact, unsafe argv, or mutable previous reference", async () => {
+    for (const artifact of [
+      { schemaVersion: 1, artifactId: "fake", createdAt: "2026-09-01T12:00:00.000Z", immutable: false, verified: true, command: ["docker", "compose", "up", "-d", "--force-recreate", "worker-analyze"], previousCommitSha: "b".repeat(40) },
+      { schemaVersion: 1, artifactId: "fake", createdAt: "2026-09-01T12:00:00.000Z", immutable: true, verified: true, command: ["sh", "-c", "docker compose up -d --force-recreate worker-analyze"], previousCommitSha: "b".repeat(40) },
+    ]) {
+      const d = deps({ prepareRollback: vi.fn(async () => artifact as never) });
+      const result = await deployWithQualityGate(request({ services: ["worker-analyze"] }), d);
+      expect(result.status).toBe("failed");
+      expect(result.reasons).toContain("rollback_unavailable");
+      expect(d.spawn).not.toHaveBeenCalled();
+    }
   });
 
   it("uses the private corpus/config adapters and ignores legacy digest environment variables", async () => {
@@ -91,7 +111,7 @@ describe("feedback quality deployment", () => {
       const d = deps({
         configSha256: undefined,
         corpusSha256: undefined,
-        effectiveConfig: vi.fn(async () => ({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), envAllowlist: [], engine: {} })),
+        effectiveConfig: vi.fn(async () => ({ schemaVersion: 1, runnerVersion: 2, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), envAllowlist: [], engine: {} })),
         root: "/private/corpus",
       });
       const result = await deployWithQualityGate(request(), d);
@@ -134,6 +154,34 @@ describe("feedback quality deployment", () => {
     expect(d.spawn).not.toHaveBeenCalled();
   });
 
+  it("fences producers with a lease, drains active work, and always resumes after canary", async () => {
+    const events: string[] = [];
+    let reads = 0;
+    const d = deps({
+      acquireQueueLease: vi.fn(async () => ({
+        drainActive: true,
+        pause: vi.fn(async () => { events.push("pause"); }),
+        counts: vi.fn(async () => { events.push("counts"); reads += 1; return { active: reads === 1 ? 1 : 0, waiting: 0, delayed: 0 }; }),
+        runCanary: vi.fn(async () => { events.push("canary"); }),
+        resume: vi.fn(async () => { events.push("resume"); }),
+      })),
+      spawn: vi.fn(async () => { events.push("spawn"); return { exitCode: 0 }; }),
+      waitForHealthy: vi.fn(async () => { events.push("health"); }),
+    });
+    const result = await deployWithQualityGate(request({ services: ["worker-analyze"] }), d);
+    expect(result.status).toBe("deployed");
+    expect(events).toEqual(["pause", "counts", "counts", "spawn", "health", "canary", "resume"]);
+  });
+
+  it("resumes a paused queue when recreate or canary fails", async () => {
+    const resume = vi.fn(async () => undefined);
+    const d = deps({ acquireQueueLease: vi.fn(async () => ({ pause: vi.fn(async () => undefined), counts: vi.fn(async () => ({ active: 0, waiting: 0 })), resume })), runCanary: vi.fn(async () => { throw new Error("mismatch"); }) });
+    const result = await deployWithQualityGate(request({ services: ["worker-analyze"] }), d);
+    expect(result.status).toBe("failed");
+    expect(result.reasons).toEqual(["canary_failed"]);
+    expect(resume).toHaveBeenCalledOnce();
+  });
+
   it("records partial rollout and stops on health/canary failure", async () => {
     const d = deps({ waitForHealthy: vi.fn(async (service: string) => { if (service === "worker-render") throw new Error("private health detail"); }) });
     const result = await deployWithQualityGate(request(), d);
@@ -159,6 +207,24 @@ describe("feedback quality deployment", () => {
     const result = await deployWithQualityGate({ decisionId: decision().decisionId, services: "worker-analyze" as unknown as readonly string[] }, deps());
     expect(result.status).toBe("failed");
     expect(result.reasons).toContain("invalid_request");
+  });
+
+  it("wires runtime commit/config bindings into every worker service", async () => {
+    const compose = await readFile(join(process.cwd(), "docker-compose.yml"), "utf8");
+    for (const service of ["worker-download", "worker-transcribe", "worker-analyze", "worker-render", "worker-finalize"]) {
+      const section = compose.match(new RegExp(`\\n  ${service}:[\\s\\S]*?(?=\\n  [A-Za-z])`))?.[0] ?? "";
+      expect(section).toContain("GIT_SHA=${GIT_SHA:-}");
+      expect(section).toContain("FEEDBACK_QUALITY_CONFIG_FILE=${FEEDBACK_QUALITY_CONFIG_FILE:-}");
+    }
+  });
+
+  it("binds every allowlisted environment value, including an explicit missing null", () => {
+    const config = { schemaVersion: 1, runnerVersion: 2, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), envAllowlist: ["ENGINE_FLAG", "MISSING_FLAG"], engine: {} };
+    const first = effectiveConfigDigest(config, { ENGINE_FLAG: "on" });
+    const second = effectiveConfigDigest(config, { ENGINE_FLAG: "off" });
+    const missing = effectiveConfigDigest(config, {});
+    expect(first).not.toBe(second);
+    expect(first).not.toBe(missing);
   });
 
   it("requires a real private 0600 reason and audits exact override mismatches before deploying", async () => {

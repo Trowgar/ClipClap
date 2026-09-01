@@ -19,7 +19,7 @@ function observation(set: "eval" | "holdout", mode: "baseline" | "candidate", po
   const cases: QualityCaseResult[] = [];
   for (let index = 0; index < positiveCount; index += 1) cases.push({ schemaVersion: 1, caseVersion: `case:${hash(`p${index}`)}`, disposition: "positive", subsystem: "selection", status: "ok", metrics: metric(true) });
   for (let index = 0; index < negativeCount; index += 1) cases.push({ schemaVersion: 1, caseVersion: `case:${hash(`n${index}`)}`, disposition: "confirmed_negative", subsystem: "boundary", status: "ok", metrics: metric(false) });
-  return snapshot({ schemaVersion: 1 as const, mode, set, commitSha: "a".repeat(40), configSha256: hash("c"), corpusSha256: hash("d"), runnerVersion: 1, cases }, createdAt);
+  return snapshot({ schemaVersion: 1 as const, mode, set, commitSha: "a".repeat(40), configSha256: hash("c"), corpusSha256: hash("d"), runnerVersion: 2, cases }, createdAt);
 }
 
 function snapshot(base: Omit<QualityObservation, "observationId" | "createdAt" | "live" | "caseVersions" | "attemptCount" | "attemptsSha256">, createdAt: string, live = false): QualityObservation {

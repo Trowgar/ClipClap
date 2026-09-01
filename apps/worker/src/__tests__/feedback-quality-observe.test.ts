@@ -48,14 +48,15 @@ const result = {
   },
   telemetry: { kept: 1, criticVerdicts: 1, omittedDrops: 0, truncatedDrops: 0, refusalDrops: 0, invariantDrops: 0 },
 };
+const observationConfig = { schemaVersion: 1 as const, runnerVersion: 2, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), envAllowlist: [] as string[], engine: {} };
 
 describe("feedback quality observation runner", () => {
   it("rejects ambient environment and only accepts the explicit allowlist", async () => {
     const runCase: ObservationCaseRunner = vi.fn(async () => result);
     const deps: ObservationDependencies = { runCase };
     await expect(observeQualitySet({
-      set: "eval", mode: "baseline", commitSha: "a".repeat(40), config: {},
-      corpusSha256: hash("f"), runnerVersion: 1, cases: [sampleCase()], dependencies: deps,
+      set: "eval", mode: "baseline", commitSha: "a".repeat(40), config: observationConfig,
+      corpusSha256: hash("f"), runnerVersion: 2, cases: [sampleCase()], dependencies: deps,
       environment: { OPENAI_API_KEY: "secret", QUALITY_ALLOWED: "yes" },
       allowedEnvironment: ["QUALITY_ALLOWED"], promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"),
       recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c") },
@@ -66,8 +67,8 @@ describe("feedback quality observation runner", () => {
   it("does not allow eval and holdout cases to cross the observation boundary", async () => {
     const runCase: ObservationCaseRunner = vi.fn(async () => result);
     await expect(observeQualitySet({
-      set: "eval", mode: "baseline", commitSha: "a".repeat(40), config: {},
-      corpusSha256: hash("f"), runnerVersion: 1, cases: [sampleCase("holdout")],
+      set: "eval", mode: "baseline", commitSha: "a".repeat(40), config: observationConfig,
+      corpusSha256: hash("f"), runnerVersion: 2, cases: [sampleCase("holdout")],
       dependencies: { runCase }, environment: {}, allowedEnvironment: [], promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"),
       recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c") },
     })).rejects.toThrow("set");
@@ -76,8 +77,8 @@ describe("feedback quality observation runner", () => {
   it("fails recorded replay on a fingerprint mismatch and requires live for a changed prompt/model", async () => {
     const runCase: ObservationCaseRunner = vi.fn(async () => result);
     const base = {
-      set: "eval" as const, mode: "candidate" as const, commitSha: "a".repeat(40), config: {},
-      corpusSha256: hash("f"), runnerVersion: 1, cases: [sampleCase()], dependencies: { runCase },
+      set: "eval" as const, mode: "candidate" as const, commitSha: "a".repeat(40), config: observationConfig,
+      corpusSha256: hash("f"), runnerVersion: 2, cases: [sampleCase()], dependencies: { runCase },
       environment: {}, allowedEnvironment: [], promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"),
     };
     await expect(observeQualitySet({ ...base, recorded: { promptFingerprint: hash("c"), modelFingerprint: hash("b"), requestFingerprint: hash("c") } }))
@@ -99,8 +100,8 @@ describe("feedback quality observation runner", () => {
       return result;
     });
     const observation = await observeQualitySet({
-      set: "eval", mode: "baseline", commitSha: "a".repeat(40), config: {},
-      corpusSha256: hash("f"), runnerVersion: 1, cases: [sampleCase()], dependencies: { runCase, publish },
+      set: "eval", mode: "baseline", commitSha: "a".repeat(40), config: observationConfig,
+      corpusSha256: hash("f"), runnerVersion: 2, cases: [sampleCase()], dependencies: { runCase, publish },
       environment: {}, allowedEnvironment: [], live: true, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"),
     });
     expect(names).toEqual(["live-1", "live-2", "live-3"]);
@@ -112,7 +113,7 @@ describe("feedback quality observation runner", () => {
   it("publishes and reads all named attempts with a verified artifact digest", async () => {
     const root = await mkdtemp(join(tmpdir(), "quality-observe-attempts-"));
     const observation = await observeQualitySet({
-      set: "eval", mode: "baseline", commitSha: "a".repeat(40), config: {}, corpusSha256: hash("f"), runnerVersion: 1,
+      set: "eval", mode: "baseline", commitSha: "a".repeat(40), config: observationConfig, corpusSha256: hash("f"), runnerVersion: 2,
       cases: [sampleCase()], root, live: true, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), environment: {}, allowedEnvironment: [],
       dependencies: { runCase: vi.fn(async () => result) },
     });
@@ -127,7 +128,7 @@ describe("feedback quality observation runner", () => {
     const id = `observation:sha256:${"a".repeat(64)}`;
     const line = canonicalJson({ caseVersion: "case:unknown", attemptName: "recorded", result: { schemaVersion: 1, caseVersion: "case:unknown", disposition: "positive", subsystem: "selection", status: "ok", metrics: { approvedMomentRetained: 1 } } });
     const results = `${line}\n`;
-    const manifest = { schemaVersion: 1, observationId: id, set: "eval", mode: "baseline", live: false, caseVersions: [sampleCase().caseVersion], commitSha: "a".repeat(40), configSha256: hash("a"), corpusSha256: hash("b"), runnerVersion: 1, createdAt: "2026-08-31T00:00:00.000Z", attemptCount: 1, attemptsSha256: sha256(results) };
+    const manifest = { schemaVersion: 1, observationId: id, set: "eval", mode: "baseline", live: false, caseVersions: [sampleCase().caseVersion], commitSha: "a".repeat(40), configSha256: hash("a"), corpusSha256: hash("b"), runnerVersion: 2, createdAt: "2026-08-31T00:00:00.000Z", attemptCount: 1, attemptsSha256: sha256(results) };
     await publishBundle({ kind: "observation", id, files: { "manifest.json": Buffer.from(`${canonicalJson(manifest)}\n`), "results.jsonl": Buffer.from(results) } }, root);
     await expect(readObservationAttempts(id, root)).rejects.toThrow("invalid_input");
   });
@@ -136,7 +137,7 @@ describe("feedback quality observation runner", () => {
     const root = await mkdtemp(join(tmpdir(), "quality-observe-manifest-"));
     const id = `observation:sha256:${"b".repeat(64)}`;
     const results = `${canonicalJson({ caseVersion: sampleCase().caseVersion, attemptName: "recorded", result: { schemaVersion: 1, caseVersion: sampleCase().caseVersion, disposition: "positive", subsystem: "selection", status: "ok", metrics: { approvedMomentRetained: 1 } } })}\n`;
-    const manifest = { schemaVersion: 1, observationId: id, set: "eval", mode: "baseline", live: false, caseVersions: [sampleCase().caseVersion], commitSha: "a".repeat(40), configSha256: hash("a"), corpusSha256: hash("b"), runnerVersion: 1, attemptCount: 1, attemptsSha256: sha256(results) };
+    const manifest = { schemaVersion: 1, observationId: id, set: "eval", mode: "baseline", live: false, caseVersions: [sampleCase().caseVersion], commitSha: "a".repeat(40), configSha256: hash("a"), corpusSha256: hash("b"), runnerVersion: 2, attemptCount: 1, attemptsSha256: sha256(results) };
     await publishBundle({ kind: "observation", id, files: { "manifest.json": Buffer.from(canonicalJson(manifest)), "results.jsonl": Buffer.from(results) } }, root);
     await expect(readObservationAttempts(id, root)).rejects.toThrow("invalid_input");
   });
@@ -146,7 +147,7 @@ describe("feedback quality observation runner", () => {
     const id = `observation:sha256:${"a".repeat(64)}`;
     const result = { schemaVersion: 1, caseVersion: sampleCase().caseVersion, disposition: "positive", subsystem: "selection", status: "ok", metrics: { approvedMomentRetained: 1 } };
     const results = `${canonicalJson({ caseVersion: sampleCase().caseVersion, attemptName: "recorded", result, extra: "reject" })}\n`;
-    const manifest = { schemaVersion: 1, observationId: id, set: "eval", mode: "baseline", live: false, caseVersions: [sampleCase().caseVersion], commitSha: "a".repeat(40), configSha256: hash("a"), corpusSha256: hash("b"), runnerVersion: 1, createdAt: "2026-08-31T00:00:00.000Z", attemptCount: 1, attemptsSha256: sha256(results) };
+    const manifest = { schemaVersion: 1, observationId: id, set: "eval", mode: "baseline", live: false, caseVersions: [sampleCase().caseVersion], commitSha: "a".repeat(40), configSha256: hash("a"), corpusSha256: hash("b"), runnerVersion: 2, createdAt: "2026-08-31T00:00:00.000Z", attemptCount: 1, attemptsSha256: sha256(results) };
     await publishBundle({ kind: "observation", id, files: { "manifest.json": Buffer.from(`${canonicalJson(manifest)}\n`), "results.jsonl": Buffer.from(results) } }, root);
     await expect(readObservationAttempts(id, root)).rejects.toThrow("invalid_input");
   });
@@ -154,8 +155,8 @@ describe("feedback quality observation runner", () => {
   it("publishes missing input as an error result instead of silently skipping the case", async () => {
     const publish = vi.fn(async () => ({ status: "committed" as const }));
     const observation = await observeQualitySet({
-      set: "eval", mode: "baseline", commitSha: "a".repeat(40), config: {},
-      corpusSha256: hash("f"), runnerVersion: 1, cases: [sampleCase()], dependencies: {
+      set: "eval", mode: "baseline", commitSha: "a".repeat(40), config: observationConfig,
+      corpusSha256: hash("f"), runnerVersion: 2, cases: [sampleCase()], dependencies: {
         publish, runCase: vi.fn(async () => { throw new Error("input missing"); }),
       }, environment: {}, allowedEnvironment: [], promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"),
       recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c") },
@@ -175,12 +176,12 @@ describe("feedback quality observation runner", () => {
     await chmod(path, 0o644);
     await expect(readSecureConfig(path)).rejects.toThrow("insecure_config");
     await chmod(path, 0o600);
-    await writeFile(path, JSON.stringify({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c") }, envAllowlist: [], engine: {} }), { mode: 0o600 });
-    expect(await readSecureConfig(path)).toMatchObject({ schemaVersion: 1, runnerVersion: 1 });
-    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), envAllowlist: [], engine: {} }, false)).toThrow("invalid_flag");
-    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), envAllowlist: [], engine: {} }, true)).not.toThrow();
-    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), envAllowlist: [], engine: {} }, true)).toThrow("invalid_flag");
-    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b") }, envAllowlist: [], engine: {} }, false)).toThrow("fingerprint");
+    await writeFile(path, JSON.stringify({ schemaVersion: 1, runnerVersion: 2, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c") }, envAllowlist: [], engine: {} }), { mode: 0o600 });
+    expect(await readSecureConfig(path)).toMatchObject({ schemaVersion: 1, runnerVersion: 2 });
+    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 2, promptFingerprint: hash("a"), modelFingerprint: hash("b"), envAllowlist: [], engine: {} }, false)).toThrow("invalid_flag");
+    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 2, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), envAllowlist: [], engine: {} }, true)).not.toThrow();
+    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 2, promptFingerprint: hash("a"), modelFingerprint: hash("b"), envAllowlist: [], engine: {} }, true)).toThrow("invalid_flag");
+    expect(() => validateObservationConfig({ schemaVersion: 1, runnerVersion: 2, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), recorded: { promptFingerprint: hash("a"), modelFingerprint: hash("b") }, envAllowlist: [], engine: {} }, false)).toThrow("fingerprint");
   });
 
   it("loads only active, committed case bundles for the requested set and derives their digest", async () => {
@@ -231,7 +232,7 @@ describe("feedback quality observation runner", () => {
     await publishBundle({ kind: "case", id, files: { "case.json": Buffer.from(JSON.stringify({ ...body, caseVersion: id }) + "\n"), "evidence.mp4": Buffer.from("video") } }, root);
     await appendLabelEvent({ schemaVersion: 1, eventId: "event-cli", action: "label", caseVersion: id, set: "eval", disposition: "positive" }, root);
     const configPath = join(root, "config.json");
-    await writeFile(configPath, JSON.stringify({ schemaVersion: 1, runnerVersion: 1, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), envAllowlist: [], engine: {} }), { mode: 0o600 });
+    await writeFile(configPath, JSON.stringify({ schemaVersion: 1, runnerVersion: 2, promptFingerprint: hash("a"), modelFingerprint: hash("b"), requestFingerprint: hash("c"), envAllowlist: [], engine: {} }), { mode: 0o600 });
     const attemptNames: string[] = [];
     let publishedAttempts: readonly unknown[] = [];
     const observation = await runObservationCli(["--set", "eval", "--mode", "baseline", "--commit", "a".repeat(40), "--config-file", configPath, "--live"], {

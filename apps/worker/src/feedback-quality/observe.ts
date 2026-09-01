@@ -3,7 +3,7 @@ import { chmod, open, readFile, stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
-import { QUALITY_RUNNER_VERSION } from "./config";
+import { effectiveConfigDigest, QUALITY_RUNNER_VERSION } from "./config";
 import { contentId, DEFAULT_QUALITY_ROOT, listBundleIds, openBundleFile, publishBundle, readBundle, readLabelEvents, type BundleKind, type CommitResult, type OpenBundleFile } from "./store";
 import type { MaterializedCase } from "./promote";
 import type { QualityCaseResult, QualityMetrics, QualityObservation } from "./types";
@@ -367,7 +367,7 @@ export async function observeQualitySet(options: ObserveQualityOptions): Promise
   const orderedResults = [...results].sort((left, right) => left.caseVersion.localeCompare(right.caseVersion));
   const caseVersions = orderedResults.map((item) => item.caseVersion);
   const resultsBytes = serializeObservationAttempts(attempts);
-  const body: ObservationIdentityBody = { schemaVersion: 1 as const, mode: options.mode, set: options.set, commitSha: options.commitSha, configSha256: sha256(canonicalJson(options.config)), corpusSha256: options.corpusSha256, runnerVersion: options.runnerVersion, live: options.live === true, caseVersions, attemptCount: attempts.length, attemptsSha256: sha256(resultsBytes), cases: orderedResults };
+  const body: ObservationIdentityBody = { schemaVersion: 1 as const, mode: options.mode, set: options.set, commitSha: options.commitSha, configSha256: effectiveConfigDigest(options.config, options.environment), corpusSha256: options.corpusSha256, runnerVersion: options.runnerVersion, live: options.live === true, caseVersions, attemptCount: attempts.length, attemptsSha256: sha256(resultsBytes), cases: orderedResults };
   const observation = freeze({ ...body, observationId: observationIdFor(body), createdAt: new Date().toISOString() } as QualityObservation);
   const publish = options.dependencies.publish ?? ((value, records) => publishDefault(value, records, options.root ?? DEFAULT_QUALITY_ROOT));
   const outcome = await publish(observation, attempts);
@@ -375,7 +375,7 @@ export async function observeQualitySet(options: ObserveQualityOptions): Promise
   return observation;
 }
 
-export function configDigest(config: unknown): `sha256:${string}` { return sha256(canonicalJson(config)); }
+export function configDigest(config: unknown, environment: Readonly<Record<string, string | undefined>> = process.env): `sha256:${string}` { return effectiveConfigDigest(config, environment); }
 export function liveAttemptNames(): readonly string[] { return LIVE_ATTEMPTS; }
 
 /** Large private artifacts stay streaming and descriptor-pinned. Callers must

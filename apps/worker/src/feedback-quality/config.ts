@@ -3,7 +3,7 @@ import { open } from "node:fs/promises";
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 
 /** Bumped only when the observation/deploy runner contract changes. */
-export const QUALITY_RUNNER_VERSION = 1;
+export const QUALITY_RUNNER_VERSION = 2;
 const HASH = /^sha256:[0-9a-f]{64}$/;
 const MAX_CONFIG_BYTES = 8 * 1024 * 1024;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -65,7 +65,15 @@ export async function readSecureConfig(path: string): Promise<unknown> {
   } finally { await handle?.close().catch(() => undefined); }
 }
 
-export function effectiveConfigDigest(value: unknown): `sha256:${string}` {
-  try { return sha256(canonicalJson(validateSecureConfig(value, true))); }
+export function effectiveConfigDigest(value: unknown, environment: Readonly<Record<string, string | undefined>> = process.env): `sha256:${string}` {
+  return effectiveConfigDigestWithEnvironment(value, environment);
+}
+
+export function effectiveConfigDigestWithEnvironment(value: unknown, environment: Readonly<Record<string, string | undefined>>): `sha256:${string}` {
+  try {
+    const config = validateSecureConfig(value, true);
+    const resolvedEnvironment = Object.fromEntries([...config.envAllowlist].sort().map((key) => [key, environment[key] ?? null]));
+    return sha256(canonicalJson({ config, environment: resolvedEnvironment }));
+  }
   catch (error) { if (error instanceof SecureConfigError) throw error; throw new SecureConfigError("invalid"); }
 }

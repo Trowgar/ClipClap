@@ -75,6 +75,16 @@ describe("worker role config", () => {
     );
   });
 
+  it("creates a dedicated control worker for quality canaries", () => {
+    createStageWorker("render");
+
+    expect(Worker).toHaveBeenCalledWith(
+      "video-render:quality-canary",
+      expect.any(Function),
+      expect.objectContaining({ concurrency: 1 })
+    );
+  });
+
   it("allows per-role concurrency overrides", () => {
     process.env.DOWNLOAD_CONCURRENCY = "8";
 

@@ -65,7 +65,7 @@ const observation = (
   commitSha: "a".repeat(40),
   configSha256: "sha256:" + "2".repeat(64),
   corpusSha256: "sha256:" + "3".repeat(64),
-  runnerVersion: 1,
+  runnerVersion: 2,
   createdAt: "2026-08-31T00:00:00.000Z",
   cases: [
     ...Array.from({ length: 4 }, (_, i) => result(`positive-${i}`, "positive", "selection")),

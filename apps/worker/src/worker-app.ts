@@ -33,20 +33,39 @@ export function createStageWorker(
   roleValue = process.env.WORKER_ROLE
 ): Worker {
   const role = parseWorkerRole(roleValue);
+  const workerOptions = {
+    connection: getRedis(),
+    concurrency: getWorkerConcurrency(role),
+    lockDuration: role === "render" ? 30 * 60 * 1000 : 5 * 60 * 1000,
+    stalledInterval: 60 * 1000,
+    maxStalledCount: 1,
+  } as const;
+  const processor = async (job: Job, token?: string) => {
+    if (isQualityCanary(job.data)) return runQualityCanary(role, job.data);
+    return dispatchStageJob(role, job.data, job, token);
+  };
   const worker = new Worker(
     getQueueNameForStage(role),
-    async (job, token) => {
-      if (isQualityCanary(job.data)) return runQualityCanary(role, job.data);
-      return dispatchStageJob(role, job.data, job, token);
-    },
-    {
-      connection: getRedis(),
-      concurrency: getWorkerConcurrency(role),
-      lockDuration: role === "render" ? 30 * 60 * 1000 : 5 * 60 * 1000,
-      stalledInterval: 60 * 1000,
-      maxStalledCount: 1,
-    }
+    processor,
+    workerOptions
   );
+
+  // Quality canaries use a dedicated control queue. This keeps the production
+  // queue fenced during recreate/health/canary and prevents a canary from
+  // competing with (or releasing) ordinary user jobs.
+  const canaryWorker = new Worker(
+    `${getQueueNameForStage(role)}:quality-canary`,
+    async (job) => {
+      if (!isQualityCanary(job.data)) throw new Error("quality_canary_required");
+      return runQualityCanary(role, job.data);
+    },
+    { ...workerOptions, concurrency: 1 }
+  );
+  const closePrimary = worker.close.bind(worker);
+  worker.close = async (force?: boolean) => {
+    await canaryWorker.close(force);
+    return closePrimary(force);
+  };
 
   worker.on("completed", (job) => {
     console.log(`[${role}] completed ${job.id}`);
