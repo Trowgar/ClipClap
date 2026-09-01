@@ -11,8 +11,8 @@ import {
 } from "../feedback-quality/observe";
 import { observeRenderCase } from "../feedback-quality/render-lane";
 import { observeSelectionCase } from "../feedback-quality/selection-lane";
-import { deriveQualityCorpusDigest, loadPrivateCases } from "../feedback-quality/observe";
-import { appendLabelEvent, contentId, publishBundle, readBundle } from "../feedback-quality/store";
+import { deriveQualityCorpusDigest, loadPrivateCases, loadQualityCorpusSnapshot } from "../feedback-quality/observe";
+import { appendLabelEvent, contentId, publishBundle, readBundle, readLabelEvents } from "../feedback-quality/store";
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import { parseObserveArgs, readSecureConfig, runObservationCli, validateObservationConfig } from "../scripts/feedback-quality-observe";
 import { measureVisualReplay, type VisualProbeExec } from "../feedback-quality/visual-probe";
@@ -197,6 +197,30 @@ describe("feedback quality observation runner", () => {
     expect(holdout.cases).toHaveLength(0);
     expect(holdout.corpusSha256).toBe(loaded.corpusSha256);
     expect(await deriveQualityCorpusDigest(root)).toBe(loaded.corpusSha256);
+  });
+
+  it("takes one ledger snapshot for both sets before a concurrent mutation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "quality-observe-atomic-corpus-"));
+    const ids: Record<"eval" | "holdout", string> = { eval: "", holdout: "" };
+    for (const set of ["eval", "holdout"] as const) {
+      const { caseVersion: _ignored, ...body } = sampleCase(set);
+      ids[set] = contentId("case", body);
+      await publishBundle({ kind: "case", id: ids[set], files: { "case.json": Buffer.from(JSON.stringify({ ...body, caseVersion: ids[set] }) + "\n"), "evidence.mp4": Buffer.from("video") } }, root);
+      await appendLabelEvent({ schemaVersion: 1, eventId: `event-${set}`, action: "label", caseVersion: ids[set], set, disposition: "positive" }, root);
+    }
+    const mutableLedger = [...await readLabelEvents(root)];
+    let reads = 0;
+    const readOnce = async () => {
+      reads += 1;
+      const snapshot = [...mutableLedger];
+      mutableLedger.splice(0, mutableLedger.length);
+      return snapshot;
+    };
+    const snapshot = await loadQualityCorpusSnapshot(root, readOnce);
+    expect(reads).toBe(1);
+    expect(snapshot.evalCases.map((item) => item.caseVersion)).toEqual([ids.eval]);
+    expect(snapshot.holdoutCases.map((item) => item.caseVersion)).toEqual([ids.holdout]);
+    expect(snapshot.corpusSha256).toMatch(/^sha256:[0-9a-f]{64}$/);
   });
 
   it("fails the production loader closed when a labelled case bundle is missing", async () => {

@@ -53,6 +53,7 @@ type LoadedCase = MaterializedCase & { loadStatus?: "missing" | "stale" };
 export type LoadedPrivateCases = Readonly<{ cases: readonly LoadedCase[]; corpusSha256: `sha256:${string}` }>;
 
 type LoadedCaseSet = readonly LoadedCase[];
+export type CorpusSnapshot = Readonly<{ evalCases: LoadedCaseSet; holdoutCases: LoadedCaseSet; corpusSha256: `sha256:${string}` }>;
 
 function unavailableCase(id: string, set: "eval" | "holdout", event: Readonly<Record<string, unknown>>, loadStatus: "missing" | "stale"): LoadedCase {
   const disposition = event.disposition === "confirmed_negative" || event.disposition === "exclude" ? event.disposition : "positive";
@@ -82,21 +83,23 @@ function caseArtifactsValid(bundle: ReadonlyMap<string, Uint8Array>, qualityCase
   return true;
 }
 
-/** Read the active label projection and then verify every selected case's
- * content-addressed bundle. A missing/stale label never becomes a skipped case. */
-async function loadPrivateCaseSet(set: "eval" | "holdout", root = DEFAULT_QUALITY_ROOT): Promise<LoadedCaseSet> {
-  const events = await readLabelEvents(root);
+function projectLabelEvents(events: ReadonlyArray<Readonly<Record<string, unknown>>>): Readonly<{ eval: ReadonlyMap<string, Readonly<Record<string, unknown>>>; holdout: ReadonlyMap<string, Readonly<Record<string, unknown>>> }> {
   const retired = new Set(events.filter((item) => item.action === "retire").map((item) => item.targetEventId).filter((item): item is string => typeof item === "string"));
-  const selected = new Map<string, Readonly<Record<string, unknown>>>();
+  const selected = { eval: new Map<string, Readonly<Record<string, unknown>>>(), holdout: new Map<string, Readonly<Record<string, unknown>>>() };
   for (const event of events) {
-    if (event.action !== "label" || event.set !== set || typeof event.caseVersion !== "string" || typeof event.eventId !== "string" || retired.has(event.eventId)) continue;
-    selected.set(event.caseVersion, event);
+    if (event.action !== "label" || (event.set !== "eval" && event.set !== "holdout") || typeof event.caseVersion !== "string" || typeof event.eventId !== "string" || retired.has(event.eventId)) continue;
+    selected[event.set].set(event.caseVersion, event);
   }
-  const ids = await listBundleIds("case", root);
+  return selected;
+}
+
+/** Verify every selected case's content-addressed bundle from one immutable
+ * ledger projection. A missing/stale label never becomes a skipped case. */
+async function loadPrivateCaseSet(set: "eval" | "holdout", root: string, selected: ReadonlyMap<string, Readonly<Record<string, unknown>>>, ids: ReadonlySet<string>): Promise<LoadedCaseSet> {
   const cases: LoadedCase[] = [];
   for (const [id] of [...selected.entries()].sort(([left], [right]) => left.localeCompare(right))) {
     const event = selected.get(id)!;
-    if (!ids.includes(id)) { cases.push(unavailableCase(id, set, event, "missing")); continue; }
+    if (!ids.has(id)) { cases.push(unavailableCase(id, set, event, "missing")); continue; }
     let bundle: ReadonlyMap<string, Uint8Array>;
     try { bundle = await readBundle("case", id, root); } catch { cases.push(unavailableCase(id, set, event, "stale")); continue; }
     const bytes = bundle.get("case.json");
@@ -116,17 +119,31 @@ async function loadPrivateCaseSet(set: "eval" | "holdout", root = DEFAULT_QUALIT
   return freeze(cases);
 }
 
+/** Build the complete corpus view from exactly one ledger read. Bundle IDs and
+ * case bytes are content-addressed, so later promote/retire activity cannot
+ * replace a case selected by this projection. */
+export async function loadQualityCorpusSnapshot(
+  root = DEFAULT_QUALITY_ROOT,
+  readLedger: (root: string) => Promise<ReadonlyArray<Readonly<Record<string, unknown>>>> = readLabelEvents,
+): Promise<CorpusSnapshot> {
+  const events = await readLedger(root);
+  const selected = projectLabelEvents(events);
+  const ids = new Set(await listBundleIds("case", root));
+  const evalCases = await loadPrivateCaseSet("eval", root, selected.eval, ids);
+  const holdoutCases = await loadPrivateCaseSet("holdout", root, selected.holdout, ids);
+  const all = [...evalCases, ...holdoutCases].sort((left, right) => left.caseVersion.localeCompare(right.caseVersion));
+  return { evalCases, holdoutCases, corpusSha256: sha256(canonicalJson(all.map((item) => ({ ...item })))) };
+}
+
 /** Content identity of the complete active corpus. Eval and holdout are views
  * over this same digest; changing either side invalidates every decision. */
 export async function deriveQualityCorpusDigest(root = DEFAULT_QUALITY_ROOT): Promise<`sha256:${string}`> {
-  const [evalCases, holdoutCases] = await Promise.all([loadPrivateCaseSet("eval", root), loadPrivateCaseSet("holdout", root)]);
-  const all = [...evalCases, ...holdoutCases].sort((left, right) => left.caseVersion.localeCompare(right.caseVersion));
-  return sha256(canonicalJson(all.map((item) => ({ ...item }))));
+  return (await loadQualityCorpusSnapshot(root)).corpusSha256;
 }
 
 export async function loadPrivateCases(set: "eval" | "holdout", root = DEFAULT_QUALITY_ROOT): Promise<LoadedPrivateCases> {
-  const cases = await loadPrivateCaseSet(set, root);
-  return { cases, corpusSha256: await deriveQualityCorpusDigest(root) };
+  const snapshot = await loadQualityCorpusSnapshot(root);
+  return { cases: set === "eval" ? snapshot.evalCases : snapshot.holdoutCases, corpusSha256: snapshot.corpusSha256 };
 }
 
 function freeze<T>(value: T): T {
