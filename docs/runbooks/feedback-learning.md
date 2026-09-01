@@ -209,10 +209,13 @@ service. Roll back using the recorded rollback artifact and verify the canary ag
 npm run feedback-quality-rollback -w @clipclap/worker -- --rollback <rollback-artifact-id>
 ```
 
-Rollback uses the artifact's immutable compose/config/env material and requires
-`FEEDBACK_QUALITY_ROOT`, `CLIPCLAP_PRODUCTION_PROJECT`, and the host Docker network/config paths
-to remain available. Verify every restored service's image digest and OCI revision before reopening
-queues.
+Rollback uses the artifact's captured immutable `production.env`, quality config, compose files, and
+external network name; the original `FEEDBACK_QUALITY_CONFIG_HOST` and
+`CLIPCLAP_PRODUCTION_ENV_FILE` paths are not needed for rollback. The compose `env_file` is consumed
+from the artifact (it is not a host-path mount). The rollback CLI still needs Docker access,
+`FEEDBACK_QUALITY_ROOT`, and `CLIPCLAP_PRODUCTION_PROJECT` to select the production adapter; the
+network and config/env contents come from the captured artifact. Verify every restored service's
+image digest and OCI revision before reopening queues.
 
 An override requires a nonempty private `0600` reason file. It is an append-only audit event and may
 bypass `decision_not_pass`, expiry, and binding mismatches, but it does not bypass malformed

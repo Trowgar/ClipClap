@@ -78,7 +78,7 @@ function bindingName(name: ts.BindingName): string | undefined {
   return ts.isIdentifier(name) ? name.text : undefined;
 }
 
-function semanticAliases(source: ts.SourceFile): { prisma: Set<string>; r2: Set<string> } {
+function semanticAliases(source: ts.SourceFile): SemanticAliases {
   const aliases = { prisma: new Set<string>(), r2: new Set<string>(), process: new Set<string>() };
   const addImport = (moduleName: string, name: string): void => {
     const target = moduleName.includes("/prisma") ? aliases.prisma : moduleName.includes("/r2") ? aliases.r2 : moduleName === "node:child_process" || moduleName === "child_process" ? aliases.process : undefined;
@@ -113,6 +113,54 @@ function semanticAliases(source: ts.SourceFile): { prisma: Set<string>; r2: Set<
   return aliases;
 }
 
+function moduleKind(moduleName: string): keyof SemanticAliases | undefined {
+  if (moduleName.includes("/prisma")) return "prisma";
+  if (moduleName.includes("/r2")) return "r2";
+  if (moduleName === "node:child_process" || moduleName === "child_process") return "process";
+  return undefined;
+}
+
+function propagatedSemanticAliases(graph: ModuleGraph): Map<string, SemanticAliases> {
+  const aliases = new Map<string, { prisma: Set<string>; r2: Set<string>; process: Set<string> }>();
+  for (const [file, source] of graph) aliases.set(file, semanticAliases(source));
+  for (let round = 0; round <= graph.size; round += 1) {
+    let changed = false;
+    for (const [file, source] of graph) {
+      const local = aliases.get(file)!;
+      for (const statement of source.statements) {
+        if (!ts.isImportDeclaration(statement) || !statement.moduleSpecifier || !ts.isStringLiteral(statement.moduleSpecifier) || !statement.moduleSpecifier.text.startsWith(".")) continue;
+        const targetFile = resolveRelative(file, statement.moduleSpecifier.text);
+        const target = targetFile ? aliases.get(targetFile) : undefined;
+        if (!target) continue;
+        const bindings = statement.importClause?.namedBindings;
+        if (bindings && ts.isNamespaceImport(bindings)) {
+          for (const kind of ["prisma", "r2", "process"] as const) if (target[kind].size > 0 && !local[kind].has(bindings.name.text)) { local[kind].add(bindings.name.text); changed = true; }
+        }
+        if (bindings && ts.isNamedImports(bindings)) for (const item of bindings.elements) {
+          const imported = item.propertyName?.text ?? item.name.text;
+          for (const kind of ["prisma", "r2", "process"] as const) if (target[kind].has(imported) && !local[kind].has(item.name.text)) { local[kind].add(item.name.text); changed = true; }
+        }
+      }
+      for (const statement of source.statements) {
+        if (!ts.isExportDeclaration(statement) || !ts.isNamedExports(statement.exportClause)) continue;
+        const moduleName = statement.moduleSpecifier && (ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : undefined);
+        const target = moduleName?.startsWith(".") ? aliases.get(resolveRelative(file, moduleName) ?? "") : undefined;
+        const externalKind = moduleName ? moduleKind(moduleName) : undefined;
+        for (const item of statement.exportClause.elements) {
+          const imported = item.propertyName?.text ?? item.name.text;
+          const exported = item.name.text;
+          for (const kind of ["prisma", "r2", "process"] as const) {
+            const tainted = externalKind === kind || target?.[kind].has(imported) || (!moduleName && local[kind].has(imported));
+            if (tainted && !local[kind].has(exported)) { local[kind].add(exported); changed = true; }
+          }
+        }
+      }
+    }
+    if (!changed) break;
+  }
+  return aliases;
+}
+
 function collectImportLiterals(node: ts.Node): string[] {
   const result: string[] = [];
   const visit = (child: ts.Node): void => {
@@ -136,12 +184,13 @@ function callsNamed(source: ts.SourceFile, names: ReadonlySet<string>, receiverP
   const found: string[] = [];
   const visit = (node: ts.Node): void => {
     if (ts.isCallExpression(node)) {
-      if (ts.isIdentifier(node.expression) && names.has(node.expression.text) && aliases?.has(node.expression.text)) found.push(node.expression.text);
+      if (ts.isIdentifier(node.expression) && aliases?.has(node.expression.text) && (names.has(node.expression.text) || aliases.size > 0)) found.push(node.expression.text);
       if (ts.isPropertyAccessExpression(node.expression) && names.has(node.expression.name.text)) {
         const receiver = node.expression.expression.getText(source);
         const aliased = aliases?.has(receiverBase(node.expression.expression) ?? "") === true;
         if ((!receiverPattern || receiverPattern.test(receiver)) && (!aliases || aliased)) found.push(node.expression.name.text);
       }
+      if (ts.isPropertyAccessExpression(node.expression) && aliases?.has(receiverBase(node.expression.expression) ?? "") && !names.has(node.expression.name.text)) found.push(node.expression.name.text);
     }
     ts.forEachChild(node, visit);
   };
@@ -154,9 +203,10 @@ function graphImports(graph: ModuleGraph): string[] {
 }
 
 function graphSemanticCalls(graph: ModuleGraph, names: ReadonlySet<string>, kind: keyof SemanticAliases): string[] {
+  const aliases = propagatedSemanticAliases(graph);
   return [...graph.values()].flatMap((source) => {
-    const aliases = semanticAliases(source)[kind];
-    return callsNamed(source, names, undefined, aliases);
+    const localAliases = aliases.get(source.fileName)?.[kind] ?? new Set<string>();
+    return callsNamed(source, names, undefined, localAliases);
   });
 }
 
@@ -205,6 +255,21 @@ describe("feedback quality dependency boundaries", () => {
       await expect(reachable(entry)).rejects.toThrow("nonliteral_module_specifier:dynamic_import");
       await writeFile(entry, "const spec = './dep';\nvoid require(spec);\n");
       await expect(reachable(entry)).rejects.toThrow("nonliteral_module_specifier:require");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("taints renamed direct and namespace calls through local re-export wrappers", async () => {
+    const root = await mkdtemp(resolve(SOURCE_ROOT, "../../../../tmp-feedback-quality-aliases-"));
+    try {
+      const entry = resolve(root, "entry.ts");
+      await writeFile(resolve(root, "process-wrapper.ts"), 'import { spawn as localSpawn } from "node:child_process"; export { localSpawn as launch };\n');
+      await writeFile(resolve(root, "r2-wrapper.ts"), 'export { putObject as write } from "@clipclap/shared/lib/r2";\n');
+      await writeFile(entry, 'import { launch } from "./process-wrapper"; import { write } from "./r2-wrapper"; launch("cmd"); write("key");\n');
+      const graph = await reachable(entry);
+      expect(graphSemanticCalls(graph, new Set(["spawn"]), "process")).toContain("launch");
+      expect(graphSemanticCalls(graph, new Set(["putObject"]), "r2")).toContain("write");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
