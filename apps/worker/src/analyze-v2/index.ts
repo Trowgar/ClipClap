@@ -312,6 +312,12 @@ export interface AnalyzeV2Options {
   safeEndAuditTelemetryTestHook?: (telemetry: unknown) => unknown;
 }
 
+export interface VisualRecallEvaluation {
+  candidates: ReturnType<typeof nominateVisualCandidates>["candidates"];
+  nominations: VisualRecallNomination[];
+  telemetry: Record<string, unknown>;
+}
+
 function countCandidateTypes(candidates: readonly { type: string }[]): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const candidate of candidates) counts[candidate.type] = (counts[candidate.type] ?? 0) + 1;
@@ -338,6 +344,24 @@ function visualRecallTelemetry(
   };
 }
 
+/** Pure, model-free visual recall evaluation shared by ANALYZE and stage-level
+ * observation paths (song/music handling). It intentionally builds its own
+ * sentence graph so callers can use it without entering the model pipeline. */
+export function evaluateVisualRecall(
+  transcription: TranscriptionResult,
+  cfg: AnalyzeConfig,
+  motionEnvelope: unknown,
+): VisualRecallEvaluation | undefined {
+  if (cfg.visualRecallMode === "off") return undefined;
+  const nodes = buildSentenceGraph(transcription.segments, cfg);
+  const visual = nominateVisualCandidates(nodes, motionEnvelope, cfg);
+  return {
+    candidates: visual.candidates,
+    nominations: visual.nominations,
+    telemetry: visualRecallTelemetry(cfg.visualRecallMode, visual),
+  };
+}
+
 export async function analyzeHighlightsV2(
   transcription: TranscriptionResult,
   options: AnalyzeV2Options = {}
@@ -356,6 +380,11 @@ export async function analyzeHighlightsV2(
   const speechSec = nodes
     .filter((n) => n.hasWords)
     .reduce((sum, n) => sum + (n.end - n.start), 0);
+  const visualEvaluation = evaluateVisualRecall(
+    transcription,
+    cfg,
+    options.motionEnvelope ?? [],
+  );
 
   // 0. degenerate guard - zero LLM cost
   if (
@@ -363,12 +392,8 @@ export async function analyzeHighlightsV2(
     speechSec < DEGENERATE_MIN_SPEECH_SEC ||
     nodes.every((n) => !n.hasWords)
   ) {
-    let visualRecall: Record<string, unknown> | undefined;
-    if (cfg.visualRecallMode === "shadow" || cfg.visualRecallMode === "on") {
-      const visual = nominateVisualCandidates(nodes, options.motionEnvelope ?? [], cfg);
-      visualRecall = visualRecallTelemetry(cfg.visualRecallMode, visual);
-      visualRecall.unionCandidates = 0;
-    }
+    const visualRecall = visualEvaluation?.telemetry;
+    if (visualRecall) visualRecall.unionCandidates = 0;
     return {
       highlights: [],
       noClipsReason: "NO_USABLE_SPEECH",
@@ -416,7 +441,7 @@ export async function analyzeHighlightsV2(
   const { mode, modeResolution } = resolveMode(modeInput, cfg);
   let candidates: MergedCandidate[];
   let scannerTelemetry: Record<string, unknown> = {};
-  let visualTelemetry: Record<string, unknown> | undefined;
+  let visualTelemetry: Record<string, unknown> | undefined = visualEvaluation?.telemetry;
   const visualMode = cfg.visualRecallMode;
 
   if (wordCount <= TINY_MAX_WORDS) {
@@ -430,11 +455,8 @@ export async function analyzeHighlightsV2(
       type: "other",
       windowIndex: 0,
     };
-    const visual = visualMode === "off"
-      ? undefined
-      : nominateVisualCandidates(nodes, options.motionEnvelope ?? [], cfg);
-    if (visual && (visualMode === "shadow" || visualMode === "on")) {
-      visualTelemetry = visualRecallTelemetry(visualMode, visual);
+    const visual = visualEvaluation;
+    if (visual && visualTelemetry && (visualMode === "shadow" || visualMode === "on")) {
       visualTelemetry.unionCandidates = visualMode === "on" ? visual.candidates.length : 0;
       const tinyMerged = visualMode === "on"
         ? mergeCandidates([tinyCandidate, ...visual.candidates], nodes, cfg, mode)
@@ -474,11 +496,8 @@ export async function analyzeHighlightsV2(
       );
     }
 
-    const visual = visualMode === "off"
-      ? undefined
-      : nominateVisualCandidates(nodes, options.motionEnvelope ?? [], cfg);
-    if (visual && (visualMode === "shadow" || visualMode === "on")) {
-      visualTelemetry = visualRecallTelemetry(visualMode, visual);
+    const visual = visualEvaluation;
+    if (visual && visualTelemetry && (visualMode === "shadow" || visualMode === "on")) {
       visualTelemetry.unionCandidates = visualMode === "on" ? visual.candidates.length : 0;
     }
     const rawCandidates = visualMode === "on" && visual

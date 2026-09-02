@@ -5,7 +5,7 @@ import {
 } from "@clipclap/shared";
 import type { Prisma } from "@prisma/client";
 import { analyzeHighlightsV1 } from "../processors/analyze";
-import { analyzeHighlightsV2 } from "../analyze-v2";
+import { analyzeHighlightsV2, evaluateVisualRecall } from "../analyze-v2";
 import { AnalyzeTechnicalError } from "../analyze-v2/critic";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { resolveEngine } from "../analyze-v2/dispatch";
@@ -33,15 +33,6 @@ export async function runAnalyzeStage(
     const cfg = loadAnalyzeConfig();
     const engine = resolveEngine(payload.jobId, cfg);
 
-    // TRANSCRIBE persists all three per-second envelopes on its own JobStep.
-    // Read that row once when a downstream path needs signals: visual recall
-    // consumes motion, while music-shorts consumes energy and luma. The dark
-    // normal path intentionally does not perform this lookup or thread a
-    // motion field into V2.
-    const visualSignals = (engine === "recall-critic" || engine === "shadow") && cfg.visualRecallMode !== "off"
-      ? await readTranscribeEnvelopes(payload.jobId)
-      : undefined;
-
     const startedAt = Date.now();
 
     if (engine === "legacy" || engine === "shadow") {
@@ -61,6 +52,9 @@ export async function runAnalyzeStage(
 
       let shadow: Prisma.InputJsonValue | undefined;
       if (engine === "shadow") {
+        const visualSignals = cfg.visualRecallMode !== "off"
+          ? await readVisualEnvelopesFailOpen(payload.jobId)
+          : undefined;
         try {
           const v2 = await analyzeHighlightsV2(transcription, {
             cfg,
@@ -109,6 +103,22 @@ export async function runAnalyzeStage(
     const songGate = cfg.songGateEnabled
       ? detectSong(transcription.segments)
       : null;
+    const musicSignalsRequired = Boolean(
+      songGate?.fired &&
+      cfg.musicShortsEnabled &&
+      typeof job.sourceDurationSec === "number" &&
+      job.sourceDurationSec > 0 &&
+      job.sourceDurationSec <= cfg.musicShortsMaxSec,
+    );
+    const visualSignalsNeeded = cfg.visualRecallMode !== "off";
+    const signals = musicSignalsRequired
+      ? await readTranscribeEnvelopes(payload.jobId)
+      : visualSignalsNeeded
+        ? await readVisualEnvelopesFailOpen(payload.jobId)
+        : undefined;
+    const manualVisualRecall = visualSignalsNeeded
+      ? evaluateVisualRecall(transcription, cfg, signals?.motionEnvelope ?? [])?.telemetry
+      : undefined;
 
     // Music shorts (spec 2026-08-23-music-shorts, task M3): a firing song
     // gate is not automatically a refusal any more. When the source is a
@@ -123,20 +133,14 @@ export async function runAnalyzeStage(
       envelopeLen: number;
       lumaLen: number;
     } | null = null;
-    if (
-      songGate?.fired &&
-      cfg.musicShortsEnabled &&
-      typeof job.sourceDurationSec === "number" &&
-      job.sourceDurationSec > 0 &&
-      job.sourceDurationSec <= cfg.musicShortsMaxSec
-    ) {
-      const { energyEnvelope, lumaEnvelope } = visualSignals ?? await readTranscribeEnvelopes(payload.jobId);
+    if (musicSignalsRequired) {
+      const { energyEnvelope, lumaEnvelope } = signals!;
       const windows = selectHookWindows(
         {
           segments: transcription.segments,
           energyEnvelope,
           lumaEnvelope,
-          durationSec: job.sourceDurationSec,
+          durationSec: job.sourceDurationSec as number,
         },
         cfg.musicShortsCount
       );
@@ -168,6 +172,7 @@ export async function runAnalyzeStage(
           telemetry: {
             path: "music-shorts",
             songGate,
+            ...(manualVisualRecall ? { visualRecall: manualVisualRecall } : {}),
             musicShorts: {
               windows: musicShorts.windows,
               envelopeLen: musicShorts.envelopeLen,
@@ -190,7 +195,11 @@ export async function runAnalyzeStage(
           // engine-notes §6) - reusing the enum value rather than adding one,
           // per this task's own instruction not to touch the prisma schema.
           noClipsReason: "NO_USABLE_SPEECH",
-          telemetry: { path: "song-gate", songGate },
+          telemetry: {
+            path: "song-gate",
+            songGate,
+            ...(manualVisualRecall ? { visualRecall: manualVisualRecall } : {}),
+          },
           usage: newUsage(),
         }
       : await analyzeHighlightsV2(transcription, {
@@ -203,7 +212,7 @@ export async function runAnalyzeStage(
           // Powers ONLY resolveAnalysisMode's hostname rules (spec 2026-08-
           // 19-stream-analyze-mode, S1) - mirrors sourceDurationSec above.
           sourceUrl: job.sourceUrl ?? undefined,
-          ...(visualSignals ? { motionEnvelope: visualSignals.motionEnvelope } : {}),
+          ...(signals ? { motionEnvelope: signals.motionEnvelope } : {}),
         });
     // Flag on but not fired: still recorded, so the job record can show the
     // gate evaluated this transcript and let it through - task 8's own
@@ -310,6 +319,20 @@ async function readTranscribeEnvelopes(
     lumaEnvelope: asNumberArray(output?.lumaEnvelope),
     motionEnvelope: asNumberArray(output?.motionEnvelope),
   };
+}
+
+async function readVisualEnvelopesFailOpen(
+  jobId: string,
+): Promise<{ energyEnvelope: number[]; lumaEnvelope: number[]; motionEnvelope: number[] }> {
+  try {
+    return await readTranscribeEnvelopes(jobId);
+  } catch (error) {
+    console.warn(
+      "[analyze] optional visual envelope read failed; continuing without motion:",
+      error instanceof Error ? error.message : String(error),
+    );
+    return { energyEnvelope: [], lumaEnvelope: [], motionEnvelope: [] };
+  }
 }
 
 function asNumberArray(raw: unknown): number[] {
