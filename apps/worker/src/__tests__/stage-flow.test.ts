@@ -1,4 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const ambientStageEnv = {
+  SCAN_PASSES: process.env.SCAN_PASSES,
+  ARC_AUDIT: process.env.ARC_AUDIT,
+  SAFE_END_AUDIT: process.env.SAFE_END_AUDIT,
+};
 
 const mocks = vi.hoisted(() => ({
   startJobStep: vi.fn(),
@@ -208,6 +214,13 @@ function recordedV2Client() {
 }
 
 describe("stage handlers", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    expect(process.env.SCAN_PASSES).toBe(ambientStageEnv.SCAN_PASSES);
+    expect(process.env.ARC_AUDIT).toBe(ambientStageEnv.ARC_AUDIT);
+    expect(process.env.SAFE_END_AUDIT).toBe(ambientStageEnv.SAFE_END_AUDIT);
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getStageQueue.mockReturnValue({ add: mocks.queueAdd });

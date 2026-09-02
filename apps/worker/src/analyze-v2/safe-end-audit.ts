@@ -23,10 +23,6 @@ export type SafeEndAuditFailureCode =
   | "timeout"
   | "construction_error";
 
-export type RescueArcEvidence = "matching_standing" | "matching_clear" | "stale_or_absent";
-export type RescueProposedAction = "none" | "zero_tail_handoff" | "standing_arc" | "both";
-export type SafeEndRescueSelectedState = "selected" | "not_selected";
-
 /** Rounded, job-local geometry only. It deliberately carries neither text nor
  * media identity, so it is safe to persist inside ANALYZE telemetry. */
 export interface SafeEndGeometryReference {
@@ -47,20 +43,6 @@ export interface SafeEndNormalRecord {
   failureCode?: SafeEndAuditFailureCode;
   extendToNode?: number | null;
   reconciliation?: SafeEndNormalReconciliation;
-}
-
-export interface SafeEndRescueRecord {
-  geometry: SafeEndGeometryReference;
-  score: number;
-  scoreRank: number;
-  /** Present on every production observation; optional for compatibility with
-   * Task 1's standalone capping primitive fixtures. */
-  language?: string;
-  kind?: string;
-  zeroTailHandoff: boolean;
-  arcEvidence: RescueArcEvidence;
-  proposedAction: RescueProposedAction;
-  selectedState: SafeEndRescueSelectedState;
 }
 
 export type SafeEndReconciliationState =
@@ -178,13 +160,6 @@ const normalSeverity: Record<SafeEndNormalOutcome, number> = {
   safe: 4,
 };
 
-const rescueSeverity: Record<RescueProposedAction, number> = {
-  both: 0,
-  zero_tail_handoff: 1,
-  standing_arc: 2,
-  none: 3,
-};
-
 /** Deterministically bounds normal detail. It never mutates the input records. */
 export function capSafeEndNormalRecords(
   records: readonly SafeEndNormalRecord[],
@@ -196,33 +171,6 @@ export function capSafeEndNormalRecords(
         compareCandidateIds(left.geometry.candidateId, right.geometry.candidateId),
     )
     .slice(0, DETAIL_CAP);
-  return { records: selected, truncatedCount: records.length - selected.length };
-}
-
-/** Deterministically bounds rescue detail while preserving the actual selected
- * rescue record in the capped cohort. The existing rescue path has at most one
- * selected candidate; malformed multi-selected input remains deterministically
- * bounded rather than silently expanding telemetry beyond its hard cap. */
-export function capSafeEndRescueRecords(
-  records: readonly SafeEndRescueRecord[],
-): SafeEndCappedRecords<SafeEndRescueRecord> {
-  const ordered = [...records].sort(
-    (left, right) =>
-      rescueSeverity[left.proposedAction] - rescueSeverity[right.proposedAction] ||
-      compareCandidateIds(left.geometry.candidateId, right.geometry.candidateId),
-  );
-  const selected = ordered.slice(0, DETAIL_CAP);
-  const rescueWinner = ordered.find((record) => record.selectedState === "selected");
-
-  if (rescueWinner && !selected.includes(rescueWinner)) {
-    selected[selected.length - 1] = rescueWinner;
-    selected.sort(
-      (left, right) =>
-        rescueSeverity[left.proposedAction] - rescueSeverity[right.proposedAction] ||
-        compareCandidateIds(left.geometry.candidateId, right.geometry.candidateId),
-    );
-  }
-
   return { records: selected, truncatedCount: records.length - selected.length };
 }
 

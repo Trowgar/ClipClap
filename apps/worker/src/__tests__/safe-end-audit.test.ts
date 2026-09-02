@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   capSafeEndNormalRecords,
-  capSafeEndRescueRecords,
   reconcileSafeEndNormalRecords,
   safeEndGeometryReference,
   zeroTailHandoff,
   type SafeEndGeometryReference,
   type SafeEndNormalRecord,
-  type SafeEndRescueRecord,
 } from "../analyze-v2/safe-end-audit";
 import type { SentenceNode, SnappedClip } from "../analyze-v2/types";
 
@@ -49,25 +47,6 @@ function normal(candidateId: string, outcome: SafeEndNormalRecord["outcome"]): S
     kind: "story",
     outcome,
     reason: null,
-  };
-}
-
-function rescue(
-  candidateId: string,
-  proposedAction: SafeEndRescueRecord["proposedAction"],
-  selectedState: SafeEndRescueRecord["selectedState"] = "not_selected",
-): SafeEndRescueRecord {
-  return {
-    geometry: geometry(candidateId),
-    score: 0.7,
-    scoreRank: 1,
-    zeroTailHandoff: proposedAction === "zero_tail_handoff" || proposedAction === "both",
-    arcEvidence:
-      proposedAction === "standing_arc" || proposedAction === "both"
-        ? "matching_standing"
-        : "matching_clear",
-    proposedAction,
-    selectedState,
   };
 }
 
@@ -156,27 +135,6 @@ describe("safe-end audit primitives", () => {
     expect(result.truncatedCount).toBe(0);
   });
 
-  it("orders rescue detail by closed severity, including standing arc", () => {
-    const result = capSafeEndRescueRecords([
-      rescue("none", "none"),
-      rescue("standing", "standing_arc"),
-      rescue("zero", "zero_tail_handoff"),
-      rescue("both-b", "both"),
-      rescue("both-a", "both"),
-      rescue("selected", "none", "selected"),
-    ]);
-
-    expect(result.records.map((record) => record.geometry.candidateId)).toEqual([
-      "both-a",
-      "both-b",
-      "zero",
-      "standing",
-      "none",
-      "selected",
-    ]);
-    expect(result.truncatedCount).toBe(0);
-  });
-
   it("hard-caps normal detail at twenty records", () => {
     const records = Array.from({ length: 22 }, (_, index) => normal(`safe-${index.toString().padStart(2, "0")}`, "safe"));
     const result = capSafeEndNormalRecords(records);
@@ -193,19 +151,6 @@ describe("safe-end audit primitives", () => {
     const result = capSafeEndNormalRecords(records, 0);
 
     expect(result.records).toHaveLength(20);
-    expect(result.truncatedCount).toBe(2);
-  });
-
-  it("retains a selected rescue loser outside the first twenty details", () => {
-    const records = [
-      ...Array.from({ length: 21 }, (_, index) => rescue(`both-${index.toString().padStart(2, "0")}`, "both")),
-      rescue("selected-loser", "none", "selected"),
-    ];
-    const result = capSafeEndRescueRecords(records);
-
-    expect(result.records).toHaveLength(20);
-    expect(result.records.map((record) => record.geometry.candidateId)).toContain("selected-loser");
-    expect(result.records.map((record) => record.geometry.candidateId)).not.toContain("both-20");
     expect(result.truncatedCount).toBe(2);
   });
 
