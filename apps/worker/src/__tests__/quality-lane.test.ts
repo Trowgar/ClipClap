@@ -1,4 +1,47 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const authoritySpies = vi.hoisted(() => ({
+  runCritic: vi.fn(),
+  evidenceGate: vi.fn(),
+  snapNodes: vi.fn(),
+  filterStandaloneClips: vi.fn(),
+  finalizeClips: vi.fn(),
+}));
+
+vi.mock("../analyze-v2/critic", async () => {
+  const actual = await vi.importActual<typeof import("../analyze-v2/critic")>("../analyze-v2/critic");
+  authoritySpies.runCritic.mockImplementation((...args: any[]) => (actual.runCritic as any)(...args));
+  return { ...actual, runCritic: authoritySpies.runCritic };
+});
+
+vi.mock("../analyze-v2/gates", async () => {
+  const actual = await vi.importActual<typeof import("../analyze-v2/gates")>("../analyze-v2/gates");
+  authoritySpies.evidenceGate.mockImplementation((...args: any[]) => (actual.evidenceGate as any)(...args));
+  return { ...actual, evidenceGate: authoritySpies.evidenceGate };
+});
+
+vi.mock("../analyze-v2/snap", async () => {
+  const actual = await vi.importActual<typeof import("../analyze-v2/snap")>("../analyze-v2/snap");
+  authoritySpies.snapNodes.mockImplementation((...args: any[]) => (actual.snapNodes as any)(...args));
+  return { ...actual, snapNodes: authoritySpies.snapNodes };
+});
+
+vi.mock("../analyze-v2/standalone-filter", async () => {
+  const actual = await vi.importActual<typeof import("../analyze-v2/standalone-filter")>("../analyze-v2/standalone-filter");
+  authoritySpies.filterStandaloneClips.mockImplementation((...args: any[]) => (actual.filterStandaloneClips as any)(...args));
+  return { ...actual, filterStandaloneClips: authoritySpies.filterStandaloneClips };
+});
+
+vi.mock("../analyze-v2/finalize", async () => {
+  const actual = await vi.importActual<typeof import("../analyze-v2/finalize")>("../analyze-v2/finalize");
+  authoritySpies.finalizeClips.mockImplementation((...args: any[]) => (actual.finalizeClips as any)(...args));
+  return { ...actual, finalizeClips: authoritySpies.finalizeClips };
+});
+
+beforeEach(() => {
+  for (const spy of Object.values(authoritySpies)) spy.mockClear();
+});
+
 import { analyzeHighlightsV2 } from "../analyze-v2";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { runQualityLane } from "../analyze-v2/quality-lane";
@@ -30,6 +73,14 @@ function transcript(): TranscriptionResult {
 const scan = {
   choices: [{ message: { content: JSON.stringify({ candidates: [
     { start_node: 10, end_node: 14, payoff_node: 13, interest: 0.8, type: "story", thread: null },
+  ] }) }, finish_reason: "stop" }],
+  usage: { prompt_tokens: 100, completion_tokens: 30 },
+};
+
+const scanPair = {
+  choices: [{ message: { content: JSON.stringify({ candidates: [
+    { start_node: 10, end_node: 14, payoff_node: 13, interest: 0.8, type: "story", thread: null },
+    { start_node: 15, end_node: 19, payoff_node: 18, interest: 0.7, type: "story", thread: null },
   ] }) }, finish_reason: "stop" }],
   usage: { prompt_tokens: 100, completion_tokens: 30 },
 };
@@ -282,6 +333,103 @@ describe("quality lane characterization", () => {
       cfg: loadAnalyzeConfig({}),
       transcriptPartial: false,
     });
+    expect(projection(result)).toMatchInlineSnapshot(`
+      {
+        "highlights": [],
+        "noClipsReason": "NO_VIABLE_MOMENTS",
+        "telemetry": {
+          "batchSplits": 0,
+          "candidatesPerWindow": [
+            1,
+          ],
+          "copyRegrounded": [],
+          "copyRepairs": 0,
+          "criticBudgetK": 8,
+          "criticCandidates": 1,
+          "criticUnjudgedPool": 0,
+          "criticVerdicts": 1,
+          "dropCapHits": 0,
+          "droppedByNms": 0,
+          "droppedVerdicts": [],
+          "dropsProtected": [],
+          "durations": [],
+          "endExtension": {
+            "applied": 0,
+            "contradicted": 0,
+            "fallbackModelUsed": false,
+            "offered": 0,
+            "proposed": 0,
+            "refused": 0,
+            "refusedBy": {},
+            "secondsGained": 0,
+            "skipped": "disabled",
+          },
+          "evidenceDrops": 0,
+          "evidenceOutOfRange": {},
+          "evidenceWidened": 0,
+          "fallbackModelUsed": false,
+          "finalizerDrops": [],
+          "finalizerSurvivors": 0,
+          "gateDropReasons": {},
+          "hookDedupDrops": [],
+          "invariantDrops": 0,
+          "kept": 0,
+          "meanLexicalOverlap": 0,
+          "mergedCandidates": 1,
+          "omittedDrops": 0,
+          "omittedFirstPass": 0,
+          "omittedRecovered": 0,
+          "omittedRetryFailed": 0,
+          "openingTrims": [],
+          "path": "full",
+          "rawCandidates": 1,
+          "refusalDrops": 0,
+          "rewriteRejected": [],
+          "selectedForFinalizer": 0,
+          "semanticDedupDrops": [],
+          "snapDrops": 0,
+          "snippetFallbacks": 0,
+          "snippetTitleRepairs": [],
+          "snippetTitlesFlagged": 0,
+          "snippetTitlesKept": 0,
+          "snippetTitlesRepaired": 0,
+          "sourceSec": 180,
+          "speechSec": 180,
+          "teaserDrops": [],
+          "teaserRegion": null,
+          "tier": "none",
+          "titleRewrites": [],
+          "trimRejected": [],
+          "truncatedDrops": 0,
+          "verdictScores": [
+            {
+              "id": "c0",
+              "keep": false,
+              "score": 0.85,
+            },
+          ],
+          "windowsFailed": 0,
+          "windowsTotal": 1,
+        },
+        "usage": {
+          "byModel": {
+            "gpt-4o-mini": {
+              "inputTokens": 100,
+              "outputTokens": 30,
+              "requests": 1,
+            },
+            "gpt-5.6-luna": {
+              "inputTokens": 200,
+              "outputTokens": 80,
+              "requests": 1,
+            },
+          },
+          "inputTokens": 300,
+          "outputTokens": 110,
+          "requests": 2,
+        },
+      }
+    `);
     expect(result.highlights).toEqual([]);
     expect(result.noClipsReason).toBe("NO_VIABLE_MOMENTS");
     expect(result.telemetry).toMatchObject({
@@ -302,12 +450,562 @@ describe("quality lane characterization", () => {
       cfg: loadAnalyzeConfig({}),
       transcriptPartial: false,
     });
+    expect(projection(result)).toMatchInlineSnapshot(`
+      {
+        "highlights": [],
+        "noClipsReason": "NO_VIABLE_MOMENTS",
+        "telemetry": {
+          "batchSplits": 0,
+          "candidatesPerWindow": [
+            1,
+          ],
+          "copyRegrounded": [],
+          "copyRepairs": 0,
+          "criticBudgetK": 8,
+          "criticCandidates": 1,
+          "criticUnjudgedPool": 0,
+          "criticVerdicts": 1,
+          "dropCapHits": 0,
+          "droppedByNms": 0,
+          "droppedVerdicts": [
+            {
+              "id": "c0",
+              "reason": "invariant_violation",
+              "score": 0.85,
+              "stage": "snap",
+            },
+          ],
+          "dropsProtected": [],
+          "durations": [],
+          "endExtension": {
+            "applied": 0,
+            "contradicted": 0,
+            "fallbackModelUsed": false,
+            "offered": 0,
+            "proposed": 0,
+            "refused": 0,
+            "refusedBy": {},
+            "secondsGained": 0,
+            "skipped": "disabled",
+          },
+          "evidenceDrops": 0,
+          "evidenceOutOfRange": {
+            "description_evidence_out_of_range": 1,
+            "title_evidence_out_of_range": 1,
+          },
+          "evidenceWidened": 0,
+          "fallbackModelUsed": false,
+          "finalizerDrops": [],
+          "finalizerSurvivors": 0,
+          "gateDropReasons": {},
+          "hookDedupDrops": [],
+          "invariantDrops": 0,
+          "kept": 0,
+          "meanLexicalOverlap": 0,
+          "mergedCandidates": 1,
+          "omittedDrops": 0,
+          "omittedFirstPass": 0,
+          "omittedRecovered": 0,
+          "omittedRetryFailed": 0,
+          "openingTrims": [],
+          "path": "full",
+          "rawCandidates": 1,
+          "refusalDrops": 0,
+          "rewriteRejected": [],
+          "selectedForFinalizer": 0,
+          "semanticDedupDrops": [],
+          "snapDrops": 1,
+          "snippetFallbacks": 0,
+          "snippetTitleRepairs": [],
+          "snippetTitlesFlagged": 0,
+          "snippetTitlesKept": 0,
+          "snippetTitlesRepaired": 0,
+          "sourceSec": 180,
+          "speechSec": 180,
+          "teaserDrops": [],
+          "teaserRegion": null,
+          "tier": "none",
+          "titleRewrites": [],
+          "trimRejected": [],
+          "truncatedDrops": 0,
+          "verdictScores": [
+            {
+              "id": "c0",
+              "keep": true,
+              "score": 0.85,
+            },
+          ],
+          "windowsFailed": 0,
+          "windowsTotal": 1,
+        },
+        "usage": {
+          "byModel": {
+            "gpt-4o-mini": {
+              "inputTokens": 100,
+              "outputTokens": 30,
+              "requests": 1,
+            },
+            "gpt-5.6-luna": {
+              "inputTokens": 200,
+              "outputTokens": 80,
+              "requests": 1,
+            },
+          },
+          "inputTokens": 300,
+          "outputTokens": 110,
+          "requests": 2,
+        },
+      }
+    `);
     expect(result.highlights).toEqual([]);
     expect(result.noClipsReason).toBe("NO_VIABLE_MOMENTS");
     expect(result.telemetry.snapDrops).toBe(1);
     expect(result.telemetry.droppedVerdicts).toEqual([
       { id: "c0", stage: "snap", reason: "invariant_violation", score: 0.85 },
     ]);
+  });
+
+  it("keeps the complete public projection for an arc-downrank drop", async () => {
+    const c = client([scan, critic(), {
+      choices: [{ message: { content: JSON.stringify({ results: [{
+        id: "c0",
+        entry: { ok: false, defect: "dangling_reference", fix_start_node: null },
+        exit: { ok: false, defect: "mid_thought", fix_end_node: null },
+        standalone: { ok: true, missing: null },
+      }] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 4 },
+    }]);
+    const result = await analyzeHighlightsV2(transcript(), {
+      client: c.client,
+      cfg: { ...loadAnalyzeConfig({ ARC_AUDIT: "on", ARC_DOWNRANK: "on" }), arcDownrankPenalty2: 0.5 },
+      transcriptPartial: false,
+    });
+    expect(projection(result)).toMatchInlineSnapshot(`
+      {
+        "highlights": [],
+        "noClipsReason": "NO_VIABLE_MOMENTS",
+        "telemetry": {
+          "arcAudit": {
+            "audited": 1,
+            "byDefect": {
+              "dangling_reference": 1,
+              "mid_thought": 1,
+            },
+            "flaggedEntry": 1,
+            "flaggedExit": 1,
+            "flaggedStandalone": 0,
+            "gatedOut": {},
+            "unaudited": 0,
+          },
+          "arcDownrank": {
+            "considered": 1,
+            "dropped": 1,
+            "penalized": 1,
+          },
+          "batchSplits": 0,
+          "candidatesPerWindow": [
+            1,
+          ],
+          "copyRegrounded": [],
+          "copyRepairs": 0,
+          "criticBudgetK": 8,
+          "criticCandidates": 1,
+          "criticUnjudgedPool": 0,
+          "criticVerdicts": 1,
+          "dropCapHits": 0,
+          "droppedByNms": 0,
+          "droppedVerdicts": [
+            {
+              "id": "c0",
+              "reason": "arc_unrepairable",
+              "score": 0.85,
+              "stage": "arc_downrank",
+            },
+          ],
+          "dropsProtected": [],
+          "durations": [],
+          "endExtension": {
+            "applied": 0,
+            "contradicted": 0,
+            "fallbackModelUsed": false,
+            "offered": 0,
+            "proposed": 0,
+            "refused": 0,
+            "refusedBy": {},
+            "secondsGained": 0,
+            "skipped": "disabled",
+          },
+          "evidenceDrops": 0,
+          "evidenceOutOfRange": {},
+          "evidenceWidened": 0,
+          "fallbackModelUsed": false,
+          "finalizerDrops": [],
+          "finalizerSurvivors": 0,
+          "gateDropReasons": {},
+          "hookDedupDrops": [],
+          "invariantDrops": 0,
+          "kept": 0,
+          "meanLexicalOverlap": 0,
+          "mergedCandidates": 1,
+          "omittedDrops": 0,
+          "omittedFirstPass": 0,
+          "omittedRecovered": 0,
+          "omittedRetryFailed": 0,
+          "openingTrims": [],
+          "path": "full",
+          "rawCandidates": 1,
+          "refusalDrops": 0,
+          "rewriteRejected": [],
+          "selectedForFinalizer": 0,
+          "semanticDedupDrops": [],
+          "snapDrops": 0,
+          "snippetFallbacks": 0,
+          "snippetTitleRepairs": [],
+          "snippetTitlesFlagged": 0,
+          "snippetTitlesKept": 0,
+          "snippetTitlesRepaired": 0,
+          "sourceSec": 180,
+          "speechSec": 180,
+          "teaserDrops": [],
+          "teaserRegion": null,
+          "tier": "strong",
+          "titleRewrites": [],
+          "trimRejected": [],
+          "truncatedDrops": 0,
+          "verdictScores": [
+            {
+              "id": "c0",
+              "keep": true,
+              "score": 0.85,
+            },
+          ],
+          "windowsFailed": 0,
+          "windowsTotal": 1,
+        },
+        "usage": {
+          "byModel": {
+            "gpt-4o-mini": {
+              "inputTokens": 100,
+              "outputTokens": 30,
+              "requests": 1,
+            },
+            "gpt-5.6-luna": {
+              "inputTokens": 210,
+              "outputTokens": 84,
+              "requests": 2,
+            },
+          },
+          "inputTokens": 310,
+          "outputTokens": 114,
+          "requests": 3,
+        },
+      }
+    `);
+    expect(result.highlights).toEqual([]);
+    expect(result.noClipsReason).toBe("NO_VIABLE_MOMENTS");
+  });
+
+  it("keeps the complete public projection for a finalizer drop", async () => {
+    const c = client([scanPair, laneCriticRows(["c0", "c1"]), {
+      choices: [{ message: { content: JSON.stringify({ clips: [
+        {
+          id: "c0", verdict: "drop", drop_reason: "incoherent", duplicate_of: null,
+          shared_claim: null, title: null, title_evidence_nodes: null, trim_start_node: null,
+        },
+        {
+          id: "c1", verdict: "ship", drop_reason: null, duplicate_of: null,
+          shared_claim: null, title: null, title_evidence_nodes: null, trim_start_node: null,
+        },
+      ] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 300, completion_tokens: 90 },
+    }]);
+    const result = await analyzeHighlightsV2(transcript(), {
+      client: c.client,
+      cfg: loadAnalyzeConfig({}),
+      transcriptPartial: false,
+    });
+    expect(projection(result)).toMatchInlineSnapshot(`
+      {
+        "highlights": [
+          {
+            "_boundaryConfidence": "word",
+            "_descriptionEvidenceNodes": [
+              18,
+            ],
+            "_endNode": 18,
+            "_grounded": true,
+            "_startNode": 15,
+            "_titleEvidenceNodes": [
+              18,
+            ],
+            "description": "Спикер называет номер c1.",
+            "end": 94.8,
+            "hookEnd": 94.5,
+            "hookStart": 85,
+            "kind": "story",
+            "language": "ru",
+            "lowQuality": false,
+            "payoffAt": 94.5,
+            "score": 0.84,
+            "shortMoment": false,
+            "start": 74.85,
+            "title": "Он назвал номер c1",
+          },
+        ],
+        "noClipsReason": undefined,
+        "telemetry": {
+          "batchSplits": 0,
+          "candidatesPerWindow": [
+            2,
+          ],
+          "copyRegrounded": [],
+          "copyRepairs": 0,
+          "criticBudgetK": 8,
+          "criticCandidates": 2,
+          "criticUnjudgedPool": 0,
+          "criticVerdicts": 2,
+          "dropCapHits": 0,
+          "droppedByNms": 0,
+          "droppedVerdicts": [],
+          "dropsProtected": [],
+          "durations": [
+            20,
+          ],
+          "endExtension": {
+            "applied": 0,
+            "contradicted": 0,
+            "fallbackModelUsed": false,
+            "offered": 0,
+            "proposed": 0,
+            "refused": 0,
+            "refusedBy": {},
+            "secondsGained": 0,
+            "skipped": "disabled",
+          },
+          "evidenceDrops": 0,
+          "evidenceOutOfRange": {},
+          "evidenceWidened": 0,
+          "fallbackModelUsed": false,
+          "finalizerDrops": [
+            {
+              "id": "c0",
+              "reason": "incoherent",
+            },
+          ],
+          "finalizerSurvivors": 1,
+          "gateDropReasons": {},
+          "hookDedupDrops": [],
+          "invariantDrops": 0,
+          "kept": 1,
+          "meanLexicalOverlap": 0.5,
+          "mergedCandidates": 2,
+          "omittedDrops": 0,
+          "omittedFirstPass": 0,
+          "omittedRecovered": 0,
+          "omittedRetryFailed": 0,
+          "openingTrims": [],
+          "path": "full",
+          "rawCandidates": 2,
+          "refusalDrops": 0,
+          "rewriteRejected": [],
+          "selectedForFinalizer": 2,
+          "semanticDedupDrops": [],
+          "snapDrops": 0,
+          "snippetFallbacks": 0,
+          "snippetTitleRepairs": [],
+          "snippetTitlesFlagged": 0,
+          "snippetTitlesKept": 0,
+          "snippetTitlesRepaired": 0,
+          "sourceSec": 180,
+          "speechSec": 180,
+          "teaserDrops": [],
+          "teaserRegion": null,
+          "tier": "strong",
+          "titleRewrites": [],
+          "trimRejected": [],
+          "truncatedDrops": 0,
+          "verdictScores": [
+            {
+              "id": "c0",
+              "keep": true,
+              "score": 0.85,
+            },
+            {
+              "id": "c1",
+              "keep": true,
+              "score": 0.84,
+            },
+          ],
+          "windowsFailed": 0,
+          "windowsTotal": 1,
+        },
+        "usage": {
+          "byModel": {
+            "gpt-4o-mini": {
+              "inputTokens": 100,
+              "outputTokens": 30,
+              "requests": 1,
+            },
+            "gpt-5.6-luna": {
+              "inputTokens": 500,
+              "outputTokens": 170,
+              "requests": 2,
+            },
+          },
+          "inputTokens": 600,
+          "outputTokens": 200,
+          "requests": 3,
+        },
+      }
+    `);
+    expect(result.highlights).toHaveLength(1);
+    expect(result.noClipsReason).toBeUndefined();
+  });
+
+  it("keeps the complete public projection when soft cap removes a finalizer survivor", async () => {
+    const c = client([scanPair, laneCriticRows(["c0", "c1"]), {
+      choices: [{ message: { content: JSON.stringify({ clips: [
+        { id: "c0", verdict: "ship", drop_reason: null, duplicate_of: null, shared_claim: null, title: null, title_evidence_nodes: null, trim_start_node: null },
+        { id: "c1", verdict: "ship", drop_reason: null, duplicate_of: null, shared_claim: null, title: null, title_evidence_nodes: null, trim_start_node: null },
+      ] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 300, completion_tokens: 90 },
+    }]);
+    const result = await analyzeHighlightsV2(transcript(), {
+      client: c.client,
+      cfg: { ...loadAnalyzeConfig({}), softCap: 1 },
+      transcriptPartial: false,
+    });
+    expect(projection(result)).toMatchInlineSnapshot(`
+      {
+        "highlights": [
+          {
+            "_boundaryConfidence": "word",
+            "_descriptionEvidenceNodes": [
+              13,
+            ],
+            "_endNode": 13,
+            "_grounded": true,
+            "_startNode": 10,
+            "_titleEvidenceNodes": [
+              13,
+            ],
+            "description": "Спикер называет номер c0.",
+            "end": 69.8,
+            "hookEnd": 69.5,
+            "hookStart": 60,
+            "kind": "story",
+            "language": "ru",
+            "lowQuality": false,
+            "payoffAt": 69.5,
+            "score": 0.85,
+            "shortMoment": false,
+            "start": 49.85,
+            "title": "Он назвал номер c0",
+          },
+        ],
+        "noClipsReason": undefined,
+        "telemetry": {
+          "batchSplits": 0,
+          "candidatesPerWindow": [
+            2,
+          ],
+          "copyRegrounded": [],
+          "copyRepairs": 0,
+          "criticBudgetK": 8,
+          "criticCandidates": 2,
+          "criticUnjudgedPool": 0,
+          "criticVerdicts": 2,
+          "dropCapHits": 0,
+          "droppedByNms": 0,
+          "droppedVerdicts": [],
+          "dropsProtected": [],
+          "durations": [
+            19.9,
+          ],
+          "endExtension": {
+            "applied": 0,
+            "contradicted": 0,
+            "fallbackModelUsed": false,
+            "offered": 0,
+            "proposed": 0,
+            "refused": 0,
+            "refusedBy": {},
+            "secondsGained": 0,
+            "skipped": "disabled",
+          },
+          "evidenceDrops": 0,
+          "evidenceOutOfRange": {},
+          "evidenceWidened": 0,
+          "fallbackModelUsed": false,
+          "finalizerDrops": [],
+          "finalizerSurvivors": 2,
+          "gateDropReasons": {},
+          "hookDedupDrops": [],
+          "invariantDrops": 0,
+          "kept": 1,
+          "meanLexicalOverlap": 0.5,
+          "mergedCandidates": 2,
+          "omittedDrops": 0,
+          "omittedFirstPass": 0,
+          "omittedRecovered": 0,
+          "omittedRetryFailed": 0,
+          "openingTrims": [],
+          "path": "full",
+          "rawCandidates": 2,
+          "refusalDrops": 0,
+          "rewriteRejected": [],
+          "selectedForFinalizer": 2,
+          "semanticDedupDrops": [],
+          "snapDrops": 0,
+          "snippetFallbacks": 0,
+          "snippetTitleRepairs": [],
+          "snippetTitlesFlagged": 0,
+          "snippetTitlesKept": 0,
+          "snippetTitlesRepaired": 0,
+          "sourceSec": 180,
+          "speechSec": 180,
+          "teaserDrops": [],
+          "teaserRegion": null,
+          "tier": "strong",
+          "titleRewrites": [],
+          "trimRejected": [],
+          "truncatedDrops": 0,
+          "verdictScores": [
+            {
+              "id": "c0",
+              "keep": true,
+              "score": 0.85,
+            },
+            {
+              "id": "c1",
+              "keep": true,
+              "score": 0.84,
+            },
+          ],
+          "windowsFailed": 0,
+          "windowsTotal": 1,
+        },
+        "usage": {
+          "byModel": {
+            "gpt-4o-mini": {
+              "inputTokens": 100,
+              "outputTokens": 30,
+              "requests": 1,
+            },
+            "gpt-5.6-luna": {
+              "inputTokens": 500,
+              "outputTokens": 170,
+              "requests": 2,
+            },
+          },
+          "inputTokens": 600,
+          "outputTokens": 200,
+          "requests": 3,
+        },
+      }
+    `);
+    expect(result.highlights).toHaveLength(1);
+    expect(result.noClipsReason).toBeUndefined();
   });
 
   it("classifies an evidence-gate drop with complete lane accounting", async () => {
@@ -373,6 +1071,16 @@ describe("quality lane characterization", () => {
     expect(result.telemetry.arcAudit).toMatchObject({ audited: 1 });
     expect(result.telemetry.standaloneFilter).toMatchObject({ considered: 1, dropped: 0 });
     expect(result.telemetry.finalizerSurvivors).toBe(1);
+    expect(authoritySpies.runCritic).toHaveBeenCalledTimes(1);
+    expect(authoritySpies.runCritic.mock.calls[0][3]).toHaveLength(1);
+    expect(authoritySpies.evidenceGate).toHaveBeenCalledTimes(1);
+    expect(authoritySpies.evidenceGate.mock.calls[0][0]).toMatchObject({ id: "c0" });
+    expect(authoritySpies.snapNodes).toHaveBeenCalledTimes(1);
+    expect(authoritySpies.snapNodes.mock.calls[0][0]).toMatchObject({ id: "c0" });
+    expect(authoritySpies.filterStandaloneClips).toHaveBeenCalledTimes(1);
+    expect(authoritySpies.filterStandaloneClips.mock.calls[0][0]).toHaveLength(1);
+    expect(authoritySpies.finalizeClips).toHaveBeenCalledTimes(1);
+    expect(authoritySpies.finalizeClips.mock.calls[0][2]).toHaveLength(1);
   });
 
   it("classifies an omitted critic row as critic_unjudged while shipping a partial survivor", async () => {
