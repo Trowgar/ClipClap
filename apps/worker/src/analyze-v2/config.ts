@@ -531,7 +531,7 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     scanWindowSec: num(env, "SCAN_WINDOW_SEC", 600),
     scanOverlapSec: num(env, "SCAN_OVERLAP_SEC", 90),
     visualRecallMode,
-    visualRecallMaxCandidates: positiveIntBounded(env, "VISUAL_RECALL_MAX_CANDIDATES", 12, 100),
+    visualRecallMaxCandidates: positiveIntBounded(env, "VISUAL_RECALL_MAX_CANDIDATES", 15, 100),
     visualRecallClusterSec: positiveBounded(env, "VISUAL_RECALL_CLUSTER_SEC", 12, 600),
     visualRecallPreSec: positiveBounded(env, "VISUAL_RECALL_PRE_SEC", 8, 600),
     visualRecallPostSec: positiveBounded(env, "VISUAL_RECALL_POST_SEC", 18, 600),
