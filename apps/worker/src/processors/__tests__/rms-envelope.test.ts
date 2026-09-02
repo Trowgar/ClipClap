@@ -189,18 +189,28 @@ describe("bucketVideoEnvelopesBySecond", () => {
   });
 
   it.each([
-    ["nonzero PTS", "frame:0 pts_time:1\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1"],
-    ["gap", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1\nframe:2 pts_time:2\nlavfi.signalstats.YAVG=20\nlavfi.signalstats.YDIF=2"],
-    ["missing YAVG", "frame:0 pts_time:0\nlavfi.signalstats.YDIF=1"],
-    ["missing YDIF", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=10"],
-    ["NaN signal", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=NaN\nlavfi.signalstats.YDIF=1"],
-    ["nonfinite signal", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=Infinity"],
-    ["NaN PTS", "frame:0 pts_time:NaN\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1"],
-    ["nonfinite PTS", "frame:0 pts_time:Infinity\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1"],
-  ])("returns empty arrays for %s", (_reason, stderr) => {
+    ["nonzero PTS", "frame:0 pts_time:1\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1", [], []],
+    ["gap", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1\nframe:2 pts_time:2\nlavfi.signalstats.YAVG=20\nlavfi.signalstats.YDIF=2", [], []],
+    ["missing YAVG", "frame:0 pts_time:0\nlavfi.signalstats.YDIF=1", [], [1]],
+    ["missing YDIF", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=10", [10], []],
+    ["NaN YAVG", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=NaN\nlavfi.signalstats.YDIF=1", [], [1]],
+    ["nonfinite YDIF", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=Infinity", [10], []],
+    ["NaN PTS", "frame:0 pts_time:NaN\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1", [], []],
+    ["nonfinite PTS", "frame:0 pts_time:Infinity\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1", [], []],
+  ])("degrades only the affected axis for %s", (_reason, stderr, luma, motion) => {
     expect(bucketVideoEnvelopesBySecond(stderr)).toEqual({
-      lumaEnvelope: [],
-      motionEnvelope: [],
+      lumaEnvelope: luma,
+      motionEnvelope: motion,
+    });
+  });
+
+  it.each([
+    ["YAVG gap", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1\nframe:1 pts_time:1\nlavfi.signalstats.YDIF=2\nframe:2 pts_time:2\nlavfi.signalstats.YAVG=30\nlavfi.signalstats.YDIF=3", [], [1, 2, 3]],
+    ["YDIF gap", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1\nframe:1 pts_time:1\nlavfi.signalstats.YAVG=20\nframe:2 pts_time:2\nlavfi.signalstats.YAVG=30\nlavfi.signalstats.YDIF=3", [10, 20, 30], []],
+  ])("degrades only the axis with a gap: %s", (_reason, stderr, luma, motion) => {
+    expect(bucketVideoEnvelopesBySecond(stderr)).toEqual({
+      lumaEnvelope: luma,
+      motionEnvelope: motion,
     });
   });
 });

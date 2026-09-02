@@ -346,18 +346,22 @@ export function bucketVideoEnvelopesBySecond(stderr: string): VideoEnvelopes {
   const numberToken = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
   const lumaBuckets = new Map<number, number[]>();
   const motionBuckets = new Map<number, number[]>();
+  const expectedSeconds = new Set<number>();
   let sec: number | null = null;
-  let invalidInput = false;
+  let invalidTimestamp = false;
+  let invalidLuma = false;
+  let invalidMotion = false;
   for (const line of stderr.split("\n")) {
     const ptsToken = line.match(/pts_time:([^\s]+)/);
     if (ptsToken) {
       const pts = Number(ptsToken[1]);
       if (!numberToken.test(ptsToken[1]) || !Number.isFinite(pts) || pts < 0) {
-        invalidInput = true;
+        invalidTimestamp = true;
         sec = null;
         continue;
       }
       sec = Math.trunc(pts);
+      expectedSeconds.add(sec);
       continue;
     }
 
@@ -365,7 +369,7 @@ export function bucketVideoEnvelopesBySecond(stderr: string): VideoEnvelopes {
     if (yavgToken) {
       const value = Number(yavgToken[1]);
       if (sec === null || !numberToken.test(yavgToken[1]) || !Number.isFinite(value)) {
-        invalidInput = true;
+        invalidLuma = true;
         continue;
       }
       const bucket = lumaBuckets.get(sec);
@@ -378,7 +382,7 @@ export function bucketVideoEnvelopesBySecond(stderr: string): VideoEnvelopes {
     if (ydifToken) {
       const value = Number(ydifToken[1]);
       if (sec === null || !numberToken.test(ydifToken[1]) || !Number.isFinite(value)) {
-        invalidInput = true;
+        invalidMotion = true;
         continue;
       }
       const bucket = motionBuckets.get(sec);
@@ -387,32 +391,34 @@ export function bucketVideoEnvelopesBySecond(stderr: string): VideoEnvelopes {
     }
   }
 
-  const seconds = [...new Set([
-    ...lumaBuckets.keys(),
-    ...motionBuckets.keys(),
-  ])].sort((a, b) => a - b);
-  if (invalidInput || seconds.length === 0 || seconds[0] !== 0) {
+  const seconds = [...expectedSeconds].sort((a, b) => a - b);
+  if (invalidTimestamp || seconds.length === 0 || seconds[0] !== 0) {
     return { lumaEnvelope: [], motionEnvelope: [] };
   }
   const maxSecond = seconds[seconds.length - 1];
   for (let second = 0; second <= maxSecond; second++) {
-    const luma = lumaBuckets.get(second);
-    const motion = motionBuckets.get(second);
-    if (!luma || !motion || luma.some((value) => !Number.isFinite(value)) ||
-      motion.some((value) => !Number.isFinite(value))) {
+    if (!expectedSeconds.has(second)) {
       return { lumaEnvelope: [], motionEnvelope: [] };
     }
   }
 
-  const roundBuckets = (buckets: Map<number, number[]>) =>
-    seconds.map((key) => {
+  const roundBuckets = (
+    buckets: Map<number, number[]>,
+    invalidAxis: boolean,
+  ) => {
+    if (invalidAxis || seconds.some((second) => {
+      const values = buckets.get(second);
+      return !values || values.some((value) => !Number.isFinite(value));
+    })) return [];
+    return seconds.map((key) => {
       const values = buckets.get(key)!;
       const mean = values.reduce((a, b) => a + b, 0) / values.length;
       return Math.round(mean * 10) / 10;
     });
+  };
   return {
-    lumaEnvelope: roundBuckets(lumaBuckets),
-    motionEnvelope: roundBuckets(motionBuckets),
+    lumaEnvelope: roundBuckets(lumaBuckets, invalidLuma),
+    motionEnvelope: roundBuckets(motionBuckets, invalidMotion),
   };
 }
 
