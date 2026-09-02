@@ -4,12 +4,12 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { promisify } from "util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { lumaEnvelope, rmsEnvelope } from "../transcribe";
+import { lumaEnvelope, rmsEnvelope, videoEnvelopes } from "../transcribe";
 
 const execFileAsync = promisify(execFile);
 
 // This file does NOT mock child_process - transcribe.test.ts does that for
-// the rest of the suite, but rmsEnvelope's (and lumaEnvelope's) actual job
+// the rest of the suite, but rmsEnvelope's (and videoEnvelopes') actual job
 // is to parse REAL ffmpeg astats/signalstats+ametadata output (see each
 // function's own comment for the measured format), so a mock would test
 // the parser against a shape nobody verified.
@@ -17,6 +17,8 @@ const execFileAsync = promisify(execFile);
 let dir: string;
 let fixturePath: string;
 let videoFixturePath: string;
+let movingVideoFixturePath: string;
+let staticVideoFixturePath: string;
 let audioOnlyFixturePath: string;
 
 beforeAll(async () => {
@@ -46,6 +48,20 @@ beforeAll(async () => {
     "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[out]",
     "-map", "[out]",
     videoFixturePath,
+  ]);
+
+  movingVideoFixturePath = join(dir, "moving.mp4");
+  await execFileAsync("ffmpeg", [
+    "-y", "-v", "error",
+    "-f", "lavfi", "-i", "testsrc2=size=64x64:rate=1:duration=4",
+    movingVideoFixturePath,
+  ]);
+
+  staticVideoFixturePath = join(dir, "static.mp4");
+  await execFileAsync("ffmpeg", [
+    "-y", "-v", "error",
+    "-f", "lavfi", "-i", "color=gray:s=64x64:r=1:d=4",
+    staticVideoFixturePath,
   ]);
 
   // The corpus's real degenerate case: an audio-only file handed to a
@@ -122,5 +138,30 @@ describe("lumaEnvelope", () => {
   it("returns [] for a source ffmpeg cannot open at all", async () => {
     const envelope = await lumaEnvelope(join(dir, "does-not-exist.mp4"));
     expect(envelope).toEqual([]);
+  });
+});
+
+describe("videoEnvelopes", () => {
+  it("extracts non-empty motion for a synthetic moving 4s source", async () => {
+    const { lumaEnvelope: luma, motionEnvelope: motion } =
+      await videoEnvelopes(movingVideoFixturePath);
+
+    expect(luma).toHaveLength(4);
+    expect(motion).toHaveLength(4);
+    expect(Math.max(...motion.slice(1))).toBeGreaterThan(1);
+  });
+
+  it("keeps static-source motion near zero after the first sample", async () => {
+    const { motionEnvelope: motion } = await videoEnvelopes(staticVideoFixturePath);
+
+    expect(motion.length).toBeGreaterThanOrEqual(2);
+    expect(Math.max(...motion.slice(1))).toBeLessThan(0.5);
+  });
+
+  it("returns both video arrays empty for an audio-only source", async () => {
+    await expect(videoEnvelopes(audioOnlyFixturePath)).resolves.toEqual({
+      lumaEnvelope: [],
+      motionEnvelope: [],
+    });
   });
 });

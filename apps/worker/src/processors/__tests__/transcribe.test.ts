@@ -114,16 +114,37 @@ describe("transcribeVideo", () => {
     // stderr is empty for every call, signalstats included, so there is
     // nothing to bucket - the key must still be present and array-typed.
     expect(result.lumaEnvelope).toEqual([]);
+    expect(result.motionEnvelope).toEqual([]);
+  });
+
+  it("includes an empty motion envelope when video analysis fails", async () => {
+    mocks.execFile.mockImplementation((_cmd, args, optsOrCb, maybeCb) => {
+      const callback = typeof optsOrCb === "function" ? optsOrCb : maybeCb;
+      const argv = args as string[];
+      if (argv.includes("fps=1,signalstats,metadata=print")) {
+        return callback(new Error("ffmpeg signalstats exploded"));
+      }
+      return callback(null, { stdout: "12.5", stderr: "" });
+    });
+
+    const result = await transcribeVideo("/tmp/source.mp4");
+
+    expect(result.lumaEnvelope).toEqual([]);
+    expect(result.motionEnvelope).toEqual([]);
+    expect(result.transcription.text).toBe("hello world");
   });
 
   it("runs the signalstats pass against the ORIGINAL video path, not the extracted audio", async () => {
     await transcribeVideo("/tmp/source.mp4");
     const signalstatsCall = mocks.execFile.mock.calls.find((call) =>
       (call[1] as string[]).includes(
-        "fps=1,signalstats,metadata=print:key=lavfi.signalstats.YAVG"
+        "fps=1,signalstats,metadata=print"
       )
     );
     expect(signalstatsCall).toBeDefined();
+    expect(mocks.execFile.mock.calls.filter((call) =>
+      (call[1] as string[]).includes("fps=1,signalstats,metadata=print")
+    )).toHaveLength(1);
     const argv = signalstatsCall![1] as string[];
     expect(argv[argv.indexOf("-i") + 1]).toBe("/tmp/source.mp4");
   });
@@ -135,7 +156,7 @@ describe("transcribeVideo", () => {
     mocks.execFile.mockImplementation((_cmd, args, optsOrCb, maybeCb) => {
       const callback = typeof optsOrCb === "function" ? optsOrCb : maybeCb;
       const argv = args as string[];
-      if (argv.includes("fps=1,signalstats,metadata=print:key=lavfi.signalstats.YAVG")) {
+      if (argv.includes("fps=1,signalstats,metadata=print")) {
         return callback(new Error("ffmpeg signalstats exploded"));
       }
       return callback(null, { stdout: "12.5", stderr: "" });
@@ -144,6 +165,7 @@ describe("transcribeVideo", () => {
     const result = await transcribeVideo("/tmp/source.mp4");
 
     expect(result.lumaEnvelope).toEqual([]);
+    expect(result.motionEnvelope).toEqual([]);
     expect(result.transcription.text).toBe("hello world");
   });
 

@@ -283,6 +283,7 @@ describe("stage handlers", () => {
       missingRanges: [],
       energyEnvelope: [-30.1, -28.4, -90],
       lumaEnvelope: [16, 16, 235],
+      motionEnvelope: [0, 12.5, 18.2],
     });
 
     await runTranscribeStage({ jobId: "job1", userId: "u1" });
@@ -321,6 +322,11 @@ describe("stage handlers", () => {
       "job1",
       "TRANSCRIBE",
       expect.objectContaining({ lumaEnvelope: [16, 16, 235] })
+    );
+    expect(mocks.completeJobStep).toHaveBeenCalledWith(
+      "job1",
+      "TRANSCRIBE",
+      expect.objectContaining({ motionEnvelope: [0, 12.5, 18.2] })
     );
   });
 
