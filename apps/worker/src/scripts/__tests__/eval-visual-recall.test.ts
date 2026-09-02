@@ -4,6 +4,7 @@ import {
   summarizeCases,
   parseEvalManifest,
   parseInvarianceEvidence,
+  parseTranscription,
   invarianceGate,
   runVisualRecallCli,
   type EvalCaseResult,
@@ -24,6 +25,37 @@ describe("visual recall evaluation metrics", () => {
     expect(matchesWindow(window(0, 0), window(0, 1), 0.2)).toBe(false);
     expect(matchesWindow(window(-1, 1), window(0, 1), 0.2)).toBe(false);
     expect(matchesWindow(window(0, 1), window(0, 1), 1.2)).toBe(false);
+  });
+
+  it("accepts production-shaped zero-duration transcript segments and words", () => {
+    const parsed = parseTranscription({
+      text: "opaque",
+      segments: [{
+        start: 4,
+        end: 4,
+        text: "",
+        words: [{ text: "", start: 4, end: 4 }],
+      }],
+    });
+    expect(parsed.segments[0]).toMatchObject({ start: 4, end: 4, text: "" });
+    expect(parsed.segments[0].words?.[0]).toMatchObject({ start: 4, end: 4, text: "" });
+  });
+
+  it.each([
+    { start: 4, end: 3, text: "reverse" },
+    { start: Number.NaN, end: 4, text: "nonfinite" },
+  ])("rejects invalid transcript segment duration: $text", (segment) => {
+    expect(() => parseTranscription({ text: "", segments: [segment] })).toThrow(/segment/i);
+  });
+
+  it.each([
+    { start: 4, end: 3, text: "reverse" },
+    { start: Number.NaN, end: 4, text: "nonfinite" },
+  ])("rejects invalid transcript word duration: $text", (word) => {
+    expect(() => parseTranscription({
+      text: "",
+      segments: [{ start: 4, end: 5, text: "", words: [word] }],
+    })).toThrow(/word/i);
   });
 
   it("aggregates recall and reports each independent gate reason", () => {
@@ -500,6 +532,9 @@ describe("visual recall manifest validation and CLI output", () => {
             }, {
               start: 20, end: 24, text: "More private words.",
               words: [{ text: "more", start: 20, end: 21 }, { text: "words", start: 21, end: 23 }],
+            }, {
+              start: 24, end: 24, text: "",
+              words: [{ text: "", start: 24, end: 24 }],
             }],
           });
         },

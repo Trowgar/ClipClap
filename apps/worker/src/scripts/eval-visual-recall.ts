@@ -664,7 +664,8 @@ function textBytes(raw: string | Buffer): number {
   return typeof raw === "string" ? Buffer.byteLength(raw, "utf8") : raw.byteLength;
 }
 
-function parseTranscription(value: unknown): TranscriptionResult {
+/** Parse the production transcript JSON shape without altering its content. */
+export function parseTranscription(value: unknown): TranscriptionResult {
   if (!isRecord(value) || typeof value.text !== "string" || !Array.isArray(value.segments)) {
     throw new Error("transcript must contain text and segments");
   }
@@ -672,7 +673,7 @@ function parseTranscription(value: unknown): TranscriptionResult {
     if (!isRecord(segment) || typeof segment.text !== "string" ||
         typeof segment.start !== "number" || typeof segment.end !== "number" ||
         !Number.isFinite(segment.start) || !Number.isFinite(segment.end) ||
-        segment.start < 0 || segment.end <= segment.start) {
+        segment.start < 0 || segment.end < segment.start) {
       throw new Error("transcript segment is malformed");
     }
     if (segment.words !== undefined) {
@@ -681,7 +682,7 @@ function parseTranscription(value: unknown): TranscriptionResult {
         if (!isRecord(word) || typeof word.text !== "string" ||
             typeof word.start !== "number" || typeof word.end !== "number" ||
             !Number.isFinite(word.start) || !Number.isFinite(word.end) ||
-            word.start < 0 || word.end <= word.start) {
+            word.start < 0 || word.end < word.start) {
           throw new Error("transcript word is malformed");
         }
       }
