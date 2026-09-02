@@ -44,6 +44,14 @@ describe("visual recall evaluation metrics", () => {
         nominatedWindows: [window(401, 409)],
         candidateCount: 1,
       },
+      {
+        caseKey: "other-a",
+        kind: "other",
+        positiveWindows: [window(500, 510)],
+        negativeWindows: [],
+        nominatedWindows: [window(501, 509)],
+        candidateCount: 1,
+      },
     ];
 
     const summary = summarizeCases(cases, {
@@ -51,13 +59,15 @@ describe("visual recall evaluation metrics", () => {
       offShadowInvariant: true,
     });
 
-    expect(summary.positiveRecall).toBeCloseTo(0.75);
+    expect(summary.positiveRecall).toBeCloseTo(0.8);
     expect(summary.gamingMatchedWindows).toBe(2);
     expect(summary.gates).toEqual({
       gamingMinimum: true,
       asIsRetention: true,
+      otherRetention: true,
       candidateCap: true,
       offShadowInvariant: true,
+      gamingWeakWindowRank: true,
     });
     expect(summary.pass).toBe(true);
   });
@@ -86,15 +96,62 @@ describe("visual recall evaluation metrics", () => {
     expect(summary.gates).toEqual({
       gamingMinimum: false,
       asIsRetention: false,
+      otherRetention: false,
       candidateCap: false,
       offShadowInvariant: false,
+      gamingWeakWindowRank: false,
     });
     expect(summary.failureReasons).toEqual([
       "gaming_positive_recall_below_two_windows",
       "as_is_positive_window_not_retained",
+      "other_positive_window_not_retained",
       "candidate_cap_exceeded",
       "off_shadow_invariance_not_verified",
+      "gaming_weak_window_rank_not_verified",
     ]);
+  });
+
+  it.each([
+    ["missing", [], [], false],
+    ["missed", [window(500, 510)], [], false],
+  ])("requires retained other positive coverage (%s)", (_label, positives, nominations, expected) => {
+    const summary = summarizeCases([{
+      caseKey: "gaming-a", kind: "gaming",
+      positiveWindows: [window(0, 10), window(100, 110)],
+      negativeWindows: [window(300, 310)],
+      nominatedWindows: [window(0, 10), window(100, 110)],
+      candidateCount: 2,
+    }, {
+      caseKey: "other-a", kind: "other",
+      positiveWindows: positives,
+      negativeWindows: [], nominatedWindows: nominations, candidateCount: 0,
+    }], { candidateCap: 12, offShadowInvariant: true });
+    expect(summary.gates.otherRetention).toBe(expected);
+  });
+
+  it.each([
+    ["no gaming negative", [],  false],
+    ["weak peak above second positive", [window(300, 310)], false],
+    ["weak peak below second positive", [window(300, 310)], true],
+    ["no weak nomination", [window(300, 310)], true],
+  ])("gates gaming weak-window rank: %s", (label, negatives, expected) => {
+    const weakNomination = label === "no weak nomination" ? [] : [{ window: window(300, 310), peakValue: label === "weak peak below second positive" ? 70 : 90 }];
+    const summary = summarizeCases([{
+      caseKey: "gaming-a", kind: "gaming",
+      positiveWindows: [window(0, 10), window(100, 110)],
+      negativeWindows: negatives,
+      nominatedWindows: [window(0, 10), window(100, 110), ...weakNomination.map((item) => item.window)],
+      nominatedPeaks: [
+        { window: window(0, 10), peakValue: 100 },
+        { window: window(100, 110), peakValue: 80 },
+        ...weakNomination,
+      ],
+      candidateCount: 3,
+    }], { candidateCap: 12, offShadowInvariant: true });
+    if (label === "no gaming negative") {
+      expect(summary.failureReasons).toContain("gaming_weak_window_rank_not_verified");
+    }
+    expect(summary.gates.gamingWeakWindowRank).toBe(expected);
   });
 
   it("cannot pass without a confirmed AS_IS positive window", () => {
@@ -323,11 +380,18 @@ describe("visual recall manifest validation and CLI output", () => {
               sourcePath: "/private/source.mp4",
               transcriptPath: "/private/transcript.json",
               positiveWindows: [window(10, 14), window(20, 24)],
+              negativeWindows: [window(30, 34)],
             }, {
               caseKey: "anonymous-as-is",
               kind: "as_is",
               sourcePath: "/private/source2.mp4",
               transcriptPath: "/private/transcript2.json",
+              positiveWindows: [window(10, 14)],
+            }, {
+              caseKey: "anonymous-other",
+              kind: "other",
+              sourcePath: "/private/source3.mp4",
+              transcriptPath: "/private/transcript3.json",
               positiveWindows: [window(10, 14)],
             }],
           });

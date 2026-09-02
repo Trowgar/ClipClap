@@ -68,6 +68,8 @@ export interface EvalCaseResult {
   positiveWindows: EvalWindow[];
   negativeWindows: EvalWindow[];
   nominatedWindows: EvalWindow[];
+  /** Peak strengths are paired with nominations for the gaming weak-window gate. */
+  nominatedPeaks?: Array<{ window: EvalWindow; peakValue: number }>;
   candidateCount: number;
 }
 
@@ -87,13 +89,17 @@ export interface EvalSummary {
   gamingMatchedWindows: number;
   asIsMatchedWindows: number;
   asIsPositiveWindows: number;
+  otherMatchedWindows: number;
+  otherPositiveWindows: number;
   negativeWindowHitRate: number | null;
   negativeControlsAvailable: boolean;
   gates: {
     gamingMinimum: boolean;
     asIsRetention: boolean;
+    otherRetention: boolean;
     candidateCap: boolean;
     offShadowInvariant: boolean;
+    gamingWeakWindowRank: boolean;
   };
   failureReasons: string[];
   pass: boolean;
@@ -309,7 +315,10 @@ export function matchesWindow(
   return overlap / Math.min(candidate.end - candidate.start, target.end - target.start) >= thresholdFraction;
 }
 
-function matchedCount(targets: readonly EvalWindow[], nominated: readonly EvalWindow[]): number {
+function matchingPairs(
+  targets: readonly EvalWindow[],
+  nominated: readonly EvalWindow[],
+): Array<{ targetIndex: number; candidateIndex: number }> {
   const candidateByTarget = targets.map((target) => nominated
     .map((candidate, candidateIndex) => matchesWindow(candidate, target) ? candidateIndex : -1)
     .filter((candidateIndex) => candidateIndex >= 0));
@@ -330,7 +339,19 @@ function matchedCount(targets: readonly EvalWindow[], nominated: readonly EvalWi
   for (let targetIndex = 0; targetIndex < targets.length; targetIndex++) {
     if (visit(targetIndex, new Set())) matched++;
   }
-  return matched;
+  return [...targetByCandidate.entries()]
+    .map(([candidateIndex, targetIndex]) => ({ targetIndex, candidateIndex }))
+    .sort((a, b) => a.targetIndex - b.targetIndex || a.candidateIndex - b.candidateIndex)
+    .slice(0, matched);
+}
+
+function matchedCount(targets: readonly EvalWindow[], nominated: readonly EvalWindow[]): number {
+  return matchingPairs(targets, nominated).length;
+}
+
+function nominationPeaks(item: EvalCaseResult): Array<{ window: EvalWindow; peakValue: number }> {
+  if (item.nominatedPeaks !== undefined) return item.nominatedPeaks;
+  return item.nominatedWindows.map((itemWindow) => ({ window: itemWindow, peakValue: 0 }));
 }
 
 function ratio(matched: number, total: number): number {
@@ -351,8 +372,13 @@ export function summarizeCases(
   let gamingCases = 0;
   let asIsPositiveWindows = 0;
   let asIsMatchedWindows = 0;
+  let otherPositiveWindows = 0;
+  let otherMatchedWindows = 0;
   let negativeWindows = 0;
   let negativeMatchedWindows = 0;
+  let gamingNegativeWindows = 0;
+  let weakWindowRankOk = true;
+  const gamingPositivePeaks: number[] = [];
   const capOk = cases.every((item) =>
     Number.isInteger(item.candidateCount) && item.candidateCount >= 0 && item.candidateCount <= candidateCap,
   );
@@ -368,20 +394,53 @@ export function summarizeCases(
       asIsPositiveWindows += item.positiveWindows.length;
       asIsMatchedWindows += positiveMatched;
     }
+    if (item.kind === "other") {
+      otherPositiveWindows += item.positiveWindows.length;
+      otherMatchedWindows += positiveMatched;
+    }
     negativeWindows += item.negativeWindows.length;
     negativeMatchedWindows += matchedCount(item.negativeWindows, item.nominatedWindows);
+    if (item.kind === "gaming") {
+      gamingNegativeWindows += item.negativeWindows.length;
+      const peaks = nominationPeaks(item);
+      const positivePairs = matchingPairs(item.positiveWindows, peaks.map((peak) => peak.window));
+      for (const pair of positivePairs) {
+        const peakValue = peaks[pair.candidateIndex]?.peakValue;
+        if (peakValue !== undefined && Number.isFinite(peakValue)) gamingPositivePeaks.push(peakValue);
+      }
+    }
+  }
+  const topTwoPositivePeaks = [...gamingPositivePeaks].sort((a, b) => b - a).slice(0, 2);
+  const secondBestPositivePeak = topTwoPositivePeaks.length === 2 ? topTwoPositivePeaks[1] : null;
+  if (secondBestPositivePeak === null) {
+    weakWindowRankOk = false;
+  } else {
+    for (const item of cases) {
+      if (item.kind !== "gaming") continue;
+      for (const negativeWindow of item.negativeWindows) {
+        for (const peak of nominationPeaks(item)) {
+          if (matchesWindow(peak.window, negativeWindow) && peak.peakValue > secondBestPositivePeak) {
+            weakWindowRankOk = false;
+          }
+        }
+      }
+    }
   }
   const gates = {
     gamingMinimum: gamingCases > 0 && gamingMatchedWindows >= 2,
     asIsRetention: asIsPositiveWindows > 0 && asIsMatchedWindows === asIsPositiveWindows,
+    otherRetention: otherPositiveWindows > 0 && otherMatchedWindows === otherPositiveWindows,
     candidateCap: capOk,
     offShadowInvariant: options.offShadowInvariant === true,
+    gamingWeakWindowRank: gamingCases > 0 && gamingNegativeWindows > 0 && weakWindowRankOk,
   };
   const failureReasons: string[] = [];
   if (!gates.gamingMinimum) failureReasons.push("gaming_positive_recall_below_two_windows");
   if (!gates.asIsRetention) failureReasons.push("as_is_positive_window_not_retained");
+  if (!gates.otherRetention) failureReasons.push("other_positive_window_not_retained");
   if (!gates.candidateCap) failureReasons.push("candidate_cap_exceeded");
   if (!gates.offShadowInvariant) failureReasons.push("off_shadow_invariance_not_verified");
+  if (!gates.gamingWeakWindowRank) failureReasons.push("gaming_weak_window_rank_not_verified");
   return {
     positiveRecall: ratio(positiveMatchedWindows, positiveWindows),
     positiveMatchedWindows,
@@ -389,6 +448,8 @@ export function summarizeCases(
     gamingMatchedWindows,
     asIsMatchedWindows,
     asIsPositiveWindows,
+    otherMatchedWindows,
+    otherPositiveWindows,
     negativeWindowHitRate: negativeWindows > 0 ? ratio(negativeMatchedWindows, negativeWindows) : null,
     negativeControlsAvailable: negativeWindows > 0,
     gates,
@@ -553,16 +614,25 @@ Manifest JSON (version 1):
 
 caseKey is an anonymous input label and is never printed. Paths and transcript text stay private.
 invarianceEvidencePath points to separate local JSON evidence from the off/shadow replay gate.
+The corpus must include gaming, as_is, and other cases. Gaming cases require at least two
+matched positives and at least one negative control; other positives must all be retained.
 The command computes local video envelopes and exits 1 when any release gate fails.
 Negative controls are reported as negativeWindowHitRate (higher is worse); with
 no negative windows, the rate is null and negativeControlsAvailable is false.
+Gaming negative controls also enforce gamingWeakWindowRank: a nomination overlapping a
+gaming negative may not exceed the weaker peak among the two strongest matched positives.
 `;
 
 function nominationWindows(
   transcription: TranscriptionResult,
   cfg: AnalyzeConfig,
   motionEnvelope: unknown,
-): { nominatedWindows: EvalWindow[]; nominations: EvalCaseReport["nominations"]; candidateCount: number } {
+): {
+  nominatedWindows: EvalWindow[];
+  nominatedPeaks: Array<{ window: EvalWindow; peakValue: number }>;
+  nominations: EvalCaseReport["nominations"];
+  candidateCount: number;
+} {
   const nodes = buildSentenceGraph(transcription.segments, cfg);
   const visual = nominateVisualCandidates(nodes, motionEnvelope, cfg);
   const nominations = visual.nominations.map((nomination) => {
@@ -578,6 +648,10 @@ function nominationWindows(
   }).filter((item): item is NonNullable<typeof item> => item !== null);
   return {
     nominatedWindows: nominations.map(({ start, end }) => ({ start, end })),
+    nominatedPeaks: nominations.map(({ start, end, peakValue }) => ({
+      window: { start, end },
+      peakValue,
+    })),
     nominations,
     candidateCount: visual.candidates.length,
   };
@@ -683,6 +757,7 @@ export async function runVisualRecallCli(
             positiveWindows: item.positiveWindows,
             negativeWindows: item.negativeWindows,
             nominatedWindows: nominated.nominatedWindows,
+            nominatedPeaks: nominated.nominatedPeaks,
             candidateCount: nominated.candidateCount,
           };
           caseResults.push(evaluated);
