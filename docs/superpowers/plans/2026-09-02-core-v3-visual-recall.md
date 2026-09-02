@@ -115,7 +115,7 @@ expect(loadAnalyzeConfig({ ANALYZE_VISUAL_RECALL_V1: "on" }).visualRecallMode).t
 expect(loadAnalyzeConfig({ ANALYZE_VISUAL_RECALL_V1: "yes" }).visualRecallMode).toBe("off");
 ```
 
-Also assert positive bounded defaults: max candidates 12, cluster 12 seconds, pre 8,
+Also assert positive bounded defaults: max candidates 15, cluster 12 seconds, pre 18,
 post 18, maximum node distance 20.
 
 - [ ] **Step 2: Write failing nomination tests**

@@ -236,7 +236,7 @@ export function nominateVisualCandidates(
   }
   const cap = Number.isInteger(cfg.visualRecallMaxCandidates) && cfg.visualRecallMaxCandidates > 0
     ? cfg.visualRecallMaxCandidates
-    : 12;
+    : 15;
   const selected = [...regionWinners];
   if (selected.length > cap) selected.length = cap;
   for (const peak of strongestFirst) {
@@ -251,7 +251,7 @@ export function nominateVisualCandidates(
     else telemetry.capped++;
   }
 
-  const preSec = Number.isFinite(cfg.visualRecallPreSec) && cfg.visualRecallPreSec > 0 ? cfg.visualRecallPreSec : 8;
+  const preSec = Number.isFinite(cfg.visualRecallPreSec) && cfg.visualRecallPreSec > 0 ? cfg.visualRecallPreSec : 18;
   const postSec = Number.isFinite(cfg.visualRecallPostSec) && cfg.visualRecallPostSec > 0 ? cfg.visualRecallPostSec : 18;
   const maxDistance = Number.isFinite(cfg.visualRecallMaxNodeDistanceSec) && cfg.visualRecallMaxNodeDistanceSec > 0
     ? cfg.visualRecallMaxNodeDistanceSec

@@ -185,4 +185,21 @@ describe("nominateVisualCandidates", () => {
       result.telemetry.clusteredPeakCount - result.telemetry.mappedCandidates - result.telemetry.rejectedNoSpeech,
     );
   });
+
+  it("uses tuned defaults when candidate config values are malformed", () => {
+    const envelope = Array.from({ length: 1_000 }, () => 0);
+    for (const region of Array.from({ length: 16 }, (_, index) => index)) {
+      envelope[region * 60 + 20] = 30;
+    }
+    const malformed = {
+      ...cfg(),
+      visualRecallMaxCandidates: Number.NaN,
+      visualRecallPreSec: Number.NaN,
+    };
+    const result = nominateVisualCandidates(denseNodes(1_000), envelope, malformed);
+    expect(result.candidates).toHaveLength(15);
+    expect(result.nominations.find((nomination) => nomination.peakSec === 20)).toMatchObject({
+      startNode: 2,
+    });
+  });
 });
