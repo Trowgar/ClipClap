@@ -299,7 +299,13 @@ add content-specific words, user identifiers, game names, or source-specific bra
 - [ ] **Step 1: Build production and test worker images**
 
 ```bash
-docker build -f apps/worker/Dockerfile -t clipclap-worker-core-v3:verify .
+set -eu
+CORE_V3_COMMIT=$(git rev-parse HEAD)
+if ! printf '%s\n' "$CORE_V3_COMMIT" | grep -Eq '^[0-9a-f]{40}$'; then
+  echo "invalid CORE_V3_COMMIT" >&2
+  exit 1
+fi
+docker build --build-arg VCS_REF="$CORE_V3_COMMIT" -f apps/worker/Dockerfile -t clipclap-worker-core-v3:verify .
 docker build --target build -f apps/worker/Dockerfile -t clipclap-worker-core-v3:test .
 ```
 
@@ -309,14 +315,14 @@ docker build --target build -f apps/worker/Dockerfile -t clipclap-worker-core-v3
 docker run --rm --entrypoint sh \
   -w /app \
   -v /var/run/docker.sock:/var/run/docker.sock \
-  -v /usr/bin/docker:/usr/bin/docker:ro \
-  -v /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro \
   -v /tmp:/tmp \
   clipclap-worker-core-v3:test \
-  -lc 'npm test --workspace @clipclap/worker -- --run'
+  -lc 'set -eu; apk add --no-cache docker-cli >/dev/null; npx vitest run --root /app apps/worker/src'
 ```
 
-The Docker CLI/socket and shared `/tmp` are provided for artifact-backed tests.
+The Docker socket, an Alpine-native Docker CLI, and shared `/tmp` are provided
+for artifact-backed tests. The host Docker binary is not mounted into Alpine:
+it may require a glibc loader that the worker image intentionally does not ship.
 Expected: all worker tests pass, including ffmpeg/font/native suites.
 
 - [ ] **Step 3: Run build, production smoke, and regression gates**
