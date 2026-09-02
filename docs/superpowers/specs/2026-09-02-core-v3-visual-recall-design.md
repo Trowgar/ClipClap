@@ -97,9 +97,9 @@ not be bundled with an uncalibrated arc-policy change.
 ## Configuration
 
 - `ANALYZE_VISUAL_RECALL_V1=off|shadow|on`, default `off`.
-- `VISUAL_RECALL_MAX_CANDIDATES`, default `12`.
+- `VISUAL_RECALL_MAX_CANDIDATES`, default `15`.
 - `VISUAL_RECALL_CLUSTER_SEC`, default `12`.
-- `VISUAL_RECALL_PRE_SEC`, default `8`.
+- `VISUAL_RECALL_PRE_SEC`, default `18`.
 - `VISUAL_RECALL_POST_SEC`, default `18`.
 - `VISUAL_RECALL_MAX_NODE_DISTANCE_SEC`, default `20`.
 
