@@ -733,7 +733,7 @@ describe("arc-downrank policy wiring", () => {
   it.each([
     ["short", 200, { SHORT_SOURCE_RESCUE: "on" }],
     ["mid", 795, { RESCUE_MID_SOURCE: "on" }],
-  ] as const)("does not let %s rescue restore c0 after arc downrank removes surviving c1", async (_tier, sourceDurationSec, rescueEnv) => {
+  ] as const)("does not restore a dropped clip after arc downrank removes surviving c1", async (_tier, sourceDurationSec, rescueEnv) => {
     const cfg = loadAnalyzeConfig({
       ...rescueEnv,
       ARC_AUDIT: "on",
@@ -776,13 +776,12 @@ describe("arc-downrank policy wiring", () => {
       reason: "arc_unrepairable",
       score: 0.65,
     });
-    // If rescue stops excluding gate-dropped ids, c0's higher score wins.
-    expect(r.highlights).toHaveLength(1);
-    expect(r.highlights[0].title).toBe("Заголовок c1");
-    expect(r.telemetry.rescue).toMatchObject({ shipped: true, verdictId: "c1", tier: _tier });
+    expect(r.highlights).toEqual([]);
+    expect(r.noClipsReason).toBe("NO_VIABLE_MOMENTS");
+    expect(r.telemetry).not.toHaveProperty("rescue");
   });
 
-  it("keeps ordinary short-source rescue available when the critic produced no clips", async () => {
+  it("keeps an ordinary judged rejection empty when the old short flag is on", async () => {
     const cfg = loadAnalyzeConfig({
       SHORT_SOURCE_RESCUE: "on",
       POST_BOUNDARY_HOOK_GATE: "enforce",
@@ -796,7 +795,8 @@ describe("arc-downrank policy wiring", () => {
 
     const r = await analyzeHighlightsV2(transcript(), { client, cfg, sourceDurationSec: 200 });
 
-    expect(r.highlights).toHaveLength(1);
-    expect(r.telemetry.rescue).toMatchObject({ shipped: true, verdictId: "c0", tier: "short" });
+    expect(r.highlights).toEqual([]);
+    expect(r.noClipsReason).toBe("NO_VIABLE_MOMENTS");
+    expect(r.telemetry).not.toHaveProperty("rescue");
   });
 });

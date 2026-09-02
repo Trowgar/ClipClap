@@ -16,11 +16,9 @@ import {
 } from "./gates";
 import { dominantScript, isoToLanguageName, scriptMismatch } from "./language";
 import { selectAndOrder } from "./select";
-import { rescueShortSource, type RescueTelemetry } from "./rescue";
 import {
   runArcAudit,
   isFullyOk,
-  type ArcAuditGeometryEvidence,
   type ArcAuditTelemetry,
 } from "./arc-audit";
 import { extendClipStarts, type StartExtensionTelemetry } from "./start-extension";
@@ -41,14 +39,11 @@ import {
 import { SAFE_END_AUDIT_SCHEMA, readSafeEndAuditRow } from "./safe-end-audit-schema";
 import {
   capSafeEndNormalRecords,
-  capSafeEndRescueRecords,
   reconcileSafeEndNormalRecords,
   safeEndGeometryReference,
   type SafeEndAuditFailureCode,
   type SafeEndNormalRecord,
-  type SafeEndRescueRecord,
 } from "./safe-end-audit";
-import { observeRescueCandidates } from "./safe-end-rescue-observation";
 import {
   nominateVisualCandidates,
   type VisualRecallNomination,
@@ -79,53 +74,6 @@ interface SafeEndNormalTelemetry {
 
 interface SafeEndAuditTelemetry {
   normal: SafeEndNormalTelemetry;
-  rescue?: SafeEndRescueTelemetry;
-}
-
-interface SafeEndRescueTelemetry {
-  summary: "not_run" | "no_realizable_candidate" | "selected";
-  evaluated: number;
-  realizable: number;
-  zeroTailHandoff: number;
-  matchingStanding: number;
-  matchingClear: number;
-  staleOrAbsent: number;
-  selected: number;
-  not_selected: number;
-  proposedAction: Record<"none" | "zero_tail_handoff" | "standing_arc" | "both", number>;
-  records: SafeEndRescueRecord[];
-  truncatedCount: number;
-}
-
-function safeEndRescueTelemetry(
-  observation: { evaluated: number; records: readonly SafeEndRescueRecord[] },
-  summary: SafeEndRescueTelemetry["summary"],
-): SafeEndRescueTelemetry {
-  const records = observation.records;
-  const capped = capSafeEndRescueRecords(records);
-  const proposedAction = {
-    none: 0,
-    zero_tail_handoff: 0,
-    standing_arc: 0,
-    both: 0,
-  };
-  for (const record of records) {
-    proposedAction[record.proposedAction] += 1;
-  }
-  return {
-    summary,
-    evaluated: observation.evaluated,
-    realizable: records.length,
-    zeroTailHandoff: records.filter((record) => record.zeroTailHandoff).length,
-    matchingStanding: records.filter((record) => record.arcEvidence === "matching_standing").length,
-    matchingClear: records.filter((record) => record.arcEvidence === "matching_clear").length,
-    staleOrAbsent: records.filter((record) => record.arcEvidence === "stale_or_absent").length,
-    selected: records.filter((record) => record.selectedState === "selected").length,
-    not_selected: records.filter((record) => record.selectedState === "not_selected").length,
-    proposedAction,
-    records: capped.records,
-    truncatedCount: capped.truncatedCount,
-  };
 }
 
 /** Converts the feature's local telemetry into the exact JSON-safe form that
@@ -288,11 +236,9 @@ export interface AnalyzeV2Options {
   client?: OpenAI;
   cfg?: AnalyzeConfig;
   transcriptPartial?: boolean;
-  /** The job row's source duration. Powers the short-source rescue's "is this
-   *  short" test (spec 2026-08-19-short-source-rescue) and NOTHING else -
-   *  callers that omit it (every eval script) get byte-identical behaviour
-   *  with the rescue permanently dark, which is what keeps the corpus
-   *  comparable across runs. */
+  /** The job row's source duration. Retained for stage/evaluation input
+   *  compatibility; legacy short- and mid-source rescue delivery has no
+   *  runtime authority. */
   sourceDurationSec?: number;
   /** The job's source URL, mirroring sourceDurationSec above: powers ONLY
    *  resolveAnalysisMode's hostname rules (spec 2026-08-19-stream-analyze-
@@ -308,7 +254,7 @@ export interface AnalyzeV2Options {
   retryDelayMs?: number;
   /** Test-only injection point for safe-end telemetry serialization faults.
    * It is applied solely to the detached audit result before its local JSON
-   * preflight; it cannot affect clips, finalizer input, rescue, or persistence. */
+   * preflight; it cannot affect clips, finalizer input, or persistence. */
   safeEndAuditTelemetryTestHook?: (telemetry: unknown) => unknown;
 }
 
@@ -785,14 +731,12 @@ export async function analyzeHighlightsV2(
   // in the eval suite depends on that being literally true, not merely
   // zeroed.
   let arcFlags: Map<string, ArcFlags> = new Map();
-  let arcGeometryEvidence: Map<string, ArcAuditGeometryEvidence> = new Map();
   let arcAuditTelemetry: ArcAuditTelemetry | undefined;
   if (cfg.arcAuditEnabled) {
     const audit = await runArcAudit(client, usage, selection.selected, nodes, cfg, {
       retryDelayMs: options.retryDelayMs,
     });
     arcFlags = audit.flags;
-    arcGeometryEvidence = audit.geometryEvidence;
     arcAuditTelemetry = audit.telemetry;
   }
 
@@ -961,11 +905,9 @@ export async function analyzeHighlightsV2(
 
   // POST-BOUNDARY HOOK GATE - evaluates the actual post-extension and
   // post-sweep geometry before any later selection authority. Off is a true
-  // no-op: no telemetry key, no candidate filtering, and no rescue exclusion.
+  // no-op: no telemetry key and no candidate filtering.
   let postBoundaryHookGateTelemetry: PostBoundaryHookGateTelemetry | undefined;
   let afterPostBoundaryHookGate = beforeFinalize;
-  const postBoundaryHookGateDroppedIds = new Set<string>();
-  let allSelectedClipsDroppedByPostBoundaryHookGate = false;
   if (cfg.postBoundaryHookGateMode !== "off") {
     const gated = applyPostBoundaryHookGate(beforeFinalize, nodes, {
       mode: cfg.postBoundaryHookGateMode,
@@ -981,10 +923,7 @@ export async function analyzeHighlightsV2(
     });
     afterPostBoundaryHookGate = gated.clips;
     postBoundaryHookGateTelemetry = gated.telemetry;
-    allSelectedClipsDroppedByPostBoundaryHookGate =
-      beforeFinalize.length > 0 && gated.drops.length === beforeFinalize.length;
     for (const drop of gated.drops) {
-      postBoundaryHookGateDroppedIds.add(drop.id);
       droppedVerdicts.push({
         id: drop.id,
         stage: "post_boundary_hook_gate",
@@ -1018,7 +957,6 @@ export async function analyzeHighlightsV2(
     );
     safeEndAuditTelemetry = {
       ...normalAudit,
-      rescue: safeEndRescueTelemetry({ evaluated: 0, records: [] }, "not_run"),
     };
   }
 
@@ -1487,99 +1425,6 @@ export async function analyzeHighlightsV2(
       );
     }
 
-    // SHORT-SOURCE RESCUE (spec 2026-08-19-short-source-rescue), extended by
-    // MID-SOURCE RESCUE (spec 2026-08-25-mid-rescue-and-stream-resolver-v2,
-    // part 1). Every candidate was really judged (the guard above) and
-    // really rejected - for a normal source that honest "no" ships below,
-    // unchanged. For a SHORT source that "no" is usually the user's first
-    // impression of the product (half of all first submissions are under 5
-    // minutes, 0.2 clips on average, 2 of 16 returned), and the measured
-    // population died entirely downstream of the critic - so the best
-    // snappable verdict ships as ONE lowQuality clip instead. Deliberately
-    // AFTER the unjudged throw: a technical failure must keep failing - its
-    // retries are free to the user and genuinely re-roll the critic - and a
-    // rescue there would bill for an answer that was never obtained.
-    // `sourceDurationSec` comes only from the stage; eval scripts never pass
-    // it, so the corpus never sees this path. STRICTLY under, matching
-    // isShortSource in shared plans.ts exactly: the bot's notice and this
-    // rescue must describe the same population, and the bot's is
-    // `durationSec < shortNoticeSec`. A 300s source gets neither.
-    const shortSource =
-      typeof options.sourceDurationSec === "number" &&
-      options.sourceDurationSec > 0 &&
-      options.sourceDurationSec < cfg.shortSourceRescueMaxSec;
-    // MID window: [shortSourceRescueMaxSec, rescueMidMaxSourceSec) - the same
-    // strict-under discipline at its own ceiling, disjoint from shortSource
-    // above so a duration is eligible for at most one tier. Independently
-    // switchable (rescueMidSourceEnabled) so the two ceilings can be armed on
-    // separate schedules; the candidate rules, lowQuality mark and bot copy
-    // inside rescueShortSource are untouched by this widening.
-    const midSource =
-      typeof options.sourceDurationSec === "number" &&
-      options.sourceDurationSec >= cfg.shortSourceRescueMaxSec &&
-      options.sourceDurationSec < cfg.rescueMidMaxSourceSec;
-    let rescueTelemetry: RescueTelemetry | undefined;
-    if (
-      ((cfg.shortSourceRescueEnabled && shortSource) ||
-        (cfg.rescueMidSourceEnabled && midSource)) &&
-      !allSelectedClipsDroppedByPostBoundaryHookGate
-    ) {
-      const rescuePool = critic.verdicts.filter(
-        (verdict) => !postBoundaryHookGateDroppedIds.has(verdict.id),
-      );
-      if (cfg.safeEndAuditMode === "shadow" && safeEndAuditTelemetry) {
-        safeEndAuditTelemetry = {
-          ...safeEndAuditTelemetry,
-          rescue: (() => {
-            const observations = observeRescueCandidates(rescuePool, nodes, cfg, arcGeometryEvidence, languageIso);
-            return safeEndRescueTelemetry(
-              observations,
-              observations.records.length > 0 ? "selected" : "no_realizable_candidate",
-            );
-          })(),
-        };
-      }
-      const rescue = rescueShortSource(
-        rescuePool,
-        nodes,
-        cfg
-      );
-      rescueTelemetry = rescue.telemetry;
-      if (rescue.clip) {
-        // An EMPTY map, never `arcFlags`: with ARC_AUDIT on, a verdict that
-        // was selected, audited and then dropped (downrank, finalizer) is
-        // exactly what the rescue re-snaps - and its flags can carry
-        // `repaired` entries the extension stages set for a geometry this
-        // clip does not have. No audit ran on the rescue geometry, so no
-        // flags may travel with it (toHighlight's own rule: a diagnostic
-        // that names things the clip does not contain sends investigations
-        // to the wrong place).
-        const h = toHighlight(rescue.clip, new Map());
-        return {
-          highlights: [h],
-          // `tier` stays "none", truthfully - selection found nothing, and
-          // the rescue is not selection. The `rescue` key is the record that
-          // this clip exists despite that, and `kept`/`durations` describe
-          // what actually shipped. The OTHER counters - selectedForFinalizer,
-          // finalizerSurvivors, meanLexicalOverlap, snippetFallbacks - keep
-          // their selection-path values deliberately: they describe the
-          // selection that found nothing (kept > finalizerSurvivors is the
-          // rescue's signature in a job record, not a bug), and the rescue's
-          // own copy provenance lives in rescue.copySource. `rescue.tier`
-          // ("short" | "mid") records which ceiling made this job eligible,
-          // additive only on the shipped path, so the 2026-09 checkpoint can
-          // tell the two populations apart.
-          telemetry: {
-            ...telemetryWithCurrentSafeEndAudit(),
-            kept: 1,
-            durations: [Math.round((h.end - h.start) * 10) / 10],
-            rescue: { ...rescueTelemetry, tier: shortSource ? "short" : "mid" },
-          },
-          usage,
-        };
-      }
-    }
-
     // Every candidate survived the holes, every one came back with a real
     // verdict, and the emptiness is therefore a judgement - keep:false, or our
     // own evidence/snap/selection bar - made on audio we really heard. Never
@@ -1588,12 +1433,7 @@ export async function analyzeHighlightsV2(
     return {
       highlights: [],
       noClipsReason: partial ? "PARTIAL_TRANSCRIPT" : "NO_VIABLE_MOMENTS",
-      // The rescue key is present iff the stage RAN (same not-a-key promise
-      // as arcAudit) - here that is "ran and could not realize any verdict",
-      // which the 2026-09 checkpoint needs to see as clearly as a success.
-      telemetry: rescueTelemetry
-        ? { ...telemetryWithCurrentSafeEndAudit(), rescue: { ...rescueTelemetry, tier: shortSource ? "short" : "mid" } }
-        : telemetryWithCurrentSafeEndAudit(),
+      telemetry: telemetryWithCurrentSafeEndAudit(),
       usage,
     };
   }
