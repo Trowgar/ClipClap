@@ -363,10 +363,21 @@ export async function analyzeHighlightsV2(
     speechSec < DEGENERATE_MIN_SPEECH_SEC ||
     nodes.every((n) => !n.hasWords)
   ) {
+    let visualRecall: Record<string, unknown> | undefined;
+    if (cfg.visualRecallMode === "shadow" || cfg.visualRecallMode === "on") {
+      const visual = nominateVisualCandidates(nodes, options.motionEnvelope ?? [], cfg);
+      visualRecall = visualRecallTelemetry(cfg.visualRecallMode, visual);
+      visualRecall.unionCandidates = 0;
+    }
     return {
       highlights: [],
       noClipsReason: "NO_USABLE_SPEECH",
-      telemetry: { wordCount, speechSec, path: "degenerate" },
+      telemetry: {
+        wordCount,
+        speechSec,
+        path: "degenerate",
+        ...(visualRecall ? { visualRecall } : {}),
+      },
       usage,
     };
   }

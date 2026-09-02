@@ -45,6 +45,18 @@ function tinyTranscript(): TranscriptionResult {
   return { text: segments.map((segment) => segment.text).join(" "), segments, language: "en" };
 }
 
+function degenerateTranscript(): TranscriptionResult {
+  return {
+    text: "hi",
+    segments: [{
+      start: 0,
+      end: 1,
+      text: "hi",
+      words: [{ text: "hi", start: 0, end: 0.5 }],
+    }],
+  };
+}
+
 function tinyVerdict(id: string) {
   return verdict(id, true, 0, 5, 3);
 }
@@ -216,5 +228,30 @@ describe("visual recall wiring", () => {
       motionEnvelope: motion,
       retryDelayMs: 1,
     })).rejects.toBeInstanceOf(AnalyzeTechnicalError);
+  });
+
+  it("reports mode-gated visual telemetry on degenerate input without calling models", async () => {
+    const offReplay = replayClient();
+    const shadowReplay = replayClient();
+    const onReplay = replayClient();
+    const off = await analyzeHighlightsV2(degenerateTranscript(), {
+      client: offReplay.client,
+      cfg: cfg("off"),
+    });
+    const shadow = await analyzeHighlightsV2(degenerateTranscript(), {
+      client: shadowReplay.client,
+      cfg: cfg("shadow"),
+    });
+    const on = await analyzeHighlightsV2(degenerateTranscript(), {
+      client: onReplay.client,
+      cfg: cfg("on"),
+    });
+
+    expect(off.telemetry).not.toHaveProperty("visualRecall");
+    expect(shadow.telemetry.visualRecall).toMatchObject({ mode: "shadow", reason: "no_motion_envelope" });
+    expect(on.telemetry.visualRecall).toMatchObject({ mode: "on", reason: "no_motion_envelope" });
+    expect(offReplay.requests).toHaveLength(0);
+    expect(shadowReplay.requests).toHaveLength(0);
+    expect(onReplay.requests).toHaveLength(0);
   });
 });
