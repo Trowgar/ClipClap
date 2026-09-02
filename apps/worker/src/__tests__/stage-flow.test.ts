@@ -23,6 +23,9 @@ const mocks = vi.hoisted(() => ({
   refundFailedJob: vi.fn(),
   refundZeroClipJob: vi.fn(),
   trueUpFreeCost: vi.fn(),
+  evaluateVisualRecall: vi.fn(),
+  detectSong: vi.fn(),
+  selectHookWindows: vi.fn(),
 }));
 
 vi.mock("@clipclap/shared", async () => ({
@@ -77,7 +80,11 @@ vi.mock("@clipclap/shared", async () => ({
 
 vi.mock("../analyze-v2", () => ({
   analyzeHighlightsV2: mocks.analyzeHighlightsV2,
+  evaluateVisualRecall: mocks.evaluateVisualRecall,
 }));
+
+vi.mock("../analyze-v2/song-gate", () => ({ detectSong: mocks.detectSong }));
+vi.mock("../analyze-v2/music-hook", () => ({ selectHookWindows: mocks.selectHookWindows }));
 
 vi.mock("../processors/download", () => ({
   downloadVideo: mocks.downloadVideo,
@@ -216,10 +223,14 @@ describe("stage handlers", () => {
     mocks.findFreeCharge.mockResolvedValue(null);
     mocks.jobFindUnique.mockResolvedValue(null);
     mocks.jobStepFindUnique.mockResolvedValue(null);
+    mocks.evaluateVisualRecall.mockReturnValue(undefined);
     // pin the engine: these tests assert the legacy analyze path and must not
     // depend on the ambient ANALYZE_ENGINE of the environment they run in
     vi.stubEnv("ANALYZE_ENGINE", "legacy");
     vi.stubEnv("ANALYZE_V2_PCT", "0");
+    vi.stubEnv("ANALYZE_VISUAL_RECALL_V1", "off");
+    vi.stubEnv("SONG_GATE", undefined);
+    vi.stubEnv("MUSIC_SHORTS", undefined);
   });
 
   it("download persists a source artifact and enqueues transcribe", async () => {
@@ -283,6 +294,7 @@ describe("stage handlers", () => {
       missingRanges: [],
       energyEnvelope: [-30.1, -28.4, -90],
       lumaEnvelope: [16, 16, 235],
+      motionEnvelope: [0, 12.5, 18.2],
     });
 
     await runTranscribeStage({ jobId: "job1", userId: "u1" });
@@ -322,6 +334,11 @@ describe("stage handlers", () => {
       "TRANSCRIBE",
       expect.objectContaining({ lumaEnvelope: [16, 16, 235] })
     );
+    expect(mocks.completeJobStep).toHaveBeenCalledWith(
+      "job1",
+      "TRANSCRIBE",
+      expect.objectContaining({ motionEnvelope: [0, 12.5, 18.2] })
+    );
   });
 
   it("analyze stores highlights and enqueues render", async () => {
@@ -352,6 +369,22 @@ describe("stage handlers", () => {
     });
   });
 
+  it("does not read visual signals for pure legacy analysis", async () => {
+    vi.stubEnv("ANALYZE_ENGINE", "legacy");
+    vi.stubEnv("ANALYZE_VISUAL_RECALL_V1", "on");
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      transcriptJson: { text: "hello", segments: [] },
+    });
+    mocks.analyzeHighlightsV1.mockResolvedValue([
+      { start: 0, end: 10, title: "Clip", reason: "Hook" },
+    ]);
+
+    await runAnalyzeStage({ jobId: "job1", userId: "u1" });
+
+    expect(mocks.jobStepFindUnique).not.toHaveBeenCalled();
+  });
+
   it("persists direct recall-critic hook-gate telemetry with its gated survivors", async () => {
     vi.stubEnv("ANALYZE_ENGINE", "recall-critic");
     mocks.jobFind.mockResolvedValue({
@@ -369,6 +402,7 @@ describe("stage handlers", () => {
     )?.[2] as { telemetry?: typeof v2.telemetry };
     expect(analyzeOutput.telemetry).toBe(v2.telemetry);
     expect(analyzeOutput.telemetry?.postBoundaryHookGate).toBe(v2.postBoundaryHookGate);
+    expect(mocks.jobStepFindUnique).not.toHaveBeenCalled();
 
     // V2 returns only post-gate survivors. This is the set persisted for the
     // render worker to read; the stage never reintroduces a pre-gate clip.
@@ -383,6 +417,117 @@ describe("stage handlers", () => {
       userId: "u1",
       mode: "clips",
     });
+  });
+
+  it("reads visual signals once and threads motion into recall-critic", async () => {
+    vi.stubEnv("ANALYZE_ENGINE", "recall-critic");
+    vi.stubEnv("ANALYZE_VISUAL_RECALL_V1", "shadow");
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      transcriptJson: { text: "hello", segments: [] },
+      transcriptPartial: false,
+    });
+    mocks.jobStepFindUnique.mockResolvedValue({
+      outputJson: {
+        energyEnvelope: [-20, -18],
+        lumaEnvelope: [12, 13],
+        motionEnvelope: [0, 14],
+      },
+    });
+    const v2 = hookGateV2Result();
+    mocks.analyzeHighlightsV2.mockResolvedValue(v2.result);
+
+    await runAnalyzeStage({ jobId: "job1", userId: "u1" });
+
+    expect(mocks.jobStepFindUnique).toHaveBeenCalledTimes(1);
+    expect(mocks.analyzeHighlightsV2).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ motionEnvelope: [0, 14] }),
+    );
+  });
+
+  it("keeps visual telemetry on a music-shorts success without unioning candidates", async () => {
+    vi.stubEnv("ANALYZE_ENGINE", "recall-critic");
+    vi.stubEnv("ANALYZE_VISUAL_RECALL_V1", "shadow");
+    vi.stubEnv("SONG_GATE", "on");
+    vi.stubEnv("MUSIC_SHORTS", "on");
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      sourceDurationSec: 60,
+      transcriptJson: { text: "song", segments: [{ start: 0, end: 4, text: "song" }] },
+      transcriptPartial: false,
+    });
+    mocks.jobStepFindUnique.mockResolvedValue({ outputJson: {
+      energyEnvelope: [-20, -5], lumaEnvelope: [20, 30], motionEnvelope: [0, 40],
+    } });
+    mocks.detectSong.mockReturnValue({ fired: true, signals: { musicTokenShare: 1 } });
+    mocks.selectHookWindows.mockReturnValue([{ startSec: 0, endSec: 20, darkSeconds: 0 }]);
+    mocks.evaluateVisualRecall.mockReturnValue({
+      candidates: [{ startNode: 0, endNode: 0, payoffNode: 0, interest: 0.7, type: "visual_action", windowIndex: 0 }],
+      telemetry: { mode: "shadow", envelopeLength: 2, nominations: [{ source: "motion", type: "visual_action", peakSec: 1, peakValue: 40 }] },
+    });
+
+    await runAnalyzeStage({ jobId: "job1", userId: "u1" });
+
+    expect(mocks.jobStepFindUnique).toHaveBeenCalledTimes(1);
+    expect(mocks.analyzeHighlightsV2).not.toHaveBeenCalled();
+    const output = mocks.completeJobStep.mock.calls.find(([, step]) => step === "ANALYZE")?.[2] as { telemetry: Record<string, unknown> };
+    expect(output.telemetry.path).toBe("music-shorts");
+    expect(output.telemetry.visualRecall).toMatchObject({ mode: "shadow" });
+  });
+
+  it("keeps visual telemetry on a song-gate refusal", async () => {
+    vi.stubEnv("ANALYZE_ENGINE", "recall-critic");
+    vi.stubEnv("ANALYZE_VISUAL_RECALL_V1", "on");
+    vi.stubEnv("SONG_GATE", "on");
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      transcriptJson: { text: "song", segments: [{ start: 0, end: 4, text: "song" }] },
+      transcriptPartial: false,
+    });
+    mocks.jobStepFindUnique.mockResolvedValue({ outputJson: { motionEnvelope: [0, 40] } });
+    mocks.detectSong.mockReturnValue({ fired: true, signals: { musicTokenShare: 1 } });
+    mocks.evaluateVisualRecall.mockReturnValue({ candidates: [], telemetry: {
+      mode: "on", envelopeLength: 2, nominations: [],
+    } });
+
+    await runAnalyzeStage({ jobId: "job1", userId: "u1" });
+
+    const output = mocks.completeJobStep.mock.calls.find(([, step]) => step === "ANALYZE")?.[2] as { telemetry: Record<string, unknown> };
+    expect(output.telemetry.path).toBe("song-gate");
+    expect(output.telemetry.visualRecall).toMatchObject({ mode: "on" });
+  });
+
+  it("fails open for optional visual signal reads in normal recall-critic", async () => {
+    vi.stubEnv("ANALYZE_ENGINE", "recall-critic");
+    vi.stubEnv("ANALYZE_VISUAL_RECALL_V1", "shadow");
+    mocks.jobFind.mockResolvedValue({ id: "job1", transcriptJson: { text: "hello", segments: [] } });
+    mocks.jobStepFindUnique.mockRejectedValue(new Error("step unavailable"));
+    mocks.analyzeHighlightsV2.mockResolvedValue(hookGateV2Result().result);
+
+    await runAnalyzeStage({ jobId: "job1", userId: "u1" });
+
+    expect(mocks.analyzeHighlightsV2).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ motionEnvelope: [] }),
+    );
+  });
+
+  it("fails open for optional visual reads in legacy shadow delivery", async () => {
+    vi.stubEnv("ANALYZE_ENGINE", "shadow");
+    vi.stubEnv("ANALYZE_VISUAL_RECALL_V1", "shadow");
+    mocks.jobFind.mockResolvedValue({ id: "job1", transcriptJson: { text: "hello", segments: [] } });
+    mocks.jobStepFindUnique.mockRejectedValue(new Error("step unavailable"));
+    mocks.analyzeHighlightsV1.mockResolvedValue([{ start: 0, end: 1, title: "Legacy" }]);
+    mocks.analyzeHighlightsV2.mockResolvedValue({
+      ...hookGateV2Result().result,
+      telemetry: { mode: "shadow", reason: "no_motion_envelope" },
+    });
+
+    await runAnalyzeStage({ jobId: "job1", userId: "u1" });
+
+    const output = mocks.completeJobStep.mock.calls.find(([, step]) => step === "ANALYZE")?.[2] as { shadowV2?: { telemetry?: Record<string, unknown> } };
+    expect(output.shadowV2?.telemetry).toMatchObject({ mode: "shadow", reason: "no_motion_envelope" });
   });
 
   it("persists shadow V2 hook-gate telemetry while delivering only legacy highlights", async () => {

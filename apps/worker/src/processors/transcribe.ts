@@ -20,6 +20,7 @@ import {
 } from "./audio-chunks";
 import { whisperLanguageToIso } from "../analyze-v2/language";
 import { transcriptionModel } from "../model-selection";
+import { videoEnvelopes } from "./video-envelopes";
 
 import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
 const execFileAsync = promisify(execFile);
@@ -47,7 +48,12 @@ export interface TranscribeOutcome {
    *  hook windows off sustained-black stretches (spec 2026-08-23-music-
    *  shorts, task R2). */
   lumaEnvelope: number[];
+  /** Per-second mean frame-to-frame luma difference of the source VIDEO. */
+  motionEnvelope: number[];
 }
+
+export { bucketVideoEnvelopesBySecond, lumaEnvelope, videoEnvelopes } from "./video-envelopes";
+export type { VideoEnvelopes } from "./video-envelopes";
 
 interface RawWhisperResponse {
   text: string;
@@ -73,18 +79,19 @@ export async function transcribeVideo(
     // One ffmpeg pass over the whole extracted audio, started here so it runs
     // parallel to whisper on both paths below. rmsEnvelope never rejects - a
     // failed pass must not fail transcription (see its own comment).
-    // lumaEnvelope runs against the ORIGINAL video path, not audioPath (no
+    // videoEnvelopes runs against the ORIGINAL video path, not audioPath (no
     // video stream survives extraction) - started here, alongside
     // envelopePromise, so both run in parallel with whisper on both paths
-    // below. Never rejects, same discipline as rmsEnvelope.
-    const lumaEnvelopePromise = lumaEnvelope(videoPath);
+    // below. Never rejects, same discipline as rmsEnvelope. Luma and motion
+    // are captured by this one video pass.
+    const videoEnvelopesPromise = videoEnvelopes(videoPath);
     const envelopePromise = rmsEnvelope(audioPath);
 
     if (bytes <= CHUNK_BYTES_THRESHOLD && durationSec <= CHUNK_DURATION_THRESHOLD_SEC) {
-      const [raw, energyEnvelope, lumaEnv] = await Promise.all([
+      const [raw, energyEnvelope, videoEnv] = await Promise.all([
         whisperCall(audioPath, undefined),
         envelopePromise,
-        lumaEnvelopePromise,
+        videoEnvelopesPromise,
       ]);
       return {
         transcription: toTranscription(raw, 0),
@@ -92,7 +99,8 @@ export async function transcribeVideo(
         partial: false,
         missingRanges: [],
         energyEnvelope,
-        lumaEnvelope: lumaEnv,
+        lumaEnvelope: videoEnv.lumaEnvelope,
+        motionEnvelope: videoEnv.motionEnvelope,
       };
     }
 
@@ -166,7 +174,8 @@ export async function transcribeVideo(
       partial: missingRanges.length > 0,
       missingRanges,
       energyEnvelope: await envelopePromise,
-      lumaEnvelope: await lumaEnvelopePromise,
+      lumaEnvelope: (await videoEnvelopesPromise).lumaEnvelope,
+      motionEnvelope: (await videoEnvelopesPromise).motionEnvelope,
     };
   } finally {
     await Promise.all(tempFiles.map((f) => unlink(f).catch(() => {})));
@@ -278,77 +287,7 @@ function bucketRmsBySecond(stderr: string): number[] {
   });
 }
 
-/**
- * Per-second mean luma (0-255) of the source VIDEO, via ffmpeg signalstats.
- * Feeds the music-shorts hook selector's dark-stretch avoidance (spec
- * 2026-08-23-music-shorts, task R2): the shipped Believer hook window
- * (53-77s) was measured to contain a ~4s near-black MV transition - a
- * music short opening on or holding through sustained black is a
- * scroll-away, so the selector needs a per-second brightness signal to
- * steer around it. This has to be captured HERE, at TRANSCRIBE, on the
- * VIDEO file: by the time ANALYZE runs there is no media file on that
- * container at all, only the transcript.
- *
- * Run on `videoPath` itself, not the extracted audio: an audio-only source
- * (the corpus's .m4a case) has no video stream, so ffmpeg's `-vf` has
- * nothing to apply it to and the pass simply emits no signalstats lines at
- * all (confirmed against a real .m4a fixture - ffmpeg exits 0, not
- * non-zero, in that case) - `bucketLumaBySecond` then naturally returns []
- * from empty input, same end state as the try/catch below reaching for a
- * source ffmpeg can't open at all.
- *
- * Output parsing mirrors rmsEnvelope/bucketRmsBySecond exactly: ffmpeg's
- * metadata=print filter writes one "pts_time:<seconds>" line followed by
- * one "lavfi.signalstats.YAVG=<value>" line per frame, on STDERR. At
- * fps=1 each frame IS one second, but this still buckets by
- * int(pts_time) rather than trusting frame index 1:1 - the same
- * defensive reasoning as rmsEnvelope, for free, and it means a source
- * whose fps=1 pass drops/duplicates a frame degrades gracefully instead
- * of silently shifting the whole envelope's time axis.
- *
- * Never rejects: a signalstats failure (bad input, maxBuffer overrun,
- * ffmpeg missing) must not fail transcription. The consumer
- * (analyze-v2/music-hook.ts) treats [] as "no luma signal, do not shift or
- * guard windows".
- */
-export async function lumaEnvelope(videoPath: string): Promise<number[]> {
-  try {
-    const { stderr } = await execFileAsync("ffmpeg", [
-      "-nostdin", "-i", videoPath,
-      "-vf", "fps=1,signalstats,metadata=print:key=lavfi.signalstats.YAVG",
-      "-f", "null", "-",
-    ], { maxBuffer: CHILD_MAX_BUFFER_BYTES });
-    return bucketLumaBySecond(stderr ?? "");
-  } catch (error) {
-    console.warn("lumaEnvelope: signalstats pass failed, continuing without a luma signal:", error);
-    return [];
-  }
-}
-
-function bucketLumaBySecond(stderr: string): number[] {
-  const buckets = new Map<number, number[]>();
-  let sec: number | null = null;
-  for (const line of stderr.split("\n")) {
-    const ptsMatch = line.match(/pts_time:([\d.]+)/);
-    if (ptsMatch) {
-      sec = Math.trunc(Number(ptsMatch[1]));
-      continue;
-    }
-    const yavgMatch = line.match(/lavfi\.signalstats\.YAVG=([\d.]+)/);
-    if (yavgMatch && sec !== null) {
-      const bucket = buckets.get(sec);
-      const value = Number(yavgMatch[1]);
-      if (bucket) bucket.push(value);
-      else buckets.set(sec, [value]);
-    }
-  }
-  return [...buckets.keys()].sort((a, b) => a - b).map((key) => {
-    const values = buckets.get(key)!;
-    const mean = values.reduce((a, b) => a + b, 0) / values.length;
-    return Math.round(mean * 10) / 10;
-  });
-}
-
+/** Audio chunking starts here; video signal extraction is in video-envelopes.ts. */
 async function runSilenceDetect(audioPath: string): Promise<string> {
   try {
     const { stderr } = await execFileAsync("ffmpeg", [

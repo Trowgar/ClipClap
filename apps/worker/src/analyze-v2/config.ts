@@ -3,6 +3,7 @@ export type PostBoundaryHookGateMode = "off" | "observe" | "shadow" | "enforce";
 /** Safe-end V1 is deliberately observation-only. Any action authority needs a
  * separately approved configuration and implementation. */
 export type SafeEndAuditMode = "off" | "shadow";
+export type VisualRecallMode = "off" | "shadow" | "on";
 
 export interface AnalyzeConfig {
   engine: AnalyzeEngineSetting;
@@ -26,6 +27,12 @@ export interface AnalyzeConfig {
   maxSec: number;
   scanWindowSec: number;
   scanOverlapSec: number;
+  visualRecallMode: VisualRecallMode;
+  visualRecallMaxCandidates: number;
+  visualRecallClusterSec: number;
+  visualRecallPreSec: number;
+  visualRecallPostSec: number;
+  visualRecallMaxNodeDistanceSec: number;
   /** Which node spans buildScanWindows may count toward the per-window budget
    *  (spec 2026-08-11 "Scan recall remedy", engine-notes §6a/§3). "speech" -
    *  the default, and BYTE-IDENTICAL to every behavior this repo had before
@@ -421,6 +428,30 @@ function positiveInt(env: Env, key: string, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+/** Positive tuning doors fail closed to their measured defaults and have a
+ * finite ceiling so a malformed deployment cannot create unbounded work. */
+function positiveBounded(
+  env: Env,
+  key: string,
+  fallback: number,
+  maximum: number,
+): number {
+  const raw = env[key];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 && parsed <= maximum ? parsed : fallback;
+}
+
+function positiveIntBounded(
+  env: Env,
+  key: string,
+  fallback: number,
+  maximum: number,
+): number {
+  const value = positiveBounded(env, key, fallback, maximum);
+  return Number.isInteger(value) ? value : fallback;
+}
+
 function parsePostBoundaryHookGate(env: Env): Pick<
   AnalyzeConfig,
   | "postBoundaryHookGateMode"
@@ -476,6 +507,10 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
   const engine = env.ANALYZE_ENGINE;
   const postBoundaryHookGate = parsePostBoundaryHookGate(env);
   const safeEndAuditMode = parseSafeEndAuditMode(env);
+  const visualRecallMode: VisualRecallMode =
+    env.ANALYZE_VISUAL_RECALL_V1 === "shadow" || env.ANALYZE_VISUAL_RECALL_V1 === "on"
+      ? env.ANALYZE_VISUAL_RECALL_V1
+      : "off";
   return {
     engine:
       engine === "recall-critic" || engine === "shadow" ? engine : "legacy",
@@ -495,6 +530,17 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     maxSec: num(env, "CLIP_MAX_SEC", 90),
     scanWindowSec: num(env, "SCAN_WINDOW_SEC", 600),
     scanOverlapSec: num(env, "SCAN_OVERLAP_SEC", 90),
+    visualRecallMode,
+    visualRecallMaxCandidates: positiveIntBounded(env, "VISUAL_RECALL_MAX_CANDIDATES", 15, 100),
+    visualRecallClusterSec: positiveBounded(env, "VISUAL_RECALL_CLUSTER_SEC", 12, 600),
+    visualRecallPreSec: positiveBounded(env, "VISUAL_RECALL_PRE_SEC", 18, 600),
+    visualRecallPostSec: positiveBounded(env, "VISUAL_RECALL_POST_SEC", 18, 600),
+    visualRecallMaxNodeDistanceSec: positiveBounded(
+      env,
+      "VISUAL_RECALL_MAX_NODE_DISTANCE_SEC",
+      20,
+      600,
+    ),
     // Exact literal "source", same discipline as every other stage switch in
     // this file: a stray truthy env value must not silently double the
     // scanner's candidate pool and critic spend.

@@ -4,12 +4,17 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { promisify } from "util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { lumaEnvelope, rmsEnvelope } from "../transcribe";
+import {
+  bucketVideoEnvelopesBySecond,
+  lumaEnvelope,
+  rmsEnvelope,
+  videoEnvelopes,
+} from "../transcribe";
 
 const execFileAsync = promisify(execFile);
 
 // This file does NOT mock child_process - transcribe.test.ts does that for
-// the rest of the suite, but rmsEnvelope's (and lumaEnvelope's) actual job
+// the rest of the suite, but rmsEnvelope's (and videoEnvelopes') actual job
 // is to parse REAL ffmpeg astats/signalstats+ametadata output (see each
 // function's own comment for the measured format), so a mock would test
 // the parser against a shape nobody verified.
@@ -17,6 +22,8 @@ const execFileAsync = promisify(execFile);
 let dir: string;
 let fixturePath: string;
 let videoFixturePath: string;
+let movingVideoFixturePath: string;
+let staticVideoFixturePath: string;
 let audioOnlyFixturePath: string;
 
 beforeAll(async () => {
@@ -46,6 +53,20 @@ beforeAll(async () => {
     "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[out]",
     "-map", "[out]",
     videoFixturePath,
+  ]);
+
+  movingVideoFixturePath = join(dir, "moving.mp4");
+  await execFileAsync("ffmpeg", [
+    "-y", "-v", "error",
+    "-f", "lavfi", "-i", "testsrc2=size=64x64:rate=1:duration=4",
+    movingVideoFixturePath,
+  ]);
+
+  staticVideoFixturePath = join(dir, "static.mp4");
+  await execFileAsync("ffmpeg", [
+    "-y", "-v", "error",
+    "-f", "lavfi", "-i", "color=gray:s=64x64:r=1:d=4",
+    staticVideoFixturePath,
   ]);
 
   // The corpus's real degenerate case: an audio-only file handed to a
@@ -122,5 +143,74 @@ describe("lumaEnvelope", () => {
   it("returns [] for a source ffmpeg cannot open at all", async () => {
     const envelope = await lumaEnvelope(join(dir, "does-not-exist.mp4"));
     expect(envelope).toEqual([]);
+  });
+});
+
+describe("videoEnvelopes", () => {
+  it("extracts non-empty motion for a synthetic moving 4s source", async () => {
+    const { lumaEnvelope: luma, motionEnvelope: motion } =
+      await videoEnvelopes(movingVideoFixturePath);
+
+    expect(luma).toHaveLength(4);
+    expect(motion).toHaveLength(4);
+    expect(Math.max(...motion.slice(1))).toBeGreaterThan(1);
+  });
+
+  it("keeps static-source motion near zero after the first sample", async () => {
+    const { motionEnvelope: motion } = await videoEnvelopes(staticVideoFixturePath);
+
+    expect(motion.length).toBeGreaterThanOrEqual(2);
+    expect(Math.max(...motion.slice(1))).toBeLessThan(0.5);
+  });
+
+  it("returns both video arrays empty for an audio-only source", async () => {
+    await expect(videoEnvelopes(audioOnlyFixturePath)).resolves.toEqual({
+      lumaEnvelope: [],
+      motionEnvelope: [],
+    });
+  });
+});
+
+describe("bucketVideoEnvelopesBySecond", () => {
+  it("keeps dense absolute-second indexing and parses signed scientific PTS", () => {
+    const result = bucketVideoEnvelopesBySecond([
+      "frame:0 pts_time:+0e0",
+      "lavfi.signalstats.YAVG=10.14",
+      "lavfi.signalstats.YDIF=0.04",
+      "frame:1 pts_time:+1e0",
+      "lavfi.signalstats.YAVG=20.26",
+      "lavfi.signalstats.YDIF=4.36",
+    ].join("\n"));
+
+    expect(result).toEqual({
+      lumaEnvelope: [10.1, 20.3],
+      motionEnvelope: [0, 4.4],
+    });
+  });
+
+  it.each([
+    ["nonzero PTS", "frame:0 pts_time:1\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1", [], []],
+    ["gap", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1\nframe:2 pts_time:2\nlavfi.signalstats.YAVG=20\nlavfi.signalstats.YDIF=2", [], []],
+    ["missing YAVG", "frame:0 pts_time:0\nlavfi.signalstats.YDIF=1", [], [1]],
+    ["missing YDIF", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=10", [10], []],
+    ["NaN YAVG", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=NaN\nlavfi.signalstats.YDIF=1", [], [1]],
+    ["nonfinite YDIF", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=Infinity", [10], []],
+    ["NaN PTS", "frame:0 pts_time:NaN\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1", [], []],
+    ["nonfinite PTS", "frame:0 pts_time:Infinity\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1", [], []],
+  ])("degrades only the affected axis for %s", (_reason, stderr, luma, motion) => {
+    expect(bucketVideoEnvelopesBySecond(stderr)).toEqual({
+      lumaEnvelope: luma,
+      motionEnvelope: motion,
+    });
+  });
+
+  it.each([
+    ["YAVG gap", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1\nframe:1 pts_time:1\nlavfi.signalstats.YDIF=2\nframe:2 pts_time:2\nlavfi.signalstats.YAVG=30\nlavfi.signalstats.YDIF=3", [], [1, 2, 3]],
+    ["YDIF gap", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1\nframe:1 pts_time:1\nlavfi.signalstats.YAVG=20\nframe:2 pts_time:2\nlavfi.signalstats.YAVG=30\nlavfi.signalstats.YDIF=3", [10, 20, 30], []],
+  ])("degrades only the axis with a gap: %s", (_reason, stderr, luma, motion) => {
+    expect(bucketVideoEnvelopesBySecond(stderr)).toEqual({
+      lumaEnvelope: luma,
+      motionEnvelope: motion,
+    });
   });
 });

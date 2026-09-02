@@ -79,6 +79,7 @@ export async function runTranscribeStage(
       // by the hook selector to shift/guard windows off sustained-black MV
       // stretches.
       lumaEnvelope: outcome.lumaEnvelope,
+      motionEnvelope: outcome.motionEnvelope,
     });
     await getStageQueue("analyze").add("analyze", payload);
   } catch (error) {

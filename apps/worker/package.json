@@ -22,7 +22,8 @@
     "feedback-quality-gate": "tsx src/scripts/feedback-quality-gate.ts",
     "feedback-quality-deploy": "tsx src/scripts/feedback-quality-deploy.ts",
     "feedback-quality-release": "tsx src/scripts/feedback-quality-release.ts",
-    "feedback-quality-rollback": "tsx src/scripts/feedback-quality-rollback.ts"
+    "feedback-quality-rollback": "tsx src/scripts/feedback-quality-rollback.ts",
+    "eval:visual-recall": "tsx src/scripts/eval-visual-recall.ts"
   },
   "dependencies": {
     "@clipclap/shared": "*",
