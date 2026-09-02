@@ -9,6 +9,11 @@ import type {
 const PAYOFF_REGION_SEC = 600;
 const HARD_MAX_CANDIDATES = 12;
 
+function invariantFailure(): never {
+  // Deliberately no candidate id, transcript, URL, or other source prose.
+  throw new Error("outcome_recovery_input_invariant");
+}
+
 export interface RecoveryPoolResult {
   candidates: MergedCandidate[];
   excludedMissingRange: number;
@@ -35,6 +40,85 @@ function compareStableId(a: MergedCandidate, b: MergedCandidate): number {
 
 function compareWithinRegion(a: MergedCandidate, b: MergedCandidate): number {
   return b.interest - a.interest || compareStableId(a, b);
+}
+
+function validatePoolInput(input: {
+  candidates: readonly MergedCandidate[];
+  nodes: readonly SentenceNode[];
+  missingRanges: readonly { start: number; end: number }[];
+  maxCandidates: number;
+}): void {
+  if (
+    !Array.isArray(input.candidates) ||
+    !Array.isArray(input.nodes) ||
+    !Array.isArray(input.missingRanges) ||
+    !Number.isFinite(input.maxCandidates) ||
+    !Number.isInteger(input.maxCandidates) ||
+    input.maxCandidates < 0
+  ) {
+    invariantFailure();
+  }
+
+  for (const range of input.missingRanges) {
+    if (
+      range === null ||
+      typeof range !== "object" ||
+      !Number.isFinite(range.start) ||
+      !Number.isFinite(range.end) ||
+      range.start > range.end
+    ) {
+      invariantFailure();
+    }
+  }
+
+  const ids = new Set<string>();
+  for (const candidate of input.candidates) {
+    if (
+      candidate === null ||
+      typeof candidate !== "object" ||
+      typeof candidate.id !== "string" ||
+      candidate.id.length === 0 ||
+      ids.has(candidate.id) ||
+      !Number.isInteger(candidate.startNode) ||
+      !Number.isInteger(candidate.payoffNode) ||
+      !Number.isInteger(candidate.endNode) ||
+      candidate.startNode < 0 ||
+      candidate.endNode >= input.nodes.length ||
+      candidate.startNode > candidate.payoffNode ||
+      candidate.payoffNode > candidate.endNode ||
+      !Number.isFinite(candidate.interest)
+    ) {
+      invariantFailure();
+    }
+    ids.add(candidate.id);
+
+    const startNode = input.nodes[candidate.startNode];
+    const payoffNode = input.nodes[candidate.payoffNode];
+    const endNode = input.nodes[candidate.endNode];
+    if (startNode === undefined || payoffNode === undefined || endNode === undefined) {
+      invariantFailure();
+    }
+    for (let nodeIndex = candidate.startNode; nodeIndex <= candidate.endNode; nodeIndex += 1) {
+      const node = input.nodes[nodeIndex];
+      if (
+        node === undefined ||
+        node === null ||
+        typeof node !== "object" ||
+        !Number.isFinite(node.start) ||
+        !Number.isFinite(node.end) ||
+        node.start < 0 ||
+        node.start > node.end
+      ) {
+        invariantFailure();
+      }
+    }
+    if (
+      startNode.start > payoffNode.start ||
+      payoffNode.start > endNode.end
+    ) {
+      invariantFailure();
+    }
+  }
 }
 
 function intersectsMissingRange(
@@ -82,6 +166,7 @@ export function buildOutcomeRecoveryPool(input: {
   missingRanges: readonly { start: number; end: number }[];
   maxCandidates: number;
 }): RecoveryPoolResult {
+  validatePoolInput(input);
   const cap = boundedCap(input.maxCandidates);
   let excludedMissingRange = 0;
   const byRegion = new Map<number, MergedCandidate[]>();
@@ -91,8 +176,7 @@ export function buildOutcomeRecoveryPool(input: {
       excludedMissingRange += 1;
       continue;
     }
-    const region = regionFor(candidate, input.nodes);
-    if (region === undefined) continue;
+    const region = regionFor(candidate, input.nodes)!;
     const bucket = byRegion.get(region) ?? [];
     bucket.push(candidate);
     byRegion.set(region, bucket);

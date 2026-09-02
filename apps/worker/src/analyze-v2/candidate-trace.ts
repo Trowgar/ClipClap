@@ -1,9 +1,10 @@
 import type {
   CandidatePrimaryDisposition,
   CandidateRecoveryDisposition,
+  MergedCandidate,
 } from "./types";
 
-const PRIMARY_DISPOSITIONS: readonly CandidatePrimaryDisposition[] = [
+const PRIMARY_DISPOSITIONS: readonly CandidatePrimaryDisposition[] = Object.freeze([
   "not_selected_for_critic",
   "critic_rejected",
   "evidence_rejected",
@@ -14,13 +15,23 @@ const PRIMARY_DISPOSITIONS: readonly CandidatePrimaryDisposition[] = [
   "standalone_rejected",
   "finalizer_rejected",
   "shipped",
-];
+]);
 
-const RECOVERY_DISPOSITIONS: readonly CandidateRecoveryDisposition[] =
+const RECOVERY_DISPOSITIONS: readonly CandidateRecoveryDisposition[] = Object.freeze(
   PRIMARY_DISPOSITIONS.filter(
     (disposition): disposition is CandidateRecoveryDisposition =>
       disposition !== "not_selected_for_critic",
-  );
+  ),
+);
+
+export type CandidateTraceDescriptor = Readonly<
+  Pick<MergedCandidate, "id" | "startNode" | "endNode" | "payoffNode" | "interest" | "type">
+>;
+
+export interface CandidateTraceEntry extends CandidateTraceDescriptor {
+  primary?: CandidatePrimaryDisposition;
+  recovery?: CandidateRecoveryDisposition;
+}
 
 type CountMap<T extends string> = Partial<Record<T, number>>;
 
@@ -35,6 +46,7 @@ export interface CandidateTrace {
   terminateRecovery(id: string, disposition: CandidateRecoveryDisposition): void;
   summaryPrimary(): CountMap<CandidatePrimaryDisposition>;
   summaryRecovery(): CountMap<CandidateRecoveryDisposition>;
+  inspect(): readonly CandidateTraceEntry[];
   serialize(): CandidateTraceSerialized;
   toJSON(): CandidateTraceSerialized;
 }
@@ -57,26 +69,63 @@ function increment<T extends string>(
   counts.set(disposition, (counts.get(disposition) ?? 0) + 1);
 }
 
-function countsObject<T extends string>(counts: Map<T, number>): CountMap<T> {
+function countsObject<T extends string>(
+  counts: Map<T, number>,
+  order: readonly T[],
+): CountMap<T> {
   const result: CountMap<T> = {};
-  for (const [disposition, count] of counts) result[disposition] = count;
+  for (const disposition of order) {
+    const count = counts.get(disposition);
+    if (count !== undefined) result[disposition] = count;
+  }
   return result;
+}
+
+function isSafeDescriptor(value: unknown): value is CandidateTraceDescriptor {
+  if (value === null || typeof value !== "object") return false;
+  const descriptor = value as Record<string, unknown>;
+  const startNode = descriptor.startNode;
+  const payoffNode = descriptor.payoffNode;
+  const endNode = descriptor.endNode;
+  return (
+    typeof descriptor.id === "string" &&
+    descriptor.id.length > 0 &&
+    Number.isInteger(startNode) &&
+    Number.isInteger(payoffNode) &&
+    Number.isInteger(endNode) &&
+    (startNode as number) >= 0 &&
+    (startNode as number) <= (payoffNode as number) &&
+    (payoffNode as number) <= (endNode as number) &&
+    Number.isFinite(descriptor.interest) &&
+    typeof descriptor.type === "string" &&
+    descriptor.type.length > 0
+  );
 }
 
 /**
  * Create an in-memory, append-only accounting trace for one candidate set.
- * IDs are the only candidate identity retained here: callers must pass any
- * range/type details to count-only telemetry separately, keeping transcript,
- * user, media, and model prose out of serialization by construction.
+ * Candidate descriptors contain only safe geometry/score/type metadata. They
+ * are copied and frozen at admission, while aggregate serialization remains
+ * counts-only so transcript, user, media, and model prose cannot leak.
  */
 export function createCandidateTrace(
-  candidateIds: readonly string[],
+  candidateDescriptors: readonly CandidateTraceDescriptor[],
 ): CandidateTrace {
   const ids = new Set<string>();
-  for (const id of candidateIds) {
-    if (typeof id !== "string" || id.length === 0) fail("invalid_candidate");
+  const descriptors = new Map<string, CandidateTraceDescriptor>();
+  for (const candidate of candidateDescriptors) {
+    if (!isSafeDescriptor(candidate)) fail("invalid_candidate_descriptor");
+    const id = candidate.id;
     if (ids.has(id)) fail("duplicate_candidate");
     ids.add(id);
+    descriptors.set(id, Object.freeze({
+      id: candidate.id,
+      startNode: candidate.startNode,
+      payoffNode: candidate.payoffNode,
+      endNode: candidate.endNode,
+      interest: candidate.interest,
+      type: candidate.type,
+    }));
   }
 
   const primary = new Map<string, CandidatePrimaryDisposition>();
@@ -145,20 +194,32 @@ export function createCandidateTrace(
 
     summaryPrimary() {
       requireCompletePrimary();
-      return countsObject(primaryCounts);
+      return countsObject(primaryCounts, PRIMARY_DISPOSITIONS);
     },
 
     summaryRecovery() {
       requireCompleteRecovery();
-      return countsObject(recoveryCounts);
+      return countsObject(recoveryCounts, RECOVERY_DISPOSITIONS);
+    },
+
+    inspect() {
+      const entries: CandidateTraceEntry[] = [];
+      for (const [id, descriptor] of descriptors) {
+        entries.push(Object.freeze({
+          ...descriptor,
+          ...(primary.has(id) ? { primary: primary.get(id) } : {}),
+          ...(recovery.has(id) ? { recovery: recovery.get(id) } : {}),
+        }));
+      }
+      return Object.freeze(entries);
     },
 
     serialize() {
       requireCompletePrimary();
       requireCompleteRecovery();
       return {
-        primary: countsObject(primaryCounts),
-        recovery: countsObject(recoveryCounts),
+        primary: countsObject(primaryCounts, PRIMARY_DISPOSITIONS),
+        recovery: countsObject(recoveryCounts, RECOVERY_DISPOSITIONS),
       };
     },
 

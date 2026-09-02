@@ -34,17 +34,40 @@ function candidate(id: string, input: Partial<MergedCandidate> = {}): MergedCand
 }
 
 describe("outcome recovery pool", () => {
+  it("rejects malformed input atomically before admitting any candidate", () => {
+    const valid = candidate("valid", { startNode: 0, payoffNode: 0, endNode: 0 });
+    const cases: Array<{ candidates?: MergedCandidate[]; nodes?: SentenceNode[]; missingRanges?: Array<{ start: number; end: number }> }> = [
+      { candidates: [candidate("oob", { startNode: 8 })] },
+      { candidates: [candidate("reversed", { startNode: 2, payoffNode: 1, endNode: 0 })] },
+      { candidates: [candidate("payoff-oob", { startNode: 0, payoffNode: 2, endNode: 1 })] },
+      { candidates: [candidate("dup"), candidate("dup")] },
+      { candidates: [candidate("")] },
+      { candidates: [candidate("nan-interest", { interest: Number.NaN })] },
+      { candidates: [candidate("infinite-interest", { interest: Number.POSITIVE_INFINITY })] },
+      { candidates: [valid], nodes: [{ ...nodes(1)[0], start: 2, end: 1 }] },
+      { candidates: [valid], missingRanges: [{ start: 5, end: 4 }] },
+    ];
+    for (const input of cases) {
+      expect(() => buildOutcomeRecoveryPool({
+        candidates: input.candidates ?? [],
+        nodes: input.nodes ?? nodes(8),
+        missingRanges: input.missingRanges ?? [],
+        maxCandidates: 6,
+      })).toThrow("outcome_recovery_input_invariant");
+    }
+  });
+
   it("round-robins ten-minute payoff regions, sorting each region by interest then id", () => {
     const tail = [
-      candidate("r0", { payoffNode: 0, interest: 0.9 }),
-      candidate("r1", { payoffNode: 1, interest: 0.8 }),
-      candidate("r2", { payoffNode: 2, interest: 0.7 }),
-      candidate("r3", { payoffNode: 6, interest: 0.9 }),
-      candidate("r4", { payoffNode: 7, interest: 0.8 }),
-      candidate("r5", { payoffNode: 8, interest: 0.7 }),
-      candidate("r6", { payoffNode: 12, interest: 0.9 }),
-      candidate("r7", { payoffNode: 13, interest: 0.8 }),
-      candidate("r8", { payoffNode: 14, interest: 0.7 }),
+      candidate("r0", { endNode: 0, payoffNode: 0, interest: 0.9 }),
+      candidate("r1", { endNode: 1, payoffNode: 1, interest: 0.8 }),
+      candidate("r2", { endNode: 2, payoffNode: 2, interest: 0.7 }),
+      candidate("r3", { endNode: 6, payoffNode: 6, interest: 0.9 }),
+      candidate("r4", { endNode: 7, payoffNode: 7, interest: 0.8 }),
+      candidate("r5", { endNode: 8, payoffNode: 8, interest: 0.7 }),
+      candidate("r6", { endNode: 12, payoffNode: 12, interest: 0.9 }),
+      candidate("r7", { endNode: 13, payoffNode: 13, interest: 0.8 }),
+      candidate("r8", { endNode: 14, payoffNode: 14, interest: 0.7 }),
     ];
     const result = buildOutcomeRecoveryPool({
       candidates: tail,
@@ -89,7 +112,7 @@ describe("outcome recovery pool", () => {
 
   it("enforces the defensive hard maximum, handles empty caps, and does not mutate inputs", () => {
     const tail = Array.from({ length: 20 }, (_, index) =>
-      candidate(`c${index}`, { payoffNode: index, interest: index / 20 })
+      candidate(`c${index}`, { endNode: index, payoffNode: index, interest: index / 20 })
     );
     const before = tail.map((item) => ({ ...item }));
     expect(buildOutcomeRecoveryPool({ candidates: tail, nodes: nodes(20), missingRanges: [], maxCandidates: 99 }).candidates).toHaveLength(12);
