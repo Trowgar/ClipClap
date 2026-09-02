@@ -138,18 +138,19 @@ function parseExpected(value: unknown, sourceDurationSec = MAX_OUTCOME_SECONDS):
 function dispositionFields(raw: Record<string, unknown>, expected: OutcomeExpected): { disposition: OutcomeDisposition; confidence: OutcomeConfidence; set?: OutcomeSet } {
   const disposition = raw.disposition;
   const confidence = raw.confidence;
+  const hasOwnSet = Object.prototype.hasOwnProperty.call(raw, "set");
   if (disposition !== "recoverable_false_negative" && disposition !== "valid_empty" && disposition !== "exclude") fail();
   if (confidence !== "high" && confidence !== "medium") fail();
   if (disposition === "recoverable_false_negative") {
-    if (expected.approvedWindows.length === 0 || (raw.set !== "eval" && raw.set !== "holdout")) fail();
+    if (expected.approvedWindows.length === 0 || !hasOwnSet || (raw.set !== "eval" && raw.set !== "holdout")) fail();
     return { disposition, confidence, set: raw.set };
   }
   if (expected.approvedWindows.length !== 0) fail();
   if (disposition === "valid_empty") {
-    if (raw.set !== "eval" && raw.set !== "holdout") fail();
+    if (!hasOwnSet || (raw.set !== "eval" && raw.set !== "holdout")) fail();
     return { disposition, confidence, set: raw.set };
   }
-  if (expected.forbiddenWindows.length !== 0 || Object.prototype.hasOwnProperty.call(raw, "set")) fail();
+  if (expected.forbiddenWindows.length !== 0 || hasOwnSet) fail();
   return { disposition, confidence };
 }
 

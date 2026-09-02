@@ -117,6 +117,21 @@ describe("zero-outcome contracts", () => {
     expect(() => parseOutcomeLabel(label({ set: "training" }))).toThrow(OutcomeSchemaError);
   });
 
+  it("never accepts an inherited set for an active label", () => {
+    const raw = label();
+    delete raw.set;
+    let thrown: unknown;
+    Object.defineProperty(Object.prototype, "set", { configurable: true, value: "eval" });
+    try {
+      parseOutcomeLabel(raw);
+    } catch (error) {
+      thrown = error;
+    } finally {
+      delete (Object.prototype as { set?: unknown }).set;
+    }
+    expect(thrown).toBeInstanceOf(OutcomeSchemaError);
+  });
+
   it("parses an exact, pseudonymous materialized case", () => {
     const result: OutcomeCase = parseOutcomeCase(outcomeCase());
     expect(result).toMatchObject({ sourceDurationSec: 300, subsystem: "selection", disposition: "recoverable_false_negative" });
@@ -141,5 +156,20 @@ describe("zero-outcome contracts", () => {
     delete excluded.set;
     expect(parseOutcomeCase(excluded)).toMatchObject({ disposition: "exclude" });
     expect(() => parseOutcomeCase(outcomeCase({ disposition: "exclude", expected: { approvedWindows: [], forbiddenWindows: [] } }))).toThrow(OutcomeSchemaError);
+  });
+
+  it("never accepts an inherited set for an active materialized case", () => {
+    const raw = outcomeCase();
+    delete raw.set;
+    let thrown: unknown;
+    Object.defineProperty(Object.prototype, "set", { configurable: true, value: "holdout" });
+    try {
+      parseOutcomeCase(raw);
+    } catch (error) {
+      thrown = error;
+    } finally {
+      delete (Object.prototype as { set?: unknown }).set;
+    }
+    expect(thrown).toBeInstanceOf(OutcomeSchemaError);
   });
 });
