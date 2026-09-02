@@ -342,34 +342,70 @@ export async function lumaEnvelope(videoPath: string): Promise<number[]> {
   return (await videoEnvelopes(videoPath)).lumaEnvelope;
 }
 
-function bucketVideoEnvelopesBySecond(stderr: string): VideoEnvelopes {
+export function bucketVideoEnvelopesBySecond(stderr: string): VideoEnvelopes {
+  const numberToken = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
   const lumaBuckets = new Map<number, number[]>();
   const motionBuckets = new Map<number, number[]>();
   let sec: number | null = null;
+  let invalidInput = false;
   for (const line of stderr.split("\n")) {
-    const ptsMatch = line.match(/pts_time:([\d.]+)/);
-    if (ptsMatch) {
-      sec = Math.trunc(Number(ptsMatch[1]));
+    const ptsToken = line.match(/pts_time:([^\s]+)/);
+    if (ptsToken) {
+      const pts = Number(ptsToken[1]);
+      if (!numberToken.test(ptsToken[1]) || !Number.isFinite(pts) || pts < 0) {
+        invalidInput = true;
+        sec = null;
+        continue;
+      }
+      sec = Math.trunc(pts);
       continue;
     }
-    const yavgMatch = line.match(/lavfi\.signalstats\.YAVG=([-+\d.eE]+)/);
-    if (yavgMatch && sec !== null) {
+
+    const yavgToken = line.match(/lavfi\.signalstats\.YAVG=([^\s]+)/);
+    if (yavgToken) {
+      const value = Number(yavgToken[1]);
+      if (sec === null || !numberToken.test(yavgToken[1]) || !Number.isFinite(value)) {
+        invalidInput = true;
+        continue;
+      }
       const bucket = lumaBuckets.get(sec);
-      const value = Number(yavgMatch[1]);
       if (bucket) bucket.push(value);
       else lumaBuckets.set(sec, [value]);
       continue;
     }
-    const ydifMatch = line.match(/lavfi\.signalstats\.YDIF=([-+\d.eE]+)/);
-    if (ydifMatch && sec !== null) {
+
+    const ydifToken = line.match(/lavfi\.signalstats\.YDIF=([^\s]+)/);
+    if (ydifToken) {
+      const value = Number(ydifToken[1]);
+      if (sec === null || !numberToken.test(ydifToken[1]) || !Number.isFinite(value)) {
+        invalidInput = true;
+        continue;
+      }
       const bucket = motionBuckets.get(sec);
-      const value = Number(ydifMatch[1]);
       if (bucket) bucket.push(value);
       else motionBuckets.set(sec, [value]);
     }
   }
+
+  const seconds = [...new Set([
+    ...lumaBuckets.keys(),
+    ...motionBuckets.keys(),
+  ])].sort((a, b) => a - b);
+  if (invalidInput || seconds.length === 0 || seconds[0] !== 0) {
+    return { lumaEnvelope: [], motionEnvelope: [] };
+  }
+  const maxSecond = seconds[seconds.length - 1];
+  for (let second = 0; second <= maxSecond; second++) {
+    const luma = lumaBuckets.get(second);
+    const motion = motionBuckets.get(second);
+    if (!luma || !motion || luma.some((value) => !Number.isFinite(value)) ||
+      motion.some((value) => !Number.isFinite(value))) {
+      return { lumaEnvelope: [], motionEnvelope: [] };
+    }
+  }
+
   const roundBuckets = (buckets: Map<number, number[]>) =>
-    [...buckets.keys()].sort((a, b) => a - b).map((key) => {
+    seconds.map((key) => {
       const values = buckets.get(key)!;
       const mean = values.reduce((a, b) => a + b, 0) / values.length;
       return Math.round(mean * 10) / 10;

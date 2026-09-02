@@ -4,7 +4,12 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { promisify } from "util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { lumaEnvelope, rmsEnvelope, videoEnvelopes } from "../transcribe";
+import {
+  bucketVideoEnvelopesBySecond,
+  lumaEnvelope,
+  rmsEnvelope,
+  videoEnvelopes,
+} from "../transcribe";
 
 const execFileAsync = promisify(execFile);
 
@@ -160,6 +165,40 @@ describe("videoEnvelopes", () => {
 
   it("returns both video arrays empty for an audio-only source", async () => {
     await expect(videoEnvelopes(audioOnlyFixturePath)).resolves.toEqual({
+      lumaEnvelope: [],
+      motionEnvelope: [],
+    });
+  });
+});
+
+describe("bucketVideoEnvelopesBySecond", () => {
+  it("keeps dense absolute-second indexing and parses signed scientific PTS", () => {
+    const result = bucketVideoEnvelopesBySecond([
+      "frame:0 pts_time:+0e0",
+      "lavfi.signalstats.YAVG=10.14",
+      "lavfi.signalstats.YDIF=0.04",
+      "frame:1 pts_time:+1e0",
+      "lavfi.signalstats.YAVG=20.26",
+      "lavfi.signalstats.YDIF=4.36",
+    ].join("\n"));
+
+    expect(result).toEqual({
+      lumaEnvelope: [10.1, 20.3],
+      motionEnvelope: [0, 4.4],
+    });
+  });
+
+  it.each([
+    ["nonzero PTS", "frame:0 pts_time:1\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1"],
+    ["gap", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1\nframe:2 pts_time:2\nlavfi.signalstats.YAVG=20\nlavfi.signalstats.YDIF=2"],
+    ["missing YAVG", "frame:0 pts_time:0\nlavfi.signalstats.YDIF=1"],
+    ["missing YDIF", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=10"],
+    ["NaN signal", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=NaN\nlavfi.signalstats.YDIF=1"],
+    ["nonfinite signal", "frame:0 pts_time:0\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=Infinity"],
+    ["NaN PTS", "frame:0 pts_time:NaN\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1"],
+    ["nonfinite PTS", "frame:0 pts_time:Infinity\nlavfi.signalstats.YAVG=10\nlavfi.signalstats.YDIF=1"],
+  ])("returns empty arrays for %s", (_reason, stderr) => {
+    expect(bucketVideoEnvelopesBySecond(stderr)).toEqual({
       lumaEnvelope: [],
       motionEnvelope: [],
     });

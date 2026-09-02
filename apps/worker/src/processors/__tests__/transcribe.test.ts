@@ -187,4 +187,32 @@ describe("transcribeVideo", () => {
     expect(mocks.createReadStream).toHaveBeenCalledWith(expect.stringMatching(/\.mp3$/));
     expect(mocks.unlink).toHaveBeenCalledWith(expect.stringMatching(/\.mp3$/));
   });
+
+  it("populates both visual envelopes on the chunked path with one video pass", async () => {
+    mocks.statSync.mockReturnValue({ size: 25 * 1024 * 1024 });
+    const visualMetadata = [
+      "frame:0 pts_time:0",
+      "lavfi.signalstats.YAVG=10",
+      "lavfi.signalstats.YDIF=0",
+      "frame:1 pts_time:1",
+      "lavfi.signalstats.YAVG=20",
+      "lavfi.signalstats.YDIF=5",
+    ].join("\n");
+    mocks.execFile.mockImplementation((_cmd, args, optsOrCb, maybeCb) => {
+      const callback = typeof optsOrCb === "function" ? optsOrCb : maybeCb;
+      const argv = args as string[];
+      if (argv.includes("fps=1,signalstats,metadata=print")) {
+        return callback(null, { stdout: "", stderr: visualMetadata });
+      }
+      return callback(null, { stdout: "12.5", stderr: "" });
+    });
+
+    const result = await transcribeVideo("/tmp/source.mp4");
+
+    expect(result.lumaEnvelope).toEqual([10, 20]);
+    expect(result.motionEnvelope).toEqual([0, 5]);
+    expect(mocks.execFile.mock.calls.filter((call) =>
+      (call[1] as string[]).includes("fps=1,signalstats,metadata=print")
+    )).toHaveLength(1);
+  });
 });
