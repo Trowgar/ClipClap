@@ -132,6 +132,45 @@ describe("outcome recovery wiring", () => {
     expect(harness.create).toHaveBeenCalledTimes(3);
   });
 
+  it.each([
+    ["evidence", { title_evidence_nodes: [999] }, "evidence_rejected"],
+    ["snap", { start_node: 39, payoff_node: 39, end_node: 39, hook_start_node: 39, hook_end_node: 39 }, "snap_rejected"],
+  ])("real recovery quality lane applies %s rejection", async (_name, patch, disposition) => {
+    const recoveryRow = { ...verdict("c1", true), ...patch };
+    const harness = client(scanTwo(), critic([verdict("c0", false)]), critic([recoveryRow]));
+    const result = await analyzeHighlightsV2(transcript(), { client: harness.client, cfg: recoveryCfg("on", { finalizerEnabled: false }), transcriptPartial: false });
+    expect(result.highlights).toEqual([]);
+    expect((result.telemetry.outcomeRecovery as any).outcome).toBe("rejected");
+    expect((result.telemetry.outcomeRecovery as any).recoveryDispositions).toEqual({ [disposition]: 1 });
+  });
+
+  it("real recovery arc, post-boundary, and standalone authorities can reject without shipping", async () => {
+    const arcResponse = (standalone: boolean, arcClean = standalone) => ({
+      choices: [{ message: { content: JSON.stringify({ results: [{
+        id: "c1",
+        entry: { ok: arcClean, defect: arcClean ? null : "dangling_reference", fix_start_node: null },
+        exit: { ok: arcClean, defect: arcClean ? null : "mid_thought", fix_end_node: null },
+        standalone: { ok: standalone, missing: standalone ? null : "setup" },
+      }] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 4 },
+    });
+    const arcCfg = { ...recoveryCfg("on", { finalizerEnabled: false, arcAuditEnabled: true, arcDownrankEnabled: true }), arcDownrankPenalty2: 0.5 };
+    const arcHarness = client(scanTwo(), critic([verdict("c0", false)]), critic([verdict("c1", true)]), arcResponse(false));
+    const arcResult = await analyzeHighlightsV2(transcript(), { client: arcHarness.client, cfg: arcCfg, transcriptPartial: false });
+    expect((arcResult.telemetry.outcomeRecovery as any).recoveryDispositions).toEqual({ arc_rejected: 1 });
+
+    const postCfg = recoveryCfg("on", { finalizerEnabled: false, postBoundaryHookGateMode: "enforce", postBoundaryHookMaxDelaySec: 0 });
+    const postRow = verdict("c1", true);
+    const postHarness = client(scanTwo(), critic([verdict("c0", false)]), critic([postRow]));
+    const postResult = await analyzeHighlightsV2(transcript(), { client: postHarness.client, cfg: postCfg, transcriptPartial: false });
+    expect((postResult.telemetry.outcomeRecovery as any).recoveryDispositions).toEqual({ post_boundary_rejected: 1 });
+
+    const standaloneCfg = { ...recoveryCfg("on", { finalizerEnabled: false, arcAuditEnabled: true, standaloneFilterEnabled: true }), arcDownrankPenalty2: 0.5 };
+    const standaloneHarness = client(scanTwo(), critic([verdict("c0", false)]), critic([verdict("c1", true)]), arcResponse(false, true));
+    const standaloneResult = await analyzeHighlightsV2(transcript(), { client: standaloneHarness.client, cfg: standaloneCfg, transcriptPartial: false });
+    expect((standaloneResult.telemetry.outcomeRecovery as any).recoveryDispositions).toEqual({ standalone_rejected: 1 });
+  });
+
   it("normal nonempty primary output does not call recovery", async () => {
     const harness = client(scanTwo(), critic([verdict("c0", true)]), finalizer());
     const { client: openai, create } = harness;
@@ -139,6 +178,36 @@ describe("outcome recovery wiring", () => {
     expect(result.highlights).toHaveLength(1);
     expect(result.telemetry.outcomeRecovery).toEqual(expect.objectContaining({ reason: "non_empty", outcome: "not_eligible" }));
     expect(create).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([false, true])( "off preserves primary telemetry projection on finalizer fallback (%s malformed)", async (malformedFallback) => {
+    const cfg = { ...baseCfg, outcomeRecoveryMode: "off" as const, finalizerEnabled: true };
+    const makeClient = (fallback: unknown) => {
+      let index = 0;
+      const first = [scanTwo(), critic([verdict("c0", true)]), finalizer()];
+      const create = vi.fn(async (request: any) => {
+        const prompt = String(request.messages?.[1]?.content ?? "");
+        if (prompt.startsWith("CLIP ")) {
+          if (request.model === cfg.finalizerModel) throw new Error("configured finalizer unavailable");
+          return fallback;
+        }
+        return first[index++];
+      });
+      return { chat: { completions: { create } } } as any;
+    };
+    const baseline = await analyzeHighlightsV2(transcript(), { client: (() => {
+      const harness = client(scanTwo(), critic([verdict("c0", true)]), finalizer());
+      return harness.client;
+    })(), cfg, transcriptPartial: false });
+    const fallback = await analyzeHighlightsV2(transcript(), {
+      client: makeClient(malformedFallback ? { choices: [{ message: { content: JSON.stringify({ clips: "invalid" }) }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } } : finalizer()),
+      cfg,
+      transcriptPartial: false,
+    });
+    expect(fallback.highlights).toEqual(baseline.highlights);
+    expect(Object.keys(fallback.telemetry)).toEqual(Object.keys(baseline.telemetry));
+    expect(fallback.telemetry).not.toHaveProperty("finalizerFallbackUsed");
+    expect(fallback.telemetry).not.toHaveProperty("finalizerSkipped", "malformed");
   });
 
   it.each([
@@ -279,6 +348,31 @@ describe("outcome recovery wiring", () => {
     for (const path of ["tiny", "degenerate", "song_gate", "music_short"]) {
       expect(isOutcomeRecoveryEligible({ ...base, path })).toEqual(expect.objectContaining({ eligible: false }));
     }
+  });
+
+  it("actual tiny analyzer path judges once and never enters recovery", async () => {
+    const tiny = {
+      text: "One two three four five six.",
+      segments: [{ start: 0, end: 6, text: "One two three four five six.", words: [
+        { text: "One", start: 0, end: 1 }, { text: "two", start: 1, end: 2 },
+        { text: "three", start: 2, end: 3 }, { text: "four", start: 3, end: 4 },
+        { text: "five", start: 4, end: 5 }, { text: "six.", start: 5, end: 6 },
+      ] }], language: "en" as const,
+    };
+    const tinyReject = { ...verdict("c0", false), start_node: 0, payoff_node: 0, end_node: 0, hook_start_node: 0, hook_end_node: 0 };
+    const harness = client(critic([tinyReject]));
+    const result = await analyzeHighlightsV2(tiny, { client: harness.client, cfg: recoveryCfg("on", { finalizerEnabled: false }), transcriptPartial: false });
+    expect(result.highlights).toEqual([]);
+    expect((result.telemetry.outcomeRecovery as any).reason).toBe("no_unjudged_tail");
+    expect(harness.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("actual degenerate analyzer path emits degenerate and makes no model call", async () => {
+    const harness = client();
+    const result = await analyzeHighlightsV2({ text: "hi", segments: [{ start: 0, end: 1, text: "hi", words: [{ text: "hi", start: 0, end: 0.5 }] }], language: "en" }, { client: harness.client, cfg: recoveryCfg("on"), transcriptPartial: false });
+    expect(result.noClipsReason).toBe("NO_USABLE_SPEECH");
+    expect((result.telemetry.outcomeRecovery as any).reason).toBe("degenerate");
+    expect(harness.create).not.toHaveBeenCalled();
   });
 
   it("malformed recovery pool state is an invariant, not a failed outcome", () => {

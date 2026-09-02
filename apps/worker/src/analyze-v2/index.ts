@@ -713,12 +713,11 @@ export async function analyzeHighlightsV2(
           });
           const recoveryTelemetryData = recovery.telemetry as { invariantDrops?: number };
           const finalizerSkipped = recovery.telemetry.finalizerSkipped;
-          const finalizerFallbackUsed = recovery.telemetry.finalizerFallbackUsed === true;
           // finalizeClips fails open by returning its input when its authority
           // is unavailable. Recovery cannot ship that input: unlike primary,
           // it has no previously judged answer to preserve.
           const finalizerAmbiguous =
-            (finalizerFallbackUsed ||
+            (recovery.finalizerAmbiguous === true ||
               (typeof finalizerSkipped === "string" && finalizerSkipped !== "empty")) &&
             (recovery.counters.selectedForFinalizer > 0 || recovery.highlights.length > 0);
           const qualityAmbiguous =

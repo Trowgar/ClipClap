@@ -64,6 +64,8 @@ export interface QualityLaneResult {
   lane: QualityLaneInput["lane"];
   highlights: V2Highlight[];
   telemetry: Record<string, unknown>;
+  /** Internal recovery-only veto signal. Never projected into primary output. */
+  finalizerAmbiguous?: boolean;
   counters: {
     judged: number;
     selectedForFinalizer: number;
@@ -908,8 +910,17 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
   // - finalize.ts's defence-in-depth gate is the ONLY thing that ever sets
   // them, and it is meant to be unreachable when the policy above is correct,
   // so both are almost always absent here.
-  const { longClipsCompressed, longClipsDropped, ...finalizedTelemetryRest } =
+  const { longClipsCompressed, longClipsDropped, finalizerFallbackUsed, ...rawFinalizedTelemetryRest } =
     finalized.telemetry;
+  // `clips` was absent from a malformed finalizer response. Before Task6 the
+  // primary lane treated that as a fail-open success with no skipped marker;
+  // retain that exact projection while exposing the ambiguity only through the
+  // recovery lane's internal result bit.
+  const { finalizerSkipped, ...withoutMalformedSkipped } = rawFinalizedTelemetryRest;
+  const finalizedTelemetryRest =
+    finalizerSkipped === "malformed" ? withoutMalformedSkipped : rawFinalizedTelemetryRest;
+  const finalizerAmbiguous =
+    finalizerFallbackUsed === true || finalizerSkipped === "malformed";
 
   const telemetry = {
     // Not-a-key discipline (spec 2026-08-19-stream-analyze-mode, S1), same as
@@ -1052,6 +1063,7 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
     lane: input.lane,
     highlights,
     telemetry,
+    ...(input.lane === "recovery" && finalizerAmbiguous ? { finalizerAmbiguous: true } : {}),
     counters: {
       judged: critic.verdicts.length,
       selectedForFinalizer: afterStandaloneFilter.length,
