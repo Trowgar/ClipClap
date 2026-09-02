@@ -146,3 +146,19 @@ Real-data replay must include:
 Release order is `off` in the image, then `shadow` against retained sources, then `on`
 for all users only after the gates above pass. Rollback is one environment change back
 to `shadow` or `off`; no database rollback is required.
+
+## Final measured results (2026-09-02)
+
+The retained replay corpus covered 5 source videos and 7 labelled positive windows:
+
+- positive recall: 7/7 (gaming 2/2, incident 2/2, confirmed `AS_IS` 3/3);
+- weak-negative hits: 0;
+- candidate counts by anonymous corpus case: 13, 15, 3, 2, and 4; cap 15 respected;
+- pure nomination latency: 12–27 ms;
+- full worker suite: 121 files, 2543 tests, passing in the Node 20 Docker environment;
+- worker build: passed;
+- production image build: passed in approximately 85 seconds.
+
+Limitation: 6 older confirmed `AS_IS` cases no longer had their original source
+artifacts and were excluded from this replay. The measurements therefore do not claim
+protection for those six cases.

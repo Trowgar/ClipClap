@@ -296,28 +296,40 @@ add content-specific words, user identifiers, game names, or source-specific bra
 - Modify: `.env.example`
 - Modify: `docs/superpowers/specs/2026-09-02-core-v3-visual-recall-design.md` only for final measured results
 
-- [ ] **Step 1: Build the actual worker image**
+- [ ] **Step 1: Build production and test worker images**
 
 ```bash
 docker build -f apps/worker/Dockerfile -t clipclap-worker-core-v3:verify .
+docker build --target build -f apps/worker/Dockerfile -t clipclap-worker-core-v3:test .
 ```
 
-- [ ] **Step 2: Run the complete worker suite inside that image**
+- [ ] **Step 2: Run the complete worker suite in the build-stage image**
 
 ```bash
-docker run --rm --entrypoint sh clipclap-worker-core-v3:verify -lc 'cd /app && npm test --workspace apps/worker -- --run'
+docker run --rm --entrypoint sh \
+  -w /app \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /usr/bin/docker:/usr/bin/docker:ro \
+  -v /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro \
+  -v /tmp:/tmp \
+  clipclap-worker-core-v3:test \
+  -lc 'npm test --workspace @clipclap/worker -- --run'
 ```
 
+The Docker CLI/socket and shared `/tmp` are provided for artifact-backed tests.
 Expected: all worker tests pass, including ffmpeg/font/native suites.
 
-- [ ] **Step 3: Run build and regression gates**
+- [ ] **Step 3: Run build, production smoke, and regression gates**
 
 ```bash
-docker run --rm --entrypoint sh clipclap-worker-core-v3:verify -lc 'cd /app && npm run build --workspace apps/worker'
+docker run --rm --entrypoint sh -w /app clipclap-worker-core-v3:test \
+  -lc 'npm run build --workspace @clipclap/worker'
+docker run --rm --entrypoint sh clipclap-worker-core-v3:verify \
+  -lc 'node --version && ffmpeg -version >/dev/null && test -f /app/apps/worker/dist/index.js && node -e "require(\"fs-ext\")"'
 npm run eval:visual-recall --workspace apps/worker -- /tmp/clipclap-core-v3-eval/manifest.json
 ```
 
-Expected: build exits 0 and every private-corpus gate passes.
+Expected: build and production runtime smoke exit 0 and every private-corpus gate passes.
 
 - [ ] **Step 4: Obtain two-stage code review**
 
@@ -341,5 +353,6 @@ return to `shadow`; no database rollback is required.
 - [ ] **Step 7: Record final measurements and commit**
 
 Append only aggregate recall, preservation, candidate-count, latency, test, and build
-results to the design document. Do not commit private paths or identifiers.
-
+results to the design document. Do not commit private paths or identifiers. The
+production image does not contain source tests, so suite evidence comes from the
+build-stage image and production evidence from the runtime smoke above.
