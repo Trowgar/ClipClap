@@ -15,6 +15,40 @@ describe("loadAnalyzeConfig", () => {
     expect(cfg.maxSec).toBe(90);
     expect(cfg.criticBatchSize).toBe(6);
     expect(cfg.v2Pct).toBe(0);
+    expect(cfg.visualRecallMode).toBe("off");
+    expect(cfg.visualRecallMaxCandidates).toBe(12);
+    expect(cfg.visualRecallClusterSec).toBe(12);
+    expect(cfg.visualRecallPreSec).toBe(8);
+    expect(cfg.visualRecallPostSec).toBe(18);
+    expect(cfg.visualRecallMaxNodeDistanceSec).toBe(20);
+  });
+
+  it("accepts only the closed visual recall rollout modes", () => {
+    expect(loadAnalyzeConfig({ ANALYZE_VISUAL_RECALL_V1: "off" }).visualRecallMode).toBe("off");
+    expect(loadAnalyzeConfig({ ANALYZE_VISUAL_RECALL_V1: "shadow" }).visualRecallMode).toBe("shadow");
+    expect(loadAnalyzeConfig({ ANALYZE_VISUAL_RECALL_V1: "on" }).visualRecallMode).toBe("on");
+    expect(loadAnalyzeConfig({ ANALYZE_VISUAL_RECALL_V1: "yes" }).visualRecallMode).toBe("off");
+    expect(loadAnalyzeConfig({ ANALYZE_VISUAL_RECALL_V1: "ON" }).visualRecallMode).toBe("off");
+  });
+
+  it("uses positive bounded visual recall overrides and defaults invalid values", () => {
+    expect(loadAnalyzeConfig({
+      VISUAL_RECALL_MAX_CANDIDATES: "4",
+      VISUAL_RECALL_CLUSTER_SEC: "7.5",
+      VISUAL_RECALL_PRE_SEC: "3",
+      VISUAL_RECALL_POST_SEC: "10",
+      VISUAL_RECALL_MAX_NODE_DISTANCE_SEC: "15",
+    })).toMatchObject({
+      visualRecallMaxCandidates: 4,
+      visualRecallClusterSec: 7.5,
+      visualRecallPreSec: 3,
+      visualRecallPostSec: 10,
+      visualRecallMaxNodeDistanceSec: 15,
+    });
+    for (const value of ["0", "-1", "NaN", "Infinity", ""]) {
+      expect(loadAnalyzeConfig({ VISUAL_RECALL_MAX_CANDIDATES: value }).visualRecallMaxCandidates).toBe(12);
+      expect(loadAnalyzeConfig({ VISUAL_RECALL_CLUSTER_SEC: value }).visualRecallClusterSec).toBe(12);
+    }
   });
 
   it("defaults the post-boundary hook gate to off without limits", () => {
