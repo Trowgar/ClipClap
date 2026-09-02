@@ -201,6 +201,48 @@ describe("recordClipFeedback write shape", () => {
 });
 
 describe("snapshot", () => {
+  it("never overwrites the first feedback snapshot on a later touch", async () => {
+    feedbackFindUnique.mockResolvedValue({
+      id: "fb-1",
+      evidenceKey: "feedback/clip-1.mp4",
+      verdict: "NO",
+      reason: "BORING",
+    });
+    clipFindFirst.mockResolvedValue({
+      ...CLIP,
+      title: "Changed after the first feedback",
+      job: {
+        ...CLIP.job,
+        analysisVersion: "core-v999-secret-v1",
+        transcriptJson: {
+          segments: [{ start: 101, end: 120, text: "changed transcript" }],
+        },
+        steps: [{
+          outputJson: {
+            telemetry: {
+              outcomeRecovery: {
+                mode: "shadow",
+                outcome: "shadow_hit",
+                version: "core-v4-recovery-v1",
+              },
+            },
+          },
+        }],
+      },
+    });
+
+    await recordClipFeedback({
+      clipId: "clip-1",
+      userId: "user-1",
+      surface: "web",
+      reason: "QUALITY",
+    });
+
+    const update = feedbackUpsert.mock.calls[0][0].update;
+    expect(update).not.toHaveProperty("snapshot");
+    expect(update).toMatchObject({ surface: "web", reason: "QUALITY" });
+  });
+
   it("selects ANALYZE attribution and freezes only its safe V4 fields", async () => {
     await recordClipFeedback({
       clipId: "clip-1",

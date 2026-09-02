@@ -226,10 +226,9 @@ export async function recordClipFeedback(
 
   // Prisma's Json input rejects `undefined` values inside the object; the
   // round-trip strips them, the same trick recordUploadRefusal in
-  // funnel.service.ts uses for the same reason. Computed once and reused in
-  // both arms of the upsert below: snapshot can carry a 4000-character
-  // transcript, and both arms of an upsert are evaluated eagerly, so writing
-  // this inline twice would round-trip it twice on every call.
+  // funnel.service.ts uses for the same reason. It belongs only to the create
+  // arm below: later verdict/reason/note touches must never rewrite the engine
+  // state that was frozen with the first feedback row.
   const snapshotJson = JSON.parse(
     JSON.stringify(snapshot)
   ) as Prisma.InputJsonValue;
@@ -239,7 +238,6 @@ export async function recordClipFeedback(
   // rather than one object with undefined holes.
   const update: Prisma.ClipFeedbackUpdateInput = {
     surface: input.surface,
-    snapshot: snapshotJson,
     evidenceKey,
   };
   if (input.verdict !== undefined) {
