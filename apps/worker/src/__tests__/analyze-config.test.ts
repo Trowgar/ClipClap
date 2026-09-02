@@ -31,6 +31,23 @@ describe("loadAnalyzeConfig", () => {
     expect(loadAnalyzeConfig({ ANALYZE_VISUAL_RECALL_V1: "ON" }).visualRecallMode).toBe("off");
   });
 
+  it("accepts only the closed outcome recovery rollout modes", () => {
+    expect(loadAnalyzeConfig({}).outcomeRecoveryMode).toBe("off");
+    expect(loadAnalyzeConfig({ ANALYZE_OUTCOME_RECOVERY_V1: "off" }).outcomeRecoveryMode).toBe("off");
+    expect(loadAnalyzeConfig({ ANALYZE_OUTCOME_RECOVERY_V1: "shadow" }).outcomeRecoveryMode).toBe("shadow");
+    expect(loadAnalyzeConfig({ ANALYZE_OUTCOME_RECOVERY_V1: "on" }).outcomeRecoveryMode).toBe("on");
+    expect(loadAnalyzeConfig({ ANALYZE_OUTCOME_RECOVERY_V1: "ON" }).outcomeRecoveryMode).toBe("off");
+    expect(loadAnalyzeConfig({ ANALYZE_OUTCOME_RECOVERY_V1: "true" }).outcomeRecoveryMode).toBe("off");
+  });
+
+  it("bounds outcome recovery candidates to positive integers", () => {
+    expect(loadAnalyzeConfig({}).outcomeRecoveryMaxCandidates).toBe(6);
+    expect(loadAnalyzeConfig({ OUTCOME_RECOVERY_MAX_CANDIDATES: "12" }).outcomeRecoveryMaxCandidates).toBe(12);
+    for (const value of ["0", "-1", "13", "1.5", "NaN", "Infinity", ""]) {
+      expect(loadAnalyzeConfig({ OUTCOME_RECOVERY_MAX_CANDIDATES: value }).outcomeRecoveryMaxCandidates).toBe(6);
+    }
+  });
+
   it("uses positive bounded visual recall overrides and defaults invalid values", () => {
     expect(loadAnalyzeConfig({
       VISUAL_RECALL_MAX_CANDIDATES: "4",

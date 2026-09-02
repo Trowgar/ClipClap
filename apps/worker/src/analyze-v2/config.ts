@@ -4,6 +4,8 @@ export type PostBoundaryHookGateMode = "off" | "observe" | "shadow" | "enforce";
  * separately approved configuration and implementation. */
 export type SafeEndAuditMode = "off" | "shadow";
 export type VisualRecallMode = "off" | "shadow" | "on";
+export type OutcomeRecoveryMode = "off" | "shadow" | "on";
+export const OUTCOME_RECOVERY_VERSION = "core-v4-recovery-v1" as const;
 
 export interface AnalyzeConfig {
   engine: AnalyzeEngineSetting;
@@ -28,6 +30,11 @@ export interface AnalyzeConfig {
   scanWindowSec: number;
   scanOverlapSec: number;
   visualRecallMode: VisualRecallMode;
+  /** V4 first-result recovery rollout mode. Configuration is intentionally
+   * closed: unknown values fail dark to preserve the current analyzer output. */
+  outcomeRecoveryMode: OutcomeRecoveryMode;
+  /** Maximum candidates the future recovery lane may judge. */
+  outcomeRecoveryMaxCandidates: number;
   visualRecallMaxCandidates: number;
   visualRecallClusterSec: number;
   visualRecallPreSec: number;
@@ -280,36 +287,6 @@ export interface AnalyzeConfig {
    *  `analyze-v2/song-gate.ts`'s doc comment for why (this task's own
    *  measurement output, not a tuning door). */
   songGateEnabled: boolean;
-  /** SHORT-SOURCE RESCUE (spec 2026-08-19-short-source-rescue): when the
-   *  engine's answer for a source at or under `shortSourceRescueMaxSec`
-   *  seconds would be zero clips, ship the best snappable critic verdict as
-   *  ONE lowQuality clip instead. Half of all users' first submission is a
-   *  short test upload, and "no clips" on it reads as "the product does not
-   *  work" - the rescue makes every judged short source demonstrate the
-   *  product (crop + subtitles), captioned by the existing lowQualityNote.
-   *  Dark for every caller that does not pass sourceDurationSec, which is
-   *  all eval scripts - the corpus never sees it. */
-  shortSourceRescueEnabled: boolean;
-  /** Default is SOURCE_FLOOR.shortNoticeSec - the SAME 300s the bot's
-   *  short-source notice fires under, imported rather than copied so the
-   *  product copy and the engine can never disagree about what "short" is. */
-  shortSourceRescueMaxSec: number;
-  /** MID-SOURCE RESCUE (spec 2026-08-25-mid-rescue-and-stream-resolver-v2,
-   *  part 1): extends the same empty-exit rescue to sources in
-   *  [`shortSourceRescueMaxSec`, `rescueMidMaxSourceSec`) - independently
-   *  switchable from `shortSourceRescueEnabled` so the two ceilings can be
-   *  armed on separate schedules. SAME candidate rules, SAME lowQuality mark,
-   *  SAME bot copy as the short rescue - rescue.ts itself is untouched by
-   *  this flag; only the eligibility window at the call site widens. Off
-   *  until measured, the same discipline as every other stage switch in this
-   *  file. Trigger: "Ben trades" (tg 6987955255), 795s source, judged and
-   *  fully rejected, 0 clips on a newcomer's second submission. */
-  rescueMidSourceEnabled: boolean;
-  /** Ceiling in seconds for the mid rescue window - sources at or above this
-   *  are NOT rescue-eligible (matches the short rescue's own strict-under
-   *  discipline at its own ceiling). 1200 = 20 minutes, the spec's own
-   *  number, not re-derived here. */
-  rescueMidMaxSourceSec: number;
   /** Master switch for stream analyze mode (spec 2026-08-19-stream-analyze-
    *  mode, S1) - the door `resolveAnalysisMode` (mode.ts) checks before any
    *  URL or density logic runs, so every consumer of `AnalysisMode` is dark
@@ -511,6 +488,10 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     env.ANALYZE_VISUAL_RECALL_V1 === "shadow" || env.ANALYZE_VISUAL_RECALL_V1 === "on"
       ? env.ANALYZE_VISUAL_RECALL_V1
       : "off";
+  const outcomeRecoveryMode: OutcomeRecoveryMode =
+    env.ANALYZE_OUTCOME_RECOVERY_V1 === "shadow" || env.ANALYZE_OUTCOME_RECOVERY_V1 === "on"
+      ? env.ANALYZE_OUTCOME_RECOVERY_V1
+      : "off";
   return {
     engine:
       engine === "recall-critic" || engine === "shadow" ? engine : "legacy",
@@ -531,6 +512,13 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     scanWindowSec: num(env, "SCAN_WINDOW_SEC", 600),
     scanOverlapSec: num(env, "SCAN_OVERLAP_SEC", 90),
     visualRecallMode,
+    outcomeRecoveryMode,
+    outcomeRecoveryMaxCandidates: positiveIntBounded(
+      env,
+      "OUTCOME_RECOVERY_MAX_CANDIDATES",
+      6,
+      12,
+    ),
     visualRecallMaxCandidates: positiveIntBounded(env, "VISUAL_RECALL_MAX_CANDIDATES", 15, 100),
     visualRecallClusterSec: positiveBounded(env, "VISUAL_RECALL_CLUSTER_SEC", 12, 600),
     visualRecallPreSec: positiveBounded(env, "VISUAL_RECALL_PRE_SEC", 18, 600),
@@ -605,22 +593,6 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     // Exact literal "on", same discipline as every other stage switch in this
     // file: a stray truthy env value must not refuse a real user's video.
     songGateEnabled: env.SONG_GATE === "on",
-    // Exact literal "on", same discipline as every other stage switch in this
-    // file: a stray truthy env value must not ship a below-bar clip to a real
-    // user by accident.
-    shortSourceRescueEnabled: env.SHORT_SOURCE_RESCUE === "on",
-    // 300 IS SOURCE_FLOOR.shortNoticeSec - the bot's own "short source"
-    // definition - but written as a literal, NOT imported: this file
-    // deliberately imports nothing, so loadAnalyzeConfig({}) works under
-    // every test that mocks @clipclap/shared (an import here broke 40 of
-    // them at once). short-source-rescue.test.ts pins the two values
-    // together and goes red if either side drifts.
-    shortSourceRescueMaxSec: num(env, "SHORT_SOURCE_RESCUE_MAX_SEC", 300),
-    // Exact literal "on", same discipline as every other stage switch in this
-    // file: a stray truthy env value must not widen the rescue window to a
-    // real user's mid-length source by accident.
-    rescueMidSourceEnabled: env.RESCUE_MID_SOURCE === "on",
-    rescueMidMaxSourceSec: num(env, "RESCUE_MID_MAX_SOURCE_SEC", 1200),
     // Exact literal "on", same discipline as every other stage switch in this
     // file: a stray truthy env value must not silently switch a real job onto
     // the stream-mode critic rubric/budget/merge behaviour tasks T2-T4 build.

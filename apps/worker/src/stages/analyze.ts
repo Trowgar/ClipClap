@@ -205,9 +205,8 @@ export async function runAnalyzeStage(
       : await analyzeHighlightsV2(transcription, {
           cfg,
           transcriptPartial: job.transcriptPartial,
-          // Powers ONLY the short-source rescue's "is this short" test - see
-          // AnalyzeV2Options; source-recheck persisted this from the real
-          // downloaded file before ANALYZE ever runs.
+          // Source duration is used by analysis-mode resolution; source-recheck
+          // persisted it from the real downloaded file before ANALYZE runs.
           sourceDurationSec: job.sourceDurationSec ?? undefined,
           // Powers ONLY resolveAnalysisMode's hostname rules (spec 2026-08-
           // 19-stream-analyze-mode, S1) - mirrors sourceDurationSec above.

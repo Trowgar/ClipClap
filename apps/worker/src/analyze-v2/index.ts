@@ -236,9 +236,7 @@ export interface AnalyzeV2Options {
   client?: OpenAI;
   cfg?: AnalyzeConfig;
   transcriptPartial?: boolean;
-  /** The job row's source duration. Retained for stage/evaluation input
-   *  compatibility; legacy short- and mid-source rescue delivery has no
-   *  runtime authority. */
+  /** The job row's source duration, used by analysis-mode resolution. */
   sourceDurationSec?: number;
   /** The job's source URL, mirroring sourceDurationSec above: powers ONLY
    *  resolveAnalysisMode's hostname rules (spec 2026-08-19-stream-analyze-

@@ -1,4 +1,7 @@
-import type { AnalyzeConfig } from "../../analyze-v2/config";
+import {
+  OUTCOME_RECOVERY_VERSION,
+  type AnalyzeConfig,
+} from "../../analyze-v2/config";
 import { arcAuditMaxOutputTokens } from "../../analyze-v2/arc-audit";
 import { criticMaxOutputTokens } from "../../analyze-v2/critic";
 import { extensionMaxOutputTokens } from "../../analyze-v2/end-extension";
@@ -457,6 +460,13 @@ export interface EngineFingerprint {
    * an otherwise invisible LLM call, so replay must distinguish dark from
    * shadow recordings. */
   safeEndAuditMode: AnalyzeConfig["safeEndAuditMode"];
+  /** Recovery mode changes whether a second quality lane is evaluated or can
+   * ship, so replay must distinguish every closed mode. */
+  outcomeRecoveryMode: AnalyzeConfig["outcomeRecoveryMode"];
+  /** Recovery candidate cap bounds additional model work and output behavior. */
+  outcomeRecoveryMaxCandidates: number;
+  /** Code-owned recovery protocol version; changing it requires re-recording. */
+  outcomeRecoveryVersion: string;
 }
 
 export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
@@ -499,6 +509,9 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     postBoundaryHookMaxDelaySec: cfg.postBoundaryHookMaxDelaySec ?? null,
     postBoundaryHookMaxPreHookGapSec: cfg.postBoundaryHookMaxPreHookGapSec ?? null,
     safeEndAuditMode: cfg.safeEndAuditMode,
+    outcomeRecoveryMode: cfg.outcomeRecoveryMode,
+    outcomeRecoveryMaxCandidates: cfg.outcomeRecoveryMaxCandidates,
+    outcomeRecoveryVersion: OUTCOME_RECOVERY_VERSION,
   };
 }
 

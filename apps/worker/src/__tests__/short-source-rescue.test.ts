@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { analyzeHighlightsV2 } from "../analyze-v2";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { AnalyzeTechnicalError } from "../analyze-v2/critic";
-import { SOURCE_FLOOR } from "@clipclap/shared";
 import type { TranscriptionResult, WhisperSegment } from "@clipclap/shared";
 
 /** Regression coverage for the retired SHORT_SOURCE_RESCUE delivery path. A
@@ -70,18 +69,11 @@ function client(...responses: any[]) {
   } as any;
 }
 
-describe("short-source rescue config", () => {
-  it("arms only on the exact literal, like every stage switch", () => {
-    expect(loadAnalyzeConfig({ SHORT_SOURCE_RESCUE: "on" }).shortSourceRescueEnabled).toBe(true);
-    expect(loadAnalyzeConfig({}).shortSourceRescueEnabled).toBe(false);
-    expect(loadAnalyzeConfig({ SHORT_SOURCE_RESCUE: "true" }).shortSourceRescueEnabled).toBe(false);
-    expect(loadAnalyzeConfig({ SHORT_SOURCE_RESCUE: "1" }).shortSourceRescueEnabled).toBe(false);
-    expect(loadAnalyzeConfig({ SHORT_SOURCE_RESCUE: "ON" }).shortSourceRescueEnabled).toBe(false);
-  });
-
-  it("defaults the threshold to the bot's own short-notice constant", () => {
-    expect(loadAnalyzeConfig({}).shortSourceRescueMaxSec).toBe(SOURCE_FLOOR.shortNoticeSec);
-    expect(loadAnalyzeConfig({ SHORT_SOURCE_RESCUE_MAX_SEC: "120" }).shortSourceRescueMaxSec).toBe(120);
+describe("short-source rescue config retirement", () => {
+  it("ignores dead rescue env knobs and leaves V4 recovery dark", () => {
+    const cfg = loadAnalyzeConfig({ SHORT_SOURCE_RESCUE: "on", SHORT_SOURCE_RESCUE_MAX_SEC: "120" });
+    expect(cfg.outcomeRecoveryMode).toBe("off");
+    expect(cfg.outcomeRecoveryMaxCandidates).toBe(6);
   });
 });
 

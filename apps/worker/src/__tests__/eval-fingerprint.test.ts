@@ -52,6 +52,9 @@ describe("computeFingerprint", () => {
       postBoundaryHookMaxDelaySec: null,
       postBoundaryHookMaxPreHookGapSec: null,
       safeEndAuditMode: baseCfg.safeEndAuditMode,
+      outcomeRecoveryMode: baseCfg.outcomeRecoveryMode,
+      outcomeRecoveryMaxCandidates: baseCfg.outcomeRecoveryMaxCandidates,
+      outcomeRecoveryVersion: "core-v4-recovery-v1",
     });
   });
 
@@ -117,6 +120,12 @@ describe("computeFingerprint", () => {
 
   it("records the standalone filter as DARK on the default config", () => {
     expect(computeFingerprint(baseCfg).standaloneFilterEnabled).toBe(false);
+  });
+
+  it("records outcome recovery dark and versioned on the default config", () => {
+    expect(computeFingerprint(baseCfg).outcomeRecoveryMode).toBe("off");
+    expect(computeFingerprint(baseCfg).outcomeRecoveryMaxCandidates).toBe(6);
+    expect(computeFingerprint(baseCfg).outcomeRecoveryVersion).toBe("core-v4-recovery-v1");
   });
 });
 
@@ -270,6 +279,36 @@ describe("assertFingerprintMatches", () => {
     const changed = computeFingerprint({ ...baseCfg, standaloneFilterEnabled: true });
     expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
       /standaloneFilterEnabled/
+    );
+  });
+
+  it("fails closed when outcome recovery mode changes", () => {
+    const changed = computeFingerprint({
+      ...baseCfg,
+      outcomeRecoveryMode: "shadow",
+    });
+    expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
+      /outcomeRecoveryMode/
+    );
+  });
+
+  it("fails closed when outcome recovery cap changes", () => {
+    const changed = computeFingerprint({
+      ...baseCfg,
+      outcomeRecoveryMaxCandidates: 12,
+    });
+    expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
+      /outcomeRecoveryMaxCandidates/
+    );
+  });
+
+  it("fails closed when the code-owned outcome recovery version changes", () => {
+    const recorded: EngineFingerprint = {
+      ...current,
+      outcomeRecoveryVersion: "core-v4-recovery-old",
+    };
+    expect(() => assertFingerprintMatches("case", recorded, current, vi.fn())).toThrow(
+      /outcomeRecoveryVersion/
     );
   });
 

@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { analyzeHighlightsV2 } from "../analyze-v2";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
-import { SOURCE_FLOOR } from "@clipclap/shared";
 import type { TranscriptionResult, WhisperSegment } from "@clipclap/shared";
 
 /** Regression coverage for the retired MID_SOURCE rescue delivery path. A
@@ -69,19 +68,15 @@ function client(...responses: any[]) {
   } as any;
 }
 
-describe("mid-source rescue config", () => {
-  it("arms only on the exact literal, like every stage switch", () => {
-    expect(loadAnalyzeConfig({ RESCUE_MID_SOURCE: "on" }).rescueMidSourceEnabled).toBe(true);
-    expect(loadAnalyzeConfig({}).rescueMidSourceEnabled).toBe(false);
-    expect(loadAnalyzeConfig({ RESCUE_MID_SOURCE: "true" }).rescueMidSourceEnabled).toBe(false);
-    expect(loadAnalyzeConfig({ RESCUE_MID_SOURCE: "1" }).rescueMidSourceEnabled).toBe(false);
-    expect(loadAnalyzeConfig({ RESCUE_MID_SOURCE: "ON" }).rescueMidSourceEnabled).toBe(false);
-  });
-
-  it("defaults the ceiling to 1200s and keeps the short ceiling independent", () => {
-    expect(loadAnalyzeConfig({}).rescueMidMaxSourceSec).toBe(1200);
-    expect(loadAnalyzeConfig({ RESCUE_MID_MAX_SOURCE_SEC: "900" }).rescueMidMaxSourceSec).toBe(900);
-    expect(loadAnalyzeConfig({}).shortSourceRescueMaxSec).toBe(SOURCE_FLOOR.shortNoticeSec);
+describe("mid-source rescue config retirement", () => {
+  it("ignores dead rescue env knobs and leaves V4 recovery dark", () => {
+    const cfg = loadAnalyzeConfig({
+      SHORT_SOURCE_RESCUE: "on",
+      RESCUE_MID_SOURCE: "on",
+      RESCUE_MID_MAX_SOURCE_SEC: "900",
+    });
+    expect(cfg.outcomeRecoveryMode).toBe("off");
+    expect(cfg.outcomeRecoveryMaxCandidates).toBe(6);
   });
 });
 
