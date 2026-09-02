@@ -1,0 +1,511 @@
+/**
+ * Offline, real-source visual-recall gate.
+ *
+ * Usage:
+ *   npm run eval:visual-recall --workspace apps/worker -- /private/manifest.json
+ *
+ * The manifest is deliberately private and anonymous. It contains only a
+ * `caseKey` (not a job/user/source id), `kind` (`gaming`, `as_is`, or
+ * `other`), local source/transcript paths, and human-labelled time windows.
+ * `offShadowInvariant` is a required boolean recorded after the separate
+ * deterministic off-vs-shadow replay tests pass. This command has no model or
+ * database dependency; it computes motion from each local source and maps
+ * peaks to the local transcript.
+ *
+ * Output is a sanitized report: source paths, transcript paths, transcript
+ * text, and external identifiers never leave the private input files.
+ */
+import { readFile, stat as fsStat } from "node:fs/promises";
+import { buildSentenceGraph } from "../analyze-v2/sentence-graph";
+import { loadAnalyzeConfig, type AnalyzeConfig } from "../analyze-v2/config";
+import { nominateVisualCandidates } from "../analyze-v2/visual-candidates";
+import type { TranscriptionResult } from "@clipclap/shared";
+
+export interface EvalWindow {
+  start: number;
+  end: number;
+}
+
+export type EvalCaseKind = "gaming" | "as_is" | "other";
+
+export interface EvalManifestCase {
+  caseKey: string;
+  kind: EvalCaseKind;
+  sourcePath: string;
+  transcriptPath: string;
+  positiveWindows: EvalWindow[];
+  negativeWindows: EvalWindow[];
+}
+
+export interface EvalManifest {
+  version: 1;
+  offShadowInvariant: boolean;
+  cases: EvalManifestCase[];
+}
+
+export interface VideoEnvelopes {
+  lumaEnvelope: number[];
+  motionEnvelope: number[];
+}
+
+export interface EvalCaseResult {
+  caseKey: string;
+  kind: EvalCaseKind;
+  positiveWindows: EvalWindow[];
+  negativeWindows: EvalWindow[];
+  nominatedWindows: EvalWindow[];
+  candidateCount: number;
+}
+
+export interface EvalCaseReport {
+  caseKey: string;
+  kind: EvalCaseKind;
+  candidateCount: number;
+  positive: { total: number; matched: number; recall: number };
+  negative: { total: number; matched: number; recall: number };
+  nominations: Array<{ start: number; end: number; peakSec: number; peakValue: number }>;
+}
+
+export interface EvalSummary {
+  positiveRecall: number;
+  positiveMatchedWindows: number;
+  positiveWindows: number;
+  gamingMatchedWindows: number;
+  asIsMatchedWindows: number;
+  asIsPositiveWindows: number;
+  negativeRecall: number;
+  gates: {
+    gamingMinimum: boolean;
+    asIsRetention: boolean;
+    candidateCap: boolean;
+    offShadowInvariant: boolean;
+  };
+  failureReasons: string[];
+  pass: boolean;
+}
+
+export interface EvalReport {
+  schemaVersion: 1;
+  candidateCap: number;
+  offShadowInvariant: { required: true; passed: boolean; separatelyVerified: true };
+  cases: EvalCaseReport[];
+  summary: EvalSummary;
+  pass: boolean;
+}
+
+export interface VisualRecallEvalIo {
+  stat(path: string): Promise<{ size: number }>;
+  readFile(path: string): Promise<string | Buffer>;
+  stdout?(value: string): void;
+  stderr?(value: string): void;
+}
+
+type EvalConfig = Pick<
+  AnalyzeConfig,
+  | "visualRecallMode"
+  | "visualRecallMaxCandidates"
+  | "visualRecallClusterSec"
+  | "visualRecallPreSec"
+  | "visualRecallPostSec"
+  | "visualRecallMaxNodeDistanceSec"
+  | "scanWindowSec"
+>;
+
+interface CliDependencies {
+  loadConfig?: () => Partial<AnalyzeConfig>;
+  videoEnvelopes?: (sourcePath: string) => Promise<VideoEnvelopes>;
+}
+
+export interface VisualRecallCliResult {
+  exitCode: 0 | 1;
+  stdout: string;
+  stderr: string;
+}
+
+const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
+const MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024;
+const MAX_CASES = 500;
+const MAX_WINDOWS_PER_CASE = 500;
+const MAX_TIME_SEC = 7 * 24 * 60 * 60;
+const CASE_KEY = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/u;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseWindow(value: unknown): EvalWindow {
+  if (!isRecord(value)) throw new Error("window must be an object");
+  const start = value.start;
+  const end = value.end;
+  if (
+    typeof start !== "number" || typeof end !== "number" ||
+    !Number.isFinite(start) || !Number.isFinite(end) ||
+    start < 0 || end <= start || end > MAX_TIME_SEC
+  ) {
+    throw new Error("window must have a finite positive range");
+  }
+  return { start, end };
+}
+
+function parseWindows(value: unknown, required: boolean): EvalWindow[] {
+  if (!Array.isArray(value) || (required && value.length === 0)) {
+    throw new Error(`${required ? "positiveWindows" : "negativeWindows"} must be an array`);
+  }
+  if (value.length > MAX_WINDOWS_PER_CASE) throw new Error("too many windows");
+  return value.map(parseWindow);
+}
+
+function parsePath(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 4096 || value.includes("\0")) {
+    throw new Error(`${label} must be a local path`);
+  }
+  return value;
+}
+
+/** Parse the private manifest before any source or transcript work starts. */
+export function parseEvalManifest(value: unknown): EvalManifest {
+  if (!isRecord(value) || value.version !== 1 || value.offShadowInvariant === undefined) {
+    throw new Error("manifest requires version 1 and offShadowInvariant");
+  }
+  if (typeof value.offShadowInvariant !== "boolean") {
+    throw new Error("offShadowInvariant must be boolean");
+  }
+  if (!Array.isArray(value.cases) || value.cases.length === 0 || value.cases.length > MAX_CASES) {
+    throw new Error("cases must be a non-empty bounded array");
+  }
+  const keys = new Set<string>();
+  const cases = value.cases.map((rawCase) => {
+    if (!isRecord(rawCase)) throw new Error("case must be an object");
+    const caseKey = rawCase.caseKey;
+    if (typeof caseKey !== "string" || !CASE_KEY.test(caseKey) || keys.has(caseKey)) {
+      throw new Error("caseKey must be unique and anonymous");
+    }
+    keys.add(caseKey);
+    const kind = rawCase.kind;
+    if (kind !== "gaming" && kind !== "as_is" && kind !== "other") {
+      throw new Error("kind must be gaming, as_is, or other");
+    }
+    const parsedKind: EvalCaseKind = kind;
+    return {
+      caseKey,
+      kind: parsedKind,
+      sourcePath: parsePath(rawCase.sourcePath, "sourcePath"),
+      transcriptPath: parsePath(rawCase.transcriptPath, "transcriptPath"),
+      positiveWindows: parseWindows(rawCase.positiveWindows, true),
+      negativeWindows: rawCase.negativeWindows === undefined
+        ? []
+        : parseWindows(rawCase.negativeWindows, false),
+    };
+  });
+  return { version: 1, offShadowInvariant: value.offShadowInvariant, cases };
+}
+
+function validWindow(value: EvalWindow): boolean {
+  return Number.isFinite(value.start) && Number.isFinite(value.end) &&
+    value.start >= 0 && value.end > value.start;
+}
+
+/** True when overlap is at least `threshold` of the shorter range.
+ * The public helper accepts either a fraction (0.2) or the plan's percentage
+ * spelling (20), which keeps replay notebooks readable without ambiguity. */
+export function matchesWindow(
+  candidate: EvalWindow,
+  target: EvalWindow,
+  threshold = 0.2,
+): boolean {
+  const thresholdFraction = Number.isInteger(threshold) && threshold > 1
+    ? threshold / 100
+    : threshold;
+  if (!validWindow(candidate) || !validWindow(target) ||
+      !Number.isFinite(thresholdFraction) || thresholdFraction < 0 || thresholdFraction > 1) return false;
+  const overlap = Math.max(0, Math.min(candidate.end, target.end) - Math.max(candidate.start, target.start));
+  if (overlap <= 0) return false;
+  return overlap / Math.min(candidate.end - candidate.start, target.end - target.start) >= thresholdFraction;
+}
+
+function matchedCount(targets: readonly EvalWindow[], nominated: readonly EvalWindow[]): number {
+  return targets.filter((target) => nominated.some((candidate) => matchesWindow(candidate, target))).length;
+}
+
+function ratio(matched: number, total: number): number {
+  return total === 0 ? 0 : matched / total;
+}
+
+/** Aggregate pure, sanitized corpus metrics and all release-gate reasons. */
+export function summarizeCases(
+  cases: readonly EvalCaseResult[],
+  options: { candidateCap?: number; offShadowInvariant?: boolean } = {},
+): EvalSummary {
+  const candidateCap = Number.isInteger(options.candidateCap) && (options.candidateCap ?? 0) > 0
+    ? options.candidateCap as number
+    : 12;
+  let positiveWindows = 0;
+  let positiveMatchedWindows = 0;
+  let gamingMatchedWindows = 0;
+  let asIsPositiveWindows = 0;
+  let asIsMatchedWindows = 0;
+  let negativeWindows = 0;
+  let negativeMatchedWindows = 0;
+  const capOk = cases.every((item) =>
+    Number.isInteger(item.candidateCount) && item.candidateCount >= 0 && item.candidateCount <= candidateCap,
+  );
+  for (const item of cases) {
+    const positiveMatched = matchedCount(item.positiveWindows, item.nominatedWindows);
+    positiveWindows += item.positiveWindows.length;
+    positiveMatchedWindows += positiveMatched;
+    if (item.kind === "gaming") gamingMatchedWindows += positiveMatched;
+    if (item.kind === "as_is") {
+      asIsPositiveWindows += item.positiveWindows.length;
+      asIsMatchedWindows += positiveMatched;
+    }
+    negativeWindows += item.negativeWindows.length;
+    negativeMatchedWindows += matchedCount(item.negativeWindows, item.nominatedWindows);
+  }
+  const gates = {
+    gamingMinimum: gamingMatchedWindows >= 2,
+    asIsRetention: asIsMatchedWindows === asIsPositiveWindows,
+    candidateCap: capOk,
+    offShadowInvariant: options.offShadowInvariant === true,
+  };
+  const failureReasons: string[] = [];
+  if (!gates.gamingMinimum) failureReasons.push("gaming_positive_recall_below_two_windows");
+  if (!gates.asIsRetention) failureReasons.push("as_is_positive_window_not_retained");
+  if (!gates.candidateCap) failureReasons.push("candidate_cap_exceeded");
+  if (!gates.offShadowInvariant) failureReasons.push("off_shadow_invariance_not_verified");
+  return {
+    positiveRecall: ratio(positiveMatchedWindows, positiveWindows),
+    positiveMatchedWindows,
+    positiveWindows,
+    gamingMatchedWindows,
+    asIsMatchedWindows,
+    asIsPositiveWindows,
+    negativeRecall: ratio(negativeMatchedWindows, negativeWindows),
+    gates,
+    failureReasons,
+    pass: Object.values(gates).every(Boolean),
+  };
+}
+
+function defaultIo(): VisualRecallEvalIo {
+  return {
+    stat: async (path) => fsStat(path),
+    readFile: async (path) => readFile(path),
+    stdout: (value) => process.stdout.write(value),
+    stderr: (value) => process.stderr.write(value),
+  };
+}
+
+async function defaultVideoEnvelopes(sourcePath: string): Promise<VideoEnvelopes> {
+  // TRANSCRIBE constructs its OpenAI client at module load. Keep this import
+  // lazy so pure metrics/tests never require production credentials.
+  const module = await import("../processors/transcribe");
+  return module.videoEnvelopes(sourcePath);
+}
+
+function textBytes(raw: string | Buffer): number {
+  return typeof raw === "string" ? Buffer.byteLength(raw, "utf8") : raw.byteLength;
+}
+
+function parseTranscription(value: unknown): TranscriptionResult {
+  if (!isRecord(value) || typeof value.text !== "string" || !Array.isArray(value.segments)) {
+    throw new Error("transcript must contain text and segments");
+  }
+  const segments = value.segments.map((segment) => {
+    if (!isRecord(segment) || typeof segment.text !== "string" ||
+        typeof segment.start !== "number" || typeof segment.end !== "number" ||
+        !Number.isFinite(segment.start) || !Number.isFinite(segment.end) ||
+        segment.start < 0 || segment.end <= segment.start) {
+      throw new Error("transcript segment is malformed");
+    }
+    if (segment.words !== undefined) {
+      if (!Array.isArray(segment.words)) throw new Error("transcript words are malformed");
+      for (const word of segment.words) {
+        if (!isRecord(word) || typeof word.text !== "string" ||
+            typeof word.start !== "number" || typeof word.end !== "number" ||
+            !Number.isFinite(word.start) || !Number.isFinite(word.end) ||
+            word.start < 0 || word.end <= word.start) {
+          throw new Error("transcript word is malformed");
+        }
+      }
+    }
+    return segment as unknown as TranscriptionResult["segments"][number];
+  });
+  return { text: value.text, segments };
+}
+
+function normalizedConfig(overrides: Partial<AnalyzeConfig>): AnalyzeConfig {
+  // Evaluation always nominates in shadow semantics, regardless of the
+  // deployment's ANALYZE_VISUAL_RECALL_V1 setting. Tuning values still come
+  // from the closed production config and cannot be set per manifest case.
+  return {
+    ...loadAnalyzeConfig(),
+    ...overrides,
+    visualRecallMode: "shadow",
+  };
+}
+
+function reportCase(
+  item: EvalCaseResult,
+  nominations: Array<{ start: number; end: number; peakSec: number; peakValue: number }>,
+): EvalCaseReport {
+  const positiveMatched = matchedCount(item.positiveWindows, item.nominatedWindows);
+  const negativeMatched = matchedCount(item.negativeWindows, item.nominatedWindows);
+  return {
+    caseKey: item.caseKey,
+    kind: item.kind,
+    candidateCount: item.candidateCount,
+    positive: {
+      total: item.positiveWindows.length,
+      matched: positiveMatched,
+      recall: ratio(positiveMatched, item.positiveWindows.length),
+    },
+    negative: {
+      total: item.negativeWindows.length,
+      matched: negativeMatched,
+      recall: ratio(negativeMatched, item.negativeWindows.length),
+    },
+    nominations,
+  };
+}
+
+function errorResult(io: VisualRecallEvalIo, message: string): VisualRecallCliResult {
+  const stderr = `${message}\n`;
+  io.stderr?.(stderr);
+  return { exitCode: 1, stdout: "", stderr };
+}
+
+export const VISUAL_RECALL_HELP = `Usage: eval-visual-recall.ts <private-manifest.json>
+
+Manifest JSON (version 1):
+  {"version":1,"offShadowInvariant":true,"cases":[
+    {"caseKey":"gaming-a","kind":"gaming","sourcePath":"/private/a.mp4",
+     "transcriptPath":"/private/a.json","positiveWindows":[{"start":10,"end":20}],
+     "negativeWindows":[]}
+  ]}
+
+caseKey is an anonymous label only. Paths and transcript text stay private.
+offShadowInvariant must be set true only after the separate off/shadow replay gate passes.
+The command computes local video envelopes and exits 1 when any release gate fails.
+`;
+
+function nominationWindows(
+  transcription: TranscriptionResult,
+  cfg: AnalyzeConfig,
+  motionEnvelope: unknown,
+): { nominatedWindows: EvalWindow[]; nominations: EvalCaseReport["nominations"]; candidateCount: number } {
+  const nodes = buildSentenceGraph(transcription.segments, cfg);
+  const visual = nominateVisualCandidates(nodes, motionEnvelope, cfg);
+  const nominations = visual.nominations.map((nomination) => {
+    const start = nodes[nomination.startNode]?.start;
+    const end = nodes[nomination.endNode]?.end;
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+    return {
+      start,
+      end,
+      peakSec: nomination.peakSec,
+      peakValue: nomination.peakValue,
+    };
+  }).filter((item): item is NonNullable<typeof item> => item !== null);
+  return {
+    nominatedWindows: nominations.map(({ start, end }) => ({ start, end })),
+    nominations,
+    candidateCount: visual.candidates.length,
+  };
+}
+
+/** Testable CLI runner. It does not call OpenAI, Prisma, or any production pipeline. */
+export async function runVisualRecallCli(
+  argv: string[] = process.argv,
+  io: VisualRecallEvalIo = defaultIo(),
+  deps: CliDependencies = {},
+): Promise<VisualRecallCliResult> {
+  if (argv.length === 3 && argv[2] === "--help") {
+    io.stdout?.(VISUAL_RECALL_HELP);
+    return { exitCode: 0, stdout: VISUAL_RECALL_HELP, stderr: "" };
+  }
+  if (argv.length !== 3 || argv[2].startsWith("-")) return errorResult(io, "usage");
+  const manifestPath = argv[2];
+  let manifestRaw: string | Buffer;
+  try {
+    const info = await io.stat(manifestPath);
+    if (!Number.isFinite(info.size) || info.size < 0 || info.size > MAX_MANIFEST_BYTES) {
+      return errorResult(io, "manifest_invalid");
+    }
+    manifestRaw = await io.readFile(manifestPath);
+    if (textBytes(manifestRaw) > MAX_MANIFEST_BYTES) return errorResult(io, "manifest_invalid");
+  } catch {
+    return errorResult(io, "manifest_unreadable");
+  }
+  let manifestValue: unknown;
+  try {
+    manifestValue = JSON.parse(typeof manifestRaw === "string" ? manifestRaw : manifestRaw.toString("utf8"));
+  } catch {
+    return errorResult(io, "manifest_invalid");
+  }
+  let manifest: EvalManifest;
+  try {
+    manifest = parseEvalManifest(manifestValue);
+  } catch {
+    return errorResult(io, "manifest_invalid");
+  }
+
+  const cfg = normalizedConfig(deps.loadConfig?.() ?? {});
+  const candidateCap = cfg.visualRecallMaxCandidates;
+  const videoEnvelopes = deps.videoEnvelopes ?? defaultVideoEnvelopes;
+  const caseResults: EvalCaseResult[] = [];
+  const caseReports: EvalCaseReport[] = [];
+  try {
+    for (const item of manifest.cases) {
+      const rawTranscript = await io.readFile(item.transcriptPath);
+      if (textBytes(rawTranscript) > MAX_TRANSCRIPT_BYTES) throw new Error("transcript too large");
+      const transcription = parseTranscription(JSON.parse(
+        typeof rawTranscript === "string" ? rawTranscript : rawTranscript.toString("utf8"),
+      ));
+      const envelope = await videoEnvelopes(item.sourcePath);
+      const nominated = nominationWindows(transcription, cfg, envelope.motionEnvelope);
+      const evaluated: EvalCaseResult = {
+        caseKey: item.caseKey,
+        kind: item.kind,
+        positiveWindows: item.positiveWindows,
+        negativeWindows: item.negativeWindows,
+        nominatedWindows: nominated.nominatedWindows,
+        candidateCount: nominated.candidateCount,
+      };
+      caseResults.push(evaluated);
+      caseReports.push(reportCase(evaluated, nominated.nominations));
+    }
+  } catch {
+    return errorResult(io, "case_invalid");
+  }
+  const summary = summarizeCases(caseResults, {
+    candidateCap,
+    offShadowInvariant: manifest.offShadowInvariant,
+  });
+  const report: EvalReport = {
+    schemaVersion: 1,
+    candidateCap,
+    offShadowInvariant: {
+      required: true,
+      passed: manifest.offShadowInvariant,
+      separatelyVerified: true,
+    },
+    cases: caseReports,
+    summary,
+    pass: summary.pass,
+  };
+  const stdout = `${JSON.stringify(report)}\n`;
+  io.stdout?.(stdout);
+  return { exitCode: report.pass ? 0 : 1, stdout, stderr: "" };
+}
+
+export async function main(argv: string[] = process.argv): Promise<void> {
+  const result = await runVisualRecallCli(argv);
+  process.exitCode = result.exitCode;
+}
+
+if (typeof require !== "undefined" && typeof module !== "undefined" && require.main === module) {
+  void main().catch(() => {
+    process.exitCode = 1;
+    process.stderr.write("case_invalid\n");
+  });
+}

@@ -16,7 +16,8 @@
     "test:watch": "vitest --root ../.. apps/worker/src",
     "backfill:thumbnails": "tsx src/scripts/backfill-thumbnails.ts",
     "feedback-learning-export": "tsx src/scripts/feedback-learning-export.ts",
-    "feedback-learning-review": "tsx src/scripts/feedback-learning-review.ts"
+    "feedback-learning-review": "tsx src/scripts/feedback-learning-review.ts",
+    "eval:visual-recall": "tsx src/scripts/eval-visual-recall.ts"
   },
   "dependencies": {
     "@clipclap/shared": "*",
