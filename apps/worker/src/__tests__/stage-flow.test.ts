@@ -154,7 +154,6 @@ function safeEndAuditV2Result() {
       audit_failed: 0,
       records: [{ geometry: { candidateId: "c0" }, outcome: "hard_handoff" }],
     },
-    rescue: { summary: "not_run", evaluated: 0, records: [] },
   };
   const telemetry = { ...base.telemetry, safeEndAudit };
   return { ...base, result: { ...base.result, telemetry }, telemetry, safeEndAudit };
@@ -585,6 +584,11 @@ describe("stage handlers", () => {
   it("persists safe-end audit telemetry under legacy shadowV2 telemetry without changing V1 highlights", async () => {
     vi.stubEnv("ANALYZE_ENGINE", "shadow");
     vi.stubEnv("SAFE_END_AUDIT", "shadow");
+    // Keep this recorded-call assertion independent of the ambient production
+    // scan/arc rollout knobs. The real V2 flow under this pinned config is
+    // exactly scan -> critic -> safe-end -> finalizer.
+    vi.stubEnv("SCAN_PASSES", "1");
+    vi.stubEnv("ARC_AUDIT", "off");
     mocks.jobFind.mockResolvedValue({
       id: "job1",
       transcriptPartial: false,
@@ -623,6 +627,10 @@ describe("stage handlers", () => {
 
   it("keeps real V2 safe-end shadow persisted highlights and render queue identical to off", async () => {
     vi.stubEnv("ANALYZE_ENGINE", "recall-critic");
+    // This test compares safe-end on/off, so pin unrelated production stages
+    // out of its request sequence.
+    vi.stubEnv("SCAN_PASSES", "1");
+    vi.stubEnv("ARC_AUDIT", "off");
     const job = {
       id: "job1",
       transcriptJson: recordedTranscript(),
