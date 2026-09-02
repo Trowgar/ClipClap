@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   Worker: vi.fn().mockImplementation(() => ({ on: vi.fn(), close: vi.fn() })),
   getRedis: vi.fn(() => ({ host: "redis" })),
+  releaseNextQueued: vi.fn(async () => []),
   download: vi.fn(),
   transcribe: vi.fn(),
   analyze: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock("bullmq", () => ({
 vi.mock("@clipclap/shared", () => ({
   getRedis: mocks.getRedis,
   getQueueNameForStage: (role: string) => `video-${role}`,
+  releaseNextQueued: mocks.releaseNextQueued,
   parseWorkerRole: (role: string | undefined) => {
     if (
       role === "download" ||
@@ -48,6 +50,7 @@ describe("worker role config", () => {
     delete process.env.WORKER_CONCURRENCY;
     delete process.env.RENDER_CONCURRENCY;
     delete process.env.DOWNLOAD_CONCURRENCY;
+    delete process.env.CLIPCLAP_OCI_REVISION;
   });
 
   it("uses CPU-safe concurrency for render", () => {
@@ -73,9 +76,49 @@ describe("worker role config", () => {
     );
   });
 
+  it("creates a dedicated control worker for quality canaries", () => {
+    createStageWorker("render");
+
+    expect(Worker).toHaveBeenCalledWith(
+      "video-render-quality-canary",
+      expect.any(Function),
+      expect.objectContaining({ concurrency: 1 })
+    );
+  });
+
   it("allows per-role concurrency overrides", () => {
     process.env.DOWNLOAD_CONCURRENCY = "8";
 
     expect(getWorkerConcurrency("download")).toBe(8);
+  });
+
+  it("does not release a pipeline slot for an internal quality canary", async () => {
+    const worker = createStageWorker("finalize");
+    const completed = (worker as unknown as { on: ReturnType<typeof vi.fn> }).on;
+    const handler = completed.mock.calls.find((call: unknown[]) => call[0] === "completed")?.[1] as ((job: unknown) => void) | undefined;
+    expect(handler).toBeDefined();
+    await handler!({ data: { kind: "feedback-quality-canary", nonce: "n", decisionId: "d", rolloutInstanceId: "instance" } });
+    expect(mocks.releaseNextQueued).not.toHaveBeenCalled();
+  });
+
+  it("rejects canary work on the primary queue so stale consumers cannot answer", async () => {
+    createStageWorker("finalize");
+    const primaryProcessor = (Worker as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][1] as (job: unknown) => Promise<unknown>;
+    await expect(primaryProcessor({ data: { kind: "feedback-quality-canary", nonce: "n", decisionId: "d", rolloutInstanceId: "instance" } })).rejects.toThrow("control_queue");
+  });
+
+  it("returns the rollout instance from the dedicated canary worker", async () => {
+    process.env.FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID = "instance";
+    process.env.CLIPCLAP_OCI_REVISION = "a".repeat(40);
+    createStageWorker("finalize");
+    const controlProcessor = (Worker as unknown as { mock: { calls: unknown[][] } }).mock.calls[1][1] as (job: unknown) => Promise<Record<string, unknown>>;
+    await expect(controlProcessor({ data: { kind: "feedback-quality-canary", nonce: "n", decisionId: "d", rolloutInstanceId: "instance" } })).resolves.toMatchObject({ rolloutInstanceId: "instance", role: "finalize", commitSha: "a".repeat(40) });
+  });
+
+  it("rejects a canary from an older worker instance", async () => {
+    process.env.FEEDBACK_QUALITY_ROLLOUT_INSTANCE_ID = "new-instance";
+    createStageWorker("finalize");
+    const controlProcessor = (Worker as unknown as { mock: { calls: unknown[][] } }).mock.calls[1][1] as (job: unknown) => Promise<unknown>;
+    await expect(controlProcessor({ data: { kind: "feedback-quality-canary", nonce: "n", decisionId: "d", rolloutInstanceId: "old-instance" } })).rejects.toThrow("instance_mismatch");
   });
 });

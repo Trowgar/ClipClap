@@ -40,6 +40,12 @@ RUN npx tsc
 
 # --- Production ---
 FROM base AS production
+ARG VCS_REF
+# The release adapter checks this label before rollout and the worker canary
+# returns the baked value. CI must pass the immutable Git commit with
+# --build-arg VCS_REF=<40-hex>; runtime environment cannot override it.
+LABEL org.opencontainers.image.revision=${VCS_REF}
+ENV CLIPCLAP_OCI_REVISION=${VCS_REF}
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/node_modules ./node_modules
 RUN node -e "require('fs-ext')" && ! apk info -e build-base

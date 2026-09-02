@@ -1,0 +1,60 @@
+# Immutable worker rollout only. The release adapter invokes this file with an
+# image reference of the form repository@sha256:..., never a tag. It has no
+# build stanza and no source bind mounts.
+x-worker-production: &worker-production
+  image: ${CLIPCLAP_WORKER_IMAGE:?set repository@sha256 digest}
+  env_file: ./production.env
+  restart: unless-stopped
+  environment:
+    NODE_ENV: production
+    FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json
+  volumes:
+    - type: bind
+      source: ./feedback-quality-config.json
+      target: /run/clipclap/feedback-quality-config.json
+      read_only: true
+
+services:
+  worker-download:
+    <<: *worker-production
+    environment:
+      NODE_ENV: production
+      WORKER_ROLE: download
+      DOWNLOAD_CONCURRENCY: "4"
+      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json
+  worker-transcribe:
+    <<: *worker-production
+    environment:
+      NODE_ENV: production
+      WORKER_ROLE: transcribe
+      TRANSCRIBE_CONCURRENCY: "2"
+      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json
+  worker-analyze:
+    <<: *worker-production
+    environment:
+      NODE_ENV: production
+      WORKER_ROLE: analyze
+      ANALYZE_CONCURRENCY: "5"
+      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json
+  worker-render:
+    <<: *worker-production
+    environment:
+      NODE_ENV: production
+      WORKER_ROLE: render
+      RENDER_CONCURRENCY: "1"
+      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json
+  worker-finalize:
+    <<: *worker-production
+    environment:
+      NODE_ENV: production
+      WORKER_ROLE: finalize
+      FINALIZE_CONCURRENCY: "3"
+      FEEDBACK_QUALITY_CONFIG_FILE: /run/clipclap/feedback-quality-config.json
+
+# This is deliberately the already-running ClipClap network. The release file
+# owns worker containers only, so it cannot build, restart, or accidentally
+# recreate database/Redis/source services.
+networks:
+  default:
+    external: true
+    name: clipclap_default
