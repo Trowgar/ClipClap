@@ -483,7 +483,7 @@ export function summarizeCases(
 ): EvalSummary {
   const candidateCap = Number.isInteger(options.candidateCap) && (options.candidateCap ?? 0) > 0
     ? options.candidateCap as number
-    : 12;
+    : 15;
   let positiveWindows = 0;
   let positiveMatchedWindows = 0;
   let gamingMatchedWindows = 0;

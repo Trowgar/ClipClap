@@ -27,6 +27,23 @@ describe("visual recall evaluation metrics", () => {
     expect(matchesWindow(window(0, 1), window(0, 1), 1.2)).toBe(false);
   });
 
+  it("uses the tuned candidate cap when the summary option is omitted or malformed", () => {
+    const withFifteen = [{
+      caseKey: "as-is-a",
+      kind: "as_is" as const,
+      positiveWindows: [window(0, 10)],
+      negativeWindows: [],
+      nominatedWindows: [],
+      candidateCount: 15,
+    }];
+    const withSixteen = [{ ...withFifteen[0], candidateCount: 16 }];
+    for (const candidateCap of [undefined, Number.NaN, 0, -1, 1.5]) {
+      const options = candidateCap === undefined ? {} : { candidateCap };
+      expect(summarizeCases(withFifteen, options).gates.candidateCap).toBe(true);
+      expect(summarizeCases(withSixteen, options).gates.candidateCap).toBe(false);
+    }
+  });
+
   it("accepts production-shaped zero-duration transcript segments and words", () => {
     const parsed = parseTranscription({
       text: "opaque",
