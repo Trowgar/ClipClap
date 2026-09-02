@@ -94,6 +94,22 @@ function isUsableNode(node: SentenceNode | undefined): node is SentenceNode {
   );
 }
 
+function hasValidNodeContract(nodes: SentenceNode[] | unknown): nodes is SentenceNode[] {
+  if (!Array.isArray(nodes)) return false;
+  for (let index = 0; index < nodes.length; index++) {
+    const node = nodes[index];
+    if (!isUsableNode(node) || node.index !== index) return false;
+    const previous = nodes[index - 1];
+    if (
+      previous &&
+      (node.start < previous.start || node.end < previous.end)
+    ) {
+      return false;
+    }
+  }
+  return nodes.length > 0;
+}
+
 function clusterPeaks(peaks: Peak[], clusterSec: number): Peak[] {
   const sorted = [...peaks].sort((a, b) => a.index - b.index);
   const clustered: Peak[] = [];
@@ -121,6 +137,7 @@ export function nominateVisualCandidates(
   motionEnvelope: unknown,
   cfg: VisualRecallConfig,
 ): VisualCandidateResult {
+  if (!hasValidNodeContract(nodes)) return emptyResult();
   // YDIF is an 8-bit per-pixel difference signal. Rejecting finite values
   // outside that physical domain keeps malformed/extreme input from
   // overflowing median/MAD arithmetic or becoming non-JSON telemetry.
@@ -161,23 +178,24 @@ export function nominateVisualCandidates(
   if (maxValue <= minValue) return { candidates: [], telemetry };
 
   const peaks: Peak[] = [];
-  for (let index = 0; index < envelope.length; index++) {
+  // Collapse each contiguous equal-value run before local-max testing. A
+  // broad motion plateau is one event, even when it is wider than clustering;
+  // its midpoint is stable under repeated replays and avoids two edge peaks.
+  for (let index = 0; index < envelope.length; ) {
     const value = envelope[index];
-    if (value <= threshold) continue;
-    const left = envelope[index - 1];
-    const right = envelope[index + 1];
-    // Require a strict rise on at least one side. That rejects static signals
-    // and makes a plateau nominate one edge deterministically.
-    if (
-      (left !== undefined && value < left) ||
-      (right !== undefined && value < right) ||
-      ((left === undefined || value === left) && (right === undefined || value === right))
-    ) {
-      continue;
+    let runEnd = index + 1;
+    while (runEnd < envelope.length && envelope[runEnd] === value) runEnd++;
+    if (value > threshold) {
+      const left = envelope[index - 1];
+      const right = envelope[runEnd];
+      const risesFromLeft = left === undefined || value > left;
+      const risesFromRight = right === undefined || value > right;
+      const hasNeighbor = left !== undefined || right !== undefined;
+      if (hasNeighbor && risesFromLeft && risesFromRight) {
+        peaks.push({ index: Math.floor((index + runEnd - 1) / 2), value });
+      }
     }
-    if ((left === undefined || value > left) || (right === undefined || value > right)) {
-      peaks.push({ index, value });
-    }
+    index = runEnd;
   }
   telemetry.rawPeakCount = peaks.length;
 
@@ -191,24 +209,30 @@ export function nominateVisualCandidates(
   // capacity afterwards preserves strength without letting one burst consume
   // the complete global budget.
   const strongestFirst = [...clustered].sort((a, b) => b.value - a.value || a.index - b.index);
-  const selected: Peak[] = [];
+  const regionWinners: Peak[] = [];
   const regions = new Set<number>();
   for (const peak of strongestFirst) {
     const region = Math.floor(peak.index / DIVERSITY_REGION_SEC);
     if (regions.has(region)) continue;
     regions.add(region);
-    selected.push(peak);
+    regionWinners.push(peak);
   }
-  telemetry.diversityDropped = clustered.length - selected.length;
   const cap = Number.isInteger(cfg.visualRecallMaxCandidates) && cfg.visualRecallMaxCandidates > 0
     ? cfg.visualRecallMaxCandidates
     : 12;
+  const selected = [...regionWinners];
   if (selected.length > cap) selected.length = cap;
   for (const peak of strongestFirst) {
     if (selected.length >= cap) break;
     if (!selected.includes(peak)) selected.push(peak);
   }
-  telemetry.capped = clustered.length - selected.length;
+  const selectedSet = new Set(selected);
+  const regionWinnerSet = new Set(regionWinners);
+  for (const peak of clustered) {
+    if (selectedSet.has(peak)) continue;
+    if (!regionWinnerSet.has(peak)) telemetry.diversityDropped++;
+    else telemetry.capped++;
+  }
 
   const preSec = Number.isFinite(cfg.visualRecallPreSec) && cfg.visualRecallPreSec > 0 ? cfg.visualRecallPreSec : 8;
   const postSec = Number.isFinite(cfg.visualRecallPostSec) && cfg.visualRecallPostSec > 0 ? cfg.visualRecallPostSec : 18;

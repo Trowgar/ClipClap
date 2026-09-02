@@ -80,6 +80,16 @@ describe("nominateVisualCandidates", () => {
     expect(result.candidates.map((candidate) => candidate.payoffNode)).toEqual([5, 20, 45]);
   });
 
+  it("collapses a wide equal plateau to one deterministic midpoint peak", () => {
+    const envelope = Array.from({ length: 100 }, () => 0);
+    for (let index = 5; index <= 25; index++) envelope[index] = 30;
+    const result = nominateVisualCandidates(denseNodes(), envelope, cfg());
+    expect(result.telemetry.rawPeakCount).toBe(1);
+    expect(result.telemetry.clusteredPeakCount).toBe(1);
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0].payoffNode).toBe(15);
+  });
+
   it("maps a peak to a bounded speech range and the nearest payoff node", () => {
     const result = nominateVisualCandidates(
       denseNodes(),
@@ -128,16 +138,36 @@ describe("nominateVisualCandidates", () => {
     expect(noSpeech.telemetry.rejectedNoSpeech).toBe(1);
   });
 
+  it("rejects malformed positional node contracts before mapping", () => {
+    const envelope = [0, 30, 0];
+    const nonfinite = nodesAt([0, 2, 4]);
+    nonfinite[1] = { ...nonfinite[1], start: Number.NaN };
+    const mismatchedIndex = nodesAt([0, 2, 4]);
+    mismatchedIndex[1] = { ...mismatchedIndex[1], index: 99 };
+    const malformed = [
+      nodesAt([0, 2, 1]),
+      nonfinite,
+      mismatchedIndex,
+    ];
+    for (const nodes of malformed) {
+      expect(() => nominateVisualCandidates(nodes, envelope, cfg())).not.toThrow();
+      expect(nominateVisualCandidates(nodes, envelope, cfg()).candidates).toEqual([]);
+    }
+  });
+
   it("enforces temporal diversity and the global candidate cap", () => {
-    const envelope = Array.from({ length: 150 }, () => 0);
-    for (const index of [2, 20, 70, 130]) envelope[index] = 30;
+    const envelope = Array.from({ length: 210 }, () => 0);
+    for (const index of [2, 20, 70, 130, 190]) envelope[index] = 30;
     const result = nominateVisualCandidates(
-      denseNodes(160),
+      denseNodes(220),
       envelope,
       cfg({ VISUAL_RECALL_MAX_CANDIDATES: "3" }),
     );
     expect(result.candidates).toHaveLength(3);
     expect(result.telemetry.capped).toBeGreaterThan(0);
     expect(result.telemetry.diversityDropped).toBeGreaterThan(0);
+    expect(result.telemetry.diversityDropped + result.telemetry.capped).toBe(
+      result.telemetry.clusteredPeakCount - result.telemetry.mappedCandidates - result.telemetry.rejectedNoSpeech,
+    );
   });
 });
