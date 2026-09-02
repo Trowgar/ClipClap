@@ -6,51 +6,51 @@ export type OutcomeSet = "eval" | "holdout";
 export type OutcomeConfidence = "high" | "medium";
 
 export interface OutcomeWindow {
-  start: number;
-  end: number;
+  readonly start: number;
+  readonly end: number;
 }
 
 export interface OutcomeExpected {
-  approvedWindows: OutcomeWindow[];
-  forbiddenWindows: OutcomeWindow[];
+  readonly approvedWindows: readonly OutcomeWindow[];
+  readonly forbiddenWindows: readonly OutcomeWindow[];
 }
 
 interface OutcomeLabelBase {
-  schemaVersion: 1;
-  action: "label";
-  eventId: string;
-  occurredAt: string;
-  caseVersion: Sha256;
-  disposition: OutcomeDisposition;
-  confidence: OutcomeConfidence;
-  expected: OutcomeExpected;
+  readonly schemaVersion: 1;
+  readonly action: "label";
+  readonly eventId: string;
+  readonly occurredAt: string;
+  readonly caseVersion: Sha256;
+  readonly disposition: OutcomeDisposition;
+  readonly confidence: OutcomeConfidence;
+  readonly expected: OutcomeExpected;
 }
 
 export type OutcomeLabel =
-  | (OutcomeLabelBase & { disposition: "recoverable_false_negative" | "valid_empty"; set: OutcomeSet })
-  | (OutcomeLabelBase & { disposition: "exclude"; set?: never });
+  | (OutcomeLabelBase & { readonly disposition: "recoverable_false_negative" | "valid_empty"; readonly set: OutcomeSet })
+  | (OutcomeLabelBase & { readonly disposition: "exclude"; readonly set?: never });
 
 interface OutcomeCaseBase {
-  schemaVersion: 1;
-  caseVersion: Sha256;
-  jobIdentitySha256: Sha256;
-  analyzeStepSha256: Sha256;
-  analysisVersion: string;
-  engineFingerprint: Sha256;
-  configSha256: Sha256;
-  sourceDurationSec: number;
-  transcriptSha256: Sha256;
-  sourceSha256: Sha256;
-  recordedResponsesSha256: Sha256;
-  disposition: OutcomeDisposition;
-  confidence: OutcomeConfidence;
-  subsystem: Subsystem;
-  expected: OutcomeExpected;
+  readonly schemaVersion: 1;
+  readonly caseVersion: Sha256;
+  readonly jobIdentitySha256: Sha256;
+  readonly analyzeStepSha256: Sha256;
+  readonly analysisVersion: string;
+  readonly engineFingerprint: Sha256;
+  readonly configSha256: Sha256;
+  readonly sourceDurationSec: number;
+  readonly transcriptSha256: Sha256;
+  readonly sourceSha256: Sha256;
+  readonly recordedResponsesSha256: Sha256;
+  readonly disposition: OutcomeDisposition;
+  readonly confidence: OutcomeConfidence;
+  readonly subsystem: Subsystem;
+  readonly expected: OutcomeExpected;
 }
 
 export type OutcomeCase =
-  | (OutcomeCaseBase & { disposition: "recoverable_false_negative" | "valid_empty"; set: OutcomeSet })
-  | (OutcomeCaseBase & { disposition: "exclude"; set?: never });
+  | (OutcomeCaseBase & { readonly disposition: "recoverable_false_negative" | "valid_empty"; readonly set: OutcomeSet })
+  | (OutcomeCaseBase & { readonly disposition: "exclude"; readonly set?: never });
 
 export class OutcomeSchemaError extends Error {
   constructor() {
@@ -65,7 +65,6 @@ export const MAX_OUTCOME_SECONDS = 7 * 24 * 60 * 60;
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const IMMUTABLE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const CANONICAL_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
-const SUBSYSTEMS: readonly Subsystem[] = ["selection", "boundary", "framing", "subtitles", "render"];
 
 function fail(): never {
   throw new OutcomeSchemaError();
@@ -132,10 +131,14 @@ function parseExpected(value: unknown, sourceDurationSec = MAX_OUTCOME_SECONDS):
   for (let index = 1; index < ordered.length; index += 1) {
     if (ordered[index].start < ordered[index - 1].end) fail();
   }
-  return Object.freeze({ approvedWindows: Object.freeze(approvedWindows), forbiddenWindows: Object.freeze(forbiddenWindows) }) as unknown as OutcomeExpected;
+  return Object.freeze({ approvedWindows: Object.freeze(approvedWindows), forbiddenWindows: Object.freeze(forbiddenWindows) });
 }
 
-function dispositionFields(raw: Record<string, unknown>, expected: OutcomeExpected): { disposition: OutcomeDisposition; confidence: OutcomeConfidence; set?: OutcomeSet } {
+type OutcomeDispositionFields =
+  | Readonly<{ disposition: "recoverable_false_negative" | "valid_empty"; confidence: OutcomeConfidence; set: OutcomeSet }>
+  | Readonly<{ disposition: "exclude"; confidence: OutcomeConfidence }>;
+
+function dispositionFields(raw: Record<string, unknown>, expected: OutcomeExpected): OutcomeDispositionFields {
   const disposition = raw.disposition;
   const confidence = raw.confidence;
   const hasOwnSet = Object.prototype.hasOwnProperty.call(raw, "set");
@@ -154,6 +157,10 @@ function dispositionFields(raw: Record<string, unknown>, expected: OutcomeExpect
   return { disposition, confidence };
 }
 
+function subsystem(value: unknown): value is Subsystem {
+  return value === "selection" || value === "boundary" || value === "framing" || value === "subtitles" || value === "render";
+}
+
 export function parseOutcomeLabel(value: unknown): OutcomeLabel {
   const preliminary = plainExact(value, hasOwnKey(value, "set")
     ? ["schemaVersion", "action", "eventId", "occurredAt", "caseVersion", "set", "disposition", "confidence", "expected"]
@@ -161,17 +168,17 @@ export function parseOutcomeLabel(value: unknown): OutcomeLabel {
   if (preliminary.schemaVersion !== 1 || preliminary.action !== "label" || typeof preliminary.eventId !== "string" || !IMMUTABLE_TOKEN.test(preliminary.eventId) || !canonicalUtc(preliminary.occurredAt) || !sha256(preliminary.caseVersion)) fail();
   const expected = parseExpected(preliminary.expected);
   const fields = dispositionFields(preliminary, expected);
-  return Object.freeze({
-    schemaVersion: 1,
-    action: "label",
+  const common = {
+    schemaVersion: 1 as const,
+    action: "label" as const,
     eventId: preliminary.eventId,
     occurredAt: preliminary.occurredAt,
     caseVersion: preliminary.caseVersion,
-    ...(fields.set === undefined ? {} : { set: fields.set }),
-    disposition: fields.disposition,
     confidence: fields.confidence,
     expected,
-  }) as OutcomeLabel;
+  };
+  if (fields.disposition === "exclude") return Object.freeze({ ...common, disposition: fields.disposition });
+  return Object.freeze({ ...common, disposition: fields.disposition, set: fields.set });
 }
 
 export function parseOutcomeCase(value: unknown): OutcomeCase {
@@ -181,28 +188,32 @@ export function parseOutcomeCase(value: unknown): OutcomeCase {
     "engineFingerprint", "configSha256", "sourceDurationSec", "transcriptSha256", "sourceSha256",
     "recordedResponsesSha256", ...(hasSet ? ["set"] : []), "disposition", "confidence", "subsystem", "expected",
   ]);
-  if (raw.schemaVersion !== 1 || !sha256(raw.caseVersion) || !sha256(raw.jobIdentitySha256) || !sha256(raw.analyzeStepSha256) ||
-      typeof raw.analysisVersion !== "string" || !IMMUTABLE_TOKEN.test(raw.analysisVersion) || !sha256(raw.engineFingerprint) || !sha256(raw.configSha256) ||
-      typeof raw.sourceDurationSec !== "number" || !Number.isFinite(raw.sourceDurationSec) || raw.sourceDurationSec <= 0 || raw.sourceDurationSec > MAX_OUTCOME_SECONDS ||
-      !sha256(raw.transcriptSha256) || !sha256(raw.sourceSha256) || !sha256(raw.recordedResponsesSha256) || !SUBSYSTEMS.includes(raw.subsystem as Subsystem)) fail();
-  const expected = parseExpected(raw.expected, raw.sourceDurationSec);
+  const {
+    caseVersion, jobIdentitySha256, analyzeStepSha256, analysisVersion, engineFingerprint, configSha256,
+    sourceDurationSec, transcriptSha256, sourceSha256, recordedResponsesSha256, subsystem: causalSubsystem,
+  } = raw;
+  if (raw.schemaVersion !== 1 || !sha256(caseVersion) || !sha256(jobIdentitySha256) || !sha256(analyzeStepSha256) ||
+      typeof analysisVersion !== "string" || !IMMUTABLE_TOKEN.test(analysisVersion) || !sha256(engineFingerprint) || !sha256(configSha256) ||
+      typeof sourceDurationSec !== "number" || !Number.isFinite(sourceDurationSec) || sourceDurationSec <= 0 || sourceDurationSec > MAX_OUTCOME_SECONDS ||
+      !sha256(transcriptSha256) || !sha256(sourceSha256) || !sha256(recordedResponsesSha256) || !subsystem(causalSubsystem)) fail();
+  const expected = parseExpected(raw.expected, sourceDurationSec);
   const fields = dispositionFields(raw, expected);
-  return Object.freeze({
-    schemaVersion: 1,
-    caseVersion: raw.caseVersion,
-    jobIdentitySha256: raw.jobIdentitySha256,
-    analyzeStepSha256: raw.analyzeStepSha256,
-    analysisVersion: raw.analysisVersion,
-    engineFingerprint: raw.engineFingerprint,
-    configSha256: raw.configSha256,
-    sourceDurationSec: raw.sourceDurationSec,
-    transcriptSha256: raw.transcriptSha256,
-    sourceSha256: raw.sourceSha256,
-    recordedResponsesSha256: raw.recordedResponsesSha256,
-    ...(fields.set === undefined ? {} : { set: fields.set }),
-    disposition: fields.disposition,
+  const common = {
+    schemaVersion: 1 as const,
+    caseVersion,
+    jobIdentitySha256,
+    analyzeStepSha256,
+    analysisVersion,
+    engineFingerprint,
+    configSha256,
+    sourceDurationSec,
+    transcriptSha256,
+    sourceSha256,
+    recordedResponsesSha256,
     confidence: fields.confidence,
-    subsystem: raw.subsystem,
+    subsystem: causalSubsystem,
     expected,
-  }) as OutcomeCase;
+  };
+  if (fields.disposition === "exclude") return Object.freeze({ ...common, disposition: fields.disposition });
+  return Object.freeze({ ...common, disposition: fields.disposition, set: fields.set });
 }

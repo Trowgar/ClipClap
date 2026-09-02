@@ -8,6 +8,18 @@ import {
   type OutcomeLabel,
 } from "../feedback-quality/outcome-types";
 
+function immutablePublicContract(labelValue: OutcomeLabel, caseValue: OutcomeCase): void {
+  // @ts-expect-error Public labels are deeply immutable.
+  labelValue.confidence = "medium";
+  // @ts-expect-error Public expected-window arrays are immutable.
+  labelValue.expected.approvedWindows.push({ start: 1, end: 2 });
+  // @ts-expect-error Public window coordinates are immutable.
+  labelValue.expected.approvedWindows[0].start = 0;
+  // @ts-expect-error Materialized cases are immutable too.
+  caseValue.analysisVersion = "changed";
+}
+void immutablePublicContract;
+
 const sha = (digit: string) => `sha256:${digit.repeat(64)}` as const;
 const expected = { approvedWindows: [{ start: 120, end: 160 }], forbiddenWindows: [{ start: 200, end: 220 }] };
 
@@ -54,6 +66,9 @@ describe("zero-outcome contracts", () => {
     expect(result).toMatchObject({ caseVersion: sha("a"), disposition: "recoverable_false_negative", set: "eval" });
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen(result.expected.approvedWindows)).toBe(true);
+    expect(Object.isFrozen(result.expected.forbiddenWindows)).toBe(true);
+    expect(Object.isFrozen(result.expected.approvedWindows[0])).toBe(true);
+    expect(Object.isFrozen(result.expected.forbiddenWindows[0])).toBe(true);
   });
 
   it.each([
