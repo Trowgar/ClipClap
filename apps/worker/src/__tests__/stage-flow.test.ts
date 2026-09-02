@@ -375,6 +375,7 @@ describe("stage handlers", () => {
     )?.[2] as { telemetry?: typeof v2.telemetry };
     expect(analyzeOutput.telemetry).toBe(v2.telemetry);
     expect(analyzeOutput.telemetry?.postBoundaryHookGate).toBe(v2.postBoundaryHookGate);
+    expect(mocks.jobStepFindUnique).not.toHaveBeenCalled();
 
     // V2 returns only post-gate survivors. This is the set persisted for the
     // render worker to read; the stage never reintroduces a pre-gate clip.
@@ -389,6 +390,33 @@ describe("stage handlers", () => {
       userId: "u1",
       mode: "clips",
     });
+  });
+
+  it("reads visual signals once and threads motion into recall-critic", async () => {
+    vi.stubEnv("ANALYZE_ENGINE", "recall-critic");
+    vi.stubEnv("ANALYZE_VISUAL_RECALL_V1", "shadow");
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      transcriptJson: { text: "hello", segments: [] },
+      transcriptPartial: false,
+    });
+    mocks.jobStepFindUnique.mockResolvedValue({
+      outputJson: {
+        energyEnvelope: [-20, -18],
+        lumaEnvelope: [12, 13],
+        motionEnvelope: [0, 14],
+      },
+    });
+    const v2 = hookGateV2Result();
+    mocks.analyzeHighlightsV2.mockResolvedValue(v2.result);
+
+    await runAnalyzeStage({ jobId: "job1", userId: "u1" });
+
+    expect(mocks.jobStepFindUnique).toHaveBeenCalledTimes(1);
+    expect(mocks.analyzeHighlightsV2).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ motionEnvelope: [0, 14] }),
+    );
   });
 
   it("persists shadow V2 hook-gate telemetry while delivering only legacy highlights", async () => {

@@ -49,6 +49,7 @@ import {
   type SafeEndRescueRecord,
 } from "./safe-end-audit";
 import { observeRescueCandidates } from "./safe-end-rescue-observation";
+import { nominateVisualCandidates, type VisualRecallTelemetry } from "./visual-candidates";
 import type {
   ArcFlags,
   MergedCandidate,
@@ -296,12 +297,44 @@ export interface AnalyzeV2Options {
    *  fire (density fallback can still apply to an eval transcript that
    *  supplies sourceDurationSec, same as production). */
   sourceUrl?: string;
+  /** Per-second motion signal persisted by TRANSCRIBE. Missing or malformed
+   *  data keeps the transcript-first path intact in visual shadow/on modes. */
+  motionEnvelope?: number[];
   /** Test hook - forwarded to scanner/critic. */
   retryDelayMs?: number;
   /** Test-only injection point for safe-end telemetry serialization faults.
    * It is applied solely to the detached audit result before its local JSON
    * preflight; it cannot affect clips, finalizer input, rescue, or persistence. */
   safeEndAuditTelemetryTestHook?: (telemetry: unknown) => unknown;
+}
+
+function countCandidateTypes(candidates: readonly { type: string }[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const candidate of candidates) counts[candidate.type] = (counts[candidate.type] ?? 0) + 1;
+  return counts;
+}
+
+function visualRecallTelemetry(
+  mode: "shadow" | "on",
+  visual: { candidates: readonly { startNode: number; endNode: number; payoffNode: number; windowIndex: number; type: string }[]; telemetry: VisualRecallTelemetry },
+): Record<string, unknown> {
+  const missing = visual.telemetry.envelopeLength === 0;
+  return {
+    mode,
+    ...visual.telemetry,
+    ...(missing ? { reason: "no_motion_envelope" } : {}),
+    unionCandidates: 0,
+    mergedByType: {},
+    criticByType: {},
+    nominations: visual.candidates.map((candidate) => ({
+      source: "motion",
+      type: candidate.type,
+      startNode: candidate.startNode,
+      endNode: candidate.endNode,
+      payoffNode: candidate.payoffNode,
+      windowIndex: candidate.windowIndex,
+    })),
+  };
 }
 
 export async function analyzeHighlightsV2(
@@ -371,6 +404,7 @@ export async function analyzeHighlightsV2(
   const { mode, modeResolution } = resolveMode(modeInput, cfg);
   let candidates: MergedCandidate[];
   let scannerTelemetry: Record<string, unknown> = {};
+  let visualTelemetry: Record<string, unknown> | undefined;
 
   if (wordCount <= TINY_MAX_WORDS) {
     // tiny path: the whole transcript is one candidate, no scanner
@@ -409,7 +443,19 @@ export async function analyzeHighlightsV2(
       );
     }
 
-    const merged = mergeCandidates(scan.candidates, nodes, cfg, mode);
+    const visualMode = cfg.visualRecallMode;
+    const visual = visualMode === "off"
+      ? undefined
+      : nominateVisualCandidates(nodes, options.motionEnvelope ?? [], cfg);
+    if (visual && (visualMode === "shadow" || visualMode === "on")) {
+      visualTelemetry = visualRecallTelemetry(visualMode, visual);
+      visualTelemetry.unionCandidates = visualMode === "on" ? visual.candidates.length : 0;
+    }
+    const rawCandidates = visualMode === "on" && visual
+      ? [...scan.candidates, ...visual.candidates]
+      : scan.candidates;
+    const merged = mergeCandidates(rawCandidates, nodes, cfg, mode);
+    if (visualTelemetry) visualTelemetry.mergedByType = countCandidateTypes(merged);
     // Intro montage fragments quote later speech verbatim and are truncated by
     // the source editor, so every clean-start/clean-end guard passes on them.
     // Dropping them HERE - before stratified selection, not after the critic -
@@ -440,6 +486,7 @@ export async function analyzeHighlightsV2(
       return false;
     });
     candidates = selectCriticCandidates(withoutTeasers, nodes, cfg, mode);
+    if (visualTelemetry) visualTelemetry.criticByType = countCandidateTypes(candidates);
     scannerTelemetry = {
       path: "full",
       ...scan.telemetry,
@@ -518,6 +565,7 @@ export async function analyzeHighlightsV2(
         // only keeps this identical in shape to the analysisMode line, it
         // does not change which jobs get the key.
         ...(cfg.streamModeEnabled ? { analysisMode: mode, modeResolution } : {}),
+        ...(visualTelemetry ? { visualRecall: visualTelemetry } : {}),
       },
       usage,
     };
@@ -1281,6 +1329,7 @@ export async function analyzeHighlightsV2(
     // V1 is observation-only. The key is absent exactly when the shadow mode is
     // off, not a zeroed placeholder; downstream stages have no reference to it.
     ...(safeEndAuditTelemetry ? { safeEndAudit: safeEndAuditTelemetry } : {}),
+    ...(visualTelemetry ? { visualRecall: visualTelemetry } : {}),
   };
   const telemetryWithCurrentSafeEndAudit = () =>
     safeEndAuditTelemetry ? { ...telemetry, safeEndAudit: safeEndAuditTelemetry } : telemetry;

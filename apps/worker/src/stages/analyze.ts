@@ -33,6 +33,15 @@ export async function runAnalyzeStage(
     const cfg = loadAnalyzeConfig();
     const engine = resolveEngine(payload.jobId, cfg);
 
+    // TRANSCRIBE persists all three per-second envelopes on its own JobStep.
+    // Read that row once when a downstream path needs signals: visual recall
+    // consumes motion, while music-shorts consumes energy and luma. The dark
+    // normal path intentionally does not perform this lookup or thread a
+    // motion field into V2.
+    const visualSignals = cfg.visualRecallMode !== "off"
+      ? await readTranscribeEnvelopes(payload.jobId)
+      : undefined;
+
     const startedAt = Date.now();
 
     if (engine === "legacy" || engine === "shadow") {
@@ -58,6 +67,7 @@ export async function runAnalyzeStage(
             transcriptPartial: job.transcriptPartial,
             sourceDurationSec: job.sourceDurationSec ?? undefined,
             sourceUrl: job.sourceUrl ?? undefined,
+            ...(visualSignals ? { motionEnvelope: visualSignals.motionEnvelope } : {}),
           });
           shadow = {
             highlights: v2.highlights,
@@ -120,9 +130,7 @@ export async function runAnalyzeStage(
       job.sourceDurationSec > 0 &&
       job.sourceDurationSec <= cfg.musicShortsMaxSec
     ) {
-      const { energyEnvelope, lumaEnvelope } = await readTranscribeEnvelopes(
-        payload.jobId
-      );
+      const { energyEnvelope, lumaEnvelope } = visualSignals ?? await readTranscribeEnvelopes(payload.jobId);
       const windows = selectHookWindows(
         {
           segments: transcription.segments,
@@ -195,6 +203,7 @@ export async function runAnalyzeStage(
           // Powers ONLY resolveAnalysisMode's hostname rules (spec 2026-08-
           // 19-stream-analyze-mode, S1) - mirrors sourceDurationSec above.
           sourceUrl: job.sourceUrl ?? undefined,
+          ...(visualSignals ? { motionEnvelope: visualSignals.motionEnvelope } : {}),
         });
     // Flag on but not fired: still recorded, so the job record can show the
     // gate evaluated this transcript and let it through - task 8's own
@@ -273,25 +282,24 @@ export async function runAnalyzeStage(
 }
 
 /**
- * The TRANSCRIBE step's own `energyEnvelope` and `lumaEnvelope`
- * (stages/transcribe.ts's `completeJobStep` call; lumaEnvelope added by
- * spec 2026-08-23-music-shorts task R2) - both live on that JobStep row's
- * outputJson, not on the Job row, so they are read the same way
+ * The TRANSCRIBE step's own `energyEnvelope`, `lumaEnvelope`, and
+ * `motionEnvelope` (stages/transcribe.ts's `completeJobStep` call) live on
+ * that JobStep row's outputJson, not on the Job row, so they are read the same way
  * finalize.ts reads the ANALYZE step's `usage.byModel` back off its own
  * JobStep row: ONE direct `prisma.jobStep.findUnique` on the `jobId_step`
- * unique index for both, never a second query for the second envelope and
+ * unique index for all three, never a second query for another envelope and
  * never either one threaded through the queue payload. Each envelope
  * degrades to `[]` independently on a missing/malformed shape (no row yet,
  * a shape from before that field existed, a non-array, a non-number
  * entry) rather than throwing - one envelope being malformed or absent
- * (e.g. an old job predating lumaEnvelope) must not poison the other, and
+ * (e.g. an old job predating lumaEnvelope or motionEnvelope) must not poison the other, and
  * `selectHookWindows` already treats an empty envelope of either kind as
  * "no signal for that dimension," which is the correct behaviour here too,
  * not a special case.
  */
 async function readTranscribeEnvelopes(
   jobId: string
-): Promise<{ energyEnvelope: number[]; lumaEnvelope: number[] }> {
+): Promise<{ energyEnvelope: number[]; lumaEnvelope: number[]; motionEnvelope: number[] }> {
   const step = await prisma.jobStep.findUnique({
     where: { jobId_step: { jobId, step: "TRANSCRIBE" } },
     select: { outputJson: true },
@@ -300,6 +308,7 @@ async function readTranscribeEnvelopes(
   return {
     energyEnvelope: asNumberArray(output?.energyEnvelope),
     lumaEnvelope: asNumberArray(output?.lumaEnvelope),
+    motionEnvelope: asNumberArray(output?.motionEnvelope),
   };
 }
 
