@@ -225,6 +225,14 @@ export function isOutcomeRecoveryEligible(input: {
   path: string;
   unselectedCount: number;
 }): RecoveryEligibility {
+  if (
+    input === null ||
+    typeof input !== "object" ||
+    !Array.isArray(input.primaryHighlights) ||
+    typeof input.transcriptPartial !== "boolean"
+  ) {
+    invariantFailure();
+  }
   if (input.mode !== "shadow" && input.mode !== "on") {
     return { eligible: false, reason: "mode_off" };
   }

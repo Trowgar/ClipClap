@@ -181,4 +181,20 @@ describe("outcome recovery eligibility", () => {
       });
     }
   });
+
+  it("rejects malformed eligibility containers and seam fields with a controlled invariant", () => {
+    const malformed = [
+      null,
+      {},
+      { ...base, primaryHighlights: null },
+      { ...base, primaryHighlights: {} },
+      { ...base, primaryHighlights: { length: 0 } },
+      { ...base, transcriptPartial: "false" },
+    ];
+    for (const input of malformed) {
+      expect(() => isOutcomeRecoveryEligible(input as never)).toThrow(
+        "outcome_recovery_input_invariant",
+      );
+    }
+  });
 });
