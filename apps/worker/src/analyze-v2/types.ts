@@ -44,6 +44,29 @@ export interface ScanCandidate {
   passIndex?: number;
 }
 
+/** Closed safe vocabulary retained in candidate audit metadata. */
+export const CANDIDATE_TYPES = Object.freeze([
+  "reaction",
+  "conflict",
+  "insight",
+  "story",
+  "funny",
+  "reveal",
+  "question",
+  "opinion",
+  "other",
+  "visual_action",
+] as const);
+export type CandidateType = (typeof CANDIDATE_TYPES)[number];
+
+export function isCandidateType(value: unknown): value is CandidateType {
+  return typeof value === "string" && CANDIDATE_TYPES.includes(value as CandidateType);
+}
+
+export function isNormalizedCandidateInterest(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
 export interface MergedCandidate extends ScanCandidate {
   id: string; // "c0", "c1", ...
   threadSetupNode?: number;

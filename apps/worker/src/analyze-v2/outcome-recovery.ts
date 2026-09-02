@@ -1,4 +1,5 @@
 import type { OutcomeRecoveryMode } from "./config";
+import { isCandidateType, isNormalizedCandidateInterest } from "./types";
 import type {
   MergedCandidate,
   NoClipsReasonValue,
@@ -65,7 +66,9 @@ function validatePoolInput(input: {
       typeof range !== "object" ||
       !Number.isFinite(range.start) ||
       !Number.isFinite(range.end) ||
-      range.start > range.end
+      range.start < 0 ||
+      range.end < 0 ||
+      range.start >= range.end
     ) {
       invariantFailure();
     }
@@ -86,7 +89,8 @@ function validatePoolInput(input: {
       candidate.endNode >= input.nodes.length ||
       candidate.startNode > candidate.payoffNode ||
       candidate.payoffNode > candidate.endNode ||
-      !Number.isFinite(candidate.interest)
+      !isNormalizedCandidateInterest(candidate.interest) ||
+      !isCandidateType(candidate.type)
     ) {
       invariantFailure();
     }
@@ -166,6 +170,7 @@ export function buildOutcomeRecoveryPool(input: {
   missingRanges: readonly { start: number; end: number }[];
   maxCandidates: number;
 }): RecoveryPoolResult {
+  if (input === null || typeof input !== "object") invariantFailure();
   validatePoolInput(input);
   const cap = boundedCap(input.maxCandidates);
   let excludedMissingRange = 0;

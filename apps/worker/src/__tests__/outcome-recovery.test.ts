@@ -44,8 +44,13 @@ describe("outcome recovery pool", () => {
       { candidates: [candidate("")] },
       { candidates: [candidate("nan-interest", { interest: Number.NaN })] },
       { candidates: [candidate("infinite-interest", { interest: Number.POSITIVE_INFINITY })] },
+      { candidates: [candidate("high-interest", { interest: 1.1 })] },
+      { candidates: [candidate("negative-interest", { interest: -0.1 })] },
+      { candidates: [candidate("arbitrary-type", { type: "transcript prose" })] },
       { candidates: [valid], nodes: [{ ...nodes(1)[0], start: 2, end: 1 }] },
       { candidates: [valid], missingRanges: [{ start: 5, end: 4 }] },
+      { candidates: [valid], missingRanges: [{ start: 5, end: 5 }] },
+      { candidates: [valid], missingRanges: [{ start: -1, end: 5 }] },
     ];
     for (const input of cases) {
       expect(() => buildOutcomeRecoveryPool({
@@ -55,6 +60,12 @@ describe("outcome recovery pool", () => {
         maxCandidates: 6,
       })).toThrow("outcome_recovery_input_invariant");
     }
+    expect(() => buildOutcomeRecoveryPool(null as never)).toThrow("outcome_recovery_input_invariant");
+    expect(() => buildOutcomeRecoveryPool({} as never)).toThrow("outcome_recovery_input_invariant");
+    expect(() => buildOutcomeRecoveryPool({ candidates: [null as never], nodes: nodes(1), missingRanges: [], maxCandidates: 6 })).toThrow("outcome_recovery_input_invariant");
+
+    const visual = candidate("visual", { type: "visual_action" });
+    expect(buildOutcomeRecoveryPool({ candidates: [visual], nodes: nodes(1), missingRanges: [], maxCandidates: 6 }).candidates).toEqual([visual]);
   });
 
   it("round-robins ten-minute payoff regions, sorting each region by interest then id", () => {

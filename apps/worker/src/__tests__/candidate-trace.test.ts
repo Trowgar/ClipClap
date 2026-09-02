@@ -5,6 +5,7 @@ import {
   RECOVERY_DISPOSITIONS,
 } from "../analyze-v2/candidate-trace";
 import type { CandidateTraceDescriptor } from "../analyze-v2/candidate-trace";
+import type { CandidateType } from "../analyze-v2/types";
 
 function candidate(id: string, input: Partial<CandidateTraceDescriptor> = {}): CandidateTraceDescriptor {
   return {
@@ -64,6 +65,20 @@ describe("candidate trace", () => {
       "invalid_recovery_disposition"
     );
     expect(() => createCandidateTrace([candidate("c0"), candidate("c0")])).toThrow("duplicate_candidate");
+  });
+
+  it("rejects malformed containers, descriptors, interest, and type vocabulary", () => {
+    expect(() => createCandidateTrace(null as never)).toThrow("invalid_candidate_descriptors");
+    expect(() => createCandidateTrace({} as never)).toThrow("invalid_candidate_descriptors");
+    expect(() => createCandidateTrace([null as never])).toThrow("invalid_candidate_descriptor");
+    expect(() => createCandidateTrace([candidate("high", { interest: 1.1 })])).toThrow("invalid_candidate_descriptor");
+    expect(() => createCandidateTrace([candidate("low", { interest: -0.1 })])).toThrow("invalid_candidate_descriptor");
+    expect(() => createCandidateTrace([candidate("prose", { type: "transcript prose" as never })])).toThrow("invalid_candidate_descriptor");
+    expect(() => createCandidateTrace([candidate("nan", { interest: Number.NaN })])).toThrow("invalid_candidate_descriptor");
+
+    const trace = createCandidateTrace([candidate("visual", { type: "visual_action" })]);
+    trace.terminatePrimary("visual", "shipped");
+    expect(trace.inspect()[0].type).toBe("visual_action");
   });
 
   it("fails closed until every known primary candidate has a terminal disposition", () => {
@@ -146,13 +161,13 @@ describe("candidate trace", () => {
   });
 
   it("retains immutable safe descriptors and lane decisions for inspection", () => {
-    const descriptor = { id: "c0", startNode: 1, payoffNode: 2, endNode: 3, interest: 0.9, type: "question" };
+    const descriptor: { id: string; startNode: number; payoffNode: number; endNode: number; interest: number; type: CandidateType } = { id: "c0", startNode: 1, payoffNode: 2, endNode: 3, interest: 0.9, type: "question" };
     const trace = createCandidateTrace([descriptor]);
     trace.terminatePrimary("c0", "not_selected_for_critic");
     trace.registerRecoveryCandidates(["c0"]);
     trace.terminateRecovery("c0", "shipped");
     descriptor.interest = 0.1;
-    descriptor.type = "changed";
+    descriptor.type = "changed" as CandidateType;
 
     expect(trace.inspect()).toEqual([
       {

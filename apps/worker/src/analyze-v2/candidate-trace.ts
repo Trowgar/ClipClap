@@ -1,6 +1,11 @@
+import {
+  isCandidateType,
+  isNormalizedCandidateInterest,
+} from "./types";
 import type {
   CandidatePrimaryDisposition,
   CandidateRecoveryDisposition,
+  CandidateType,
   MergedCandidate,
 } from "./types";
 
@@ -25,7 +30,9 @@ const RECOVERY_DISPOSITIONS: readonly CandidateRecoveryDisposition[] = Object.fr
 );
 
 export type CandidateTraceDescriptor = Readonly<
-  Pick<MergedCandidate, "id" | "startNode" | "endNode" | "payoffNode" | "interest" | "type">
+  Omit<Pick<MergedCandidate, "id" | "startNode" | "endNode" | "payoffNode" | "interest" | "type">, "type"> & {
+    type: CandidateType;
+  }
 >;
 
 export interface CandidateTraceEntry extends CandidateTraceDescriptor {
@@ -96,9 +103,8 @@ function isSafeDescriptor(value: unknown): value is CandidateTraceDescriptor {
     (startNode as number) >= 0 &&
     (startNode as number) <= (payoffNode as number) &&
     (payoffNode as number) <= (endNode as number) &&
-    Number.isFinite(descriptor.interest) &&
-    typeof descriptor.type === "string" &&
-    descriptor.type.length > 0
+    isNormalizedCandidateInterest(descriptor.interest) &&
+    isCandidateType(descriptor.type)
   );
 }
 
@@ -111,6 +117,7 @@ function isSafeDescriptor(value: unknown): value is CandidateTraceDescriptor {
 export function createCandidateTrace(
   candidateDescriptors: readonly CandidateTraceDescriptor[],
 ): CandidateTrace {
+  if (!Array.isArray(candidateDescriptors)) fail("invalid_candidate_descriptors");
   const ids = new Set<string>();
   const descriptors = new Map<string, CandidateTraceDescriptor>();
   for (const candidate of candidateDescriptors) {
