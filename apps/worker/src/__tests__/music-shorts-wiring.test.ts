@@ -218,6 +218,7 @@ describe("music shorts wiring (stages/analyze.ts)", () => {
   it("MUSIC_SHORTS=on + song fired + 200s source + a real envelope -> 2 highlights shaped for render.ts, subtitles off in the SAME update, routed to render, telemetry path music-shorts", async () => {
     stubBaseEnv();
     vi.stubEnv("MUSIC_SHORTS", "on");
+    vi.stubEnv("ANALYZE_OUTCOME_RECOVERY_V1", "on");
     mocks.jobFind.mockResolvedValue({
       id: "job-music",
       transcriptJson: pureMusicTranscript(),
@@ -265,6 +266,7 @@ describe("music shorts wiring (stages/analyze.ts)", () => {
 
     const complete = mocks.completeJobStep.mock.calls[0][2];
     expect(complete.telemetry.path).toBe("music-shorts");
+    expect(complete.telemetry.outcomeRecovery).toEqual(expect.objectContaining({ mode: "on", reason: "music_short", outcome: "not_eligible" }));
     expect(complete.telemetry.songGate).toEqual(
       expect.objectContaining({ fired: true })
     );

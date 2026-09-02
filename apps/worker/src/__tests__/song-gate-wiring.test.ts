@@ -97,6 +97,7 @@ describe("song gate wiring (stages/analyze.ts)", () => {
 
   it("SONG_GATE=on fires on a song transcript WITHOUT ever calling analyzeHighlightsV2", async () => {
     vi.stubEnv("SONG_GATE", "on");
+    vi.stubEnv("ANALYZE_OUTCOME_RECOVERY_V1", "on");
     mocks.jobFind.mockResolvedValue({
       id: "job1",
       transcriptJson: songTranscript(),
@@ -124,6 +125,7 @@ describe("song gate wiring (stages/analyze.ts)", () => {
       expect.objectContaining({ fired: true })
     );
     expect(payload.telemetry.songGate.signals.musicTokenShare).toBeGreaterThan(0.3);
+    expect(payload.telemetry.outcomeRecovery).toEqual(expect.objectContaining({ mode: "on", reason: "song_gate", outcome: "not_eligible" }));
 
     // billing invariant: never FAILED
     expect(mocks.jobUpdate).not.toHaveBeenCalledWith(

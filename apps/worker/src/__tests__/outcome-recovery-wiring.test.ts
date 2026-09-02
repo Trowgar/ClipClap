@@ -157,18 +157,34 @@ describe("outcome recovery wiring", () => {
     const arcCfg = { ...recoveryCfg("on", { finalizerEnabled: false, arcAuditEnabled: true, arcDownrankEnabled: true }), arcDownrankPenalty2: 0.5 };
     const arcHarness = client(scanTwo(), critic([verdict("c0", false)]), critic([verdict("c1", true)]), arcResponse(false));
     const arcResult = await analyzeHighlightsV2(transcript(), { client: arcHarness.client, cfg: arcCfg, transcriptPartial: false });
+    expect(arcResult.highlights).toEqual([]);
     expect((arcResult.telemetry.outcomeRecovery as any).recoveryDispositions).toEqual({ arc_rejected: 1 });
 
-    const postCfg = recoveryCfg("on", { finalizerEnabled: false, postBoundaryHookGateMode: "enforce", postBoundaryHookMaxDelaySec: 0 });
+    const postCfg = recoveryCfg("on", { finalizerEnabled: false, postBoundaryHookGateMode: "enforce", postBoundaryHookMaxDelaySec: 0, postBoundaryHookMaxPreHookGapSec: 0 });
     const postRow = verdict("c1", true);
     const postHarness = client(scanTwo(), critic([verdict("c0", false)]), critic([postRow]));
     const postResult = await analyzeHighlightsV2(transcript(), { client: postHarness.client, cfg: postCfg, transcriptPartial: false });
+    expect(postResult.highlights).toEqual([]);
     expect((postResult.telemetry.outcomeRecovery as any).recoveryDispositions).toEqual({ post_boundary_rejected: 1 });
 
-    const standaloneCfg = { ...recoveryCfg("on", { finalizerEnabled: false, arcAuditEnabled: true, standaloneFilterEnabled: true }), arcDownrankPenalty2: 0.5 };
-    const standaloneHarness = client(scanTwo(), critic([verdict("c0", false)]), critic([verdict("c1", true)]), arcResponse(false, true));
+    const scanThree = { ...scanTwo(), choices: [{ ...scanTwo().choices[0], message: { content: JSON.stringify({ candidates: [
+      { start_node: 10, end_node: 14, payoff_node: 13, interest: 0.9, type: "story", thread: null },
+      { start_node: 20, end_node: 24, payoff_node: 23, interest: 0.8, type: "insight", thread: null },
+      { start_node: 30, end_node: 34, payoff_node: 33, interest: 0.7, type: "story", thread: null },
+    ] }) } }] };
+    const standaloneCfg = { ...recoveryCfg("on", { finalizerEnabled: true, arcAuditEnabled: true, standaloneFilterEnabled: true, outcomeRecoveryMaxCandidates: 2 }), arcDownrankPenalty2: 0.5, softCap: 0 };
+    const standaloneC2 = { ...verdict("c2", true), start_node: 30, payoff_node: 33, end_node: 34, hook_start_node: 32, hook_end_node: 33, title_evidence_nodes: [33], description_evidence_nodes: [33] };
+    const standaloneArc = { choices: [{ message: { content: JSON.stringify({ results: [
+      { id: "c1", entry: { ok: true, defect: null, fix_start_node: null }, exit: { ok: true, defect: null, fix_end_node: null }, standalone: { ok: false, missing: "setup" } },
+      { id: "c2", entry: { ok: true, defect: null, fix_start_node: null }, exit: { ok: true, defect: null, fix_end_node: null }, standalone: { ok: true, missing: null } },
+    ] }) }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 4 } };
+    const standaloneFinalizer = { choices: [{ message: { content: JSON.stringify({ clips: [
+      { id: "c2", verdict: "drop", drop_reason: "incoherent", duplicate_of: null, shared_claim: null, title: null, title_evidence_nodes: null, trim_start_node: null },
+    ] }) }, finish_reason: "stop" }], usage: { prompt_tokens: 10, completion_tokens: 4 } };
+    const standaloneHarness = client(scanThree, critic([verdict("c0", false)]), critic([verdict("c1", true), standaloneC2]), standaloneArc, standaloneFinalizer);
     const standaloneResult = await analyzeHighlightsV2(transcript(), { client: standaloneHarness.client, cfg: standaloneCfg, transcriptPartial: false });
-    expect((standaloneResult.telemetry.outcomeRecovery as any).recoveryDispositions).toEqual({ standalone_rejected: 1 });
+    expect(standaloneResult.highlights).toEqual([]);
+    expect((standaloneResult.telemetry.outcomeRecovery as any).recoveryDispositions).toEqual({ standalone_rejected: 1, selection_not_chosen: 1 });
   });
 
   it("normal nonempty primary output does not call recovery", async () => {
@@ -203,6 +219,7 @@ describe("outcome recovery wiring", () => {
       client: makeClient(malformedFallback ? { choices: [{ message: { content: JSON.stringify({ clips: "invalid" }) }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } } : finalizer()),
       cfg,
       transcriptPartial: false,
+      retryDelayMs: 0,
     });
     expect(fallback.highlights).toEqual(baseline.highlights);
     expect(Object.keys(fallback.telemetry)).toEqual(Object.keys(baseline.telemetry));
