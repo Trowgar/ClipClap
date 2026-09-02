@@ -141,7 +141,7 @@ describe("analyzeHighlightsV2", () => {
       poolSize: 1,
       judged: 1,
     }));
-    expect(c.chat.completions.create).toHaveBeenCalledTimes(3);
+    expect(c.chat.completions.create).toHaveBeenCalledTimes(4);
   });
 
   it("produces a scored, described highlight from scan + critic", async () => {

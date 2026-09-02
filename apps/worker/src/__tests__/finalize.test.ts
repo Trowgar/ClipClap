@@ -982,15 +982,14 @@ describe("finalizeClips", () => {
     expect(models.at(-1)).toBe(cfg.criticModelFallback);
     expect(new Set(models.slice(0, -1))).toEqual(new Set([cfg.finalizerModel]));
     expect(ids(r.clips)).toEqual(["a"]);
+    expect(r.telemetry.finalizerFallbackUsed).toBe(true);
   });
 
   /**
-   * The finalizer's fallback leaves NO telemetry field at all - not even the
-   * critic's boolean - so this line is the only record that the judge holding
-   * veto authority over the shipped set was not the configured one. Job
-   * cmscht6rp001xq41s5rhjx6q0 fell back here too, and the only way anyone could
-   * tell was by reconstructing the request count by hand (18 = 3 scanner + 12
-   * critic + 3 finalizer).
+   * The finalizer's fallback now emits an explicit machine-readable signal so
+   * recovery can veto the ambiguous authority handoff without changing the
+   * primary lane's output. Job cmscht6rp001xq41s5rhjx6q0 fell back here too,
+   * and the signal makes that state directly inspectable.
    */
   it("announces the finalizer fallback, naming the stage and both models", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});

@@ -104,6 +104,9 @@ export interface FinalizeTelemetry {
   dropsProtected: string[];
   /** Present whenever the LLM half did not run: "disabled" or a call outcome. */
   finalizerSkipped?: string;
+  /** The configured judge failed and a fallback judge answered. Recovery treats
+   * this authority handoff as ambiguous even when the fallback is usable. */
+  finalizerFallbackUsed?: boolean;
   /** Defence-in-depth counts (spec 2026-08-10 task 5) - a surviving overLength
    *  clip this stage found unblessed after applyFinalizerEntries ran, folded
    *  into index.ts's `longClips.compressed`/`longClips.dropped`. Unreachable
@@ -585,9 +588,12 @@ export async function finalizeClips(
     (c) => resolveArcAuditNote(c.verdict.id, arcFlags, cfg) !== undefined
   ).length;
 
+  let finalizerFallbackUsed = false;
+  const withFallbackSignal = <T extends FinalizeTelemetry>(telemetry: T): T =>
+    finalizerFallbackUsed ? { ...telemetry, finalizerFallbackUsed: true } : telemetry;
   const skip = (reason: string): FinalizeResult => ({
     clips: survivors,
-    telemetry: { ...emptyFinalizeTelemetry(), hookDedupDrops, finalizerSkipped: reason },
+    telemetry: withFallbackSignal({ ...emptyFinalizeTelemetry(), hookDedupDrops, finalizerSkipped: reason }),
   });
 
   if (!cfg.finalizerEnabled) return skip("disabled");
@@ -618,16 +624,18 @@ export async function finalizeClips(
     // llm.ts has already spent its full retry budget on a hard error (or ruled
     // it unretryable); try the fallback model exactly as the critic does.
     // One call IS the stage, so this branch
-    // runs at most once and needs no latch - and unlike the critic it leaves no
-    // telemetry flag at all, which makes the log the ONLY record that the judge
-    // with veto authority over the shipped set was not the configured one.
+    // runs at most once and needs no latch. The explicit telemetry bit below
+    // lets recovery veto an ambiguous authority handoff without changing the
+    // primary lane's clip decision.
     if (!result.ok && result.kind === "error") {
+      finalizerFallbackUsed = true;
       logModelFallback("finalizer", cfg.finalizerModel, cfg.criticModelFallback);
       result = await call(cfg.criticModelFallback, 1);
     }
     if (!result.ok) return skip(result.kind);
 
-    const rows = Array.isArray(result.data?.clips) ? (result.data.clips as unknown[]) : [];
+    if (!Array.isArray(result.data?.clips)) return skip("malformed");
+    const rows = result.data.clips as unknown[];
     const entries = rows.flatMap((raw) => {
       const entry = normalizeEntry(raw);
       return entry ? [entry] : [];
@@ -641,6 +649,7 @@ export async function finalizeClips(
         telemetry: {
           ...applied.telemetry,
           hookDedupDrops,
+          ...(finalizerFallbackUsed ? { finalizerFallbackUsed: true } : {}),
           ...(auditNoteCount > 0 ? { auditNotes: auditNoteCount } : {}),
         },
       };
@@ -687,6 +696,7 @@ export async function finalizeClips(
       telemetry: {
         ...applied.telemetry,
         hookDedupDrops,
+        ...(finalizerFallbackUsed ? { finalizerFallbackUsed: true } : {}),
         ...(auditNoteCount > 0 ? { auditNotes: auditNoteCount } : {}),
         ...(longClipsCompressed !== undefined ? { longClipsCompressed } : {}),
         ...(longClipsDropped !== undefined ? { longClipsDropped } : {}),

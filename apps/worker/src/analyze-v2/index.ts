@@ -215,7 +215,7 @@ export async function analyzeHighlightsV2(
                 counters: { selectedForFinalizer: 0, finalizerSurvivors: 0 },
                 primaryDispositions: {},
                 recoveryDispositions: {},
-                addedUsage: usage,
+                addedUsage: newUsage(),
                 elapsedMs: 0,
                 outcome: "not_eligible",
               }),
@@ -428,47 +428,7 @@ export async function analyzeHighlightsV2(
     // so the same quota rule applies - a DONE 0-clip job burns the user's
     // minutes (usage sums every job that is not FAILED) while FAILED leaves the
     // quota untouched and BullMQ retries.
-    if (holeDrops > 0) {
-      // Recovery is never allowed to infer a verdict from audio crossing a
-      // hole. Keep the established technical failure for the existing/off
-      // path, but give non-off rollouts a closed, honest observation: every
-      // selected candidate was rejected before the critic and the residual
-      // tail was not selected. No recovery pool or model call is constructed.
-      if (cfg.outcomeRecoveryMode === "off") throw unheardAudioError(holeDrops, missingRanges);
-      const primaryDispositions: Record<string, number> = {
-        missing_range_rejected: holeDrops,
-      };
-      if (unjudgedCriticCandidates.length > 0) {
-        primaryDispositions.not_selected_for_critic = unjudgedCriticCandidates.length;
-      }
-      return {
-        highlights: [],
-        noClipsReason: partial ? "PARTIAL_TRANSCRIPT" : "NO_VIABLE_MOMENTS",
-        telemetry: {
-          ...scannerTelemetry,
-          keptVerdicts: 0,
-          holeDrops,
-          ...(cfg.streamModeEnabled ? { analysisMode: mode, modeResolution } : {}),
-          ...(visualTelemetry ? { visualRecall: visualTelemetry } : {}),
-          outcomeRecovery: buildOutcomeRecoveryTelemetry({
-            mode: cfg.outcomeRecoveryMode,
-            eligible: false,
-            reason: "missing_range",
-            tailSize: unjudgedCriticCandidates.length,
-            poolSize: 0,
-            excludedMissingRange: 0,
-            judged: 0,
-            counters: { selectedForFinalizer: 0, finalizerSurvivors: 0 },
-            primaryDispositions,
-            recoveryDispositions: {},
-            addedUsage: newUsage(),
-            elapsedMs: 0,
-            outcome: "not_eligible",
-          }),
-        },
-        usage,
-      };
-    }
+    if (holeDrops > 0) throw unheardAudioError(holeDrops, missingRanges);
     return {
       highlights: [],
       // No hole removed anything: the scanner looked at the audio we heard and
@@ -503,7 +463,7 @@ export async function analyzeHighlightsV2(
                 counters: { selectedForFinalizer: 0, finalizerSurvivors: 0 },
                 primaryDispositions: {},
                 recoveryDispositions: {},
-                addedUsage: usage,
+                addedUsage: newUsage(),
                 elapsedMs: 0,
                 outcome: "no_candidate",
               }),
@@ -753,12 +713,13 @@ export async function analyzeHighlightsV2(
           });
           const recoveryTelemetryData = recovery.telemetry as { invariantDrops?: number };
           const finalizerSkipped = recovery.telemetry.finalizerSkipped;
+          const finalizerFallbackUsed = recovery.telemetry.finalizerFallbackUsed === true;
           // finalizeClips fails open by returning its input when its authority
           // is unavailable. Recovery cannot ship that input: unlike primary,
           // it has no previously judged answer to preserve.
           const finalizerAmbiguous =
-            typeof finalizerSkipped === "string" &&
-            finalizerSkipped !== "empty" &&
+            (finalizerFallbackUsed ||
+              (typeof finalizerSkipped === "string" && finalizerSkipped !== "empty")) &&
             (recovery.counters.selectedForFinalizer > 0 || recovery.highlights.length > 0);
           const qualityAmbiguous =
             [...recovery.terminal.values()].some((disposition) => disposition === "critic_unjudged") ||

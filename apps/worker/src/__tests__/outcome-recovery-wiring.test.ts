@@ -4,7 +4,9 @@ import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { runCritic } from "../analyze-v2/critic";
 import { newUsage } from "../analyze-v2/llm";
 import {
+  buildOutcomeRecoveryPool,
   buildOutcomeRecoveryTelemetry,
+  isOutcomeRecoveryEligible,
   mergeUsage,
 } from "../analyze-v2/outcome-recovery";
 import type { TranscriptionResult } from "@clipclap/shared";
@@ -122,6 +124,14 @@ describe("outcome recovery wiring", () => {
     expect((result.telemetry.outcomeRecovery as any).ranges).toHaveLength(1);
   });
 
+  it("recovery keep:false is a closed rejection and never ships", async () => {
+    const harness = client(scanTwo(), critic([verdict("c0", false)]), critic([verdict("c1", false)]));
+    const result = await analyzeHighlightsV2(transcript(), { client: harness.client, cfg: recoveryCfg("on", { finalizerEnabled: false }), transcriptPartial: false });
+    expect(result.highlights).toEqual([]);
+    expect(result.telemetry.outcomeRecovery).toEqual(expect.objectContaining({ outcome: "rejected", recoveryDispositions: { critic_rejected: 1 } }));
+    expect(harness.create).toHaveBeenCalledTimes(3);
+  });
+
   it("normal nonempty primary output does not call recovery", async () => {
     const harness = client(scanTwo(), critic([verdict("c0", true)]), finalizer());
     const { client: openai, create } = harness;
@@ -179,6 +189,25 @@ describe("outcome recovery wiring", () => {
     expect((result.telemetry.outcomeRecovery as any).recoveryDispositions).toEqual({ finalizer_unjudged: 1 });
   });
 
+  it.each([false, true])( "configured finalizer failure plus %s fallback response is ambiguous", async (malformedFallback) => {
+    const cfg = recoveryCfg("on");
+    const firstThree = [scanTwo(), critic([verdict("c0", false)]), critic([verdict("c1", true)])];
+    let index = 0;
+    const create = vi.fn(async (request: any) => {
+      const prompt = String(request.messages?.[1]?.content ?? "");
+      if (prompt.startsWith("CLIP ")) {
+        if (request.model === cfg.finalizerModel) throw new Error("configured finalizer unavailable");
+        return malformedFallback
+          ? { choices: [{ message: { content: JSON.stringify({ clips: "invalid" }) }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } }
+          : finalizer();
+      }
+      return firstThree[index++];
+    });
+    const result = await analyzeHighlightsV2(transcript(), { client: { chat: { completions: { create } } } as any, cfg, transcriptPartial: false, retryDelayMs: 0 });
+    expect(result.highlights).toEqual([]);
+    expect(result.telemetry.outcomeRecovery).toEqual(expect.objectContaining({ outcome: "failed", recoveryDispositions: { finalizer_unjudged: 1 } }));
+  });
+
   it("a cap-12 recovery critic is one bounded request, never a split or retry", async () => {
     const candidates = Array.from({ length: 12 }, (_, i) => ({
       id: `c${i}`, startNode: 0, payoffNode: 1, endNode: 1,
@@ -196,18 +225,79 @@ describe("outcome recovery wiring", () => {
     expect((harness.create as any).mock.calls[0][1]).toEqual({ maxRetries: 0 });
   });
 
-  it("partial transcripts and missing ranges are ineligible without recovery calls", async () => {
+  it("a cap-12 recovery critic error is one request and no fallback", async () => {
+    const candidates = Array.from({ length: 12 }, (_, i) => ({ id: `c${i}`, startNode: 0, payoffNode: 1, endNode: 1, interest: 0.5, type: "story" as const, windowIndex: 0 }));
+    const nodes = [
+      { index: 0, start: 0, end: 1, text: "A sentence.", hasWords: true, trailingStrength: 1, leadingStrength: 1 },
+      { index: 1, start: 1, end: 2, text: "Another sentence.", hasWords: true, trailingStrength: 1, leadingStrength: 1 },
+    ];
+    const harness = client(new Error("503"));
+    await expect(runCritic(harness.client, newUsage(), nodes, candidates, "en", recoveryCfg("on"), { recovery: true })).rejects.toThrow(/recovery critic request failed/);
+    expect(harness.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("partial transcripts are ineligible; selected holes remain technical in every mode", async () => {
     const partialHarness = client(scanTwo(), critic([verdict("c0", false)]));
     const { client: partialClient, create } = partialHarness;
     const partial = await analyzeHighlightsV2(transcript(), { client: partialClient, cfg: recoveryCfg("on", { finalizerEnabled: false }), transcriptPartial: true });
     expect(partial.telemetry.outcomeRecovery).toEqual(expect.objectContaining({ reason: "partial_transcript" }));
     expect(create).toHaveBeenCalledTimes(2);
 
-    const { client: holeClient, create: holeCreate } = client(scanTwo(), critic([verdict("c0", false)]));
-    const withHole = { ...transcript(), missingRanges: [{ start: 100, end: 130, reason: "chunk_failed" }] };
-    const hole = await analyzeHighlightsV2(withHole, { client: holeClient, cfg: recoveryCfg("on", { finalizerEnabled: false }), transcriptPartial: false });
-    expect(hole.telemetry.outcomeRecovery).toEqual(expect.objectContaining({ reason: "missing_range" }));
-    expect(holeCreate).toHaveBeenCalledTimes(2);
+    const withHole = { ...transcript(), missingRanges: [{ start: 50, end: 75, reason: "chunk_failed" }] };
+    for (const mode of ["off", "shadow", "on"] as const) {
+      const { client: holeClient, create: holeCreate } = client(scanTwo(), critic([verdict("c0", false)]));
+      const holeCfg = mode === "off"
+        ? { ...baseCfg, outcomeRecoveryMode: "off" as const, finalizerEnabled: false }
+        : { ...recoveryCfg(mode), finalizerEnabled: false };
+      await expect(analyzeHighlightsV2(withHole, { client: holeClient, cfg: holeCfg, transcriptPartial: false })).rejects.toThrow(/all 1 candidate/);
+      expect(holeCreate).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("no-candidate telemetry keeps recovery usage at a fresh zero", async () => {
+    const emptyScan = {
+      choices: [{ message: { content: JSON.stringify({ candidates: [] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 17, completion_tokens: 4 },
+    };
+    const harness = client(emptyScan);
+    const result = await analyzeHighlightsV2(transcript(), { client: harness.client, cfg: recoveryCfg("on"), transcriptPartial: false });
+    expect(result.telemetry.outcomeRecovery).toEqual(expect.objectContaining({ outcome: "no_candidate", addedUsage: { inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} } }));
+  });
+
+  it("an empty unselected tail is closed without a recovery request", async () => {
+    const oneScan = { ...scanTwo(), choices: [{ ...scanTwo().choices[0], message: { content: JSON.stringify({ candidates: [
+      { start_node: 10, end_node: 14, payoff_node: 13, interest: 0.9, type: "story", thread: null },
+    ] }) } }] };
+    const harness = client(oneScan, critic([verdict("c0", false)]));
+    const result = await analyzeHighlightsV2(transcript(), { client: harness.client, cfg: recoveryCfg("on", { finalizerEnabled: false }), transcriptPartial: false });
+    expect(result.telemetry.outcomeRecovery).toEqual(expect.objectContaining({ outcome: "no_candidate", reason: "no_unjudged_tail" }));
+    expect(harness.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("closed eligibility rejects tiny, degenerate, song, and music-short paths", () => {
+    const base = { mode: "on" as const, primaryHighlights: [], noClipsReason: "NO_VIABLE_MOMENTS" as const, transcriptPartial: false, missingRangeDrops: 0, unselectedCount: 1 };
+    for (const path of ["tiny", "degenerate", "song_gate", "music_short"]) {
+      expect(isOutcomeRecoveryEligible({ ...base, path })).toEqual(expect.objectContaining({ eligible: false }));
+    }
+  });
+
+  it("malformed recovery pool state is an invariant, not a failed outcome", () => {
+    expect(() => buildOutcomeRecoveryPool({ candidates: [{ id: "c0" } as any], nodes: [], missingRanges: [], maxCandidates: 1 })).toThrow(/outcome_recovery_input_invariant/);
+  });
+
+  it("telemetry keeps every shared quality drop disposition count-only", () => {
+    const dispositions = {
+      critic_rejected: 1, evidence_rejected: 1, snap_rejected: 1,
+      arc_rejected: 1, post_boundary_rejected: 1, standalone_rejected: 1,
+      finalizer_rejected: 1,
+    };
+    const telemetry = buildOutcomeRecoveryTelemetry({
+      mode: "shadow", eligible: true, reason: "unjudged_tail", tailSize: 7, poolSize: 7,
+      excludedMissingRange: 0, judged: 7, counters: { selectedForFinalizer: 7, finalizerSurvivors: 0 },
+      primaryDispositions: {}, recoveryDispositions: dispositions, addedUsage: newUsage(), elapsedMs: 0,
+      outcome: "shadow_miss",
+    });
+    expect(telemetry.recoveryDispositions).toEqual(dispositions);
   });
 
   it("usage merge and telemetry are additive, bounded, and private", () => {
