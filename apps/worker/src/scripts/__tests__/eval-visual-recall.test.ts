@@ -486,6 +486,8 @@ describe("visual recall manifest validation and CLI output", () => {
           visualRecallMode: "shadow",
           visualRecallMaxCandidates: 12,
         }),
+        resolveCurrentCommit: async () => "c".repeat(40),
+        resolveWorktreeDirty: async () => false,
         videoEnvelopes: async () => ({ lumaEnvelope: [], motionEnvelope: [0, 10, 0] }),
       },
     );
