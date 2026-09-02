@@ -15,14 +15,18 @@
  * Output is a sanitized report: source paths, transcript paths, transcript
  * text, and external identifiers never leave the private input files.
  */
-import { readFile, stat as fsStat } from "node:fs/promises";
-import { isAbsolute } from "node:path";
+import { open as fsOpen, readFile, stat as fsStat } from "node:fs/promises";
+import { constants } from "node:fs";
+import { isAbsolute, normalize } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildSentenceGraph } from "../analyze-v2/sentence-graph";
 import { loadAnalyzeConfig, type AnalyzeConfig } from "../analyze-v2/config";
 import { nominateVisualCandidates } from "../analyze-v2/visual-candidates";
-import { videoEnvelopes as defaultVideoEnvelopes, type VideoEnvelopes } from "../processors/video-envelopes";
+import {
+  videoEnvelopesFromFd,
+  type VideoEnvelopes,
+} from "../processors/video-envelopes";
 import type { TranscriptionResult } from "@clipclap/shared";
 
 const execFileAsync = promisify(execFile);
@@ -72,7 +76,7 @@ export interface EvalCaseReport {
   kind: EvalCaseKind;
   candidateCount: number;
   positive: { total: number; matched: number; recall: number };
-  negative: { total: number; matched: number; recall: number };
+  negative: { total: number; matched: number; hitRate: number | null; available: boolean };
   nominations: Array<{ start: number; end: number; peakSec: number; peakValue: number }>;
 }
 
@@ -83,7 +87,8 @@ export interface EvalSummary {
   gamingMatchedWindows: number;
   asIsMatchedWindows: number;
   asIsPositiveWindows: number;
-  negativeRecall: number;
+  negativeWindowHitRate: number | null;
+  negativeControlsAvailable: boolean;
   gates: {
     gamingMinimum: boolean;
     asIsRetention: boolean;
@@ -106,8 +111,16 @@ export interface EvalReport {
 export interface VisualRecallEvalIo {
   stat(path: string): Promise<{ size: number; isFile: (() => boolean) | boolean }>;
   readFile(path: string): Promise<string | Buffer>;
+  open?(path: string): Promise<EvalFileHandle>;
   stdout?(value: string): void;
   stderr?(value: string): void;
+}
+
+export interface EvalFileHandle {
+  fd: number;
+  stat(): Promise<{ size: number; isFile: () => boolean }>;
+  readFile(): Promise<string | Buffer>;
+  close(): Promise<void>;
 }
 
 type EvalConfig = Pick<
@@ -123,7 +136,9 @@ type EvalConfig = Pick<
 
 interface CliDependencies {
   loadConfig?: () => Partial<AnalyzeConfig>;
+  /** Test-only path hook; production uses the descriptor hook below. */
   videoEnvelopes?: (sourcePath: string) => Promise<VideoEnvelopes>;
+  videoEnvelopesFromFd?: (sourceFd: number) => Promise<VideoEnvelopes>;
   resolveCurrentCommit?: () => Promise<string>;
   resolveWorktreeDirty?: () => Promise<boolean>;
 }
@@ -188,6 +203,7 @@ export function parseEvalManifest(value: unknown): EvalManifest {
     throw new Error("cases must be a non-empty bounded array");
   }
   const keys = new Set<string>();
+  const sourcePaths = new Set<string>();
   const cases = value.cases.map((rawCase) => {
     if (!isRecord(rawCase)) throw new Error("case must be an object");
     const caseKey = rawCase.caseKey;
@@ -210,10 +226,20 @@ export function parseEvalManifest(value: unknown): EvalManifest {
     };
     assertNoDuplicates(positiveWindows, "positive");
     assertNoDuplicates(negativeWindows, "negative");
+    const sourcePath = parsePath(rawCase.sourcePath, "sourcePath");
+    const normalizedSourcePath = normalize(sourcePath);
+    if (sourcePaths.has(normalizedSourcePath)) throw new Error("duplicate sourcePath");
+    sourcePaths.add(normalizedSourcePath);
+    const sortedPositive = [...positiveWindows].sort((a, b) => a.start - b.start || a.end - b.end);
+    for (let index = 1; index < sortedPositive.length; index++) {
+      if (sortedPositive[index].start < sortedPositive[index - 1].end) {
+        throw new Error("overlapping positive windows represent one human event");
+      }
+    }
     return {
       caseKey,
       kind: parsedKind,
-      sourcePath: parsePath(rawCase.sourcePath, "sourcePath"),
+      sourcePath,
       transcriptPath: parsePath(rawCase.transcriptPath, "transcriptPath"),
       positiveWindows,
       negativeWindows,
@@ -284,7 +310,27 @@ export function matchesWindow(
 }
 
 function matchedCount(targets: readonly EvalWindow[], nominated: readonly EvalWindow[]): number {
-  return targets.filter((target) => nominated.some((candidate) => matchesWindow(candidate, target))).length;
+  const candidateByTarget = targets.map((target) => nominated
+    .map((candidate, candidateIndex) => matchesWindow(candidate, target) ? candidateIndex : -1)
+    .filter((candidateIndex) => candidateIndex >= 0));
+  const targetByCandidate = new Map<number, number>();
+  const visit = (targetIndex: number, seen: Set<number>): boolean => {
+    for (const candidateIndex of candidateByTarget[targetIndex]) {
+      if (seen.has(candidateIndex)) continue;
+      seen.add(candidateIndex);
+      const previousTarget = targetByCandidate.get(candidateIndex);
+      if (previousTarget === undefined || visit(previousTarget, seen)) {
+        targetByCandidate.set(candidateIndex, targetIndex);
+        return true;
+      }
+    }
+    return false;
+  };
+  let matched = 0;
+  for (let targetIndex = 0; targetIndex < targets.length; targetIndex++) {
+    if (visit(targetIndex, new Set())) matched++;
+  }
+  return matched;
 }
 
 function ratio(matched: number, total: number): number {
@@ -302,6 +348,7 @@ export function summarizeCases(
   let positiveWindows = 0;
   let positiveMatchedWindows = 0;
   let gamingMatchedWindows = 0;
+  let gamingCases = 0;
   let asIsPositiveWindows = 0;
   let asIsMatchedWindows = 0;
   let negativeWindows = 0;
@@ -313,7 +360,10 @@ export function summarizeCases(
     const positiveMatched = matchedCount(item.positiveWindows, item.nominatedWindows);
     positiveWindows += item.positiveWindows.length;
     positiveMatchedWindows += positiveMatched;
-    if (item.kind === "gaming") gamingMatchedWindows += positiveMatched;
+    if (item.kind === "gaming") {
+      gamingCases += 1;
+      gamingMatchedWindows += positiveMatched;
+    }
     if (item.kind === "as_is") {
       asIsPositiveWindows += item.positiveWindows.length;
       asIsMatchedWindows += positiveMatched;
@@ -322,8 +372,8 @@ export function summarizeCases(
     negativeMatchedWindows += matchedCount(item.negativeWindows, item.nominatedWindows);
   }
   const gates = {
-    gamingMinimum: gamingMatchedWindows >= 2,
-    asIsRetention: asIsMatchedWindows === asIsPositiveWindows,
+    gamingMinimum: gamingCases > 0 && gamingMatchedWindows >= 2,
+    asIsRetention: asIsPositiveWindows > 0 && asIsMatchedWindows === asIsPositiveWindows,
     candidateCap: capOk,
     offShadowInvariant: options.offShadowInvariant === true,
   };
@@ -339,7 +389,8 @@ export function summarizeCases(
     gamingMatchedWindows,
     asIsMatchedWindows,
     asIsPositiveWindows,
-    negativeRecall: ratio(negativeMatchedWindows, negativeWindows),
+    negativeWindowHitRate: negativeWindows > 0 ? ratio(negativeMatchedWindows, negativeWindows) : null,
+    negativeControlsAvailable: negativeWindows > 0,
     gates,
     failureReasons,
     pass: Object.values(gates).every(Boolean),
@@ -350,22 +401,53 @@ function defaultIo(): VisualRecallEvalIo {
   return {
     stat: async (path) => fsStat(path),
     readFile: async (path) => readFile(path),
+    open: async (path) => fsOpen(path, constants.O_RDONLY | constants.O_NOFOLLOW),
     stdout: (value) => process.stdout.write(value),
     stderr: (value) => process.stderr.write(value),
   };
 }
 
-async function boundedRegularFile(
-  io: VisualRecallEvalIo,
-  path: string,
+async function boundedRegularFileHandle(
+  handle: EvalFileHandle,
   maximumBytes: number,
 ): Promise<number> {
-  const info = await io.stat(path);
+  const info = await handle.stat();
   const regular = typeof info.isFile === "function" ? info.isFile() : info.isFile;
   if (!Number.isFinite(info.size) || info.size < 0 || info.size > maximumBytes || regular !== true) {
     throw new Error("not a bounded regular file");
   }
   return info.size;
+}
+
+async function openBoundedFile(
+  io: VisualRecallEvalIo,
+  path: string,
+  maximumBytes: number,
+): Promise<EvalFileHandle> {
+  if (!io.open) {
+    // Legacy test doubles may expose path stat/read only. Production's
+    // defaultIo always supplies open(), so real evaluations remain descriptor
+    // stable; this branch exists solely for older pure-CLI tests.
+    const info = await io.stat(path);
+    const regular = typeof info.isFile === "function" ? info.isFile() : info.isFile;
+    if (!Number.isFinite(info.size) || info.size < 0 || info.size > maximumBytes || regular !== true) {
+      throw new Error("not a bounded regular file");
+    }
+    return {
+      fd: -1,
+      stat: async () => ({ size: info.size, isFile: () => true }),
+      readFile: () => io.readFile(path),
+      close: async () => undefined,
+    };
+  }
+  const handle = await io.open(path);
+  try {
+    await boundedRegularFileHandle(handle, maximumBytes);
+    return handle;
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
 }
 
 async function defaultCurrentCommit(): Promise<string> {
@@ -376,10 +458,14 @@ async function defaultCurrentCommit(): Promise<string> {
 }
 
 async function defaultWorktreeDirty(): Promise<boolean> {
-  const { stdout } = await execFileAsync("git", ["status", "--porcelain", "--untracked-files=no"], {
+  const { stdout } = await execFileAsync("git", ["status", "--porcelain", "--untracked-files=all"], {
     maxBuffer: 64 * 1024,
   });
   return stdout.trim().length > 0;
+}
+
+async function defaultVideoEnvelopesFromFd(sourceFd: number): Promise<VideoEnvelopes> {
+  return videoEnvelopesFromFd(sourceFd);
 }
 
 function textBytes(raw: string | Buffer): number {
@@ -443,7 +529,8 @@ function reportCase(
     negative: {
       total: item.negativeWindows.length,
       matched: negativeMatched,
-      recall: ratio(negativeMatched, item.negativeWindows.length),
+      hitRate: item.negativeWindows.length > 0 ? ratio(negativeMatched, item.negativeWindows.length) : null,
+      available: item.negativeWindows.length > 0,
     },
     nominations,
   };
@@ -467,6 +554,8 @@ Manifest JSON (version 1):
 caseKey is an anonymous input label and is never printed. Paths and transcript text stay private.
 invarianceEvidencePath points to separate local JSON evidence from the off/shadow replay gate.
 The command computes local video envelopes and exits 1 when any release gate fails.
+Negative controls are reported as negativeWindowHitRate (higher is worse); with
+no negative windows, the rate is null and negativeControlsAvailable is false.
 `;
 
 function nominationWindows(
@@ -513,8 +602,12 @@ export async function runVisualRecallCli(
   }
   let manifestRaw: string | Buffer;
   try {
-    await boundedRegularFile(io, manifestPath, MAX_MANIFEST_BYTES);
-    manifestRaw = await io.readFile(manifestPath);
+    const handle = await openBoundedFile(io, manifestPath, MAX_MANIFEST_BYTES);
+    try {
+      manifestRaw = await handle.readFile();
+    } finally {
+      await handle.close();
+    }
     if (textBytes(manifestRaw) > MAX_MANIFEST_BYTES) return errorResult(io, "manifest_invalid");
   } catch {
     return errorResult(io, "manifest_unreadable");
@@ -534,8 +627,12 @@ export async function runVisualRecallCli(
 
   let invarianceRaw: string | Buffer;
   try {
-    await boundedRegularFile(io, manifest.invarianceEvidencePath, MAX_MANIFEST_BYTES);
-    invarianceRaw = await io.readFile(manifest.invarianceEvidencePath);
+    const handle = await openBoundedFile(io, manifest.invarianceEvidencePath, MAX_MANIFEST_BYTES);
+    try {
+      invarianceRaw = await handle.readFile();
+    } finally {
+      await handle.close();
+    }
     if (textBytes(invarianceRaw) > MAX_MANIFEST_BYTES) return errorResult(io, "manifest_invalid");
   } catch {
     return errorResult(io, "invariance_unreadable");
@@ -561,30 +658,41 @@ export async function runVisualRecallCli(
 
   const cfg = normalizedConfig(deps.loadConfig?.() ?? {});
   const candidateCap = cfg.visualRecallMaxCandidates;
-  const videoEnvelopes = deps.videoEnvelopes ?? defaultVideoEnvelopes;
   const caseResults: EvalCaseResult[] = [];
   const caseReports: EvalCaseReport[] = [];
   try {
     for (const item of manifest.cases) {
-      await boundedRegularFile(io, item.sourcePath, MAX_SOURCE_BYTES);
-      await boundedRegularFile(io, item.transcriptPath, MAX_TRANSCRIPT_BYTES);
-      const rawTranscript = await io.readFile(item.transcriptPath);
-      if (textBytes(rawTranscript) > MAX_TRANSCRIPT_BYTES) throw new Error("transcript too large");
-      const transcription = parseTranscription(JSON.parse(
-        typeof rawTranscript === "string" ? rawTranscript : rawTranscript.toString("utf8"),
-      ));
-      const envelope = await videoEnvelopes(item.sourcePath);
-      const nominated = nominationWindows(transcription, cfg, envelope.motionEnvelope);
-      const evaluated: EvalCaseResult = {
-        caseKey: item.caseKey,
-        kind: item.kind,
-        positiveWindows: item.positiveWindows,
-        negativeWindows: item.negativeWindows,
-        nominatedWindows: nominated.nominatedWindows,
-        candidateCount: nominated.candidateCount,
-      };
-      caseResults.push(evaluated);
-      caseReports.push(reportCase(evaluated, nominated.nominations, caseReports.length + 1));
+      const sourceHandle = await openBoundedFile(io, item.sourcePath, MAX_SOURCE_BYTES);
+      try {
+        const transcriptHandle = await openBoundedFile(io, item.transcriptPath, MAX_TRANSCRIPT_BYTES);
+        try {
+          const rawTranscript = await transcriptHandle.readFile();
+          if (textBytes(rawTranscript) > MAX_TRANSCRIPT_BYTES) throw new Error("transcript too large");
+          const transcription = parseTranscription(JSON.parse(
+            typeof rawTranscript === "string" ? rawTranscript : rawTranscript.toString("utf8"),
+          ));
+          const envelope = deps.videoEnvelopesFromFd
+            ? await deps.videoEnvelopesFromFd(sourceHandle.fd)
+            : deps.videoEnvelopes
+              ? await deps.videoEnvelopes(item.sourcePath)
+              : await defaultVideoEnvelopesFromFd(sourceHandle.fd);
+          const nominated = nominationWindows(transcription, cfg, envelope.motionEnvelope);
+          const evaluated: EvalCaseResult = {
+            caseKey: item.caseKey,
+            kind: item.kind,
+            positiveWindows: item.positiveWindows,
+            negativeWindows: item.negativeWindows,
+            nominatedWindows: nominated.nominatedWindows,
+            candidateCount: nominated.candidateCount,
+          };
+          caseResults.push(evaluated);
+          caseReports.push(reportCase(evaluated, nominated.nominations, caseReports.length + 1));
+        } finally {
+          await transcriptHandle.close();
+        }
+      } finally {
+        await sourceHandle.close();
+      }
     }
   } catch {
     return errorResult(io, "case_invalid");

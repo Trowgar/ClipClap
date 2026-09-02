@@ -96,6 +96,33 @@ describe("visual recall evaluation metrics", () => {
       "off_shadow_invariance_not_verified",
     ]);
   });
+
+  it("cannot pass without a confirmed AS_IS positive window", () => {
+    const summary = summarizeCases([{
+      caseKey: "gaming-a",
+      kind: "gaming",
+      positiveWindows: [window(0, 10), window(100, 110)],
+      negativeWindows: [],
+      nominatedWindows: [window(0, 10), window(100, 110)],
+      candidateCount: 2,
+    }], { candidateCap: 12, offShadowInvariant: true });
+    expect(summary.gates.asIsRetention).toBe(false);
+    expect(summary.failureReasons).toContain("as_is_positive_window_not_retained");
+    expect(summary.pass).toBe(false);
+  });
+
+  it("matches each nomination to at most one positive target", () => {
+    const summary = summarizeCases([{
+      caseKey: "gaming-a",
+      kind: "gaming",
+      positiveWindows: [window(0, 20), window(10, 30)],
+      negativeWindows: [],
+      nominatedWindows: [window(0, 30)],
+      candidateCount: 1,
+    }], { candidateCap: 12, offShadowInvariant: true });
+    expect(summary.gamingMatchedWindows).toBe(1);
+    expect(summary.gates.gamingMinimum).toBe(false);
+  });
 });
 
 describe("visual recall manifest validation and CLI output", () => {
@@ -157,6 +184,35 @@ describe("visual recall manifest validation and CLI output", () => {
       ...base,
       cases: [{ ...base.cases[0], positiveWindows: [window(10, 20)], negativeWindows: [window(30, 40), window(30, 40)] }],
     })).toThrow(/duplicate/i);
+  });
+
+  it("rejects overlapping positive windows and duplicate source paths across cases", () => {
+    const overlapping = {
+      version: 1,
+      invarianceEvidencePath: "/private/evidence.json",
+      cases: [{
+        caseKey: "gaming-a", kind: "gaming", sourcePath: "/private/source.mp4",
+        transcriptPath: "/private/transcript.json",
+        positiveWindows: [window(10, 20), window(19, 30)],
+      }],
+    };
+    expect(() => parseEvalManifest(overlapping)).toThrow(/overlap/i);
+    expect(() => parseEvalManifest({
+      ...overlapping,
+      cases: [
+        { ...overlapping.cases[0], positiveWindows: [window(10, 20)] },
+        { ...overlapping.cases[0], caseKey: "gaming-b", transcriptPath: "/private/other.json", positiveWindows: [window(30, 40)] },
+      ],
+    })).toThrow(/sourcePath/i);
+  });
+
+  it("reports negative controls as an unavailable hit rate when none are supplied", () => {
+    const summary = summarizeCases([{
+      caseKey: "as-is-a", kind: "as_is", positiveWindows: [window(0, 10)],
+      negativeWindows: [], nominatedWindows: [window(0, 10)], candidateCount: 1,
+    }], { candidateCap: 12, offShadowInvariant: true });
+    expect(summary.negativeWindowHitRate).toBeNull();
+    expect(summary.negativeControlsAvailable).toBe(false);
   });
 
   it("requires local absolute paths and validates invariance evidence", () => {
@@ -266,7 +322,13 @@ describe("visual recall manifest validation and CLI output", () => {
               kind: "gaming",
               sourcePath: "/private/source.mp4",
               transcriptPath: "/private/transcript.json",
-              positiveWindows: [window(10, 20), window(10.5, 19.5)],
+              positiveWindows: [window(10, 14), window(20, 24)],
+            }, {
+              caseKey: "anonymous-as-is",
+              kind: "as_is",
+              sourcePath: "/private/source2.mp4",
+              transcriptPath: "/private/transcript2.json",
+              positiveWindows: [window(10, 14)],
             }],
           });
           if (path.endsWith("invariance.json")) return JSON.stringify({
@@ -282,6 +344,9 @@ describe("visual recall manifest validation and CLI output", () => {
             segments: [{
               start: 10, end: 20, text: "Private words.",
               words: [{ text: "private", start: 10, end: 12 }, { text: "words", start: 12, end: 14 }],
+            }, {
+              start: 20, end: 24, text: "More private words.",
+              words: [{ text: "more", start: 20, end: 21 }, { text: "words", start: 21, end: 23 }],
             }],
           });
         },
@@ -291,7 +356,7 @@ describe("visual recall manifest validation and CLI output", () => {
       {
         resolveCurrentCommit: async () => commit,
         resolveWorktreeDirty: async () => false,
-        videoEnvelopes: async () => ({ lumaEnvelope: [], motionEnvelope: [0, 10, 0] }),
+        videoEnvelopes: async () => ({ lumaEnvelope: [], motionEnvelope: [0, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0] }),
       },
     );
     expect(result.exitCode).toBe(0);
@@ -299,6 +364,55 @@ describe("visual recall manifest validation and CLI output", () => {
       separatelyVerified: true,
       passed: true,
     });
+  });
+
+  it("hands the stable source descriptor to the envelope processor", async () => {
+    let receivedFd = -1;
+    const commit = "e".repeat(40);
+    const manifest = JSON.stringify({
+      version: 1,
+      invarianceEvidencePath: "/private/invariance.json",
+      cases: [{
+        caseKey: "anonymous-gaming",
+        kind: "gaming",
+        sourcePath: "/private/source.mp4",
+        transcriptPath: "/private/transcript.json",
+        positiveWindows: [window(10, 20)],
+      }],
+    });
+    const evidence = JSON.stringify({
+      version: 1, passed: true, testName: "visual-recall-wiring",
+      offHighlightsSha256: "a".repeat(64), shadowHighlightsSha256: "a".repeat(64), testedCommit: commit,
+    });
+    const transcript = JSON.stringify({
+      text: "words",
+      segments: [{ start: 10, end: 14, text: "Words.", words: [{ text: "words", start: 10, end: 12 }] }],
+    });
+    const result = await runVisualRecallCli(
+      ["node", "eval-visual-recall.ts", "/private/manifest.json"],
+      {
+        stat: async () => ({ size: 100, isFile: () => true }),
+        readFile: async () => manifest,
+        open: async (path) => ({
+          fd: path.endsWith("source.mp4") ? 73 : 74,
+          stat: async () => ({ size: 100, isFile: () => true }),
+          readFile: async () => path.endsWith("manifest.json") ? manifest : path.endsWith("invariance.json") ? evidence : transcript,
+          close: async () => undefined,
+        }),
+        stdout: () => undefined,
+        stderr: () => undefined,
+      },
+      {
+        resolveCurrentCommit: async () => commit,
+        resolveWorktreeDirty: async () => false,
+        videoEnvelopesFromFd: async (fd) => {
+          receivedFd = fd;
+          return { lumaEnvelope: [], motionEnvelope: [0, 10, 0] };
+        },
+      },
+    );
+    expect(receivedFd).toBe(73);
+    expect(result.exitCode).toBe(1);
   });
 
   it("supports help without reading a manifest", async () => {

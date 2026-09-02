@@ -1,8 +1,10 @@
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
 import { promisify } from "util";
 import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
 
 const execFileAsync = promisify(execFile);
+const MAX_ENVELOPE_SECOND = 7 * 24 * 60 * 60;
+const VIDEO_ENVELOPE_TIMEOUT_MS = 30 * 60 * 1000;
 
 export interface VideoEnvelopes {
   lumaEnvelope: number[];
@@ -28,7 +30,7 @@ export function bucketVideoEnvelopesBySecond(stderr: string): VideoEnvelopes {
     const ptsToken = line.match(/pts_time:([^\s]+)/);
     if (ptsToken) {
       const pts = Number(ptsToken[1]);
-      if (!numberToken.test(ptsToken[1]) || !Number.isFinite(pts) || pts < 0) {
+      if (!numberToken.test(ptsToken[1]) || !Number.isFinite(pts) || pts < 0 || pts > MAX_ENVELOPE_SECOND) {
         invalidTimestamp = true;
         sec = null;
         continue;
@@ -99,7 +101,7 @@ export async function videoEnvelopes(videoPath: string): Promise<VideoEnvelopes>
       "-nostdin", "-i", videoPath,
       "-vf", "fps=1,signalstats,metadata=print",
       "-f", "null", "-",
-    ], { maxBuffer: CHILD_MAX_BUFFER_BYTES });
+    ], { maxBuffer: CHILD_MAX_BUFFER_BYTES, timeout: VIDEO_ENVELOPE_TIMEOUT_MS });
     return bucketVideoEnvelopesBySecond(stderr ?? "");
   } catch {
     // Keep this warning generic: eval input paths are private and must never
@@ -107,6 +109,57 @@ export async function videoEnvelopes(videoPath: string): Promise<VideoEnvelopes>
     console.warn("videoEnvelopes: signalstats pass failed; continuing without visual signals");
     return { lumaEnvelope: [], motionEnvelope: [] };
   }
+}
+
+/**
+ * Descriptor-backed variant for offline evaluation. fd 3 is inherited by the
+ * child, so ffmpeg reads the already-validated inode rather than reopening a
+ * path that could be swapped between validation and processing.
+ */
+export async function videoEnvelopesFromFd(sourceFd: number): Promise<VideoEnvelopes> {
+  if (!Number.isInteger(sourceFd) || sourceFd < 0) return { lumaEnvelope: [], motionEnvelope: [] };
+  try {
+    const stderr = await runFfmpegFromFd(sourceFd);
+    return bucketVideoEnvelopesBySecond(stderr ?? "");
+  } catch {
+    console.warn("videoEnvelopes: signalstats pass failed; continuing without visual signals");
+    return { lumaEnvelope: [], motionEnvelope: [] };
+  }
+}
+
+function runFfmpegFromFd(sourceFd: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("ffmpeg", [
+      "-nostdin", "-i", "/proc/self/fd/3",
+      "-vf", "fps=1,signalstats,metadata=print",
+      "-f", "null", "-",
+    ], { stdio: ["ignore", "pipe", "pipe", sourceFd] });
+    let stderr = "";
+    let overflow = false;
+    const timeout = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error("video envelope timeout"));
+    }, VIDEO_ENVELOPE_TIMEOUT_MS);
+    child.stderr?.on("data", (chunk: Buffer | string) => {
+      if (overflow) return;
+      stderr += chunk.toString();
+      if (Buffer.byteLength(stderr, "utf8") > CHILD_MAX_BUFFER_BYTES) {
+        overflow = true;
+        child.kill("SIGTERM");
+        reject(new Error("video envelope output exceeded limit"));
+      }
+    });
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+      if (overflow) return;
+      if (code === 0) resolve(stderr);
+      else reject(new Error("ffmpeg video envelope failed"));
+    });
+  });
 }
 
 export async function lumaEnvelope(videoPath: string): Promise<number[]> {
