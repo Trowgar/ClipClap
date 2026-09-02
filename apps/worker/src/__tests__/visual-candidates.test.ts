@@ -32,6 +32,20 @@ describe("nominateVisualCandidates", () => {
     }
   });
 
+  it("rejects finite values outside the physical motion domain without non-finite telemetry", () => {
+    const result = nominateVisualCandidates(
+      denseNodes(),
+      [0, Number.MAX_VALUE, 1],
+      cfg(),
+    );
+    expect(result.candidates).toEqual([]);
+    expect(result.telemetry.envelopeLength).toBe(0);
+    for (const value of Object.values(result.telemetry)) {
+      expect(Number.isFinite(value)).toBe(true);
+      expect(() => JSON.stringify(value)).not.toThrow();
+    }
+  });
+
   it("rejects a static envelope and computes a robust threshold for an outlier", () => {
     expect(nominateVisualCandidates(denseNodes(), [4, 4, 4, 4], cfg()).candidates).toEqual([]);
     const result = nominateVisualCandidates(
@@ -89,6 +103,29 @@ describe("nominateVisualCandidates", () => {
     expect(result.candidates).toEqual([]);
     expect(result.telemetry.mappedCandidates).toBe(0);
     expect(result.telemetry.rejectedNoSpeech).toBe(1);
+  });
+
+  it("chooses the nearest reliable payoff node inside the bounded range", () => {
+    const envelope = Array.from({ length: 51 }, () => 0);
+    envelope[50] = 30;
+    const result = nominateVisualCandidates(
+      nodesAt([41, 50, 65], [true, false, true]),
+      envelope,
+      cfg({
+        VISUAL_RECALL_PRE_SEC: "8",
+        VISUAL_RECALL_POST_SEC: "18",
+        VISUAL_RECALL_MAX_NODE_DISTANCE_SEC: "20",
+      }),
+    );
+    expect(result.candidates[0]).toMatchObject({ startNode: 1, endNode: 2, payoffNode: 2 });
+
+    const noSpeech = nominateVisualCandidates(
+      nodesAt([50], [false]),
+      envelope,
+      cfg({ VISUAL_RECALL_PRE_SEC: "8", VISUAL_RECALL_POST_SEC: "18" }),
+    );
+    expect(noSpeech.candidates).toEqual([]);
+    expect(noSpeech.telemetry.rejectedNoSpeech).toBe(1);
   });
 
   it("enforces temporal diversity and the global candidate cap", () => {

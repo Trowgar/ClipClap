@@ -121,10 +121,16 @@ export function nominateVisualCandidates(
   motionEnvelope: unknown,
   cfg: VisualRecallConfig,
 ): VisualCandidateResult {
+  // YDIF is an 8-bit per-pixel difference signal. Rejecting finite values
+  // outside that physical domain keeps malformed/extreme input from
+  // overflowing median/MAD arithmetic or becoming non-JSON telemetry.
   if (
     !Array.isArray(motionEnvelope) ||
     motionEnvelope.length === 0 ||
-    !motionEnvelope.every((value): value is number => typeof value === "number" && Number.isFinite(value))
+    !motionEnvelope.every(
+      (value): value is number =>
+        typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 255,
+    )
   ) {
     return emptyResult();
   }
@@ -214,22 +220,6 @@ export function nominateVisualCandidates(
 
   for (const peak of selected) {
     const peakSec = peak.index;
-    let payoffNode = -1;
-    let nearestDistance = Number.POSITIVE_INFINITY;
-    for (let index = 0; index < nodes.length; index++) {
-      const node = nodes[index];
-      if (!isUsableNode(node) || node.hasWords !== true) continue;
-      const distance = distanceToNode(peakSec, node);
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        payoffNode = index;
-      }
-    }
-    if (payoffNode < 0 || nearestDistance > maxDistance) {
-      telemetry.rejectedNoSpeech++;
-      continue;
-    }
-
     const startSecond = peakSec - preSec;
     const endSecond = peakSec + postSec;
     let startNode = -1;
@@ -244,11 +234,32 @@ export function nominateVisualCandidates(
       telemetry.rejectedNoSpeech++;
       continue;
     }
+
+    // Ground the payoff only against reliable speech that is actually inside
+    // the bounded candidate range. A globally nearest node can sit just
+    // outside the pre-roll, and clamping that index would incorrectly turn an
+    // opaque visual node into the payoff.
+    let payoffNode = -1;
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    for (let index = startNode; index <= endNode; index++) {
+      const node = nodes[index];
+      if (!isUsableNode(node) || node.hasWords !== true) continue;
+      const distance = distanceToNode(peakSec, node);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        payoffNode = index;
+      }
+    }
+    if (payoffNode < 0 || nearestDistance > maxDistance) {
+      telemetry.rejectedNoSpeech++;
+      continue;
+    }
+
     const normalized = (peak.value - threshold) / Math.max(maxValue - threshold, Number.EPSILON);
     candidates.push({
       startNode,
       endNode,
-      payoffNode: Math.min(endNode, Math.max(startNode, payoffNode)),
+      payoffNode,
       interest: Math.min(0.95, Math.max(0.55, 0.55 + Math.max(0, Math.min(1, normalized)) * 0.4)),
       type: "visual_action",
       windowIndex: Math.max(0, Math.floor(peakSec / scanWindowSec)),
