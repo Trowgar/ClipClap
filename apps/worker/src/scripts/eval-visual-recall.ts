@@ -318,34 +318,149 @@ export function matchesWindow(
   return overlap / Math.min(candidate.end - candidate.start, target.end - target.start) >= thresholdFraction;
 }
 
+interface FlowEdge {
+  to: number;
+  reverse: number;
+  capacity: number;
+  cost: number;
+}
+
+class MinHeap {
+  private readonly items: Array<{ node: number; distance: number }> = [];
+
+  get size(): number {
+    return this.items.length;
+  }
+
+  push(item: { node: number; distance: number }): void {
+    this.items.push(item);
+    let index = this.items.length - 1;
+    while (index > 0) {
+      const parent = Math.floor((index - 1) / 2);
+      if (this.items[parent].distance < item.distance ||
+          (this.items[parent].distance === item.distance && this.items[parent].node <= item.node)) break;
+      this.items[index] = this.items[parent];
+      index = parent;
+    }
+    this.items[index] = item;
+  }
+
+  pop(): { node: number; distance: number } | undefined {
+    if (this.items.length === 0) return undefined;
+    const result = this.items[0];
+    const last = this.items.pop();
+    if (last !== undefined && this.items.length > 0) {
+      let index = 0;
+      while (true) {
+        const left = index * 2 + 1;
+        if (left >= this.items.length) break;
+        const right = left + 1;
+        let child = left;
+        if (right < this.items.length &&
+            (this.items[right].distance < this.items[left].distance ||
+             (this.items[right].distance === this.items[left].distance && this.items[right].node < this.items[left].node))) {
+          child = right;
+        }
+        if (this.items[child].distance > last.distance ||
+            (this.items[child].distance === last.distance && this.items[child].node >= last.node)) break;
+        this.items[index] = this.items[child];
+        index = child;
+      }
+      this.items[index] = last;
+    }
+    return result;
+  }
+}
+
+/**
+ * Maximum-cardinality, maximum-weight bipartite assignment. Cardinality is
+ * guaranteed first by augmenting until no path remains; shortest residual
+ * paths then minimize negative candidate weights. Node and edge insertion
+ * order provide a stable index tie-break for equal weights.
+ */
 function matchingPairs(
   targets: readonly EvalWindow[],
   nominated: readonly EvalWindow[],
+  weights: readonly number[] = [],
 ): Array<{ targetIndex: number; candidateIndex: number }> {
-  const candidateByTarget = targets.map((target) => nominated
-    .map((candidate, candidateIndex) => matchesWindow(candidate, target) ? candidateIndex : -1)
-    .filter((candidateIndex) => candidateIndex >= 0));
-  const targetByCandidate = new Map<number, number>();
-  const visit = (targetIndex: number, seen: Set<number>): boolean => {
-    for (const candidateIndex of candidateByTarget[targetIndex]) {
-      if (seen.has(candidateIndex)) continue;
-      seen.add(candidateIndex);
-      const previousTarget = targetByCandidate.get(candidateIndex);
-      if (previousTarget === undefined || visit(previousTarget, seen)) {
-        targetByCandidate.set(candidateIndex, targetIndex);
-        return true;
+  const source = 0;
+  const targetBase = 1;
+  const candidateBase = targetBase + targets.length;
+  const sink = candidateBase + nominated.length;
+  const graph: FlowEdge[][] = Array.from({ length: sink + 1 }, () => []);
+  const links: Array<{ targetIndex: number; candidateIndex: number; edge: FlowEdge }> = [];
+  const addEdge = (from: number, to: number, cost: number): FlowEdge => {
+    const edge: FlowEdge = { to, reverse: graph[to].length, capacity: 1, cost };
+    const reverse: FlowEdge = { to: from, reverse: graph[from].length, capacity: 0, cost: -cost };
+    graph[from].push(edge);
+    graph[to].push(reverse);
+    return edge;
+  };
+  for (let targetIndex = 0; targetIndex < targets.length; targetIndex++) {
+    addEdge(source, targetBase + targetIndex, 0);
+    for (let candidateIndex = 0; candidateIndex < nominated.length; candidateIndex++) {
+      if (!matchesWindow(nominated[candidateIndex], targets[targetIndex])) continue;
+      const weight = Number.isFinite(weights[candidateIndex]) ? weights[candidateIndex] : 0;
+      const edge = addEdge(targetBase + targetIndex, candidateBase + candidateIndex, -weight);
+      links.push({ targetIndex, candidateIndex, edge });
+    }
+  }
+  for (let candidateIndex = 0; candidateIndex < nominated.length; candidateIndex++) {
+    addEdge(candidateBase + candidateIndex, sink, 0);
+  }
+
+  // These are shortest-path potentials for the initial acyclic forward graph,
+  // making all reduced costs non-negative for Dijkstra.
+  const potential = new Array(graph.length).fill(0) as number[];
+  for (let candidateIndex = 0; candidateIndex < nominated.length; candidateIndex++) {
+    let best = 0;
+    for (const link of links) {
+      if (link.candidateIndex === candidateIndex) best = Math.min(best, link.edge.cost);
+    }
+    potential[candidateBase + candidateIndex] = best;
+  }
+  potential[sink] = nominated.length > 0
+    ? Math.min(0, ...potential.slice(candidateBase, sink))
+    : 0;
+
+  while (true) {
+    const distances = new Array(graph.length).fill(Number.POSITIVE_INFINITY) as number[];
+    const previous: Array<{ node: number; edgeIndex: number } | undefined> = [];
+    distances[source] = 0;
+    const heap = new MinHeap();
+    heap.push({ node: source, distance: 0 });
+    while (heap.size > 0) {
+      const current = heap.pop();
+      if (current === undefined || current.distance !== distances[current.node]) continue;
+      for (let edgeIndex = 0; edgeIndex < graph[current.node].length; edgeIndex++) {
+        const edge = graph[current.node][edgeIndex];
+        if (edge.capacity === 0) continue;
+        const distance = current.distance + edge.cost + potential[current.node] - potential[edge.to];
+        if (distance < distances[edge.to]) {
+          distances[edge.to] = distance;
+          previous[edge.to] = { node: current.node, edgeIndex };
+          heap.push({ node: edge.to, distance });
+        }
       }
     }
-    return false;
-  };
-  let matched = 0;
-  for (let targetIndex = 0; targetIndex < targets.length; targetIndex++) {
-    if (visit(targetIndex, new Set())) matched++;
+    if (!Number.isFinite(distances[sink])) break;
+    for (let node = 0; node < potential.length; node++) {
+      if (Number.isFinite(distances[node])) potential[node] += distances[node];
+    }
+    let node = sink;
+    while (node !== source) {
+      const step = previous[node];
+      if (step === undefined) throw new Error("matching assignment path is malformed");
+      const edge = graph[step.node][step.edgeIndex];
+      edge.capacity -= 1;
+      graph[node][edge.reverse].capacity += 1;
+      node = step.node;
+    }
   }
-  return [...targetByCandidate.entries()]
-    .map(([candidateIndex, targetIndex]) => ({ targetIndex, candidateIndex }))
-    .sort((a, b) => a.targetIndex - b.targetIndex || a.candidateIndex - b.candidateIndex)
-    .slice(0, matched);
+  return links
+    .filter((link) => link.edge.capacity === 0)
+    .map(({ targetIndex, candidateIndex }) => ({ targetIndex, candidateIndex }))
+    .sort((a, b) => a.targetIndex - b.targetIndex || a.candidateIndex - b.candidateIndex);
 }
 
 function matchedCount(targets: readonly EvalWindow[], nominated: readonly EvalWindow[]): number {
@@ -407,7 +522,6 @@ export function summarizeCases(
   // from multiple incidents if a caller bypasses manifest validation.
   const gamingCase = gamingCases === 1 ? cases.find((item) => item.kind === "gaming") : undefined;
   if (gamingCase) {
-    gamingMatchedWindows = matchedCount(gamingCase.positiveWindows, gamingCase.nominatedWindows);
     gamingNegativeWindows = gamingCase.negativeWindows.length;
     const orderedPeaks = nominationPeaks(gamingCase)
       .map((peak, index) => ({ ...peak, index }))
@@ -419,7 +533,9 @@ export function summarizeCases(
     const positivePairs = matchingPairs(
       gamingCase.positiveWindows,
       orderedPeaks.map((peak) => peak.window),
+      orderedPeaks.map((peak) => peak.peakValue),
     );
+    gamingMatchedWindows = positivePairs.length;
     for (const pair of positivePairs) {
       const peakValue = orderedPeaks[pair.candidateIndex]?.peakValue;
       if (peakValue !== undefined && Number.isFinite(peakValue)) gamingPositivePeaks.push(peakValue);
