@@ -171,8 +171,12 @@ export function nominateVisualCandidates(
   const p75 = percentile(envelope, 0.75);
   const robustThreshold = center + ROBUST_MAD_MULTIPLIER * mad;
   const threshold = Math.max(robustThreshold, p75);
-  const minValue = Math.min(...envelope);
-  const maxValue = Math.max(...envelope);
+  let minValue = Number.POSITIVE_INFINITY;
+  let maxValue = Number.NEGATIVE_INFINITY;
+  for (const value of envelope) {
+    if (value < minValue) minValue = value;
+    if (value > maxValue) maxValue = value;
+  }
   const telemetry: VisualRecallTelemetry = {
     envelopeLength: envelope.length,
     median: center,

@@ -46,6 +46,13 @@ describe("nominateVisualCandidates", () => {
     }
   });
 
+  it("handles an envelope larger than the JavaScript argument limit", () => {
+    const envelope = new Array(130_000).fill(0);
+    envelope[100_000] = 30;
+    expect(() => nominateVisualCandidates(nodesAt([100_000]), envelope, cfg())).not.toThrow();
+    expect(nominateVisualCandidates(nodesAt([100_000]), envelope, cfg()).telemetry.rawPeakCount).toBe(1);
+  });
+
   it("rejects a static envelope and computes a robust threshold for an outlier", () => {
     expect(nominateVisualCandidates(denseNodes(), [4, 4, 4, 4], cfg()).candidates).toEqual([]);
     const result = nominateVisualCandidates(

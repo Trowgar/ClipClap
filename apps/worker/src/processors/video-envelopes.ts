@@ -98,7 +98,7 @@ export function bucketVideoEnvelopesBySecond(stderr: string): VideoEnvelopes {
 export async function videoEnvelopes(videoPath: string): Promise<VideoEnvelopes> {
   try {
     const { stderr } = await execFileAsync("ffmpeg", [
-      "-nostdin", "-i", videoPath,
+      "-nostdin", "-protocol_whitelist", "file,pipe", "-i", videoPath,
       "-vf", "fps=1,signalstats,metadata=print",
       "-f", "null", "-",
     ], { maxBuffer: CHILD_MAX_BUFFER_BYTES, timeout: VIDEO_ENVELOPE_TIMEOUT_MS });
@@ -130,7 +130,7 @@ export async function videoEnvelopesFromFd(sourceFd: number): Promise<VideoEnvel
 function runFfmpegFromFd(sourceFd: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("ffmpeg", [
-      "-nostdin", "-i", "/proc/self/fd/3",
+      "-nostdin", "-protocol_whitelist", "file,pipe", "-i", "/proc/self/fd/3",
       "-vf", "fps=1,signalstats,metadata=print",
       "-f", "null", "-",
     ], { stdio: ["ignore", "pipe", "pipe", sourceFd] });

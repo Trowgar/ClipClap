@@ -146,6 +146,13 @@ describe("transcribeVideo", () => {
       (call[1] as string[]).includes("fps=1,signalstats,metadata=print")
     )).toHaveLength(1);
     const argv = signalstatsCall![1] as string[];
+    const whitelistIndex = argv.indexOf("-protocol_whitelist");
+    expect(argv[whitelistIndex + 1]).toBe("file,pipe");
+    expect(whitelistIndex).toBeGreaterThanOrEqual(0);
+    expect(whitelistIndex).toBeLessThan(argv.indexOf("-i"));
+    expect(argv).not.toContain("http");
+    expect(argv).not.toContain("https");
+    expect(argv).not.toContain("concat");
     expect(argv[argv.indexOf("-i") + 1]).toBe("/tmp/source.mp4");
   });
 
