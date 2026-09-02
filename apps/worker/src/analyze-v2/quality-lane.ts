@@ -35,9 +35,9 @@ import {
 } from "./safe-end-audit";
 import type {
   ArcFlags,
-  CandidateDisposition,
   LlmUsage,
   MergedCandidate,
+  QualityLaneDisposition,
   SentenceNode,
   SnappedClip,
   V2Highlight,
@@ -61,6 +61,7 @@ export interface QualityLaneInput {
 }
 
 export interface QualityLaneResult {
+  lane: QualityLaneInput["lane"];
   highlights: V2Highlight[];
   telemetry: Record<string, unknown>;
   counters: {
@@ -68,7 +69,7 @@ export interface QualityLaneResult {
     selectedForFinalizer: number;
     finalizerSurvivors: number;
   };
-  terminal: ReadonlyMap<string, CandidateDisposition>;
+  terminal: ReadonlyMap<string, QualityLaneDisposition>;
 }
 
 interface SafeEndNormalTelemetry {
@@ -243,6 +244,21 @@ async function runSafeEndNormalAudit(
 
 
 export async function runQualityLane(input: QualityLaneInput): Promise<QualityLaneResult> {
+  if (input.lane !== "primary" && input.lane !== "recovery") {
+    throw new AnalyzeTechnicalError("quality lane invariant: invalid lane");
+  }
+  const candidateIds = new Set<string>();
+  for (const candidate of input.candidates) {
+    if (typeof candidate.id !== "string" || candidate.id.trim().length === 0) {
+      throw new AnalyzeTechnicalError("quality lane invariant: invalid candidate id");
+    }
+    if (candidateIds.has(candidate.id)) {
+      throw new AnalyzeTechnicalError(
+        `quality lane invariant: duplicate candidate id ${candidate.id}`
+      );
+    }
+    candidateIds.add(candidate.id);
+  }
   const { client, usage, nodes, candidates, languageIso, cfg } = input;
   const options = { retryDelayMs: input.retryDelayMs };
   const critic = await runCritic(
@@ -997,15 +1013,16 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
   };
 
   const shippedIds = new Set(shipped.map((clip) => clip.verdict.id));
+  const finalizedIds = new Set(finalized.clips.map((clip) => clip.verdict.id));
   const finalizerInputIds = new Set(afterStandaloneFilter.map((clip) => clip.verdict.id));
   const selectedIds = new Set(selection.selected.map((clip) => clip.verdict.id));
-  const terminal = new Map<string, CandidateDisposition>();
+  const terminal = new Map<string, QualityLaneDisposition>();
   const verdictById = new Map(critic.verdicts.map((verdict) => [verdict.id, verdict]));
   const droppedById = new Map(droppedVerdicts.map((drop) => [drop.id, drop]));
   for (const candidate of input.candidates) {
     const verdict = verdictById.get(candidate.id);
     if (!verdict) {
-      terminal.set(candidate.id, "not_selected_for_critic");
+      terminal.set(candidate.id, "critic_unjudged");
       continue;
     }
     if (!verdict.keep) {
@@ -1022,10 +1039,17 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
     else if (drop?.stage === "post_boundary_hook_gate") terminal.set(candidate.id, "post_boundary_rejected");
     else if (drop?.stage === "arc_downrank") terminal.set(candidate.id, "arc_rejected");
     else if (drop?.stage === "standalone_filter") terminal.set(candidate.id, "standalone_rejected");
+    else if (finalizedIds.has(candidate.id)) terminal.set(candidate.id, "selection_not_chosen");
     else if (!selectedIds.has(candidate.id) || !finalizerInputIds.has(candidate.id)) terminal.set(candidate.id, "selection_not_chosen");
     else terminal.set(candidate.id, "finalizer_rejected");
   }
+  if (terminal.size !== input.candidates.length) {
+    throw new AnalyzeTechnicalError(
+      `quality lane invariant: terminal accounting ${terminal.size}/${input.candidates.length}`
+    );
+  }
   return {
+    lane: input.lane,
     highlights,
     telemetry,
     counters: {

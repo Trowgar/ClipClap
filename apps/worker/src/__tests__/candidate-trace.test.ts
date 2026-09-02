@@ -37,6 +37,15 @@ describe("candidate trace", () => {
     );
   });
 
+  it("records a candidate that entered the lane without a usable critic verdict", () => {
+    const trace = createCandidateTrace([candidate("c0")]);
+    trace.terminatePrimary("c0", "critic_unjudged");
+
+    expect(trace.summaryPrimary()).toEqual({ critic_unjudged: 1 });
+    expect(PRIMARY_DISPOSITIONS).toContain("critic_unjudged");
+    expect(RECOVERY_DISPOSITIONS).toContain("critic_unjudged");
+  });
+
   it("keeps recovery disposition separate from primary history", () => {
     const trace = createCandidateTrace([candidate("c0")]);
     trace.terminatePrimary("c0", "not_selected_for_critic");

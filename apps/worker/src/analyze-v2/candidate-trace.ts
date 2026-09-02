@@ -11,6 +11,7 @@ import type {
 
 const PRIMARY_DISPOSITIONS: readonly CandidatePrimaryDisposition[] = Object.freeze([
   "not_selected_for_critic",
+  "critic_unjudged",
   "critic_rejected",
   "evidence_rejected",
   "snap_rejected",

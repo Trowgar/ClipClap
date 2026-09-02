@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { analyzeHighlightsV2 } from "../analyze-v2";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
+import { runQualityLane } from "../analyze-v2/quality-lane";
+import { buildSentenceGraph } from "../analyze-v2/sentence-graph";
+import { newUsage } from "../analyze-v2/llm";
 import type { TranscriptionResult, WhisperSegment } from "@clipclap/shared";
 
 /** Characterization fixtures for the pre-extraction quality lane.  These tests
@@ -61,6 +64,71 @@ function client(responses: unknown[]) {
     return typeof response === "function" ? response(body) : response;
   });
   return { client: { chat: { completions: { create } } } as any, create };
+}
+
+function laneCandidate(id: string, startNode = 10, endNode = 14) {
+  return {
+    id,
+    startNode,
+    endNode,
+    payoffNode: endNode - 1,
+    interest: 0.8,
+    type: "story" as const,
+    windowIndex: 0,
+  };
+}
+
+function laneCriticRows(ids: string[]) {
+  return {
+    choices: [{ message: { content: JSON.stringify({ results: ids.map((id, offset) => ({
+      id, keep: true, score: 0.85 - offset * 0.01, grounded: true, self_contained: true,
+      start_node: 10 + offset * 5, payoff_node: 13 + offset * 5, end_node: 14 + offset * 5,
+      hook_start_node: 12 + offset * 5, hook_end_node: 13 + offset * 5,
+      title: `Он назвал номер ${id}`, description: `Спикер называет номер ${id}.`,
+      title_evidence_nodes: [13 + offset * 5], description_evidence_nodes: [13 + offset * 5], language: "ru",
+    })) }) }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 200, completion_tokens: 80 },
+  };
+}
+
+async function directLane(input: {
+  candidates: ReturnType<typeof laneCandidate>[];
+  criticResponse: unknown;
+  finalizerResponse?: unknown;
+  arcResponse?: unknown;
+  cfg?: ReturnType<typeof loadAnalyzeConfig>;
+}) {
+  const cfg = input.cfg ?? loadAnalyzeConfig({});
+  const nodes = buildSentenceGraph(transcript().segments, cfg);
+  const c = client([]);
+  const usage = newUsage();
+  c.create.mockImplementation(async (body: any) => {
+    const schema = body.response_format.json_schema.name;
+    if (schema === "critic_verdicts") return input.criticResponse;
+    if (schema === "arc_audit") return input.arcResponse;
+    if (schema === "clip_finalizer") return input.finalizerResponse ?? finalizer;
+    throw new Error(`unexpected schema ${schema}`);
+  });
+  return {
+    result: await runQualityLane({
+      lane: "primary",
+      candidates: input.candidates,
+      nodes,
+      languageIso: "ru",
+      cfg,
+      usage,
+      client: c.client,
+      retryDelayMs: 1,
+      analysisMode: "standard",
+      modeResolution: undefined,
+      missingRanges: [],
+      transcription: transcript(),
+      sourceDurationSec: 200,
+      safeEndAuditTelemetryTestHook: undefined,
+    }),
+    usage,
+    create: c.create,
+  };
 }
 
 function projection(result: Awaited<ReturnType<typeof analyzeHighlightsV2>>) {
@@ -242,6 +310,42 @@ describe("quality lane characterization", () => {
     ]);
   });
 
+  it("classifies an evidence-gate drop with complete lane accounting", async () => {
+    const { result, usage } = await directLane({
+      candidates: [laneCandidate("c0")],
+      criticResponse: {
+        choices: [{ message: { content: JSON.stringify({ results: [{
+          ...JSON.parse((laneCriticRows(["c0"]).choices[0] as any).message.content).results[0],
+          title_evidence_nodes: [999],
+        }] }) }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 200, completion_tokens: 80 },
+      },
+    });
+    expect(result.highlights).toEqual([]);
+    expect(result.counters).toMatchObject({ judged: 1, selectedForFinalizer: 0, finalizerSurvivors: 0 });
+    expect(result.telemetry.evidenceDrops).toBe(1);
+    expect(result.terminal.get("c0")).toBe("evidence_rejected");
+    expect(usage.requests).toBe(1);
+  });
+
+  it("classifies a snap rejection with complete lane accounting", async () => {
+    const { result, usage } = await directLane({
+      candidates: [laneCandidate("c0")],
+      criticResponse: {
+        choices: [{ message: { content: JSON.stringify({ results: [{
+          ...JSON.parse((laneCriticRows(["c0"]).choices[0] as any).message.content).results[0],
+          start_node: 39, end_node: 39, payoff_node: 39,
+        }] }) }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 200, completion_tokens: 80 },
+      },
+    });
+    expect(result.highlights).toEqual([]);
+    expect(result.counters).toMatchObject({ judged: 1, selectedForFinalizer: 0, finalizerSurvivors: 0 });
+    expect(result.telemetry.snapDrops).toBe(1);
+    expect(result.terminal.get("c0")).toBe("snap_rejected");
+    expect(usage.requests).toBe(1);
+  });
+
   it("proves the enabled arc, standalone, and finalizer authorities are invoked", async () => {
     const arc = {
       results: [{ id: "c0", entry: { ok: true, defect: null, fix_start_node: null },
@@ -257,7 +361,10 @@ describe("quality lane characterization", () => {
     }]);
     const result = await analyzeHighlightsV2(transcript(), {
       client: c.client,
-      cfg: loadAnalyzeConfig({ ARC_AUDIT: "on", ANALYZE_STANDALONE_FILTER_V1: "on" }),
+      cfg: {
+        ...loadAnalyzeConfig({ ARC_AUDIT: "on", ANALYZE_STANDALONE_FILTER_V1: "on" }),
+        arcDownrankPenalty2: 0.5,
+      },
       transcriptPartial: false,
     });
 
@@ -266,5 +373,176 @@ describe("quality lane characterization", () => {
     expect(result.telemetry.arcAudit).toMatchObject({ audited: 1 });
     expect(result.telemetry.standaloneFilter).toMatchObject({ considered: 1, dropped: 0 });
     expect(result.telemetry.finalizerSurvivors).toBe(1);
+  });
+
+  it("classifies an omitted critic row as critic_unjudged while shipping a partial survivor", async () => {
+    const { result, usage } = await directLane({
+      candidates: [laneCandidate("c0"), laneCandidate("c1", 15, 19)],
+      criticResponse: laneCriticRows(["c0"]),
+    });
+
+    expect(result.highlights).toHaveLength(1);
+    expect(result.lane).toBe("primary");
+    expect(result.counters).toMatchObject({ judged: 1, selectedForFinalizer: 1, finalizerSurvivors: 1 });
+    expect(result.terminal).toEqual(new Map([
+      ["c0", "shipped"],
+      ["c1", "critic_unjudged"],
+    ]));
+  });
+
+  it("rejects duplicate lane ids before invoking any authority", async () => {
+    const c = client([]);
+    const cfg = loadAnalyzeConfig({});
+    const nodes = buildSentenceGraph(transcript().segments, cfg);
+    await expect(runQualityLane({
+      lane: "primary",
+      candidates: [laneCandidate("dup"), laneCandidate("dup")],
+      nodes,
+      languageIso: "ru",
+      cfg,
+      usage: newUsage(),
+      client: c.client,
+      retryDelayMs: 1,
+      analysisMode: "standard",
+      modeResolution: undefined,
+      missingRanges: [],
+      transcription: transcript(),
+      sourceDurationSec: 200,
+      safeEndAuditTelemetryTestHook: undefined,
+    })).rejects.toThrow(/duplicate candidate/i);
+    expect(c.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects empty ids and invalid lanes before invoking any authority", async () => {
+    const cfg = loadAnalyzeConfig({});
+    const nodes = buildSentenceGraph(transcript().segments, cfg);
+    const c = client([]);
+    const base = {
+      candidates: [laneCandidate(" ")],
+      nodes,
+      languageIso: "ru",
+      cfg,
+      usage: newUsage(),
+      client: c.client,
+      retryDelayMs: 1,
+      analysisMode: "standard" as const,
+      modeResolution: undefined,
+      missingRanges: [],
+      transcription: transcript(),
+      sourceDurationSec: 200,
+      safeEndAuditTelemetryTestHook: undefined,
+    };
+    await expect(runQualityLane({ lane: "primary", ...base })).rejects.toThrow(/invalid candidate id/i);
+    await expect(runQualityLane({ lane: "other" as never, ...base })).rejects.toThrow(/invalid lane/i);
+    expect(c.create).not.toHaveBeenCalled();
+  });
+
+  it("classifies a finalizer drop as finalizer_rejected", async () => {
+    const { result, usage } = await directLane({
+      candidates: [laneCandidate("c0"), laneCandidate("c1", 15, 19)],
+      criticResponse: laneCriticRows(["c0", "c1"]),
+      finalizerResponse: {
+        choices: [{ message: { content: JSON.stringify({ clips: [{
+          id: "c0", verdict: "drop", drop_reason: "incoherent", duplicate_of: null,
+          shared_claim: null, title: null, title_evidence_nodes: null, trim_start_node: null,
+        }, {
+          id: "c1", verdict: "ship", drop_reason: null, duplicate_of: null,
+          shared_claim: null, title: null, title_evidence_nodes: null, trim_start_node: null,
+        }] }) }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 300, completion_tokens: 90 },
+      },
+    });
+    expect(result.highlights).toHaveLength(1);
+    expect(result.counters).toMatchObject({ judged: 2, selectedForFinalizer: 2, finalizerSurvivors: 1 });
+    expect(result.telemetry.finalizerDrops).toEqual([{ id: "c0", reason: "incoherent" }]);
+    expect(result.terminal.get("c0")).toBe("finalizer_rejected");
+    expect(usage.requests).toBe(2);
+  });
+
+  it("classifies a finalizer survivor removed by the soft cap as selection_not_chosen", async () => {
+    const cfg = { ...loadAnalyzeConfig({}), softCap: 1 };
+    const { result, usage } = await directLane({
+      cfg,
+      candidates: [laneCandidate("c0"), laneCandidate("c1", 15, 19)],
+      criticResponse: laneCriticRows(["c0", "c1"]),
+      finalizerResponse: {
+        choices: [{ message: { content: JSON.stringify({ clips: [
+          { id: "c0", verdict: "ship", drop_reason: null, duplicate_of: null, shared_claim: null, title: null, title_evidence_nodes: null, trim_start_node: null },
+          { id: "c1", verdict: "ship", drop_reason: null, duplicate_of: null, shared_claim: null, title: null, title_evidence_nodes: null, trim_start_node: null },
+        ] }) }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 300, completion_tokens: 90 },
+      },
+    });
+    expect(result.highlights).toHaveLength(1);
+    expect(result.counters).toMatchObject({ judged: 2, selectedForFinalizer: 2, finalizerSurvivors: 2 });
+    expect(result.terminal.get("c1")).toBe("selection_not_chosen");
+    expect(result.telemetry.finalizerSurvivors).toBe(2);
+    expect(usage.requests).toBe(2);
+  });
+
+  it("classifies an arc-downrank drop as arc_rejected", async () => {
+    const cfg = { ...loadAnalyzeConfig({ ARC_AUDIT: "on", ARC_DOWNRANK: "on" }), arcDownrankPenalty2: 0.5 };
+    const { result, usage } = await directLane({
+      cfg,
+      candidates: [laneCandidate("c0")],
+      criticResponse: laneCriticRows(["c0"]),
+      arcResponse: {
+        choices: [{ message: { content: JSON.stringify({ results: [{
+          id: "c0",
+          entry: { ok: false, defect: "dangling_reference", fix_start_node: null },
+          exit: { ok: false, defect: "mid_thought", fix_end_node: null },
+          standalone: { ok: true, missing: null },
+        }] }) }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 10, completion_tokens: 4 },
+      },
+    });
+    expect(result.highlights).toEqual([]);
+    expect(result.counters).toMatchObject({ judged: 1, selectedForFinalizer: 0, finalizerSurvivors: 0 });
+    expect(result.telemetry.arcDownrank).toMatchObject({ considered: 1, penalized: 1, dropped: 1 });
+    expect(result.terminal.get("c0")).toBe("arc_rejected");
+    expect(usage.requests).toBe(2);
+  });
+
+  it("lets the standalone filter veto an audited clip", async () => {
+    const { result, usage } = await directLane({
+      cfg: {
+        ...loadAnalyzeConfig({ ARC_AUDIT: "on", ANALYZE_STANDALONE_FILTER_V1: "on" }),
+        arcDownrankPenalty2: 0.5,
+      },
+      candidates: [laneCandidate("c0"), laneCandidate("c1", 15, 19)],
+      criticResponse: laneCriticRows(["c0", "c1"]),
+      arcResponse: {
+        choices: [{ message: { content: JSON.stringify({ results: [
+          {
+            id: "c0",
+            entry: { ok: true, defect: null, fix_start_node: null },
+            exit: { ok: true, defect: null, fix_end_node: null },
+            standalone: { ok: false, missing: "setup" },
+          },
+          {
+            id: "c1",
+            entry: { ok: true, defect: null, fix_start_node: null },
+            exit: { ok: true, defect: null, fix_end_node: null },
+            standalone: { ok: true, missing: null },
+          },
+        ] }) }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 10, completion_tokens: 4 },
+      },
+    });
+    expect(result.highlights).toHaveLength(1);
+    expect(result.counters).toMatchObject({ judged: 2, selectedForFinalizer: 1, finalizerSurvivors: 1 });
+    expect(result.telemetry.standaloneFilter).toMatchObject({ considered: 2, dropped: 1 });
+    expect(result.terminal.get("c0")).toBe("standalone_rejected");
+    expect(usage.requests).toBe(3);
+  });
+
+  it("preserves the outer zero-survivor technical guard for a malformed critic", async () => {
+    await expect(directLane({
+      candidates: [laneCandidate("c0")],
+      criticResponse: {
+        choices: [{ message: { content: JSON.stringify({ results: [{ id: "foreign" }] }) }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 200, completion_tokens: 80 },
+      },
+    })).rejects.toThrow(/0 usable verdicts/);
   });
 });

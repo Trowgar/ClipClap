@@ -213,6 +213,7 @@ export type NoClipsReasonValue =
  * may receive exactly one of these and that record is immutable. */
 export type CandidatePrimaryDisposition =
   | "not_selected_for_critic"
+  | "critic_unjudged"
   | "critic_rejected"
   | "evidence_rejected"
   | "snap_rejected"
@@ -226,6 +227,13 @@ export type CandidatePrimaryDisposition =
 /** Recovery uses the same quality authorities, but has its own immutable lane
  * accounting so recovery never rewrites primary history. */
 export type CandidateRecoveryDisposition = Exclude<
+  CandidatePrimaryDisposition,
+  "not_selected_for_critic"
+>;
+
+/** Terminal vocabulary emitted by the shared quality lane. Partitioning is
+ * the only stage allowed to say a candidate was not selected for critic. */
+export type QualityLaneDisposition = Exclude<
   CandidatePrimaryDisposition,
   "not_selected_for_critic"
 >;
