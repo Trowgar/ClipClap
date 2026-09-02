@@ -251,6 +251,9 @@ export function parseEvalManifest(value: unknown): EvalManifest {
       negativeWindows,
     };
   });
+  if (cases.filter((item) => item.kind === "gaming").length !== 1) {
+    throw new Error("manifest requires exactly one gaming case");
+  }
   return { version: 1, invarianceEvidencePath, cases };
 }
 
@@ -388,7 +391,6 @@ export function summarizeCases(
     positiveMatchedWindows += positiveMatched;
     if (item.kind === "gaming") {
       gamingCases += 1;
-      gamingMatchedWindows += positiveMatched;
     }
     if (item.kind === "as_is") {
       asIsPositiveWindows += item.positiveWindows.length;
@@ -400,14 +402,23 @@ export function summarizeCases(
     }
     negativeWindows += item.negativeWindows.length;
     negativeMatchedWindows += matchedCount(item.negativeWindows, item.nominatedWindows);
-    if (item.kind === "gaming") {
-      gamingNegativeWindows += item.negativeWindows.length;
-      const peaks = nominationPeaks(item);
-      const positivePairs = matchingPairs(item.positiveWindows, peaks.map((peak) => peak.window));
-      for (const pair of positivePairs) {
-        const peakValue = peaks[pair.candidateIndex]?.peakValue;
-        if (peakValue !== undefined && Number.isFinite(peakValue)) gamingPositivePeaks.push(peakValue);
-      }
+  }
+  // The paid gaming corpus is intentionally singular. Do not combine evidence
+  // from multiple incidents if a caller bypasses manifest validation.
+  const gamingCase = gamingCases === 1 ? cases.find((item) => item.kind === "gaming") : undefined;
+  if (gamingCase) {
+    gamingMatchedWindows = matchedCount(gamingCase.positiveWindows, gamingCase.nominatedWindows);
+    gamingNegativeWindows = gamingCase.negativeWindows.length;
+    const peaks = nominationPeaks(gamingCase);
+    const eventStrengths = gamingCase.positiveWindows.map((positiveWindow) => {
+      const overlappingPeaks = peaks
+        .filter((peak) => matchesWindow(peak.window, positiveWindow))
+        .map((peak) => peak.peakValue)
+        .filter((peakValue) => Number.isFinite(peakValue));
+      return overlappingPeaks.length > 0 ? Math.max(...overlappingPeaks) : 0;
+    });
+    for (const peakValue of eventStrengths) {
+      gamingPositivePeaks.push(peakValue);
     }
   }
   const topTwoPositivePeaks = [...gamingPositivePeaks].sort((a, b) => b - a).slice(0, 2);
@@ -415,10 +426,9 @@ export function summarizeCases(
   if (secondBestPositivePeak === null) {
     weakWindowRankOk = false;
   } else {
-    for (const item of cases) {
-      if (item.kind !== "gaming") continue;
-      for (const negativeWindow of item.negativeWindows) {
-        for (const peak of nominationPeaks(item)) {
+    if (gamingCase) {
+      for (const negativeWindow of gamingCase.negativeWindows) {
+        for (const peak of nominationPeaks(gamingCase)) {
           if (matchesWindow(peak.window, negativeWindow) && peak.peakValue > secondBestPositivePeak) {
             weakWindowRankOk = false;
           }
@@ -427,14 +437,15 @@ export function summarizeCases(
     }
   }
   const gates = {
-    gamingMinimum: gamingCases > 0 && gamingMatchedWindows >= 2,
+    gamingMinimum: gamingCases === 1 && gamingMatchedWindows >= 2,
     asIsRetention: asIsPositiveWindows > 0 && asIsMatchedWindows === asIsPositiveWindows,
     otherRetention: otherPositiveWindows > 0 && otherMatchedWindows === otherPositiveWindows,
     candidateCap: capOk,
     offShadowInvariant: options.offShadowInvariant === true,
-    gamingWeakWindowRank: gamingCases > 0 && gamingNegativeWindows > 0 && weakWindowRankOk,
+    gamingWeakWindowRank: gamingCases === 1 && gamingNegativeWindows > 0 && weakWindowRankOk,
   };
   const failureReasons: string[] = [];
+  if (gamingCases !== 1) failureReasons.push("gaming_case_count_invalid");
   if (!gates.gamingMinimum) failureReasons.push("gaming_positive_recall_below_two_windows");
   if (!gates.asIsRetention) failureReasons.push("as_is_positive_window_not_retained");
   if (!gates.otherRetention) failureReasons.push("other_positive_window_not_retained");
@@ -614,8 +625,9 @@ Manifest JSON (version 1):
 
 caseKey is an anonymous input label and is never printed. Paths and transcript text stay private.
 invarianceEvidencePath points to separate local JSON evidence from the off/shadow replay gate.
-The corpus must include gaming, as_is, and other cases. Gaming cases require at least two
-matched positives and at least one negative control; other positives must all be retained.
+The corpus must include exactly one gaming case, plus as_is and other cases. The gaming
+case requires at least two matched positives and at least one negative control; other
+positives must all be retained.
 The command computes local video envelopes and exits 1 when any release gate fails.
 Negative controls are reported as negativeWindowHitRate (higher is worse); with
 no negative windows, the rate is null and negativeControlsAvailable is false.

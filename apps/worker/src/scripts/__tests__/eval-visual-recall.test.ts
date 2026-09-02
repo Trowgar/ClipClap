@@ -154,6 +154,44 @@ describe("visual recall evaluation metrics", () => {
     expect(summary.gates.gamingWeakWindowRank).toBe(expected);
   });
 
+  it("uses the strongest nomination for each positive event", () => {
+    const summary = summarizeCases([{
+      caseKey: "gaming-a", kind: "gaming",
+      positiveWindows: [window(0, 10), window(100, 110)],
+      negativeWindows: [window(300, 310)],
+      nominatedWindows: [window(0, 5), window(0, 10), window(100, 110), window(300, 310)],
+      nominatedPeaks: [
+        { window: window(0, 5), peakValue: 20 },
+        { window: window(0, 10), peakValue: 100 },
+        { window: window(100, 110), peakValue: 80 },
+        { window: window(300, 310), peakValue: 50 },
+      ],
+      candidateCount: 4,
+    }], { candidateCap: 12, offShadowInvariant: true });
+    expect(summary.gates.gamingWeakWindowRank).toBe(true);
+  });
+
+  it("does not enable gaming gates when more than one gaming case is supplied", () => {
+    const gaming = (caseKey: string) => ({
+      caseKey, kind: "gaming" as const,
+      positiveWindows: [window(0, 10), window(100, 110)],
+      negativeWindows: [window(300, 310)],
+      nominatedWindows: [window(0, 10), window(100, 110)],
+      nominatedPeaks: [
+        { window: window(0, 10), peakValue: 100 },
+        { window: window(100, 110), peakValue: 80 },
+      ],
+      candidateCount: 2,
+    });
+    const summary = summarizeCases([gaming("gaming-a"), gaming("gaming-b")], {
+      candidateCap: 12,
+      offShadowInvariant: true,
+    });
+    expect(summary.gates.gamingMinimum).toBe(false);
+    expect(summary.gates.gamingWeakWindowRank).toBe(false);
+    expect(summary.failureReasons).toContain("gaming_case_count_invalid");
+  });
+
   it("cannot pass without a confirmed AS_IS positive window", () => {
     const summary = summarizeCases([{
       caseKey: "gaming-a",
@@ -222,6 +260,23 @@ describe("visual recall manifest validation and CLI output", () => {
         positiveWindows: [window(10, 10)],
       }],
     })).toThrow(/window/i);
+  });
+
+  it("rejects manifests with more than one gaming case", () => {
+    const baseCase = {
+      kind: "gaming",
+      sourcePath: "/private/source.mp4",
+      transcriptPath: "/private/transcript.json",
+      positiveWindows: [window(10, 20)],
+    };
+    expect(() => parseEvalManifest({
+      version: 1,
+      invarianceEvidencePath: "/private/evidence.json",
+      cases: [
+        { ...baseCase, caseKey: "gaming-a" },
+        { ...baseCase, caseKey: "gaming-b", sourcePath: "/private/source-b.mp4", transcriptPath: "/private/transcript-b.json" },
+      ],
+    })).toThrow(/exactly one gaming/i);
   });
 
   it("rejects duplicate positive or negative windows", () => {
