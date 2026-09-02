@@ -4,7 +4,13 @@ import { loadAnalyzeConfig, type AnalyzeConfig } from "./config";
 import { buildSentenceGraph } from "./sentence-graph";
 import { resolveMode } from "./mode";
 import { runScanner } from "./scanner";
-import { criticBudget, mergeCandidates, selectCriticCandidates, sourceSeconds } from "./candidates";
+import {
+  criticBudget,
+  mergeCandidates,
+  partitionCriticCandidates,
+  sourceSeconds,
+  type CriticCandidatePartition,
+} from "./candidates";
 import { AnalyzeTechnicalError, runCritic, repairCopy } from "./critic";
 import { snapNodes, compressToFit } from "./snap";
 import {
@@ -384,6 +390,9 @@ export async function analyzeHighlightsV2(
   };
   const { mode, modeResolution } = resolveMode(modeInput, cfg);
   let candidates: MergedCandidate[];
+  // Retained only for the later outcome-recovery lane. It is deliberately not
+  // part of telemetry or the returned result while V4 is inactive.
+  let unjudgedCriticCandidates: MergedCandidate[] = [];
   let scannerTelemetry: Record<string, unknown> = {};
   let visualTelemetry: Record<string, unknown> | undefined = visualEvaluation?.telemetry;
   const visualMode = cfg.visualRecallMode;
@@ -478,7 +487,14 @@ export async function analyzeHighlightsV2(
       });
       return false;
     });
-    candidates = selectCriticCandidates(withoutTeasers, nodes, cfg, mode);
+    const criticPartition: CriticCandidatePartition = partitionCriticCandidates(
+      withoutTeasers,
+      nodes,
+      cfg,
+      mode
+    );
+    candidates = criticPartition.selected;
+    unjudgedCriticCandidates = criticPartition.unselected;
     if (visualTelemetry) visualTelemetry.criticByType = countCandidateTypes(candidates);
     scannerTelemetry = {
       path: "full",

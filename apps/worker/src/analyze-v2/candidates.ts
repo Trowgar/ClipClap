@@ -286,14 +286,19 @@ function budgetForCap(nodes: SentenceNode[], maxCandidates: number): number {
   );
 }
 
-/** Stratified, coverage-aware pick of at most K candidates for the critic. */
-export function selectCriticCandidates(
+export interface CriticCandidatePartition {
+  selected: MergedCandidate[];
+  unselected: MergedCandidate[];
+}
+
+/** Stratified, coverage-aware partition of candidates for the critic. */
+export function partitionCriticCandidates(
   merged: MergedCandidate[],
   nodes: SentenceNode[],
   cfg: AnalyzeConfig,
   // consumed by tasks T2-T4 of the stream-analyze-mode spec
   mode: AnalysisMode = "standard"
-): MergedCandidate[] {
+): CriticCandidatePartition {
   // STREAM MODE budget override (spec §S3, task T3). Phase-1 measurement
   // (2026-08-19-stream-moment-selection.md): on a 3h stream the per-window
   // quota (perWindowMinCandidates=2, ~18 windows) consumed 36 of
@@ -355,5 +360,19 @@ export function selectCriticCandidates(
 
   // Quota picks are never evicted - coverage beats the cap for the guaranteed
   // tier; extras only ever fill up to K (the loop above stops at K).
-  return result;
+  const ids = new Set(result.map((candidate) => candidate.id));
+  return {
+    selected: result,
+    unselected: merged.filter((candidate) => !ids.has(candidate.id)),
+  };
+}
+
+/** Backwards-compatible selector exposing only the critic-selected array. */
+export function selectCriticCandidates(
+  merged: MergedCandidate[],
+  nodes: SentenceNode[],
+  cfg: AnalyzeConfig,
+  mode: AnalysisMode = "standard"
+): MergedCandidate[] {
+  return partitionCriticCandidates(merged, nodes, cfg, mode).selected;
 }
