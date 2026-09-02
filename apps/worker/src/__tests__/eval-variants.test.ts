@@ -41,7 +41,7 @@ const SYNTHETIC_FIXTURE = "synthetic";
  * make it: those files are paid recordings. The transcript and responses here
  * are never replayed, only parsed, so they can be empty.
  */
-function syntheticFixture(opts: { declare: Record<string, unknown> }): string {
+function syntheticFixture(opts: { declare: Record<string, unknown>; engine?: unknown }): string {
   const dir = variantsDir(opts.declare);
   const fixture = join(dir, SYNTHETIC_FIXTURE);
   mkdirSync(fixture);
@@ -51,7 +51,10 @@ function syntheticFixture(opts: { declare: Record<string, unknown> }): string {
     join(fixture, "snapshot.json"),
     JSON.stringify({ count: 0, tier: null, clips: [], dropReasons: {} })
   );
-  writeFileSync(join(fixture, "meta.json"), JSON.stringify({ engine: { scanModel: "x" } }));
+  writeFileSync(
+    join(fixture, "meta.json"),
+    JSON.stringify({ engine: opts.engine === undefined ? { scanModel: "x" } : opts.engine }),
+  );
   return dir;
 }
 
@@ -395,6 +398,20 @@ describe("post-boundary hook gate fingerprint", () => {
 });
 
 describe("fixture variant surface", () => {
+  it.each([
+    ["empty object", {}],
+    ["array", []],
+    ["string", "malformed"],
+    ["number", 7],
+    ["boolean", true],
+    ["null", null],
+  ])("rejects a malformed %s engine fingerprint while loading", (_label, engine) => {
+    const dir = syntheticFixture({ declare: {}, engine });
+    expect(() => loadFixture(SYNTHETIC_FIXTURE, dir)).toThrow(
+      /invalid .*engine fingerprint.*recognized/i,
+    );
+  });
+
   it("exposes the base snapshot and fingerprint under the base variant name", () => {
     const fixture = loadFixture("podcast-ecology");
     expect(fixture.snapshots[BASE_VARIANT]).toEqual(fixture.snapshot);

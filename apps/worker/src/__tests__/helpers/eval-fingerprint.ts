@@ -538,10 +538,39 @@ export interface FingerprintComparison {
   stale: string[];
 }
 
+/**
+ * Validate the runtime shape before comparing a JSON-decoded fingerprint.
+ * TypeScript's Partial<EngineFingerprint> annotation cannot protect eval
+ * metadata loaded from disk, and treating `{}` or an unknown-only object as a
+ * legacy partial would silently certify an unverified recording.
+ */
+export function validateFingerprintShape(
+  recorded: unknown,
+  current: EngineFingerprint,
+  context = "engine fingerprint",
+): asserts recorded is Partial<EngineFingerprint> {
+  if (recorded === null || typeof recorded !== "object" || Array.isArray(recorded)) {
+    const kind = recorded === null ? "null" : Array.isArray(recorded) ? "array" : typeof recorded;
+    throw new Error(
+      `[eval] invalid ${context}: expected a non-empty JSON object with at least one recognized ` +
+        `engine key; received ${kind}`,
+    );
+  }
+  const keys = Object.keys(recorded);
+  const recognized = new Set(Object.keys(current));
+  if (keys.length === 0 || !keys.some((key) => recognized.has(key))) {
+    throw new Error(
+      `[eval] invalid ${context}: expected a non-empty JSON object with at least one recognized ` +
+        `engine key; received keys [${keys.join(", ") || "none"}]`,
+    );
+  }
+}
+
 export function compareFingerprints(
   recorded: Partial<EngineFingerprint>,
   current: EngineFingerprint
 ): FingerprintComparison {
+  validateFingerprintShape(recorded, current);
   const mismatches: string[] = [];
   const unrecorded: string[] = [];
   for (const key of Object.keys(current) as Array<keyof EngineFingerprint>) {

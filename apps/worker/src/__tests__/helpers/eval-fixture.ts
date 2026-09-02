@@ -8,6 +8,7 @@ import { createReplayClient } from "./replay-client";
 import {
   assertFingerprintMatches,
   computeFingerprint,
+  validateFingerprintShape,
   type EngineFingerprint,
 } from "./eval-fingerprint";
 
@@ -337,21 +338,56 @@ export function loadFixture(name: string, fixturesDir: string = FIXTURES_DIR): F
   const readIfPresent = (file: string) =>
     existsSync(join(dir, file)) ? read(file) : null;
 
-  const meta = readIfPresent("meta.json") as
+  const metaValue = existsSync(join(dir, "meta.json")) ? read("meta.json") : undefined;
+  if (metaValue !== undefined && (metaValue === null || typeof metaValue !== "object" || Array.isArray(metaValue))) {
+    throw new Error(
+      `[eval] invalid fixture "${name}" meta.json: expected a JSON object`,
+    );
+  }
+  const meta = metaValue as
     | {
-        engine?: Partial<EngineFingerprint>;
-        variants?: Record<string, { engine?: Partial<EngineFingerprint> }>;
+        engine?: unknown;
+        variants?: unknown;
       }
-    | null;
+    | undefined;
+  const currentFingerprint = computeFingerprint(loadAnalyzeConfig({}));
+  const readFingerprint = (value: unknown, context: string): Partial<EngineFingerprint> | null => {
+    // Missing engine metadata is the intentional compatibility path for
+    // pre-fingerprint base fixtures. A present null/scalar/empty object is
+    // malformed provenance and must fail closed.
+    if (value === undefined) return null;
+    validateFingerprintShape(value, currentFingerprint, context);
+    return value;
+  };
+  const variants = meta?.variants;
+  if (variants !== undefined && (variants === null || typeof variants !== "object" || Array.isArray(variants))) {
+    throw new Error(
+      `[eval] invalid fixture "${name}" meta.json variants: expected a JSON object`,
+    );
+  }
 
   const snapshots: Record<string, EvalShape | null> = {};
   const fingerprints: Record<string, Partial<EngineFingerprint> | null> = {};
   for (const variant of variantNames(fixturesDir)) {
     snapshots[variant] = readIfPresent(snapshotFileName(variant));
-    fingerprints[variant] =
-      variant === BASE_VARIANT
-        ? (meta?.engine ?? null)
-        : (meta?.variants?.[variant]?.engine ?? null);
+    if (variant === BASE_VARIANT) {
+      fingerprints[variant] = readFingerprint(meta?.engine, `fixture "${name}" engine fingerprint`);
+      continue;
+    }
+    const variantMeta = (variants as Record<string, unknown> | undefined)?.[variant];
+    if (variantMeta === undefined) {
+      fingerprints[variant] = null;
+      continue;
+    }
+    if (variantMeta === null || typeof variantMeta !== "object" || Array.isArray(variantMeta)) {
+      throw new Error(
+        `[eval] invalid fixture "${name}" variant "${variant}" metadata: expected a JSON object`,
+      );
+    }
+    fingerprints[variant] = readFingerprint(
+      (variantMeta as { engine?: unknown }).engine,
+      `fixture "${name}" variant "${variant}" engine fingerprint`,
+    );
   }
 
   return {

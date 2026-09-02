@@ -860,12 +860,17 @@ prompt, not a command). **Both nuclear refusals are the §3 word-timing root cau
 completing nodes are opaque, so `opaque_end`/`no_clean_end` refuse them however good the hint;
 the lever remains Whisper word-timing coverage, now visible from a third direction.
 
-### Short-source rescue: a judged-empty short source ships one demo clip (2026-08-19)
+### Retired short-source rescue (historical record; 2026-08-19)
 
-Spec `2026-08-19-short-source-rescue.md`; flag `SHORT_SOURCE_RESCUE` (exact literal "on"),
-threshold `SHORT_SOURCE_RESCUE_MAX_SEC` default 300 - a LITERAL in config.ts pinned by test to
-`SOURCE_FLOOR.shortNoticeSec` (config.ts deliberately imports nothing: a real import broke 40
-mocked-shared tests at once).
+Status: retired. The old `SHORT_SOURCE_RESCUE` / `SHORT_SOURCE_RESCUE_MAX_SEC` flags and their
+mid-source counterpart are no longer parsed, and the `analyze-v2/rescue.ts` delivery path and
+`rescue` telemetry were removed after the critic-rejection audit found that this bypass could ship
+`keep:false` clips. The historical details below explain the original decision and are not active
+runtime policy.
+
+Core V4 is the replacement direction: `ANALYZE_OUTCOME_RECOVERY_V1=off` by default, with bounded
+`shadow`/`on` modes gated by the shared quality lane and a versioned evaluation fingerprint. No V4
+recovery behavior is active in this rollout.
 
 The funnel numbers that motivated it: 16 of 33 users' FIRST submission was under 5 minutes, they
 averaged 0.2 clips, 2 of 16 returned; job_steps telemetry on all 17 short NO_VIABLE_MOMENTS jobs
@@ -873,15 +878,15 @@ shows the scanner FOUND candidates and everything died downstream of the critic 
 gate, snap, selection tier "none") - never for lack of judged material. So the weak-fallback
 tier in select.ts could rescue nothing: eligibility empties the pool before selection ever runs.
 
-Mechanism (`analyze-v2/rescue.ts`, called only at the engine's final empty exit, strictly AFTER
-the unjudged guard so technical failures keep failing): best-scoring critic verdict - keep:false
-included, that judgement is exactly what a demo clip overrides - that `snapNodes` can realize,
+Historical mechanism (`analyze-v2/rescue.ts`, since removed, called at the engine's final empty exit,
+strictly AFTER the unjudged guard): best-scoring critic verdict - keep:false included, that
+judgement was exactly what a demo clip overrode - that `snapNodes` could realize,
 `regroundCopy` then verbatim-snippet on script mismatch (zero LLM calls), `lowQuality: true` so
 the existing "best available" caption and web badge travel with it. An overLength snap is
 compressed like an unblessed clip, never shipped wide. `sourceDurationSec` reaches the engine
 only from stages/analyze.ts; eval scripts never pass it, so every corpus run stays
-byte-identical. Telemetry: `rescue` key present iff the stage ran (arcAudit's not-a-key
-promise); `tier` stays "none" truthfully.
+byte-identical. Historical telemetry used a `rescue` key iff the stage ran (`tier` stayed "none"
+truthfully); current runtime emits no such key.
 
 NO_USABLE_SPEECH shorts (8 of 25 measured) stay honest zeros - nothing to subtitle - as do
 song-gate refusals and scanner-empty sources: no verdict, no rescue.

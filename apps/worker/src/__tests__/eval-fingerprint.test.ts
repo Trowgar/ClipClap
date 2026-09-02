@@ -140,6 +140,20 @@ describe("assertFingerprintMatches", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["empty object", {}],
+    ["array", []],
+    ["string", "malformed"],
+    ["number", 7],
+    ["boolean", true],
+  ])("fails closed with a controlled error for a malformed %s", (_label, recorded) => {
+    const warn = vi.fn();
+    expect(() => assertFingerprintMatches("malformed", recorded as never, current, warn)).toThrow(
+      /invalid engine fingerprint.*recognized/i,
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("fails naming the critic model when it changed", () => {
     const recorded: EngineFingerprint = { ...current, criticModel: "gpt-5.1" };
     const changed = computeFingerprint({ ...baseCfg, criticModel: "gpt-6-turbo" });
