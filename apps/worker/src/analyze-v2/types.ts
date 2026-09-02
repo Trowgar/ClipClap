@@ -186,6 +186,32 @@ export type NoClipsReasonValue =
   | "NO_VIABLE_MOMENTS"
   | "PARTIAL_TRANSCRIPT";
 
+/** Closed terminal dispositions for the primary candidate lane. A candidate
+ * may receive exactly one of these and that record is immutable. */
+export type CandidatePrimaryDisposition =
+  | "not_selected_for_critic"
+  | "critic_rejected"
+  | "evidence_rejected"
+  | "snap_rejected"
+  | "selection_not_chosen"
+  | "arc_rejected"
+  | "post_boundary_rejected"
+  | "standalone_rejected"
+  | "finalizer_rejected"
+  | "shipped";
+
+/** Recovery uses the same quality authorities, but has its own immutable lane
+ * accounting so recovery never rewrites primary history. */
+export type CandidateRecoveryDisposition = Exclude<
+  CandidatePrimaryDisposition,
+  "not_selected_for_critic"
+>;
+
+/** Backwards-friendly aliases for consumers that refer to the shared closed
+ * disposition vocabulary without naming the lane. */
+export type CandidateDisposition = CandidatePrimaryDisposition;
+export type RecoveryDisposition = CandidateRecoveryDisposition;
+
 /** Closed defect vocabulary for a broken ENTRY, verbatim from the arc-audit
  *  design (spec 2026-08-10 §2a). Mirrored in ARC_AUDIT_SCHEMA's enum. */
 export type ArcEntryDefect =
