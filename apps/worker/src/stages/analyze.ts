@@ -7,7 +7,10 @@ import type { Prisma } from "@prisma/client";
 import { analyzeHighlightsV1 } from "../processors/analyze";
 import { analyzeHighlightsV2, evaluateVisualRecall } from "../analyze-v2";
 import { AnalyzeTechnicalError } from "../analyze-v2/critic";
-import { loadAnalyzeConfig } from "../analyze-v2/config";
+import {
+  loadAnalyzeConfig,
+  OUTCOME_RECOVERY_VERSION,
+} from "../analyze-v2/config";
 import { resolveEngine } from "../analyze-v2/dispatch";
 import { detectSong } from "../analyze-v2/song-gate";
 import { selectHookWindows, type HookWindow } from "../analyze-v2/music-hook";
@@ -48,6 +51,7 @@ export async function runAnalyzeStage(
           analyzeMs,
           analyzeEngine: "LEGACY",
           highlightsVersion: 1,
+          analysisVersion: OUTCOME_RECOVERY_VERSION,
         },
       });
 
@@ -270,6 +274,7 @@ export async function runAnalyzeStage(
         analyzeMs,
         analyzeEngine: "RECALL_CRITIC",
         highlightsVersion: 2,
+        analysisVersion: OUTCOME_RECOVERY_VERSION,
         noClipsReason: result.noClipsReason ?? null,
         analysisInputTokens: result.usage.inputTokens,
         analysisOutputTokens: result.usage.outputTokens,

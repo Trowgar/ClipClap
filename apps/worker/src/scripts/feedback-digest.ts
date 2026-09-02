@@ -76,6 +76,12 @@ interface FeedbackSnapshot {
   payoffAt?: number | null;
   analyzeEngine?: string | null;
   highlightsVersion?: number | null;
+  analysisVersion?: string | null;
+  outcomeRecovery?: {
+    mode?: string | null;
+    outcome?: string | null;
+    version?: string | null;
+  } | null;
   language?: string | null;
   sourceDurationSec?: number | null;
   cropPlan?: {
@@ -151,6 +157,7 @@ function renderClip(row: Row, videoLink: string): string {
     `- Score: ${num(s.score, 2)}   Kind: ${str(s.clipKind)}   Low quality: ${s.lowQuality ? "yes" : "no"}`,
     `- Hook: ${num(s.hookStart)}s -> ${num(s.hookEnd)}s   Payoff: ${num(s.payoffAt)}s`,
     `- Engine: ${str(s.analyzeEngine)}   Highlights version: ${s.highlightsVersion ?? "-"}   Language: ${str(s.language)}`,
+    `- Analysis version: ${str(s.analysisVersion)}   Recovery: mode=${str(s.outcomeRecovery?.mode)} outcome=${str(s.outcomeRecovery?.outcome)} version=${str(s.outcomeRecovery?.version)}`,
     `- Source duration: ${s.sourceDurationSec ?? "-"}s`,
     crop
       ? `- Crop plan: ${crop.keyframes ?? "-"} keyframes, layout=${crop.layout ?? "-"}, static=${crop.static ? "yes" : "no"}`

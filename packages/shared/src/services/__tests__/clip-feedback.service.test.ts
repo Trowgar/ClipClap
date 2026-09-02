@@ -38,6 +38,7 @@ const CLIP = {
   job: {
     analyzeEngine: "recall-critic",
     highlightsVersion: 2,
+    analysisVersion: "core-v4-recovery-v1",
     language: "en",
     sourceDurationSec: 3600,
     transcriptJson: {
@@ -48,6 +49,22 @@ const CLIP = {
         { start: 150, end: 160, text: "after" },
       ],
     },
+    steps: [{
+      outputJson: {
+        telemetry: {
+          outcomeRecovery: {
+            mode: "on",
+            outcome: "shipped",
+            version: "core-v4-recovery-v1",
+            candidateIds: ["secret-candidate-id"],
+            transcript: "secret-whole-transcript",
+            sourceKey: "secret-source-key",
+            sourceUrl: "https://secret.invalid/source",
+            userId: "secret-user-id",
+          },
+        },
+      },
+    }],
   },
 };
 
@@ -184,6 +201,61 @@ describe("recordClipFeedback write shape", () => {
 });
 
 describe("snapshot", () => {
+  it("selects ANALYZE attribution and freezes only its safe V4 fields", async () => {
+    await recordClipFeedback({
+      clipId: "clip-1",
+      userId: "user-1",
+      surface: "bot",
+      verdict: "NO",
+    });
+
+    expect(clipFindFirst.mock.calls[0][0].select.job.select).toMatchObject({
+      analysisVersion: true,
+      steps: {
+        where: { step: "ANALYZE" },
+        take: 1,
+        select: { outputJson: true },
+      },
+    });
+    const snapshot = feedbackUpsert.mock.calls[0][0].create.snapshot;
+    expect(snapshot).toMatchObject({
+      analysisVersion: "core-v4-recovery-v1",
+      outcomeRecovery: {
+        mode: "on",
+        outcome: "shipped",
+        version: "core-v4-recovery-v1",
+      },
+    });
+    expect(snapshot.outcomeRecovery).toEqual({
+      mode: "on",
+      outcome: "shipped",
+      version: "core-v4-recovery-v1",
+    });
+    const serialized = JSON.stringify(snapshot);
+    expect(serialized).not.toContain("secret-candidate-id");
+    expect(serialized).not.toContain("secret-whole-transcript");
+    expect(serialized).not.toContain("secret-source-key");
+    expect(serialized).not.toContain("secret.invalid");
+    expect(serialized).not.toContain("secret-user-id");
+  });
+
+  it("keeps historical V4 attribution nullable", async () => {
+    clipFindFirst.mockResolvedValue({
+      ...CLIP,
+      job: { ...CLIP.job, analysisVersion: null, steps: [] },
+    });
+    await recordClipFeedback({
+      clipId: "clip-1",
+      userId: "user-1",
+      surface: "bot",
+      verdict: "NO",
+    });
+
+    const snapshot = feedbackUpsert.mock.calls[0][0].create.snapshot;
+    expect(snapshot.analysisVersion).toBeNull();
+    expect(snapshot.outcomeRecovery).toBeNull();
+  });
+
   it("freezes clip and job context and slices the transcript to the clip window", async () => {
     await recordClipFeedback({
       clipId: "clip-1",

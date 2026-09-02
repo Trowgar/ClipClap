@@ -494,6 +494,9 @@ model Job {
   sourceSweptAt         DateTime?
   analyzeEngine         AnalyzeEngine?
   highlightsVersion     Int            @default(1)
+  /// Immutable analyzer release attribution for outputs produced after the
+  /// version stamp was introduced. Historical jobs remain NULL.
+  analysisVersion       String?
   transcriptCoverage    Float?
   transcriptPartial     Boolean        @default(false)
   analysisInputTokens   Int?

@@ -41,6 +41,50 @@ interface TranscriptSegment {
   text?: string;
 }
 
+const RECOVERY_MODES = new Set(["off", "shadow", "on"]);
+const RECOVERY_OUTCOMES = new Set([
+  "not_eligible",
+  "no_candidate",
+  "empty_pool",
+  "rejected",
+  "failed",
+  "shadow_hit",
+  "shadow_miss",
+  "shipped",
+]);
+const RECOVERY_VERSIONS = new Set(["core-v4-recovery-v1"]);
+
+interface OutcomeRecoverySnapshot {
+  mode: string;
+  outcome: string;
+  version: string;
+}
+
+/** Reduce ANALYZE telemetry to its bounded attribution tuple. Nothing else
+ * from the step output is allowed into the customer-feedback snapshot. */
+function digestOutcomeRecovery(
+  steps: readonly { outputJson?: unknown }[] | null | undefined
+): OutcomeRecoverySnapshot | null {
+  const output = steps?.[0]?.outputJson;
+  if (!output || typeof output !== "object" || Array.isArray(output)) return null;
+  const telemetry = (output as Record<string, unknown>).telemetry;
+  if (!telemetry || typeof telemetry !== "object" || Array.isArray(telemetry)) return null;
+  const recovery = (telemetry as Record<string, unknown>).outcomeRecovery;
+  if (!recovery || typeof recovery !== "object" || Array.isArray(recovery)) return null;
+  const { mode, outcome, version } = recovery as Record<string, unknown>;
+  if (
+    typeof mode !== "string" ||
+    typeof outcome !== "string" ||
+    typeof version !== "string" ||
+    !RECOVERY_MODES.has(mode) ||
+    !RECOVERY_OUTCOMES.has(outcome) ||
+    !RECOVERY_VERSIONS.has(version)
+  ) {
+    return null;
+  }
+  return { mode, outcome, version };
+}
+
 /** Text of every segment that overlaps the clip window, joined and capped. */
 function sliceTranscript(
   transcriptJson: unknown,
@@ -119,9 +163,15 @@ export async function recordClipFeedback(
         select: {
           analyzeEngine: true,
           highlightsVersion: true,
+          analysisVersion: true,
           language: true,
           sourceDurationSec: true,
           transcriptJson: true,
+          steps: {
+            where: { step: "ANALYZE" },
+            take: 1,
+            select: { outputJson: true },
+          },
         },
       },
     },
@@ -162,6 +212,8 @@ export async function recordClipFeedback(
     payoffAt: clip.payoffAt,
     analyzeEngine: clip.job?.analyzeEngine ?? null,
     highlightsVersion: clip.job?.highlightsVersion ?? null,
+    analysisVersion: clip.job?.analysisVersion ?? null,
+    outcomeRecovery: digestOutcomeRecovery(clip.job?.steps),
     language: clip.job?.language ?? null,
     sourceDurationSec: clip.job?.sourceDurationSec ?? null,
     cropPlan: digestCropPlan(clip.cropPlan),
