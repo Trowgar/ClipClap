@@ -7,7 +7,7 @@ import type { Prisma } from "@prisma/client";
 import { analyzeHighlightsV1 } from "../processors/analyze";
 import { analyzeHighlightsV2, evaluateVisualRecall } from "../analyze-v2";
 import { AnalyzeTechnicalError } from "../analyze-v2/critic";
-import { loadAnalyzeConfig } from "../analyze-v2/config";
+import { loadAnalyzeConfig, OUTCOME_RECOVERY_VERSION } from "../analyze-v2/config";
 import { resolveEngine } from "../analyze-v2/dispatch";
 import { detectSong } from "../analyze-v2/song-gate";
 import { selectHookWindows, type HookWindow } from "../analyze-v2/music-hook";
@@ -198,6 +198,26 @@ export async function runAnalyzeStage(
           telemetry: {
             path: "song-gate",
             songGate,
+            ...(cfg.outcomeRecoveryMode !== "off"
+              ? {
+                  outcomeRecovery: {
+                    version: OUTCOME_RECOVERY_VERSION,
+                    mode: cfg.outcomeRecoveryMode,
+                    eligible: false,
+                    reason: "song_gate",
+                    tailSize: 0,
+                    poolSize: 0,
+                    excludedMissingRange: 0,
+                    judged: 0,
+                    counters: { selectedForFinalizer: 0, finalizerSurvivors: 0 },
+                    primaryDispositions: {},
+                    recoveryDispositions: {},
+                    addedUsage: { inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} },
+                    elapsedMs: 0,
+                    outcome: "not_eligible",
+                  },
+                }
+              : {}),
             ...(manualVisualRecall ? { visualRecall: manualVisualRecall } : {}),
           },
           usage: newUsage(),

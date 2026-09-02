@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildOutcomeRecoveryPool,
   isOutcomeRecoveryEligible,
+  mergeUsage,
 } from "../analyze-v2/outcome-recovery";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import type { MergedCandidate, SentenceNode } from "../analyze-v2/types";
@@ -34,6 +35,36 @@ function candidate(id: string, input: Partial<MergedCandidate> = {}): MergedCand
 }
 
 describe("outcome recovery pool", () => {
+  it("merges isolated usage exactly once, including per-model buckets", () => {
+    const target = {
+      inputTokens: 10,
+      outputTokens: 2,
+      requests: 1,
+      byModel: { primary: { inputTokens: 10, outputTokens: 2, requests: 1 } },
+    };
+    const addition = {
+      inputTokens: 7,
+      outputTokens: 5,
+      requests: 2,
+      byModel: {
+        primary: { inputTokens: 3, outputTokens: 1, requests: 1 },
+        recovery: { inputTokens: 4, outputTokens: 4, requests: 1 },
+      },
+    };
+    mergeUsage(target, addition);
+    expect(target).toEqual({
+      inputTokens: 17,
+      outputTokens: 7,
+      requests: 3,
+      byModel: {
+        primary: { inputTokens: 13, outputTokens: 3, requests: 2 },
+        recovery: { inputTokens: 4, outputTokens: 4, requests: 1 },
+      },
+    });
+    mergeUsage(target, target);
+    expect(target.inputTokens).toBe(17);
+  });
+
   it("rejects malformed input atomically before admitting any candidate", () => {
     const valid = candidate("valid", { startNode: 0, payoffNode: 0, endNode: 0 });
     const cases: Array<{ candidates?: MergedCandidate[]; nodes?: SentenceNode[]; missingRanges?: Array<{ start: number; end: number }> }> = [

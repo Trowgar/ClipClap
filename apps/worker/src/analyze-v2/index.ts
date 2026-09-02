@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { TranscriptionResult } from "@clipclap/shared";
-import { loadAnalyzeConfig, type AnalyzeConfig } from "./config";
+import { loadAnalyzeConfig, OUTCOME_RECOVERY_VERSION, type AnalyzeConfig } from "./config";
 import { runQualityLane } from "./quality-lane";
 import { buildSentenceGraph } from "./sentence-graph";
 import { resolveMode } from "./mode";
@@ -13,6 +13,13 @@ import {
   type CriticCandidatePartition,
 } from "./candidates";
 import { AnalyzeTechnicalError } from "./critic";
+import {
+  buildOutcomeRecoveryPool,
+  isOutcomeRecoveryEligible,
+  mergeUsage,
+} from "./outcome-recovery";
+import { createCandidateTrace } from "./candidate-trace";
+import type { CandidateTraceDescriptor } from "./candidate-trace";
 import { detectTeaserRegion, isInTeaserRegion } from "./teaser";
 import { newUsage } from "./llm";
 import { dominantScript } from "./language";
@@ -22,6 +29,8 @@ import {
   type VisualRecallTelemetry,
 } from "./visual-candidates";
 import type {
+  CandidatePrimaryDisposition,
+  LlmUsage,
   MergedCandidate,
   V2Highlight,
   V2Result,
@@ -65,6 +74,122 @@ function countCandidateTypes(candidates: readonly { type: string }[]): Record<st
   const counts: Record<string, number> = {};
   for (const candidate of candidates) counts[candidate.type] = (counts[candidate.type] ?? 0) + 1;
   return counts;
+}
+
+type RecoveryOutcome =
+  | "not_eligible"
+  | "no_candidate"
+  | "empty_pool"
+  | "rejected"
+  | "failed"
+  | "shadow_hit"
+  | "shadow_miss"
+  | "shipped";
+type RecoveryReason =
+  | "mode_off"
+  | "non_empty"
+  | "wrong_content_reason"
+  | "partial_transcript"
+  | "missing_range"
+  | "degenerate"
+  | "song_gate"
+  | "no_unjudged_tail"
+  | "unjudged_tail"
+  | "empty_pool"
+  | "quality_error"
+  | "malformed_state";
+
+function safeUsage(usage: LlmUsage): LlmUsage {
+  const read = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0
+      ? value
+      : 0;
+  const byModel: Record<string, { inputTokens: number; outputTokens: number; requests: number }> = {};
+  if (usage?.byModel && typeof usage.byModel === "object") {
+    for (const [model, raw] of Object.entries(usage.byModel)) {
+      if (!model || raw === null || typeof raw !== "object") continue;
+      const bucket = raw as Partial<LlmUsage>;
+      byModel[model] = {
+        inputTokens: read(bucket.inputTokens),
+        outputTokens: read(bucket.outputTokens),
+        requests: read(bucket.requests),
+      };
+    }
+  }
+  return {
+    inputTokens: read(usage?.inputTokens),
+    outputTokens: read(usage?.outputTokens),
+    requests: read(usage?.requests),
+    byModel,
+  };
+}
+
+function recoveryTelemetry(input: {
+  mode: AnalyzeConfig["outcomeRecoveryMode"];
+  eligible: boolean;
+  reason: RecoveryReason;
+  tailSize: number;
+  poolSize: number;
+  excludedMissingRange: number;
+  judged: number;
+  counters: { selectedForFinalizer: number; finalizerSurvivors: number };
+  primaryDispositions: Record<string, number>;
+  recoveryDispositions: Record<string, number>;
+  addedUsage: LlmUsage;
+  elapsedMs: number;
+  outcome: RecoveryOutcome;
+}): Record<string, unknown> {
+  return {
+    version: OUTCOME_RECOVERY_VERSION,
+    mode: input.mode,
+    eligible: input.eligible,
+    reason: input.reason,
+    tailSize: input.tailSize,
+    poolSize: input.poolSize,
+    excludedMissingRange: input.excludedMissingRange,
+    judged: input.judged,
+    counters: input.counters,
+    primaryDispositions: input.primaryDispositions,
+    recoveryDispositions: input.recoveryDispositions,
+    addedUsage: safeUsage(input.addedUsage),
+    elapsedMs: Math.max(0, Math.round(input.elapsedMs)),
+    outcome: input.outcome,
+  };
+}
+
+function terminalCounts(terminal: ReadonlyMap<string, string>, tail: readonly MergedCandidate[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const disposition of terminal.values()) counts[disposition] = (counts[disposition] ?? 0) + 1;
+  if (tail.length > 0) counts.not_selected_for_critic = (counts.not_selected_for_critic ?? 0) + tail.length;
+  return counts;
+}
+
+function primaryTraceForRecovery(input: {
+  selected: readonly MergedCandidate[];
+  selectedMissing: ReadonlySet<string>;
+  tail: readonly MergedCandidate[];
+  terminal: ReadonlyMap<string, CandidatePrimaryDisposition>;
+}) {
+  const descriptors: CandidateTraceDescriptor[] = [...input.selected, ...input.tail].map((candidate) => ({
+    id: candidate.id,
+    startNode: candidate.startNode,
+    payoffNode: candidate.payoffNode,
+    endNode: candidate.endNode,
+    interest: candidate.interest,
+    type: candidate.type as CandidateTraceDescriptor["type"],
+  }));
+  const trace = createCandidateTrace(descriptors);
+  for (const candidate of input.selected) {
+    if (input.selectedMissing.has(candidate.id)) {
+      trace.terminatePrimary(candidate.id, "missing_range_rejected");
+      continue;
+    }
+    const disposition = input.terminal.get(candidate.id);
+    if (!disposition) throw new AnalyzeTechnicalError("candidate trace missing primary terminal");
+    trace.terminatePrimary(candidate.id, disposition);
+  }
+  for (const candidate of input.tail) trace.terminatePrimary(candidate.id, "not_selected_for_critic");
+  return trace;
 }
 
 function visualRecallTelemetry(
@@ -145,6 +270,25 @@ export async function analyzeHighlightsV2(
         speechSec,
         path: "degenerate",
         ...(visualRecall ? { visualRecall } : {}),
+        ...(cfg.outcomeRecoveryMode !== "off"
+          ? {
+              outcomeRecovery: recoveryTelemetry({
+                mode: cfg.outcomeRecoveryMode,
+                eligible: false,
+                reason: "degenerate",
+                tailSize: 0,
+                poolSize: 0,
+                excludedMissingRange: 0,
+                judged: 0,
+                counters: { selectedForFinalizer: 0, finalizerSurvivors: 0 },
+                primaryDispositions: {},
+                recoveryDispositions: {},
+                addedUsage: usage,
+                elapsedMs: 0,
+                outcome: "not_eligible",
+              }),
+            }
+          : {}),
       },
       usage,
     };
@@ -183,6 +327,7 @@ export async function analyzeHighlightsV2(
   };
   const { mode, modeResolution } = resolveMode(modeInput, cfg);
   let candidates: MergedCandidate[];
+  let selectedCriticCandidates: MergedCandidate[] = [];
   // Retained only for the later outcome-recovery lane. It is deliberately not
   // part of telemetry or the returned result while V4 is inactive.
   let unjudgedCriticCandidates: MergedCandidate[] = [];
@@ -218,6 +363,7 @@ export async function analyzeHighlightsV2(
         },
       ];
     }
+    selectedCriticCandidates = candidates;
     scannerTelemetry = { path: "tiny" };
   } else {
     const scan = await runScanner(
@@ -287,6 +433,7 @@ export async function analyzeHighlightsV2(
       mode
     );
     candidates = criticPartition.selected;
+    selectedCriticCandidates = criticPartition.selected;
     unjudgedCriticCandidates = criticPartition.unselected;
     if (visualTelemetry) visualTelemetry.criticByType = countCandidateTypes(candidates);
     scannerTelemetry = {
@@ -329,12 +476,15 @@ export async function analyzeHighlightsV2(
   // audio we never heard cannot be verified
   const missingRanges = transcription.missingRanges ?? [];
   let holeDrops = 0;
+  const selectedMissingRangeIds = new Set<string>();
   if (missingRanges.length > 0) {
     const before = candidates.length;
     candidates = candidates.filter((c) => {
       const startSec = nodes[c.startNode].start;
       const endSec = nodes[c.endNode].end;
-      return !missingRanges.some((r) => startSec < r.end && endSec > r.start);
+      const intersects = missingRanges.some((r) => startSec < r.end && endSec > r.start);
+      if (intersects) selectedMissingRangeIds.add(c.id);
+      return !intersects;
     });
     holeDrops = before - candidates.length;
   }
@@ -368,6 +518,25 @@ export async function analyzeHighlightsV2(
         // does not change which jobs get the key.
         ...(cfg.streamModeEnabled ? { analysisMode: mode, modeResolution } : {}),
         ...(visualTelemetry ? { visualRecall: visualTelemetry } : {}),
+        ...(cfg.outcomeRecoveryMode !== "off"
+          ? {
+              outcomeRecovery: recoveryTelemetry({
+                mode: cfg.outcomeRecoveryMode,
+                eligible: false,
+                reason: "no_unjudged_tail",
+                tailSize: 0,
+                poolSize: 0,
+                excludedMissingRange: 0,
+                judged: 0,
+                counters: { selectedForFinalizer: 0, finalizerSurvivors: 0 },
+                primaryDispositions: {},
+                recoveryDispositions: {},
+                addedUsage: usage,
+                elapsedMs: 0,
+                outcome: "no_candidate",
+              }),
+            }
+          : {}),
       },
       usage,
     };
@@ -506,6 +675,191 @@ export async function analyzeHighlightsV2(
       );
     }
 
+    // V4 FIRST-RESULT RECOVERY. This block is deliberately below the primary
+    // unjudged guard above: recovery can only reinterpret a complete, honest
+    // primary empty answer. It has its own usage accumulator so a thrown or
+    // ambiguous recovery lane can be merged once and fail open to this exact
+    // primary empty result.
+    if (cfg.outcomeRecoveryMode !== "off") {
+      const recoveryStartedAt = Date.now();
+      const primaryNoClipsReason = partial ? "PARTIAL_TRANSCRIPT" : "NO_VIABLE_MOMENTS";
+      let trace: ReturnType<typeof createCandidateTrace> | undefined;
+      let primaryDispositions: Record<string, number> = {};
+      let recoveryDispositions: Record<string, number> = {};
+      let recoveryUsage = newUsage();
+      let pool: ReturnType<typeof buildOutcomeRecoveryPool> = {
+        candidates: [],
+        excludedMissingRange: 0,
+      };
+
+      const baseTelemetry = (input: {
+        eligible: boolean;
+    reason: RecoveryReason;
+        outcome: RecoveryOutcome;
+        judged?: number;
+        counters?: { selectedForFinalizer: number; finalizerSurvivors: number };
+      }) => recoveryTelemetry({
+        mode: cfg.outcomeRecoveryMode,
+        eligible: input.eligible,
+        reason: input.reason,
+        tailSize: unjudgedCriticCandidates.length,
+        poolSize: pool.candidates.length,
+        excludedMissingRange: pool.excludedMissingRange,
+        judged: input.judged ?? 0,
+        counters: input.counters ?? { selectedForFinalizer: 0, finalizerSurvivors: 0 },
+        primaryDispositions,
+        recoveryDispositions,
+        addedUsage: recoveryUsage,
+        elapsedMs: Date.now() - recoveryStartedAt,
+        outcome: input.outcome,
+      });
+
+      try {
+        trace = primaryTraceForRecovery({
+          selected: selectedCriticCandidates,
+          selectedMissing: selectedMissingRangeIds,
+          tail: unjudgedCriticCandidates,
+          terminal: quality.terminal,
+        });
+        pool = buildOutcomeRecoveryPool({
+          candidates: unjudgedCriticCandidates,
+          nodes,
+          missingRanges,
+          maxCandidates: cfg.outcomeRecoveryMaxCandidates,
+        });
+        const eligibility = isOutcomeRecoveryEligible({
+          mode: cfg.outcomeRecoveryMode,
+          primaryHighlights: highlights,
+          noClipsReason: primaryNoClipsReason,
+          transcriptPartial: partial,
+          missingRangeDrops: holeDrops + pool.excludedMissingRange,
+          path: typeof scannerTelemetry.path === "string" ? scannerTelemetry.path : "unknown",
+          unselectedCount: unjudgedCriticCandidates.length,
+        });
+        primaryDispositions = trace.summaryPrimary();
+        if (!eligibility.eligible) {
+          recoveryDispositions = trace.summaryRecovery();
+          return {
+            highlights: [],
+            noClipsReason: primaryNoClipsReason,
+            telemetry: { ...telemetry, outcomeRecovery: baseTelemetry({ eligible: false, reason: eligibility.reason, outcome: pool.candidates.length === 0 && eligibility.reason === "no_unjudged_tail" ? "no_candidate" : "not_eligible" }) },
+            usage,
+          };
+        }
+        if (pool.candidates.length === 0) {
+          recoveryDispositions = trace.summaryRecovery();
+          return {
+            highlights: [],
+            noClipsReason: primaryNoClipsReason,
+            telemetry: { ...telemetry, outcomeRecovery: baseTelemetry({ eligible: true, reason: "empty_pool", outcome: "empty_pool" }) },
+            usage,
+          };
+        }
+
+        trace.registerRecoveryCandidates(pool.candidates.map((candidate) => candidate.id));
+        let recovery: Awaited<ReturnType<typeof runQualityLane>>;
+        try {
+          recovery = await runQualityLane({
+            lane: "recovery",
+            candidates: pool.candidates,
+            nodes,
+            languageIso,
+            cfg,
+            usage: recoveryUsage,
+            client,
+            retryDelayMs: options.retryDelayMs,
+            analysisMode: mode,
+            modeResolution,
+            missingRanges,
+            transcription,
+            sourceDurationSec: options.sourceDurationSec,
+            safeEndAuditTelemetryTestHook: options.safeEndAuditTelemetryTestHook,
+          });
+          for (const candidate of pool.candidates) {
+            const disposition = recovery.terminal.get(candidate.id);
+            if (!disposition) throw new AnalyzeTechnicalError("outcome recovery incomplete terminal accounting");
+            trace.terminateRecovery(candidate.id, disposition);
+          }
+          recoveryDispositions = trace.summaryRecovery();
+          const recoveryTelemetryData = recovery.telemetry as { invariantDrops?: number };
+          if (
+            [...recovery.terminal.values()].some((disposition) => disposition === "critic_unjudged") ||
+            (typeof recoveryTelemetryData.invariantDrops === "number" && recoveryTelemetryData.invariantDrops > 0)
+          ) {
+            throw new AnalyzeTechnicalError("outcome recovery contained unjudged candidates");
+          }
+        } catch {
+          // A recovery error is intentionally local. The primary lane already
+          // passed its technical guard, so the caller receives its complete
+          // empty answer while the failed recovery spend is still accounted.
+          for (const candidate of pool.candidates) {
+            try {
+              trace.terminateRecovery(candidate.id, "critic_unjudged");
+            } catch {
+              // A terminal already recorded before a later invariant fault is
+              // retained; the closed aggregate below remains fail-open.
+            }
+          }
+          mergeUsage(usage, recoveryUsage);
+          recoveryDispositions = trace.summaryRecovery();
+          return {
+            highlights: [],
+            noClipsReason: primaryNoClipsReason,
+            telemetry: { ...telemetry, outcomeRecovery: baseTelemetry({ eligible: true, reason: "quality_error", outcome: "failed" }) },
+            usage,
+          };
+        }
+
+        mergeUsage(usage, recoveryUsage);
+        const recoveryHit = recovery.highlights.length > 0;
+        const outcome: RecoveryOutcome =
+          cfg.outcomeRecoveryMode === "shadow"
+            ? recoveryHit ? "shadow_hit" : "shadow_miss"
+            : recoveryHit ? "shipped" : "rejected";
+        const recoveryTelemetryValue = baseTelemetry({
+          eligible: true,
+          reason: "unjudged_tail",
+          outcome,
+          judged: recovery.counters.judged,
+          counters: {
+            selectedForFinalizer: recovery.counters.selectedForFinalizer,
+            finalizerSurvivors: recovery.counters.finalizerSurvivors,
+          },
+        });
+        if (cfg.outcomeRecoveryMode === "shadow" || !recoveryHit) {
+          return {
+            highlights: [],
+            noClipsReason: primaryNoClipsReason,
+            telemetry: { ...telemetry, outcomeRecovery: recoveryTelemetryValue },
+            usage,
+          };
+        }
+        return {
+          highlights: recovery.highlights,
+          telemetry: { ...telemetry, outcomeRecovery: recoveryTelemetryValue },
+          usage,
+        };
+      } catch {
+        // Pool/trace malformed state is a recovery ineligibility, never a
+        // reason to rewrite or retry a complete primary empty answer.
+        if (trace) {
+          try {
+            primaryDispositions = trace.summaryPrimary();
+            recoveryDispositions = trace.summaryRecovery();
+          } catch {
+            primaryDispositions = {};
+            recoveryDispositions = {};
+          }
+        }
+        return {
+          highlights: [],
+          noClipsReason: primaryNoClipsReason,
+          telemetry: { ...telemetry, outcomeRecovery: baseTelemetry({ eligible: false, reason: "malformed_state", outcome: "failed" }) },
+          usage,
+        };
+      }
+    }
+
     // Every candidate survived the holes, every one came back with a real
     // verdict, and the emptiness is therefore a judgement - keep:false, or our
     // own evidence/snap/selection bar - made on audio we really heard. Never
@@ -519,7 +873,33 @@ export async function analyzeHighlightsV2(
     };
   }
 
-  return { highlights, telemetry, usage };
+  return {
+    highlights,
+    telemetry: cfg.outcomeRecoveryMode === "off"
+      ? telemetry
+      : {
+          ...telemetry,
+          outcomeRecovery: recoveryTelemetry({
+            mode: cfg.outcomeRecoveryMode,
+            eligible: false,
+            reason: "non_empty",
+            tailSize: unjudgedCriticCandidates.length,
+            poolSize: 0,
+            excludedMissingRange: 0,
+            judged: quality.counters.judged,
+            counters: {
+              selectedForFinalizer: quality.counters.selectedForFinalizer,
+              finalizerSurvivors: quality.counters.finalizerSurvivors,
+            },
+            primaryDispositions: terminalCounts(quality.terminal, unjudgedCriticCandidates),
+            recoveryDispositions: {},
+            addedUsage: newUsage(),
+            elapsedMs: 0,
+            outcome: "not_eligible",
+          }),
+        },
+    usage,
+  };
 }
 
 /** Every candidate the scanner found was thrown away for crossing a transcript

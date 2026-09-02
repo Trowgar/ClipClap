@@ -214,6 +214,8 @@ export type NoClipsReasonValue =
 export type CandidatePrimaryDisposition =
   | "not_selected_for_critic"
   | "critic_unjudged"
+  /** Candidate was excluded because its selected range intersects a transcript hole. */
+  | "missing_range_rejected"
   | "critic_rejected"
   | "evidence_rejected"
   | "snap_rejected"
@@ -228,14 +230,14 @@ export type CandidatePrimaryDisposition =
  * accounting so recovery never rewrites primary history. */
 export type CandidateRecoveryDisposition = Exclude<
   CandidatePrimaryDisposition,
-  "not_selected_for_critic"
+  "not_selected_for_critic" | "missing_range_rejected"
 >;
 
 /** Terminal vocabulary emitted by the shared quality lane. Partitioning is
  * the only stage allowed to say a candidate was not selected for critic. */
 export type QualityLaneDisposition = Exclude<
   CandidatePrimaryDisposition,
-  "not_selected_for_critic"
+  "not_selected_for_critic" | "missing_range_rejected"
 >;
 
 /** Backwards-friendly aliases for consumers that refer to the shared closed

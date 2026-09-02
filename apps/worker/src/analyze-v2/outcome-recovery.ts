@@ -1,4 +1,5 @@
 import type { OutcomeRecoveryMode } from "./config";
+import type { LlmUsage, ModelUsage } from "./types";
 import { isCandidateType, isNormalizedCandidateInterest } from "./types";
 import type {
   MergedCandidate,
@@ -9,6 +10,50 @@ import type {
 
 const PAYOFF_REGION_SEC = 600;
 const HARD_MAX_CANDIDATES = 12;
+
+/**
+ * Add one isolated lane's usage to the job accumulator. Recovery deliberately
+ * runs with a fresh accumulator, then crosses this seam exactly once. The
+ * source buckets are snapshotted before mutation so an accidentally aliased
+ * `byModel` object cannot be counted twice.
+ */
+export function mergeUsage(target: LlmUsage, addition: LlmUsage): void {
+  if (target === addition) return;
+  if (target === null || typeof target !== "object" || addition === null || typeof addition !== "object") {
+    throw new Error("outcome_recovery_usage_invariant");
+  }
+  const read = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0
+      ? value
+      : 0;
+  const buckets: Array<[string, ModelUsage]> = [];
+  if (addition.byModel && typeof addition.byModel === "object") {
+    for (const [model, raw] of Object.entries(addition.byModel)) {
+      if (!model || raw === null || typeof raw !== "object") continue;
+      const bucket = raw as Partial<ModelUsage>;
+      buckets.push([model, {
+        inputTokens: read(bucket.inputTokens),
+        outputTokens: read(bucket.outputTokens),
+        requests: read(bucket.requests),
+      }]);
+    }
+  }
+  const inputTokens = read(addition.inputTokens);
+  const outputTokens = read(addition.outputTokens);
+  const requests = read(addition.requests);
+  target.inputTokens = read(target.inputTokens) + inputTokens;
+  target.outputTokens = read(target.outputTokens) + outputTokens;
+  target.requests = read(target.requests) + requests;
+  if (target.byModel === null || typeof target.byModel !== "object") target.byModel = {};
+  for (const [model, bucket] of buckets) {
+    const current = target.byModel[model] ?? { inputTokens: 0, outputTokens: 0, requests: 0 };
+    target.byModel[model] = {
+      inputTokens: read(current.inputTokens) + bucket.inputTokens,
+      outputTokens: read(current.outputTokens) + bucket.outputTokens,
+      requests: read(current.requests) + bucket.requests,
+    };
+  }
+}
 
 function invariantFailure(): never {
   // Deliberately no candidate id, transcript, URL, or other source prose.

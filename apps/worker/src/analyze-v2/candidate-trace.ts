@@ -12,6 +12,7 @@ import type {
 const PRIMARY_DISPOSITIONS: readonly CandidatePrimaryDisposition[] = Object.freeze([
   "not_selected_for_critic",
   "critic_unjudged",
+  "missing_range_rejected",
   "critic_rejected",
   "evidence_rejected",
   "snap_rejected",
@@ -26,7 +27,7 @@ const PRIMARY_DISPOSITIONS: readonly CandidatePrimaryDisposition[] = Object.free
 const RECOVERY_DISPOSITIONS: readonly CandidateRecoveryDisposition[] = Object.freeze(
   PRIMARY_DISPOSITIONS.filter(
     (disposition): disposition is CandidateRecoveryDisposition =>
-      disposition !== "not_selected_for_critic",
+      disposition !== "not_selected_for_critic" && disposition !== "missing_range_rejected",
   ),
 );
 

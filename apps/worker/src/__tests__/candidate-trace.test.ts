@@ -73,6 +73,9 @@ describe("candidate trace", () => {
     expect(() => trace.terminateRecovery("c0", "not_selected_for_critic" as never)).toThrow(
       "invalid_recovery_disposition"
     );
+    expect(() => trace.terminateRecovery("c0", "missing_range_rejected" as never)).toThrow(
+      "invalid_recovery_disposition"
+    );
     expect(() => createCandidateTrace([candidate("c0"), candidate("c0")])).toThrow("duplicate_candidate");
   });
 

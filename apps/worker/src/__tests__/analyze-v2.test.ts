@@ -71,6 +71,75 @@ function client(...responses: any[]) {
 }
 
 describe("analyzeHighlightsV2", () => {
+  it("runs one bounded recovery quality lane for an honest empty tail and ships only its survivor", async () => {
+    const scanTwoCandidates = {
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            candidates: [
+              { start_node: 10, end_node: 14, payoff_node: 13, interest: 0.9, type: "story", thread: null },
+              { start_node: 20, end_node: 24, payoff_node: 23, interest: 0.8, type: "insight", thread: null },
+            ],
+          }),
+        },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 100, completion_tokens: 30 },
+    };
+    const primaryReject = {
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            results: [{
+              id: "c0", keep: false, score: 0.1, grounded: true, self_contained: true,
+              start_node: 10, payoff_node: 13, end_node: 14,
+              hook_start_node: 12, hook_end_node: 13,
+              title: "", description: "", title_evidence_nodes: [], description_evidence_nodes: [], language: "ru",
+            }],
+          }),
+        },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 200, completion_tokens: 80 },
+    };
+    const recoveryKeep = {
+      choices: [{
+        message: {
+          content: JSON.stringify({
+            results: [{
+              id: "c1", keep: true, score: 0.9, grounded: true, self_contained: true,
+              start_node: 20, payoff_node: 23, end_node: 24,
+              hook_start_node: 22, hook_end_node: 23,
+              title: "Он объяснил идею", description: "Спикер объясняет идею.",
+              title_evidence_nodes: [23], description_evidence_nodes: [23], language: "ru",
+            }],
+          }),
+        },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 220, completion_tokens: 90 },
+    };
+    const recoveryCfg = {
+      ...cfg,
+      outcomeRecoveryMode: "on" as const,
+      criticMaxCandidates: 1,
+      perWindowMinCandidates: 1,
+      finalizerEnabled: false,
+    };
+    const c = client(scanTwoCandidates, primaryReject, recoveryKeep);
+    const r = await analyzeHighlightsV2(transcript(), { client: c, cfg: recoveryCfg, transcriptPartial: false });
+
+    expect(r.highlights).toHaveLength(1);
+    expect(r.highlights[0].title).toBe("Он объяснил идею");
+    expect(r.telemetry.outcomeRecovery).toEqual(expect.objectContaining({
+      mode: "on",
+      outcome: "shipped",
+      poolSize: 1,
+      judged: 1,
+    }));
+    expect(c.chat.completions.create).toHaveBeenCalledTimes(3);
+  });
+
   it("produces a scored, described highlight from scan + critic", async () => {
     const r = await analyzeHighlightsV2(transcript(), {
       client: client(scanResponse(), criticResponse(0.85)),
