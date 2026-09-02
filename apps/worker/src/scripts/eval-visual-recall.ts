@@ -6,9 +6,9 @@
  *
  * The manifest is deliberately private and anonymous. It contains only a
  * `caseKey` (not a job/user/source id), `kind` (`gaming`, `as_is`, or
- * `other`), local source/transcript paths, and human-labelled time windows.
- * `offShadowInvariant` is a required boolean recorded after the separate
- * deterministic off-vs-shadow replay tests pass. This command has no model or
+ * `other`), local source/transcript paths, human-labelled time windows, and an
+ * `invarianceEvidencePath` to separate deterministic off-vs-shadow replay
+ * evidence. This command has no model or
  * database dependency; it computes motion from each local source and maps
  * peaks to the local transcript.
  *
@@ -16,9 +16,11 @@
  * text, and external identifiers never leave the private input files.
  */
 import { readFile, stat as fsStat } from "node:fs/promises";
+import { isAbsolute } from "node:path";
 import { buildSentenceGraph } from "../analyze-v2/sentence-graph";
 import { loadAnalyzeConfig, type AnalyzeConfig } from "../analyze-v2/config";
 import { nominateVisualCandidates } from "../analyze-v2/visual-candidates";
+import { videoEnvelopes as defaultVideoEnvelopes, type VideoEnvelopes } from "../processors/video-envelopes";
 import type { TranscriptionResult } from "@clipclap/shared";
 
 export interface EvalWindow {
@@ -39,13 +41,17 @@ export interface EvalManifestCase {
 
 export interface EvalManifest {
   version: 1;
-  offShadowInvariant: boolean;
+  invarianceEvidencePath: string;
   cases: EvalManifestCase[];
 }
 
-export interface VideoEnvelopes {
-  lumaEnvelope: number[];
-  motionEnvelope: number[];
+export interface InvarianceEvidence {
+  version: 1;
+  passed: boolean;
+  testName: "visual-recall-wiring";
+  offHighlightsSha256: string;
+  shadowHighlightsSha256: string;
+  testedCommit: string;
 }
 
 export interface EvalCaseResult {
@@ -87,14 +93,14 @@ export interface EvalSummary {
 export interface EvalReport {
   schemaVersion: 1;
   candidateCap: number;
-  offShadowInvariant: { required: true; passed: boolean; separatelyVerified: true };
+  offShadowInvariant: { required: true; passed: boolean; separatelyVerified: boolean };
   cases: EvalCaseReport[];
   summary: EvalSummary;
   pass: boolean;
 }
 
 export interface VisualRecallEvalIo {
-  stat(path: string): Promise<{ size: number }>;
+  stat(path: string): Promise<{ size: number; isFile: (() => boolean) | boolean }>;
   readFile(path: string): Promise<string | Buffer>;
   stdout?(value: string): void;
   stderr?(value: string): void;
@@ -124,6 +130,7 @@ export interface VisualRecallCliResult {
 
 const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
 const MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024;
+const MAX_SOURCE_BYTES = 4 * 1024 * 1024 * 1024;
 const MAX_CASES = 500;
 const MAX_WINDOWS_PER_CASE = 500;
 const MAX_TIME_SEC = 7 * 24 * 60 * 60;
@@ -156,20 +163,21 @@ function parseWindows(value: unknown, required: boolean): EvalWindow[] {
 }
 
 function parsePath(value: unknown, label: string): string {
-  if (typeof value !== "string" || value.length === 0 || value.length > 4096 || value.includes("\0")) {
-    throw new Error(`${label} must be a local path`);
+  if (
+    typeof value !== "string" || value.length === 0 || value.length > 4096 ||
+    value.includes("\0") || !isAbsolute(value) || /^[A-Za-z][A-Za-z0-9+.-]*:/u.test(value)
+  ) {
+    throw new Error(`${label} must be an absolute local path`);
   }
   return value;
 }
 
 /** Parse the private manifest before any source or transcript work starts. */
 export function parseEvalManifest(value: unknown): EvalManifest {
-  if (!isRecord(value) || value.version !== 1 || value.offShadowInvariant === undefined) {
-    throw new Error("manifest requires version 1 and offShadowInvariant");
+  if (!isRecord(value) || value.version !== 1) {
+    throw new Error("manifest requires version 1");
   }
-  if (typeof value.offShadowInvariant !== "boolean") {
-    throw new Error("offShadowInvariant must be boolean");
-  }
+  const invarianceEvidencePath = parsePath(value.invarianceEvidencePath, "invarianceEvidencePath");
   if (!Array.isArray(value.cases) || value.cases.length === 0 || value.cases.length > MAX_CASES) {
     throw new Error("cases must be a non-empty bounded array");
   }
@@ -186,18 +194,52 @@ export function parseEvalManifest(value: unknown): EvalManifest {
       throw new Error("kind must be gaming, as_is, or other");
     }
     const parsedKind: EvalCaseKind = kind;
+    const positiveWindows = parseWindows(rawCase.positiveWindows, true);
+    const negativeWindows = rawCase.negativeWindows === undefined
+      ? []
+      : parseWindows(rawCase.negativeWindows, false);
+    const assertNoDuplicates = (windows: EvalWindow[], label: string) => {
+      const seen = new Set(windows.map((item) => `${item.start}:${item.end}`));
+      if (seen.size !== windows.length) throw new Error(`duplicate ${label} window`);
+    };
+    assertNoDuplicates(positiveWindows, "positive");
+    assertNoDuplicates(negativeWindows, "negative");
     return {
       caseKey,
       kind: parsedKind,
       sourcePath: parsePath(rawCase.sourcePath, "sourcePath"),
       transcriptPath: parsePath(rawCase.transcriptPath, "transcriptPath"),
-      positiveWindows: parseWindows(rawCase.positiveWindows, true),
-      negativeWindows: rawCase.negativeWindows === undefined
-        ? []
-        : parseWindows(rawCase.negativeWindows, false),
+      positiveWindows,
+      negativeWindows,
     };
   });
-  return { version: 1, offShadowInvariant: value.offShadowInvariant, cases };
+  return { version: 1, invarianceEvidencePath, cases };
+}
+
+export function parseInvarianceEvidence(value: unknown): InvarianceEvidence {
+  if (!isRecord(value) || value.version !== 1 || typeof value.passed !== "boolean") {
+    throw new Error("invariance evidence is malformed");
+  }
+  if (value.testName !== "visual-recall-wiring") {
+    throw new Error("invariance evidence testName is not allowlisted");
+  }
+  if (
+      typeof value.offHighlightsSha256 !== "string" ||
+      typeof value.shadowHighlightsSha256 !== "string" ||
+      typeof value.testedCommit !== "string" ||
+      !/^[a-f0-9]{64}$/iu.test(value.offHighlightsSha256) ||
+      !/^[a-f0-9]{64}$/iu.test(value.shadowHighlightsSha256) ||
+      !/^[a-f0-9]{40}$/iu.test(value.testedCommit)) {
+    throw new Error("invariance evidence is malformed");
+  }
+  return {
+    version: 1,
+    passed: value.passed,
+    testName: "visual-recall-wiring",
+    offHighlightsSha256: value.offHighlightsSha256,
+    shadowHighlightsSha256: value.shadowHighlightsSha256,
+    testedCommit: value.testedCommit,
+  };
 }
 
 function validWindow(value: EvalWindow): boolean {
@@ -295,11 +337,17 @@ function defaultIo(): VisualRecallEvalIo {
   };
 }
 
-async function defaultVideoEnvelopes(sourcePath: string): Promise<VideoEnvelopes> {
-  // TRANSCRIBE constructs its OpenAI client at module load. Keep this import
-  // lazy so pure metrics/tests never require production credentials.
-  const module = await import("../processors/transcribe");
-  return module.videoEnvelopes(sourcePath);
+async function boundedRegularFile(
+  io: VisualRecallEvalIo,
+  path: string,
+  maximumBytes: number,
+): Promise<number> {
+  const info = await io.stat(path);
+  const regular = typeof info.isFile === "function" ? info.isFile() : info.isFile;
+  if (!Number.isFinite(info.size) || info.size < 0 || info.size > maximumBytes || regular !== true) {
+    throw new Error("not a bounded regular file");
+  }
+  return info.size;
 }
 
 function textBytes(raw: string | Buffer): number {
@@ -347,11 +395,12 @@ function normalizedConfig(overrides: Partial<AnalyzeConfig>): AnalyzeConfig {
 function reportCase(
   item: EvalCaseResult,
   nominations: Array<{ start: number; end: number; peakSec: number; peakValue: number }>,
+  ordinal: number,
 ): EvalCaseReport {
   const positiveMatched = matchedCount(item.positiveWindows, item.nominatedWindows);
   const negativeMatched = matchedCount(item.negativeWindows, item.nominatedWindows);
   return {
-    caseKey: item.caseKey,
+    caseKey: `case-${ordinal}`,
     kind: item.kind,
     candidateCount: item.candidateCount,
     positive: {
@@ -377,14 +426,14 @@ function errorResult(io: VisualRecallEvalIo, message: string): VisualRecallCliRe
 export const VISUAL_RECALL_HELP = `Usage: eval-visual-recall.ts <private-manifest.json>
 
 Manifest JSON (version 1):
-  {"version":1,"offShadowInvariant":true,"cases":[
+  {"version":1,"invarianceEvidencePath":"/private/invariance.json","cases":[
     {"caseKey":"gaming-a","kind":"gaming","sourcePath":"/private/a.mp4",
      "transcriptPath":"/private/a.json","positiveWindows":[{"start":10,"end":20}],
      "negativeWindows":[]}
   ]}
 
-caseKey is an anonymous label only. Paths and transcript text stay private.
-offShadowInvariant must be set true only after the separate off/shadow replay gate passes.
+caseKey is an anonymous input label and is never printed. Paths and transcript text stay private.
+invarianceEvidencePath points to separate local JSON evidence from the off/shadow replay gate.
 The command computes local video envelopes and exits 1 when any release gate fails.
 `;
 
@@ -425,12 +474,14 @@ export async function runVisualRecallCli(
   }
   if (argv.length !== 3 || argv[2].startsWith("-")) return errorResult(io, "usage");
   const manifestPath = argv[2];
+  try {
+    parsePath(manifestPath, "manifestPath");
+  } catch {
+    return errorResult(io, "manifest_invalid");
+  }
   let manifestRaw: string | Buffer;
   try {
-    const info = await io.stat(manifestPath);
-    if (!Number.isFinite(info.size) || info.size < 0 || info.size > MAX_MANIFEST_BYTES) {
-      return errorResult(io, "manifest_invalid");
-    }
+    await boundedRegularFile(io, manifestPath, MAX_MANIFEST_BYTES);
     manifestRaw = await io.readFile(manifestPath);
     if (textBytes(manifestRaw) > MAX_MANIFEST_BYTES) return errorResult(io, "manifest_invalid");
   } catch {
@@ -449,6 +500,23 @@ export async function runVisualRecallCli(
     return errorResult(io, "manifest_invalid");
   }
 
+  let invarianceRaw: string | Buffer;
+  try {
+    await boundedRegularFile(io, manifest.invarianceEvidencePath, MAX_MANIFEST_BYTES);
+    invarianceRaw = await io.readFile(manifest.invarianceEvidencePath);
+    if (textBytes(invarianceRaw) > MAX_MANIFEST_BYTES) return errorResult(io, "manifest_invalid");
+  } catch {
+    return errorResult(io, "invariance_unreadable");
+  }
+  let invariance: InvarianceEvidence;
+  try {
+    invariance = parseInvarianceEvidence(JSON.parse(
+      typeof invarianceRaw === "string" ? invarianceRaw : invarianceRaw.toString("utf8"),
+    ));
+  } catch {
+    return errorResult(io, "invariance_invalid");
+  }
+
   const cfg = normalizedConfig(deps.loadConfig?.() ?? {});
   const candidateCap = cfg.visualRecallMaxCandidates;
   const videoEnvelopes = deps.videoEnvelopes ?? defaultVideoEnvelopes;
@@ -456,6 +524,8 @@ export async function runVisualRecallCli(
   const caseReports: EvalCaseReport[] = [];
   try {
     for (const item of manifest.cases) {
+      await boundedRegularFile(io, item.sourcePath, MAX_SOURCE_BYTES);
+      await boundedRegularFile(io, item.transcriptPath, MAX_TRANSCRIPT_BYTES);
       const rawTranscript = await io.readFile(item.transcriptPath);
       if (textBytes(rawTranscript) > MAX_TRANSCRIPT_BYTES) throw new Error("transcript too large");
       const transcription = parseTranscription(JSON.parse(
@@ -472,21 +542,23 @@ export async function runVisualRecallCli(
         candidateCount: nominated.candidateCount,
       };
       caseResults.push(evaluated);
-      caseReports.push(reportCase(evaluated, nominated.nominations));
+      caseReports.push(reportCase(evaluated, nominated.nominations, caseReports.length + 1));
     }
   } catch {
     return errorResult(io, "case_invalid");
   }
   const summary = summarizeCases(caseResults, {
     candidateCap,
-    offShadowInvariant: manifest.offShadowInvariant,
+    offShadowInvariant: invariance.passed &&
+      invariance.offHighlightsSha256.toLowerCase() === invariance.shadowHighlightsSha256.toLowerCase(),
   });
   const report: EvalReport = {
     schemaVersion: 1,
     candidateCap,
     offShadowInvariant: {
       required: true,
-      passed: manifest.offShadowInvariant,
+      passed: invariance.passed &&
+        invariance.offHighlightsSha256.toLowerCase() === invariance.shadowHighlightsSha256.toLowerCase(),
       separatelyVerified: true,
     },
     cases: caseReports,

@@ -3,6 +3,7 @@ import {
   matchesWindow,
   summarizeCases,
   parseEvalManifest,
+  parseInvarianceEvidence,
   runVisualRecallCli,
   type EvalCaseResult,
 } from "../eval-visual-recall";
@@ -100,7 +101,7 @@ describe("visual recall manifest validation and CLI output", () => {
   it("accepts the documented anonymous manifest shape", () => {
     const manifest = parseEvalManifest({
       version: 1,
-      offShadowInvariant: true,
+      invarianceEvidencePath: "/private/evidence.json",
       cases: [{
         caseKey: "gaming-a",
         kind: "gaming",
@@ -113,10 +114,10 @@ describe("visual recall manifest validation and CLI output", () => {
   });
 
   it("rejects malformed manifests with a bounded case/window shape", () => {
-    expect(() => parseEvalManifest({ version: 1, offShadowInvariant: true, cases: [] })).toThrow(/cases/i);
+    expect(() => parseEvalManifest({ version: 1, invarianceEvidencePath: "/private/evidence.json", cases: [] })).toThrow(/cases/i);
     expect(() => parseEvalManifest({
       version: 1,
-      offShadowInvariant: true,
+      invarianceEvidencePath: "/private/evidence.json",
       cases: [{
         caseKey: "../production-id",
         kind: "gaming",
@@ -127,7 +128,7 @@ describe("visual recall manifest validation and CLI output", () => {
     })).toThrow(/caseKey/i);
     expect(() => parseEvalManifest({
       version: 1,
-      offShadowInvariant: true,
+      invarianceEvidencePath: "/private/evidence.json",
       cases: [{
         caseKey: "gaming-a",
         kind: "gaming",
@@ -138,25 +139,75 @@ describe("visual recall manifest validation and CLI output", () => {
     })).toThrow(/window/i);
   });
 
+  it("rejects duplicate positive or negative windows", () => {
+    const base = {
+      version: 1,
+      invarianceEvidencePath: "/private/evidence.json",
+      cases: [{
+        caseKey: "gaming-a",
+        kind: "gaming",
+        sourcePath: "/private/source.mp4",
+        transcriptPath: "/private/transcript.json",
+        positiveWindows: [window(10, 20), window(10, 20)],
+      }],
+    };
+    expect(() => parseEvalManifest(base)).toThrow(/duplicate/i);
+    expect(() => parseEvalManifest({
+      ...base,
+      cases: [{ ...base.cases[0], positiveWindows: [window(10, 20)], negativeWindows: [window(30, 40), window(30, 40)] }],
+    })).toThrow(/duplicate/i);
+  });
+
+  it("requires local absolute paths and validates invariance evidence", () => {
+    expect(() => parseEvalManifest({
+      version: 1,
+      invarianceEvidencePath: "https://example.test/evidence.json",
+      cases: [{
+        caseKey: "gaming-a", kind: "gaming", sourcePath: "/private/source.mp4",
+        transcriptPath: "/private/transcript.json", positiveWindows: [window(10, 20)],
+      }],
+    })).toThrow(/local|absolute|path/i);
+    expect(() => parseInvarianceEvidence({
+      version: 1, passed: true, testName: "wrong",
+      offHighlightsSha256: "0".repeat(64), shadowHighlightsSha256: "0".repeat(64),
+      testedCommit: "0".repeat(40),
+    })).toThrow(/testName/i);
+    expect(parseInvarianceEvidence({
+      version: 1, passed: true, testName: "visual-recall-wiring",
+      offHighlightsSha256: "a".repeat(64), shadowHighlightsSha256: "a".repeat(64),
+      testedCommit: "b".repeat(40),
+    }).passed).toBe(true);
+  });
+
   it("prints sanitized JSON and exits nonzero for a failed gate", async () => {
     const output: string[] = [];
     const errors: string[] = [];
     const result = await runVisualRecallCli(
       ["node", "eval-visual-recall.ts", "/private/manifest.json"],
       {
-        stat: async () => ({ size: 100 }),
+        stat: async () => ({ size: 100, isFile: () => true }),
         readFile: async (path) => {
           if (path === "/private/manifest.json") {
             return JSON.stringify({
               version: 1,
-              offShadowInvariant: false,
+              invarianceEvidencePath: "/private/invariance.json",
               cases: [{
-                caseKey: "gaming-a",
+                caseKey: "production-looking-job-id-123",
                 kind: "gaming",
                 sourcePath: "/private/secret-source.mp4",
                 transcriptPath: "/private/secret-transcript.json",
                 positiveWindows: [window(10, 20)],
               }],
+            });
+          }
+          if (path === "/private/invariance.json") {
+            return JSON.stringify({
+              version: 1,
+              passed: false,
+              testName: "visual-recall-wiring",
+              offHighlightsSha256: "a".repeat(64),
+              shadowHighlightsSha256: "b".repeat(64),
+              testedCommit: "c".repeat(40),
             });
           }
           return JSON.stringify({
@@ -182,7 +233,8 @@ describe("visual recall manifest validation and CLI output", () => {
     expect(serialized).not.toContain("secret-source");
     expect(serialized).not.toContain("secret-transcript");
     expect(serialized).not.toContain("private transcript text");
-    expect(serialized).toContain('"offShadowInvariant"');
+    expect(serialized).not.toContain("production-looking-job-id-123");
+    expect(serialized).toContain('"separatelyVerified"');
     expect(JSON.parse(serialized).pass).toBe(false);
   });
 
