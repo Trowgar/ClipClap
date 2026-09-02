@@ -67,6 +67,10 @@ function boundedCap(value: number): number {
   return Math.min(HARD_MAX_CANDIDATES, Math.floor(value));
 }
 
+function isNonNegativeInteger(value: number): boolean {
+  return Number.isFinite(value) && Number.isInteger(value) && value >= 0;
+}
+
 /**
  * Build a deterministic, diversity-first pool from the primary lane's
  * unselected tail. This function only reads candidates/nodes and returns a
@@ -144,7 +148,7 @@ export function isOutcomeRecoveryEligible(input: {
   if (input.transcriptPartial) {
     return { eligible: false, reason: "partial_transcript" };
   }
-  if (input.missingRangeDrops > 0) {
+  if (!isNonNegativeInteger(input.missingRangeDrops) || input.missingRangeDrops > 0) {
     return { eligible: false, reason: "missing_range" };
   }
   if (input.path === "degenerate") {
@@ -158,7 +162,7 @@ export function isOutcomeRecoveryEligible(input: {
   if (input.path !== "full") {
     return { eligible: false, reason: "no_unjudged_tail" };
   }
-  if (input.unselectedCount <= 0) {
+  if (!isNonNegativeInteger(input.unselectedCount) || input.unselectedCount === 0) {
     return { eligible: false, reason: "no_unjudged_tail" };
   }
   return { eligible: true, reason: "unjudged_tail" };

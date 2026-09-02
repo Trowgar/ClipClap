@@ -31,6 +31,7 @@ export interface CandidateTraceSerialized {
 
 export interface CandidateTrace {
   terminatePrimary(id: string, disposition: CandidatePrimaryDisposition): void;
+  registerRecoveryCandidates(ids: readonly string[]): void;
   terminateRecovery(id: string, disposition: CandidateRecoveryDisposition): void;
   summaryPrimary(): CountMap<CandidatePrimaryDisposition>;
   summaryRecovery(): CountMap<CandidateRecoveryDisposition>;
@@ -80,11 +81,24 @@ export function createCandidateTrace(
 
   const primary = new Map<string, CandidatePrimaryDisposition>();
   const recovery = new Map<string, CandidateRecoveryDisposition>();
+  const registeredRecovery = new Set<string>();
   const primaryCounts = new Map<CandidatePrimaryDisposition, number>();
   const recoveryCounts = new Map<CandidateRecoveryDisposition, number>();
 
   const requireKnown = (id: string): void => {
     if (!ids.has(id)) fail("unknown_candidate");
+  };
+
+  const requireCompletePrimary = (): void => {
+    for (const id of ids) {
+      if (!primary.has(id)) fail("incomplete_primary_disposition");
+    }
+  };
+
+  const requireCompleteRecovery = (): void => {
+    for (const id of registeredRecovery) {
+      if (!recovery.has(id)) fail("incomplete_recovery_disposition");
+    }
   };
 
   return {
@@ -98,8 +112,26 @@ export function createCandidateTrace(
       increment(primaryCounts, disposition);
     },
 
+    registerRecoveryCandidates(candidateIds) {
+      const requested = new Set<string>();
+      // Preflight the complete registration so a bad batch cannot partially
+      // enroll its earlier entries.
+      for (const id of candidateIds) {
+        requireKnown(id);
+        if (requested.has(id) || registeredRecovery.has(id)) {
+          fail("duplicate_recovery_registration");
+        }
+        if (primary.get(id) !== "not_selected_for_critic") {
+          fail("primary_disposition_required");
+        }
+        requested.add(id);
+      }
+      for (const id of requested) registeredRecovery.add(id);
+    },
+
     terminateRecovery(id, disposition) {
       requireKnown(id);
+      if (!registeredRecovery.has(id)) fail("unregistered_recovery_candidate");
       if (recovery.has(id)) fail("duplicate_disposition");
       if (!isDisposition(disposition, RECOVERY_DISPOSITIONS)) {
         fail("invalid_recovery_disposition");
@@ -112,14 +144,18 @@ export function createCandidateTrace(
     },
 
     summaryPrimary() {
+      requireCompletePrimary();
       return countsObject(primaryCounts);
     },
 
     summaryRecovery() {
+      requireCompleteRecovery();
       return countsObject(recoveryCounts);
     },
 
     serialize() {
+      requireCompletePrimary();
+      requireCompleteRecovery();
       return {
         primary: countsObject(primaryCounts),
         recovery: countsObject(recoveryCounts),
@@ -127,10 +163,7 @@ export function createCandidateTrace(
     },
 
     toJSON() {
-      return {
-        primary: countsObject(primaryCounts),
-        recovery: countsObject(recoveryCounts),
-      };
+      return this.serialize();
     },
   };
 }

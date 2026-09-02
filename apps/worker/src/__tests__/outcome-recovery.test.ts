@@ -132,4 +132,19 @@ describe("outcome recovery eligibility", () => {
     expect(isOutcomeRecoveryEligible({ ...base, mode: "shadow", path: "tiny", unselectedCount: 1 })).toEqual({ eligible: false, reason: "no_unjudged_tail" });
     expect(isOutcomeRecoveryEligible({ ...base, mode: "shadow", unselectedCount: -1 })).toEqual({ eligible: false, reason: "no_unjudged_tail" });
   });
+
+  it("fails closed for invalid missing-range and tail counters", () => {
+    for (const missingRangeDrops of [Number.NaN, Number.POSITIVE_INFINITY, 0.5, -1]) {
+      expect(isOutcomeRecoveryEligible({ ...base, mode: "on", missingRangeDrops })).toEqual({
+        eligible: false,
+        reason: "missing_range",
+      });
+    }
+    for (const unselectedCount of [Number.NaN, Number.POSITIVE_INFINITY, 0.5, -1]) {
+      expect(isOutcomeRecoveryEligible({ ...base, mode: "on", unselectedCount })).toEqual({
+        eligible: false,
+        reason: "no_unjudged_tail",
+      });
+    }
+  });
 });
