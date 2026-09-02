@@ -184,7 +184,7 @@ describe("outcome recovery eligibility", () => {
   it("uses deterministic precedence for all ineligible reasons", () => {
     expect(isOutcomeRecoveryEligible({ ...base, mode: "off", primaryHighlights: [{} as never], noClipsReason: "NO_USABLE_SPEECH", transcriptPartial: true, missingRangeDrops: 1, path: "degenerate", unselectedCount: 0 })).toEqual({ eligible: false, reason: "mode_off" });
     expect(isOutcomeRecoveryEligible({ ...base, mode: "on", primaryHighlights: [{} as never], noClipsReason: "NO_USABLE_SPEECH", transcriptPartial: true, missingRangeDrops: 1, path: "degenerate", unselectedCount: 0 })).toEqual({ eligible: false, reason: "non_empty" });
-    expect(isOutcomeRecoveryEligible({ ...base, mode: "on", noClipsReason: "NO_USABLE_SPEECH", transcriptPartial: true, missingRangeDrops: 1, path: "degenerate", unselectedCount: 0 })).toEqual({ eligible: false, reason: "wrong_content_reason" });
+    expect(isOutcomeRecoveryEligible({ ...base, mode: "on", noClipsReason: "NO_USABLE_SPEECH", transcriptPartial: true, missingRangeDrops: 1, path: "degenerate", unselectedCount: 0 })).toEqual({ eligible: false, reason: "partial_transcript" });
     expect(isOutcomeRecoveryEligible({ ...base, mode: "on", transcriptPartial: true, missingRangeDrops: 1, path: "degenerate", unselectedCount: 0 })).toEqual({ eligible: false, reason: "partial_transcript" });
     expect(isOutcomeRecoveryEligible({ ...base, mode: "on", missingRangeDrops: 1, path: "degenerate", unselectedCount: 0 })).toEqual({ eligible: false, reason: "missing_range" });
     expect(isOutcomeRecoveryEligible({ ...base, mode: "on", path: "degenerate", unselectedCount: 0 })).toEqual({ eligible: false, reason: "degenerate" });

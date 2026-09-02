@@ -231,7 +231,7 @@ export type CandidatePrimaryDisposition =
 export type CandidateRecoveryDisposition = Exclude<
   CandidatePrimaryDisposition,
   "not_selected_for_critic" | "missing_range_rejected"
->;
+> | "finalizer_unjudged";
 
 /** Terminal vocabulary emitted by the shared quality lane. Partitioning is
  * the only stage allowed to say a candidate was not selected for critic. */

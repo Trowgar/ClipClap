@@ -124,9 +124,13 @@ describe("analyzeHighlightsV2", () => {
       outcomeRecoveryMode: "on" as const,
       criticMaxCandidates: 1,
       perWindowMinCandidates: 1,
-      finalizerEnabled: false,
+      finalizerEnabled: true,
     };
-    const c = client(scanTwoCandidates, primaryReject, recoveryKeep);
+    const recoveryFinalizer = {
+      choices: [{ message: { content: JSON.stringify({ clips: [] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 40, completion_tokens: 10 },
+    };
+    const c = client(scanTwoCandidates, primaryReject, recoveryKeep, recoveryFinalizer);
     const r = await analyzeHighlightsV2(transcript(), { client: c, cfg: recoveryCfg, transcriptPartial: false });
 
     expect(r.highlights).toHaveLength(1);

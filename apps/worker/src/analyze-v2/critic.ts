@@ -168,6 +168,10 @@ export interface CriticRunResult {
 export interface CriticOptions {
   /** Test hook - forwarded to callJsonSchema. */
   retryDelayMs?: number;
+  /** Recovery is a single, isolated critic request: no SDK retry, fallback,
+   * omission retry, or recursive batch splitting. Primary callers remain
+   * unchanged when this is absent. */
+  recovery?: boolean;
 }
 
 export async function runCritic(
@@ -194,8 +198,14 @@ export async function runCritic(
     fallbackModelUsed: false,
   };
 
+  const recoveryPolicy = options.recovery === true;
+  if (recoveryPolicy && (candidates.length === 0 || candidates.length > 12)) {
+    throw new AnalyzeTechnicalError("recovery critic batch invariant");
+  }
+
   const batches: MergedCandidate[][] = [];
-  for (let i = 0; i < candidates.length; i += cfg.criticBatchSize) {
+  if (recoveryPolicy) batches.push(candidates.slice());
+  else for (let i = 0; i < candidates.length; i += cfg.criticBatchSize) {
     batches.push(candidates.slice(i, i + cfg.criticBatchSize));
   }
 
@@ -220,6 +230,7 @@ export async function runCritic(
       maxOutputTokens: criticMaxOutputTokens(batch.length, capMultiplier),
       reasoningEffort: cfg.reasoningEffort,
       retryDelayMs: options.retryDelayMs,
+      noRetry: recoveryPolicy,
     });
 
   /**
@@ -234,7 +245,7 @@ export async function runCritic(
    */
   const processBatch = async (
     batch: MergedCandidate[],
-    mayRetryOmissions = true
+    mayRetryOmissions = !recoveryPolicy
   ): Promise<TaggedRow[]> => {
     const ids = () => batch.map((c) => c.id).join(",");
 
@@ -279,6 +290,10 @@ export async function runCritic(
 
     let degraded = false;
     let result = await callBatch(batch, cfg.criticModel, 1);
+
+    if (recoveryPolicy && !result.ok) {
+      throw new AnalyzeTechnicalError(`recovery critic request failed: ${result.kind}`);
+    }
 
     if (!result.ok && result.kind === "truncated") {
       if (batch.length > 1) return split();

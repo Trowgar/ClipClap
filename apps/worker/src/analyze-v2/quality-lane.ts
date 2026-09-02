@@ -268,7 +268,7 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
     candidates,
     languageIso,
     cfg,
-    { retryDelayMs: options.retryDelayMs },
+    { retryDelayMs: options.retryDelayMs, recovery: input.lane === "recovery" },
     input.analysisMode
   );
 

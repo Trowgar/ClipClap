@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import type { TranscriptionResult } from "@clipclap/shared";
-import { loadAnalyzeConfig, OUTCOME_RECOVERY_VERSION, type AnalyzeConfig } from "./config";
+import { loadAnalyzeConfig, type AnalyzeConfig } from "./config";
 import { runQualityLane } from "./quality-lane";
 import { buildSentenceGraph } from "./sentence-graph";
 import { resolveMode } from "./mode";
@@ -15,8 +15,11 @@ import {
 import { AnalyzeTechnicalError } from "./critic";
 import {
   buildOutcomeRecoveryPool,
+  buildOutcomeRecoveryTelemetry,
   isOutcomeRecoveryEligible,
   mergeUsage,
+  type RecoveryOutcome,
+  type RecoveryReason,
 } from "./outcome-recovery";
 import { createCandidateTrace } from "./candidate-trace";
 import type { CandidateTraceDescriptor } from "./candidate-trace";
@@ -30,7 +33,7 @@ import {
 } from "./visual-candidates";
 import type {
   CandidatePrimaryDisposition,
-  LlmUsage,
+  CandidateRecoveryDisposition,
   MergedCandidate,
   V2Highlight,
   V2Result,
@@ -39,6 +42,16 @@ import type {
 const DEGENERATE_MIN_WORDS = 5;
 const DEGENERATE_MIN_SPEECH_SEC = 4;
 const TINY_MAX_WORDS = 24;
+const TRACE_INVARIANT_CODES = new Set([
+  "invalid_candidate_descriptors", "invalid_candidate_descriptor", "duplicate_candidate",
+  "unknown_candidate", "incomplete_primary_disposition", "incomplete_recovery_disposition",
+  "duplicate_disposition", "duplicate_recovery_registration", "primary_disposition_required",
+  "unregistered_recovery_candidate", "invalid_primary_disposition", "invalid_recovery_disposition",
+]);
+
+function isTraceInvariantError(error: unknown): boolean {
+  return error instanceof Error && TRACE_INVARIANT_CODES.has(error.message);
+}
 
 export interface AnalyzeV2Options {
   client?: OpenAI;
@@ -74,87 +87,6 @@ function countCandidateTypes(candidates: readonly { type: string }[]): Record<st
   const counts: Record<string, number> = {};
   for (const candidate of candidates) counts[candidate.type] = (counts[candidate.type] ?? 0) + 1;
   return counts;
-}
-
-type RecoveryOutcome =
-  | "not_eligible"
-  | "no_candidate"
-  | "empty_pool"
-  | "rejected"
-  | "failed"
-  | "shadow_hit"
-  | "shadow_miss"
-  | "shipped";
-type RecoveryReason =
-  | "mode_off"
-  | "non_empty"
-  | "wrong_content_reason"
-  | "partial_transcript"
-  | "missing_range"
-  | "degenerate"
-  | "song_gate"
-  | "no_unjudged_tail"
-  | "unjudged_tail"
-  | "empty_pool"
-  | "quality_error"
-  | "malformed_state";
-
-function safeUsage(usage: LlmUsage): LlmUsage {
-  const read = (value: unknown): number =>
-    typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0
-      ? value
-      : 0;
-  const byModel: Record<string, { inputTokens: number; outputTokens: number; requests: number }> = {};
-  if (usage?.byModel && typeof usage.byModel === "object") {
-    for (const [model, raw] of Object.entries(usage.byModel)) {
-      if (!model || raw === null || typeof raw !== "object") continue;
-      const bucket = raw as Partial<LlmUsage>;
-      byModel[model] = {
-        inputTokens: read(bucket.inputTokens),
-        outputTokens: read(bucket.outputTokens),
-        requests: read(bucket.requests),
-      };
-    }
-  }
-  return {
-    inputTokens: read(usage?.inputTokens),
-    outputTokens: read(usage?.outputTokens),
-    requests: read(usage?.requests),
-    byModel,
-  };
-}
-
-function recoveryTelemetry(input: {
-  mode: AnalyzeConfig["outcomeRecoveryMode"];
-  eligible: boolean;
-  reason: RecoveryReason;
-  tailSize: number;
-  poolSize: number;
-  excludedMissingRange: number;
-  judged: number;
-  counters: { selectedForFinalizer: number; finalizerSurvivors: number };
-  primaryDispositions: Record<string, number>;
-  recoveryDispositions: Record<string, number>;
-  addedUsage: LlmUsage;
-  elapsedMs: number;
-  outcome: RecoveryOutcome;
-}): Record<string, unknown> {
-  return {
-    version: OUTCOME_RECOVERY_VERSION,
-    mode: input.mode,
-    eligible: input.eligible,
-    reason: input.reason,
-    tailSize: input.tailSize,
-    poolSize: input.poolSize,
-    excludedMissingRange: input.excludedMissingRange,
-    judged: input.judged,
-    counters: input.counters,
-    primaryDispositions: input.primaryDispositions,
-    recoveryDispositions: input.recoveryDispositions,
-    addedUsage: safeUsage(input.addedUsage),
-    elapsedMs: Math.max(0, Math.round(input.elapsedMs)),
-    outcome: input.outcome,
-  };
 }
 
 function terminalCounts(terminal: ReadonlyMap<string, string>, tail: readonly MergedCandidate[]): Record<string, number> {
@@ -272,7 +204,7 @@ export async function analyzeHighlightsV2(
         ...(visualRecall ? { visualRecall } : {}),
         ...(cfg.outcomeRecoveryMode !== "off"
           ? {
-              outcomeRecovery: recoveryTelemetry({
+              outcomeRecovery: buildOutcomeRecoveryTelemetry({
                 mode: cfg.outcomeRecoveryMode,
                 eligible: false,
                 reason: "degenerate",
@@ -496,7 +428,47 @@ export async function analyzeHighlightsV2(
     // so the same quota rule applies - a DONE 0-clip job burns the user's
     // minutes (usage sums every job that is not FAILED) while FAILED leaves the
     // quota untouched and BullMQ retries.
-    if (holeDrops > 0) throw unheardAudioError(holeDrops, missingRanges);
+    if (holeDrops > 0) {
+      // Recovery is never allowed to infer a verdict from audio crossing a
+      // hole. Keep the established technical failure for the existing/off
+      // path, but give non-off rollouts a closed, honest observation: every
+      // selected candidate was rejected before the critic and the residual
+      // tail was not selected. No recovery pool or model call is constructed.
+      if (cfg.outcomeRecoveryMode === "off") throw unheardAudioError(holeDrops, missingRanges);
+      const primaryDispositions: Record<string, number> = {
+        missing_range_rejected: holeDrops,
+      };
+      if (unjudgedCriticCandidates.length > 0) {
+        primaryDispositions.not_selected_for_critic = unjudgedCriticCandidates.length;
+      }
+      return {
+        highlights: [],
+        noClipsReason: partial ? "PARTIAL_TRANSCRIPT" : "NO_VIABLE_MOMENTS",
+        telemetry: {
+          ...scannerTelemetry,
+          keptVerdicts: 0,
+          holeDrops,
+          ...(cfg.streamModeEnabled ? { analysisMode: mode, modeResolution } : {}),
+          ...(visualTelemetry ? { visualRecall: visualTelemetry } : {}),
+          outcomeRecovery: buildOutcomeRecoveryTelemetry({
+            mode: cfg.outcomeRecoveryMode,
+            eligible: false,
+            reason: "missing_range",
+            tailSize: unjudgedCriticCandidates.length,
+            poolSize: 0,
+            excludedMissingRange: 0,
+            judged: 0,
+            counters: { selectedForFinalizer: 0, finalizerSurvivors: 0 },
+            primaryDispositions,
+            recoveryDispositions: {},
+            addedUsage: newUsage(),
+            elapsedMs: 0,
+            outcome: "not_eligible",
+          }),
+        },
+        usage,
+      };
+    }
     return {
       highlights: [],
       // No hole removed anything: the scanner looked at the audio we heard and
@@ -520,10 +492,10 @@ export async function analyzeHighlightsV2(
         ...(visualTelemetry ? { visualRecall: visualTelemetry } : {}),
         ...(cfg.outcomeRecoveryMode !== "off"
           ? {
-              outcomeRecovery: recoveryTelemetry({
+              outcomeRecovery: buildOutcomeRecoveryTelemetry({
                 mode: cfg.outcomeRecoveryMode,
                 eligible: false,
-                reason: "no_unjudged_tail",
+                reason: partial ? "partial_transcript" : "no_unjudged_tail",
                 tailSize: 0,
                 poolSize: 0,
                 excludedMissingRange: 0,
@@ -687,6 +659,7 @@ export async function analyzeHighlightsV2(
       let primaryDispositions: Record<string, number> = {};
       let recoveryDispositions: Record<string, number> = {};
       let recoveryUsage = newUsage();
+      let recoveryLaneStarted = false;
       let pool: ReturnType<typeof buildOutcomeRecoveryPool> = {
         candidates: [],
         excludedMissingRange: 0,
@@ -698,7 +671,8 @@ export async function analyzeHighlightsV2(
         outcome: RecoveryOutcome;
         judged?: number;
         counters?: { selectedForFinalizer: number; finalizerSurvivors: number };
-      }) => recoveryTelemetry({
+        ranges?: readonly { startMs: number; endMs: number }[];
+      }) => buildOutcomeRecoveryTelemetry({
         mode: cfg.outcomeRecoveryMode,
         eligible: input.eligible,
         reason: input.reason,
@@ -712,6 +686,7 @@ export async function analyzeHighlightsV2(
         addedUsage: recoveryUsage,
         elapsedMs: Date.now() - recoveryStartedAt,
         outcome: input.outcome,
+        ranges: input.ranges,
       });
 
       try {
@@ -758,6 +733,7 @@ export async function analyzeHighlightsV2(
 
         trace.registerRecoveryCandidates(pool.candidates.map((candidate) => candidate.id));
         let recovery: Awaited<ReturnType<typeof runQualityLane>>;
+        recoveryLaneStarted = true;
         try {
           recovery = await runQualityLane({
             lane: "recovery",
@@ -775,20 +751,52 @@ export async function analyzeHighlightsV2(
             sourceDurationSec: options.sourceDurationSec,
             safeEndAuditTelemetryTestHook: options.safeEndAuditTelemetryTestHook,
           });
-          for (const candidate of pool.candidates) {
-            const disposition = recovery.terminal.get(candidate.id);
+          const recoveryTelemetryData = recovery.telemetry as { invariantDrops?: number };
+          const finalizerSkipped = recovery.telemetry.finalizerSkipped;
+          // finalizeClips fails open by returning its input when its authority
+          // is unavailable. Recovery cannot ship that input: unlike primary,
+          // it has no previously judged answer to preserve.
+          const finalizerAmbiguous =
+            typeof finalizerSkipped === "string" &&
+            finalizerSkipped !== "empty" &&
+            (recovery.counters.selectedForFinalizer > 0 || recovery.highlights.length > 0);
+          const qualityAmbiguous =
+            [...recovery.terminal.values()].some((disposition) => disposition === "critic_unjudged") ||
+            (typeof recoveryTelemetryData.invariantDrops === "number" && recoveryTelemetryData.invariantDrops > 0);
+          const dispositionForFailure = (disposition: string | undefined): CandidateRecoveryDisposition => {
+            if (qualityAmbiguous && (disposition === "shipped" || disposition === "critic_unjudged" || disposition === undefined)) {
+              return "critic_unjudged";
+            }
+            if (finalizerAmbiguous && disposition === "shipped") return "finalizer_unjudged";
             if (!disposition) throw new AnalyzeTechnicalError("outcome recovery incomplete terminal accounting");
-            trace.terminateRecovery(candidate.id, disposition);
+            return disposition as CandidateRecoveryDisposition;
+          };
+          for (const candidate of pool.candidates) {
+            trace.terminateRecovery(candidate.id, dispositionForFailure(recovery.terminal.get(candidate.id)));
           }
           recoveryDispositions = trace.summaryRecovery();
-          const recoveryTelemetryData = recovery.telemetry as { invariantDrops?: number };
-          if (
-            [...recovery.terminal.values()].some((disposition) => disposition === "critic_unjudged") ||
-            (typeof recoveryTelemetryData.invariantDrops === "number" && recoveryTelemetryData.invariantDrops > 0)
-          ) {
-            throw new AnalyzeTechnicalError("outcome recovery contained unjudged candidates");
+          if (qualityAmbiguous || finalizerAmbiguous) {
+            // Finalizer is a veto authority. A skipped/refused/truncated/error
+            // finalizer cannot be treated as a successful recovery, even though
+            // the shared lane intentionally fails open for primary clips.
+            mergeUsage(usage, recoveryUsage);
+            return {
+              highlights: [],
+              noClipsReason: primaryNoClipsReason,
+              telemetry: { ...telemetry, outcomeRecovery: baseTelemetry({ eligible: true, reason: "quality_error", outcome: "failed", judged: recovery.counters.judged, counters: { selectedForFinalizer: recovery.counters.selectedForFinalizer, finalizerSurvivors: recovery.counters.finalizerSurvivors } }) },
+              usage,
+            };
           }
-        } catch {
+        } catch (error) {
+          // A trace violation means the append-only accounting itself is
+          // corrupt, not that the recovery model failed. Do not convert this
+          // technical signal into a successful-looking failed outcome.
+          if (isTraceInvariantError(error)) {
+            throw new AnalyzeTechnicalError("outcome recovery trace invariant");
+          }
+          if (error instanceof AnalyzeTechnicalError && error.message.startsWith("quality lane invariant")) {
+            throw error;
+          }
           // A recovery error is intentionally local. The primary lane already
           // passed its technical guard, so the caller receives its complete
           // empty answer while the failed recovery spend is still accounted.
@@ -825,6 +833,10 @@ export async function analyzeHighlightsV2(
             selectedForFinalizer: recovery.counters.selectedForFinalizer,
             finalizerSurvivors: recovery.counters.finalizerSurvivors,
           },
+          ranges: recovery.highlights.map((highlight) => ({
+            startMs: Math.round(highlight.start * 1000),
+            endMs: Math.round(highlight.end * 1000),
+          })),
         });
         if (cfg.outcomeRecoveryMode === "shadow" || !recoveryHit) {
           return {
@@ -839,24 +851,14 @@ export async function analyzeHighlightsV2(
           telemetry: { ...telemetry, outcomeRecovery: recoveryTelemetryValue },
           usage,
         };
-      } catch {
-        // Pool/trace malformed state is a recovery ineligibility, never a
-        // reason to rewrite or retry a complete primary empty answer.
-        if (trace) {
-          try {
-            primaryDispositions = trace.summaryPrimary();
-            recoveryDispositions = trace.summaryRecovery();
-          } catch {
-            primaryDispositions = {};
-            recoveryDispositions = {};
-          }
+      } catch (error) {
+        // Candidate/pool/trace invariants are technical failures. Only the
+        // isolated model/quality lane is allowed to fail open to primary empty.
+        if (!recoveryLaneStarted) {
+          if (error instanceof AnalyzeTechnicalError) throw error;
+          throw new AnalyzeTechnicalError("outcome recovery invariant");
         }
-        return {
-          highlights: [],
-          noClipsReason: primaryNoClipsReason,
-          telemetry: { ...telemetry, outcomeRecovery: baseTelemetry({ eligible: false, reason: "malformed_state", outcome: "failed" }) },
-          usage,
-        };
+        throw error;
       }
     }
 
@@ -879,7 +881,7 @@ export async function analyzeHighlightsV2(
       ? telemetry
       : {
           ...telemetry,
-          outcomeRecovery: recoveryTelemetry({
+          outcomeRecovery: buildOutcomeRecoveryTelemetry({
             mode: cfg.outcomeRecoveryMode,
             eligible: false,
             reason: "non_empty",

@@ -25,10 +25,9 @@ const PRIMARY_DISPOSITIONS: readonly CandidatePrimaryDisposition[] = Object.free
 ]);
 
 const RECOVERY_DISPOSITIONS: readonly CandidateRecoveryDisposition[] = Object.freeze(
-  PRIMARY_DISPOSITIONS.filter(
-    (disposition): disposition is CandidateRecoveryDisposition =>
-      disposition !== "not_selected_for_critic" && disposition !== "missing_range_rejected",
-  ),
+  [...PRIMARY_DISPOSITIONS.filter(
+    (disposition) => disposition !== "not_selected_for_critic" && disposition !== "missing_range_rejected",
+  ), "finalizer_unjudged"] as CandidateRecoveryDisposition[],
 );
 
 export type CandidateTraceDescriptor = Readonly<

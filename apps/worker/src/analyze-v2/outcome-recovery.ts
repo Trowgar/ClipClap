@@ -1,4 +1,4 @@
-import type { OutcomeRecoveryMode } from "./config";
+import { OUTCOME_RECOVERY_VERSION, type OutcomeRecoveryMode } from "./config";
 import type { LlmUsage, ModelUsage } from "./types";
 import { isCandidateType, isNormalizedCandidateInterest } from "./types";
 import type {
@@ -10,6 +10,105 @@ import type {
 
 const PAYOFF_REGION_SEC = 600;
 const HARD_MAX_CANDIDATES = 12;
+
+export type RecoveryOutcome =
+  | "not_eligible" | "no_candidate" | "empty_pool" | "rejected" | "failed"
+  | "shadow_hit" | "shadow_miss" | "shipped";
+export type RecoveryReason =
+  | "mode_off" | "non_empty" | "wrong_content_reason" | "partial_transcript"
+  | "missing_range" | "degenerate" | "song_gate" | "music_short" | "no_unjudged_tail"
+  | "unjudged_tail" | "empty_pool" | "quality_error" | "malformed_state";
+
+export interface RecoveryRange {
+  startMs: number;
+  endMs: number;
+}
+
+export interface OutcomeRecoveryTelemetryInput {
+  mode: OutcomeRecoveryMode;
+  eligible: boolean;
+  reason: RecoveryReason;
+  tailSize: number;
+  poolSize: number;
+  excludedMissingRange: number;
+  judged: number;
+  counters: { selectedForFinalizer: number; finalizerSurvivors: number };
+  primaryDispositions: Record<string, number>;
+  recoveryDispositions: Record<string, number>;
+  addedUsage: LlmUsage;
+  elapsedMs: number;
+  outcome: RecoveryOutcome;
+  ranges?: readonly RecoveryRange[];
+}
+
+function safeUsage(usage: LlmUsage): LlmUsage {
+  const read = (value: unknown): number =>
+    typeof value === "number" && Number.isFinite(value) && Number.isInteger(value) && value >= 0 ? value : 0;
+  const byModel: Record<string, ModelUsage> = {};
+  if (usage?.byModel && typeof usage.byModel === "object") {
+    for (const [model, raw] of Object.entries(usage.byModel)) {
+      if (!model || raw === null || typeof raw !== "object") continue;
+      const bucket = raw as Partial<ModelUsage>;
+      byModel[model] = { inputTokens: read(bucket.inputTokens), outputTokens: read(bucket.outputTokens), requests: read(bucket.requests) };
+    }
+  }
+  return { inputTokens: read(usage?.inputTokens), outputTokens: read(usage?.outputTokens), requests: read(usage?.requests), byModel };
+}
+
+const SAFE_PRIMARY_DISPOSITIONS = new Set([
+  "not_selected_for_critic", "critic_unjudged", "missing_range_rejected",
+  "critic_rejected", "evidence_rejected", "snap_rejected", "selection_not_chosen",
+  "arc_rejected", "post_boundary_rejected", "standalone_rejected",
+  "finalizer_rejected", "shipped",
+]);
+const SAFE_RECOVERY_DISPOSITIONS = new Set([
+  "critic_unjudged", "critic_rejected", "evidence_rejected", "snap_rejected",
+  "selection_not_chosen", "arc_rejected", "post_boundary_rejected",
+  "standalone_rejected", "finalizer_rejected", "shipped", "finalizer_unjudged",
+]);
+
+function safeDispositionCounts(
+  counts: Record<string, number> | null | undefined,
+  allowed: ReadonlySet<string>,
+): Record<string, number> {
+  const result: Record<string, number> = {};
+  if (!counts || typeof counts !== "object") return result;
+  for (const [key, value] of Object.entries(counts)) {
+    if (!allowed.has(key) || !Number.isInteger(value) || value < 0) continue;
+    result[key] = value;
+  }
+  return result;
+}
+
+/** Build the only public recovery telemetry shape. Ranges are geometry only. */
+export function buildOutcomeRecoveryTelemetry(input: OutcomeRecoveryTelemetryInput): Record<string, unknown> {
+  const ranges = (Array.isArray(input.ranges) ? input.ranges : []).slice(0, HARD_MAX_CANDIDATES).filter((range) =>
+    range !== null && typeof range === "object" &&
+    Number.isFinite(range.startMs) && Number.isFinite(range.endMs) &&
+    Number.isInteger(range.startMs) && Number.isInteger(range.endMs) &&
+    range.startMs >= 0 && range.endMs >= range.startMs
+  ).map((range) => ({ startMs: range.startMs, endMs: range.endMs }));
+  return {
+    version: OUTCOME_RECOVERY_VERSION,
+    mode: input.mode,
+    eligible: input.eligible,
+    reason: input.reason,
+    tailSize: input.tailSize,
+    poolSize: input.poolSize,
+    excludedMissingRange: input.excludedMissingRange,
+    judged: input.judged,
+    counters: {
+      selectedForFinalizer: Number.isInteger(input.counters?.selectedForFinalizer) && input.counters.selectedForFinalizer >= 0 ? input.counters.selectedForFinalizer : 0,
+      finalizerSurvivors: Number.isInteger(input.counters?.finalizerSurvivors) && input.counters.finalizerSurvivors >= 0 ? input.counters.finalizerSurvivors : 0,
+    },
+    primaryDispositions: safeDispositionCounts(input.primaryDispositions, SAFE_PRIMARY_DISPOSITIONS),
+    recoveryDispositions: safeDispositionCounts(input.recoveryDispositions, SAFE_RECOVERY_DISPOSITIONS),
+    addedUsage: safeUsage(input.addedUsage),
+    elapsedMs: Math.max(0, Math.round(input.elapsedMs)),
+    ranges,
+    outcome: input.outcome,
+  };
+}
 
 /**
  * Add one isolated lane's usage to the job accumulator. Recovery deliberately
@@ -284,11 +383,11 @@ export function isOutcomeRecoveryEligible(input: {
   if (input.primaryHighlights.length > 0) {
     return { eligible: false, reason: "non_empty" };
   }
-  if (input.noClipsReason !== "NO_VIABLE_MOMENTS") {
-    return { eligible: false, reason: "wrong_content_reason" };
-  }
   if (input.transcriptPartial) {
     return { eligible: false, reason: "partial_transcript" };
+  }
+  if (input.noClipsReason !== "NO_VIABLE_MOMENTS") {
+    return { eligible: false, reason: "wrong_content_reason" };
   }
   if (!isNonNegativeInteger(input.missingRangeDrops) || input.missingRangeDrops > 0) {
     return { eligible: false, reason: "missing_range" };
