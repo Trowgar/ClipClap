@@ -18,7 +18,7 @@ describe("loadAnalyzeConfig", () => {
     expect(cfg.visualRecallMode).toBe("off");
     expect(cfg.visualRecallMaxCandidates).toBe(15);
     expect(cfg.visualRecallClusterSec).toBe(12);
-    expect(cfg.visualRecallPreSec).toBe(8);
+    expect(cfg.visualRecallPreSec).toBe(18);
     expect(cfg.visualRecallPostSec).toBe(18);
     expect(cfg.visualRecallMaxNodeDistanceSec).toBe(20);
   });
@@ -48,6 +48,7 @@ describe("loadAnalyzeConfig", () => {
     for (const value of ["0", "-1", "NaN", "Infinity", ""]) {
       expect(loadAnalyzeConfig({ VISUAL_RECALL_MAX_CANDIDATES: value }).visualRecallMaxCandidates).toBe(15);
       expect(loadAnalyzeConfig({ VISUAL_RECALL_CLUSTER_SEC: value }).visualRecallClusterSec).toBe(12);
+      expect(loadAnalyzeConfig({ VISUAL_RECALL_PRE_SEC: value }).visualRecallPreSec).toBe(18);
     }
   });
 

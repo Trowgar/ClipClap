@@ -533,7 +533,7 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     visualRecallMode,
     visualRecallMaxCandidates: positiveIntBounded(env, "VISUAL_RECALL_MAX_CANDIDATES", 15, 100),
     visualRecallClusterSec: positiveBounded(env, "VISUAL_RECALL_CLUSTER_SEC", 12, 600),
-    visualRecallPreSec: positiveBounded(env, "VISUAL_RECALL_PRE_SEC", 8, 600),
+    visualRecallPreSec: positiveBounded(env, "VISUAL_RECALL_PRE_SEC", 18, 600),
     visualRecallPostSec: positiveBounded(env, "VISUAL_RECALL_POST_SEC", 18, 600),
     visualRecallMaxNodeDistanceSec: positiveBounded(
       env,
