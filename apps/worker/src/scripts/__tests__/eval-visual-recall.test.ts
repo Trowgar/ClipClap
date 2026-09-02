@@ -4,6 +4,7 @@ import {
   summarizeCases,
   parseEvalManifest,
   parseInvarianceEvidence,
+  invarianceGate,
   runVisualRecallCli,
   type EvalCaseResult,
 } from "../eval-visual-recall";
@@ -179,6 +180,17 @@ describe("visual recall manifest validation and CLI output", () => {
     }).passed).toBe(true);
   });
 
+  it("requires invariance evidence to match the evaluated commit and clean worktree", () => {
+    const evidence = parseInvarianceEvidence({
+      version: 1, passed: true, testName: "visual-recall-wiring",
+      offHighlightsSha256: "a".repeat(64), shadowHighlightsSha256: "a".repeat(64),
+      testedCommit: "b".repeat(40),
+    });
+    expect(invarianceGate(evidence, "c".repeat(40), false)).toBe(false);
+    expect(invarianceGate(evidence, "b".repeat(40), true)).toBe(false);
+    expect(invarianceGate(evidence, "b".repeat(40), false)).toBe(true);
+  });
+
   it("prints sanitized JSON and exits nonzero for a failed gate", async () => {
     const output: string[] = [];
     const errors: string[] = [];
@@ -236,6 +248,57 @@ describe("visual recall manifest validation and CLI output", () => {
     expect(serialized).not.toContain("production-looking-job-id-123");
     expect(serialized).toContain('"separatelyVerified"');
     expect(JSON.parse(serialized).pass).toBe(false);
+  });
+
+  it("passes the invariance gate only when injected commit and clean state match", async () => {
+    const output: string[] = [];
+    const commit = "d".repeat(40);
+    const result = await runVisualRecallCli(
+      ["node", "eval-visual-recall.ts", "/private/manifest.json"],
+      {
+        stat: async () => ({ size: 100, isFile: () => true }),
+        readFile: async (path) => {
+          if (path.endsWith("manifest.json")) return JSON.stringify({
+            version: 1,
+            invarianceEvidencePath: "/private/invariance.json",
+            cases: [{
+              caseKey: "anonymous-gaming",
+              kind: "gaming",
+              sourcePath: "/private/source.mp4",
+              transcriptPath: "/private/transcript.json",
+              positiveWindows: [window(10, 20), window(10.5, 19.5)],
+            }],
+          });
+          if (path.endsWith("invariance.json")) return JSON.stringify({
+            version: 1,
+            passed: true,
+            testName: "visual-recall-wiring",
+            offHighlightsSha256: "a".repeat(64),
+            shadowHighlightsSha256: "a".repeat(64),
+            testedCommit: commit,
+          });
+          return JSON.stringify({
+            text: "private words",
+            segments: [{
+              start: 10, end: 20, text: "Private words.",
+              words: [{ text: "private", start: 10, end: 12 }, { text: "words", start: 12, end: 14 }],
+            }],
+          });
+        },
+        stdout: (value) => output.push(value),
+        stderr: () => undefined,
+      },
+      {
+        resolveCurrentCommit: async () => commit,
+        resolveWorktreeDirty: async () => false,
+        videoEnvelopes: async () => ({ lumaEnvelope: [], motionEnvelope: [0, 10, 0] }),
+      },
+    );
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(output.join("")).offShadowInvariant).toMatchObject({
+      separatelyVerified: true,
+      passed: true,
+    });
   });
 
   it("supports help without reading a manifest", async () => {

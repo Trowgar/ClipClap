@@ -17,11 +17,15 @@
  */
 import { readFile, stat as fsStat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { buildSentenceGraph } from "../analyze-v2/sentence-graph";
 import { loadAnalyzeConfig, type AnalyzeConfig } from "../analyze-v2/config";
 import { nominateVisualCandidates } from "../analyze-v2/visual-candidates";
 import { videoEnvelopes as defaultVideoEnvelopes, type VideoEnvelopes } from "../processors/video-envelopes";
 import type { TranscriptionResult } from "@clipclap/shared";
+
+const execFileAsync = promisify(execFile);
 
 export interface EvalWindow {
   start: number;
@@ -120,6 +124,8 @@ type EvalConfig = Pick<
 interface CliDependencies {
   loadConfig?: () => Partial<AnalyzeConfig>;
   videoEnvelopes?: (sourcePath: string) => Promise<VideoEnvelopes>;
+  resolveCurrentCommit?: () => Promise<string>;
+  resolveWorktreeDirty?: () => Promise<boolean>;
 }
 
 export interface VisualRecallCliResult {
@@ -242,6 +248,18 @@ export function parseInvarianceEvidence(value: unknown): InvarianceEvidence {
   };
 }
 
+/** Evidence is valid only for the exact clean tree that produced it. */
+export function invarianceGate(
+  evidence: InvarianceEvidence,
+  currentCommit: string,
+  worktreeDirty: boolean,
+): boolean {
+  return evidence.passed && !worktreeDirty &&
+    evidence.offHighlightsSha256.toLowerCase() === evidence.shadowHighlightsSha256.toLowerCase() &&
+    /^[a-f0-9]{40}$/iu.test(currentCommit) &&
+    evidence.testedCommit.toLowerCase() === currentCommit.toLowerCase();
+}
+
 function validWindow(value: EvalWindow): boolean {
   return Number.isFinite(value.start) && Number.isFinite(value.end) &&
     value.start >= 0 && value.end > value.start;
@@ -348,6 +366,20 @@ async function boundedRegularFile(
     throw new Error("not a bounded regular file");
   }
   return info.size;
+}
+
+async function defaultCurrentCommit(): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["rev-parse", "HEAD"], {
+    maxBuffer: 4096,
+  });
+  return stdout.trim();
+}
+
+async function defaultWorktreeDirty(): Promise<boolean> {
+  const { stdout } = await execFileAsync("git", ["status", "--porcelain", "--untracked-files=no"], {
+    maxBuffer: 64 * 1024,
+  });
+  return stdout.trim().length > 0;
 }
 
 function textBytes(raw: string | Buffer): number {
@@ -517,6 +549,16 @@ export async function runVisualRecallCli(
     return errorResult(io, "invariance_invalid");
   }
 
+  let currentCommit: string;
+  let worktreeDirty: boolean;
+  try {
+    currentCommit = await (deps.resolveCurrentCommit ?? defaultCurrentCommit)();
+    worktreeDirty = await (deps.resolveWorktreeDirty ?? defaultWorktreeDirty)();
+  } catch {
+    return errorResult(io, "invariance_unavailable");
+  }
+  const invariancePassed = invarianceGate(invariance, currentCommit, worktreeDirty);
+
   const cfg = normalizedConfig(deps.loadConfig?.() ?? {});
   const candidateCap = cfg.visualRecallMaxCandidates;
   const videoEnvelopes = deps.videoEnvelopes ?? defaultVideoEnvelopes;
@@ -549,16 +591,14 @@ export async function runVisualRecallCli(
   }
   const summary = summarizeCases(caseResults, {
     candidateCap,
-    offShadowInvariant: invariance.passed &&
-      invariance.offHighlightsSha256.toLowerCase() === invariance.shadowHighlightsSha256.toLowerCase(),
+    offShadowInvariant: invariancePassed,
   });
   const report: EvalReport = {
     schemaVersion: 1,
     candidateCap,
     offShadowInvariant: {
       required: true,
-      passed: invariance.passed &&
-        invariance.offHighlightsSha256.toLowerCase() === invariance.shadowHighlightsSha256.toLowerCase(),
+      passed: invariancePassed,
       separatelyVerified: true,
     },
     cases: caseReports,
