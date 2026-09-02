@@ -409,16 +409,20 @@ export function summarizeCases(
   if (gamingCase) {
     gamingMatchedWindows = matchedCount(gamingCase.positiveWindows, gamingCase.nominatedWindows);
     gamingNegativeWindows = gamingCase.negativeWindows.length;
-    const peaks = nominationPeaks(gamingCase);
-    const eventStrengths = gamingCase.positiveWindows.map((positiveWindow) => {
-      const overlappingPeaks = peaks
-        .filter((peak) => matchesWindow(peak.window, positiveWindow))
-        .map((peak) => peak.peakValue)
-        .filter((peakValue) => Number.isFinite(peakValue));
-      return overlappingPeaks.length > 0 ? Math.max(...overlappingPeaks) : 0;
-    });
-    for (const peakValue of eventStrengths) {
-      gamingPositivePeaks.push(peakValue);
+    const orderedPeaks = nominationPeaks(gamingCase)
+      .map((peak, index) => ({ ...peak, index }))
+      .sort((a, b) => {
+        const aValue = Number.isFinite(a.peakValue) ? a.peakValue : Number.NEGATIVE_INFINITY;
+        const bValue = Number.isFinite(b.peakValue) ? b.peakValue : Number.NEGATIVE_INFINITY;
+        return bValue - aValue || a.index - b.index;
+      });
+    const positivePairs = matchingPairs(
+      gamingCase.positiveWindows,
+      orderedPeaks.map((peak) => peak.window),
+    );
+    for (const pair of positivePairs) {
+      const peakValue = orderedPeaks[pair.candidateIndex]?.peakValue;
+      if (peakValue !== undefined && Number.isFinite(peakValue)) gamingPositivePeaks.push(peakValue);
     }
   }
   const topTwoPositivePeaks = [...gamingPositivePeaks].sort((a, b) => b - a).slice(0, 2);

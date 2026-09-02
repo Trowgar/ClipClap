@@ -171,6 +171,22 @@ describe("visual recall evaluation metrics", () => {
     expect(summary.gates.gamingWeakWindowRank).toBe(true);
   });
 
+  it("does not reuse one broad nomination for two gaming positive strengths", () => {
+    const summary = summarizeCases([{
+      caseKey: "gaming-a", kind: "gaming",
+      positiveWindows: [window(0, 20), window(10, 30)],
+      negativeWindows: [window(100, 110)],
+      nominatedWindows: [window(0, 30), window(100, 110)],
+      nominatedPeaks: [
+        { window: window(0, 30), peakValue: 100 },
+        { window: window(100, 110), peakValue: 50 },
+      ],
+      candidateCount: 2,
+    }], { candidateCap: 12, offShadowInvariant: true });
+    expect(summary.gamingMatchedWindows).toBe(1);
+    expect(summary.gates.gamingWeakWindowRank).toBe(false);
+  });
+
   it("does not enable gaming gates when more than one gaming case is supplied", () => {
     const gaming = (caseKey: string) => ({
       caseKey, kind: "gaming" as const,
