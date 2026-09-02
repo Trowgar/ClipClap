@@ -49,7 +49,11 @@ import {
   type SafeEndRescueRecord,
 } from "./safe-end-audit";
 import { observeRescueCandidates } from "./safe-end-rescue-observation";
-import { nominateVisualCandidates, type VisualRecallTelemetry } from "./visual-candidates";
+import {
+  nominateVisualCandidates,
+  type VisualRecallNomination,
+  type VisualRecallTelemetry,
+} from "./visual-candidates";
 import type {
   ArcFlags,
   MergedCandidate,
@@ -316,7 +320,11 @@ function countCandidateTypes(candidates: readonly { type: string }[]): Record<st
 
 function visualRecallTelemetry(
   mode: "shadow" | "on",
-  visual: { candidates: readonly { startNode: number; endNode: number; payoffNode: number; windowIndex: number; type: string }[]; telemetry: VisualRecallTelemetry },
+  visual: {
+    candidates: readonly { type: string }[];
+    telemetry: VisualRecallTelemetry;
+    nominations: VisualRecallNomination[];
+  },
 ): Record<string, unknown> {
   const missing = visual.telemetry.envelopeLength === 0;
   return {
@@ -326,14 +334,7 @@ function visualRecallTelemetry(
     unionCandidates: 0,
     mergedByType: {},
     criticByType: {},
-    nominations: visual.candidates.map((candidate) => ({
-      source: "motion",
-      type: candidate.type,
-      startNode: candidate.startNode,
-      endNode: candidate.endNode,
-      payoffNode: candidate.payoffNode,
-      windowIndex: candidate.windowIndex,
-    })),
+    nominations: visual.nominations,
   };
 }
 
@@ -405,20 +406,39 @@ export async function analyzeHighlightsV2(
   let candidates: MergedCandidate[];
   let scannerTelemetry: Record<string, unknown> = {};
   let visualTelemetry: Record<string, unknown> | undefined;
+  const visualMode = cfg.visualRecallMode;
 
   if (wordCount <= TINY_MAX_WORDS) {
     // tiny path: the whole transcript is one candidate, no scanner
-    candidates = [
-      {
-        id: "c0",
-        startNode: 0,
-        endNode: nodes.length - 1,
-        payoffNode: nodes.length - 1,
-        interest: 0.5,
-        type: "other",
-        windowIndex: 0,
-      },
-    ];
+    const tinyCandidate = {
+      id: "c0",
+      startNode: 0,
+      endNode: nodes.length - 1,
+      payoffNode: nodes.length - 1,
+      interest: 0.5,
+      type: "other",
+      windowIndex: 0,
+    };
+    const visual = visualMode === "off"
+      ? undefined
+      : nominateVisualCandidates(nodes, options.motionEnvelope ?? [], cfg);
+    if (visual && (visualMode === "shadow" || visualMode === "on")) {
+      visualTelemetry = visualRecallTelemetry(visualMode, visual);
+      visualTelemetry.unionCandidates = visualMode === "on" ? visual.candidates.length : 0;
+      const tinyMerged = visualMode === "on"
+        ? mergeCandidates([tinyCandidate, ...visual.candidates], nodes, cfg, mode)
+        : [tinyCandidate];
+      visualTelemetry.mergedByType = countCandidateTypes(tinyMerged);
+      visualTelemetry.criticByType = countCandidateTypes(tinyMerged);
+      candidates = tinyMerged;
+    } else {
+      candidates = [
+        {
+          ...tinyCandidate,
+          id: "c0",
+        },
+      ];
+    }
     scannerTelemetry = { path: "tiny" };
   } else {
     const scan = await runScanner(
@@ -443,7 +463,6 @@ export async function analyzeHighlightsV2(
       );
     }
 
-    const visualMode = cfg.visualRecallMode;
     const visual = visualMode === "off"
       ? undefined
       : nominateVisualCandidates(nodes, options.motionEnvelope ?? [], cfg);

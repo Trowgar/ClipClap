@@ -62,6 +62,14 @@ describe("nominateVisualCandidates", () => {
     expect(result.candidates[0].interest).toBeGreaterThanOrEqual(0.55);
     expect(result.candidates[0].interest).toBeLessThanOrEqual(0.95);
     expect(result.telemetry.mappedCandidates).toBe(1);
+    expect(result.nominations).toEqual([expect.objectContaining({
+      source: "motion",
+      startNode: 0,
+      endNode: 21,
+      payoffNode: 3,
+      peakSec: 3,
+      peakValue: 20,
+    })]);
   });
 
   it("keeps only local maxima and clusters maxima within twelve seconds", () => {

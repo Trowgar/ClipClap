@@ -38,7 +38,7 @@ export async function runAnalyzeStage(
     // consumes motion, while music-shorts consumes energy and luma. The dark
     // normal path intentionally does not perform this lookup or thread a
     // motion field into V2.
-    const visualSignals = cfg.visualRecallMode !== "off"
+    const visualSignals = (engine === "recall-critic" || engine === "shadow") && cfg.visualRecallMode !== "off"
       ? await readTranscribeEnvelopes(payload.jobId)
       : undefined;
 

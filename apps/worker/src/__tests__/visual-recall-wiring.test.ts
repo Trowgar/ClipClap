@@ -22,12 +22,45 @@ function transcript(): TranscriptionResult {
 }
 
 function scanResponse() {
-  return {
-    choices: [{ message: { content: JSON.stringify({ candidates: [
-      { start_node: 20, end_node: 24, payoff_node: 23, interest: 0.8, type: "story", thread: null },
-    ] }) }, finish_reason: "stop" }],
-    usage: { prompt_tokens: 10, completion_tokens: 10 },
-  };
+  return { candidates: [
+    { start_node: 20, end_node: 24, payoff_node: 23, interest: 0.8, type: "story", thread: null },
+  ] };
+}
+
+function tinyTranscript(): TranscriptionResult {
+  const segments = Array.from({ length: 6 }, (_, index) => {
+    const start = index * 5;
+    return {
+      start,
+      end: start + 4.5,
+      text: `Tiny sentence ${index}.`,
+      words: [
+        { text: "Tiny", start, end: start + 1 },
+        { text: "test", start: start + 1.1, end: start + 2 },
+        { text: "scene", start: start + 2.1, end: start + 3 },
+        { text: `${index}.`, start: start + 3.1, end: start + 4.5 },
+      ],
+    };
+  });
+  return { text: segments.map((segment) => segment.text).join(" "), segments, language: "en" };
+}
+
+function tinyVerdict(id: string) {
+  return verdict(id, true, 0, 5, 3);
+}
+
+function tinyReplayClient() {
+  const requests: Array<Record<string, unknown>> = [];
+  const create = vi.fn(async (body: Record<string, unknown>) => {
+    requests.push(body);
+    const schema = (body.response_format as { json_schema: { name: string } }).json_schema.name;
+    if (schema !== "critic_verdicts") throw new Error(`unexpected schema ${schema}`);
+    return {
+      choices: [{ message: { content: JSON.stringify({ results: [tinyVerdict("c0")] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 10 },
+    };
+  });
+  return { client: { chat: { completions: { create } } } as never, requests };
 }
 
 function verdict(id: string, keep: boolean, startNode: number, endNode: number, payoffNode: number) {
@@ -121,6 +154,40 @@ describe("visual recall wiring", () => {
       mergedByType: { visual_action: 1 },
       criticByType: { visual_action: 1 },
     });
+    expect(result.highlights).toHaveLength(1);
+    expect(result.highlights[0].title).toBe("Scene c0");
+    expect(replay.requests.some((request) => JSON.stringify(request).includes("type story"))).toBe(true);
+    expect(replay.requests.some((request) => JSON.stringify(request).includes("type visual_action"))).toBe(true);
+  });
+
+  it("keeps tiny off and shadow output identical and attaches shadow no-motion telemetry", async () => {
+    const off = await analyzeHighlightsV2(tinyTranscript(), {
+      client: tinyReplayClient().client,
+      cfg: cfg("off"),
+      retryDelayMs: 1,
+    });
+    const shadow = await analyzeHighlightsV2(tinyTranscript(), {
+      client: tinyReplayClient().client,
+      cfg: cfg("shadow"),
+      retryDelayMs: 1,
+    });
+
+    expect(off.highlights).toEqual(shadow.highlights);
+    expect(off.telemetry).not.toHaveProperty("visualRecall");
+    expect(shadow.telemetry).toHaveProperty("visualRecall");
+    expect(shadow.telemetry.visualRecall).toMatchObject({ mode: "shadow", reason: "no_motion_envelope" });
+  });
+
+  it("unions tiny visual nominations into the ordinary candidate before critic", async () => {
+    const replay = tinyReplayClient();
+    const result = await analyzeHighlightsV2(tinyTranscript(), {
+      client: replay.client,
+      cfg: cfg("on"),
+      motionEnvelope: [0, 100, 0, 0, 0, 0],
+      retryDelayMs: 1,
+    });
+
+    expect((result.telemetry.visualRecall as { unionCandidates: number }).unionCandidates).toBeGreaterThan(0);
     expect(replay.requests.some((request) => JSON.stringify(request).includes("type visual_action"))).toBe(true);
   });
 

@@ -27,9 +27,21 @@ export interface VisualRecallTelemetry {
   capped: number;
 }
 
+export interface VisualRecallNomination {
+  source: "motion";
+  type: "visual_action";
+  startNode: number;
+  endNode: number;
+  payoffNode: number;
+  peakSec: number;
+  peakValue: number;
+  windowIndex: number;
+}
+
 export interface VisualCandidateResult {
   candidates: ScanCandidate[];
   telemetry: VisualRecallTelemetry;
+  nominations: VisualRecallNomination[];
 }
 
 interface Peak {
@@ -62,6 +74,7 @@ function percentile(values: number[], fraction: number): number {
 function emptyResult(): VisualCandidateResult {
   return {
     candidates: [],
+    nominations: [],
     telemetry: {
       envelopeLength: 0,
       median: 0,
@@ -175,7 +188,7 @@ export function nominateVisualCandidates(
     capped: 0,
   };
 
-  if (maxValue <= minValue) return { candidates: [], telemetry };
+  if (maxValue <= minValue) return { candidates: [], nominations: [], telemetry };
 
   const peaks: Peak[] = [];
   // Collapse each contiguous equal-value run before local-max testing. A
@@ -240,7 +253,7 @@ export function nominateVisualCandidates(
     ? cfg.visualRecallMaxNodeDistanceSec
     : 20;
   const scanWindowSec = Number.isFinite(cfg.scanWindowSec) && cfg.scanWindowSec > 0 ? cfg.scanWindowSec : 600;
-  const candidates: Array<ScanCandidate & { peakSec: number }> = [];
+  const candidates: Array<ScanCandidate & { peakSec: number; peakValue: number }> = [];
 
   for (const peak of selected) {
     const peakSec = peak.index;
@@ -288,13 +301,24 @@ export function nominateVisualCandidates(
       type: "visual_action",
       windowIndex: Math.max(0, Math.floor(peakSec / scanWindowSec)),
       peakSec,
+      peakValue: peak.value,
     });
   }
 
   candidates.sort((a, b) => a.peakSec - b.peakSec);
   telemetry.mappedCandidates = candidates.length;
   return {
-    candidates: candidates.map(({ peakSec: _peakSec, ...candidate }) => candidate),
+    candidates: candidates.map(({ peakSec: _peakSec, peakValue: _peakValue, ...candidate }) => candidate),
+    nominations: candidates.map(({ peakSec, peakValue, ...candidate }) => ({
+      source: "motion",
+      type: "visual_action",
+      startNode: candidate.startNode,
+      endNode: candidate.endNode,
+      payoffNode: candidate.payoffNode,
+      peakSec,
+      peakValue,
+      windowIndex: candidate.windowIndex,
+    })),
     telemetry,
   };
 }

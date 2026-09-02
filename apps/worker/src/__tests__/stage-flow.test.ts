@@ -220,6 +220,7 @@ describe("stage handlers", () => {
     // depend on the ambient ANALYZE_ENGINE of the environment they run in
     vi.stubEnv("ANALYZE_ENGINE", "legacy");
     vi.stubEnv("ANALYZE_V2_PCT", "0");
+    vi.stubEnv("ANALYZE_VISUAL_RECALL_V1", "off");
   });
 
   it("download persists a source artifact and enqueues transcribe", async () => {
@@ -356,6 +357,22 @@ describe("stage handlers", () => {
       userId: "u1",
       mode: "clips",
     });
+  });
+
+  it("does not read visual signals for pure legacy analysis", async () => {
+    vi.stubEnv("ANALYZE_ENGINE", "legacy");
+    vi.stubEnv("ANALYZE_VISUAL_RECALL_V1", "on");
+    mocks.jobFind.mockResolvedValue({
+      id: "job1",
+      transcriptJson: { text: "hello", segments: [] },
+    });
+    mocks.analyzeHighlightsV1.mockResolvedValue([
+      { start: 0, end: 10, title: "Clip", reason: "Hook" },
+    ]);
+
+    await runAnalyzeStage({ jobId: "job1", userId: "u1" });
+
+    expect(mocks.jobStepFindUnique).not.toHaveBeenCalled();
   });
 
   it("persists direct recall-critic hook-gate telemetry with its gated survivors", async () => {
