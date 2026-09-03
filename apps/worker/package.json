@@ -25,6 +25,7 @@
     "feedback-quality-rollback": "tsx src/scripts/feedback-quality-rollback.ts",
     "outcome-promote": "tsx src/scripts/outcome-promote.ts",
     "outcome-validate": "tsx src/scripts/outcome-validate.ts",
+    "outcome-observe": "tsx src/scripts/outcome-observe.ts",
     "eval:visual-recall": "tsx src/scripts/eval-visual-recall.ts"
   },
   "dependencies": {
