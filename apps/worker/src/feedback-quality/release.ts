@@ -1,11 +1,13 @@
 import { constants } from "node:fs";
 import { execFile } from "node:child_process";
 import { open } from "node:fs/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import type { DeployDependencies, GateDeployDecision, RollbackArtifact, WorkerService } from "./deploy";
+import { readGateDecision } from "./gate";
+import { readOutcomeGateDecision, type OutcomeGateDecision } from "./outcome-gate";
 import { contentId, publishBundle, readBundle, type CommitResult } from "./store";
 
 const execFileAsync = promisify(execFile);
@@ -46,6 +48,16 @@ export type ProductionReleaseDependencies = Readonly<{
 
 export class ProductionReleaseError extends Error {
   constructor(readonly code: "invalid_image" | "candidate_image_mismatch" | "previous_image_mismatch" | "compose_unavailable" | "rollback_publish_failed" | "rollback_invalid" | "rollback_process_failed" | "rollback_verify_failed") { super(code); this.name = "ProductionReleaseError"; }
+}
+
+/** `on` is the only runtime mode allowed to make an outcome-quality claim.
+ * Its claim must be the fresh composite decision for this exact clip gate. */
+export function assertOutcomeReleaseBinding(mode: string | undefined, clip: GateDeployDecision, outcomeId: string | undefined, outcome?: OutcomeGateDecision): void {
+  if (mode !== "on") {
+    if (outcomeId !== undefined) throw new ProductionReleaseError("rollback_invalid");
+    return;
+  }
+  if (!outcome || outcome.decisionId !== outcomeId || outcome.verdict !== "pass" || outcome.clipDecisionId !== clip.decisionId || outcome.candidateCommitSha !== clip.candidateCommitSha || outcome.configSha256 !== clip.configSha256) throw new ProductionReleaseError("rollback_invalid");
 }
 
 export function parseImageReference(value: string): ImageReference {
@@ -231,13 +243,23 @@ function productionAdapter(candidateImage: string, composeFile: string, root: st
 
 /** Production-only dependency adapter. It deliberately selects the immutable
  * compose file and adds --no-build; ordinary development compose is never used. */
-export function createProductionDeployDependencies(candidateImage: string, projectName: string, composeFile = resolve(process.cwd(), "docker-compose.production.yml"), root: string, network = process.env.CLIPCLAP_PRODUCTION_NETWORK ?? "clipclap_default", environmentFile = process.env.CLIPCLAP_PRODUCTION_ENV_FILE, configFile = process.env.FEEDBACK_QUALITY_CONFIG_HOST): Pick<DeployDependencies, "prepareRollback" | "spawnProduction" | "waitForHealthy" | "configSha256"> {
+export function createProductionDeployDependencies(candidateImage: string, projectName: string, composeFile = resolve(process.cwd(), "docker-compose.production.yml"), root: string, network = process.env.CLIPCLAP_PRODUCTION_NETWORK ?? "clipclap_default", environmentFile = process.env.CLIPCLAP_PRODUCTION_ENV_FILE, configFile = process.env.FEEDBACK_QUALITY_CONFIG_HOST): Pick<DeployDependencies, "prepareRollback" | "spawnProduction" | "waitForHealthy" | "configSha256" | "readDecision"> {
   const candidate = parseImageReference(candidateImage);
   if (!PROJECT.test(projectName) || !NETWORK.test(network) || !environmentFile || !configFile) throw new ProductionReleaseError("rollback_invalid");
   let artifact: RollbackArtifact | undefined;
   const snapshots = Promise.all([readPrivateSnapshot(environmentFile), readPrivateSnapshot(configFile)]).then(([environment, config]) => ({ environment, config, parsed: parseEnvironment(environment) }));
   const release = productionAdapter(candidateImage, composeFile, root, projectName, network);
   return {
+    readDecision: async (decisionId, decisionRoot) => {
+      const snapshot = await snapshots;
+      const clip = await readGateDecision(decisionId, decisionRoot);
+      const mode = snapshot.parsed.ANALYZE_OUTCOME_RECOVERY_V1;
+      const outcomeId = snapshot.parsed.OUTCOME_RECOVERY_GATE_DECISION_ID;
+      const outcome = mode === "on" && /^outcome-decision:sha256:[0-9a-f]{64}$/.test(outcomeId ?? "")
+        ? await readOutcomeGateDecision(outcomeId, join(root, "outcomes")) : undefined;
+      assertOutcomeReleaseBinding(mode, clip, outcomeId, outcome);
+      return clip;
+    },
     configSha256: async () => {
       const snapshot = await snapshots;
       const config = JSON.parse(snapshot.config.toString("utf8"));

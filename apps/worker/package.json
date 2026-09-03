@@ -26,6 +26,7 @@
     "outcome-promote": "tsx src/scripts/outcome-promote.ts",
     "outcome-validate": "tsx src/scripts/outcome-validate.ts",
     "outcome-observe": "tsx src/scripts/outcome-observe.ts",
+    "outcome-recovery-gate": "tsx src/scripts/outcome-recovery-gate.ts",
     "eval:visual-recall": "tsx src/scripts/eval-visual-recall.ts"
   },
   "dependencies": {

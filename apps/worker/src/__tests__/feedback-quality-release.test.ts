@@ -8,6 +8,7 @@ import {
   createProductionRollback,
   executeRollback,
   parseImageReference,
+  assertOutcomeReleaseBinding,
   type ProductionReleaseDependencies,
 } from "../feedback-quality/release";
 import { contentId, publishBundle } from "../feedback-quality/store";
@@ -18,6 +19,15 @@ const roots: string[] = [];
 afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
 
 describe("immutable production release adapter", () => {
+  it("requires the same fresh composite pass only when outcome recovery is on", () => {
+    const clip = { decisionId: `decision:${digest("clip")}`, candidateCommitSha: commit, configSha256: digest("config") };
+    const outcome = { decisionId: `outcome-decision:${digest("outcome")}`, verdict: "pass", clipDecisionId: clip.decisionId, candidateCommitSha: commit, configSha256: digest("config") };
+    expect(() => assertOutcomeReleaseBinding("on", clip as never, outcome.decisionId, outcome as never)).not.toThrow();
+    expect(() => assertOutcomeReleaseBinding("on", clip as never, undefined, undefined)).toThrow("rollback_invalid");
+    expect(() => assertOutcomeReleaseBinding("on", clip as never, outcome.decisionId, { ...outcome, configSha256: digest("other") } as never)).toThrow("rollback_invalid");
+    expect(() => assertOutcomeReleaseBinding("off", clip as never, undefined, undefined)).not.toThrow();
+    expect(() => assertOutcomeReleaseBinding("shadow", clip as never, outcome.decisionId, outcome as never)).toThrow("rollback_invalid");
+  });
   it.each(["CLIPCLAP_OCI_REVISION", "GIT_SHA", "FEEDBACK_QUALITY_CONFIG_FILE", "WORKER_ROLE", "NODE_ENV", "COMPOSE_PROJECT_NAME"])("rejects reserved production.env key %s before creating a candidate", async (key) => {
     const candidate = `registry.example/clipclap-worker@${digest("candidate")}`;
     await expect(createProductionRollback(["worker-analyze"], { candidateCommitSha: commit }, {

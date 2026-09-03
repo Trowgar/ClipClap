@@ -432,3 +432,41 @@ export async function decideGate(input: DecideGateInput, dependencies: GateDepen
   if (published.status !== "committed" && published.status !== "noop") throw new GateError("publish_failed");
   return decision;
 }
+
+/** Aggregate-only evidence for gates which compose the clip decision with a
+ * subsystem-specific policy. The case identities never leave this module. */
+export async function readGateCaseEvidence(decision: GateDecision, root = DEFAULT_QUALITY_ROOT): Promise<Readonly<{
+  positiveCases: number;
+  confirmedNegativeCases: number;
+  selectionNegativeCases: number;
+  positiveLosses: number;
+  confirmedNegativeWorsening: number;
+}>> {
+  const pairs = [
+    [decision.baselineEvalObservationId, decision.candidateEvalObservationId, "eval"],
+    [decision.baselineHoldoutObservationId, decision.candidateHoldoutObservationId, "holdout"],
+  ] as const;
+  let positiveCases = 0;
+  let confirmedNegativeCases = 0;
+  let selectionNegativeCases = 0;
+  let positiveLosses = 0;
+  let confirmedNegativeWorsening = 0;
+  for (const [baselineId, candidateId, set] of pairs) {
+    const baseline = (await loadObservation(baselineId, set, root, {})).observation;
+    const candidate = (await loadObservation(candidateId, set, root, {})).observation;
+    const baselineByCase = new Map(baseline.cases.map((item) => [item.caseVersion, item]));
+    for (const item of candidate.cases) {
+      const prior = baselineByCase.get(item.caseVersion);
+      if (!prior || prior.disposition !== item.disposition || prior.subsystem !== item.subsystem) throw new GateError("observation_invalid");
+      if (item.disposition === "positive") {
+        positiveCases += 1;
+        if ((item.metrics.approvedMomentRetained ?? item.metrics.positiveRetention ?? 0) < (prior.metrics.approvedMomentRetained ?? prior.metrics.positiveRetention ?? 0)) positiveLosses += 1;
+      } else if (item.disposition === "confirmed_negative") {
+        confirmedNegativeCases += 1;
+        if (item.subsystem === "selection") selectionNegativeCases += 1;
+        if ((item.metrics.defectSeverity ?? item.metrics.negativeDefects ?? 0) > (prior.metrics.defectSeverity ?? prior.metrics.negativeDefects ?? 0)) confirmedNegativeWorsening += 1;
+      }
+    }
+  }
+  return Object.freeze({ positiveCases, confirmedNegativeCases, selectionNegativeCases, positiveLosses, confirmedNegativeWorsening });
+}
