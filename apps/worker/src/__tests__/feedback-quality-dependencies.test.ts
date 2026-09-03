@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 const SOURCE_ROOT = resolve(__dirname, "..");
 const ENTRYPOINTS = {
   promotion: resolve(SOURCE_ROOT, "scripts/feedback-quality-promote.ts"),
+  outcomePromotion: resolve(SOURCE_ROOT, "scripts/outcome-promote.ts"),
   observation: resolve(SOURCE_ROOT, "scripts/feedback-quality-observe.ts"),
   gate: resolve(SOURCE_ROOT, "feedback-quality/gate.ts"),
   deployment: resolve(SOURCE_ROOT, "feedback-quality/deploy.ts"),
@@ -295,6 +296,18 @@ describe("feedback quality dependency boundaries", () => {
     expect(sourceText).toContain("downloadFile");
     expect(sourceText).toContain("getObjectSize");
     expect(graphSemanticCalls(graph, new Set(["putObject", "deleteObject", "upload"]), "r2")).toEqual([]);
+  });
+
+  it("keeps zero-outcome promotion read-only at the Prisma and R2 boundaries", async () => {
+    const graph = await reachable(ENTRYPOINTS.outcomePromotion);
+    const imports = graphImports(graph);
+    expect(imports).toContain("@clipclap/shared/lib/prisma");
+    expect(imports).toContain("@clipclap/shared/lib/r2");
+    expect(imports.some((value) => value === "bullmq" || value === "node:child_process")).toBe(false);
+    const mutators = new Set(["create", "createMany", "update", "updateMany", "upsert", "delete", "deleteMany"]);
+    expect([...new Set(graphSemanticCalls(graph, mutators, "prisma"))]).toEqual(["$disconnect"]);
+    expect([...new Set(graphSemanticCalls(graph, new Set(["downloadFile", "getObjectSize"]), "r2"))].sort()).toEqual(["downloadFile"]);
+    expect([...graph.values()].map((source) => source.getFullText()).join("\n")).toContain("getObjectSize");
   });
 
   it("walks observation's complete graph, including analyzers/renderers, without DB/R2/queue/spawn", async () => {

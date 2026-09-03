@@ -41,6 +41,9 @@ export type AppendOutcomeOptions = Readonly<{
   lockOptions?: LockOptions;
   /** Test-only adversarial hook, invoked while outcomes.lock is held. */
   afterLock?: () => void | Promise<void>;
+  /** Promotion-time authority check. Runs under outcomes.lock against the
+   * active, already-validated labels immediately before the append. */
+  validateBeforeCommit?: (active: readonly OutcomeLabel[]) => void | Promise<void>;
 }>;
 
 export { type QualityStoreFault as OutcomeStoreFault };
@@ -162,9 +165,10 @@ export async function appendOutcomeEvent(
         const active = activeLabels(events);
         if (event.action === "label") {
           if (active.some((label) => label.caseVersion === event.caseVersion)) throw new OutcomeStoreError("invalid_retirement");
-          return;
+          return options.validateBeforeCommit?.(Object.freeze([...active]));
         }
         if (!active.some((label) => label.eventId === event.targetEventId)) throw new OutcomeStoreError("invalid_retirement");
+        return options.validateBeforeCommit?.(Object.freeze([...active]));
       },
     });
   } catch (error) { return translateStoreError(error); }
