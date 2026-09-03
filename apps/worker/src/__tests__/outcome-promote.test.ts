@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,12 +8,16 @@ import { appendOutcomeEvent } from "../feedback-quality/outcome-store";
 import {
   createPrismaOutcomePromotionRepository,
   digestAnalyzeStep,
+  isOutcomeSourceSizeAllowed,
+  MAX_OUTCOME_CASE_BYTES,
+  MAX_OUTCOME_SOURCE_BYTES,
   promoteOutcomeCase,
   publishOutcomeCase,
   validateOutcomeStore,
   type OutcomePromotionDecision,
   type OutcomePromotionDependencies,
   type OutcomePromotionSnapshot,
+  type OutcomeCasePublication,
 } from "../feedback-quality/outcome-promote";
 import { readOutcomeDecisionFile, runOutcomePromote } from "../scripts/outcome-promote";
 import { runOutcomeValidate } from "../scripts/outcome-validate";
@@ -116,7 +120,11 @@ describe("zero-outcome promotion", () => {
     expect(caseText).not.toContain("step-private-1");
     expect(caseText).not.toContain("private transcript");
     expect(caseText).not.toContain("work/");
-    expect(JSON.parse(caseText)).toMatchObject({ disposition: "recoverable_false_negative", set: "eval", sourceDurationSec: 120 });
+    expect(JSON.parse(caseText)).toMatchObject({
+      disposition: "recoverable_false_negative", set: "eval", sourceDurationSec: 120,
+      jobUpdatedAt: "2026-09-02T23:00:00.000Z", reviewedAt: "2026-09-02T23:10:00.000Z",
+      materializedAt: "2026-09-02T23:11:00.000Z", freshnessSha256: expect.stringMatching(/^sha256:/),
+    });
   });
 
   it("materializes a reviewed valid-empty control with forbidden windows only", async () => {
@@ -170,6 +178,11 @@ describe("zero-outcome promotion", () => {
     const dependencies = deps();
     await expect(promoteOutcomeCase(decision(snapshot(), changed), dependencies)).rejects.toMatchObject({ code: "stale_input" });
     expect(dependencies.publish).not.toHaveBeenCalled();
+  });
+
+  it("rejects reviews and materializations outside bounded freshness windows", async () => {
+    await expect(promoteOutcomeCase(decision(snapshot(), { reviewedAt: "2026-09-10T23:10:00.000Z" }), deps())).rejects.toMatchObject({ code: "stale_input" });
+    await expect(promoteOutcomeCase(decision(), deps(snapshot(), { now: () => new Date("2026-09-04T23:11:00.000Z") }))).rejects.toMatchObject({ code: "stale_input" });
   });
 
   it.each([
@@ -260,6 +273,100 @@ describe("zero-outcome promotion", () => {
     await rm(join(root, "cases", promoted.caseVersion), { recursive: true });
     await mkdir(join(root, "cases", hash("orphan")), { mode: 0o700 });
     await expect(validateOutcomeStore(root)).resolves.toMatchObject({ status: "invalid", reasons: expect.objectContaining({ missing_or_invalid_case: 1, orphan_case: 1 }) });
+  });
+
+  it("validator fails standalone on missing, mismatched, and future freshness bindings", async () => {
+    const root = await temporaryRoot();
+    const promoted = await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
+    await expect(validateOutcomeStore(root, { now: new Date("2026-09-02T23:12:00.000Z") })).resolves.toMatchObject({ status: "valid" });
+    await expect(validateOutcomeStore(root, { now: new Date("2026-09-02T23:00:00.000Z") })).resolves.toMatchObject({ status: "invalid", reasons: { stale_case: 1 } });
+
+    const casePath = join(root, "cases", promoted.caseVersion, "case.json");
+    const raw = JSON.parse(await readFile(casePath, "utf8"));
+    delete raw.freshnessSha256;
+    await writeFile(casePath, `${canonicalJson(raw)}\n`, { mode: 0o600 });
+    await expect(validateOutcomeStore(root)).resolves.toMatchObject({ status: "invalid", reasons: { missing_or_invalid_case: 1 } });
+  });
+
+  it("uses the current clock by default to reject future materialization", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-03T00:00:00.000Z"));
+    try {
+      const future = snapshot({
+        job: { ...snapshot().job, updatedAt: "2026-09-09T23:00:00.000Z" },
+        analyzeStep: { ...snapshot().analyzeStep, finishedAt: "2026-09-09T22:59:00.000Z" },
+      });
+      const root = await temporaryRoot();
+      await promoteOutcomeCase(
+        decision(future, { reviewedAt: "2026-09-09T23:10:00.000Z" }),
+        deps(future, { root, publish: undefined, now: () => new Date("2026-09-09T23:11:00.000Z") }),
+      );
+      await expect(validateOutcomeStore(root)).resolves.toMatchObject({ status: "invalid", reasons: { stale_case: 1 } });
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("rejects oversized stored case metadata before parsing", async () => {
+    const root = await temporaryRoot();
+    const promoted = await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
+    await truncate(join(root, "cases", promoted.caseVersion, "case.json"), MAX_OUTCOME_CASE_BYTES + 1);
+    await expect(validateOutcomeStore(root)).resolves.toMatchObject({ status: "invalid", reasons: { missing_or_invalid_case: 1 } });
+  });
+
+  it.each(["observations", "decisions"])("requires %s to remain a private directory", async (name) => {
+    const root = await temporaryRoot();
+    await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
+    await rm(join(root, name), { recursive: true });
+    await writeFile(join(root, name), "", { mode: 0o600 });
+    await expect(validateOutcomeStore(root)).resolves.toMatchObject({ status: "invalid", reasons: { required_entry_type: 1 } });
+  });
+
+  it("snapshots mutable byte payloads once before validation and publication", async () => {
+    const captured = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
+    await promoteOutcomeCase(decision(), deps(snapshot(), { publish: captured }));
+    const template = captured.mock.calls[0][0];
+    const root = await temporaryRoot();
+    const originalSource = Buffer.from("source-bytes");
+    const source = new Uint8Array(originalSource);
+    const files = { ...template.files, "source.mp4": source };
+    await publishOutcomeCase({
+      ...template, root, files,
+      afterPrepare: () => { source.fill(0x78); },
+    });
+    expect(await readFile(join(root, "cases", template.caseVersion, "source.mp4"))).toEqual(originalSource);
+  });
+
+  it("anchors and snapshots a file-backed payload before an adversarial source change", async () => {
+    const captured = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
+    await promoteOutcomeCase(decision(), deps(snapshot(), { publish: captured }));
+    const template = captured.mock.calls[0][0];
+    const root = await temporaryRoot();
+    const external = join(roots[roots.length - 1], "external-source.mp4");
+    const originalSource = Buffer.from("source-bytes");
+    await writeFile(external, originalSource, { mode: 0o600 });
+    await publishOutcomeCase({
+      ...template, root,
+      files: { ...template.files, "source.mp4": { path: external, size: originalSource.length, sha256: sha256(originalSource) } },
+      afterPrepare: () => writeFile(external, "source-bytes-changed", { mode: 0o600 }),
+    });
+    expect(await readFile(join(root, "cases", template.caseVersion, "source.mp4"))).toEqual(originalSource);
+  });
+
+  it("enforces the public source cap, including the exact boundary", async () => {
+    expect(isOutcomeSourceSizeAllowed(MAX_OUTCOME_SOURCE_BYTES)).toBe(true);
+    expect(isOutcomeSourceSizeAllowed(MAX_OUTCOME_SOURCE_BYTES + 1)).toBe(false);
+
+    const captured = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
+    await promoteOutcomeCase(decision(), deps(snapshot(), { publish: captured }));
+    const template = captured.mock.calls[0][0];
+    const root = await temporaryRoot();
+    const oversized = join(roots[roots.length - 1], "oversized-source.mp4");
+    await writeFile(oversized, "", { mode: 0o600 });
+    await truncate(oversized, MAX_OUTCOME_SOURCE_BYTES + 1);
+    await expect(publishOutcomeCase({
+      ...template, root,
+      files: { ...template.files, "source.mp4": { path: oversized, size: MAX_OUTCOME_SOURCE_BYTES + 1, sha256: hash("irrelevant") } },
+    })).rejects.toMatchObject({ code: "source_too_large" });
+    await expect(lstat(root)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("validator retains and verifies retired immutable cases without counting them active", async () => {

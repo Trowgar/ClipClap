@@ -1,3 +1,4 @@
+import { canonicalJson, sha256 as digestSha256 } from "../feedback-learning/canonical";
 import type { Sha256 } from "../feedback-learning/types";
 import type { Subsystem } from "./types";
 
@@ -42,6 +43,10 @@ interface OutcomeCaseBase {
   readonly transcriptSha256: Sha256;
   readonly sourceSha256: Sha256;
   readonly recordedResponsesSha256: Sha256;
+  readonly jobUpdatedAt: string;
+  readonly reviewedAt: string;
+  readonly materializedAt: string;
+  readonly freshnessSha256: Sha256;
   readonly disposition: OutcomeDisposition;
   readonly confidence: OutcomeConfidence;
   readonly subsystem: Subsystem;
@@ -61,6 +66,39 @@ export class OutcomeSchemaError extends Error {
 
 export const MAX_OUTCOME_WINDOWS = 64;
 export const MAX_OUTCOME_SECONDS = 7 * 24 * 60 * 60;
+export const MAX_OUTCOME_REVIEW_DELAY_MS = 7 * 24 * 60 * 60 * 1000;
+export const MAX_OUTCOME_MATERIALIZATION_DELAY_MS = 24 * 60 * 60 * 1000;
+
+export type OutcomeFreshnessBinding = Readonly<{
+  jobIdentitySha256: Sha256;
+  jobUpdatedAt: string;
+  reviewedAt: string;
+  materializedAt: string;
+  analyzeStepSha256: Sha256;
+  analysisVersion: string;
+  engineFingerprint: Sha256;
+  configSha256: Sha256;
+  transcriptSha256: Sha256;
+  sourceSha256: Sha256;
+  recordedResponsesSha256: Sha256;
+}>;
+
+/** Binds review freshness only to publishable pseudonymous digests/timestamps. */
+export function outcomeFreshnessSha256(value: OutcomeFreshnessBinding): Sha256 {
+  return digestSha256(canonicalJson({
+    jobIdentitySha256: value.jobIdentitySha256,
+    jobUpdatedAt: value.jobUpdatedAt,
+    reviewedAt: value.reviewedAt,
+    materializedAt: value.materializedAt,
+    analyzeStepSha256: value.analyzeStepSha256,
+    analysisVersion: value.analysisVersion,
+    engineFingerprint: value.engineFingerprint,
+    configSha256: value.configSha256,
+    transcriptSha256: value.transcriptSha256,
+    sourceSha256: value.sourceSha256,
+    recordedResponsesSha256: value.recordedResponsesSha256,
+  }));
+}
 
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const IMMUTABLE_TOKEN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -186,16 +224,32 @@ export function parseOutcomeCase(value: unknown): OutcomeCase {
   const raw = plainExact(value, [
     "schemaVersion", "caseVersion", "jobIdentitySha256", "analyzeStepSha256", "analysisVersion",
     "engineFingerprint", "configSha256", "sourceDurationSec", "transcriptSha256", "sourceSha256",
-    "recordedResponsesSha256", ...(hasSet ? ["set"] : []), "disposition", "confidence", "subsystem", "expected",
+    "recordedResponsesSha256", "jobUpdatedAt", "reviewedAt", "materializedAt", "freshnessSha256",
+    ...(hasSet ? ["set"] : []), "disposition", "confidence", "subsystem", "expected",
   ]);
   const {
     caseVersion, jobIdentitySha256, analyzeStepSha256, analysisVersion, engineFingerprint, configSha256,
-    sourceDurationSec, transcriptSha256, sourceSha256, recordedResponsesSha256, subsystem: causalSubsystem,
+    sourceDurationSec, transcriptSha256, sourceSha256, recordedResponsesSha256, jobUpdatedAt, reviewedAt,
+    materializedAt, freshnessSha256, subsystem: causalSubsystem,
   } = raw;
   if (raw.schemaVersion !== 1 || !sha256(caseVersion) || !sha256(jobIdentitySha256) || !sha256(analyzeStepSha256) ||
       typeof analysisVersion !== "string" || !IMMUTABLE_TOKEN.test(analysisVersion) || !sha256(engineFingerprint) || !sha256(configSha256) ||
       typeof sourceDurationSec !== "number" || !Number.isFinite(sourceDurationSec) || sourceDurationSec <= 0 || sourceDurationSec > MAX_OUTCOME_SECONDS ||
-      !sha256(transcriptSha256) || !sha256(sourceSha256) || !sha256(recordedResponsesSha256) || !subsystem(causalSubsystem)) fail();
+      !sha256(transcriptSha256) || !sha256(sourceSha256) || !sha256(recordedResponsesSha256) ||
+      !canonicalUtc(jobUpdatedAt) || !canonicalUtc(reviewedAt) || !canonicalUtc(materializedAt) || !sha256(freshnessSha256) ||
+      !subsystem(causalSubsystem)) fail();
+  const jobUpdatedMs = new Date(jobUpdatedAt).getTime();
+  const reviewedMs = new Date(reviewedAt).getTime();
+  const materializedMs = new Date(materializedAt).getTime();
+  let computedFreshness: Sha256;
+  try {
+    computedFreshness = outcomeFreshnessSha256({
+      jobIdentitySha256, jobUpdatedAt, reviewedAt, materializedAt, analyzeStepSha256, analysisVersion, engineFingerprint, configSha256,
+      transcriptSha256, sourceSha256, recordedResponsesSha256,
+    });
+  } catch { return fail(); }
+  if (reviewedMs < jobUpdatedMs || materializedMs < reviewedMs || reviewedMs - jobUpdatedMs > MAX_OUTCOME_REVIEW_DELAY_MS ||
+      materializedMs - reviewedMs > MAX_OUTCOME_MATERIALIZATION_DELAY_MS || computedFreshness !== freshnessSha256) fail();
   const expected = parseExpected(raw.expected, sourceDurationSec);
   const fields = dispositionFields(raw, expected);
   const common = {
@@ -210,6 +264,10 @@ export function parseOutcomeCase(value: unknown): OutcomeCase {
     transcriptSha256,
     sourceSha256,
     recordedResponsesSha256,
+    jobUpdatedAt,
+    reviewedAt,
+    materializedAt,
+    freshnessSha256,
     confidence: fields.confidence,
     subsystem: causalSubsystem,
     expected,

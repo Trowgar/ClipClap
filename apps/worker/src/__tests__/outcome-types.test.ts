@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  outcomeFreshnessSha256,
   OutcomeSchemaError,
   parseOutcomeCase,
   parseOutcomeLabel,
@@ -39,7 +40,7 @@ function label(overrides: Record<string, unknown> = {}): Record<string, unknown>
 }
 
 function outcomeCase(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  return {
+  const base = {
     schemaVersion: 1,
     caseVersion: sha("a"),
     jobIdentitySha256: sha("b"),
@@ -51,13 +52,17 @@ function outcomeCase(overrides: Record<string, unknown> = {}): Record<string, un
     transcriptSha256: sha("f"),
     sourceSha256: sha("1"),
     recordedResponsesSha256: sha("2"),
+    jobUpdatedAt: "2026-09-02T23:00:00.000Z",
+    reviewedAt: "2026-09-02T23:10:00.000Z",
+    materializedAt: "2026-09-02T23:11:00.000Z",
     set: "eval",
     disposition: "recoverable_false_negative",
     confidence: "high",
     subsystem: "selection",
     expected,
-    ...overrides,
   };
+  const merged = { ...base, ...overrides };
+  return { ...merged, freshnessSha256: Object.prototype.hasOwnProperty.call(overrides, "freshnessSha256") ? overrides.freshnessSha256 : outcomeFreshnessSha256(merged) };
 }
 
 describe("zero-outcome contracts", () => {
@@ -151,6 +156,16 @@ describe("zero-outcome contracts", () => {
     const result: OutcomeCase = parseOutcomeCase(outcomeCase());
     expect(result).toMatchObject({ sourceDurationSec: 300, subsystem: "selection", disposition: "recoverable_false_negative" });
     expect(Object.isFrozen(result)).toBe(true);
+  });
+
+  it("requires an exact privacy-safe freshness binding and bounded timestamp order", () => {
+    const missing = outcomeCase();
+    delete missing.freshnessSha256;
+    expect(() => parseOutcomeCase(missing)).toThrow(OutcomeSchemaError);
+    expect(() => parseOutcomeCase(outcomeCase({ freshnessSha256: sha("9") }))).toThrow(OutcomeSchemaError);
+    expect(() => parseOutcomeCase(outcomeCase({ reviewedAt: "2026-09-02T22:59:00.000Z" }))).toThrow(OutcomeSchemaError);
+    expect(() => parseOutcomeCase(outcomeCase({ materializedAt: "2026-09-02T23:09:00.000Z" }))).toThrow(OutcomeSchemaError);
+    expect(() => parseOutcomeCase(outcomeCase({ reviewedAt: "2026-08-01T00:00:00.000Z" }))).toThrow(OutcomeSchemaError);
   });
 
   it("rejects mutable/private identifiers and free-form text from a case", () => {
