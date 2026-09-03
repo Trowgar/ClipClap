@@ -11,8 +11,8 @@ import type { AnalyzeConfig } from "../analyze-v2/config";
 import type { V2Result } from "../analyze-v2/types";
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import type { Sha256 } from "../feedback-learning/types";
-import { validateOutcomeStore, MAX_OUTCOME_RECORDED_RESPONSES_BYTES, MAX_OUTCOME_TRANSCRIPT_BYTES, type RecordedOutcomeResponse } from "./outcome-promote";
-import { ensureOutcomeStore, readActiveOutcomeLabels } from "./outcome-store";
+import { loadOutcomeObservationAuthority, withOutcomeObservationAuthority, type OutcomeObservationAuthorityCase, type RecordedOutcomeResponse } from "./outcome-promote";
+import { ensureOutcomeStore } from "./outcome-store";
 import { parseOutcomeCase, type OutcomeCase, type OutcomeDisposition } from "./outcome-types";
 import type { CommitResult } from "./store";
 
@@ -71,7 +71,9 @@ export type MaterializedOutcomeLiveLane = Readonly<{
   attempts: readonly Readonly<{
     attemptId: string;
     recordedAt: string;
-    cases: readonly Readonly<{ caseVersion: Sha256; recordedResponses: readonly RecordedOutcomeResponse[] }>[];
+    engineFingerprint: Sha256;
+    captureSha256: Sha256;
+    cases: readonly Readonly<{ caseVersion: Sha256; recordedResponses: readonly Readonly<{ providerRequestId: string; recording: RecordedOutcomeResponse }>[] }>[];
   }>[];
 }>;
 
@@ -149,32 +151,37 @@ function completion(recording: RecordedOutcomeResponse): Readonly<Record<string,
 }
 
 function strictReplayClient(recordings: readonly RecordedOutcomeResponse[]): OpenAI & { assertComplete(): void } {
-  const validated: RecordedOutcomeResponse[] = [];
+  const queues = new Map<Sha256, RecordedOutcomeResponse[]>();
+  const promptModels = new Set<string>();
+  let remaining = 0;
   for (const recording of recordings) {
     if (!exactDataObject(recording, ["promptFingerprint", "modelFingerprint", "requestFingerprint", "result"]) || !isHash(recording.promptFingerprint) || !isHash(recording.modelFingerprint) || !isHash(recording.requestFingerprint) || !isPlain(recording.result)) fail("invalid_case");
-    validated.push(recording);
+    const queue = queues.get(recording.requestFingerprint) ?? [];
+    queue.push(recording);
+    queues.set(recording.requestFingerprint, queue);
+    promptModels.add(`${recording.promptFingerprint}\0${recording.modelFingerprint}`);
+    remaining += 1;
   }
-  let cursor = 0;
   let replayFailure: OutcomeObservationError | undefined;
   const create = async (body: unknown) => {
     try {
       const fingerprint = fingerprintOutcomeRequest(body);
-      const exact = validated[cursor];
-      if (!exact) fail("missing_request");
-      if (exact.requestFingerprint !== fingerprint.requestFingerprint) {
-        const knownElsewhere = validated.slice(cursor + 1).some((entry) => entry.requestFingerprint === fingerprint.requestFingerprint);
-        if (knownElsewhere || (exact.promptFingerprint === fingerprint.promptFingerprint && exact.modelFingerprint === fingerprint.modelFingerprint)) fail("request_fingerprint_drift");
-        fail("live_lane_required");
+      const queue = queues.get(fingerprint.requestFingerprint);
+      const exact = queue?.shift();
+      if (!exact) {
+        if (queues.has(fingerprint.requestFingerprint)) fail("missing_request");
+        if (promptModels.has(`${fingerprint.promptFingerprint}\0${fingerprint.modelFingerprint}`)) fail("request_fingerprint_drift");
+        fail(remaining === 0 ? "missing_request" : "live_lane_required");
       }
       if (exact.promptFingerprint !== fingerprint.promptFingerprint || exact.modelFingerprint !== fingerprint.modelFingerprint) fail("request_fingerprint_drift");
-      cursor += 1;
+      remaining -= 1;
       return completion(exact);
     } catch (error) {
       if (error instanceof OutcomeObservationError) replayFailure ??= error;
       throw error;
     }
   };
-  return { chat: { completions: { create } }, assertComplete() { if (replayFailure) throw replayFailure; if (cursor !== validated.length) fail("recording_not_consumed"); } } as unknown as OpenAI & { assertComplete(): void };
+  return { chat: { completions: { create } }, assertComplete() { if (replayFailure) throw replayFailure; if (remaining !== 0) fail("recording_not_consumed"); } } as unknown as OpenAI & { assertComplete(): void };
 }
 
 function countMap(value: unknown, allowed: ReadonlySet<string>): boolean {
@@ -182,7 +189,10 @@ function countMap(value: unknown, allowed: ReadonlySet<string>): boolean {
   return Object.entries(value).every(([key, count]) => allowed.has(key) && nonnegativeInt(count));
 }
 
-function validateRecoveryTelemetry(value: unknown, expectedMode: "shadow" | "on"): Record<string, unknown> {
+function sumCounts(value: Record<string, unknown>): number { return Object.values(value).reduce<number>((sum, count) => sum + (count as number), 0); }
+
+function validateRecoveryTelemetry(value: unknown, cfg: AnalyzeConfig): Record<string, unknown> {
+  const expectedMode = cfg.outcomeRecoveryMode as "shadow" | "on";
   if (!exactDataObject(value, RECOVERY_KEYS) || value.version !== "core-v4-recovery-v1" || value.mode !== expectedMode || !RECOVERY_MODES.has(value.mode as string) || typeof value.eligible !== "boolean" || !RECOVERY_REASONS.has(value.reason as string) || !RECOVERY_OUTCOMES.has(value.outcome as string)) fail("unknown_telemetry");
   for (const key of ["tailSize", "poolSize", "excludedMissingRange", "judged", "elapsedMs"] as const) if (!nonnegativeInt(value[key])) fail("unknown_telemetry");
   if (!exactDataObject(value.counters, ["selectedForFinalizer", "finalizerSurvivors"]) || !nonnegativeInt(value.counters.selectedForFinalizer) || !nonnegativeInt(value.counters.finalizerSurvivors)) fail("unknown_telemetry");
@@ -190,6 +200,39 @@ function validateRecoveryTelemetry(value: unknown, expectedMode: "shadow" | "on"
   if (!exactDataObject(value.addedUsage, ["inputTokens", "outputTokens", "requests", "byModel"]) || !nonnegativeInt(value.addedUsage.inputTokens) || !nonnegativeInt(value.addedUsage.outputTokens) || !nonnegativeInt(value.addedUsage.requests) || !isPlain(value.addedUsage.byModel)) fail("unknown_telemetry");
   for (const bucket of Object.values(value.addedUsage.byModel)) if (!exactDataObject(bucket, ["inputTokens", "outputTokens", "requests"]) || !nonnegativeInt(bucket.inputTokens) || !nonnegativeInt(bucket.outputTokens) || !nonnegativeInt(bucket.requests)) fail("unknown_telemetry");
   if (!Array.isArray(value.ranges) || value.ranges.some((range) => !exactDataObject(range, ["startMs", "endMs"]) || !nonnegativeInt(range.startMs) || !nonnegativeInt(range.endMs) || range.endMs <= range.startMs)) fail("unknown_telemetry");
+  const pool = value.poolSize as number;
+  const tail = value.tailSize as number;
+  const excluded = value.excludedMissingRange as number;
+  const judged = value.judged as number;
+  const counters = value.counters as Record<string, number>;
+  const primary = value.primaryDispositions as Record<string, unknown>;
+  const recovery = value.recoveryDispositions as Record<string, unknown>;
+  const usage = value.addedUsage as { requests: number; inputTokens: number; outputTokens: number; byModel: Record<string, { requests: number; inputTokens: number; outputTokens: number }> };
+  const ranges = value.ranges as Array<unknown>;
+  const recoveryUnjudged = (recovery.critic_unjudged as number | undefined) ?? 0;
+  const recoveryShipped = (recovery.shipped as number | undefined) ?? 0;
+  if (!Number.isSafeInteger(cfg.outcomeRecoveryMaxCandidates) || cfg.outcomeRecoveryMaxCandidates < 1 || cfg.outcomeRecoveryMaxCandidates > 12 ||
+      pool > cfg.outcomeRecoveryMaxCandidates || pool > tail || excluded > tail || pool + excluded > tail || ((value.eligible as boolean) && judged > pool) ||
+      counters.finalizerSurvivors > counters.selectedForFinalizer || counters.selectedForFinalizer > judged || ranges.length > counters.finalizerSurvivors ||
+      sumCounts(primary) < tail || ((primary.not_selected_for_critic as number | undefined) ?? 0) !== tail || sumCounts(recovery) !== ((value.eligible as boolean) ? pool : 0) ||
+      Object.values(usage.byModel).reduce((n, bucket) => n + bucket.requests, 0) !== usage.requests ||
+      Object.values(usage.byModel).reduce((n, bucket) => n + bucket.inputTokens, 0) !== usage.inputTokens ||
+      Object.values(usage.byModel).reduce((n, bucket) => n + bucket.outputTokens, 0) !== usage.outputTokens) fail("unknown_telemetry");
+  const eligible = value.eligible as boolean;
+  const outcome = value.outcome as string;
+  const reason = value.reason as string;
+  if ((eligible !== (reason === "unjudged_tail" || reason === "empty_pool" || reason === "quality_error")) ||
+      (!eligible && !["not_eligible", "no_candidate"].includes(outcome)) ||
+      (eligible && pool === 0 && outcome !== "empty_pool") ||
+      (eligible && pool > 0 && ["not_eligible", "no_candidate", "empty_pool"].includes(outcome)) ||
+      (outcome === "shipped" && expectedMode !== "on") ||
+      ((outcome === "shadow_hit" || outcome === "shadow_miss") && expectedMode !== "shadow") ||
+      (eligible && judged !== pool - recoveryUnjudged) || (eligible && judged > 0 && usage.requests === 0) ||
+      ranges.length !== recoveryShipped || ((outcome === "shipped" || outcome === "shadow_hit") !== (ranges.length > 0)) ||
+      (reason === "empty_pool" && outcome !== "empty_pool") || (reason === "quality_error" && outcome !== "failed") ||
+      (reason === "unjudged_tail" && expectedMode === "on" && !["shipped", "rejected", "failed"].includes(outcome)) ||
+      (reason === "unjudged_tail" && expectedMode === "shadow" && !["shadow_hit", "shadow_miss", "failed"].includes(outcome)) ||
+      (["rejected", "failed", "shadow_miss", "not_eligible", "no_candidate", "empty_pool"].includes(outcome) && ranges.length !== 0)) fail("unknown_telemetry");
   return value;
 }
 
@@ -197,7 +240,7 @@ function overlap(window: { start: number; end: number }, expected: { start: numb
   return Math.min(window.end, expected.end) > Math.max(window.start, expected.start);
 }
 
-function projectResult(item: OutcomeObservationCase, result: V2Result, cfg: AnalyzeConfig, mode: OutcomeObservationMode): OutcomeObservationResult {
+function projectResult(item: OutcomeObservationCase, result: V2Result, cfg: AnalyzeConfig, mode: OutcomeObservationMode, suppliedAudit: Readonly<{ keepFalseShipped: number; explicitGateResurrections: number }> | undefined): OutcomeObservationResult {
   if (item.case.disposition === "exclude") fail("invalid_case");
   if (!Array.isArray(result.highlights) || !isPlain(result.telemetry)) fail("invalid_case");
   if (result.noClipsReason !== undefined && result.noClipsReason !== "NO_USABLE_SPEECH" && result.noClipsReason !== "NO_VIABLE_MOMENTS" && result.noClipsReason !== "PARTIAL_TRANSCRIPT") fail("unknown_telemetry");
@@ -206,16 +249,25 @@ function projectResult(item: OutcomeObservationCase, result: V2Result, cfg: Anal
     return Object.freeze({ start: highlight.start, end: highlight.end });
   });
   let criticBatches = 0;
+  let audit: Readonly<{ keepFalseShipped: number; explicitGateResurrections: number }> = Object.freeze({ keepFalseShipped: 0, explicitGateResurrections: 0 });
   if (mode === "baseline") {
     if (Object.prototype.hasOwnProperty.call(result.telemetry, "outcomeRecovery")) fail("unknown_telemetry");
   } else {
-    const recovery = validateRecoveryTelemetry(result.telemetry.outcomeRecovery, cfg.outcomeRecoveryMode as "shadow" | "on");
+    const recovery = validateRecoveryTelemetry(result.telemetry.outcomeRecovery, cfg);
+    if ((recovery.outcome === "shipped" || recovery.outcome === "shadow_hit") && suppliedAudit === undefined) fail("unknown_telemetry");
+    if (recovery.outcome !== "shipped" && recovery.outcome !== "shadow_hit" && suppliedAudit !== undefined &&
+        (suppliedAudit.keepFalseShipped !== 0 || suppliedAudit.explicitGateResurrections !== 0)) fail("unknown_telemetry");
+    if (suppliedAudit !== undefined) audit = suppliedAudit;
+    const recoveryRanges = (recovery.ranges as Array<{ startMs: number; endMs: number}>).map((range) => ({ start: range.startMs / 1000, end: range.endMs / 1000 }));
+    if (cfg.outcomeRecoveryMode === "shadow" && result.highlights.length !== 0) fail("unknown_telemetry");
+    if (cfg.outcomeRecoveryMode === "on" && recovery.outcome === "shipped" && canonicalJson(shippedWindows) !== canonicalJson(recoveryRanges)) fail("unknown_telemetry");
+    if (cfg.outcomeRecoveryMode === "on" && recovery.outcome !== "shipped" && recovery.reason !== "non_empty" && result.highlights.length !== 0) fail("unknown_telemetry");
     criticBatches = (recovery.poolSize as number) === 0 ? 0 : Math.ceil((recovery.poolSize as number) / cfg.criticBatchSize);
     if (criticBatches > 1) fail("unknown_telemetry");
     // Shadow returns the primary empty set; its bounded geometry is the
     // candidate output under evaluation, never a customer-visible claim.
     if (cfg.outcomeRecoveryMode === "shadow" && recovery.outcome === "shadow_hit") {
-      shippedWindows = (recovery.ranges as Array<{ startMs: number; endMs: number }>).map((range) => Object.freeze({ start: range.startMs / 1000, end: range.endMs / 1000 }));
+      shippedWindows = recoveryRanges.map((range) => Object.freeze(range));
       if (shippedWindows.some((window) => window.end > item.case.sourceDurationSec)) fail("output_out_of_duration");
     }
   }
@@ -225,8 +277,8 @@ function projectResult(item: OutcomeObservationCase, result: V2Result, cfg: Anal
     shippedWindows: Object.freeze(shippedWindows),
     approvedHits: item.case.expected.approvedWindows.filter((expected) => shippedWindows.some((window) => overlap(window, expected))).length,
     forbiddenHits: item.case.expected.forbiddenWindows.filter((expected) => shippedWindows.some((window) => overlap(window, expected))).length,
-    keepFalseShipped: 0,
-    explicitGateResurrections: 0,
+    keepFalseShipped: audit.keepFalseShipped,
+    explicitGateResurrections: audit.explicitGateResurrections,
     candidateCap: mode === "baseline" ? 0 : cfg.outcomeRecoveryMaxCandidates,
     criticBatches,
     noClipsReason: result.noClipsReason ?? null,
@@ -237,27 +289,42 @@ function corpusDigest(cases: readonly OutcomeObservationCase[]): Sha256 {
   return sha256(canonicalJson(cases.map(({ case: value }) => ({ caseVersion: value.caseVersion, transcriptSha256: value.transcriptSha256, sourceSha256: value.sourceSha256, expected: value.expected, disposition: value.disposition }))));
 }
 
-function parseLiveLane(raw: MaterializedOutcomeLiveLane, cases: readonly OutcomeObservationCase[]): Readonly<{
+function parseLiveLane(raw: MaterializedOutcomeLiveLane, cases: readonly OutcomeObservationCase[], engineFingerprint: Sha256, now: Date): Readonly<{
   name: string;
   attempts: readonly Readonly<{ attemptId: string; recordedAt: string; responses: readonly (readonly RecordedOutcomeResponse[])[]; digest: Sha256 }>[];
 }> {
   if (!exactDataObject(raw, ["schemaVersion", "name", "attempts"]) || raw.schemaVersion !== 1 || !SAFE_NAME.test(raw.name) || !Array.isArray(raw.attempts) || raw.attempts.length !== 3) fail("invalid_live_lane");
   const expectedVersions = cases.map((item) => item.case.caseVersion);
   const attemptIds = new Set<string>();
+  const providerRequestIds = new Set<string>();
+  const nowMs = now.getTime();
+  if (!Number.isFinite(nowMs)) fail("invalid_live_lane");
   const attempts = raw.attempts.map((attempt) => {
-    if (!exactDataObject(attempt, ["attemptId", "recordedAt", "cases"])) fail("invalid_live_lane");
+    const providerCountBefore = providerRequestIds.size;
+    if (!exactDataObject(attempt, ["attemptId", "recordedAt", "engineFingerprint", "captureSha256", "cases"])) fail("invalid_live_lane");
     const attemptId = attempt.attemptId;
     const recordedAt = attempt.recordedAt;
     const attemptCases = attempt.cases;
-    if (typeof attemptId !== "string" || !SAFE_NAME.test(attemptId) || attemptIds.has(attemptId) || !canonicalUtc(recordedAt) || !Array.isArray(attemptCases) || attemptCases.length !== cases.length) fail("invalid_live_lane");
+    const recordedMs = typeof recordedAt === "string" ? new Date(recordedAt).getTime() : Number.NaN;
+    if (typeof attemptId !== "string" || !SAFE_NAME.test(attemptId) || attemptIds.has(attemptId) || !canonicalUtc(recordedAt) ||
+        attempt.engineFingerprint !== engineFingerprint || !isHash(attempt.captureSha256) || recordedMs > nowMs || nowMs - recordedMs > 24 * 60 * 60 * 1000 ||
+        !Array.isArray(attemptCases) || attemptCases.length !== cases.length) fail("invalid_live_lane");
+    const { captureSha256, ...captureBody } = attempt;
+    if (sha256(canonicalJson(captureBody)) !== captureSha256) fail("invalid_live_lane");
     attemptIds.add(attemptId);
-    const ordered = [...attemptCases].sort((left, right) => String((left as Record<string, unknown>).caseVersion).localeCompare(String((right as Record<string, unknown>).caseVersion))) as Array<{ caseVersion: Sha256; recordedResponses: readonly RecordedOutcomeResponse[] }>;
+    const ordered = [...attemptCases].sort((left, right) => String((left as Record<string, unknown>).caseVersion).localeCompare(String((right as Record<string, unknown>).caseVersion))) as Array<{ caseVersion: Sha256; recordedResponses: readonly Readonly<{ providerRequestId: string; recording: RecordedOutcomeResponse }>[] }>;
     if (ordered.some((entry, index) => !exactDataObject(entry, ["caseVersion", "recordedResponses"]) || entry.caseVersion !== expectedVersions[index] || !Array.isArray(entry.recordedResponses))) fail("invalid_live_lane");
-    for (const entry of ordered) strictReplayClient(entry.recordedResponses);
+    const recordings = ordered.map((entry) => entry.recordedResponses.map((captured) => {
+      if (!exactDataObject(captured, ["providerRequestId", "recording"]) || typeof captured.providerRequestId !== "string" || !SAFE_NAME.test(captured.providerRequestId) || providerRequestIds.has(captured.providerRequestId)) fail("invalid_live_lane");
+      providerRequestIds.add(captured.providerRequestId);
+      return captured.recording;
+    }));
+    for (const entry of recordings) strictReplayClient(entry);
+    if (providerRequestIds.size === providerCountBefore) fail("invalid_live_lane");
     return Object.freeze({
       attemptId,
       recordedAt,
-      responses: Object.freeze(ordered.map((entry) => Object.freeze([...entry.recordedResponses]))),
+      responses: Object.freeze(recordings.map((entry) => Object.freeze([...entry]))),
       digest: sha256(canonicalJson(attempt)),
     });
   });
@@ -276,10 +343,18 @@ async function runCases(
     const item = cases[index];
     const client = strictReplayClient(recordings[index]);
     let result: V2Result;
-    try { result = await analyze(item.transcript as TranscriptionResult, { client, cfg, sourceDurationSec: item.case.sourceDurationSec, retryDelayMs: 1 }); }
+    let audit: Readonly<{ keepFalseShipped: number; explicitGateResurrections: number }> | undefined;
+    let auditCalls = 0;
+    try { result = await analyze(item.transcript as TranscriptionResult, { client, cfg, sourceDurationSec: item.case.sourceDurationSec, retryDelayMs: 1,
+      outcomeRecoveryAuditSink(value) {
+        auditCalls += 1;
+        if (auditCalls !== 1 || !exactDataObject(value, ["keepFalseShipped", "explicitGateResurrections"]) || !nonnegativeInt(value.keepFalseShipped) || !nonnegativeInt(value.explicitGateResurrections)) fail("unknown_telemetry");
+        audit = Object.freeze({ keepFalseShipped: value.keepFalseShipped, explicitGateResurrections: value.explicitGateResurrections });
+      },
+    }); }
     catch (error) { client.assertComplete(); throw error; }
     client.assertComplete();
-    results.push(projectResult(item, result, cfg, mode));
+    results.push(projectResult(item, result, cfg, mode, audit));
   }
   return Object.freeze(results);
 }
@@ -292,10 +367,13 @@ export async function observeOutcomeCases(input: Readonly<{
   config: AnalyzeConfig;
   cases: readonly OutcomeObservationCase[];
   liveLane?: MaterializedOutcomeLiveLane;
+  now?: Date;
 }>, dependencies: Readonly<{
   analyze?: (transcript: TranscriptionResult, options: AnalyzeV2Options) => Promise<V2Result>;
 }> = {}): Promise<OutcomeObservation> {
-  if ((input.mode !== "baseline" && input.mode !== "candidate") || !COMMIT.test(input.commitSha) || !Array.isArray(input.cases) || input.cases.length === 0 || !isPlain(input.config)) fail("invalid_input");
+  if ((input.mode !== "baseline" && input.mode !== "candidate") || !COMMIT.test(input.commitSha) || !Array.isArray(input.cases) || input.cases.length === 0 || !isPlain(input.config) ||
+      !Number.isSafeInteger(input.config.outcomeRecoveryMaxCandidates) || input.config.outcomeRecoveryMaxCandidates < 1 || input.config.outcomeRecoveryMaxCandidates > 12 ||
+      !Number.isSafeInteger(input.config.criticBatchSize) || input.config.outcomeRecoveryMaxCandidates > input.config.criticBatchSize) fail("invalid_input");
   const cfg = Object.freeze({ ...input.config, outcomeRecoveryMode: input.mode === "baseline" ? "off" : input.config.outcomeRecoveryMode }) as AnalyzeConfig;
   if (input.mode === "candidate" && cfg.outcomeRecoveryMode !== "shadow" && cfg.outcomeRecoveryMode !== "on") fail("invalid_input");
   const sorted = input.cases.map(validateCaseBinding).sort((left, right) => left.case.caseVersion.localeCompare(right.case.caseVersion));
@@ -309,7 +387,7 @@ export async function observeOutcomeCases(input: Readonly<{
   let liveLaneBinding: OutcomeObservation["liveLane"];
   let recordedResponsesDigest: Sha256;
   if (input.liveLane) {
-    const lane = parseLiveLane(input.liveLane, sorted);
+    const lane = parseLiveLane(input.liveLane, sorted, sha256(canonicalJson(cfg)), input.now ?? new Date());
     const attempts: Array<readonly OutcomeObservationResult[]> = [];
     for (const attempt of lane.attempts) attempts.push(await runCases(sorted, attempt.responses, cfg, input.mode, analyze));
     const expected = canonicalJson(attempts[0]);
@@ -347,7 +425,8 @@ async function readPrivate(path: string, maximum: number): Promise<Buffer> {
 
 function parseRecordings(bytes: Buffer): readonly RecordedOutcomeResponse[] {
   const text = new TextDecoder("utf8", { fatal: true }).decode(bytes);
-  if (text.length === 0 || !text.endsWith("\n")) fail("invalid_case");
+  if (text.length === 0) return Object.freeze([]);
+  if (!text.endsWith("\n")) fail("invalid_case");
   return Object.freeze(text.slice(0, -1).split("\n").map((line) => {
     let value: unknown;
     try { value = JSON.parse(line); } catch { return fail("invalid_case"); }
@@ -357,28 +436,20 @@ function parseRecordings(bytes: Buffer): readonly RecordedOutcomeResponse[] {
 }
 
 export async function loadOutcomeObservationCases(root: string): Promise<readonly OutcomeObservationCase[]> {
-  const validation = await validateOutcomeStore(root);
-  if (validation.status !== "valid") fail("private_store_invalid");
-  const labels = (await readActiveOutcomeLabels(root)).filter((label) => label.disposition !== "exclude").sort((a, b) => a.caseVersion.localeCompare(b.caseVersion));
+  let authority;
+  try { authority = await loadOutcomeObservationAuthority(root); }
+  catch { return fail("private_store_invalid"); }
   const result: OutcomeObservationCase[] = [];
-  for (const label of labels) {
-    const directory = join(root, "cases", label.caseVersion);
-    const [caseBytes, transcriptBytes, responseBytes] = await Promise.all([
-      readPrivate(join(directory, "case.json"), 1024 * 1024),
-      readPrivate(join(directory, "transcript.json"), MAX_OUTCOME_TRANSCRIPT_BYTES),
-      readPrivate(join(directory, "recorded-responses.jsonl"), MAX_OUTCOME_RECORDED_RESPONSES_BYTES),
-    ]);
+  for (const item of authority) {
     try {
-      const parsed = parseOutcomeCase(JSON.parse(caseBytes.toString("utf8")));
-      if (`${canonicalJson(parsed)}\n` !== caseBytes.toString("utf8") || parsed.caseVersion !== label.caseVersion || sha256(transcriptBytes) !== parsed.transcriptSha256 || sha256(responseBytes) !== parsed.recordedResponsesSha256) fail("invalid_case");
-      result.push(Object.freeze({ case: parsed, transcript: JSON.parse(new TextDecoder("utf8", { fatal: true }).decode(transcriptBytes)), recordedResponses: parseRecordings(responseBytes) }));
+      result.push(Object.freeze({ case: item.case, transcript: JSON.parse(new TextDecoder("utf8", { fatal: true }).decode(item.transcriptBytes)), recordedResponses: parseRecordings(Buffer.from(item.recordedResponsesBytes)) }));
     } catch (error) { if (error instanceof OutcomeObservationError) throw error; return fail("invalid_case"); }
   }
   if (result.length === 0) fail("invalid_case");
   return Object.freeze(result);
 }
 
-export async function publishOutcomeObservation(root: string, observation: OutcomeObservation, authoritativeCases: readonly OutcomeObservationCase[]): Promise<CommitResult> {
+async function publishOutcomeObservationAgainstAuthority(root: string, observation: OutcomeObservation, authoritativeCases: readonly OutcomeObservationCase[], loaded: readonly OutcomeObservationAuthorityCase[]): Promise<CommitResult> {
   if (!validatedObservations.has(observation as object)) fail("publication_failed");
   const observationKeys = ["schemaVersion", "observationId", "mode", "commitSha", "engineFingerprint", "corpusDigest", "runnerVersion", "recordedResponsesDigest", "results", ...(observation.liveLane ? ["liveLane"] : [])];
   if (!exactDataObject(observation, observationKeys) ||
@@ -387,11 +458,21 @@ export async function publishOutcomeObservation(root: string, observation: Outco
       observation.runnerVersion !== OUTCOME_OBSERVATION_RUNNER_VERSION || !isHash(observation.recordedResponsesDigest) ||
       !Array.isArray(observation.results) || observation.results.length === 0) fail("publication_failed");
   let authority: OutcomeObservationCase[];
-  try { authority = authoritativeCases.map(validateCaseBinding).sort((left, right) => left.case.caseVersion.localeCompare(right.case.caseVersion)); }
+  let expectedAuthority: OutcomeObservationCase[];
+  try {
+    expectedAuthority = authoritativeCases.map(validateCaseBinding).sort((left, right) => left.case.caseVersion.localeCompare(right.case.caseVersion));
+    authority = loaded.map((item) => validateCaseBinding({
+      case: item.case,
+      transcript: JSON.parse(new TextDecoder("utf8", { fatal: true }).decode(item.transcriptBytes)),
+      recordedResponses: parseRecordings(Buffer.from(item.recordedResponsesBytes)),
+    })).sort((left, right) => left.case.caseVersion.localeCompare(right.case.caseVersion));
+  }
   catch { return fail("publication_failed"); }
   const authorityVersions = authority.map((item) => item.case.caseVersion);
+  const expectedVersions = expectedAuthority.map((item) => item.case.caseVersion);
   const resultVersions = observation.results.map((result) => result.caseVersion);
-  if (new Set(authorityVersions).size !== authorityVersions.length || new Set(resultVersions).size !== resultVersions.length ||
+  if (canonicalJson(authority.map((item) => item.case)) !== canonicalJson(expectedAuthority.map((item) => item.case)) || expectedVersions.join("\n") !== authorityVersions.join("\n") ||
+      new Set(authorityVersions).size !== authorityVersions.length || new Set(resultVersions).size !== resultVersions.length ||
       authorityVersions.join("\n") !== [...resultVersions].sort().join("\n") || corpusDigest(authority) !== observation.corpusDigest) fail("publication_failed");
   if (observation.liveLane && (!exactDataObject(observation.liveLane, ["name", "attempts", "attemptDigests"]) || !SAFE_NAME.test(observation.liveLane.name) || observation.liveLane.attempts !== 3 || !Array.isArray(observation.liveLane.attemptDigests) || observation.liveLane.attemptDigests.length !== 3 || observation.liveLane.attemptDigests.some((digest) => !isHash(digest)))) fail("publication_failed");
   for (const result of observation.results) {
@@ -451,6 +532,16 @@ export async function publishOutcomeObservation(root: string, observation: Outco
   } finally {
     if (temporaryName && observations) await rm(join(`/proc/self/fd/${observations.fd}`, temporaryName), { recursive: true, force: true }).catch(() => undefined);
     await observations?.close().catch(() => undefined);
+  }
+}
+
+export async function publishOutcomeObservation(root: string, observation: OutcomeObservation, authoritativeCases: readonly OutcomeObservationCase[]): Promise<CommitResult> {
+  try {
+    return await withOutcomeObservationAuthority(root, async (authority) =>
+      publishOutcomeObservationAgainstAuthority(root, observation, authoritativeCases, authority));
+  } catch (error) {
+    if (error instanceof OutcomeObservationError) throw error;
+    return fail("publication_failed");
   }
 }
 

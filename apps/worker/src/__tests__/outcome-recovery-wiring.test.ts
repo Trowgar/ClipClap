@@ -117,11 +117,13 @@ describe("outcome recovery wiring", () => {
 
   it("on ships only the shared-lane survivor", async () => {
     const harness = client(scanTwo(), critic([verdict("c0", false)]), critic([verdict("c1", true)]), finalizer());
-    const result = await analyzeHighlightsV2(transcript(), { client: harness.client, cfg: recoveryCfg("on"), transcriptPartial: false });
+    const audits: unknown[] = [];
+    const result = await analyzeHighlightsV2(transcript(), { client: harness.client, cfg: recoveryCfg("on"), transcriptPartial: false, outcomeRecoveryAuditSink: (audit) => audits.push(audit) });
     expect(result.highlights).toHaveLength(1);
     expect(result.highlights[0].title).toBe("Sentence number 23.");
     expect(result.telemetry.outcomeRecovery).toEqual(expect.objectContaining({ outcome: "shipped" }));
     expect((result.telemetry.outcomeRecovery as any).ranges).toHaveLength(1);
+    expect(audits).toEqual([{ keepFalseShipped: 0, explicitGateResurrections: 0 }]);
   });
 
   it("recovery keep:false is a closed rejection and never ships", async () => {

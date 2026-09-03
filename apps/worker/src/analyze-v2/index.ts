@@ -75,6 +75,12 @@ export interface AnalyzeV2Options {
    * It is applied solely to the detached audit result before its local JSON
    * preflight; it cannot affect clips, finalizer input, or persistence. */
   safeEndAuditTelemetryTestHook?: (telemetry: unknown) => unknown;
+  /** Offline-only aggregate observation seam. Candidate ids and source prose
+   * never cross it. Production callers do not set it. */
+  outcomeRecoveryAuditSink?: (audit: Readonly<{
+    keepFalseShipped: number;
+    explicitGateResurrections: number;
+  }>) => void;
 }
 
 export interface VisualRecallEvaluation {
@@ -798,6 +804,21 @@ export async function analyzeHighlightsV2(
             endMs: Math.round(highlight.end * 1000),
           })),
         });
+        const recoveryAudit = (() => {
+          const explicitPrimaryRejections = new Set<CandidatePrimaryDisposition>([
+            "missing_range_rejected", "critic_rejected", "evidence_rejected", "snap_rejected",
+            "arc_rejected", "post_boundary_rejected", "standalone_rejected", "finalizer_rejected",
+          ]);
+          let keepFalseShipped = 0;
+          let explicitGateResurrections = 0;
+          for (const entry of trace.inspect()) {
+            if (entry.recovery !== "shipped") continue;
+            if (recovery.criticKeep.get(entry.id) === false) keepFalseShipped += 1;
+            if (entry.primary !== undefined && explicitPrimaryRejections.has(entry.primary)) explicitGateResurrections += 1;
+          }
+          return Object.freeze({ keepFalseShipped, explicitGateResurrections });
+        })();
+        options.outcomeRecoveryAuditSink?.(recoveryAudit);
         if (cfg.outcomeRecoveryMode === "shadow" || !recoveryHit) {
           return {
             highlights: [],

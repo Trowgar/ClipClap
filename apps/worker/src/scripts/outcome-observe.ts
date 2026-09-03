@@ -15,10 +15,10 @@ const SAFE_LANE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 export type OutcomeObserveIo = Readonly<{ stdout(line: string): void; stderr(line: string): void }>;
 const processIo: OutcomeObserveIo = { stdout: (line) => process.stdout.write(`${line}\n`), stderr: (line) => process.stderr.write(`${line}\n`) };
 
-type Arguments = Readonly<{ mode: OutcomeObservationMode; root: string; configFile?: string; liveLaneName?: string; liveLaneFile?: string }>;
+type Arguments = Readonly<{ mode: OutcomeObservationMode; root: string; configFile: string; liveLaneName?: string; liveLaneFile?: string }>;
 function parse(argv: readonly string[]): Arguments {
   if (argv[0] !== "--mode" || typeof argv[1] !== "string" || argv[2] !== "--root" || !argv[3]) throw new Error("invalid_arguments");
-  if (argv[1] === "baseline" && argv.length === 4) return Object.freeze({ mode: "baseline", root: argv[3] });
+  if (argv[1] === "baseline" && argv.length === 6 && argv[4] === "--config-file" && argv[5]) return Object.freeze({ mode: "baseline", root: argv[3], configFile: argv[5] });
   if (argv[1] === "candidate" && argv.length === 6 && argv[4] === "--config-file" && argv[5]) return Object.freeze({ mode: "candidate", root: argv[3], configFile: argv[5] });
   if (argv[1].startsWith("live:") && argv.length === 8 && argv[4] === "--config-file" && argv[5] && argv[6] === "--live-lane-file" && argv[7]) {
     const name = argv[1].slice("live:".length);
@@ -45,7 +45,7 @@ async function readPrivateJson(path: string, maximum: number): Promise<unknown> 
   finally { await handle?.close().catch(() => undefined); }
 }
 
-export async function readOutcomeCandidateConfig(path: string): Promise<AnalyzeConfig> {
+export async function readOutcomeObservationConfig(path: string): Promise<AnalyzeConfig> {
   try {
     const value = await readPrivateJson(path, MAX_CONFIG_BYTES);
     if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).sort().join(",") !== "config,engineFingerprint,schemaVersion" || Reflect.ownKeys(value).length !== 3) throw new Error();
@@ -73,12 +73,16 @@ export async function readOutcomeCandidateConfig(path: string): Promise<AnalyzeC
     };
     for (const [key, allowed] of Object.entries(enumValues)) if (!allowed.includes(config[key] as string)) throw new Error();
     for (const actual of Object.values(config)) if (typeof actual === "string" && (actual.length === 0 || actual.length > 256)) throw new Error();
-    if (config.outcomeRecoveryMode !== "shadow" && config.outcomeRecoveryMode !== "on") throw new Error();
+    if (config.outcomeRecoveryMode !== "off" && config.outcomeRecoveryMode !== "shadow" && config.outcomeRecoveryMode !== "on") throw new Error();
     if (!Number.isSafeInteger(config.outcomeRecoveryMaxCandidates) || (config.outcomeRecoveryMaxCandidates as number) < 1 || (config.outcomeRecoveryMaxCandidates as number) > 12 || !Number.isSafeInteger(config.criticBatchSize) || (config.criticBatchSize as number) < (config.outcomeRecoveryMaxCandidates as number)) throw new Error();
     if (envelope.engineFingerprint !== sha256(canonicalJson(config))) throw new Error();
     return Object.freeze({ ...config }) as unknown as AnalyzeConfig;
   } catch { throw new Error("private_config_invalid"); }
 }
+
+/** Compatibility export; both baseline and candidate now read the identical
+ * closed envelope and baseline changes only the recovery mode in memory. */
+export const readOutcomeCandidateConfig = readOutcomeObservationConfig;
 
 export async function readOutcomeLiveLaneFile(path: string, expectedName: string): Promise<MaterializedOutcomeLiveLane> {
   try {
@@ -88,7 +92,7 @@ export async function readOutcomeLiveLaneFile(path: string, expectedName: string
   } catch { throw new Error("private_live_lane_invalid"); }
 }
 
-type ExecuteInput = Readonly<{ root: string; mode: OutcomeObservationMode; configFile?: string; commitSha: string; liveLaneName?: string; liveLaneFile?: string }>;
+type ExecuteInput = Readonly<{ root: string; mode: OutcomeObservationMode; configFile: string; commitSha: string; liveLaneName?: string; liveLaneFile?: string }>;
 type ExecuteResult = Readonly<{ observationId: Sha256; mode: OutcomeObservationMode; caseCount: number }>;
 type Dependencies = Readonly<{
   execute(input: ExecuteInput): Promise<ExecuteResult>;
@@ -127,7 +131,7 @@ async function main(): Promise<void> {
     commitSha: process.env.CLIPCLAP_COMMIT_SHA,
     execute: async ({ root, mode, configFile, commitSha, liveLaneFile, liveLaneName }) => runOutcomeObservation({
       root: join(root, "outcomes"), mode, commitSha,
-      config: mode === "baseline" ? loadAnalyzeConfig({}) : await readOutcomeCandidateConfig(configFile!),
+      config: await readOutcomeObservationConfig(configFile!),
       ...(liveLaneFile ? { liveLane: await readOutcomeLiveLaneFile(liveLaneFile, liveLaneName!) } : {}),
     }),
   });

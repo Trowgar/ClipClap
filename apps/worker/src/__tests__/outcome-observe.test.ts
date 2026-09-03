@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +8,7 @@ import { analyzeHighlightsV2 } from "../analyze-v2";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { requestKey } from "./helpers/replay-client";
 import { outcomeFreshnessSha256, type OutcomeCase } from "../feedback-quality/outcome-types";
+import { loadOutcomeObservationAuthority, publishOutcomeCase } from "../feedback-quality/outcome-promote";
 import { OUTCOME_OBSERVATION_RUNNER_VERSION, fingerprintOutcomeRequest, observeOutcomeCases, publishOutcomeObservation, type OutcomeObservationCase } from "../feedback-quality/outcome-observe";
 import { readOutcomeCandidateConfig, runOutcomeObserve } from "../scripts/outcome-observe";
 
@@ -40,6 +41,17 @@ function artifact(overrides: Partial<Omit<OutcomeObservationCase, "case">> & { c
   return { case: outcomeCase(transcript, recordedResponses, overrides.caseOverrides), transcript, recordedResponses };
 }
 
+async function materializeAuthority(root: string, item: OutcomeObservationCase): Promise<void> {
+  if (item.case.disposition === "exclude" || item.case.set === undefined) throw new Error("test authority must be active");
+  await publishOutcomeCase({
+    root, caseVersion: item.case.caseVersion,
+    label: { schemaVersion: 1, action: "label", eventId: "observe-authority", occurredAt: item.case.materializedAt,
+      caseVersion: item.case.caseVersion, set: item.case.set, disposition: item.case.disposition, confidence: item.case.confidence, expected: item.case.expected },
+    files: { "case.json": Buffer.from(`${canonicalJson(item.case)}\n`), "transcript.json": Buffer.from(canonicalJson(item.transcript)),
+      "source.mp4": Buffer.from("source"), "recorded-responses.jsonl": recordingBytes(item.recordedResponses) },
+  });
+}
+
 function recoveryTelemetry(mode: "shadow" | "on") {
   return {
     version: "core-v4-recovery-v1", mode, eligible: true, reason: "unjudged_tail", tailSize: 2, poolSize: 2,
@@ -58,6 +70,7 @@ describe("immutable zero-outcome observations", () => {
     const observation = await observeOutcomeCases({ mode: "candidate", commitSha: COMMIT, config: cfg, cases: [artifact()] }, {
       analyze: vi.fn(async (_transcript, options) => {
         expect(options.cfg.outcomeRecoveryMode).toBe("on");
+        options.outcomeRecoveryAuditSink?.({ keepFalseShipped: 0, explicitGateResurrections: 0 });
         return { highlights: [{ start: 12, end: 25, title: "PRIVATE TITLE" }], telemetry: { outcomeRecovery: recoveryTelemetry("on") }, usage: { inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} } } as never;
       }),
     });
@@ -73,20 +86,26 @@ describe("immutable zero-outcome observations", () => {
 
   it("forces baseline recovery off while candidate uses the supplied V4 configuration", async () => {
     const modes: string[] = [];
+    const effective: unknown[] = [];
     const cfg = { ...loadAnalyzeConfig({}), outcomeRecoveryMode: "on" as const };
     const analyze = vi.fn(async (_transcript, options) => {
       modes.push(options.cfg.outcomeRecoveryMode);
-      return { highlights: [], noClipsReason: "NO_VIABLE_MOMENTS", telemetry: options.cfg.outcomeRecoveryMode === "on" ? { outcomeRecovery: recoveryTelemetry("on") } : {}, usage: { inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} } } as never;
+      effective.push(options.cfg);
+      if (options.cfg.outcomeRecoveryMode === "on") options.outcomeRecoveryAuditSink?.({ keepFalseShipped: 0, explicitGateResurrections: 0 });
+      return { highlights: options.cfg.outcomeRecoveryMode === "on" ? [{ start: 12, end: 25 }] : [], ...(options.cfg.outcomeRecoveryMode === "on" ? {} : { noClipsReason: "NO_VIABLE_MOMENTS" }), telemetry: options.cfg.outcomeRecoveryMode === "on" ? { outcomeRecovery: recoveryTelemetry("on") } : {}, usage: { inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} } } as never;
     });
-    await observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [artifact()] }, { analyze });
-    await observeOutcomeCases({ mode: "candidate", commitSha: COMMIT, config: cfg, cases: [artifact()] }, { analyze });
+    const baseline = await observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [artifact()] }, { analyze });
+    const candidate = await observeOutcomeCases({ mode: "candidate", commitSha: COMMIT, config: cfg, cases: [artifact()] }, { analyze });
     expect(modes).toEqual(["off", "on"]);
+    expect(Object.entries(effective[0] as Record<string, unknown>).filter(([key, value]) => value !== (effective[1] as Record<string, unknown>)[key]).map(([key]) => key)).toEqual(["outcomeRecoveryMode"]);
+    expect(baseline.engineFingerprint).toBe(sha256(canonicalJson({ ...cfg, outcomeRecoveryMode: "off" })));
+    expect(candidate.engineFingerprint).toBe(sha256(canonicalJson(cfg)));
   });
 
   it("scores bounded hypothetical windows from a shadow candidate", async () => {
     const cfg = { ...loadAnalyzeConfig({}), outcomeRecoveryMode: "shadow" as const };
     const observation = await observeOutcomeCases({ mode: "candidate", commitSha: COMMIT, config: cfg, cases: [artifact()] }, {
-      analyze: async () => ({ highlights: [], noClipsReason: "NO_VIABLE_MOMENTS", telemetry: { outcomeRecovery: recoveryTelemetry("shadow") }, usage: { inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} } }) as never,
+      analyze: async (_t, options) => { options.outcomeRecoveryAuditSink?.({ keepFalseShipped: 0, explicitGateResurrections: 0 }); return ({ highlights: [], noClipsReason: "NO_VIABLE_MOMENTS", telemetry: { outcomeRecovery: recoveryTelemetry("shadow") }, usage: { inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} } }) as never; },
     });
     expect(observation.results[0]).toMatchObject({ shippedWindows: [{ start: 12, end: 25 }], approvedHits: 1 });
   });
@@ -138,7 +157,30 @@ describe("immutable zero-outcome observations", () => {
     const twice = async (_t: unknown, options: any) => { await options.client.chat.completions.create(bodyA); await options.client.chat.completions.create(bodyA); return result; };
     await expect(observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [artifact({ recordedResponses: [a, a] })] }, { analyze: once as never })).rejects.toMatchObject({ code: "recording_not_consumed" });
     await expect(observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [artifact({ recordedResponses: [a] })] }, { analyze: twice as never })).rejects.toMatchObject({ code: "missing_request" });
-    await expect(observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [artifact({ recordedResponses: [a, b] })] }, { analyze: async (_t, options) => { await (options.client as any).chat.completions.create(bodyB); return result; } })).rejects.toMatchObject({ code: "request_fingerprint_drift" });
+    await expect(observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [artifact({ recordedResponses: [a, b] })] }, { analyze: async (_t, options) => { await (options.client as any).chat.completions.create(bodyB); return result; } })).rejects.toMatchObject({ code: "recording_not_consumed" });
+  });
+
+  it("matches concurrent request fingerprints independently and preserves duplicate FIFO", async () => {
+    const bodyA = { model: "m", messages: [{ role: "system", content: "s" }, { role: "user", content: "a" }] };
+    const bodyB = { model: "m", messages: [{ role: "system", content: "s" }, { role: "user", content: "b" }] };
+    const recordings = [
+      { ...fingerprintOutcomeRequest(bodyA), result: { marker: "a-first" } },
+      { ...fingerprintOutcomeRequest(bodyB), result: { marker: "b" } },
+      { ...fingerprintOutcomeRequest(bodyA), result: { marker: "a-second" } },
+    ];
+    const cfg = { ...loadAnalyzeConfig({}), outcomeRecoveryMode: "off" as const };
+    const analyze = async (_t: unknown, options: any) => {
+      const pendingA = options.client.chat.completions.create(bodyA);
+      const pendingB = options.client.chat.completions.create(bodyB);
+      const b = await pendingB;
+      const a1 = await pendingA;
+      const a2 = await options.client.chat.completions.create(bodyA);
+      expect(JSON.parse(b.choices[0].message.content).marker).toBe("b");
+      expect(JSON.parse(a1.choices[0].message.content).marker).toBe("a-first");
+      expect(JSON.parse(a2.choices[0].message.content).marker).toBe("a-second");
+      return { highlights: [], noClipsReason: "NO_VIABLE_MOMENTS", telemetry: {}, usage: { inputTokens: 0, outputTokens: 0, requests: 3, byModel: {} } };
+    };
+    await expect(observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [artifact({ recordedResponses: recordings })] }, { analyze: analyze as never })).resolves.toBeDefined();
   });
 
   it("accepts only a named materialized live lane with three independent stable attempts", async () => {
@@ -147,18 +189,45 @@ describe("immutable zero-outcome observations", () => {
     const deterministicOnly = { ...fingerprintOutcomeRequest({ ...body, model: "must-not-be-used" }), result: {} };
     const cfg = { ...loadAnalyzeConfig({}), outcomeRecoveryMode: "on" as const };
     const cases = [artifact({ recordedResponses: [deterministicOnly] })];
+    const engineFingerprint = sha256(canonicalJson(cfg));
     const liveLane = {
       schemaVersion: 1 as const, name: "v4_recovery_live_20260903",
-      attempts: [1, 2, 3].map((number) => ({ attemptId: `attempt-${number}`, recordedAt: `2026-09-03T00:0${number}:00.000Z`, cases: [{ caseVersion: cases[0].case.caseVersion, recordedResponses: [response] }] })),
+      attempts: [1, 2, 3].map((number) => {
+        const body = { attemptId: `attempt-${number}`, recordedAt: `2026-09-03T00:0${number}:00.000Z`, engineFingerprint,
+          cases: [{ caseVersion: cases[0].case.caseVersion, recordedResponses: [{ providerRequestId: `provider-${number}`, recording: response }] }] };
+        return { ...body, captureSha256: sha256(canonicalJson(body)) };
+      }),
     };
     const analyze = vi.fn(async (_t, options: any) => {
       await options.client.chat.completions.create(body);
+      options.outcomeRecoveryAuditSink?.({ keepFalseShipped: 0, explicitGateResurrections: 0 });
       return { highlights: [{ start: 12, end: 25 }], telemetry: { outcomeRecovery: recoveryTelemetry("on") }, usage: { inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} } } as never;
     });
-    const observation = await observeOutcomeCases({ mode: "candidate", commitSha: COMMIT, config: cfg, cases, liveLane }, { analyze });
+    const observation = await observeOutcomeCases({ mode: "candidate", commitSha: COMMIT, config: cfg, cases, liveLane, now: new Date("2026-09-03T01:00:00.000Z") }, { analyze });
     expect(analyze).toHaveBeenCalledTimes(3);
     expect(observation).toMatchObject({ liveLane: { name: "v4_recovery_live_20260903", attempts: 3, attemptDigests: [expect.stringMatching(/^sha256:/), expect.any(String), expect.any(String)] } });
-    await expect(observeOutcomeCases({ mode: "candidate", commitSha: COMMIT, config: cfg, cases, liveLane: { ...liveLane, attempts: liveLane.attempts.slice(0, 2) } }, { analyze })).rejects.toMatchObject({ code: "invalid_live_lane" });
+    await expect(observeOutcomeCases({ mode: "candidate", commitSha: COMMIT, config: cfg, cases, liveLane: { ...liveLane, attempts: liveLane.attempts.slice(0, 2) }, now: new Date("2026-09-03T01:00:00.000Z") }, { analyze })).rejects.toMatchObject({ code: "invalid_live_lane" });
+    const duplicateProvider = { ...liveLane, attempts: liveLane.attempts.map((attempt) => {
+      const body = { ...attempt, cases: attempt.cases.map((entry) => ({ ...entry, recordedResponses: entry.recordedResponses.map((captured) => ({ ...captured, providerRequestId: "provider-same" })) })) };
+      const { captureSha256: _old, ...captureBody } = body;
+      return { ...captureBody, captureSha256: sha256(canonicalJson(captureBody)) };
+    }) };
+    await expect(observeOutcomeCases({ mode: "candidate", commitSha: COMMIT, config: cfg, cases, liveLane: duplicateProvider, now: new Date("2026-09-03T01:00:00.000Z") }, { analyze })).rejects.toMatchObject({ code: "invalid_live_lane" });
+  });
+
+  it("records candidate-level recovery authority violations without publishing ids", async () => {
+    const cfg = { ...loadAnalyzeConfig({}), outcomeRecoveryMode: "on" as const };
+    const observation = await observeOutcomeCases({ mode: "candidate", commitSha: COMMIT, config: cfg, cases: [artifact()] }, {
+      analyze: async (_t, options) => {
+        options.outcomeRecoveryAuditSink?.({ keepFalseShipped: 1, explicitGateResurrections: 2 });
+        return { highlights: [{ start: 12, end: 25 }], telemetry: { outcomeRecovery: recoveryTelemetry("on") }, usage: { inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} } } as never;
+      },
+    });
+    expect(observation.results[0]).toMatchObject({ keepFalseShipped: 1, explicitGateResurrections: 2 });
+    expect(canonicalJson(observation)).not.toContain("candidate-");
+    await expect(observeOutcomeCases({ mode: "candidate", commitSha: COMMIT, config: cfg, cases: [artifact()] }, {
+      analyze: async () => ({ highlights: [{ start: 12, end: 25 }], telemetry: { outcomeRecovery: recoveryTelemetry("on") }, usage: { inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} } }) as never,
+    })).rejects.toMatchObject({ code: "unknown_telemetry" });
   });
 
   it("deterministically replays the full analyzer, not a reduced scoring surrogate", async () => {
@@ -194,19 +263,49 @@ describe("immutable zero-outcome observations", () => {
     await expect(observeOutcomeCases({ mode: "candidate", commitSha: COMMIT, config: cfg, cases: [artifact()] }, { analyze: async () => ({ ...result, usage: { inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} } }) as never })).rejects.toMatchObject({ code });
   });
 
+  it.each([
+    ["candidate cap", (t: any) => ({ ...t, poolSize: 7, tailSize: 7, judged: 7, recoveryDispositions: { shipped: 1, critic_rejected: 6 } })],
+    ["tail accounting", (t: any) => ({ ...t, primaryDispositions: { not_selected_for_critic: 1 } })],
+    ["recovery accounting", (t: any) => ({ ...t, recoveryDispositions: { shipped: 2 } })],
+    ["usage accounting", (t: any) => ({ ...t, addedUsage: { ...t.addedUsage, requests: 3 } })],
+    ["counter ordering", (t: any) => ({ ...t, counters: { selectedForFinalizer: 1, finalizerSurvivors: 2 } })],
+  ])("rejects semantically inconsistent %s telemetry", async (_name, mutate) => {
+    const cfg = { ...loadAnalyzeConfig({}), outcomeRecoveryMode: "on" as const, outcomeRecoveryMaxCandidates: 6 };
+    await expect(observeOutcomeCases({ mode: "candidate", commitSha: COMMIT, config: cfg, cases: [artifact()] }, {
+      analyze: async () => ({ highlights: [{ start: 12, end: 25 }], telemetry: { outcomeRecovery: mutate(recoveryTelemetry("on")) }, usage: { inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} } }) as never,
+    })).rejects.toMatchObject({ code: "unknown_telemetry" });
+  });
+
   it("publishes one immutable private observation without overwriting a collision", async () => {
     const parent = await mkdtemp(join(tmpdir(), "clipclap-outcome-observe-")); roots.push(parent);
     const root = join(parent, "outcomes");
+    const item = artifact();
+    await materializeAuthority(root, item);
+    await expect(loadOutcomeObservationAuthority(root)).resolves.toHaveLength(1);
     const cfg = { ...loadAnalyzeConfig({}), outcomeRecoveryMode: "off" as const };
-    const observation = await observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [artifact()] }, { analyze: async () => ({ highlights: [], noClipsReason: "NO_VIABLE_MOMENTS", telemetry: {}, usage: { inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} } }) as never });
-    await expect(publishOutcomeObservation(root, observation, [artifact()])).resolves.toEqual({ status: "committed" });
+    const observation = await observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [item] }, { analyze: async () => ({ highlights: [], noClipsReason: "NO_VIABLE_MOMENTS", telemetry: {}, usage: { inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} } }) as never });
+    await expect(publishOutcomeObservation(root, observation, [item])).resolves.toEqual({ status: "committed" });
     const directory = join(root, "observations", observation.observationId);
     expect((await stat(directory)).mode & 0o777).toBe(0o700);
     expect((await stat(join(directory, "results.jsonl"))).mode & 0o777).toBe(0o600);
     expect(await readFile(join(directory, "results.jsonl"), "utf8")).toBe(`${canonicalJson(observation)}\n`);
-    await expect(publishOutcomeObservation(root, observation, [artifact()])).resolves.toEqual({ status: "noop" });
+    await expect(publishOutcomeObservation(root, observation, [item])).resolves.toEqual({ status: "noop" });
     await chmod(join(directory, "results.jsonl"), 0o644);
-    await expect(publishOutcomeObservation(root, observation, [artifact()])).rejects.toMatchObject({ code: "publication_failed" });
+    await expect(publishOutcomeObservation(root, observation, [item])).rejects.toMatchObject({ code: "publication_failed" });
+  });
+
+  it("rejects an authority root replaced after descriptor anchoring", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "clipclap-outcome-replace-")); roots.push(parent);
+    const root = join(parent, "outcomes");
+    await materializeAuthority(root, artifact());
+    const moved = join(parent, "moved");
+    await expect(loadOutcomeObservationAuthority(root, { afterAnchor: async () => {
+      await rename(root, moved);
+      await mkdir(root, { mode: 0o700 });
+      for (const name of ["ledger", "cases", "observations", "decisions"]) await mkdir(join(root, name), { mode: 0o700 });
+    } })).rejects.toThrow();
+    await rm(root, { recursive: true, force: true });
+    await rename(moved, root);
   });
 
   it("rejects a self-hashed observation carrying private or unknown fields", async () => {
@@ -224,6 +323,7 @@ describe("immutable zero-outcome observations", () => {
     const parent = await mkdtemp(join(tmpdir(), "clipclap-outcome-observe-authority-")); roots.push(parent);
     const root = join(parent, "outcomes");
     const item = artifact();
+    await materializeAuthority(root, item);
     const cfg = { ...loadAnalyzeConfig({}), outcomeRecoveryMode: "off" as const };
     const observation = await observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [item] }, { analyze: async () => ({ highlights: [], noClipsReason: "NO_VIABLE_MOMENTS", telemetry: {}, usage: { inputTokens: 0, outputTokens: 0, requests: 0, byModel: {} } }) as never });
     const { observationId: _old, ...body } = observation;
@@ -256,6 +356,8 @@ describe("immutable zero-outcome observations", () => {
     expect(stdout).toHaveBeenCalledWith(JSON.stringify({ operation: "outcome-observe", status: "committed", mode: "candidate", caseCount: 2 }));
     expect(execute).toHaveBeenCalledWith(expect.objectContaining({ root: "/private/root", configFile: "/private/v4.json", commitSha: COMMIT }));
     await expect(runOutcomeObserve(["--mode", "candidate", "--root", "/private/root"], { execute, commitSha: COMMIT, io: { stdout, stderr } })).resolves.toBe(2);
+    await expect(runOutcomeObserve(["--mode", "baseline", "--root", "/private/root"], { execute, commitSha: COMMIT, io: { stdout, stderr } })).resolves.toBe(2);
+    await expect(runOutcomeObserve(["--mode", "baseline", "--root", "/private/root", "--config-file", "/private/v4.json"], { execute, commitSha: COMMIT, io: { stdout, stderr } })).resolves.toBe(0);
     await expect(runOutcomeObserve(["--mode", "live:v4_lane", "--root", "/private/root", "--config-file", "/private/v4.json", "--live-lane-file", "/private/live.json"], { execute, commitSha: COMMIT, io: { stdout, stderr } })).resolves.toBe(0);
     expect(execute).toHaveBeenLastCalledWith(expect.objectContaining({ mode: "candidate", liveLaneName: "v4_lane", liveLaneFile: "/private/live.json" }));
     expect(JSON.stringify(stderr.mock.calls)).not.toContain("/private/root");

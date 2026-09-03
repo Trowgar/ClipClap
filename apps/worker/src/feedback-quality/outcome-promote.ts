@@ -785,6 +785,18 @@ type OutcomeValidationOptions = Readonly<{
   afterArtifactDigestRead?: (name: OutcomeArtifactName) => void | Promise<void>;
 }>;
 
+export type OutcomeObservationAuthorityCase = Readonly<{
+  case: OutcomeCase;
+  transcriptBytes: Uint8Array;
+  recordedResponsesBytes: Uint8Array;
+}>;
+
+export type OutcomeObservationAuthorityOptions = Readonly<{
+  now?: Date;
+  /** Test-only adversarial hook, after the authority tree is anchored. */
+  afterAnchor?: () => void | Promise<void>;
+}>;
+
 function addReason(reasons: Record<string, number>, code: string): void { reasons[code] = (reasons[code] ?? 0) + 1; }
 
 class OutcomePathError extends Error {}
@@ -979,4 +991,94 @@ export async function validateOutcomeStore(root: string, options: OutcomeValidat
     const reasons = Object.freeze({ [(error instanceof OutcomeStoreError && error.code === "unsafe_path") ? "unsafe_path" : "missing_store"]: 1 });
     return Object.freeze({ status: "invalid", counts: Object.freeze({ eval: 0, holdout: 0 }), reasons });
   }
+}
+
+/** Read the active observation authority from descriptors pinned beneath the
+ * same validation lock. No corpus artifact is subsequently reopened by its
+ * caller-visible path. */
+async function loadOutcomeObservationAuthorityLocked(
+  root: string,
+  options: OutcomeObservationAuthorityOptions,
+): Promise<readonly OutcomeObservationAuthorityCase[]> {
+    const report = await validateOutcomeStoreLocked(root, { now: options.now });
+    if (report.status !== "valid") throw new OutcomePromotionError("publication_failed");
+    let tree: OutcomeValidationTree | undefined;
+    try {
+      tree = await openValidationTree(root);
+      await options.afterAnchor?.();
+      await assertValidationTreeCurrent(root, tree);
+      const ledgerText = Buffer.from(await readRegularPrivate(
+        anchoredPath(tree.ledger, "outcomes.jsonl"), MAX_OUTCOME_LEDGER_BYTES,
+      )).toString("utf8");
+      const labels = new Map<string, OutcomeLabel>();
+      const retired = new Set<string>();
+      for (const line of ledgerText.length === 0 ? [] : ledgerText.slice(0, -1).split("\n")) {
+        const raw = JSON.parse(line) as Record<string, unknown>;
+        if (raw.action === "label") labels.set(raw.eventId as string, parseOutcomeLabel(raw));
+        else retired.add(raw.targetEventId as string);
+      }
+      const active = [...labels.entries()]
+        .filter(([eventId, label]) => !retired.has(eventId) && label.disposition !== "exclude")
+        .map(([, label]) => label)
+        .sort((left, right) => left.caseVersion.localeCompare(right.caseVersion));
+      const result: OutcomeObservationAuthorityCase[] = [];
+      const activeSources = new Set<Sha256>();
+      const activeVersions = new Set<Sha256>();
+      const authorityNow = (options.now ?? new Date()).getTime();
+      for (const label of active) {
+        const directory = await openValidationDirectory(anchoredPath(tree.cases, label.caseVersion));
+        try {
+          await assertChildCurrent(tree.cases, label.caseVersion, directory);
+          const [caseBytes, transcriptBytes, recordedResponsesBytes, source] = await Promise.all([
+            readRegularPrivate(anchoredPath(directory, "case.json"), MAX_OUTCOME_CASE_BYTES),
+            readRegularPrivate(anchoredPath(directory, "transcript.json"), MAX_OUTCOME_TRANSCRIPT_BYTES),
+            readRegularPrivate(anchoredPath(directory, "recorded-responses.jsonl"), MAX_OUTCOME_RECORDED_RESPONSES_BYTES),
+            privateFileDigest(anchoredPath(directory, "source.mp4"), { minimum: 1, maximum: MAX_OUTCOME_SOURCE_BYTES }),
+          ]);
+          await assertChildCurrent(tree.cases, label.caseVersion, directory);
+          const text = Buffer.from(caseBytes).toString("utf8");
+          const parsed = parseOutcomeCase(JSON.parse(text));
+          const { caseVersion: _caseVersion, ...body } = parsed;
+          if (`${canonicalJson(parsed)}\n` !== text || parsed.caseVersion !== label.caseVersion || sha256(canonicalJson(body)) !== parsed.caseVersion ||
+              sha256(Buffer.from(transcriptBytes)) !== parsed.transcriptSha256 || sha256(Buffer.from(recordedResponsesBytes)) !== parsed.recordedResponsesSha256 ||
+              source.sha256 !== parsed.sourceSha256 || parsed.disposition !== label.disposition || parsed.materializedAt !== label.occurredAt ||
+              parsed.set !== label.set || canonicalJson(parsed.expected) !== canonicalJson(label.expected) ||
+              !Number.isFinite(authorityNow) || new Date(parsed.materializedAt).getTime() > authorityNow + MAX_OUTCOME_FUTURE_SKEW_MS ||
+              activeSources.has(parsed.sourceSha256) || activeVersions.has(parsed.caseVersion)) throw new OutcomePromotionError("publication_failed");
+          activeSources.add(parsed.sourceSha256);
+          activeVersions.add(parsed.caseVersion);
+          result.push(Object.freeze({ case: parsed, transcriptBytes: Buffer.from(transcriptBytes), recordedResponsesBytes: Buffer.from(recordedResponsesBytes) }));
+        } finally { await directory.close().catch(() => undefined); }
+      }
+      await assertValidationTreeCurrent(root, tree);
+      return Object.freeze(result);
+    } catch (error) {
+      if (error instanceof OutcomePromotionError) throw error;
+      throw new OutcomePromotionError("publication_failed");
+    } finally { if (tree) await closeValidationTree(tree); }
+}
+
+export async function withOutcomeObservationAuthority<T>(
+  root: string,
+  operation: (cases: readonly OutcomeObservationAuthorityCase[]) => Promise<T>,
+  options: OutcomeObservationAuthorityOptions = {},
+): Promise<T> {
+  return withOutcomeValidationLock(root, async () => {
+    const guard = await openValidationTree(root);
+    try {
+      await assertValidationTreeCurrent(root, guard);
+      const cases = await loadOutcomeObservationAuthorityLocked(root, options);
+      await assertValidationTreeCurrent(root, guard);
+      const result = await operation(cases);
+      await assertValidationTreeCurrent(root, guard);
+      return result;
+    } finally { await closeValidationTree(guard); }
+  });
+}
+
+export async function loadOutcomeObservationAuthority(
+  root: string,
+  options: OutcomeObservationAuthorityOptions = {},
+): Promise<readonly OutcomeObservationAuthorityCase[]> {
+  return withOutcomeObservationAuthority(root, async (cases) => cases, options);
 }

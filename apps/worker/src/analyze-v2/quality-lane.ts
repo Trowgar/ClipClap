@@ -72,6 +72,9 @@ export interface QualityLaneResult {
     finalizerSurvivors: number;
   };
   terminal: ReadonlyMap<string, QualityLaneDisposition>;
+  /** Private candidate-level critic authority used only by the offline outcome
+   * observer. It is never copied to job telemetry or serialized. */
+  criticKeep: ReadonlyMap<string, boolean>;
 }
 
 interface SafeEndNormalTelemetry {
@@ -1070,6 +1073,7 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
       finalizerSurvivors: finalized.clips.length,
     },
     terminal,
+    criticKeep: new Map(critic.verdicts.map((verdict) => [verdict.id, verdict.keep])),
   };
 }
 /** `arcFlags` is keyed by clip id and absent whenever the stage did not audit
