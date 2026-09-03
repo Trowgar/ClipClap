@@ -11,7 +11,7 @@ import type { AnalyzeConfig } from "../analyze-v2/config";
 import type { V2Result } from "../analyze-v2/types";
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import type { Sha256 } from "../feedback-learning/types";
-import { loadOutcomeObservationAuthority, withOutcomeObservationAuthority, type OutcomeObservationAuthorityCase, type RecordedOutcomeResponse } from "./outcome-promote";
+import { loadOutcomeObservationAuthority, MAX_RECORDED_RESPONSES, withOutcomeObservationAuthority, type OutcomeObservationAuthorityCase, type RecordedOutcomeResponse } from "./outcome-promote";
 import { ensureOutcomeStore } from "./outcome-store";
 import { parseOutcomeCase, type OutcomeCase, type OutcomeDisposition } from "./outcome-types";
 import type { CommitResult } from "./store";
@@ -117,6 +117,7 @@ function validateCaseBinding(item: OutcomeObservationCase): OutcomeObservationCa
   let parsed: OutcomeCase;
   let transcriptBytes: Buffer;
   try {
+    if (!Array.isArray(item.recordedResponses) || item.recordedResponses.length > MAX_RECORDED_RESPONSES) fail("invalid_case");
     parsed = parseOutcomeCase(item.case);
     transcriptBytes = Buffer.from(canonicalJson(item.transcript));
   } catch { return fail("invalid_case"); }
@@ -151,13 +152,14 @@ function completion(recording: RecordedOutcomeResponse): Readonly<Record<string,
 }
 
 function strictReplayClient(recordings: readonly RecordedOutcomeResponse[]): OpenAI & { assertComplete(): void } {
+  if (!Array.isArray(recordings) || recordings.length > MAX_RECORDED_RESPONSES) fail("invalid_case");
   const queues = new Map<Sha256, RecordedOutcomeResponse[]>();
   const promptModels = new Set<string>();
   let remaining = 0;
   for (const recording of recordings) {
     if (!exactDataObject(recording, ["promptFingerprint", "modelFingerprint", "requestFingerprint", "result"]) || !isHash(recording.promptFingerprint) || !isHash(recording.modelFingerprint) || !isHash(recording.requestFingerprint) || !isPlain(recording.result)) fail("invalid_case");
     const queue = queues.get(recording.requestFingerprint) ?? [];
-    queue.push(recording);
+    queue.push(recording as unknown as RecordedOutcomeResponse);
     queues.set(recording.requestFingerprint, queue);
     promptModels.add(`${recording.promptFingerprint}\0${recording.modelFingerprint}`);
     remaining += 1;
@@ -309,16 +311,20 @@ function parseLiveLane(raw: MaterializedOutcomeLiveLane, cases: readonly Outcome
     if (typeof attemptId !== "string" || !SAFE_NAME.test(attemptId) || attemptIds.has(attemptId) || !canonicalUtc(recordedAt) ||
         attempt.engineFingerprint !== engineFingerprint || !isHash(attempt.captureSha256) || recordedMs > nowMs || nowMs - recordedMs > 24 * 60 * 60 * 1000 ||
         !Array.isArray(attemptCases) || attemptCases.length !== cases.length) fail("invalid_live_lane");
+    if (attemptCases.some((entry) => !isPlain(entry) || !Array.isArray(entry.recordedResponses) || entry.recordedResponses.length > MAX_RECORDED_RESPONSES)) fail("invalid_live_lane");
     const { captureSha256, ...captureBody } = attempt;
     if (sha256(canonicalJson(captureBody)) !== captureSha256) fail("invalid_live_lane");
     attemptIds.add(attemptId);
     const ordered = [...attemptCases].sort((left, right) => String((left as Record<string, unknown>).caseVersion).localeCompare(String((right as Record<string, unknown>).caseVersion))) as Array<{ caseVersion: Sha256; recordedResponses: readonly Readonly<{ providerRequestId: string; recording: RecordedOutcomeResponse }>[] }>;
     if (ordered.some((entry, index) => !exactDataObject(entry, ["caseVersion", "recordedResponses"]) || entry.caseVersion !== expectedVersions[index] || !Array.isArray(entry.recordedResponses))) fail("invalid_live_lane");
-    const recordings = ordered.map((entry) => entry.recordedResponses.map((captured) => {
+    const recordings = ordered.map((entry) => {
+      if (entry.recordedResponses.length > MAX_RECORDED_RESPONSES) fail("invalid_live_lane");
+      return entry.recordedResponses.map((captured) => {
       if (!exactDataObject(captured, ["providerRequestId", "recording"]) || typeof captured.providerRequestId !== "string" || !SAFE_NAME.test(captured.providerRequestId) || providerRequestIds.has(captured.providerRequestId)) fail("invalid_live_lane");
       providerRequestIds.add(captured.providerRequestId);
       return captured.recording;
-    }));
+      });
+    });
     for (const entry of recordings) strictReplayClient(entry);
     if (providerRequestIds.size === providerCountBefore) fail("invalid_live_lane");
     return Object.freeze({
@@ -424,6 +430,8 @@ async function readPrivate(path: string, maximum: number): Promise<Buffer> {
 }
 
 function parseRecordings(bytes: Buffer): readonly RecordedOutcomeResponse[] {
+  let lineCount = 0;
+  for (const byte of bytes) if (byte === 0x0a && ++lineCount > MAX_RECORDED_RESPONSES) fail("invalid_case");
   const text = new TextDecoder("utf8", { fatal: true }).decode(bytes);
   if (text.length === 0) return Object.freeze([]);
   if (!text.endsWith("\n")) fail("invalid_case");

@@ -20,7 +20,7 @@ const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 const MAX_OUTCOME_FUTURE_SKEW_MS = 5 * 60 * 1000;
 export const MAX_OUTCOME_SOURCE_BYTES = 2 * 1024 * 1024 * 1024;
-const MAX_RECORDED_RESPONSES = 256;
+export const MAX_RECORDED_RESPONSES = 256;
 export const MAX_OUTCOME_CASE_BYTES = 1024 * 1024;
 /** Ledger ceiling: tens of thousands of compact immutable review events. */
 export const MAX_OUTCOME_LEDGER_BYTES = MAX_PRIVATE_LEDGER_BYTES;
@@ -245,6 +245,7 @@ export function createPrismaOutcomePromotionRepository(client: PrismaClient): Ou
 }
 
 function recordedResponseBytes(responses: readonly RecordedOutcomeResponse[]): Buffer {
+  if (responses.length > MAX_RECORDED_RESPONSES) fail("inputs_missing");
   const chunks: Buffer[] = [];
   let total = 0;
   for (const entry of responses) {
@@ -527,7 +528,7 @@ async function writeCapturedPayload(handle: Awaited<ReturnType<typeof open>>, pa
   } finally { await source.close().catch(() => undefined); }
 }
 
-async function privateFileDigest(path: string, limits: Readonly<{ minimum?: number; maximum?: number; afterRead?: () => void | Promise<void> }> = {}): Promise<Readonly<{ size: number; sha256: Sha256 }>> {
+async function privateFileDigest(path: string, limits: Readonly<{ minimum?: number; maximum?: number; maximumLines?: number; afterRead?: () => void | Promise<void> }> = {}): Promise<Readonly<{ size: number; sha256: Sha256 }>> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   const digest = createHash("sha256");
   try {
@@ -538,12 +539,21 @@ async function privateFileDigest(path: string, limits: Readonly<{ minimum?: numb
     if (namedInitial.isSymbolicLink() || !samePrivateFileSnapshot(initial, namedInitial)) fail("publication_failed");
     const chunk = Buffer.allocUnsafe(Math.min(1024 * 1024, Math.max(1, initial.size)));
     let offset = 0;
+    let lines = 0;
+    let lastByte: number | undefined;
     while (offset < initial.size) {
       const item = await handle.read(chunk, 0, Math.min(chunk.length, initial.size - offset), offset);
       if (item.bytesRead <= 0) fail("publication_failed");
       digest.update(chunk.subarray(0, item.bytesRead));
+      if (limits.maximumLines !== undefined) {
+        for (let index = 0; index < item.bytesRead; index += 1) {
+          lastByte = chunk[index];
+          if (lastByte === 0x0a && ++lines > limits.maximumLines) fail("publication_failed");
+        }
+      }
       offset += item.bytesRead;
     }
+    if (limits.maximumLines !== undefined && initial.size > 0 && lastByte !== 0x0a) fail("publication_failed");
     await limits.afterRead?.();
     const final = await handle.stat();
     const namedFinal = await lstat(path);
@@ -621,7 +631,7 @@ async function assertExactExisting(directory: FileHandle, files: OutcomeCasePubl
       name === "source.mp4" ? { minimum: 1, maximum: MAX_OUTCOME_SOURCE_BYTES }
         : name === "case.json" ? { maximum: MAX_OUTCOME_CASE_BYTES }
           : name === "transcript.json" ? { maximum: MAX_OUTCOME_TRANSCRIPT_BYTES }
-            : { maximum: MAX_OUTCOME_RECORDED_RESPONSES_BYTES },
+            : { maximum: MAX_OUTCOME_RECORDED_RESPONSES_BYTES, maximumLines: MAX_RECORDED_RESPONSES },
     );
     if (actual.size !== capturedPayloadSize(files[name]) || actual.sha256 !== capturedPayloadSha256(files[name])) fail("publication_failed");
   }
@@ -639,6 +649,14 @@ async function validatePublication(input: OutcomeCasePublication): Promise<void>
   if (materialized.caseVersion !== input.caseVersion || sha256(canonicalJson(body)) !== input.caseVersion ||
       input.label.caseVersion !== input.caseVersion || materialized.disposition !== input.label.disposition ||
       (materialized.disposition !== "exclude" && materialized.set !== input.label.set) || canonicalJson(materialized.expected) !== canonicalJson(input.label.expected)) fail("publication_failed");
+  const recordedPayload = input.files["recorded-responses.jsonl"];
+  if (recordedPayload instanceof Uint8Array) {
+    let lines = 0;
+    for (const byte of recordedPayload) if (byte === 0x0a && ++lines > MAX_RECORDED_RESPONSES) fail("publication_failed");
+    if (recordedPayload.byteLength > 0 && recordedPayload[recordedPayload.byteLength - 1] !== 0x0a) fail("publication_failed");
+  } else {
+    await privateFileDigest(recordedPayload.path, { maximum: MAX_OUTCOME_RECORDED_RESPONSES_BYTES, maximumLines: MAX_RECORDED_RESPONSES });
+  }
   const expected = {
     "transcript.json": materialized.transcriptSha256,
     "source.mp4": materialized.sourceSha256,
@@ -951,7 +969,7 @@ async function validateOutcomeStoreLocked(root: string, options: OutcomeValidati
         const [transcriptFile, sourceFile, recordedFile] = await Promise.all([
           privateFileDigest(anchoredPath(directory, "transcript.json"), { maximum: MAX_OUTCOME_TRANSCRIPT_BYTES, afterRead: () => options.afterArtifactDigestRead?.("transcript.json") }),
           privateFileDigest(anchoredPath(directory, "source.mp4"), { minimum: 1, maximum: MAX_OUTCOME_SOURCE_BYTES, afterRead: () => options.afterArtifactDigestRead?.("source.mp4") }),
-          privateFileDigest(anchoredPath(directory, "recorded-responses.jsonl"), { maximum: MAX_OUTCOME_RECORDED_RESPONSES_BYTES, afterRead: () => options.afterArtifactDigestRead?.("recorded-responses.jsonl") }),
+          privateFileDigest(anchoredPath(directory, "recorded-responses.jsonl"), { maximum: MAX_OUTCOME_RECORDED_RESPONSES_BYTES, maximumLines: MAX_RECORDED_RESPONSES, afterRead: () => options.afterArtifactDigestRead?.("recorded-responses.jsonl") }),
         ]);
         await assertChildCurrent(tree.cases, label.caseVersion, directory);
         const caseText = Buffer.from(caseBytes).toString("utf8");

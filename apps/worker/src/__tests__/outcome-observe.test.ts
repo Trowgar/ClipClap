@@ -183,6 +183,29 @@ describe("immutable zero-outcome observations", () => {
     await expect(observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [artifact({ recordedResponses: recordings })] }, { analyze: analyze as never })).resolves.toBeDefined();
   });
 
+  it("bounds deterministic recordings at 256 before replay allocation", async () => {
+    const body = { model: "m", messages: [{ role: "system", content: "s" }, { role: "user", content: "same" }] };
+    const recordings = Array.from({ length: 256 }, (_, marker) => ({ ...fingerprintOutcomeRequest(body), result: { marker } }));
+    const cfg = { ...loadAnalyzeConfig({}), outcomeRecoveryMode: "off" as const };
+    const analyze = async (_t: unknown, options: any) => {
+      for (let marker = 0; marker < 256; marker += 1) {
+        const response = await options.client.chat.completions.create(body);
+        expect(JSON.parse(response.choices[0].message.content).marker).toBe(marker);
+      }
+      return { highlights: [], noClipsReason: "NO_VIABLE_MOMENTS", telemetry: {}, usage: { inputTokens: 0, outputTokens: 0, requests: 256, byModel: {} } };
+    };
+    await expect(observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [artifact({ recordedResponses: recordings })] }, { analyze: analyze as never })).resolves.toBeDefined();
+    const neverRun = vi.fn(analyze);
+    await expect(observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [artifact({ recordedResponses: [...recordings, recordings[0]] })] }, { analyze: neverRun as never })).rejects.toMatchObject({ code: "invalid_case" });
+    expect(neverRun).not.toHaveBeenCalled();
+    const thousands = Array.from({ length: 5_000 }, () => recordings[0]);
+    await expect(observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [artifact({ recordedResponses: thousands })] }, { analyze: neverRun as never })).rejects.toMatchObject({ code: "invalid_case" });
+    expect(neverRun).not.toHaveBeenCalled();
+    const parent = await mkdtemp(join(tmpdir(), "clipclap-outcome-count-")); roots.push(parent);
+    await expect(materializeAuthority(join(parent, "accepted"), artifact({ recordedResponses: recordings }))).resolves.toBeUndefined();
+    await expect(materializeAuthority(join(parent, "rejected"), artifact({ recordedResponses: [...recordings, recordings[0]] }))).rejects.toMatchObject({ code: "publication_failed" });
+  });
+
   it("accepts only a named materialized live lane with three independent stable attempts", async () => {
     const body = { model: "live-model", messages: [{ role: "system", content: "s" }, { role: "user", content: "u" }] };
     const response = { ...fingerprintOutcomeRequest(body), result: {} };
@@ -213,6 +236,13 @@ describe("immutable zero-outcome observations", () => {
       return { ...captureBody, captureSha256: sha256(canonicalJson(captureBody)) };
     }) };
     await expect(observeOutcomeCases({ mode: "candidate", commitSha: COMMIT, config: cfg, cases, liveLane: duplicateProvider, now: new Date("2026-09-03T01:00:00.000Z") }, { analyze })).rejects.toMatchObject({ code: "invalid_live_lane" });
+    const oversizedAttempts = liveLane.attempts.map((attempt, attemptIndex) => {
+      if (attemptIndex !== 0) return attempt;
+      const body = { ...attempt, cases: attempt.cases.map((entry) => ({ ...entry, recordedResponses: Array.from({ length: 257 }, (_, index) => ({ providerRequestId: `provider-big-${index}`, recording: response })) })) };
+      const { captureSha256: _old, ...captureBody } = body;
+      return { ...captureBody, captureSha256: sha256(canonicalJson(captureBody)) };
+    });
+    await expect(observeOutcomeCases({ mode: "candidate", commitSha: COMMIT, config: cfg, cases, liveLane: { ...liveLane, attempts: oversizedAttempts }, now: new Date("2026-09-03T01:00:00.000Z") }, { analyze })).rejects.toMatchObject({ code: "invalid_live_lane" });
   });
 
   it("records candidate-level recovery authority violations without publishing ids", async () => {
