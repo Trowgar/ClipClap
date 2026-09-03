@@ -9,6 +9,7 @@ import {
   QualityStoreError,
   readPrivateLedgerEvents,
   type PrivateLedgerPaths,
+  withPrivateLedgerTransaction,
 } from "./store";
 import { parseOutcomeLabel, type OutcomeLabel } from "./outcome-types";
 import type { LockOptions } from "../feedback-learning/lock";
@@ -179,5 +180,37 @@ export async function readActiveOutcomeLabels(root = DEFAULT_OUTCOME_ROOT): Prom
     await ensureOutcomeStore(root);
     const events = await readPrivateLedgerEvents(root, LAYOUT);
     return Object.freeze(activeLabels(events));
+  } catch (error) { return translateStoreError(error); }
+}
+
+export type OutcomePublicationAuthority = Readonly<{
+  rootPath: string;
+  active: readonly OutcomeLabel[];
+  assertCurrent: () => Promise<void>;
+  appendLabel: (label: OutcomeLabel, injectFault?: QualityStoreFaultInjector) => Promise<CommitResult>;
+}>;
+
+export async function withOutcomePublication<T>(
+  root: string,
+  operation: (authority: OutcomePublicationAuthority) => Promise<T>,
+): Promise<T> {
+  try {
+    await ensureOutcomeStore(root);
+    return await withPrivateLedgerTransaction(root, LAYOUT, async (transaction) => {
+      const active = Object.freeze(activeLabels(transaction.events));
+      return operation(Object.freeze({
+        rootPath: transaction.rootPath,
+        active,
+        assertCurrent: transaction.assertCurrent,
+        appendLabel: (label, injectFault) => transaction.append(parseOutcomeLabel(label) as unknown as Readonly<{ eventId: string; [key: string]: unknown }>, {
+          rejectDuplicate: true,
+          injectFault,
+          validateBeforeCommit(events) {
+            const current = activeLabels(events);
+            if (current.some((entry) => entry.caseVersion === label.caseVersion)) throw new OutcomeStoreError("invalid_retirement");
+          },
+        }),
+      }));
+    });
   } catch (error) { return translateStoreError(error); }
 }

@@ -1,16 +1,16 @@
 import { createHash, randomBytes } from "node:crypto";
 import { constants } from "node:fs";
-import { chmod, lstat, mkdir, mkdtemp, open, readdir, rename, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, open, readdir, rename, rm, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import type { Sha256 } from "../feedback-learning/types";
-import { appendOutcomeEvent, DEFAULT_OUTCOME_ROOT, ensureOutcomeStore, OutcomeStoreError, readActiveOutcomeLabels, type OutcomeStorePaths } from "./outcome-store";
+import { DEFAULT_OUTCOME_ROOT, OutcomeStoreError, withOutcomePublication } from "./outcome-store";
 import { MAX_OUTCOME_MATERIALIZATION_DELAY_MS, MAX_OUTCOME_REVIEW_DELAY_MS, outcomeFreshnessSha256, parseOutcomeCase, parseOutcomeLabel, type OutcomeCase, type OutcomeConfidence, type OutcomeDisposition, type OutcomeExpected, type OutcomeLabel, type OutcomeSet } from "./outcome-types";
-import type { BundleFilePayload, CommitResult, FileBackedPayload } from "./store";
+import type { BundleFilePayload, CommitResult, FileBackedPayload, QualityStoreFaultInjector } from "./store";
 import type { Subsystem } from "./types";
 
 const HASH = /^sha256:[0-9a-f]{64}$/;
@@ -95,6 +95,10 @@ export interface OutcomeCasePublication {
   readonly label: OutcomeLabel;
   /** Test-only adversarial hook, after caller-owned payloads have been captured. */
   readonly afterPrepare?: () => void | Promise<void>;
+  readonly afterCaseTreeOpen?: () => void | Promise<void>;
+  readonly afterCaseRename?: () => void | Promise<void>;
+  readonly beforeSnapshotDestinationOpen?: (path: string) => void | Promise<void>;
+  readonly injectLedgerFault?: QualityStoreFaultInjector;
 }
 
 export interface OutcomePromotionDependencies {
@@ -104,6 +108,8 @@ export interface OutcomePromotionDependencies {
   readonly root?: string;
   readonly publish?: (input: OutcomeCasePublication) => Promise<CommitResult>;
   readonly now?: () => Date;
+  /** Test-only fault hook; production uses chmod(0700). */
+  readonly secureSpool?: (path: string) => Promise<void>;
 }
 
 export type OutcomePromotionResult = Readonly<{ status: "promoted"; durability: CommitResult["status"]; caseVersion: Sha256; set: OutcomeSet }>;
@@ -250,7 +256,7 @@ async function spoolSource(body: Uint8Array | Buffer | ReadableStream<Uint8Array
     else {
       const reader = body.getReader();
       try { for (;;) { const item = await reader.read(); if (item.done) break; await write(item.value); } }
-      finally { reader.releaseLock(); }
+      finally { await reader.cancel().catch(() => undefined); reader.releaseLock(); }
     }
     await handle.sync();
   } finally { await handle.close().catch(() => undefined); }
@@ -291,8 +297,8 @@ export async function promoteOutcomeCase(rawDecision: unknown, dependencies: Out
   if (sourceSize === null || !Number.isSafeInteger(sourceSize) || sourceSize <= 0) fail("source_missing");
   if (sourceSize > MAX_OUTCOME_SOURCE_BYTES) fail("source_too_large");
   const spool = await mkdtemp(join(tmpdir(), "clipclap-outcome-source-"));
-  await chmod(spool, DIRECTORY_MODE);
   try {
+    await (dependencies.secureSpool ?? ((path) => chmod(path, DIRECTORY_MODE)))(spool);
     const source = await spoolSource(await dependencies.downloadFile(sourceKey, { method: "GET" }), sourceSize, spool);
     if (source.sha256 !== value.sourceSha256) fail("stale_input");
     const jobIdentitySha256 = sha256(canonicalJson({ jobId: snapshot.job.id, userId: snapshot.job.userId }));
@@ -379,11 +385,13 @@ type PreparedPublicationFiles = Readonly<{
   temporaryRoot?: string;
 }>;
 
-async function snapshotFilePayload(payload: FileBackedPayload, destination: string): Promise<FileBackedPayload> {
+async function snapshotFilePayload(payload: FileBackedPayload, destination: string, beforeDestinationOpen?: (path: string) => void | Promise<void>): Promise<FileBackedPayload> {
   const source = await open(payload.path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  const target = await open(destination, constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY, FILE_MODE);
+  let target: Awaited<ReturnType<typeof open>> | undefined;
   const digest = createHash("sha256");
   try {
+    await beforeDestinationOpen?.(destination);
+    target = await open(destination, constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY, FILE_MODE);
     const initial = await source.stat();
     if (!initial.isFile() || initial.nlink !== 1 || initial.size !== payload.size || (initial.mode & 0o7777) !== FILE_MODE) fail("publication_failed");
     const chunk = Buffer.allocUnsafe(Math.min(1024 * 1024, Math.max(1, initial.size)));
@@ -407,11 +415,11 @@ async function snapshotFilePayload(payload: FileBackedPayload, destination: stri
     await target.sync();
     return Object.freeze({ path: destination, size: initial.size, sha256: capturedSha256 });
   } finally {
-    await Promise.all([source.close().catch(() => undefined), target.close().catch(() => undefined)]);
+    await Promise.all([source.close().catch(() => undefined), target?.close().catch(() => undefined)]);
   }
 }
 
-async function preparePublicationFiles(files: OutcomeCasePublication["files"]): Promise<PreparedPublicationFiles> {
+async function preparePublicationFiles(files: OutcomeCasePublication["files"], beforeDestinationOpen?: (path: string) => void | Promise<void>): Promise<PreparedPublicationFiles> {
   let temporaryRoot: string | undefined;
   const prepared = {} as Record<(typeof REQUIRED_CASE_FILES)[number], BundleFilePayload>;
   try {
@@ -421,7 +429,7 @@ async function preparePublicationFiles(files: OutcomeCasePublication["files"]): 
       else {
         temporaryRoot ??= await mkdtemp(join(tmpdir(), "clipclap-outcome-publish-"));
         await chmod(temporaryRoot, DIRECTORY_MODE);
-        prepared[name] = await snapshotFilePayload(payload, join(temporaryRoot, `${index}.payload`));
+        prepared[name] = await snapshotFilePayload(payload, join(temporaryRoot, `${index}.payload`), beforeDestinationOpen);
       }
     }
     return Object.freeze({ files: Object.freeze(prepared), temporaryRoot });
@@ -435,12 +443,16 @@ async function readRegularPrivate(path: string, maximumBytes = Number.MAX_SAFE_I
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const initial = await handle.stat();
+    const namedInitial = await lstat(path);
     if (!initial.isFile() || initial.nlink !== 1 || (initial.mode & 0o7777) !== FILE_MODE || initial.size > maximumBytes) fail("publication_failed");
+    if (namedInitial.isSymbolicLink() || namedInitial.dev !== initial.dev || namedInitial.ino !== initial.ino) fail("publication_failed");
     const bytes = Buffer.allocUnsafe(initial.size);
     let offset = 0;
     while (offset < bytes.length) { const item = await handle.read(bytes, offset, bytes.length - offset, null); if (!item.bytesRead) break; offset += item.bytesRead; }
     const final = await handle.stat();
-    if (offset !== bytes.length || final.size !== initial.size || final.ino !== initial.ino) fail("publication_failed");
+    const namedFinal = await lstat(path);
+    if (offset !== bytes.length || final.size !== initial.size || final.dev !== initial.dev || final.ino !== initial.ino ||
+        namedFinal.isSymbolicLink() || namedFinal.dev !== final.dev || namedFinal.ino !== final.ino) fail("publication_failed");
     return bytes;
   } finally { await handle.close(); }
 }
@@ -483,12 +495,15 @@ async function writeCapturedPayload(handle: Awaited<ReturnType<typeof open>>, pa
   } finally { await source.close().catch(() => undefined); }
 }
 
-async function privateFileDigest(path: string): Promise<Readonly<{ size: number; sha256: Sha256 }>> {
+async function privateFileDigest(path: string, limits: Readonly<{ minimum?: number; maximum?: number }> = {}): Promise<Readonly<{ size: number; sha256: Sha256 }>> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   const digest = createHash("sha256");
   try {
     const initial = await handle.stat();
-    if (!initial.isFile() || initial.nlink !== 1 || (initial.mode & 0o7777) !== FILE_MODE) fail("publication_failed");
+    const namedInitial = await lstat(path);
+    if (!initial.isFile() || initial.nlink !== 1 || (initial.mode & 0o7777) !== FILE_MODE ||
+        initial.size < (limits.minimum ?? 0) || initial.size > (limits.maximum ?? Number.MAX_SAFE_INTEGER)) fail("publication_failed");
+    if (namedInitial.isSymbolicLink() || namedInitial.dev !== initial.dev || namedInitial.ino !== initial.ino) fail("publication_failed");
     const chunk = Buffer.allocUnsafe(Math.min(1024 * 1024, Math.max(1, initial.size)));
     let offset = 0;
     while (offset < initial.size) {
@@ -498,21 +513,78 @@ async function privateFileDigest(path: string): Promise<Readonly<{ size: number;
       offset += item.bytesRead;
     }
     const final = await handle.stat();
-    if (final.dev !== initial.dev || final.ino !== initial.ino || final.size !== initial.size || final.mtimeMs !== initial.mtimeMs || final.ctimeMs !== initial.ctimeMs) fail("publication_failed");
+    const namedFinal = await lstat(path);
+    if (final.dev !== initial.dev || final.ino !== initial.ino || final.size !== initial.size || final.mtimeMs !== initial.mtimeMs || final.ctimeMs !== initial.ctimeMs ||
+        namedFinal.isSymbolicLink() || namedFinal.dev !== final.dev || namedFinal.ino !== final.ino) fail("publication_failed");
     return Object.freeze({ size: initial.size, sha256: `sha256:${digest.digest("hex")}` as Sha256 });
   } finally { await handle.close(); }
 }
 
-async function readStoredCase(paths: OutcomeStorePaths, caseVersion: Sha256): Promise<OutcomeCase> {
-  const bytes = await readRegularPrivate(join(paths.casesDir, caseVersion, "case.json"), MAX_OUTCOME_CASE_BYTES);
-  try { return parseOutcomeCase(JSON.parse(Buffer.from(bytes).toString("utf8"))); } catch { return fail("publication_failed"); }
+function anchoredPath(handle: FileHandle, child?: string): string {
+  const root = `/proc/self/fd/${handle.fd}`;
+  return child === undefined ? root : join(root, child);
 }
 
-async function assertExactExisting(directory: string, files: OutcomeCasePublication["files"]): Promise<void> {
-  const entries = await readdir(directory, { withFileTypes: true });
+async function openPrivateDirectory(path: string): Promise<FileHandle> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    const stats = await handle.stat();
+    if (!stats.isDirectory() || (stats.mode & 0o7777) !== DIRECTORY_MODE) fail("publication_failed");
+    return handle;
+  } catch (error) {
+    await handle?.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+async function sameDirectory(left: FileHandle, right: FileHandle): Promise<boolean> {
+  const [a, b] = await Promise.all([left.stat(), right.stat()]);
+  return a.isDirectory() && b.isDirectory() && a.dev === b.dev && a.ino === b.ino;
+}
+
+async function assertCasesCurrent(rootPath: string, cases: FileHandle, assertRootCurrent: () => Promise<void>): Promise<void> {
+  await assertRootCurrent();
+  const current = await openPrivateDirectory(join(rootPath, "cases"));
+  try { if (!await sameDirectory(cases, current)) fail("publication_failed"); }
+  finally { await current.close().catch(() => undefined); }
+  await assertRootCurrent();
+}
+
+async function assertChildCurrent(parent: FileHandle, name: string, child: FileHandle): Promise<void> {
+  const current = await openPrivateDirectory(anchoredPath(parent, name));
+  try { if (!await sameDirectory(child, current)) fail("publication_failed"); }
+  finally { await current.close().catch(() => undefined); }
+}
+
+async function assertFileCurrent(path: string, handle: FileHandle): Promise<void> {
+  const [anchored, named] = await Promise.all([handle.stat(), lstat(path)]);
+  if (!anchored.isFile() || anchored.nlink !== 1 || (anchored.mode & 0o7777) !== FILE_MODE || named.isSymbolicLink() ||
+      named.dev !== anchored.dev || named.ino !== anchored.ino) fail("publication_failed");
+}
+
+async function readStoredCase(cases: FileHandle, caseVersion: Sha256): Promise<OutcomeCase> {
+  const directory = await openPrivateDirectory(anchoredPath(cases, caseVersion));
+  let bytes: Uint8Array;
+  try {
+    await assertChildCurrent(cases, caseVersion, directory);
+    bytes = await readRegularPrivate(anchoredPath(directory, "case.json"), MAX_OUTCOME_CASE_BYTES);
+    await assertChildCurrent(cases, caseVersion, directory);
+  } finally { await directory.close().catch(() => undefined); }
+  try {
+    const text = Buffer.from(bytes).toString("utf8");
+    const parsed = parseOutcomeCase(JSON.parse(text));
+    const { caseVersion: _caseVersion, ...body } = parsed;
+    if (`${canonicalJson(parsed)}\n` !== text || parsed.caseVersion !== caseVersion || sha256(canonicalJson(body)) !== caseVersion) fail("publication_failed");
+    return parsed;
+  } catch { return fail("publication_failed"); }
+}
+
+async function assertExactExisting(directory: FileHandle, files: OutcomeCasePublication["files"]): Promise<void> {
+  const entries = await readdir(anchoredPath(directory), { withFileTypes: true });
   if (entries.length !== REQUIRED_CASE_FILES.length || entries.some((entry) => !entry.isFile() || entry.isSymbolicLink() || !REQUIRED_CASE_FILES.includes(entry.name as never))) fail("publication_failed");
   for (const name of REQUIRED_CASE_FILES) {
-    const actual = await privateFileDigest(join(directory, name));
+    const actual = await privateFileDigest(anchoredPath(directory, name));
     if (actual.size !== capturedPayloadSize(files[name]) || actual.sha256 !== capturedPayloadSha256(files[name])) fail("publication_failed");
   }
 }
@@ -521,7 +593,9 @@ async function validatePublication(input: OutcomeCasePublication): Promise<void>
   let materialized: OutcomeCase;
   try {
     if (capturedPayloadSize(input.files["case.json"]) > MAX_OUTCOME_CASE_BYTES) fail("publication_failed");
-    materialized = parseOutcomeCase(JSON.parse(Buffer.from(await payloadBytes(input.files["case.json"])).toString("utf8")));
+    const text = Buffer.from(await payloadBytes(input.files["case.json"])).toString("utf8");
+    materialized = parseOutcomeCase(JSON.parse(text));
+    if (`${canonicalJson(materialized)}\n` !== text) fail("publication_failed");
   } catch { return fail("publication_failed"); }
   const { caseVersion: _caseVersion, ...body } = materialized;
   if (materialized.caseVersion !== input.caseVersion || sha256(canonicalJson(body)) !== input.caseVersion ||
@@ -543,56 +617,114 @@ export async function publishOutcomeCase(input: OutcomeCasePublication): Promise
   const sourceSize = sourcePayload instanceof Uint8Array ? sourcePayload.byteLength : sourcePayload.size;
   if (Number.isSafeInteger(sourceSize) && sourceSize > MAX_OUTCOME_SOURCE_BYTES) fail("source_too_large");
   if (!isOutcomeSourceSizeAllowed(sourceSize)) fail("publication_failed");
-  const prepared = await preparePublicationFiles(input.files);
+  const prepared = await preparePublicationFiles(input.files, input.beforeSnapshotDestinationOpen);
   try {
     await input.afterPrepare?.();
-    const capturedInput: OutcomeCasePublication = { ...input, files: prepared.files, afterPrepare: undefined };
+    const capturedInput: OutcomeCasePublication = {
+      ...input,
+      files: prepared.files,
+      afterPrepare: undefined,
+      afterCaseTreeOpen: undefined,
+      afterCaseRename: undefined,
+      beforeSnapshotDestinationOpen: undefined,
+      injectLedgerFault: undefined,
+    };
     await validatePublication(capturedInput);
-    const paths = await ensureOutcomeStore(input.root);
     const candidateSource = capturedInput.files["source.mp4"] instanceof Uint8Array ? sha256(Buffer.from(capturedInput.files["source.mp4"])) : capturedInput.files["source.mp4"].sha256;
-    for (const label of await readActiveOutcomeLabels(input.root)) {
-      if (label.eventId === input.label.eventId) fail("duplicate_event");
-      if ((await readStoredCase(paths, label.caseVersion)).sourceSha256 === candidateSource) fail("duplicate_source");
-    }
-    const temporary = join(paths.casesDir, `.tmp-${randomBytes(12).toString("hex")}`);
-    let tempCreated = false;
-    let caseCommitted = false;
     try {
-      try {
-        const existing = await lstat(join(paths.casesDir, input.caseVersion));
-        if (existing.isSymbolicLink() || !existing.isDirectory() || existing.nlink !== 2 || (existing.mode & 0o7777) !== DIRECTORY_MODE) fail("publication_failed");
-        await assertExactExisting(join(paths.casesDir, input.caseVersion), capturedInput.files);
-        caseCommitted = true;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        await mkdir(temporary, { mode: DIRECTORY_MODE });
-        tempCreated = true;
-        for (const name of REQUIRED_CASE_FILES) {
-          const handle = await open(join(temporary, name), constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY, FILE_MODE);
-          try { await writeCapturedPayload(handle, capturedInput.files[name]); await handle.sync(); } finally { await handle.close(); }
-        }
-        const directory = await open(temporary, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-        try { await directory.sync(); } finally { await directory.close(); }
-        await rename(temporary, join(paths.casesDir, input.caseVersion));
-        tempCreated = false;
-        const parent = await open(paths.casesDir, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-        try { await parent.sync(); } finally { await parent.close(); }
-        caseCommitted = true;
-      }
-      if (!caseCommitted) fail("publication_failed");
-      return await appendOutcomeEvent(input.root, input.label, {
-        async validateBeforeCommit(active) {
-          for (const label of active) {
-            const existing = await readStoredCase(paths, label.caseVersion);
-            if (existing.sourceSha256 === candidateSource) fail("duplicate_source");
+      return await withOutcomePublication(input.root, async (authority) => {
+        await authority.assertCurrent();
+        const cases = await openPrivateDirectory(join(authority.rootPath, "cases"));
+        let temporaryName: string | undefined;
+        let createdIdentity: Readonly<{ dev: number; ino: number }> | undefined;
+        let ledgerReached = false;
+        const assertCurrent = () => assertCasesCurrent(authority.rootPath, cases, authority.assertCurrent);
+        const rollbackCreated = async (): Promise<void> => {
+          if (!createdIdentity) return;
+          const final = await openPrivateDirectory(anchoredPath(cases, input.caseVersion));
+          try {
+            const stats = await final.stat();
+            if (stats.dev !== createdIdentity.dev || stats.ino !== createdIdentity.ino) return fail("publication_failed");
+          } finally { await final.close().catch(() => undefined); }
+          const rollbackName = `.rollback-${randomBytes(12).toString("hex")}`;
+          await rename(anchoredPath(cases, input.caseVersion), anchoredPath(cases, rollbackName));
+          const rollback = await openPrivateDirectory(anchoredPath(cases, rollbackName));
+          try {
+            const stats = await rollback.stat();
+            if (stats.dev !== createdIdentity.dev || stats.ino !== createdIdentity.ino) return fail("publication_failed");
+          } finally { await rollback.close().catch(() => undefined); }
+          await rm(anchoredPath(cases, rollbackName), { recursive: true, force: false });
+          createdIdentity = undefined;
+        };
+        try {
+          await input.afterCaseTreeOpen?.();
+          await assertCurrent();
+          for (const label of authority.active) {
+            if (label.eventId === input.label.eventId) fail("duplicate_event");
+            if ((await readStoredCase(cases, label.caseVersion)).sourceSha256 === candidateSource) fail("duplicate_source");
+            await assertCurrent();
           }
-        },
+          let caseCommitted = false;
+          try {
+            const existing = await openPrivateDirectory(anchoredPath(cases, input.caseVersion));
+            try {
+              await assertChildCurrent(cases, input.caseVersion, existing);
+              await assertExactExisting(existing, capturedInput.files);
+              await assertChildCurrent(cases, input.caseVersion, existing);
+              caseCommitted = true;
+            } finally { await existing.close().catch(() => undefined); }
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+            temporaryName = `.tmp-${randomBytes(12).toString("hex")}`;
+            await assertCurrent();
+            await mkdir(anchoredPath(cases, temporaryName), { mode: DIRECTORY_MODE });
+            const temporary = await openPrivateDirectory(anchoredPath(cases, temporaryName));
+            let temporaryIdentity: Readonly<{ dev: number; ino: number }>;
+            try {
+              await assertChildCurrent(cases, temporaryName, temporary);
+              const tempStats = await temporary.stat();
+              temporaryIdentity = Object.freeze({ dev: tempStats.dev, ino: tempStats.ino });
+              for (const name of REQUIRED_CASE_FILES) {
+                const path = anchoredPath(temporary, name);
+                const handle = await open(path, constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY, FILE_MODE);
+                try { await writeCapturedPayload(handle, capturedInput.files[name]); await handle.sync(); await assertFileCurrent(path, handle); }
+                finally { await handle.close(); }
+              }
+              await temporary.sync();
+              await assertChildCurrent(cases, temporaryName, temporary);
+            } finally { await temporary.close().catch(() => undefined); }
+            await assertCurrent();
+            await rename(anchoredPath(cases, temporaryName), anchoredPath(cases, input.caseVersion));
+            temporaryName = undefined;
+            createdIdentity = temporaryIdentity!;
+            await input.afterCaseRename?.();
+            const committed = await openPrivateDirectory(anchoredPath(cases, input.caseVersion));
+            try {
+              const stats = await committed.stat();
+              if (stats.dev !== createdIdentity.dev || stats.ino !== createdIdentity.ino) fail("publication_failed");
+              await assertChildCurrent(cases, input.caseVersion, committed);
+            } finally { await committed.close().catch(() => undefined); }
+            await cases.sync();
+            await assertCurrent();
+            caseCommitted = true;
+          }
+          if (!caseCommitted) fail("publication_failed");
+          const result = await authority.appendLabel(input.label, input.injectLedgerFault);
+          ledgerReached = true;
+          await assertCurrent();
+          return result;
+        } catch (error) {
+          if (!ledgerReached) await rollbackCreated();
+          throw error;
+        } finally {
+          if (temporaryName) await rm(anchoredPath(cases, temporaryName), { recursive: true, force: true }).catch(() => undefined);
+          await cases.close().catch(() => undefined);
+        }
       });
     } catch (error) {
-      if (error instanceof OutcomePromotionError || error instanceof OutcomeStoreError) throw error;
+      if (error instanceof OutcomePromotionError) throw error;
+      if (error instanceof OutcomeStoreError && error.code === "duplicate_event") fail("duplicate_event");
       return fail("publication_failed");
-    } finally {
-      if (tempCreated) await rm(temporary, { recursive: true, force: true }).catch(() => undefined);
     }
   } finally {
     if (prepared.temporaryRoot) await rm(prepared.temporaryRoot, { recursive: true, force: true }).catch(() => undefined);
@@ -602,48 +734,128 @@ export async function publishOutcomeCase(input: OutcomeCasePublication): Promise
 export type OutcomeValidationReport = Readonly<{ status: "valid" | "invalid"; counts: Readonly<{ eval: number; holdout: number }>; reasons: Readonly<Record<string, number>> }>;
 
 function addReason(reasons: Record<string, number>, code: string): void { reasons[code] = (reasons[code] ?? 0) + 1; }
-async function auditPrivateTree(path: string, reasons: Record<string, number>, budget: { remaining: number }): Promise<void> {
-  budget.remaining -= 1;
-  if (budget.remaining < 0) { addReason(reasons, "store_too_large"); return; }
-  const stats = await lstat(path);
-  if (stats.isSymbolicLink() || (!stats.isDirectory() && !stats.isFile()) || (stats.isFile() && stats.nlink !== 1)) { addReason(reasons, "unsafe_path"); return; }
-  if ((stats.mode & 0o7777) !== (stats.isDirectory() ? DIRECTORY_MODE : FILE_MODE)) addReason(reasons, "unsafe_mode");
-  if (!stats.isDirectory()) return;
-  for (const entry of await readdir(path)) await auditPrivateTree(join(path, entry), reasons, budget);
-}
 
-async function requireStoreEntry(path: string, kind: "directory" | "file", reasons: Record<string, number>): Promise<void> {
+class OutcomePathError extends Error {}
+class RequiredEntryTypeError extends Error {}
+
+async function openValidationDirectory(path: string, privateMode = true): Promise<FileHandle> {
+  let handle: FileHandle | undefined;
   try {
-    const stats = await lstat(path);
-    if (stats.isSymbolicLink() || (kind === "directory" ? !stats.isDirectory() : !stats.isFile()) || (kind === "file" && stats.nlink !== 1)) {
-      addReason(reasons, "required_entry_type");
-    }
-  } catch { addReason(reasons, "required_entry_type"); }
+    handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    const stats = await handle.stat();
+    if (!stats.isDirectory() || (privateMode && (stats.mode & 0o7777) !== DIRECTORY_MODE)) throw new OutcomePathError();
+    return handle;
+  } catch (error) {
+    await handle?.close().catch(() => undefined);
+    throw error instanceof OutcomePathError ? error : new OutcomePathError();
+  }
 }
 
-export async function validateOutcomeStore(root: string, options: Readonly<{ now?: Date }> = {}): Promise<OutcomeValidationReport> {
+async function openValidationRoot(root: string): Promise<FileHandle> {
+  const components = resolve(root).split("/").filter(Boolean);
+  let current = await openValidationDirectory("/", false);
+  try {
+    for (const component of components) {
+      const next = await openValidationDirectory(anchoredPath(current, component), false);
+      await current.close();
+      current = next;
+    }
+    return current;
+  } catch (error) {
+    await current.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+type OutcomeValidationTree = Readonly<{
+  root: FileHandle;
+  ledger: FileHandle;
+  cases: FileHandle;
+  observations: FileHandle;
+  decisions: FileHandle;
+}>;
+
+async function openValidationTree(root: string): Promise<OutcomeValidationTree> {
+  const rootHandle = await openValidationRoot(root);
+  const opened: FileHandle[] = [];
+  try {
+    for (const name of ["ledger", "cases", "observations", "decisions"]) {
+      try { opened.push(await openValidationDirectory(anchoredPath(rootHandle, name), false)); }
+      catch { throw new RequiredEntryTypeError(); }
+    }
+    return Object.freeze({ root: rootHandle, ledger: opened[0], cases: opened[1], observations: opened[2], decisions: opened[3] });
+  } catch (error) {
+    await Promise.all(opened.map((handle) => handle.close().catch(() => undefined)));
+    await rootHandle.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+async function closeValidationTree(tree: OutcomeValidationTree): Promise<void> {
+  await Promise.all([tree.ledger, tree.cases, tree.observations, tree.decisions, tree.root].map((handle) => handle.close().catch(() => undefined)));
+}
+
+async function assertValidationTreeCurrent(root: string, tree: OutcomeValidationTree): Promise<void> {
+  const currentRoot = await openValidationRoot(root);
+  try {
+    if (!await sameDirectory(tree.root, currentRoot)) throw new OutcomePathError();
+    for (const [name, trusted] of [["ledger", tree.ledger], ["cases", tree.cases], ["observations", tree.observations], ["decisions", tree.decisions]] as const) {
+      const current = await openValidationDirectory(anchoredPath(currentRoot, name), false);
+      try { if (!await sameDirectory(trusted, current)) throw new OutcomePathError(); }
+      finally { await current.close().catch(() => undefined); }
+    }
+  } finally { await currentRoot.close().catch(() => undefined); }
+}
+
+async function auditPrivateHandle(directory: FileHandle, reasons: Record<string, number>, budget: { remaining: number }): Promise<void> {
+  for (const entry of await readdir(anchoredPath(directory), { withFileTypes: true })) {
+    budget.remaining -= 1;
+    if (budget.remaining < 0) { addReason(reasons, "store_too_large"); return; }
+    const path = anchoredPath(directory, entry.name);
+    const stats = await lstat(path);
+    if (stats.isSymbolicLink() || (!stats.isDirectory() && !stats.isFile()) || (stats.isFile() && stats.nlink !== 1)) { addReason(reasons, "unsafe_path"); continue; }
+    if ((stats.mode & 0o7777) !== (stats.isDirectory() ? DIRECTORY_MODE : FILE_MODE)) addReason(reasons, "unsafe_mode");
+    if (stats.isDirectory()) {
+      const child = await openValidationDirectory(path);
+      try {
+        const anchored = await child.stat();
+        if (anchored.dev !== stats.dev || anchored.ino !== stats.ino) throw new OutcomePathError();
+        await auditPrivateHandle(child, reasons, budget);
+        const named = await lstat(path);
+        if (named.isSymbolicLink() || named.dev !== anchored.dev || named.ino !== anchored.ino) throw new OutcomePathError();
+      } finally { await child.close().catch(() => undefined); }
+    }
+  }
+}
+
+export async function validateOutcomeStore(root: string, options: Readonly<{
+  now?: Date;
+  afterAnchor?: () => void | Promise<void>;
+  afterCaseAnchor?: (caseVersion: Sha256) => void | Promise<void>;
+}> = {}): Promise<OutcomeValidationReport> {
   const reasons: Record<string, number> = {};
   const counts = { eval: 0, holdout: 0 };
   const validationNow = (options.now ?? new Date()).getTime();
-  const paths = { root, ledgerDir: join(root, "ledger"), eventsFile: join(root, "ledger", "outcomes.jsonl"), lockFile: join(root, "ledger", "outcomes.lock"), casesDir: join(root, "cases"), observationsDir: join(root, "observations"), decisionsDir: join(root, "decisions") };
+  let tree: OutcomeValidationTree | undefined;
   try {
-    await Promise.all([
-      requireStoreEntry(root, "directory", reasons),
-      requireStoreEntry(paths.ledgerDir, "directory", reasons),
-      requireStoreEntry(paths.casesDir, "directory", reasons),
-      requireStoreEntry(paths.observationsDir, "directory", reasons),
-      requireStoreEntry(paths.decisionsDir, "directory", reasons),
-      requireStoreEntry(paths.eventsFile, "file", reasons),
-      requireStoreEntry(paths.lockFile, "file", reasons),
-    ]);
-    await auditPrivateTree(root, reasons, { remaining: 100_000 });
-    const rootNames = (await readdir(root)).sort();
+    tree = await openValidationTree(root);
+    await options.afterAnchor?.();
+    await assertValidationTreeCurrent(root, tree);
+    if (((await tree.root.stat()).mode & 0o7777) !== DIRECTORY_MODE) addReason(reasons, "unsafe_mode");
+    await auditPrivateHandle(tree.root, reasons, { remaining: 100_000 });
+    await assertValidationTreeCurrent(root, tree);
+    const rootNames = (await readdir(anchoredPath(tree.root))).sort();
     if (rootNames.join(",") !== ["cases", "decisions", "ledger", "observations"].join(",")) addReason(reasons, "unexpected_entry");
-    const ledgerNames = (await readdir(paths.ledgerDir)).sort();
+    const ledgerNames = (await readdir(anchoredPath(tree.ledger))).sort();
     if (ledgerNames.join(",") !== ["outcomes.jsonl", "outcomes.lock"].join(",")) addReason(reasons, "unexpected_entry");
+    for (const name of ["outcomes.jsonl", "outcomes.lock"]) {
+      const stats = await lstat(anchoredPath(tree.ledger, name));
+      if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1) addReason(reasons, "required_entry_type");
+    }
     if (Object.keys(reasons).length > 0) return Object.freeze({ status: "invalid", counts: Object.freeze(counts), reasons: Object.freeze(reasons) });
-    const ledger = Buffer.from(await readRegularPrivate(paths.eventsFile)).toString("utf8");
-    if (!ledger.endsWith("\n")) addReason(reasons, "invalid_ledger");
+    const ledger = Buffer.from(await readRegularPrivate(anchoredPath(tree.ledger, "outcomes.jsonl"))).toString("utf8");
+    await assertValidationTreeCurrent(root, tree);
+    if (ledger.length > 0 && !ledger.endsWith("\n")) addReason(reasons, "invalid_ledger");
     const active = new Map<string, OutcomeLabel>();
     const retired = new Set<string>();
     const seenEventIds = new Set<string>();
@@ -663,19 +875,24 @@ export async function validateOutcomeStore(root: string, options: Readonly<{ now
     const knownCaseVersions = new Set(allLabels.map(([, label]) => label.caseVersion));
     const activeSourceHashes = new Set<Sha256>();
     for (const [eventId, label] of allLabels) {
+      let directory: FileHandle | undefined;
       try {
-        const directory = join(paths.casesDir, label.caseVersion);
-        const names = await readdir(directory, { withFileTypes: true });
+        directory = await openValidationDirectory(anchoredPath(tree.cases, label.caseVersion));
+        await options.afterCaseAnchor?.(label.caseVersion);
+        await assertChildCurrent(tree.cases, label.caseVersion, directory);
+        const names = await readdir(anchoredPath(directory), { withFileTypes: true });
         if (names.length !== REQUIRED_CASE_FILES.length || names.some((entry) => entry.isSymbolicLink() || !entry.isFile() || !REQUIRED_CASE_FILES.includes(entry.name as never))) { addReason(reasons, "unsafe_path"); continue; }
-        const caseBytes = await readRegularPrivate(join(directory, "case.json"), MAX_OUTCOME_CASE_BYTES);
+        const caseBytes = await readRegularPrivate(anchoredPath(directory, "case.json"), MAX_OUTCOME_CASE_BYTES);
         const [transcriptFile, sourceFile, recordedFile] = await Promise.all([
-          privateFileDigest(join(directory, "transcript.json")),
-          privateFileDigest(join(directory, "source.mp4")),
-          privateFileDigest(join(directory, "recorded-responses.jsonl")),
+          privateFileDigest(anchoredPath(directory, "transcript.json")),
+          privateFileDigest(anchoredPath(directory, "source.mp4"), { minimum: 1, maximum: MAX_OUTCOME_SOURCE_BYTES }),
+          privateFileDigest(anchoredPath(directory, "recorded-responses.jsonl")),
         ]);
-        const parsed = parseOutcomeCase(JSON.parse(Buffer.from(caseBytes).toString("utf8")));
+        await assertChildCurrent(tree.cases, label.caseVersion, directory);
+        const caseText = Buffer.from(caseBytes).toString("utf8");
+        const parsed = parseOutcomeCase(JSON.parse(caseText));
         const { caseVersion: _caseVersion, ...body } = parsed;
-        if (parsed.caseVersion !== label.caseVersion || sha256(canonicalJson(body)) !== label.caseVersion ||
+        if (`${canonicalJson(parsed)}\n` !== caseText || parsed.caseVersion !== label.caseVersion || sha256(canonicalJson(body)) !== label.caseVersion ||
             transcriptFile.sha256 !== parsed.transcriptSha256 || sourceFile.sha256 !== parsed.sourceSha256 ||
             recordedFile.sha256 !== parsed.recordedResponsesSha256 || parsed.disposition !== label.disposition ||
             parsed.materializedAt !== label.occurredAt ||
@@ -689,13 +906,16 @@ export async function validateOutcomeStore(root: string, options: Readonly<{ now
           }
         }
       } catch { addReason(reasons, "missing_or_invalid_case"); }
+      finally { await directory?.close().catch(() => undefined); }
     }
-    const caseEntries = await readdir(paths.casesDir, { withFileTypes: true });
+    const caseEntries = await readdir(anchoredPath(tree.cases), { withFileTypes: true });
     if (caseEntries.some((entry) => entry.isSymbolicLink() || !entry.isDirectory())) addReason(reasons, "unsafe_path");
     for (const entry of caseEntries) if (entry.isDirectory() && !entry.isSymbolicLink() && !knownCaseVersions.has(entry.name as Sha256)) addReason(reasons, entry.name.startsWith(".tmp-") ? "stale_temp" : "orphan_case");
+    await assertValidationTreeCurrent(root, tree);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ELOOP" || (error as NodeJS.ErrnoException).code === "ENOTDIR") addReason(reasons, "unsafe_path");
+    if (error instanceof RequiredEntryTypeError) addReason(reasons, "required_entry_type");
+    else if (error instanceof OutcomePathError || (error as NodeJS.ErrnoException).code === "ELOOP" || (error as NodeJS.ErrnoException).code === "ENOTDIR") addReason(reasons, "unsafe_path");
     else addReason(reasons, "missing_store");
-  }
+  } finally { if (tree) await closeValidationTree(tree); }
   return Object.freeze({ status: Object.keys(reasons).length === 0 ? "valid" : "invalid", counts: Object.freeze(counts), reasons: Object.freeze(reasons) });
 }

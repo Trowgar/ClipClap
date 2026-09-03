@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, mkdtemp, readFile, rm, symlink, truncate, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -207,6 +207,30 @@ describe("zero-outcome promotion", () => {
     expect(oversized.downloadFile).not.toHaveBeenCalled();
   });
 
+  it("cancels an R2 stream reader when spooling fails", async () => {
+    const cancelled = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(Buffer.from("too-large")); },
+      cancel: cancelled,
+    });
+    const dependencies = deps(snapshot(), {
+      getObjectSize: vi.fn(async () => 1),
+      downloadFile: vi.fn(async () => stream),
+    });
+    await expect(promoteOutcomeCase(decision(), dependencies)).rejects.toMatchObject({ code: "source_too_large" });
+    expect(cancelled).toHaveBeenCalledOnce();
+  });
+
+  it("removes a newly-created spool even when securing its mode fails", async () => {
+    let spoolPath = "";
+    const dependencies = deps(snapshot(), {
+      secureSpool: vi.fn(async (path) => { spoolPath = path; throw new Error("chmod-failed"); }),
+    });
+    await expect(promoteOutcomeCase(decision(), dependencies)).rejects.toThrow("chmod-failed");
+    expect(spoolPath).not.toBe("");
+    await expect(lstat(spoolPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("does not let an empty normalized key hide a valid source artifact", async () => {
     const snap = snapshot({ job: { ...snapshot().job, normalizedArtifactKey: "", sourceArtifactKey: "source.mp4" } });
     const dependencies = deps(snap);
@@ -247,6 +271,164 @@ describe("zero-outcome promotion", () => {
     await expect(promoteOutcomeCase(decision(second, { eventId: "outcome-event-2" }), deps(second, { root, publish: undefined }))).rejects.toMatchObject({ code: "duplicate_source" });
   });
 
+  it("serializes concurrent same-source publications without leaving an orphan", async () => {
+    const captureOne = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
+    const captureTwo = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
+    const first = snapshot();
+    const second = snapshot({
+      job: { ...snapshot().job, id: "job-private-2", userId: "user-private-2", updatedAt: "2026-09-02T23:01:00.000Z" },
+      analyzeStep: { ...snapshot().analyzeStep, id: "step-private-2" },
+    });
+    await promoteOutcomeCase(decision(first), deps(first, { publish: captureOne }));
+    await promoteOutcomeCase(decision(second, { eventId: "outcome-event-2" }), deps(second, { publish: captureTwo }));
+    const root = await temporaryRoot();
+    const publications = [captureOne.mock.calls[0][0], captureTwo.mock.calls[0][0]].map((input) => ({
+      ...input, root, files: { ...input.files, "source.mp4": Buffer.from("source-bytes") },
+    }));
+    const results = await Promise.allSettled(publications.map(publishOutcomeCase));
+    expect(results.filter((item) => item.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((item) => item.status === "rejected")).toHaveLength(1);
+    await expect(validateOutcomeStore(root)).resolves.toEqual({ status: "valid", counts: { eval: 1, holdout: 0 }, reasons: {} });
+  });
+
+  it("rolls back only its new case when ledger append fails before rename", async () => {
+    const captured = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
+    await promoteOutcomeCase(decision(), deps(snapshot(), { publish: captured }));
+    const template = captured.mock.calls[0][0];
+    const root = await temporaryRoot();
+    await expect(publishOutcomeCase({
+      ...template, root, files: { ...template.files, "source.mp4": Buffer.from("source-bytes") },
+      injectLedgerFault: (point) => { if (point.operation === "write" && point.timing === "before") throw new Error("injected"); },
+    })).rejects.toBeDefined();
+    await expect(validateOutcomeStore(root)).resolves.toEqual({ status: "valid", counts: { eval: 0, holdout: 0 }, reasons: {} });
+  });
+
+  it("rolls back through the pinned cases fd after the public cases path is replaced", async () => {
+    const captured = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
+    await promoteOutcomeCase(decision(), deps(snapshot(), { publish: captured }));
+    const template = captured.mock.calls[0][0];
+    const root = await temporaryRoot();
+    const replacement = join(roots[roots.length - 1], "post-rename-replacement");
+    await mkdir(replacement, { mode: 0o700 });
+    await expect(publishOutcomeCase({
+      ...template, root, files: { ...template.files, "source.mp4": Buffer.from("source-bytes") },
+      afterCaseRename: async () => {
+        await rename(join(root, "cases"), join(root, "cases-original"));
+        await rename(replacement, join(root, "cases"));
+        throw new Error("after-case-rename");
+      },
+    })).rejects.toBeDefined();
+    expect(await readdir(join(root, "cases-original"))).toEqual([]);
+    expect(await readdir(join(root, "cases"))).toEqual([]);
+  });
+
+  it("never deletes a case when ledger state becomes unknown after rename", async () => {
+    const captured = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
+    await promoteOutcomeCase(decision(), deps(snapshot(), { publish: captured }));
+    const template = captured.mock.calls[0][0];
+    const root = await temporaryRoot();
+    const moved = `${root}-moved`;
+    await expect(publishOutcomeCase({
+      ...template, root, files: { ...template.files, "source.mp4": Buffer.from("source-bytes") },
+      injectLedgerFault: async (point) => {
+        if (point.operation === "rename" && point.timing === "after") {
+          await rename(root, moved);
+          throw new Error("lost-public-root");
+        }
+      },
+    })).rejects.toBeDefined();
+    await expect(validateOutcomeStore(moved)).resolves.toEqual({ status: "valid", counts: { eval: 1, holdout: 0 }, reasons: {} });
+    expect(await readdir(join(moved, "cases"))).toContain(template.caseVersion);
+  });
+
+  it("reconciles an error after ledger rename without creating a missing-case label", async () => {
+    const captured = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
+    await promoteOutcomeCase(decision(), deps(snapshot(), { publish: captured }));
+    const template = captured.mock.calls[0][0];
+    const root = await temporaryRoot();
+    await expect(publishOutcomeCase({
+      ...template, root, files: { ...template.files, "source.mp4": Buffer.from("source-bytes") },
+      injectLedgerFault: (point) => {
+        if (point.operation === "rename" && point.timing === "after") throw new Error("after-ledger-rename");
+      },
+    })).resolves.toEqual({ status: "committed_durability_uncertain" });
+    await expect(validateOutcomeStore(root)).resolves.toEqual({ status: "valid", counts: { eval: 1, holdout: 0 }, reasons: {} });
+  });
+
+  it("rolls back when the ledger rename syscall fails before changing the destination", async () => {
+    const captured = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
+    await promoteOutcomeCase(decision(), deps(snapshot(), { publish: captured }));
+    const template = captured.mock.calls[0][0];
+    const root = await temporaryRoot();
+    const events = join(root, "ledger", "outcomes.jsonl");
+    const backup = join(root, "ledger", "outcomes.backup");
+    let sabotaged = false;
+    await expect(publishOutcomeCase({
+      ...template, root, files: { ...template.files, "source.mp4": Buffer.from("source-bytes") },
+      injectLedgerFault: async (point) => {
+        if (!sabotaged && point.operation === "rename" && point.timing === "before") {
+          sabotaged = true;
+          await rename(events, backup);
+          await mkdir(events, { mode: 0o700 });
+        }
+      },
+    })).rejects.toBeDefined();
+    expect(await readdir(join(root, "cases"))).toEqual([]);
+    await rm(events, { recursive: true });
+    await rename(backup, events);
+    await expect(validateOutcomeStore(root)).resolves.toEqual({ status: "valid", counts: { eval: 0, holdout: 0 }, reasons: {} });
+  });
+
+  it("rolls back on an injected failure before the ledger rename is attempted", async () => {
+    const captured = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
+    await promoteOutcomeCase(decision(), deps(snapshot(), { publish: captured }));
+    const template = captured.mock.calls[0][0];
+    const root = await temporaryRoot();
+    await expect(publishOutcomeCase({
+      ...template, root, files: { ...template.files, "source.mp4": Buffer.from("source-bytes") },
+      injectLedgerFault: (point) => { if (point.operation === "rename" && point.timing === "before") throw new Error("before-ledger-rename"); },
+    })).rejects.toBeDefined();
+    await expect(validateOutcomeStore(root)).resolves.toEqual({ status: "valid", counts: { eval: 0, holdout: 0 }, reasons: {} });
+  });
+
+  it("rejects a cases-directory swap without writing outside the anchored store", async () => {
+    const captured = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
+    await promoteOutcomeCase(decision(), deps(snapshot(), { publish: captured }));
+    const template = captured.mock.calls[0][0];
+    const root = await temporaryRoot();
+    await mkdir(root, { recursive: true, mode: 0o700 });
+    const outside = join(roots[roots.length - 1], "outside-cases");
+    await mkdir(outside, { mode: 0o700 });
+    await expect(publishOutcomeCase({
+      ...template, root, files: { ...template.files, "source.mp4": Buffer.from("source-bytes") },
+      afterCaseTreeOpen: async () => {
+        await rename(join(root, "cases"), join(root, "cases-original"));
+        await symlink(outside, join(root, "cases"));
+      },
+    })).rejects.toBeDefined();
+    expect(await readdir(outside)).toEqual([]);
+  });
+
+  it("rejects an active case-directory symlink swap during dedupe", async () => {
+    const root = await temporaryRoot();
+    const first = await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
+    const second = snapshot({ job: { ...snapshot().job, id: "job-private-2", userId: "user-private-2", updatedAt: "2026-09-02T23:01:00.000Z" }, analyzeStep: { ...snapshot().analyzeStep, id: "step-private-2" } });
+    const capture = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
+    await promoteOutcomeCase(decision(second, { eventId: "outcome-event-2" }), deps(second, { publish: capture }));
+    const outside = join(roots[roots.length - 1], "outside-case");
+    await mkdir(outside, { mode: 0o700 });
+    await writeFile(join(outside, "case.json"), "outside", { mode: 0o600 });
+    await expect(publishOutcomeCase({
+      ...capture.mock.calls[0][0], root,
+      files: { ...capture.mock.calls[0][0].files, "source.mp4": Buffer.from("source-bytes") },
+      afterCaseTreeOpen: async () => {
+        await rename(join(root, "cases", first.caseVersion), join(root, "cases", `${first.caseVersion}-original`));
+        await symlink(outside, join(root, "cases", first.caseVersion));
+      },
+    })).rejects.toMatchObject({ code: "publication_failed" });
+    expect(await readFile(join(outside, "case.json"), "utf8")).toBe("outside");
+  });
+
   it("validator is read-only and rejects unsafe modes and symlinks with aggregate codes", async () => {
     const root = await temporaryRoot();
     await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
@@ -263,6 +445,37 @@ describe("zero-outcome promotion", () => {
     expect((await lstat(real)).isFile()).toBe(true);
   });
 
+  it("validator detects a cases-root replacement after anchoring", async () => {
+    const root = await temporaryRoot();
+    await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
+    const replacement = join(roots[roots.length - 1], "replacement-cases");
+    await mkdir(replacement, { mode: 0o700 });
+    const result = await validateOutcomeStore(root, {
+      afterAnchor: async () => {
+        await rename(join(root, "cases"), join(root, "cases-original"));
+        await rename(replacement, join(root, "cases"));
+      },
+    });
+    expect(result).toMatchObject({ status: "invalid", reasons: expect.objectContaining({ unsafe_path: 1 }) });
+  });
+
+  it("validator does not follow a case directory replaced after it is anchored", async () => {
+    const root = await temporaryRoot();
+    const promoted = await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
+    const outside = join(roots[roots.length - 1], "validator-outside-case");
+    await mkdir(outside, { mode: 0o700 });
+    await writeFile(join(outside, "case.json"), "outside", { mode: 0o600 });
+    const result = await validateOutcomeStore(root, {
+      afterCaseAnchor: async (caseVersion) => {
+        await rename(join(root, "cases", caseVersion), join(root, "cases", `${caseVersion}-original`));
+        await symlink(outside, join(root, "cases", caseVersion));
+      },
+    });
+    expect(result.status).toBe("invalid");
+    expect(await readFile(join(outside, "case.json"), "utf8")).toBe("outside");
+    expect(promoted.caseVersion).toMatch(/^sha256:/);
+  });
+
   it("validator fails closed on tampered case bytes and orphan case directories", async () => {
     const root = await temporaryRoot();
     const promoted = await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
@@ -273,6 +486,27 @@ describe("zero-outcome promotion", () => {
     await rm(join(root, "cases", promoted.caseVersion), { recursive: true });
     await mkdir(join(root, "cases", hash("orphan")), { mode: 0o700 });
     await expect(validateOutcomeStore(root)).resolves.toMatchObject({ status: "invalid", reasons: expect.objectContaining({ missing_or_invalid_case: 1, orphan_case: 1 }) });
+  });
+
+  it("caps stored source size before streaming its digest", async () => {
+    const root = await temporaryRoot();
+    const promoted = await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
+    const sourcePath = join(root, "cases", promoted.caseVersion, "source.mp4");
+    await truncate(sourcePath, 0);
+    await expect(validateOutcomeStore(root)).resolves.toMatchObject({ status: "invalid", reasons: { missing_or_invalid_case: 1 } });
+    await truncate(sourcePath, MAX_OUTCOME_SOURCE_BYTES + 1);
+    await expect(validateOutcomeStore(root)).resolves.toMatchObject({ status: "invalid", reasons: { missing_or_invalid_case: 1 } });
+  });
+
+  it("refuses dedupe decisions based on a non-content-addressed stored case", async () => {
+    const root = await temporaryRoot();
+    const promoted = await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
+    const casePath = join(root, "cases", promoted.caseVersion, "case.json");
+    const raw = JSON.parse(await readFile(casePath, "utf8"));
+    raw.subsystem = "boundary";
+    await writeFile(casePath, `${canonicalJson(raw)}\n`, { mode: 0o600 });
+    const second = snapshot({ job: { ...snapshot().job, id: "job-private-2", userId: "user-private-2", updatedAt: "2026-09-02T23:01:00.000Z" }, analyzeStep: { ...snapshot().analyzeStep, id: "step-private-2" } });
+    await expect(promoteOutcomeCase(decision(second, { eventId: "outcome-event-2" }), deps(second, { root, publish: undefined }))).rejects.toMatchObject({ code: "publication_failed" });
   });
 
   it("validator fails standalone on missing, mismatched, and future freshness bindings", async () => {
@@ -349,6 +583,29 @@ describe("zero-outcome promotion", () => {
       afterPrepare: () => writeFile(external, "source-bytes-changed", { mode: 0o600 }),
     });
     expect(await readFile(join(root, "cases", template.caseVersion, "source.mp4"))).toEqual(originalSource);
+  });
+
+  it("closes an anchored source descriptor if snapshot destination creation fails", async () => {
+    const captured = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
+    await promoteOutcomeCase(decision(), deps(snapshot(), { publish: captured }));
+    const template = captured.mock.calls[0][0];
+    const root = await temporaryRoot();
+    const external = join(roots[roots.length - 1], "fd-source.mp4");
+    await writeFile(external, "source-bytes", { mode: 0o600 });
+    const openReferences = async (): Promise<number> => {
+      let total = 0;
+      for (const name of await readdir("/proc/self/fd")) {
+        try { if (await readlink(join("/proc/self/fd", name)) === external) total += 1; } catch { /* fd raced closed */ }
+      }
+      return total;
+    };
+    expect(await openReferences()).toBe(0);
+    await expect(publishOutcomeCase({
+      ...template, root,
+      files: { ...template.files, "source.mp4": { path: external, size: 12, sha256: hash("source-bytes") } },
+      beforeSnapshotDestinationOpen: (path) => writeFile(path, "occupied", { mode: 0o600 }),
+    })).rejects.toBeDefined();
+    expect(await openReferences()).toBe(0);
   });
 
   it("enforces the public source cap, including the exact boundary", async () => {

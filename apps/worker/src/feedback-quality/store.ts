@@ -24,6 +24,7 @@ const COMMIT_MARKER_BYTES = Buffer.from("clipclap-feedback-quality-committed-v1\
 const BUNDLE_NAMES = ["case", "observation", "decision", "rollback"] as const;
 const PRIVATE_FILE_NAMES = new Set(["case.json", "transcript.json", "evidence.mp4", "source.mp4", "source-or-evidence.mp4", "recorded-responses.json", "manifest.json", "results.jsonl", "decision.json", "report.md", "rollback.json", "compose.production.yml", "rollback.compose.yml", "candidate.compose.yml", "production.env", "feedback-quality-config.json"]);
 const MAX_PRIVATE_METADATA_BYTES = 8 * 1024;
+const DEFINITE_PRE_COMMIT_RENAME_ERRORS = new Set(["EACCES", "EBUSY", "EEXIST", "EISDIR", "EINVAL", "ELOOP", "ENAMETOOLONG", "ENOENT", "ENOTDIR", "ENOTEMPTY", "EPERM", "EROFS", "EXDEV"]);
 export const MAX_READ_BUNDLE_FILE_BYTES = 256 * 1024 * 1024;
 export const MAX_READ_BUNDLE_TOTAL_BYTES = 512 * 1024 * 1024;
 export const MAX_STREAM_BUNDLE_FILE_BYTES = 2 * 1024 * 1024 * 1024;
@@ -96,6 +97,14 @@ export type AppendPrivateLedgerOptions = Readonly<{
   afterLock?: () => void | Promise<void>;
 }>;
 
+export type PrivateLedgerTransaction = Readonly<{
+  /** Valid only for the lifetime of the transaction callback. */
+  rootPath: string;
+  events: readonly Readonly<Record<string, unknown>>[];
+  assertCurrent: () => Promise<void>;
+  append: (event: QualityLabelEvent, options?: Omit<AppendPrivateLedgerOptions, "afterLock" | "lockOptions">) => Promise<CommitResult>;
+}>;
+
 export class PrivateLedgerDuplicateError extends Error {
   readonly code = "duplicate_event" as const;
 
@@ -116,6 +125,13 @@ class PrivateLedgerAnchorError extends Error {
   constructor(readonly anchorCause: unknown) {
     super("private_ledger_anchor_changed");
     this.name = "PrivateLedgerAnchorError";
+  }
+}
+
+class PrivateLedgerOperationError extends Error {
+  constructor(readonly operationCause: unknown) {
+    super("private_ledger_operation_failed");
+    this.name = "PrivateLedgerOperationError";
   }
 }
 
@@ -148,6 +164,10 @@ function codeOf(error: unknown): string | undefined {
   return error && typeof error === "object" && "code" in error && typeof error.code === "string"
     ? error.code
     : undefined;
+}
+
+function definitelyPreCommitRenameFailure(error: unknown): boolean {
+  return DEFINITE_PRE_COMMIT_RENAME_ERRORS.has(codeOf(error) ?? "");
 }
 
 function safeError(code: QualityStoreError["code"]): QualityStoreError {
@@ -1256,13 +1276,13 @@ async function verifyPrivateLedgerEvent(
   paths: PrivateLedgerPaths,
   wantedId: string,
   wantedLine: Buffer,
-): Promise<boolean> {
+): Promise<true | false | "unknown"> {
   let tree: Awaited<ReturnType<typeof openPrivateLedgerTree>> | undefined;
   try {
     tree = await openPrivateLedgerTree(paths);
     const snapshot = await readPrivateLedgerFile(anchoredPath(tree.ledger, basename(paths.eventsFile)));
     return snapshot.events.some((event) => event.eventId === wantedId && Buffer.from(`${canonicalJson(event)}\n`).equals(wantedLine));
-  } catch { return false; }
+  } catch { return "unknown"; }
   finally { if (tree) await closePrivateLedgerTree(tree); }
 }
 
@@ -1280,7 +1300,8 @@ async function appendPrivateLedgerEventLocked(
   let tempPath: string | undefined;
   let tempCreated = false;
   let renamed = false;
-  let renamePossible = false;
+  let renameAttempted = false;
+  let renameCompleted = false;
   let validating = false;
   const assertCurrent = async (): Promise<void> => {
     try { await assertPrivateLedgerTreeCurrent(paths, tree, lockIdentity); }
@@ -1324,8 +1345,9 @@ async function appendPrivateLedgerEventLocked(
     } finally { await closeQuietly(handle); }
     await assertCurrent();
     await fault(options.injectFault, { scope: "ledger", operation: "rename", timing: "before" });
-    renamePossible = true;
+    renameAttempted = true;
     await rename(tempPath, anchoredPath(tree.ledger, basename(paths.eventsFile)));
+    renameCompleted = true;
     renamed = true;
     await fault(options.injectFault, { scope: "ledger", operation: "rename", timing: "after" });
     await fault(options.injectFault, { scope: "ledger", operation: "parent_fsync", timing: "before" });
@@ -1334,13 +1356,17 @@ async function appendPrivateLedgerEventLocked(
     await assertCurrent();
     return { status: "committed" };
   } catch (error) {
-    if (validating || error instanceof PrivateLedgerValidationError || error instanceof PrivateLedgerAnchorError) throw error;
     if (error instanceof PrivateLedgerDuplicateError) throw error;
-    if (renamePossible) {
-      return (await verifyPrivateLedgerEvent(paths, eventId, line))
-        ? { status: "committed_durability_uncertain" }
-        : { status: "indeterminate" };
+    if (renameCompleted) {
+      const verified = await verifyPrivateLedgerEvent(paths, eventId, line);
+      return verified === true ? { status: "committed_durability_uncertain" } : { status: "indeterminate" };
     }
+    if (renameAttempted) {
+      const verified = await verifyPrivateLedgerEvent(paths, eventId, line);
+      if (verified === true) return { status: "committed_durability_uncertain" };
+      if (verified === "unknown" && !definitelyPreCommitRenameFailure(error)) return { status: "indeterminate" };
+    }
+    if (validating || error instanceof PrivateLedgerValidationError || error instanceof PrivateLedgerAnchorError) throw error;
     if (error instanceof QualityStoreError) throw error;
     throw safeError("integrity");
   } finally {
@@ -1367,6 +1393,53 @@ export async function appendPrivateLedgerEvent(
       return appendPrivateLedgerEventLocked(event, paths, tree, lockIdentity, options);
     }, options.lockOptions);
   } catch (error) {
+    if (error instanceof PrivateLedgerAnchorError) throw error.anchorCause;
+    if (error instanceof PrivateLedgerValidationError) throw error.validationCause;
+    if (error instanceof PrivateLedgerDuplicateError || error instanceof QualityStoreError) throw error;
+    const code = codeOf(error);
+    if (code === "lock_timeout" || code === "lock_unavailable") throw error as CorpusLockError;
+    throw safeError("integrity");
+  } finally { await closePrivateLedgerTree(tree); }
+}
+
+/** Execute filesystem publication and its authoritative ledger append beneath
+ * one pinned-root ledger lock. The callback must not retain rootPath. */
+export async function withPrivateLedgerTransaction<T>(
+  root: string,
+  layout: PrivateLedgerLayout,
+  operation: (transaction: PrivateLedgerTransaction) => Promise<T>,
+  lockOptions: LockOptions = {},
+): Promise<T> {
+  const paths = await ensurePrivateLedger(root, layout);
+  const tree = await openPrivateLedgerTree(paths);
+  try {
+    const anchoredLock = anchoredPath(tree.ledger, basename(paths.lockFile));
+    await assertLockSafe(anchoredLock);
+    return await withCorpusLock(anchoredLock, async (lockIdentity) => {
+      const assertCurrent = () => assertPrivateLedgerTreeCurrent(paths, tree, lockIdentity);
+      await assertCurrent();
+      let snapshot = await readPrivateLedgerFile(anchoredPath(tree.ledger, basename(paths.eventsFile)));
+      if (!snapshot.present) {
+        const handle = await open(anchoredPath(tree.ledger, basename(paths.eventsFile)), constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY, FILE_MODE);
+        try { await handle.chmod(FILE_MODE); await handle.sync(); } finally { await closeQuietly(handle); }
+        await tree.ledger.sync();
+        await assertCurrent();
+        snapshot = await readPrivateLedgerFile(anchoredPath(tree.ledger, basename(paths.eventsFile)));
+      }
+      const transaction: PrivateLedgerTransaction = Object.freeze({
+        rootPath: anchoredPath(tree.root),
+        events: Object.freeze([...snapshot.events]),
+        assertCurrent,
+        append: (event, options = {}) => appendPrivateLedgerEventLocked(event, paths, tree, lockIdentity, options),
+      });
+      let result: T;
+      try { result = await operation(transaction); }
+      catch (error) { throw new PrivateLedgerOperationError(error); }
+      await assertCurrent();
+      return result;
+    }, lockOptions);
+  } catch (error) {
+    if (error instanceof PrivateLedgerOperationError) throw error.operationCause;
     if (error instanceof PrivateLedgerAnchorError) throw error.anchorCause;
     if (error instanceof PrivateLedgerValidationError) throw error.validationCause;
     if (error instanceof PrivateLedgerDuplicateError || error instanceof QualityStoreError) throw error;
