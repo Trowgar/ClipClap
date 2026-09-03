@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import { chmod, lstat, mkdir, mkdtemp, open, readdir, rename, rm, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -462,24 +462,29 @@ async function preparePublicationFiles(files: OutcomeCasePublication["files"], b
   }
 }
 
+function isPrivateRegularFile(stats: Stats): boolean {
+  return stats.isFile() && stats.nlink === 1 && (stats.mode & 0o7777) === FILE_MODE;
+}
+
+function samePrivateFileSnapshot(expected: Stats, actual: Stats): boolean {
+  return isPrivateRegularFile(expected) && isPrivateRegularFile(actual) &&
+    actual.dev === expected.dev && actual.ino === expected.ino && actual.size === expected.size &&
+    actual.mtimeMs === expected.mtimeMs && actual.ctimeMs === expected.ctimeMs;
+}
+
 async function readRegularPrivate(path: string, maximumBytes = Number.MAX_SAFE_INTEGER, afterRead?: () => void | Promise<void>): Promise<Uint8Array> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const initial = await handle.stat();
     const namedInitial = await lstat(path);
-    if (!initial.isFile() || initial.nlink !== 1 || (initial.mode & 0o7777) !== FILE_MODE || initial.size > maximumBytes) fail("publication_failed");
-    if (namedInitial.isSymbolicLink() || namedInitial.dev !== initial.dev || namedInitial.ino !== initial.ino) fail("publication_failed");
+    if (!isPrivateRegularFile(initial) || initial.size > maximumBytes || namedInitial.isSymbolicLink() || !samePrivateFileSnapshot(initial, namedInitial)) fail("publication_failed");
     const bytes = Buffer.allocUnsafe(initial.size);
     let offset = 0;
     while (offset < bytes.length) { const item = await handle.read(bytes, offset, bytes.length - offset, null); if (!item.bytesRead) break; offset += item.bytesRead; }
     await afterRead?.();
     const final = await handle.stat();
     const namedFinal = await lstat(path);
-    if (offset !== bytes.length || !final.isFile() || final.nlink !== 1 || (final.mode & 0o7777) !== FILE_MODE ||
-        final.size !== initial.size || final.dev !== initial.dev || final.ino !== initial.ino || final.mtimeMs !== initial.mtimeMs || final.ctimeMs !== initial.ctimeMs ||
-        namedFinal.isSymbolicLink() || !namedFinal.isFile() || namedFinal.nlink !== 1 || (namedFinal.mode & 0o7777) !== FILE_MODE ||
-        namedFinal.size !== final.size || namedFinal.dev !== final.dev || namedFinal.ino !== final.ino ||
-        namedFinal.mtimeMs !== final.mtimeMs || namedFinal.ctimeMs !== final.ctimeMs) fail("publication_failed");
+    if (offset !== bytes.length || !samePrivateFileSnapshot(initial, final) || namedFinal.isSymbolicLink() || !samePrivateFileSnapshot(final, namedFinal)) fail("publication_failed");
     return bytes;
   } finally { await handle.close(); }
 }
@@ -522,15 +527,15 @@ async function writeCapturedPayload(handle: Awaited<ReturnType<typeof open>>, pa
   } finally { await source.close().catch(() => undefined); }
 }
 
-async function privateFileDigest(path: string, limits: Readonly<{ minimum?: number; maximum?: number }> = {}): Promise<Readonly<{ size: number; sha256: Sha256 }>> {
+async function privateFileDigest(path: string, limits: Readonly<{ minimum?: number; maximum?: number; afterRead?: () => void | Promise<void> }> = {}): Promise<Readonly<{ size: number; sha256: Sha256 }>> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   const digest = createHash("sha256");
   try {
     const initial = await handle.stat();
     const namedInitial = await lstat(path);
-    if (!initial.isFile() || initial.nlink !== 1 || (initial.mode & 0o7777) !== FILE_MODE ||
+    if (!isPrivateRegularFile(initial) ||
         initial.size < (limits.minimum ?? 0) || initial.size > (limits.maximum ?? Number.MAX_SAFE_INTEGER)) fail("publication_failed");
-    if (namedInitial.isSymbolicLink() || namedInitial.dev !== initial.dev || namedInitial.ino !== initial.ino) fail("publication_failed");
+    if (namedInitial.isSymbolicLink() || !samePrivateFileSnapshot(initial, namedInitial)) fail("publication_failed");
     const chunk = Buffer.allocUnsafe(Math.min(1024 * 1024, Math.max(1, initial.size)));
     let offset = 0;
     while (offset < initial.size) {
@@ -539,10 +544,10 @@ async function privateFileDigest(path: string, limits: Readonly<{ minimum?: numb
       digest.update(chunk.subarray(0, item.bytesRead));
       offset += item.bytesRead;
     }
+    await limits.afterRead?.();
     const final = await handle.stat();
     const namedFinal = await lstat(path);
-    if (final.dev !== initial.dev || final.ino !== initial.ino || final.size !== initial.size || final.mtimeMs !== initial.mtimeMs || final.ctimeMs !== initial.ctimeMs ||
-        namedFinal.isSymbolicLink() || namedFinal.dev !== final.dev || namedFinal.ino !== final.ino) fail("publication_failed");
+    if (!samePrivateFileSnapshot(initial, final) || namedFinal.isSymbolicLink() || !samePrivateFileSnapshot(final, namedFinal)) fail("publication_failed");
     return Object.freeze({ size: initial.size, sha256: `sha256:${digest.digest("hex")}` as Sha256 });
   } finally { await handle.close(); }
 }
@@ -771,6 +776,14 @@ export async function publishOutcomeCase(input: OutcomeCasePublication): Promise
 }
 
 export type OutcomeValidationReport = Readonly<{ status: "valid" | "invalid"; counts: Readonly<{ eval: number; holdout: number }>; reasons: Readonly<Record<string, number>> }>;
+type OutcomeArtifactName = "transcript.json" | "source.mp4" | "recorded-responses.jsonl";
+type OutcomeValidationOptions = Readonly<{
+  now?: Date;
+  afterAnchor?: () => void | Promise<void>;
+  afterCaseAnchor?: (caseVersion: Sha256) => void | Promise<void>;
+  afterLedgerAnchor?: () => void | Promise<void>;
+  afterArtifactDigestRead?: (name: OutcomeArtifactName) => void | Promise<void>;
+}>;
 
 function addReason(reasons: Record<string, number>, code: string): void { reasons[code] = (reasons[code] ?? 0) + 1; }
 
@@ -867,12 +880,7 @@ async function auditPrivateHandle(directory: FileHandle, reasons: Record<string,
   }
 }
 
-async function validateOutcomeStoreLocked(root: string, options: Readonly<{
-  now?: Date;
-  afterAnchor?: () => void | Promise<void>;
-  afterCaseAnchor?: (caseVersion: Sha256) => void | Promise<void>;
-  afterLedgerAnchor?: () => void | Promise<void>;
-}> = {}): Promise<OutcomeValidationReport> {
+async function validateOutcomeStoreLocked(root: string, options: OutcomeValidationOptions = {}): Promise<OutcomeValidationReport> {
   const reasons: Record<string, number> = {};
   const counts = { eval: 0, holdout: 0 };
   const validationNow = (options.now ?? new Date()).getTime();
@@ -929,9 +937,9 @@ async function validateOutcomeStoreLocked(root: string, options: Readonly<{
         if (names.length !== REQUIRED_CASE_FILES.length || names.some((entry) => entry.isSymbolicLink() || !entry.isFile() || !REQUIRED_CASE_FILES.includes(entry.name as never))) { addReason(reasons, "unsafe_path"); continue; }
         const caseBytes = await readRegularPrivate(anchoredPath(directory, "case.json"), MAX_OUTCOME_CASE_BYTES);
         const [transcriptFile, sourceFile, recordedFile] = await Promise.all([
-          privateFileDigest(anchoredPath(directory, "transcript.json"), { maximum: MAX_OUTCOME_TRANSCRIPT_BYTES }),
-          privateFileDigest(anchoredPath(directory, "source.mp4"), { minimum: 1, maximum: MAX_OUTCOME_SOURCE_BYTES }),
-          privateFileDigest(anchoredPath(directory, "recorded-responses.jsonl"), { maximum: MAX_OUTCOME_RECORDED_RESPONSES_BYTES }),
+          privateFileDigest(anchoredPath(directory, "transcript.json"), { maximum: MAX_OUTCOME_TRANSCRIPT_BYTES, afterRead: () => options.afterArtifactDigestRead?.("transcript.json") }),
+          privateFileDigest(anchoredPath(directory, "source.mp4"), { minimum: 1, maximum: MAX_OUTCOME_SOURCE_BYTES, afterRead: () => options.afterArtifactDigestRead?.("source.mp4") }),
+          privateFileDigest(anchoredPath(directory, "recorded-responses.jsonl"), { maximum: MAX_OUTCOME_RECORDED_RESPONSES_BYTES, afterRead: () => options.afterArtifactDigestRead?.("recorded-responses.jsonl") }),
         ]);
         await assertChildCurrent(tree.cases, label.caseVersion, directory);
         const caseText = Buffer.from(caseBytes).toString("utf8");
@@ -965,12 +973,7 @@ async function validateOutcomeStoreLocked(root: string, options: Readonly<{
   return Object.freeze({ status: Object.keys(reasons).length === 0 ? "valid" : "invalid", counts: Object.freeze(counts), reasons: Object.freeze(reasons) });
 }
 
-export async function validateOutcomeStore(root: string, options: Readonly<{
-  now?: Date;
-  afterAnchor?: () => void | Promise<void>;
-  afterCaseAnchor?: (caseVersion: Sha256) => void | Promise<void>;
-  afterLedgerAnchor?: () => void | Promise<void>;
-}> = {}): Promise<OutcomeValidationReport> {
+export async function validateOutcomeStore(root: string, options: OutcomeValidationOptions = {}): Promise<OutcomeValidationReport> {
   try { return await withOutcomeValidationLock(root, () => validateOutcomeStoreLocked(root, options)); }
   catch (error) {
     const reasons = Object.freeze({ [(error instanceof OutcomeStoreError && error.code === "unsafe_path") ? "unsafe_path" : "missing_store"]: 1 });

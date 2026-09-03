@@ -1,4 +1,4 @@
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, symlink, truncate, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, readFile, readdir, readlink, rename, rm, symlink, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -518,6 +518,34 @@ describe("zero-outcome promotion", () => {
     await rm(join(root, "cases", promoted.caseVersion), { recursive: true });
     await mkdir(join(root, "cases", hash("orphan")), { mode: 0o700 });
     await expect(validateOutcomeStore(root)).resolves.toMatchObject({ status: "invalid", reasons: expect.objectContaining({ missing_or_invalid_case: 1, orphan_case: 1 }) });
+  });
+
+  it("fails closed if a private artifact mode changes while its digest is computed", async () => {
+    const root = await temporaryRoot();
+    const promoted = await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
+    const transcript = join(root, "cases", promoted.caseVersion, "transcript.json");
+    const result = await validateOutcomeStore(root, {
+      afterArtifactDigestRead: async (name) => {
+        if (name === "transcript.json") await chmod(transcript, 0o644);
+      },
+    });
+    expect(result).toMatchObject({ status: "invalid", reasons: { missing_or_invalid_case: 1 } });
+  });
+
+  it("fails closed if a private artifact gains a hardlink while its digest is computed", async () => {
+    const root = await temporaryRoot();
+    const promoted = await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
+    const transcript = join(root, "cases", promoted.caseVersion, "transcript.json");
+    let linked = false;
+    const result = await validateOutcomeStore(root, {
+      afterArtifactDigestRead: async (name) => {
+        if (name === "transcript.json" && !linked) {
+          linked = true;
+          await link(transcript, join(root, "digest-race-link"));
+        }
+      },
+    });
+    expect(result).toMatchObject({ status: "invalid", reasons: { missing_or_invalid_case: 1 } });
   });
 
   it("accepts ledger-only excluded labels, never counts/dedupes them, and validates an excluded case when present", async () => {
