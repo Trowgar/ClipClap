@@ -14,7 +14,7 @@ import {
 import { basename, join, resolve } from "node:path";
 
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
-import { withCorpusLock, type CorpusLockError } from "../feedback-learning/lock";
+import { withCorpusLock, type CorpusLockError, type LockOptions } from "../feedback-learning/lock";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -73,6 +73,42 @@ export type AppendLabelOptions = Readonly<{
   /** Runs under labels.lock immediately before publishing the new ledger bytes. */
   beforeCommit?: () => void | Promise<void>;
 }>;
+
+export type PrivateLedgerPaths = Readonly<{
+  root: string;
+  ledgerDir: string;
+  eventsFile: string;
+  lockFile: string;
+}>;
+
+export type PrivateLedgerLayout = Readonly<{
+  eventsFileName: string;
+  lockFileName: string;
+}>;
+
+export type AppendPrivateLedgerOptions = Readonly<{
+  injectFault?: QualityStoreFaultInjector;
+  tempSuffix?: string;
+  lockOptions?: LockOptions;
+  rejectDuplicate?: boolean;
+  validateBeforeCommit?: (events: readonly Readonly<Record<string, unknown>>[]) => void | Promise<void>;
+}>;
+
+export class PrivateLedgerDuplicateError extends Error {
+  readonly code = "duplicate_event" as const;
+
+  constructor() {
+    super("duplicate_event");
+    this.name = "PrivateLedgerDuplicateError";
+  }
+}
+
+class PrivateLedgerValidationError extends Error {
+  constructor(readonly validationCause: unknown) {
+    super("private_ledger_validation_failed");
+    this.name = "PrivateLedgerValidationError";
+  }
+}
 
 export type PublishBundleInput = Readonly<{
   kind: BundleKind;
@@ -415,7 +451,7 @@ async function readRegular(path: string): Promise<Uint8Array> {
   try {
     const current = await lstat(path);
     if (current.isSymbolicLink() || !current.isFile()) throw safeError("unsafe_path");
-    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const stats = await handle.stat();
     if (!stats.isFile() || stats.nlink !== 1) throw safeError("unsafe_path");
     const bytes = await handle.readFile();
@@ -602,7 +638,7 @@ async function openTree(root: string): Promise<{ paths: QualityPaths; root: File
 async function assertLockSafe(path: string): Promise<void> {
   let handle: FileHandle | undefined;
   try {
-    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const current = await handle.stat();
     if (!current.isFile() || current.nlink !== 1) throw safeError("unsafe_path");
   } catch (error) {
@@ -1049,6 +1085,249 @@ export async function appendLabelEvent(
   await assertLockSafe(paths.labelsLock);
   try {
     return await withCorpusLock(paths.labelsLock, () => appendLabelEventLocked(event, paths.root, options));
+  } catch (error) {
+    if (error instanceof QualityStoreError) throw error;
+    const code = codeOf(error);
+    if (code === "lock_timeout" || code === "lock_unavailable") throw error as CorpusLockError;
+    throw safeError("integrity");
+  }
+}
+
+function privateLedgerNames(layout: PrivateLedgerLayout): PrivateLedgerLayout {
+  if (
+    !layout ||
+    typeof layout !== "object" ||
+    Array.isArray(layout) ||
+    Object.keys(layout).sort().join(",") !== "eventsFileName,lockFileName" ||
+    typeof layout.eventsFileName !== "string" ||
+    typeof layout.lockFileName !== "string" ||
+    !/^[a-z][a-z0-9-]{0,63}\.jsonl$/.test(layout.eventsFileName) ||
+    !/^[a-z][a-z0-9-]{0,63}\.lock$/.test(layout.lockFileName)
+  ) throw safeError("invalid_input");
+  validateComponent(layout.eventsFileName);
+  validateComponent(layout.lockFileName);
+  return Object.freeze({ eventsFileName: layout.eventsFileName, lockFileName: layout.lockFileName });
+}
+
+export async function ensurePrivateLedger(
+  root: string,
+  layout: PrivateLedgerLayout,
+): Promise<PrivateLedgerPaths> {
+  const checkedRoot = validateRoot(root);
+  const names = privateLedgerNames(layout);
+  await assertNoSymlinkComponents(checkedRoot);
+  await ensureDirectory(checkedRoot);
+  const ledgerDir = join(checkedRoot, "ledger");
+  await ensureDirectory(ledgerDir);
+  return Object.freeze({
+    root: checkedRoot,
+    ledgerDir,
+    eventsFile: join(ledgerDir, names.eventsFileName),
+    lockFile: join(ledgerDir, names.lockFileName),
+  });
+}
+
+export async function ensurePrivateDirectories(root: string, directoryNames: readonly string[]): Promise<void> {
+  const checkedRoot = validateRoot(root);
+  if (!Array.isArray(directoryNames) || new Set(directoryNames).size !== directoryNames.length) throw safeError("invalid_input");
+  const names = directoryNames.map((name) => validateComponent(name));
+  await assertNoSymlinkComponents(checkedRoot);
+  await ensureDirectory(checkedRoot);
+  for (const name of names) await ensureDirectory(join(checkedRoot, name));
+}
+
+async function openPrivateLedgerTree(paths: PrivateLedgerPaths): Promise<{ root: FileHandle; ledger: FileHandle }> {
+  const root = await openRootAnchored(paths.root);
+  let ledger: FileHandle | undefined;
+  try {
+    ledger = await openDirectory(anchoredPath(root, "ledger"));
+    return { root, ledger };
+  } catch (error) {
+    await closeQuietly(ledger);
+    await closeQuietly(root);
+    throw error;
+  }
+}
+
+async function closePrivateLedgerTree(tree: { root: FileHandle; ledger: FileHandle }): Promise<void> {
+  await closeQuietly(tree.ledger);
+  await closeQuietly(tree.root);
+}
+
+function parseCanonicalLedger(bytes: Uint8Array): Readonly<Record<string, unknown>>[] {
+  if (bytes.byteLength === 0) return [];
+  const text = Buffer.from(bytes).toString("utf8");
+  if (!text.endsWith("\n")) throw safeError("integrity");
+  const result: Record<string, unknown>[] = [];
+  for (const line of text.slice(0, -1).split("\n")) {
+    if (!line) throw safeError("integrity");
+    let value: unknown;
+    try { value = JSON.parse(line); } catch { throw safeError("integrity"); }
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw safeError("integrity");
+    let normalized: string;
+    try { normalized = canonicalJson(value); } catch { throw safeError("integrity"); }
+    if (normalized !== line) throw safeError("integrity");
+    result.push(value as Record<string, unknown>);
+  }
+  return result;
+}
+
+async function readPrivateLedgerFile(path: string): Promise<{ bytes: Uint8Array; events: Readonly<Record<string, unknown>>[] }> {
+  let bytes: Uint8Array<ArrayBufferLike> = new Uint8Array();
+  try {
+    const current = await lstat(path);
+    if (current.isSymbolicLink() || !current.isFile() || current.nlink !== 1) throw safeError("unsafe_path");
+    bytes = await readRegular(path);
+  }
+  catch (error) {
+    if (codeOf(error) !== "ENOENT") throw error;
+  }
+  return { bytes, events: parseCanonicalLedger(bytes) };
+}
+
+async function cleanupPrivateLedgerTemps(ledger: FileHandle, eventsFileName: string): Promise<void> {
+  const prefix = `.${eventsFileName}.tmp-`;
+  for (const entry of await entries(ledger)) {
+    if (!entry.name.startsWith(prefix)) continue;
+    if (!/^[a-z0-9-]{1,64}$/.test(entry.name.slice(prefix.length)) || !entry.isFile() || entry.isSymbolicLink()) {
+      throw safeError("unsafe_path");
+    }
+    const path = anchoredPath(ledger, entry.name);
+    let handle: FileHandle | undefined;
+    try {
+      handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+      const stats = await handle.stat();
+      if (!stats.isFile() || stats.nlink !== 1) throw safeError("unsafe_path");
+    } finally { await closeQuietly(handle); }
+    await unlink(path);
+  }
+}
+
+async function verifyPrivateLedgerEvent(
+  paths: PrivateLedgerPaths,
+  wantedId: string,
+  wantedLine: Buffer,
+): Promise<boolean> {
+  let tree: Awaited<ReturnType<typeof openPrivateLedgerTree>> | undefined;
+  try {
+    tree = await openPrivateLedgerTree(paths);
+    const snapshot = await readPrivateLedgerFile(anchoredPath(tree.ledger, basename(paths.eventsFile)));
+    return snapshot.events.some((event) => event.eventId === wantedId && Buffer.from(`${canonicalJson(event)}\n`).equals(wantedLine));
+  } catch { return false; }
+  finally { if (tree) await closePrivateLedgerTree(tree); }
+}
+
+async function appendPrivateLedgerEventLocked(
+  event: QualityLabelEvent,
+  paths: PrivateLedgerPaths,
+  options: AppendPrivateLedgerOptions,
+): Promise<CommitResult> {
+  const eventId = eventIdOf(event);
+  let line: Buffer;
+  try { line = Buffer.from(`${canonicalJson(event)}\n`); }
+  catch { throw safeError("invalid_input"); }
+  let tree: Awaited<ReturnType<typeof openPrivateLedgerTree>> | undefined;
+  let tempPath: string | undefined;
+  let tempCreated = false;
+  let renamed = false;
+  let renamePossible = false;
+  let validating = false;
+  try {
+    tree = await openPrivateLedgerTree(paths);
+    await cleanupPrivateLedgerTemps(tree.ledger, basename(paths.eventsFile));
+    const current = await readPrivateLedgerFile(anchoredPath(tree.ledger, basename(paths.eventsFile)));
+    const duplicate = current.events.find((item) => item.eventId === eventId);
+    if (duplicate) {
+      if (options.rejectDuplicate) throw new PrivateLedgerDuplicateError();
+      if (!Buffer.from(`${canonicalJson(duplicate)}\n`).equals(line)) throw safeError("integrity");
+      await restoreLedgerMode(anchoredPath(tree.ledger, basename(paths.eventsFile)));
+      return { status: "noop" };
+    }
+    validating = true;
+    try { await options.validateBeforeCommit?.(Object.freeze([...current.events])); }
+    catch (error) { throw new PrivateLedgerValidationError(error); }
+    validating = false;
+    const tempSuffix = options.tempSuffix ?? randomBytes(12).toString("hex");
+    if (!/^[0-9a-z-]{1,64}$/.test(tempSuffix)) throw safeError("invalid_input");
+    tempPath = anchoredPath(tree.ledger, `.${basename(paths.eventsFile)}.tmp-${tempSuffix}`);
+    const handle = await open(tempPath, constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW | constants.O_WRONLY, FILE_MODE);
+    tempCreated = true;
+    try {
+      const stats = await handle.stat();
+      if (!stats.isFile() || stats.nlink !== 1) throw safeError("unsafe_path");
+      await handle.chmod(FILE_MODE);
+      await fault(options.injectFault, { scope: "ledger", operation: "write", timing: "before" });
+      await writeAll(handle, Buffer.concat([Buffer.from(current.bytes), line]));
+      await fault(options.injectFault, { scope: "ledger", operation: "write", timing: "after" });
+      await fault(options.injectFault, { scope: "ledger", operation: "file_fsync", timing: "before" });
+      await handle.sync();
+      await fault(options.injectFault, { scope: "ledger", operation: "file_fsync", timing: "after" });
+      await fault(options.injectFault, { scope: "ledger", operation: "close", timing: "before" });
+      await handle.close();
+      await fault(options.injectFault, { scope: "ledger", operation: "close", timing: "after" });
+    } finally { await closeQuietly(handle); }
+    await fault(options.injectFault, { scope: "ledger", operation: "rename", timing: "before" });
+    renamePossible = true;
+    await rename(tempPath, anchoredPath(tree.ledger, basename(paths.eventsFile)));
+    renamed = true;
+    await fault(options.injectFault, { scope: "ledger", operation: "rename", timing: "after" });
+    await fault(options.injectFault, { scope: "ledger", operation: "parent_fsync", timing: "before" });
+    await tree.ledger.sync();
+    await fault(options.injectFault, { scope: "ledger", operation: "parent_fsync", timing: "after" });
+    return { status: "committed" };
+  } catch (error) {
+    if (validating || error instanceof PrivateLedgerValidationError) throw error;
+    if (error instanceof PrivateLedgerDuplicateError) throw error;
+    if (renamePossible) {
+      return (await verifyPrivateLedgerEvent(paths, eventId, line))
+        ? { status: "committed_durability_uncertain" }
+        : { status: "indeterminate" };
+    }
+    if (error instanceof QualityStoreError) throw error;
+    throw safeError("integrity");
+  } finally {
+    if (!renamed && tempCreated) {
+      try { await unlink(tempPath!); } catch { /* only our temp */ }
+    }
+    if (tree) await closePrivateLedgerTree(tree);
+  }
+}
+
+export async function appendPrivateLedgerEvent(
+  event: QualityLabelEvent,
+  root: string,
+  layout: PrivateLedgerLayout,
+  options: AppendPrivateLedgerOptions = {},
+): Promise<CommitResult> {
+  const paths = await ensurePrivateLedger(root, layout);
+  await assertLockSafe(paths.lockFile);
+  try {
+    return await withCorpusLock(paths.lockFile, () => appendPrivateLedgerEventLocked(event, paths, options), options.lockOptions);
+  } catch (error) {
+    if (error instanceof PrivateLedgerValidationError) throw error.validationCause;
+    if (error instanceof PrivateLedgerDuplicateError || error instanceof QualityStoreError) throw error;
+    const code = codeOf(error);
+    if (code === "lock_timeout" || code === "lock_unavailable") throw error as CorpusLockError;
+    throw safeError("integrity");
+  }
+}
+
+export async function readPrivateLedgerEvents(
+  root: string,
+  layout: PrivateLedgerLayout,
+  lockOptions: LockOptions = {},
+): Promise<ReadonlyArray<Readonly<Record<string, unknown>>>> {
+  const paths = await ensurePrivateLedger(root, layout);
+  await assertLockSafe(paths.lockFile);
+  try {
+    return await withCorpusLock(paths.lockFile, async () => {
+      const tree = await openPrivateLedgerTree(paths);
+      try {
+        const snapshot = await readPrivateLedgerFile(anchoredPath(tree.ledger, basename(paths.eventsFile)));
+        if (snapshot.bytes.byteLength > 0) await restoreLedgerMode(anchoredPath(tree.ledger, basename(paths.eventsFile)));
+        return Object.freeze([...snapshot.events]);
+      } finally { await closePrivateLedgerTree(tree); }
+    }, lockOptions);
   } catch (error) {
     if (error instanceof QualityStoreError) throw error;
     const code = codeOf(error);
