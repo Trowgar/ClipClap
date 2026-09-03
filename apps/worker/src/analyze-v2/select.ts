@@ -9,7 +9,7 @@ export interface SelectionResult {
 
 /** Overlap above this share of the SHORTER clip makes two clips the same
  *  moment for a viewer. */
-const NMS_OVERLAP_FRAC = 0.3;
+const NMS_OVERLAP_FRAC = 0.2;
 
 /**
  * The one definition of "these two clips are the same moment".

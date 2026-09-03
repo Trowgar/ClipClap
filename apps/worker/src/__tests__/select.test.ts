@@ -73,11 +73,18 @@ describe("selectAndOrder", () => {
     expect(r.selected[0].endSec).toBe(60);
   });
 
-  it("keeps small overlaps (<30% of shorter)", () => {
+  it("keeps small overlaps (<20% of shorter)", () => {
     const a = clip(0, 60, 0.9);
     const b = clip(55, 120, 0.7); // 5s overlap of a 65s clip
     const r = selectAndOrder([a, b], cfg);
     expect(r.selected).toHaveLength(2);
+  });
+
+  it("drops the repeated beat seen in production feedback", () => {
+    const setup = clip(317.2, 373.2, 0.76);
+    const payoff = clip(364.8, 399.6, 0.66); // 8.4s, 24% of the shorter clip
+    const r = selectAndOrder([setup, payoff], cfg);
+    expect(r.selected).toEqual([setup]);
   });
 
   it("charges short clips a score surcharge in the strong tier", () => {
