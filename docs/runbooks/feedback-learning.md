@@ -232,3 +232,59 @@ npm run feedback-quality-release -w @clipclap/worker -- --image registry.example
 Never retry a command after `durability_uncertain` or `commit_indeterminate` without inspecting the
 private store and ledger. Exact content-addressed replays are safe; an integrity mismatch is a hard
 stop. A failing or expired quality decision leaves production unchanged.
+
+## V4 zero-outcome recovery gate
+
+V4 evaluates jobs where the existing engine returned no clips. Keep this lane under the same
+private quality root; its data lives below `outcomes/` and must never be committed. Promote only
+reviewed, complete `NO_VIABLE_MOMENTS` jobs. Exclude technical failures, partial transcripts,
+missing source ranges, song/music gates, source-limited inputs, and subjective examples.
+
+The minimum release corpus is four `recoverable_false_negative` and four `valid_empty` cases, with
+at least one case of each class assigned to the undisclosed holdout before tuning. The composite
+clip gate must independently contain at least five positives and eight confirmed negatives; at
+least three negatives must exercise selection/rescue rather than render-only behavior.
+
+Put every review decision in a regular `0600` JSON file and use the read-only promotion path:
+
+```bash
+npm run outcome-promote -w @clipclap/worker -- \
+  --decision-file /trusted/private/outcome-review.json \
+  --root apps/worker/.corpus/feedback-quality-gate
+npm run outcome-validate -w @clipclap/worker -- \
+  --root apps/worker/.corpus/feedback-quality-gate
+```
+
+Prepare one closed `0600` analyzer-config envelope with `outcomeRecoveryMode=shadow`. Baseline and
+candidate must use the same commit, corpus, recorded responses, and all config values except that
+the runner forces baseline recovery off. A prompt/model/request drift requires the separately named
+three-attempt live lane; it must not silently reuse recordings.
+
+```bash
+export CLIPCLAP_COMMIT_SHA="$(git rev-parse HEAD)"
+npm run outcome-observe -w @clipclap/worker -- \
+  --mode baseline --root apps/worker/.corpus/feedback-quality-gate \
+  --config-file /trusted/private/outcome-config.json
+npm run outcome-observe -w @clipclap/worker -- \
+  --mode candidate --root apps/worker/.corpus/feedback-quality-gate \
+  --config-file /trusted/private/outcome-config.json
+npm run outcome-recovery-gate -w @clipclap/worker -- \
+  --root apps/worker/.corpus/feedback-quality-gate \
+  --baseline <sha256-id> --candidate <sha256-id> \
+  --clip-decision <decision-id> --config-file /trusted/private/outcome-config.json
+```
+
+A pass requires at least two recovered cases and 30% recoverable recall, 100% valid-empty
+precision, no positive loss or confirmed-negative worsening, no keep-false/gate resurrection, at
+most six recovery candidates, and at most one critic batch. The decision is content-addressed and
+cannot outlive any input observation or the clip gate. It binds the shadow engine to its exact
+`on` activation fingerprint; the production release adapter recomputes that fingerprint from the
+snapshotted production environment before allowing `ANALYZE_OUTCOME_RECOVERY_V1=on`.
+
+Deploy shadow without an outcome decision ID. Keep customer output baseline-identical and observe
+at least five terminal eligible decisions or seven days, whichever is later. Only then create fresh
+clip and outcome decisions, set `ANALYZE_OUTCOME_RECOVERY_V1=on` plus the matching
+`OUTCOME_RECOVERY_GATE_DECISION_ID`, drain the analyze queue, and use the immutable release adapter.
+Any V4 `CUTOFF`, `QUALITY`, or `BORING` feedback pauses rollout for review; a false positive,
+resurrection, render/technical/billing regression, or attribution mismatch immediately returns the
+mode to `off`.
