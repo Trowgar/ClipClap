@@ -99,6 +99,7 @@ export interface OutcomeCasePublication {
   readonly afterCaseRename?: () => void | Promise<void>;
   readonly beforeSnapshotDestinationOpen?: (path: string) => void | Promise<void>;
   readonly injectLedgerFault?: QualityStoreFaultInjector;
+  readonly afterRollbackSync?: () => void | Promise<void>;
 }
 
 export interface OutcomePromotionDependencies {
@@ -439,7 +440,7 @@ async function preparePublicationFiles(files: OutcomeCasePublication["files"], b
   }
 }
 
-async function readRegularPrivate(path: string, maximumBytes = Number.MAX_SAFE_INTEGER): Promise<Uint8Array> {
+async function readRegularPrivate(path: string, maximumBytes = Number.MAX_SAFE_INTEGER, afterRead?: () => void | Promise<void>): Promise<Uint8Array> {
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const initial = await handle.stat();
@@ -449,10 +450,14 @@ async function readRegularPrivate(path: string, maximumBytes = Number.MAX_SAFE_I
     const bytes = Buffer.allocUnsafe(initial.size);
     let offset = 0;
     while (offset < bytes.length) { const item = await handle.read(bytes, offset, bytes.length - offset, null); if (!item.bytesRead) break; offset += item.bytesRead; }
+    await afterRead?.();
     const final = await handle.stat();
     const namedFinal = await lstat(path);
-    if (offset !== bytes.length || final.size !== initial.size || final.dev !== initial.dev || final.ino !== initial.ino ||
-        namedFinal.isSymbolicLink() || namedFinal.dev !== final.dev || namedFinal.ino !== final.ino) fail("publication_failed");
+    if (offset !== bytes.length || !final.isFile() || final.nlink !== 1 || (final.mode & 0o7777) !== FILE_MODE ||
+        final.size !== initial.size || final.dev !== initial.dev || final.ino !== initial.ino || final.mtimeMs !== initial.mtimeMs || final.ctimeMs !== initial.ctimeMs ||
+        namedFinal.isSymbolicLink() || !namedFinal.isFile() || namedFinal.nlink !== 1 || (namedFinal.mode & 0o7777) !== FILE_MODE ||
+        namedFinal.size !== final.size || namedFinal.dev !== final.dev || namedFinal.ino !== final.ino ||
+        namedFinal.mtimeMs !== final.mtimeMs || namedFinal.ctimeMs !== final.ctimeMs) fail("publication_failed");
     return bytes;
   } finally { await handle.close(); }
 }
@@ -584,7 +589,10 @@ async function assertExactExisting(directory: FileHandle, files: OutcomeCasePubl
   const entries = await readdir(anchoredPath(directory), { withFileTypes: true });
   if (entries.length !== REQUIRED_CASE_FILES.length || entries.some((entry) => !entry.isFile() || entry.isSymbolicLink() || !REQUIRED_CASE_FILES.includes(entry.name as never))) fail("publication_failed");
   for (const name of REQUIRED_CASE_FILES) {
-    const actual = await privateFileDigest(anchoredPath(directory, name));
+    const actual = await privateFileDigest(
+      anchoredPath(directory, name),
+      name === "source.mp4" ? { minimum: 1, maximum: MAX_OUTCOME_SOURCE_BYTES } : {},
+    );
     if (actual.size !== capturedPayloadSize(files[name]) || actual.sha256 !== capturedPayloadSha256(files[name])) fail("publication_failed");
   }
 }
@@ -628,6 +636,7 @@ export async function publishOutcomeCase(input: OutcomeCasePublication): Promise
       afterCaseRename: undefined,
       beforeSnapshotDestinationOpen: undefined,
       injectLedgerFault: undefined,
+      afterRollbackSync: undefined,
     };
     await validatePublication(capturedInput);
     const candidateSource = capturedInput.files["source.mp4"] instanceof Uint8Array ? sha256(Buffer.from(capturedInput.files["source.mp4"])) : capturedInput.files["source.mp4"].sha256;
@@ -654,6 +663,8 @@ export async function publishOutcomeCase(input: OutcomeCasePublication): Promise
             if (stats.dev !== createdIdentity.dev || stats.ino !== createdIdentity.ino) return fail("publication_failed");
           } finally { await rollback.close().catch(() => undefined); }
           await rm(anchoredPath(cases, rollbackName), { recursive: true, force: false });
+          await cases.sync();
+          await input.afterRollbackSync?.();
           createdIdentity = undefined;
         };
         try {
@@ -661,7 +672,7 @@ export async function publishOutcomeCase(input: OutcomeCasePublication): Promise
           await assertCurrent();
           for (const label of authority.active) {
             if (label.eventId === input.label.eventId) fail("duplicate_event");
-            if ((await readStoredCase(cases, label.caseVersion)).sourceSha256 === candidateSource) fail("duplicate_source");
+            if (label.disposition !== "exclude" && (await readStoredCase(cases, label.caseVersion)).sourceSha256 === candidateSource) fail("duplicate_source");
             await assertCurrent();
           }
           let caseCommitted = false;
@@ -832,6 +843,7 @@ export async function validateOutcomeStore(root: string, options: Readonly<{
   now?: Date;
   afterAnchor?: () => void | Promise<void>;
   afterCaseAnchor?: (caseVersion: Sha256) => void | Promise<void>;
+  afterLedgerAnchor?: () => void | Promise<void>;
 }> = {}): Promise<OutcomeValidationReport> {
   const reasons: Record<string, number> = {};
   const counts = { eval: 0, holdout: 0 };
@@ -853,7 +865,7 @@ export async function validateOutcomeStore(root: string, options: Readonly<{
       if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1) addReason(reasons, "required_entry_type");
     }
     if (Object.keys(reasons).length > 0) return Object.freeze({ status: "invalid", counts: Object.freeze(counts), reasons: Object.freeze(reasons) });
-    const ledger = Buffer.from(await readRegularPrivate(anchoredPath(tree.ledger, "outcomes.jsonl"))).toString("utf8");
+    const ledger = Buffer.from(await readRegularPrivate(anchoredPath(tree.ledger, "outcomes.jsonl"), Number.MAX_SAFE_INTEGER, options.afterLedgerAnchor)).toString("utf8");
     await assertValidationTreeCurrent(root, tree);
     if (ledger.length > 0 && !ledger.endsWith("\n")) addReason(reasons, "invalid_ledger");
     const active = new Map<string, OutcomeLabel>();
@@ -877,6 +889,11 @@ export async function validateOutcomeStore(root: string, options: Readonly<{
     for (const [eventId, label] of allLabels) {
       let directory: FileHandle | undefined;
       try {
+        try { await lstat(anchoredPath(tree.cases, label.caseVersion)); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT" && label.disposition === "exclude") continue;
+          throw error;
+        }
         directory = await openValidationDirectory(anchoredPath(tree.cases, label.caseVersion));
         await options.afterCaseAnchor?.(label.caseVersion);
         await assertChildCurrent(tree.cases, label.caseVersion, directory);
@@ -899,10 +916,10 @@ export async function validateOutcomeStore(root: string, options: Readonly<{
             (!Number.isFinite(validationNow) || new Date(parsed.materializedAt).getTime() > validationNow + MAX_OUTCOME_FUTURE_SKEW_MS) ||
             (parsed.disposition !== "exclude" && parsed.set !== label.set) || canonicalJson(parsed.expected) !== canonicalJson(label.expected)) addReason(reasons, "stale_case");
         else {
-          if (activeEventIds.has(eventId)) {
+          if (activeEventIds.has(eventId) && parsed.disposition !== "exclude") {
             if (activeSourceHashes.has(parsed.sourceSha256)) addReason(reasons, "duplicate_source");
             activeSourceHashes.add(parsed.sourceSha256);
-            counts[label.set!] += 1;
+            counts[parsed.set] += 1;
           }
         }
       } catch { addReason(reasons, "missing_or_invalid_case"); }

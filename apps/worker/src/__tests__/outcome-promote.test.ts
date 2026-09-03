@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import { appendOutcomeEvent } from "../feedback-quality/outcome-store";
+import { parseOutcomeLabel } from "../feedback-quality/outcome-types";
 import {
   createPrismaOutcomePromotionRepository,
   digestAnalyzeStep,
@@ -303,6 +304,21 @@ describe("zero-outcome promotion", () => {
     await expect(validateOutcomeStore(root)).resolves.toEqual({ status: "valid", counts: { eval: 0, holdout: 0 }, reasons: {} });
   });
 
+  it("fsyncs the cases parent before exposing a completed rollback", async () => {
+    const captured = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
+    await promoteOutcomeCase(decision(), deps(snapshot(), { publish: captured }));
+    const template = captured.mock.calls[0][0];
+    const root = await temporaryRoot();
+    const afterDurableRollback = vi.fn(() => { throw new Error("crash-after-rollback-fsync"); });
+    await expect(publishOutcomeCase({
+      ...template, root, files: { ...template.files, "source.mp4": Buffer.from("source-bytes") },
+      injectLedgerFault: (point) => { if (point.operation === "write" && point.timing === "before") throw new Error("ledger-write-failed"); },
+      afterRollbackSync: afterDurableRollback,
+    })).rejects.toBeDefined();
+    expect(afterDurableRollback).toHaveBeenCalledOnce();
+    await expect(validateOutcomeStore(root)).resolves.toEqual({ status: "valid", counts: { eval: 0, holdout: 0 }, reasons: {} });
+  });
+
   it("rolls back through the pinned cases fd after the public cases path is replaced", async () => {
     const captured = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
     await promoteOutcomeCase(decision(), deps(snapshot(), { publish: captured }));
@@ -488,6 +504,60 @@ describe("zero-outcome promotion", () => {
     await expect(validateOutcomeStore(root)).resolves.toMatchObject({ status: "invalid", reasons: expect.objectContaining({ missing_or_invalid_case: 1, orphan_case: 1 }) });
   });
 
+  it("accepts ledger-only excluded labels, never counts/dedupes them, and validates an excluded case when present", async () => {
+    const root = await temporaryRoot();
+    const excluded = parseOutcomeLabel({
+      schemaVersion: 1, action: "label", eventId: "excluded-event", occurredAt: "2026-09-02T23:11:00.000Z",
+      caseVersion: hash("excluded-case"), disposition: "exclude", confidence: "high",
+      expected: { approvedWindows: [], forbiddenWindows: [] },
+    });
+    await appendOutcomeEvent(root, excluded);
+    await expect(validateOutcomeStore(root)).resolves.toEqual({ status: "valid", counts: { eval: 0, holdout: 0 }, reasons: {} });
+    await mkdir(join(root, "cases", excluded.caseVersion), { mode: 0o700 });
+    await expect(validateOutcomeStore(root)).resolves.toMatchObject({ status: "invalid", reasons: expect.objectContaining({ unsafe_path: 1 }) });
+    await rm(join(root, "cases", excluded.caseVersion), { recursive: true });
+    await appendOutcomeEvent(root, { schemaVersion: 1, action: "retire", eventId: "retire-excluded", occurredAt: "2026-09-02T23:12:00.000Z", targetEventId: excluded.eventId });
+    await expect(validateOutcomeStore(root)).resolves.toEqual({ status: "valid", counts: { eval: 0, holdout: 0 }, reasons: {} });
+  });
+
+  it("validates a present excluded case but omits it from counts and source dedupe", async () => {
+    const capture = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
+    await promoteOutcomeCase(decision(), deps(snapshot(), { publish: capture }));
+    const template = capture.mock.calls[0][0];
+    const raw = JSON.parse(Buffer.from(template.files["case.json"] as Uint8Array).toString("utf8"));
+    const { caseVersion: _oldVersion, set: _oldSet, ...base } = raw;
+    const body = { ...base, disposition: "exclude", expected: { approvedWindows: [], forbiddenWindows: [] } };
+    const caseVersion = sha256(canonicalJson(body));
+    const excluded: OutcomeCasePublication = {
+      root: await temporaryRoot(), caseVersion,
+      files: { ...template.files, "case.json": Buffer.from(`${canonicalJson({ ...body, caseVersion })}\n`), "source.mp4": Buffer.from("source-bytes") },
+      label: parseOutcomeLabel({
+        schemaVersion: 1, action: "label", eventId: "excluded-with-case", occurredAt: raw.materializedAt,
+        caseVersion, disposition: "exclude", confidence: "high", expected: { approvedWindows: [], forbiddenWindows: [] },
+      }),
+    };
+    await publishOutcomeCase(excluded);
+    await expect(validateOutcomeStore(excluded.root)).resolves.toEqual({ status: "valid", counts: { eval: 0, holdout: 0 }, reasons: {} });
+    await expect(publishOutcomeCase({
+      ...template, root: excluded.root, label: { ...template.label, eventId: "normal-after-exclude" },
+      files: { ...template.files, "source.mp4": Buffer.from("source-bytes") },
+    })).resolves.toMatchObject({ status: expect.stringMatching(/^committed/) });
+    await expect(validateOutcomeStore(excluded.root)).resolves.toEqual({ status: "valid", counts: { eval: 1, holdout: 0 }, reasons: {} });
+  });
+
+  it("rejects an oversized existing source before streaming it during exact-match publication", async () => {
+    const root = await temporaryRoot();
+    const captured = vi.fn(async (_input: OutcomeCasePublication) => ({ status: "committed" as const }));
+    await promoteOutcomeCase(decision(), deps(snapshot(), { publish: captured }));
+    const template = captured.mock.calls[0][0];
+    const promoted = await publishOutcomeCase({ ...template, root, files: { ...template.files, "source.mp4": Buffer.from("source-bytes") } });
+    expect(promoted.status).toMatch(/committed/);
+    await appendOutcomeEvent(root, { schemaVersion: 1, action: "retire", eventId: "retire-before-replay", occurredAt: "2026-09-02T23:12:00.000Z", targetEventId: template.label.eventId });
+    await truncate(join(root, "cases", template.caseVersion, "source.mp4"), MAX_OUTCOME_SOURCE_BYTES + 1);
+    const replay = { ...template, label: { ...template.label, eventId: "replay-event" }, root, files: { ...template.files, "source.mp4": Buffer.from("source-bytes") } };
+    await expect(publishOutcomeCase(replay)).rejects.toMatchObject({ code: "publication_failed" });
+  });
+
   it("caps stored source size before streaming its digest", async () => {
     const root = await temporaryRoot();
     const promoted = await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
@@ -520,6 +590,23 @@ describe("zero-outcome promotion", () => {
     delete raw.freshnessSha256;
     await writeFile(casePath, `${canonicalJson(raw)}\n`, { mode: 0o600 });
     await expect(validateOutcomeStore(root)).resolves.toMatchObject({ status: "invalid", reasons: { missing_or_invalid_case: 1 } });
+  });
+
+  it("fails closed when the pinned ledger is mutated in place at the same size", async () => {
+    const root = await temporaryRoot();
+    await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
+    const ledgerPath = join(root, "ledger", "outcomes.jsonl");
+    const result = await validateOutcomeStore(root, {
+      afterLedgerAnchor: async () => {
+        const bytes = await readFile(ledgerPath);
+        const changed = Buffer.from(bytes);
+        const offset = changed.indexOf(Buffer.from("outcome-event-1"));
+        changed[offset] = "x".charCodeAt(0);
+        expect(changed.byteLength).toBe(bytes.byteLength);
+        await writeFile(ledgerPath, changed, { mode: 0o600 });
+      },
+    });
+    expect(result.status).toBe("invalid");
   });
 
   it("uses the current clock by default to reject future materialization", async () => {
