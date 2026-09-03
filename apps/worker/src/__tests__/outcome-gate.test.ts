@@ -16,7 +16,7 @@ function result(index: number, disposition: "recoverable_false_negative" | "vali
 }
 
 function observation(mode: "baseline" | "candidate", results: readonly OutcomeObservationResult[]): OutcomeObservation {
-  const body = { schemaVersion: 1 as const, mode, commitSha: commit, engineFingerprint: hash(mode === "baseline" ? "off" : "on"), corpusDigest: hash("corpus"), runnerVersion: "outcome-observe-v1" as const, recordedResponsesDigest: hash("responses"), results };
+  const body = { schemaVersion: 1 as const, mode, createdAt: "2026-09-02T11:00:00.000Z", commitSha: commit, engineFingerprint: hash(mode === "baseline" ? "off" : "on"), corpusDigest: hash("corpus"), runnerVersion: "outcome-observe-v1" as const, recordedResponsesDigest: hash("responses"), results };
   return { ...body, observationId: sha256(canonicalJson(body)) };
 }
 
@@ -45,10 +45,10 @@ function dependencies(overrides: Partial<OutcomeGateDependencies> = {}): Outcome
 describe("composite outcome recovery gate", () => {
   it("publishes a content-addressed 24-hour aggregate-only pass", async () => {
     const value = fixture(); const publishDecision = vi.fn(async () => ({ status: "committed" as const }));
-    const decision = await decideOutcomeRecoveryGate({ baselineObservationId: value.baseline.observationId, candidateObservationId: value.candidate.observationId, clipDecisionId: value.clipDecision.decisionId, expectedCandidateEngineFingerprint: hash("on"), customerOutputsMatch: true }, dependencies({ publishDecision }));
+    const decision = await decideOutcomeRecoveryGate({ baselineObservationId: value.baseline.observationId, candidateObservationId: value.candidate.observationId, clipDecisionId: value.clipDecision.decisionId, expectedCandidateEngineFingerprint: hash("on"), expectedActivationEngineFingerprint: hash("activation-on"), customerOutputsMatch: true }, dependencies({ publishDecision }));
     expect(decision).toMatchObject({ verdict: "pass", clipDecisionId: value.clipDecision.decisionId, candidateCommitSha: commit, configSha256: hash("config"), metrics: { recoverableCases: 4, validEmptyCases: 4, recoveredCases: 2 } });
     expect(decision.decisionId).toBe(`outcome-decision:${sha256(canonicalJson(Object.fromEntries(Object.entries(decision).filter(([key]) => key !== "decisionId"))))}`);
-    expect(new Date(decision.expiresAt).getTime() - new Date(decision.createdAt).getTime()).toBe(24 * 60 * 60 * 1000);
+    expect(decision.expiresAt).toBe("2026-09-03T10:00:00.000Z");
     const report = (publishDecision.mock.calls as unknown as Array<[unknown, string, string]>)[0][1];
     expect(report).toBe(outcomeDecisionReport(decision));
     for (const label of value.labels) expect(report).not.toContain(label.caseVersion);
@@ -56,16 +56,17 @@ describe("composite outcome recovery gate", () => {
 
   it("fails closed when observations are stale or do not bind the clip commit", async () => {
     const value = fixture();
-    const stale = await decideOutcomeRecoveryGate({ baselineObservationId: value.baseline.observationId, candidateObservationId: value.candidate.observationId, clipDecisionId: value.clipDecision.decisionId, expectedCandidateEngineFingerprint: hash("on"), customerOutputsMatch: true }, dependencies({ loadObservation: async (id) => ({ observation: id === value.baseline.observationId ? value.baseline : value.candidate, observedAt: new Date("2026-09-01T11:59:59.999Z") }) }));
+    const staleObservation = (item: OutcomeObservation): OutcomeObservation => ({ ...item, createdAt: "2026-09-01T11:59:59.999Z" });
+    const stale = await decideOutcomeRecoveryGate({ baselineObservationId: value.baseline.observationId, candidateObservationId: value.candidate.observationId, clipDecisionId: value.clipDecision.decisionId, expectedCandidateEngineFingerprint: hash("on"), expectedActivationEngineFingerprint: hash("activation-on"), customerOutputsMatch: true }, dependencies({ loadObservation: async (id) => ({ observation: staleObservation(id === value.baseline.observationId ? value.baseline : value.candidate), observedAt: new Date("2026-09-02T11:00:00.000Z") }) }));
     expect(stale.reasons).toContain("stale_input");
     const wrongClip = { ...value.clipDecision, candidateCommitSha: "b".repeat(40) };
-    const mismatched = await decideOutcomeRecoveryGate({ baselineObservationId: value.baseline.observationId, candidateObservationId: value.candidate.observationId, clipDecisionId: value.clipDecision.decisionId, expectedCandidateEngineFingerprint: hash("on"), customerOutputsMatch: true }, dependencies({ loadClipDecision: async () => wrongClip }));
+    const mismatched = await decideOutcomeRecoveryGate({ baselineObservationId: value.baseline.observationId, candidateObservationId: value.candidate.observationId, clipDecisionId: value.clipDecision.decisionId, expectedCandidateEngineFingerprint: hash("on"), expectedActivationEngineFingerprint: hash("activation-on"), customerOutputsMatch: true }, dependencies({ loadClipDecision: async () => wrongClip }));
     expect(mismatched.reasons).toContain("fingerprint_mismatch");
   });
 
   it("does not let a render-only confirmed-negative population authorize V4", async () => {
     const value = fixture();
-    const decision = await decideOutcomeRecoveryGate({ baselineObservationId: value.baseline.observationId, candidateObservationId: value.candidate.observationId, clipDecisionId: value.clipDecision.decisionId, expectedCandidateEngineFingerprint: hash("on"), customerOutputsMatch: true }, dependencies({ loadClipEvidence: async () => ({ positiveCases: 5, confirmedNegativeCases: 8, selectionNegativeCases: 0, positiveLosses: 0, confirmedNegativeWorsening: 0 }) }));
+    const decision = await decideOutcomeRecoveryGate({ baselineObservationId: value.baseline.observationId, candidateObservationId: value.candidate.observationId, clipDecisionId: value.clipDecision.decisionId, expectedCandidateEngineFingerprint: hash("on"), expectedActivationEngineFingerprint: hash("activation-on"), customerOutputsMatch: true }, dependencies({ loadClipEvidence: async () => ({ positiveCases: 5, confirmedNegativeCases: 8, selectionNegativeCases: 0, positiveLosses: 0, confirmedNegativeWorsening: 0 }) }));
     expect(decision.reasons).toContain("insufficient_selection_negatives");
   });
 });

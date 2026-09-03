@@ -30,8 +30,10 @@ export async function runOutcomeRecoveryGate(argv: readonly string[], io: Io = i
   try { args = parse(argv); } catch { io.stderr(line({ operation: "outcome-recovery-gate", status: "failed", reasons: ["invalid_input"] })); return 2; }
   try {
     const config = await readOutcomeObservationConfig(args.configFile);
+    if (config.outcomeRecoveryMode !== "shadow") throw new Error();
+    const activationConfig = { ...config, outcomeRecoveryMode: "on" as const };
     const decision = await decideOutcomeRecoveryGate({ baselineObservationId: args.baseline, candidateObservationId: args.candidate, clipDecisionId: args.clipDecision,
-      expectedCandidateEngineFingerprint: sha256(canonicalJson(config)), customerOutputsMatch: config.outcomeRecoveryMode === "shadow" }, { root: join(args.root, "outcomes"), clipRoot: args.root });
+      expectedCandidateEngineFingerprint: sha256(canonicalJson(config)), expectedActivationEngineFingerprint: sha256(canonicalJson(activationConfig)), customerOutputsMatch: true }, { root: join(args.root, "outcomes"), clipRoot: args.root });
     const output = line({ operation: "outcome-recovery-gate", status: "committed", verdict: decision.verdict, reasons: decision.reasons,
       recoverableCases: decision.metrics.recoverableCases, validEmptyCases: decision.metrics.validEmptyCases, recoveredCases: decision.metrics.recoveredCases });
     io[decision.verdict === "pass" ? "stdout" : "stderr"](output); return decision.verdict === "pass" ? 0 : 1;

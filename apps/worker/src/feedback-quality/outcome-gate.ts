@@ -32,6 +32,7 @@ export type DecideOutcomeGateInput = Readonly<{
   candidateObservationId: Sha256;
   clipDecisionId: string;
   expectedCandidateEngineFingerprint: Sha256;
+  expectedActivationEngineFingerprint: Sha256;
   customerOutputsMatch: boolean;
 }>;
 
@@ -43,6 +44,7 @@ export type OutcomeGateDecision = Readonly<{
   candidateCommitSha: string;
   configSha256: string;
   outcomeEngineFingerprint: Sha256;
+  activationEngineFingerprint: Sha256;
   outcomeCorpusDigest: Sha256;
   runnerVersion: typeof OUTCOME_OBSERVATION_RUNNER_VERSION;
   baselineObservationId: Sha256;
@@ -96,10 +98,10 @@ function validReasons(value: unknown): value is readonly OutcomeGateReason[] {
 }
 
 function parseObservation(value: unknown, wantedId: Sha256): OutcomeObservation {
-  if (!exact(value, ["schemaVersion", "observationId", "mode", "commitSha", "engineFingerprint", "corpusDigest", "runnerVersion", "recordedResponsesDigest", "results"]) &&
-      !exact(value, ["schemaVersion", "observationId", "mode", "commitSha", "engineFingerprint", "corpusDigest", "runnerVersion", "recordedResponsesDigest", "results", "liveLane"])) throw new OutcomeGateError("private_store_invalid");
+  if (!exact(value, ["schemaVersion", "observationId", "mode", "createdAt", "commitSha", "engineFingerprint", "corpusDigest", "runnerVersion", "recordedResponsesDigest", "results"]) &&
+      !exact(value, ["schemaVersion", "observationId", "mode", "createdAt", "commitSha", "engineFingerprint", "corpusDigest", "runnerVersion", "recordedResponsesDigest", "results", "liveLane"])) throw new OutcomeGateError("private_store_invalid");
   const item = value as unknown as OutcomeObservation;
-  if (item.schemaVersion !== 1 || item.observationId !== wantedId || (item.mode !== "baseline" && item.mode !== "candidate") || !COMMIT.test(item.commitSha) ||
+  if (item.schemaVersion !== 1 || item.observationId !== wantedId || (item.mode !== "baseline" && item.mode !== "candidate") || !utc(item.createdAt) || !COMMIT.test(item.commitSha) ||
       !HASH.test(item.engineFingerprint) || !HASH.test(item.corpusDigest) || item.runnerVersion !== OUTCOME_OBSERVATION_RUNNER_VERSION || !HASH.test(item.recordedResponsesDigest) || !Array.isArray(item.results) || item.results.length === 0) throw new OutcomeGateError("private_store_invalid");
   const seen = new Set<string>();
   for (const result of item.results) {
@@ -139,14 +141,14 @@ export async function readOutcomeObservation(id: Sha256, root = DEFAULT_OUTCOME_
 
 function decisionBody(input: DecideOutcomeGateInput, clip: GateDecision, candidate: OutcomeObservation, createdAt: string, expiresAt: string, metrics: OutcomeGateMetrics, verdict: "pass" | "fail", reasons: readonly OutcomeGateReason[]) {
   return { schemaVersion: 1 as const, policyVersion: OUTCOME_POLICY_VERSION, clipDecisionId: input.clipDecisionId, candidateCommitSha: candidate.commitSha,
-    configSha256: clip.configSha256, outcomeEngineFingerprint: candidate.engineFingerprint, outcomeCorpusDigest: candidate.corpusDigest,
+    configSha256: clip.configSha256, outcomeEngineFingerprint: candidate.engineFingerprint, activationEngineFingerprint: input.expectedActivationEngineFingerprint, outcomeCorpusDigest: candidate.corpusDigest,
     runnerVersion: candidate.runnerVersion, baselineObservationId: input.baselineObservationId, candidateObservationId: input.candidateObservationId,
     createdAt, expiresAt, metrics, verdict, reasons };
 }
 
 export function outcomeDecisionReport(decision: OutcomeGateDecision): string {
   return ["# Outcome recovery quality gate", "", `verdict: ${decision.verdict}`, `reasons: ${decision.reasons.join(",") || "none"}`,
-    `candidate_commit: ${decision.candidateCommitSha}`, `config: ${decision.configSha256}`, `outcome_engine: ${decision.outcomeEngineFingerprint}`,
+    `candidate_commit: ${decision.candidateCommitSha}`, `config: ${decision.configSha256}`, `outcome_engine: ${decision.outcomeEngineFingerprint}`, `activation_engine: ${decision.activationEngineFingerprint}`,
     `outcome_corpus: ${decision.outcomeCorpusDigest}`, `runner: ${decision.runnerVersion}`, `metrics: ${canonicalJson(decision.metrics)}`,
     `clip_decision: ${decision.clipDecisionId}`, `decision: ${decision.decisionId}`, ""].join("\n");
 }
@@ -179,7 +181,7 @@ async function publishDefault(decision: OutcomeGateDecision, report: string, roo
 }
 
 export async function decideOutcomeRecoveryGate(input: DecideOutcomeGateInput, dependencies: OutcomeGateDependencies = {}): Promise<OutcomeGateDecision> {
-  if (!input || !HASH.test(input.baselineObservationId) || !HASH.test(input.candidateObservationId) || !DECISION_ID.test(input.clipDecisionId) || !HASH.test(input.expectedCandidateEngineFingerprint) || typeof input.customerOutputsMatch !== "boolean") throw new OutcomeGateError("invalid_input");
+  if (!input || !HASH.test(input.baselineObservationId) || !HASH.test(input.candidateObservationId) || !DECISION_ID.test(input.clipDecisionId) || !HASH.test(input.expectedCandidateEngineFingerprint) || !HASH.test(input.expectedActivationEngineFingerprint) || input.expectedActivationEngineFingerprint === input.expectedCandidateEngineFingerprint || typeof input.customerOutputsMatch !== "boolean") throw new OutcomeGateError("invalid_input");
   const root = dependencies.root ?? DEFAULT_OUTCOME_ROOT; const clipRoot = dependencies.clipRoot ?? dirname(root); const now = dependencies.now?.() ?? new Date();
   if (!(now instanceof Date) || !Number.isFinite(now.getTime())) throw new OutcomeGateError("invalid_input");
   const loadObservation = dependencies.loadObservation ?? readOutcomeObservation;
@@ -191,10 +193,10 @@ export async function decideOutcomeRecoveryGate(input: DecideOutcomeGateInput, d
     ]);
     clipEvidence = await (dependencies.loadClipEvidence ?? readGateCaseEvidence)(clip, clipRoot);
   } catch { /* policy publishes a fail-closed missing-input decision */ }
-  const fallback = (mode: "baseline" | "candidate"): OutcomeObservation => ({ schemaVersion: 1, observationId: mode === "baseline" ? input.baselineObservationId : input.candidateObservationId, mode, commitSha: "0".repeat(40), engineFingerprint: `sha256:${"0".repeat(64)}`, corpusDigest: `sha256:${"0".repeat(64)}`, runnerVersion: OUTCOME_OBSERVATION_RUNNER_VERSION, recordedResponsesDigest: `sha256:${"0".repeat(64)}`, results: [] });
+  const fallback = (mode: "baseline" | "candidate"): OutcomeObservation => ({ schemaVersion: 1, observationId: mode === "baseline" ? input.baselineObservationId : input.candidateObservationId, mode, createdAt: now.toISOString(), commitSha: "0".repeat(40), engineFingerprint: `sha256:${"0".repeat(64)}`, corpusDigest: `sha256:${"0".repeat(64)}`, runnerVersion: OUTCOME_OBSERVATION_RUNNER_VERSION, recordedResponsesDigest: `sha256:${"0".repeat(64)}`, results: [] });
   const selectedBaseline = baseline?.observation ?? fallback("baseline"); const selectedCandidate = candidate?.observation ?? fallback("candidate");
   const selectedClip = clip ?? ({ decisionId: input.clipDecisionId, candidateCommitSha: "0".repeat(40), configSha256: `sha256:${"0".repeat(64)}`, verdict: "fail", createdAt: now.toISOString(), expiresAt: now.toISOString() } as GateDecision);
-  const freshness = [baseline?.observedAt, candidate?.observedAt, clip ? new Date(clip.createdAt) : undefined].filter((value): value is Date => value instanceof Date);
+  const freshness = [baseline ? new Date(baseline.observation.createdAt) : undefined, candidate ? new Date(candidate.observation.createdAt) : undefined, clip ? new Date(clip.createdAt) : undefined].filter((value): value is Date => value instanceof Date);
   const inputsFresh = freshness.length === 3 && freshness.every((value) => value.getTime() <= now.getTime() && value.getTime() + DAY_MS > now.getTime()) && new Date(selectedClip.expiresAt).getTime() > now.getTime();
   const boundFingerprint = selectedCandidate.commitSha === selectedClip.candidateCommitSha && selectedCandidate.engineFingerprint === input.expectedCandidateEngineFingerprint;
   const policy = decideOutcomeGate({ baseline: selectedBaseline, candidate: selectedCandidate,
@@ -203,7 +205,9 @@ export async function decideOutcomeRecoveryGate(input: DecideOutcomeGateInput, d
     customerOutputsMatch: input.customerOutputsMatch, clip: { verdict: selectedClip.verdict, positiveCases: clipEvidence?.positiveCases ?? 0, confirmedNegativeCases: clipEvidence?.confirmedNegativeCases ?? 0,
       selectionNegativeCases: clipEvidence?.selectionNegativeCases ?? 0, positiveLosses: clipEvidence?.positiveLosses ?? 0, confirmedNegativeWorsening: clipEvidence?.confirmedNegativeWorsening ?? 0 },
     inputsPresent: Boolean(baseline && candidate && clip && clipEvidence), inputsFresh });
-  const createdAt = now.toISOString(); const expiresAt = new Date(now.getTime() + DAY_MS).toISOString();
+  const createdAt = now.toISOString();
+  const expiryTimes = [now.getTime() + DAY_MS, new Date(selectedBaseline.createdAt).getTime() + DAY_MS, new Date(selectedCandidate.createdAt).getTime() + DAY_MS, new Date(selectedClip.expiresAt).getTime()].filter(Number.isFinite);
+  const expiresAt = new Date(policy.verdict === "pass" ? Math.min(...expiryTimes) : now.getTime() + DAY_MS).toISOString();
   const body = decisionBody(input, selectedClip, selectedCandidate, createdAt, expiresAt, policy.metrics, policy.verdict, policy.reasons);
   const decision = Object.freeze({ ...body, decisionId: `outcome-decision:${sha256(canonicalJson(body))}` }) as OutcomeGateDecision;
   const committed = await (dependencies.publishDecision ?? publishDefault)(decision, outcomeDecisionReport(decision), root);
@@ -217,9 +221,9 @@ export async function readOutcomeGateDecision(id: string, root = DEFAULT_OUTCOME
   if (names.sort().join(",") !== "decision.json,report.md") throw new OutcomeGateError("private_store_invalid");
   const [decisionFile, reportFile] = await Promise.all([readPrivate(join(directory, "decision.json")), readPrivate(join(directory, "report.md"))]);
   let parsed: unknown; try { parsed = JSON.parse(new TextDecoder("utf8", { fatal: true }).decode(decisionFile.bytes)); } catch { throw new OutcomeGateError("private_store_invalid"); }
-  const keys = ["schemaVersion", "decisionId", "policyVersion", "clipDecisionId", "candidateCommitSha", "configSha256", "outcomeEngineFingerprint", "outcomeCorpusDigest", "runnerVersion", "baselineObservationId", "candidateObservationId", "createdAt", "expiresAt", "metrics", "verdict", "reasons"];
+  const keys = ["schemaVersion", "decisionId", "policyVersion", "clipDecisionId", "candidateCommitSha", "configSha256", "outcomeEngineFingerprint", "activationEngineFingerprint", "outcomeCorpusDigest", "runnerVersion", "baselineObservationId", "candidateObservationId", "createdAt", "expiresAt", "metrics", "verdict", "reasons"];
   if (!exact(parsed, keys)) throw new OutcomeGateError("private_store_invalid"); const decision = parsed as unknown as OutcomeGateDecision;
   const { decisionId: _id, ...body } = decision;
-  if (decision.decisionId !== id || `outcome-decision:${sha256(canonicalJson(body))}` !== id || decision.schemaVersion !== 1 || decision.policyVersion !== OUTCOME_POLICY_VERSION || !DECISION_ID.test(decision.clipDecisionId) || !COMMIT.test(decision.candidateCommitSha) || !HASH.test(decision.configSha256) || !HASH.test(decision.outcomeEngineFingerprint) || !HASH.test(decision.outcomeCorpusDigest) || decision.runnerVersion !== OUTCOME_OBSERVATION_RUNNER_VERSION || !HASH.test(decision.baselineObservationId) || !HASH.test(decision.candidateObservationId) || !utc(decision.createdAt) || !utc(decision.expiresAt) || new Date(decision.createdAt).getTime() > now.getTime() || new Date(decision.expiresAt).getTime() <= now.getTime() || new Date(decision.expiresAt).getTime() > new Date(decision.createdAt).getTime() + DAY_MS || (decision.verdict !== "pass" && decision.verdict !== "fail") || !validReasons(decision.reasons) || !validMetrics(decision.metrics) || (decision.verdict === "pass" ? decision.reasons.length !== 0 : decision.reasons.length === 0) || reportFile.bytes.toString("utf8") !== outcomeDecisionReport(decision)) throw new OutcomeGateError("private_store_invalid");
+  if (decision.decisionId !== id || `outcome-decision:${sha256(canonicalJson(body))}` !== id || decision.schemaVersion !== 1 || decision.policyVersion !== OUTCOME_POLICY_VERSION || !DECISION_ID.test(decision.clipDecisionId) || !COMMIT.test(decision.candidateCommitSha) || !HASH.test(decision.configSha256) || !HASH.test(decision.outcomeEngineFingerprint) || !HASH.test(decision.activationEngineFingerprint) || decision.activationEngineFingerprint === decision.outcomeEngineFingerprint || !HASH.test(decision.outcomeCorpusDigest) || decision.runnerVersion !== OUTCOME_OBSERVATION_RUNNER_VERSION || !HASH.test(decision.baselineObservationId) || !HASH.test(decision.candidateObservationId) || !utc(decision.createdAt) || !utc(decision.expiresAt) || new Date(decision.createdAt).getTime() > now.getTime() || new Date(decision.expiresAt).getTime() <= now.getTime() || new Date(decision.expiresAt).getTime() > new Date(decision.createdAt).getTime() + DAY_MS || (decision.verdict !== "pass" && decision.verdict !== "fail") || !validReasons(decision.reasons) || !validMetrics(decision.metrics) || (decision.verdict === "pass" ? decision.reasons.length !== 0 : decision.reasons.length === 0) || reportFile.bytes.toString("utf8") !== outcomeDecisionReport(decision)) throw new OutcomeGateError("private_store_invalid");
   return decision;
 }

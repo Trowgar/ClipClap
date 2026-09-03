@@ -50,6 +50,7 @@ export type OutcomeObservation = Readonly<{
   schemaVersion: 1;
   observationId: Sha256;
   mode: OutcomeObservationMode;
+  createdAt: string;
   commitSha: string;
   engineFingerprint: Sha256;
   corpusDigest: Sha256;
@@ -380,6 +381,9 @@ export async function observeOutcomeCases(input: Readonly<{
   if ((input.mode !== "baseline" && input.mode !== "candidate") || !COMMIT.test(input.commitSha) || !Array.isArray(input.cases) || input.cases.length === 0 || !isPlain(input.config) ||
       !Number.isSafeInteger(input.config.outcomeRecoveryMaxCandidates) || input.config.outcomeRecoveryMaxCandidates < 1 || input.config.outcomeRecoveryMaxCandidates > 12 ||
       !Number.isSafeInteger(input.config.criticBatchSize) || input.config.outcomeRecoveryMaxCandidates > input.config.criticBatchSize) fail("invalid_input");
+  const observationTime = input.now ?? new Date();
+  if (!(observationTime instanceof Date) || !Number.isFinite(observationTime.getTime())) fail("invalid_input");
+  const createdAt = observationTime.toISOString();
   const cfg = Object.freeze({ ...input.config, outcomeRecoveryMode: input.mode === "baseline" ? "off" : input.config.outcomeRecoveryMode }) as AnalyzeConfig;
   if (input.mode === "candidate" && cfg.outcomeRecoveryMode !== "shadow" && cfg.outcomeRecoveryMode !== "on") fail("invalid_input");
   const sorted = input.cases.map(validateCaseBinding).sort((left, right) => left.case.caseVersion.localeCompare(right.case.caseVersion));
@@ -407,7 +411,7 @@ export async function observeOutcomeCases(input: Readonly<{
     recordedResponsesDigest = sha256(canonicalJson(sorted.map(({ case: value }) => ({ caseVersion: value.caseVersion, recordedResponsesSha256: value.recordedResponsesSha256 }))));
   }
   const engineFingerprint = sha256(canonicalJson(cfg));
-  const body = { schemaVersion: 1 as const, mode: input.mode, commitSha: input.commitSha, engineFingerprint, corpusDigest: corpusDigest(sorted), runnerVersion: OUTCOME_OBSERVATION_RUNNER_VERSION, recordedResponsesDigest, results, ...(liveLaneBinding ? { liveLane: liveLaneBinding } : {}) };
+  const body = { schemaVersion: 1 as const, mode: input.mode, createdAt, commitSha: input.commitSha, engineFingerprint, corpusDigest: corpusDigest(sorted), runnerVersion: OUTCOME_OBSERVATION_RUNNER_VERSION, recordedResponsesDigest, results, ...(liveLaneBinding ? { liveLane: liveLaneBinding } : {}) };
   const observation = Object.freeze({ ...body, observationId: sha256(canonicalJson(body)) });
   validatedObservations.add(observation);
   return observation;
@@ -459,10 +463,10 @@ export async function loadOutcomeObservationCases(root: string): Promise<readonl
 
 async function publishOutcomeObservationAgainstAuthority(root: string, observation: OutcomeObservation, authoritativeCases: readonly OutcomeObservationCase[], loaded: readonly OutcomeObservationAuthorityCase[]): Promise<CommitResult> {
   if (!validatedObservations.has(observation as object)) fail("publication_failed");
-  const observationKeys = ["schemaVersion", "observationId", "mode", "commitSha", "engineFingerprint", "corpusDigest", "runnerVersion", "recordedResponsesDigest", "results", ...(observation.liveLane ? ["liveLane"] : [])];
+  const observationKeys = ["schemaVersion", "observationId", "mode", "createdAt", "commitSha", "engineFingerprint", "corpusDigest", "runnerVersion", "recordedResponsesDigest", "results", ...(observation.liveLane ? ["liveLane"] : [])];
   if (!exactDataObject(observation, observationKeys) ||
       observation.schemaVersion !== 1 || (observation.mode !== "baseline" && observation.mode !== "candidate") ||
-      !COMMIT.test(observation.commitSha) || !isHash(observation.engineFingerprint) || !isHash(observation.corpusDigest) ||
+      !canonicalUtc(observation.createdAt) || !COMMIT.test(observation.commitSha) || !isHash(observation.engineFingerprint) || !isHash(observation.corpusDigest) ||
       observation.runnerVersion !== OUTCOME_OBSERVATION_RUNNER_VERSION || !isHash(observation.recordedResponsesDigest) ||
       !Array.isArray(observation.results) || observation.results.length === 0) fail("publication_failed");
   let authority: OutcomeObservationCase[];

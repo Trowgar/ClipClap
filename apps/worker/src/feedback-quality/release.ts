@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
+import { loadAnalyzeConfig } from "../analyze-v2/config";
 import type { DeployDependencies, GateDeployDecision, RollbackArtifact, WorkerService } from "./deploy";
 import { readGateDecision } from "./gate";
 import { readOutcomeGateDecision, type OutcomeGateDecision } from "./outcome-gate";
@@ -52,12 +53,12 @@ export class ProductionReleaseError extends Error {
 
 /** `on` is the only runtime mode allowed to make an outcome-quality claim.
  * Its claim must be the fresh composite decision for this exact clip gate. */
-export function assertOutcomeReleaseBinding(mode: string | undefined, clip: GateDeployDecision, outcomeId: string | undefined, outcome?: OutcomeGateDecision): void {
+export function assertOutcomeReleaseBinding(mode: string | undefined, clip: GateDeployDecision, outcomeId: string | undefined, outcome?: OutcomeGateDecision, activationEngineFingerprint?: string): void {
   if (mode !== "on") {
     if (outcomeId !== undefined) throw new ProductionReleaseError("rollback_invalid");
     return;
   }
-  if (!outcome || outcome.decisionId !== outcomeId || outcome.verdict !== "pass" || outcome.clipDecisionId !== clip.decisionId || outcome.candidateCommitSha !== clip.candidateCommitSha || outcome.configSha256 !== clip.configSha256) throw new ProductionReleaseError("rollback_invalid");
+  if (!outcome || outcome.decisionId !== outcomeId || outcome.verdict !== "pass" || outcome.clipDecisionId !== clip.decisionId || outcome.candidateCommitSha !== clip.candidateCommitSha || outcome.configSha256 !== clip.configSha256 || outcome.activationEngineFingerprint !== activationEngineFingerprint) throw new ProductionReleaseError("rollback_invalid");
 }
 
 export function parseImageReference(value: string): ImageReference {
@@ -257,7 +258,8 @@ export function createProductionDeployDependencies(candidateImage: string, proje
       const outcomeId = snapshot.parsed.OUTCOME_RECOVERY_GATE_DECISION_ID;
       const outcome = mode === "on" && /^outcome-decision:sha256:[0-9a-f]{64}$/.test(outcomeId ?? "")
         ? await readOutcomeGateDecision(outcomeId, join(root, "outcomes")) : undefined;
-      assertOutcomeReleaseBinding(mode, clip, outcomeId, outcome);
+      const activationEngineFingerprint = sha256(canonicalJson(loadAnalyzeConfig(snapshot.parsed)));
+      assertOutcomeReleaseBinding(mode, clip, outcomeId, outcome, activationEngineFingerprint);
       return clip;
     },
     configSha256: async () => {

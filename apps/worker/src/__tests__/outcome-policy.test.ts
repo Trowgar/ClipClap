@@ -18,7 +18,7 @@ function result(index: number, disposition: "recoverable_false_negative" | "vali
 
 function observation(mode: "baseline" | "candidate", results: readonly OutcomeObservationResult[]): OutcomeObservation {
   return {
-    schemaVersion: 1, observationId: hash(`${mode}-${JSON.stringify(results)}`), mode, commitSha: commit,
+    schemaVersion: 1, observationId: hash(`${mode}-${JSON.stringify(results)}`), mode, createdAt: "2026-09-02T11:00:00.000Z", commitSha: commit,
     engineFingerprint: hash(mode === "baseline" ? "engine-off" : "engine-on"), corpusDigest: hash("corpus"),
     runnerVersion: "outcome-observe-v1", recordedResponsesDigest: hash("responses"), results,
   };
@@ -69,5 +69,12 @@ describe("outcome recovery policy", () => {
     expect(decideOutcomeGate({ ...passing(), inputsPresent: false }).reasons).toContain("missing_input");
     expect(decideOutcomeGate({ ...passing(), inputsFresh: false }).reasons).toContain("stale_input");
     expect(decideOutcomeGate({ ...passing(), expectedCandidateEngineFingerprint: hash("wrong") }).reasons).toContain("fingerprint_mismatch");
+  });
+
+  it("fails closed instead of normalizing malformed safety counters to zero", () => {
+    const input = passing();
+    const candidate = observation("candidate", input.candidate.results.map((item, index) => index === 0 ? { ...item, keepFalseShipped: Number.NaN } : item));
+    expect(decideOutcomeGate({ ...input, candidate }).reasons).toContain("invalid_input");
+    expect(decideOutcomeGate({ ...input, clip: { ...input.clip, positiveLosses: -1 } }).reasons).toContain("invalid_input");
   });
 });

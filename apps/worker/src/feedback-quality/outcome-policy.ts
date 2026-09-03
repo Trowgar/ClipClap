@@ -71,6 +71,10 @@ function safeCount(value: unknown): number {
   return Number.isSafeInteger(value) && (value as number) >= 0 ? value as number : 0;
 }
 
+function validCount(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
 /** Pure fail-closed V4 policy. Persisted-input authenticity and freshness are
  * established by the gate reader and surfaced through the two closed flags. */
 export function decideOutcomeGate(input: OutcomePolicyInput): OutcomePolicyDecision {
@@ -81,6 +85,10 @@ export function decideOutcomeGate(input: OutcomePolicyInput): OutcomePolicyDecis
 
   const baselineResults = Array.isArray(input?.baseline?.results) ? input.baseline.results : [];
   const candidateResults = Array.isArray(input?.candidate?.results) ? input.candidate.results : [];
+  if (![input?.clip?.positiveCases, input?.clip?.confirmedNegativeCases, input?.clip?.selectionNegativeCases,
+    input?.clip?.positiveLosses, input?.clip?.confirmedNegativeWorsening].every(validCount) ||
+    [...baselineResults, ...candidateResults].some((entry) => !entry ||
+      ![entry.approvedHits, entry.forbiddenHits, entry.keepFalseShipped, entry.explicitGateResurrections, entry.candidateCap, entry.criticBatches].every(validCount))) reasons.add("invalid_input");
   const bindings = Array.isArray(input?.cases) ? input.cases : [];
   const baselineByCase = new Map(baselineResults.map((entry) => [entry.caseVersion, entry]));
   const candidateByCase = new Map(candidateResults.map((entry) => [entry.caseVersion, entry]));
