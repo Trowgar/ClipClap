@@ -18,6 +18,8 @@ import type { CommitResult } from "./store";
 
 const HASH = /^sha256:[0-9a-f]{64}$/;
 const COMMIT = /^[0-9a-f]{40}$/;
+const SAFE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+const UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 const RECOVERY_KEYS = ["addedUsage", "counters", "elapsedMs", "eligible", "excludedMissingRange", "judged", "mode", "outcome", "poolSize", "primaryDispositions", "ranges", "reason", "recoveryDispositions", "tailSize", "version"] as const;
@@ -54,6 +56,7 @@ export type OutcomeObservation = Readonly<{
   runnerVersion: typeof OUTCOME_OBSERVATION_RUNNER_VERSION;
   recordedResponsesDigest: Sha256;
   results: readonly OutcomeObservationResult[];
+  liveLane?: Readonly<{ name: string; attempts: 3; attemptDigests: readonly [Sha256, Sha256, Sha256] }>;
 }>;
 
 export type OutcomeObservationCase = Readonly<{
@@ -62,13 +65,23 @@ export type OutcomeObservationCase = Readonly<{
   recordedResponses: readonly RecordedOutcomeResponse[];
 }>;
 
+export type MaterializedOutcomeLiveLane = Readonly<{
+  schemaVersion: 1;
+  name: string;
+  attempts: readonly Readonly<{
+    attemptId: string;
+    recordedAt: string;
+    cases: readonly Readonly<{ caseVersion: Sha256; recordedResponses: readonly RecordedOutcomeResponse[] }>[];
+  }>[];
+}>;
+
 export class OutcomeObservationError extends Error {
   readonly requiredLiveLane?: Readonly<{ attempts: 3; named: true }>;
 
   constructor(readonly code:
     | "invalid_input" | "invalid_case" | "missing_request" | "request_fingerprint_drift"
-    | "unknown_telemetry" | "output_out_of_duration"
-    | "private_store_invalid" | "publication_failed" | "live_lane_required") {
+    | "unknown_telemetry" | "output_out_of_duration" | "recording_not_consumed"
+    | "private_store_invalid" | "publication_failed" | "live_lane_required" | "invalid_live_lane" | "live_attempt_disagreement") {
     super(code);
     this.name = "OutcomeObservationError";
     if (code === "request_fingerprint_drift" || code === "live_lane_required") {
@@ -87,6 +100,29 @@ function exactDataObject(value: unknown, keys: readonly string[]): value is Reco
   return Object.values(descriptors).every((descriptor) => descriptor.enumerable === true && Object.prototype.hasOwnProperty.call(descriptor, "value"));
 }
 function nonnegativeInt(value: unknown): value is number { return typeof value === "number" && Number.isSafeInteger(value) && value >= 0; }
+function canonicalUtc(value: unknown): value is string {
+  if (typeof value !== "string" || !UTC.test(value)) return false;
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value;
+}
+
+function recordedResponseBytes(recordings: readonly RecordedOutcomeResponse[]): Buffer {
+  try { return Buffer.from(recordings.map((recording) => canonicalJson(recording)).join("\n") + (recordings.length > 0 ? "\n" : "")); }
+  catch { return fail("invalid_case"); }
+}
+
+function validateCaseBinding(item: OutcomeObservationCase): OutcomeObservationCase {
+  let parsed: OutcomeCase;
+  let transcriptBytes: Buffer;
+  try {
+    parsed = parseOutcomeCase(item.case);
+    transcriptBytes = Buffer.from(canonicalJson(item.transcript));
+  } catch { return fail("invalid_case"); }
+  const { caseVersion: _caseVersion, ...body } = parsed;
+  if (sha256(canonicalJson(body)) !== parsed.caseVersion || sha256(transcriptBytes) !== parsed.transcriptSha256 ||
+      sha256(recordedResponseBytes(item.recordedResponses)) !== parsed.recordedResponsesSha256 || !isHash(parsed.sourceSha256)) fail("invalid_case");
+  return Object.freeze({ case: parsed, transcript: item.transcript, recordedResponses: item.recordedResponses });
+}
 
 export function fingerprintOutcomeRequest(raw: unknown): Readonly<{ promptFingerprint: Sha256; modelFingerprint: Sha256; requestFingerprint: Sha256 }> {
   if (!isPlain(raw) || typeof raw.model !== "string" || !Array.isArray(raw.messages)) fail("invalid_input");
@@ -112,25 +148,33 @@ function completion(recording: RecordedOutcomeResponse): Readonly<Record<string,
   return { choices: [{ message: { content: canonicalJson(result), refusal: null }, finish_reason: "stop" }], usage };
 }
 
-function strictReplayClient(recordings: readonly RecordedOutcomeResponse[]): OpenAI {
-  const byRequest = new Map<string, RecordedOutcomeResponse>();
+function strictReplayClient(recordings: readonly RecordedOutcomeResponse[]): OpenAI & { assertComplete(): void } {
+  const validated: RecordedOutcomeResponse[] = [];
   for (const recording of recordings) {
-    if (!isHash(recording.promptFingerprint) || !isHash(recording.modelFingerprint) || !isHash(recording.requestFingerprint) || !isPlain(recording.result) || byRequest.has(recording.requestFingerprint)) fail("invalid_case");
-    byRequest.set(recording.requestFingerprint, recording);
+    if (!exactDataObject(recording, ["promptFingerprint", "modelFingerprint", "requestFingerprint", "result"]) || !isHash(recording.promptFingerprint) || !isHash(recording.modelFingerprint) || !isHash(recording.requestFingerprint) || !isPlain(recording.result)) fail("invalid_case");
+    validated.push(recording);
   }
+  let cursor = 0;
+  let replayFailure: OutcomeObservationError | undefined;
   const create = async (body: unknown) => {
-    const fingerprint = fingerprintOutcomeRequest(body);
-    const exact = byRequest.get(fingerprint.requestFingerprint);
-    if (!exact) {
-      const samePromptAndModel = recordings.some((entry) => entry.promptFingerprint === fingerprint.promptFingerprint && entry.modelFingerprint === fingerprint.modelFingerprint);
-      if (samePromptAndModel) fail("request_fingerprint_drift");
-      if (recordings.length > 0) fail("live_lane_required");
-      fail("missing_request");
+    try {
+      const fingerprint = fingerprintOutcomeRequest(body);
+      const exact = validated[cursor];
+      if (!exact) fail("missing_request");
+      if (exact.requestFingerprint !== fingerprint.requestFingerprint) {
+        const knownElsewhere = validated.slice(cursor + 1).some((entry) => entry.requestFingerprint === fingerprint.requestFingerprint);
+        if (knownElsewhere || (exact.promptFingerprint === fingerprint.promptFingerprint && exact.modelFingerprint === fingerprint.modelFingerprint)) fail("request_fingerprint_drift");
+        fail("live_lane_required");
+      }
+      if (exact.promptFingerprint !== fingerprint.promptFingerprint || exact.modelFingerprint !== fingerprint.modelFingerprint) fail("request_fingerprint_drift");
+      cursor += 1;
+      return completion(exact);
+    } catch (error) {
+      if (error instanceof OutcomeObservationError) replayFailure ??= error;
+      throw error;
     }
-    if (exact.promptFingerprint !== fingerprint.promptFingerprint || exact.modelFingerprint !== fingerprint.modelFingerprint) fail("request_fingerprint_drift");
-    return completion(exact);
   };
-  return { chat: { completions: { create } } } as unknown as OpenAI;
+  return { chat: { completions: { create } }, assertComplete() { if (replayFailure) throw replayFailure; if (cursor !== validated.length) fail("recording_not_consumed"); } } as unknown as OpenAI & { assertComplete(): void };
 }
 
 function countMap(value: unknown, allowed: ReadonlySet<string>): boolean {
@@ -189,31 +233,100 @@ function projectResult(item: OutcomeObservationCase, result: V2Result, cfg: Anal
   });
 }
 
+function corpusDigest(cases: readonly OutcomeObservationCase[]): Sha256 {
+  return sha256(canonicalJson(cases.map(({ case: value }) => ({ caseVersion: value.caseVersion, transcriptSha256: value.transcriptSha256, sourceSha256: value.sourceSha256, expected: value.expected, disposition: value.disposition }))));
+}
+
+function parseLiveLane(raw: MaterializedOutcomeLiveLane, cases: readonly OutcomeObservationCase[]): Readonly<{
+  name: string;
+  attempts: readonly Readonly<{ attemptId: string; recordedAt: string; responses: readonly (readonly RecordedOutcomeResponse[])[]; digest: Sha256 }>[];
+}> {
+  if (!exactDataObject(raw, ["schemaVersion", "name", "attempts"]) || raw.schemaVersion !== 1 || !SAFE_NAME.test(raw.name) || !Array.isArray(raw.attempts) || raw.attempts.length !== 3) fail("invalid_live_lane");
+  const expectedVersions = cases.map((item) => item.case.caseVersion);
+  const attemptIds = new Set<string>();
+  const attempts = raw.attempts.map((attempt) => {
+    if (!exactDataObject(attempt, ["attemptId", "recordedAt", "cases"])) fail("invalid_live_lane");
+    const attemptId = attempt.attemptId;
+    const recordedAt = attempt.recordedAt;
+    const attemptCases = attempt.cases;
+    if (typeof attemptId !== "string" || !SAFE_NAME.test(attemptId) || attemptIds.has(attemptId) || !canonicalUtc(recordedAt) || !Array.isArray(attemptCases) || attemptCases.length !== cases.length) fail("invalid_live_lane");
+    attemptIds.add(attemptId);
+    const ordered = [...attemptCases].sort((left, right) => String((left as Record<string, unknown>).caseVersion).localeCompare(String((right as Record<string, unknown>).caseVersion))) as Array<{ caseVersion: Sha256; recordedResponses: readonly RecordedOutcomeResponse[] }>;
+    if (ordered.some((entry, index) => !exactDataObject(entry, ["caseVersion", "recordedResponses"]) || entry.caseVersion !== expectedVersions[index] || !Array.isArray(entry.recordedResponses))) fail("invalid_live_lane");
+    for (const entry of ordered) strictReplayClient(entry.recordedResponses);
+    return Object.freeze({
+      attemptId,
+      recordedAt,
+      responses: Object.freeze(ordered.map((entry) => Object.freeze([...entry.recordedResponses]))),
+      digest: sha256(canonicalJson(attempt)),
+    });
+  });
+  return Object.freeze({ name: raw.name, attempts: Object.freeze(attempts) });
+}
+
+async function runCases(
+  cases: readonly OutcomeObservationCase[],
+  recordings: readonly (readonly RecordedOutcomeResponse[])[],
+  cfg: AnalyzeConfig,
+  mode: OutcomeObservationMode,
+  analyze: (transcript: TranscriptionResult, options: AnalyzeV2Options) => Promise<V2Result>,
+): Promise<readonly OutcomeObservationResult[]> {
+  const results: OutcomeObservationResult[] = [];
+  for (let index = 0; index < cases.length; index += 1) {
+    const item = cases[index];
+    const client = strictReplayClient(recordings[index]);
+    let result: V2Result;
+    try { result = await analyze(item.transcript as TranscriptionResult, { client, cfg, sourceDurationSec: item.case.sourceDurationSec, retryDelayMs: 1 }); }
+    catch (error) { client.assertComplete(); throw error; }
+    client.assertComplete();
+    results.push(projectResult(item, result, cfg, mode));
+  }
+  return Object.freeze(results);
+}
+
+const validatedObservations = new WeakSet<object>();
+
 export async function observeOutcomeCases(input: Readonly<{
   mode: OutcomeObservationMode;
   commitSha: string;
   config: AnalyzeConfig;
   cases: readonly OutcomeObservationCase[];
+  liveLane?: MaterializedOutcomeLiveLane;
 }>, dependencies: Readonly<{
   analyze?: (transcript: TranscriptionResult, options: AnalyzeV2Options) => Promise<V2Result>;
 }> = {}): Promise<OutcomeObservation> {
   if ((input.mode !== "baseline" && input.mode !== "candidate") || !COMMIT.test(input.commitSha) || !Array.isArray(input.cases) || input.cases.length === 0 || !isPlain(input.config)) fail("invalid_input");
   const cfg = Object.freeze({ ...input.config, outcomeRecoveryMode: input.mode === "baseline" ? "off" : input.config.outcomeRecoveryMode }) as AnalyzeConfig;
   if (input.mode === "candidate" && cfg.outcomeRecoveryMode !== "shadow" && cfg.outcomeRecoveryMode !== "on") fail("invalid_input");
-  const sorted = [...input.cases].sort((left, right) => left.case.caseVersion.localeCompare(right.case.caseVersion));
+  const sorted = input.cases.map(validateCaseBinding).sort((left, right) => left.case.caseVersion.localeCompare(right.case.caseVersion));
   if (new Set(sorted.map((entry) => entry.case.caseVersion)).size !== sorted.length) fail("invalid_case");
-  const results: OutcomeObservationResult[] = [];
   for (const item of sorted) {
     if (!isHash(item.case.caseVersion) || item.case.disposition === "exclude" || !Array.isArray(item.recordedResponses)) fail("invalid_case");
-    const client = strictReplayClient(item.recordedResponses);
-    const result = await (dependencies.analyze ?? analyzeHighlightsV2)(item.transcript as TranscriptionResult, { client, cfg, sourceDurationSec: item.case.sourceDurationSec, retryDelayMs: 1 });
-    results.push(projectResult(item, result, cfg, input.mode));
+  }
+  if (input.mode === "baseline" && input.liveLane !== undefined) fail("invalid_live_lane");
+  const analyze = dependencies.analyze ?? analyzeHighlightsV2;
+  let results: readonly OutcomeObservationResult[];
+  let liveLaneBinding: OutcomeObservation["liveLane"];
+  let recordedResponsesDigest: Sha256;
+  if (input.liveLane) {
+    const lane = parseLiveLane(input.liveLane, sorted);
+    const attempts: Array<readonly OutcomeObservationResult[]> = [];
+    for (const attempt of lane.attempts) attempts.push(await runCases(sorted, attempt.responses, cfg, input.mode, analyze));
+    const expected = canonicalJson(attempts[0]);
+    if (attempts.slice(1).some((attempt) => canonicalJson(attempt) !== expected)) fail("live_attempt_disagreement");
+    results = attempts[0];
+    const attemptDigests = lane.attempts.map((attempt) => attempt.digest) as [Sha256, Sha256, Sha256];
+    liveLaneBinding = Object.freeze({ name: lane.name, attempts: 3, attemptDigests: Object.freeze(attemptDigests) });
+    recordedResponsesDigest = sha256(canonicalJson(attemptDigests));
+  } else {
+    results = await runCases(sorted, sorted.map((item) => item.recordedResponses), cfg, input.mode, analyze);
+    recordedResponsesDigest = sha256(canonicalJson(sorted.map(({ case: value }) => ({ caseVersion: value.caseVersion, recordedResponsesSha256: value.recordedResponsesSha256 }))));
   }
   const engineFingerprint = sha256(canonicalJson(cfg));
-  const corpusDigest = sha256(canonicalJson(sorted.map(({ case: value }) => ({ caseVersion: value.caseVersion, transcriptSha256: value.transcriptSha256, sourceSha256: value.sourceSha256, expected: value.expected, disposition: value.disposition }))));
-  const recordedResponsesDigest = sha256(canonicalJson(sorted.map(({ case: value }) => ({ caseVersion: value.caseVersion, recordedResponsesSha256: value.recordedResponsesSha256 }))));
-  const body = { schemaVersion: 1 as const, mode: input.mode, commitSha: input.commitSha, engineFingerprint, corpusDigest, runnerVersion: OUTCOME_OBSERVATION_RUNNER_VERSION, recordedResponsesDigest, results: Object.freeze(results) };
-  return Object.freeze({ ...body, observationId: sha256(canonicalJson(body)) });
+  const body = { schemaVersion: 1 as const, mode: input.mode, commitSha: input.commitSha, engineFingerprint, corpusDigest: corpusDigest(sorted), runnerVersion: OUTCOME_OBSERVATION_RUNNER_VERSION, recordedResponsesDigest, results, ...(liveLaneBinding ? { liveLane: liveLaneBinding } : {}) };
+  const observation = Object.freeze({ ...body, observationId: sha256(canonicalJson(body)) });
+  validatedObservations.add(observation);
+  return observation;
 }
 
 async function readPrivate(path: string, maximum: number): Promise<Buffer> {
@@ -265,12 +378,22 @@ export async function loadOutcomeObservationCases(root: string): Promise<readonl
   return Object.freeze(result);
 }
 
-export async function publishOutcomeObservation(root: string, observation: OutcomeObservation): Promise<CommitResult> {
-  if (!exactDataObject(observation, ["schemaVersion", "observationId", "mode", "commitSha", "engineFingerprint", "corpusDigest", "runnerVersion", "recordedResponsesDigest", "results"]) ||
+export async function publishOutcomeObservation(root: string, observation: OutcomeObservation, authoritativeCases: readonly OutcomeObservationCase[]): Promise<CommitResult> {
+  if (!validatedObservations.has(observation as object)) fail("publication_failed");
+  const observationKeys = ["schemaVersion", "observationId", "mode", "commitSha", "engineFingerprint", "corpusDigest", "runnerVersion", "recordedResponsesDigest", "results", ...(observation.liveLane ? ["liveLane"] : [])];
+  if (!exactDataObject(observation, observationKeys) ||
       observation.schemaVersion !== 1 || (observation.mode !== "baseline" && observation.mode !== "candidate") ||
       !COMMIT.test(observation.commitSha) || !isHash(observation.engineFingerprint) || !isHash(observation.corpusDigest) ||
       observation.runnerVersion !== OUTCOME_OBSERVATION_RUNNER_VERSION || !isHash(observation.recordedResponsesDigest) ||
       !Array.isArray(observation.results) || observation.results.length === 0) fail("publication_failed");
+  let authority: OutcomeObservationCase[];
+  try { authority = authoritativeCases.map(validateCaseBinding).sort((left, right) => left.case.caseVersion.localeCompare(right.case.caseVersion)); }
+  catch { return fail("publication_failed"); }
+  const authorityVersions = authority.map((item) => item.case.caseVersion);
+  const resultVersions = observation.results.map((result) => result.caseVersion);
+  if (new Set(authorityVersions).size !== authorityVersions.length || new Set(resultVersions).size !== resultVersions.length ||
+      authorityVersions.join("\n") !== [...resultVersions].sort().join("\n") || corpusDigest(authority) !== observation.corpusDigest) fail("publication_failed");
+  if (observation.liveLane && (!exactDataObject(observation.liveLane, ["name", "attempts", "attemptDigests"]) || !SAFE_NAME.test(observation.liveLane.name) || observation.liveLane.attempts !== 3 || !Array.isArray(observation.liveLane.attemptDigests) || observation.liveLane.attemptDigests.length !== 3 || observation.liveLane.attemptDigests.some((digest) => !isHash(digest)))) fail("publication_failed");
   for (const result of observation.results) {
     if (!exactDataObject(result, ["caseVersion", "disposition", "shippedWindows", "approvedHits", "forbiddenHits", "keepFalseShipped", "explicitGateResurrections", "candidateCap", "criticBatches", "noClipsReason"]) ||
         !isHash(result.caseVersion) || (result.disposition !== "recoverable_false_negative" && result.disposition !== "valid_empty") ||
@@ -331,10 +454,10 @@ export async function publishOutcomeObservation(root: string, observation: Outco
   }
 }
 
-export async function runOutcomeObservation(input: Readonly<{ root: string; mode: OutcomeObservationMode; commitSha: string; config: AnalyzeConfig }>): Promise<Readonly<{ observationId: Sha256; mode: OutcomeObservationMode; caseCount: number }>> {
+export async function runOutcomeObservation(input: Readonly<{ root: string; mode: OutcomeObservationMode; commitSha: string; config: AnalyzeConfig; liveLane?: MaterializedOutcomeLiveLane }>): Promise<Readonly<{ observationId: Sha256; mode: OutcomeObservationMode; caseCount: number }>> {
   const cases = await loadOutcomeObservationCases(input.root);
   const observation = await observeOutcomeCases({ ...input, cases });
-  const committed = await publishOutcomeObservation(input.root, observation);
+  const committed = await publishOutcomeObservation(input.root, observation, cases);
   if (committed.status !== "committed" && committed.status !== "noop") fail("publication_failed");
   return Object.freeze({ observationId: observation.observationId, mode: observation.mode, caseCount: observation.results.length });
 }
