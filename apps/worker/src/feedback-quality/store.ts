@@ -14,7 +14,7 @@ import {
 import { basename, join, resolve } from "node:path";
 
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
-import { withCorpusLock, type CorpusLockError, type LockOptions } from "../feedback-learning/lock";
+import { withCorpusLock, type CorpusLockError, type CorpusLockIdentity, type LockOptions } from "../feedback-learning/lock";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -92,6 +92,8 @@ export type AppendPrivateLedgerOptions = Readonly<{
   lockOptions?: LockOptions;
   rejectDuplicate?: boolean;
   validateBeforeCommit?: (events: readonly Readonly<Record<string, unknown>>[]) => void | Promise<void>;
+  /** Test-only adversarial hook, invoked while the permanent flock is held. */
+  afterLock?: () => void | Promise<void>;
 }>;
 
 export class PrivateLedgerDuplicateError extends Error {
@@ -107,6 +109,13 @@ class PrivateLedgerValidationError extends Error {
   constructor(readonly validationCause: unknown) {
     super("private_ledger_validation_failed");
     this.name = "PrivateLedgerValidationError";
+  }
+}
+
+class PrivateLedgerAnchorError extends Error {
+  constructor(readonly anchorCause: unknown) {
+    super("private_ledger_anchor_changed");
+    this.name = "PrivateLedgerAnchorError";
   }
 }
 
@@ -1154,6 +1163,44 @@ async function closePrivateLedgerTree(tree: { root: FileHandle; ledger: FileHand
   await closeQuietly(tree.root);
 }
 
+async function samePrivateDirectory(left: FileHandle, right: FileHandle): Promise<boolean> {
+  const [leftStats, rightStats] = await Promise.all([left.stat(), right.stat()]);
+  return leftStats.isDirectory() && rightStats.isDirectory() &&
+    (leftStats.mode & 0o7777) === DIRECTORY_MODE && (rightStats.mode & 0o7777) === DIRECTORY_MODE &&
+    leftStats.dev === rightStats.dev && leftStats.ino === rightStats.ino;
+}
+
+async function assertPrivateLedgerTreeCurrent(
+  paths: PrivateLedgerPaths,
+  trusted: { root: FileHandle; ledger: FileHandle },
+  lockIdentity: CorpusLockIdentity,
+): Promise<void> {
+  let currentRoot: FileHandle | undefined;
+  let currentLedger: FileHandle | undefined;
+  let currentLock: FileHandle | undefined;
+  let anchoredLock: FileHandle | undefined;
+  try {
+    currentRoot = await openRootAnchored(paths.root);
+    if (!await samePrivateDirectory(trusted.root, currentRoot)) throw safeError("unsafe_path");
+    currentLedger = await openDirectory(anchoredPath(currentRoot, "ledger"));
+    if (!await samePrivateDirectory(trusted.ledger, currentLedger)) throw safeError("unsafe_path");
+    currentLock = await open(anchoredPath(currentLedger, basename(paths.lockFile)), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    anchoredLock = await open(anchoredPath(trusted.ledger, basename(paths.lockFile)), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const [currentStats, anchoredStats] = await Promise.all([currentLock.stat(), anchoredLock.stat()]);
+    for (const stats of [currentStats, anchoredStats]) {
+      if (!stats.isFile() || stats.nlink !== 1 || (stats.mode & 0o7777) !== FILE_MODE || stats.dev !== lockIdentity.dev || stats.ino !== lockIdentity.ino) throw safeError("unsafe_path");
+    }
+  } catch (error) {
+    if (error instanceof QualityStoreError) throw error;
+    throw safeError("unsafe_path");
+  } finally {
+    await closeQuietly(anchoredLock);
+    await closeQuietly(currentLock);
+    await closeQuietly(currentLedger);
+    await closeQuietly(currentRoot);
+  }
+}
+
 function parseCanonicalLedger(bytes: Uint8Array): Readonly<Record<string, unknown>>[] {
   if (bytes.byteLength === 0) return [];
   const text = Buffer.from(bytes).toString("utf8");
@@ -1220,26 +1267,32 @@ async function verifyPrivateLedgerEvent(
 async function appendPrivateLedgerEventLocked(
   event: QualityLabelEvent,
   paths: PrivateLedgerPaths,
+  tree: { root: FileHandle; ledger: FileHandle },
+  lockIdentity: CorpusLockIdentity,
   options: AppendPrivateLedgerOptions,
 ): Promise<CommitResult> {
   const eventId = eventIdOf(event);
   let line: Buffer;
   try { line = Buffer.from(`${canonicalJson(event)}\n`); }
   catch { throw safeError("invalid_input"); }
-  let tree: Awaited<ReturnType<typeof openPrivateLedgerTree>> | undefined;
   let tempPath: string | undefined;
   let tempCreated = false;
   let renamed = false;
   let renamePossible = false;
   let validating = false;
+  const assertCurrent = async (): Promise<void> => {
+    try { await assertPrivateLedgerTreeCurrent(paths, tree, lockIdentity); }
+    catch (error) { throw new PrivateLedgerAnchorError(error); }
+  };
   try {
-    tree = await openPrivateLedgerTree(paths);
+    await assertCurrent();
     await cleanupPrivateLedgerTemps(tree.ledger, basename(paths.eventsFile));
     const current = await readPrivateLedgerFile(anchoredPath(tree.ledger, basename(paths.eventsFile)));
     const duplicate = current.events.find((item) => item.eventId === eventId);
     if (duplicate) {
       if (options.rejectDuplicate) throw new PrivateLedgerDuplicateError();
       if (!Buffer.from(`${canonicalJson(duplicate)}\n`).equals(line)) throw safeError("integrity");
+      await assertCurrent();
       await restoreLedgerMode(anchoredPath(tree.ledger, basename(paths.eventsFile)));
       return { status: "noop" };
     }
@@ -1247,6 +1300,7 @@ async function appendPrivateLedgerEventLocked(
     try { await options.validateBeforeCommit?.(Object.freeze([...current.events])); }
     catch (error) { throw new PrivateLedgerValidationError(error); }
     validating = false;
+    await assertCurrent();
     const tempSuffix = options.tempSuffix ?? randomBytes(12).toString("hex");
     if (!/^[0-9a-z-]{1,64}$/.test(tempSuffix)) throw safeError("invalid_input");
     tempPath = anchoredPath(tree.ledger, `.${basename(paths.eventsFile)}.tmp-${tempSuffix}`);
@@ -1266,6 +1320,7 @@ async function appendPrivateLedgerEventLocked(
       await handle.close();
       await fault(options.injectFault, { scope: "ledger", operation: "close", timing: "after" });
     } finally { await closeQuietly(handle); }
+    await assertCurrent();
     await fault(options.injectFault, { scope: "ledger", operation: "rename", timing: "before" });
     renamePossible = true;
     await rename(tempPath, anchoredPath(tree.ledger, basename(paths.eventsFile)));
@@ -1274,9 +1329,10 @@ async function appendPrivateLedgerEventLocked(
     await fault(options.injectFault, { scope: "ledger", operation: "parent_fsync", timing: "before" });
     await tree.ledger.sync();
     await fault(options.injectFault, { scope: "ledger", operation: "parent_fsync", timing: "after" });
+    await assertCurrent();
     return { status: "committed" };
   } catch (error) {
-    if (validating || error instanceof PrivateLedgerValidationError) throw error;
+    if (validating || error instanceof PrivateLedgerValidationError || error instanceof PrivateLedgerAnchorError) throw error;
     if (error instanceof PrivateLedgerDuplicateError) throw error;
     if (renamePossible) {
       return (await verifyPrivateLedgerEvent(paths, eventId, line))
@@ -1289,7 +1345,6 @@ async function appendPrivateLedgerEventLocked(
     if (!renamed && tempCreated) {
       try { await unlink(tempPath!); } catch { /* only our temp */ }
     }
-    if (tree) await closePrivateLedgerTree(tree);
   }
 }
 
@@ -1300,16 +1355,23 @@ export async function appendPrivateLedgerEvent(
   options: AppendPrivateLedgerOptions = {},
 ): Promise<CommitResult> {
   const paths = await ensurePrivateLedger(root, layout);
-  await assertLockSafe(paths.lockFile);
+  const tree = await openPrivateLedgerTree(paths);
   try {
-    return await withCorpusLock(paths.lockFile, () => appendPrivateLedgerEventLocked(event, paths, options), options.lockOptions);
+    const anchoredLock = anchoredPath(tree.ledger, basename(paths.lockFile));
+    await assertLockSafe(anchoredLock);
+    return await withCorpusLock(anchoredLock, async (lockIdentity) => {
+      await options.afterLock?.();
+      await assertPrivateLedgerTreeCurrent(paths, tree, lockIdentity);
+      return appendPrivateLedgerEventLocked(event, paths, tree, lockIdentity, options);
+    }, options.lockOptions);
   } catch (error) {
+    if (error instanceof PrivateLedgerAnchorError) throw error.anchorCause;
     if (error instanceof PrivateLedgerValidationError) throw error.validationCause;
     if (error instanceof PrivateLedgerDuplicateError || error instanceof QualityStoreError) throw error;
     const code = codeOf(error);
     if (code === "lock_timeout" || code === "lock_unavailable") throw error as CorpusLockError;
     throw safeError("integrity");
-  }
+  } finally { await closePrivateLedgerTree(tree); }
 }
 
 export async function readPrivateLedgerEvents(
@@ -1318,22 +1380,24 @@ export async function readPrivateLedgerEvents(
   lockOptions: LockOptions = {},
 ): Promise<ReadonlyArray<Readonly<Record<string, unknown>>>> {
   const paths = await ensurePrivateLedger(root, layout);
-  await assertLockSafe(paths.lockFile);
+  const tree = await openPrivateLedgerTree(paths);
   try {
-    return await withCorpusLock(paths.lockFile, async () => {
-      const tree = await openPrivateLedgerTree(paths);
-      try {
-        const snapshot = await readPrivateLedgerFile(anchoredPath(tree.ledger, basename(paths.eventsFile)));
-        if (snapshot.bytes.byteLength > 0) await restoreLedgerMode(anchoredPath(tree.ledger, basename(paths.eventsFile)));
-        return Object.freeze([...snapshot.events]);
-      } finally { await closePrivateLedgerTree(tree); }
+    const anchoredLock = anchoredPath(tree.ledger, basename(paths.lockFile));
+    await assertLockSafe(anchoredLock);
+    return await withCorpusLock(anchoredLock, async (lockIdentity) => {
+      await assertPrivateLedgerTreeCurrent(paths, tree, lockIdentity);
+      const snapshot = await readPrivateLedgerFile(anchoredPath(tree.ledger, basename(paths.eventsFile)));
+      await assertPrivateLedgerTreeCurrent(paths, tree, lockIdentity);
+      if (snapshot.bytes.byteLength > 0) await restoreLedgerMode(anchoredPath(tree.ledger, basename(paths.eventsFile)));
+      await assertPrivateLedgerTreeCurrent(paths, tree, lockIdentity);
+      return Object.freeze([...snapshot.events]);
     }, lockOptions);
   } catch (error) {
     if (error instanceof QualityStoreError) throw error;
     const code = codeOf(error);
     if (code === "lock_timeout" || code === "lock_unavailable") throw error as CorpusLockError;
     throw safeError("integrity");
-  }
+  } finally { await closePrivateLedgerTree(tree); }
 }
 
 /** Read the permanent destination lock without acquiring labels.lock. Callers

@@ -13,6 +13,11 @@ export interface LockOptions {
   delay?: (ms: number) => Promise<void>;
 }
 
+export type CorpusLockIdentity = Readonly<{
+  dev: number;
+  ino: number;
+}>;
+
 export type CorpusLockErrorCode = "lock_timeout" | "lock_unavailable";
 
 export class CorpusLockError extends Error {
@@ -105,7 +110,7 @@ async function acquireLock(
 
 export async function withCorpusLock<T>(
   lockPath: string,
-  operation: () => Promise<T>,
+  operation: (identity: CorpusLockIdentity) => Promise<T>,
   options: LockOptions = {}
 ): Promise<T> {
   const retryMs = options.retryMs ?? DEFAULT_RETRY_MS;
@@ -120,7 +125,9 @@ export async function withCorpusLock<T>(
   try {
     await acquireLock(handle, retryMs, timeoutMs, nowNs, delay);
     locked = true;
-    return await operation();
+    const stats = await handle.stat();
+    if (!stats.isFile() || stats.nlink !== 1) throw new CorpusLockError("lock_unavailable");
+    return await operation(Object.freeze({ dev: stats.dev, ino: stats.ino }));
   } catch (error) {
     primaryFailure = true;
     throw error;

@@ -39,6 +39,8 @@ export type AppendOutcomeOptions = Readonly<{
   injectFault?: QualityStoreFaultInjector;
   tempSuffix?: string;
   lockOptions?: LockOptions;
+  /** Test-only adversarial hook, invoked while outcomes.lock is held. */
+  afterLock?: () => void | Promise<void>;
 }>;
 
 export { type QualityStoreFault as OutcomeStoreFault };

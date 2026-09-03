@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { link, lstat, mkdir, mkdtemp, readFile, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, readFile, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -148,6 +148,55 @@ describe("private zero-outcome store", () => {
     await expect(appendOutcomeEvent(root, label("event-locked"), { lockOptions: { timeoutMs: 20, retryMs: 1 } })).rejects.toMatchObject({ code: "lock_timeout" });
     release();
     await holder;
+  });
+
+  it("fails closed when the lock path is replaced after flock acquisition", async () => {
+    const root = await temporaryRoot();
+    const paths = await ensureOutcomeStore(root);
+    await appendOutcomeEvent(root, label("event-before-lock-swap"));
+    const before = await readFile(paths.eventsFile);
+    await expect(appendOutcomeEvent(root, label("event-after-lock-swap", { caseVersion: sha("b") }), {
+      async afterLock() {
+        await rename(paths.lockFile, `${paths.lockFile}.displaced`);
+        await writeFile(paths.lockFile, "", { mode: 0o600 });
+      },
+    })).rejects.toMatchObject({ code: "unsafe_path" });
+    expect(await readFile(paths.eventsFile)).toEqual(before);
+  });
+
+  it("fails closed when the ledger directory is replaced after flock acquisition", async () => {
+    const root = await temporaryRoot();
+    const paths = await ensureOutcomeStore(root);
+    await appendOutcomeEvent(root, label("event-before-ledger-swap"));
+    const before = await readFile(paths.eventsFile);
+    const displaced = join(root, "ledger.displaced");
+    await expect(appendOutcomeEvent(root, label("event-after-ledger-swap", { caseVersion: sha("b") }), {
+      async afterLock() {
+        await rename(paths.ledgerDir, displaced);
+        await mkdir(paths.ledgerDir, 0o700);
+        await rename(join(displaced, "outcomes.lock"), paths.lockFile);
+      },
+    })).rejects.toMatchObject({ code: "unsafe_path" });
+    expect(await readFile(join(displaced, "outcomes.jsonl"))).toEqual(before);
+    await expect(lstat(paths.eventsFile)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("fails closed when the store root is replaced after flock acquisition", async () => {
+    const root = await temporaryRoot();
+    const paths = await ensureOutcomeStore(root);
+    await appendOutcomeEvent(root, label("event-before-root-swap"));
+    const before = await readFile(paths.eventsFile);
+    const displaced = `${root}.displaced`;
+    await expect(appendOutcomeEvent(root, label("event-after-root-swap", { caseVersion: sha("b") }), {
+      async afterLock() {
+        await rename(root, displaced);
+        await mkdir(root, 0o700);
+        await mkdir(join(root, "ledger"), 0o700);
+        await rename(join(displaced, "ledger", "outcomes.lock"), join(root, "ledger", "outcomes.lock"));
+      },
+    })).rejects.toMatchObject({ code: "unsafe_path" });
+    expect(await readFile(join(displaced, "ledger", "outcomes.jsonl"))).toEqual(before);
+    await expect(lstat(paths.eventsFile)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("keeps the old ledger and removes its temp after a crash before rename", async () => {
