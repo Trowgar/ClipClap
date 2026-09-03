@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, open, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,7 +10,7 @@ import { requestKey } from "./helpers/replay-client";
 import { outcomeFreshnessSha256, type OutcomeCase } from "../feedback-quality/outcome-types";
 import { loadOutcomeObservationAuthority, publishOutcomeCase } from "../feedback-quality/outcome-promote";
 import { OUTCOME_OBSERVATION_RUNNER_VERSION, fingerprintOutcomeRequest, observeOutcomeCases, publishOutcomeObservation, type OutcomeObservationCase } from "../feedback-quality/outcome-observe";
-import { readOutcomeCandidateConfig, runOutcomeObserve } from "../scripts/outcome-observe";
+import { readOutcomeCandidateConfig, readOutcomeLiveLaneFile, runOutcomeObserve } from "../scripts/outcome-observe";
 
 const roots: string[] = [];
 const digest = (value: string) => sha256(Buffer.from(value));
@@ -158,6 +158,18 @@ describe("immutable zero-outcome observations", () => {
     await expect(observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [artifact({ recordedResponses: [a, a] })] }, { analyze: once as never })).rejects.toMatchObject({ code: "recording_not_consumed" });
     await expect(observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [artifact({ recordedResponses: [a] })] }, { analyze: twice as never })).rejects.toMatchObject({ code: "missing_request" });
     await expect(observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [artifact({ recordedResponses: [a, b] })] }, { analyze: async (_t, options) => { await (options.client as any).chat.completions.create(bodyB); return result; } })).rejects.toMatchObject({ code: "recording_not_consumed" });
+  });
+
+  it("allows baseline to leave explicitly recovery-only recordings unused, while candidate consumes them", async () => {
+    const bodyA = { model: "m", messages: [{ role: "system", content: "s" }, { role: "user", content: "a" }] };
+    const bodyB = { model: "m", messages: [{ role: "system", content: "s" }, { role: "user", content: "b" }] };
+    const primary = { ...fingerprintOutcomeRequest(bodyA), result: {} };
+    const recovery = { recordingVersion: 2 as const, phase: "recovery" as const, ...fingerprintOutcomeRequest(bodyB), result: {} };
+    const cfg = { ...loadAnalyzeConfig({}), outcomeRecoveryMode: "off" as const };
+    const result = { highlights: [], noClipsReason: "NO_VIABLE_MOMENTS", telemetry: {}, usage: { inputTokens: 0, outputTokens: 0, requests: 1, byModel: {} } } as never;
+    const analyze = async (_t: unknown, options: any) => { await options.client.chat.completions.create(bodyA); return result; };
+    await expect(observeOutcomeCases({ mode: "baseline", commitSha: COMMIT, config: cfg, cases: [artifact({ recordedResponses: [primary, recovery] })] }, { analyze: analyze as never })).resolves.toBeDefined();
+    await expect(observeOutcomeCases({ mode: "candidate", commitSha: COMMIT, config: { ...cfg, outcomeRecoveryMode: "on" }, cases: [artifact({ recordedResponses: [primary, recovery] })] }, { analyze: analyze as never })).rejects.toMatchObject({ code: "recording_not_consumed" });
   });
 
   it("matches concurrent request fingerprints independently and preserves duplicate FIFO", async () => {
@@ -377,6 +389,27 @@ describe("immutable zero-outcome observations", () => {
     const badEnum = { ...config, visualRecallMode: "PRIVATE_MODE" };
     await writeFile(path, canonicalJson({ schemaVersion: 1, engineFingerprint: sha256(canonicalJson(badEnum)), config: badEnum }), { mode: 0o600 });
     await expect(readOutcomeCandidateConfig(path)).rejects.toThrow("private_config_invalid");
+  });
+
+  it("rejects a private live-lane file whose mode changes during the read", async () => {
+    const parent = await mkdtemp(join(tmpdir(), "clipclap-outcome-live-mode-")); roots.push(parent);
+    const path = join(parent, "lane.json");
+    await writeFile(path, canonicalJson({ schemaVersion: 1, name: "lane" }), { mode: 0o600 });
+    const probe = await open(path, "r");
+    const prototype = Object.getPrototypeOf(probe) as { read: (...args: any[]) => Promise<unknown> };
+    await probe.close();
+    const originalRead = prototype.read;
+    prototype.read = async function(this: unknown, ...args: any[]): Promise<unknown> {
+      const result = await originalRead.apply(this, args);
+      await chmod(path, 0o644);
+      return result;
+    };
+    try {
+      await expect(readOutcomeLiveLaneFile(path, "lane")).rejects.toThrow("private_live_lane_invalid");
+    } finally {
+      prototype.read = originalRead;
+      await chmod(path, 0o600);
+    }
   });
 
   it("keeps the CLI aggregate-only and requires an explicit candidate config", async () => {

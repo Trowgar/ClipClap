@@ -11,7 +11,7 @@ import type { AnalyzeConfig } from "../analyze-v2/config";
 import type { V2Result } from "../analyze-v2/types";
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import type { Sha256 } from "../feedback-learning/types";
-import { loadOutcomeObservationAuthority, MAX_RECORDED_RESPONSES, withOutcomeObservationAuthority, type OutcomeObservationAuthorityCase, type RecordedOutcomeResponse } from "./outcome-promote";
+import { loadOutcomeObservationAuthority, MAX_OUTCOME_RECORDED_RESPONSES_BYTES, MAX_RECORDED_RESPONSES, withOutcomeObservationAuthority, type OutcomeObservationAuthorityCase, type RecordedOutcomeResponse } from "./outcome-promote";
 import { ensureOutcomeStore } from "./outcome-store";
 import { parseOutcomeCase, type OutcomeCase, type OutcomeDisposition } from "./outcome-types";
 import type { CommitResult } from "./store";
@@ -29,7 +29,7 @@ const RECOVERY_OUTCOMES = new Set(["not_eligible", "no_candidate", "empty_pool",
 const PRIMARY_DISPOSITIONS = new Set(["not_selected_for_critic", "critic_unjudged", "missing_range_rejected", "critic_rejected", "evidence_rejected", "snap_rejected", "selection_not_chosen", "arc_rejected", "post_boundary_rejected", "standalone_rejected", "finalizer_rejected", "shipped"]);
 const RECOVERY_DISPOSITIONS = new Set(["critic_unjudged", "critic_rejected", "evidence_rejected", "snap_rejected", "selection_not_chosen", "arc_rejected", "post_boundary_rejected", "standalone_rejected", "finalizer_rejected", "shipped", "finalizer_unjudged"]);
 
-export const OUTCOME_OBSERVATION_RUNNER_VERSION = "outcome-observe-v1" as const;
+export const OUTCOME_OBSERVATION_RUNNER_VERSION = "outcome-observe-v2" as const;
 
 export type OutcomeObservationMode = "baseline" | "candidate";
 
@@ -54,7 +54,9 @@ export type OutcomeObservation = Readonly<{
   commitSha: string;
   engineFingerprint: Sha256;
   corpusDigest: Sha256;
-  runnerVersion: typeof OUTCOME_OBSERVATION_RUNNER_VERSION;
+  /** Kept structurally open for old in-memory fixtures; publication and gate
+   * validation require the current runner constant. */
+  runnerVersion: string;
   recordedResponsesDigest: Sha256;
   results: readonly OutcomeObservationResult[];
   liveLane?: Readonly<{ name: string; attempts: 3; attemptDigests: readonly [Sha256, Sha256, Sha256] }>;
@@ -75,6 +77,20 @@ export type MaterializedOutcomeLiveLane = Readonly<{
     engineFingerprint: Sha256;
     captureSha256: Sha256;
     cases: readonly Readonly<{ caseVersion: Sha256; recordedResponses: readonly Readonly<{ providerRequestId: string; recording: RecordedOutcomeResponse }>[] }>[];
+  }>[];
+}>;
+
+export type OutcomeLiveLaneDraft = Readonly<{
+  schemaVersion: 1;
+  name: string;
+  caseVersion: Sha256;
+  materializeAfterPromotion: true;
+  attempts: readonly Readonly<{
+    attemptId: string;
+    recordedAt: string;
+    engineFingerprint: Sha256;
+    captureSha256: Sha256;
+    cases: readonly Readonly<{ caseVersion: null; recordedResponses: readonly Readonly<{ providerRequestId: string; recording: RecordedOutcomeResponse }>[] }>[];
   }>[];
 }>;
 
@@ -152,13 +168,13 @@ function completion(recording: RecordedOutcomeResponse): Readonly<Record<string,
   return { choices: [{ message: { content: canonicalJson(result), refusal: null }, finish_reason: "stop" }], usage };
 }
 
-function strictReplayClient(recordings: readonly RecordedOutcomeResponse[]): OpenAI & { assertComplete(): void } {
+function strictReplayClient(recordings: readonly RecordedOutcomeResponse[], mode: OutcomeObservationMode): OpenAI & { assertComplete(): void } {
   if (!Array.isArray(recordings) || recordings.length > MAX_RECORDED_RESPONSES) fail("invalid_case");
   const queues = new Map<Sha256, RecordedOutcomeResponse[]>();
   const promptModels = new Set<string>();
   let remaining = 0;
   for (const recording of recordings) {
-    if (!exactDataObject(recording, ["promptFingerprint", "modelFingerprint", "requestFingerprint", "result"]) || !isHash(recording.promptFingerprint) || !isHash(recording.modelFingerprint) || !isHash(recording.requestFingerprint) || !isPlain(recording.result)) fail("invalid_case");
+    if ((!exactDataObject(recording, ["promptFingerprint", "modelFingerprint", "requestFingerprint", "result"]) && !exactDataObject(recording, ["recordingVersion", "phase", "promptFingerprint", "modelFingerprint", "requestFingerprint", "result"])) || (Object.prototype.hasOwnProperty.call(recording, "recordingVersion") && (recording.recordingVersion !== 2 || (recording.phase !== "primary" && recording.phase !== "recovery"))) || !isHash(recording.promptFingerprint) || !isHash(recording.modelFingerprint) || !isHash(recording.requestFingerprint) || !isPlain(recording.result)) fail("invalid_case");
     const queue = queues.get(recording.requestFingerprint) ?? [];
     queue.push(recording as unknown as RecordedOutcomeResponse);
     queues.set(recording.requestFingerprint, queue);
@@ -176,6 +192,7 @@ function strictReplayClient(recordings: readonly RecordedOutcomeResponse[]): Ope
         if (promptModels.has(`${fingerprint.promptFingerprint}\0${fingerprint.modelFingerprint}`)) fail("request_fingerprint_drift");
         fail(remaining === 0 ? "missing_request" : "live_lane_required");
       }
+      if (mode === "baseline" && exact.phase === "recovery") fail("missing_request");
       if (exact.promptFingerprint !== fingerprint.promptFingerprint || exact.modelFingerprint !== fingerprint.modelFingerprint) fail("request_fingerprint_drift");
       remaining -= 1;
       return completion(exact);
@@ -184,7 +201,14 @@ function strictReplayClient(recordings: readonly RecordedOutcomeResponse[]): Ope
       throw error;
     }
   };
-  return { chat: { completions: { create } }, assertComplete() { if (replayFailure) throw replayFailure; if (remaining !== 0) fail("recording_not_consumed"); } } as unknown as OpenAI & { assertComplete(): void };
+  return { chat: { completions: { create } }, assertComplete() {
+    if (replayFailure) throw replayFailure;
+    if (mode === "candidate" && remaining !== 0) fail("recording_not_consumed");
+    if (mode === "baseline") {
+      const primaryRemaining = [...queues.values()].flat().filter((recording) => recording.phase !== "recovery").length;
+      if (primaryRemaining !== 0) fail("recording_not_consumed");
+    }
+  } } as unknown as OpenAI & { assertComplete(): void };
 }
 
 function countMap(value: unknown, allowed: ReadonlySet<string>): boolean {
@@ -292,6 +316,47 @@ function corpusDigest(cases: readonly OutcomeObservationCase[]): Sha256 {
   return sha256(canonicalJson(cases.map(({ case: value }) => ({ caseVersion: value.caseVersion, transcriptSha256: value.transcriptSha256, sourceSha256: value.sourceSha256, expected: value.expected, disposition: value.disposition }))));
 }
 
+/** Convert a capture-only lane draft into the exact post-promotion lane.
+ * The draft is authenticated before case-version substitution, then every
+ * attempt digest is recomputed over the materialized bytes. */
+export function materializeOutcomeLiveLane(raw: unknown, realCaseVersion: Sha256): MaterializedOutcomeLiveLane {
+  try {
+    if (!isPlain(raw) || !exactDataObject(raw, ["schemaVersion", "name", "caseVersion", "materializeAfterPromotion", "attempts"]) ||
+        raw.schemaVersion !== 1 || raw.materializeAfterPromotion !== true || typeof raw.name !== "string" || !SAFE_NAME.test(raw.name) ||
+        !isHash(raw.caseVersion) || !isHash(realCaseVersion) || !Array.isArray(raw.attempts) || raw.attempts.length !== 3) fail("invalid_live_lane");
+    const providerIds = new Set<string>();
+    const attempts = raw.attempts.map((draftAttempt) => {
+      if (!isPlain(draftAttempt) || !exactDataObject(draftAttempt, ["attemptId", "recordedAt", "engineFingerprint", "captureSha256", "cases"]) ||
+          typeof draftAttempt.attemptId !== "string" || !SAFE_NAME.test(draftAttempt.attemptId) || !canonicalUtc(draftAttempt.recordedAt) ||
+          !isHash(draftAttempt.engineFingerprint) || !isHash(draftAttempt.captureSha256) || !Array.isArray(draftAttempt.cases) || draftAttempt.cases.length === 0) fail("invalid_live_lane");
+      const { captureSha256: draftDigest, ...draftBody } = draftAttempt;
+      if (sha256(canonicalJson(draftBody)) !== draftDigest) fail("invalid_live_lane");
+      const cases = draftAttempt.cases.map((draftCase) => {
+        if (!isPlain(draftCase) || !exactDataObject(draftCase, ["caseVersion", "recordedResponses"]) || draftCase.caseVersion !== null || !Array.isArray(draftCase.recordedResponses) || draftCase.recordedResponses.length > MAX_RECORDED_RESPONSES) fail("invalid_live_lane");
+        let recordedBytes = 0;
+        const recordedResponses = draftCase.recordedResponses.map((captured) => {
+          if (!isPlain(captured) || !exactDataObject(captured, ["providerRequestId", "recording"]) || typeof captured.providerRequestId !== "string" || !SAFE_NAME.test(captured.providerRequestId) || providerIds.has(captured.providerRequestId)) fail("invalid_live_lane");
+          const recording = captured.recording;
+          const v1 = exactDataObject(recording, ["promptFingerprint", "modelFingerprint", "requestFingerprint", "result"]);
+          const v2 = exactDataObject(recording, ["recordingVersion", "phase", "promptFingerprint", "modelFingerprint", "requestFingerprint", "result"]);
+          if ((!v1 && !v2) || (v2 && (recording.recordingVersion !== 2 || (recording.phase !== "primary" && recording.phase !== "recovery"))) ||
+              !isHash(recording.promptFingerprint) || !isHash(recording.modelFingerprint) || !isHash(recording.requestFingerprint) || !isPlain(recording.result)) fail("invalid_live_lane");
+          providerIds.add(captured.providerRequestId);
+          recordedBytes += Buffer.byteLength(`${canonicalJson(recording)}\n`);
+          if (recordedBytes > MAX_OUTCOME_RECORDED_RESPONSES_BYTES) fail("invalid_live_lane");
+          return Object.freeze({ providerRequestId: captured.providerRequestId, recording: JSON.parse(canonicalJson(recording)) as RecordedOutcomeResponse });
+        });
+        return Object.freeze({ caseVersion: realCaseVersion, recordedResponses: Object.freeze(recordedResponses) });
+      });
+      const materializedBody = { attemptId: draftAttempt.attemptId, recordedAt: draftAttempt.recordedAt, engineFingerprint: draftAttempt.engineFingerprint, cases: Object.freeze(cases) };
+      return Object.freeze({ ...materializedBody, captureSha256: sha256(canonicalJson(materializedBody)) });
+    });
+    const attemptIds = attempts.map((attempt) => attempt.attemptId);
+    if (new Set(attemptIds).size !== attemptIds.length || providerIds.size === 0) fail("invalid_live_lane");
+    return Object.freeze({ schemaVersion: 1 as const, name: raw.name, attempts: Object.freeze(attempts) });
+  } catch (error) { if (error instanceof OutcomeObservationError) throw error; return fail("invalid_live_lane"); }
+}
+
 function parseLiveLane(raw: MaterializedOutcomeLiveLane, cases: readonly OutcomeObservationCase[], engineFingerprint: Sha256, now: Date): Readonly<{
   name: string;
   attempts: readonly Readonly<{ attemptId: string; recordedAt: string; responses: readonly (readonly RecordedOutcomeResponse[])[]; digest: Sha256 }>[];
@@ -326,7 +391,7 @@ function parseLiveLane(raw: MaterializedOutcomeLiveLane, cases: readonly Outcome
       return captured.recording;
       });
     });
-    for (const entry of recordings) strictReplayClient(entry);
+    for (const entry of recordings) strictReplayClient(entry, "candidate");
     if (providerRequestIds.size === providerCountBefore) fail("invalid_live_lane");
     return Object.freeze({
       attemptId,
@@ -348,7 +413,7 @@ async function runCases(
   const results: OutcomeObservationResult[] = [];
   for (let index = 0; index < cases.length; index += 1) {
     const item = cases[index];
-    const client = strictReplayClient(recordings[index]);
+    const client = strictReplayClient(recordings[index], mode);
     let result: V2Result;
     let audit: Readonly<{ keepFalseShipped: number; explicitGateResurrections: number }> | undefined;
     let auditCalls = 0;
@@ -442,7 +507,7 @@ function parseRecordings(bytes: Buffer): readonly RecordedOutcomeResponse[] {
   return Object.freeze(text.slice(0, -1).split("\n").map((line) => {
     let value: unknown;
     try { value = JSON.parse(line); } catch { return fail("invalid_case"); }
-    if (!isPlain(value) || !exactKeys(value, ["promptFingerprint", "modelFingerprint", "requestFingerprint", "result"]) || canonicalJson(value) !== line || !isHash(value.promptFingerprint) || !isHash(value.modelFingerprint) || !isHash(value.requestFingerprint) || !isPlain(value.result)) fail("invalid_case");
+    if (!isPlain(value) || (!exactKeys(value, ["promptFingerprint", "modelFingerprint", "requestFingerprint", "result"]) && !exactKeys(value, ["recordingVersion", "phase", "promptFingerprint", "modelFingerprint", "requestFingerprint", "result"])) || canonicalJson(value) !== line || (Object.prototype.hasOwnProperty.call(value, "recordingVersion") && (value.recordingVersion !== 2 || (value.phase !== "primary" && value.phase !== "recovery"))) || !isHash(value.promptFingerprint) || !isHash(value.modelFingerprint) || !isHash(value.requestFingerprint) || !isPlain(value.result)) fail("invalid_case");
     return Object.freeze(value) as unknown as RecordedOutcomeResponse;
   }));
 }

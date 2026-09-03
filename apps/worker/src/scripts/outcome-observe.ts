@@ -39,7 +39,7 @@ async function readPrivateJson(path: string, maximum: number): Promise<unknown> 
     let offset = 0;
     while (offset < bytes.length) { const item = await handle.read(bytes, offset, bytes.length - offset, null); if (!item.bytesRead) break; offset += item.bytesRead; }
     const final = await handle.stat();
-    if (offset !== bytes.length || final.dev !== initial.dev || final.ino !== initial.ino || final.size !== initial.size || final.mtimeMs !== initial.mtimeMs) throw new Error();
+    if (offset !== bytes.length || final.dev !== initial.dev || final.ino !== initial.ino || final.size !== initial.size || final.mtimeMs !== initial.mtimeMs || final.nlink !== 1 || (final.mode & 0o7777) !== 0o600) throw new Error();
     return JSON.parse(new TextDecoder("utf8", { fatal: true }).decode(bytes));
   } catch { throw new Error("private_file_invalid"); }
   finally { await handle?.close().catch(() => undefined); }

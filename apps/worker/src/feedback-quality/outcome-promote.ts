@@ -30,12 +30,15 @@ export const MAX_OUTCOME_TRANSCRIPT_BYTES = 64 * 1024 * 1024;
 export const MAX_OUTCOME_RECORDED_RESPONSES_BYTES = 16 * 1024 * 1024;
 const REQUIRED_CASE_FILES = ["case.json", "recorded-responses.jsonl", "source.mp4", "transcript.json"] as const;
 
-export interface RecordedOutcomeResponse {
+interface RecordedOutcomeResponseBase {
   readonly promptFingerprint: Sha256;
   readonly modelFingerprint: Sha256;
   readonly requestFingerprint: Sha256;
   readonly result: Readonly<Record<string, unknown>>;
 }
+export type RecordedOutcomeResponse =
+  | (RecordedOutcomeResponseBase & Readonly<{ recordingVersion?: undefined; phase?: undefined }>)
+  | (RecordedOutcomeResponseBase & Readonly<{ recordingVersion: 2; phase: "primary" | "recovery" }>);
 
 export interface OutcomePromotionDecision {
   readonly schemaVersion: 1;
@@ -185,8 +188,9 @@ function parseDecision(value: unknown): OutcomePromotionDecision {
     expected = parseOutcomeLabel({ schemaVersion: 1, action: "label", eventId: value.eventId, occurredAt: value.reviewedAt, caseVersion: `sha256:${"0".repeat(64)}`, set: value.destination, disposition: value.disposition, confidence: value.confidence, expected: value.expected }).expected;
   } catch { fail("invalid_decision"); }
   const responses = dense(value.recordedResponses, MAX_RECORDED_RESPONSES).map((entry) => {
-    if (!plain(entry) || !exact(entry, ["promptFingerprint", "modelFingerprint", "requestFingerprint", "result"]) ||
+    if (!plain(entry) || (!exact(entry, ["promptFingerprint", "modelFingerprint", "requestFingerprint", "result"]) && !exact(entry, ["recordingVersion", "phase", "promptFingerprint", "modelFingerprint", "requestFingerprint", "result"])) ||
         !hash(entry.promptFingerprint) || !hash(entry.modelFingerprint) || !hash(entry.requestFingerprint) || !plain(entry.result)) fail("invalid_decision");
+    if (Object.prototype.hasOwnProperty.call(entry, "recordingVersion") && (entry.recordingVersion !== 2 || (entry.phase !== "primary" && entry.phase !== "recovery"))) fail("invalid_decision");
     // Capture now so later getters/prototype changes cannot alter publication.
     try { return JSON.parse(canonicalJson(entry)) as RecordedOutcomeResponse; } catch { return fail("invalid_decision"); }
   });

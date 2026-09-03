@@ -81,6 +81,10 @@ export interface AnalyzeV2Options {
     keepFalseShipped: number;
     explicitGateResurrections: number;
   }>) => void;
+  /** Explicit phase authority for private outcome recordings. This is emitted
+   * by the analyzer at the phase boundary; capture code must never infer it
+   * from request fingerprints. */
+  outcomeRecoveryPhase?: (phase: "primary" | "recovery") => void;
 }
 
 export interface VisualRecallEvaluation {
@@ -304,6 +308,7 @@ export async function analyzeHighlightsV2(
     selectedCriticCandidates = candidates;
     scannerTelemetry = { path: "tiny" };
   } else {
+    options.outcomeRecoveryPhase?.("primary");
     const scan = await runScanner(
       client,
       usage,
@@ -701,6 +706,7 @@ export async function analyzeHighlightsV2(
         let recovery: Awaited<ReturnType<typeof runQualityLane>>;
         recoveryLaneStarted = true;
         try {
+          options.outcomeRecoveryPhase?.("recovery");
           recovery = await runQualityLane({
             lane: "recovery",
             candidates: pool.candidates,
