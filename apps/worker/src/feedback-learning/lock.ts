@@ -84,6 +84,20 @@ async function openLockFile(lockPath: string): Promise<FileHandle> {
   }
 }
 
+async function openExistingLockFile(lockPath: string): Promise<FileHandle> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(lockPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stats = await handle.stat();
+    if (!stats.isFile() || stats.nlink !== 1 || (stats.mode & 0o7777) !== 0o600) throw new CorpusLockError("lock_unavailable");
+    return handle;
+  } catch (error) {
+    if (handle) await handle.close().catch(() => undefined);
+    if (error instanceof CorpusLockError) throw error;
+    throw new CorpusLockError("lock_unavailable");
+  }
+}
+
 async function acquireLock(
   handle: FileHandle,
   retryMs: number,
@@ -150,6 +164,36 @@ export async function withCorpusLock<T>(
     } catch {
       cleanupFailed = true;
     }
+    if (cleanupFailed && !primaryFailure) throw new CorpusLockError("lock_unavailable");
+  }
+}
+
+/** Acquire an already-owned lock without creating or chmod'ing filesystem state. */
+export async function withExistingCorpusLock<T>(
+  lockPath: string,
+  operation: (identity: CorpusLockIdentity) => Promise<T>,
+  options: LockOptions = {},
+): Promise<T> {
+  const handle = await openExistingLockFile(lockPath);
+  const retryMs = options.retryMs ?? DEFAULT_RETRY_MS;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const nowNs = options.nowNs ?? process.hrtime.bigint;
+  const delay = options.delay ?? defaultDelay;
+  let locked = false;
+  let primaryFailure = false;
+  try {
+    await acquireLock(handle, retryMs, timeoutMs, nowNs, delay);
+    locked = true;
+    const stats = await handle.stat();
+    if (!stats.isFile() || stats.nlink !== 1 || (stats.mode & 0o7777) !== 0o600) throw new CorpusLockError("lock_unavailable");
+    return await operation(Object.freeze({ dev: stats.dev, ino: stats.ino }));
+  } catch (error) {
+    primaryFailure = true;
+    throw error;
+  } finally {
+    let cleanupFailed = false;
+    if (locked) try { await flockAsync(handle.fd, "un"); } catch { cleanupFailed = true; }
+    try { await handle.close(); } catch { cleanupFailed = true; }
     if (cleanupFailed && !primaryFailure) throw new CorpusLockError("lock_unavailable");
   }
 }

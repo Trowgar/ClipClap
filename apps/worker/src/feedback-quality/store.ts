@@ -14,7 +14,7 @@ import {
 import { basename, join, resolve } from "node:path";
 
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
-import { withCorpusLock, type CorpusLockError, type CorpusLockIdentity, type LockOptions } from "../feedback-learning/lock";
+import { withCorpusLock, withExistingCorpusLock, type CorpusLockError, type CorpusLockIdentity, type LockOptions } from "../feedback-learning/lock";
 
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
@@ -24,6 +24,7 @@ const COMMIT_MARKER_BYTES = Buffer.from("clipclap-feedback-quality-committed-v1\
 const BUNDLE_NAMES = ["case", "observation", "decision", "rollback"] as const;
 const PRIVATE_FILE_NAMES = new Set(["case.json", "transcript.json", "evidence.mp4", "source.mp4", "source-or-evidence.mp4", "recorded-responses.json", "manifest.json", "results.jsonl", "decision.json", "report.md", "rollback.json", "compose.production.yml", "rollback.compose.yml", "candidate.compose.yml", "production.env", "feedback-quality-config.json"]);
 const MAX_PRIVATE_METADATA_BYTES = 8 * 1024;
+export const MAX_PRIVATE_LEDGER_BYTES = 8 * 1024 * 1024;
 const DEFINITE_PRE_COMMIT_RENAME_ERRORS = new Set(["EACCES", "EBUSY", "EEXIST", "EISDIR", "EINVAL", "ELOOP", "ENAMETOOLONG", "ENOENT", "ENOTDIR", "ENOTEMPTY", "EPERM", "EROFS", "EXDEV"]);
 export const MAX_READ_BUNDLE_FILE_BYTES = 256 * 1024 * 1024;
 export const MAX_READ_BUNDLE_TOTAL_BYTES = 512 * 1024 * 1024;
@@ -491,12 +492,12 @@ async function readRegular(path: string): Promise<Uint8Array> {
   } finally { await closeQuietly(handle); }
 }
 
-async function readRegularCapped(path: string, cap: number): Promise<Uint8Array> {
+async function readRegularCapped(path: string, cap: number, requireExactPrivateMode = false): Promise<Uint8Array> {
   let handle: FileHandle | undefined;
   try {
     handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     const stats = await handle.stat();
-    if (!stats.isFile() || stats.nlink !== 1) throw safeError("unsafe_path");
+    if (!stats.isFile() || stats.nlink !== 1 || (requireExactPrivateMode && (stats.mode & 0o7777) !== FILE_MODE)) throw safeError("unsafe_path");
     if (stats.size > cap) throw safeError("too_large");
     const bytes = Buffer.allocUnsafe(stats.size);
     let offset = 0;
@@ -506,7 +507,7 @@ async function readRegularCapped(path: string, cap: number): Promise<Uint8Array>
       offset += result.bytesRead;
     }
     const final = await handle.stat();
-    if (!final.isFile() || final.nlink !== 1 || final.size > cap || final.size !== offset) throw safeError(final.size > cap ? "too_large" : "integrity");
+    if (!final.isFile() || final.nlink !== 1 || (requireExactPrivateMode && (final.mode & 0o7777) !== FILE_MODE) || final.size > cap || final.size !== offset) throw safeError(final.size > cap ? "too_large" : "integrity");
     return new Uint8Array(bytes.subarray(0, offset));
   } catch (error) {
     if (error instanceof QualityStoreError) throw error;
@@ -1244,9 +1245,9 @@ async function readPrivateLedgerFile(path: string): Promise<{ present: boolean; 
   let present = false;
   try {
     const current = await lstat(path);
-    if (current.isSymbolicLink() || !current.isFile() || current.nlink !== 1) throw safeError("unsafe_path");
+    if (current.isSymbolicLink() || !current.isFile() || current.nlink !== 1 || (current.mode & 0o7777) !== FILE_MODE || current.size > MAX_PRIVATE_LEDGER_BYTES) throw safeError(current.size > MAX_PRIVATE_LEDGER_BYTES ? "too_large" : "unsafe_path");
     present = true;
-    bytes = await readRegular(path);
+    bytes = await readRegularCapped(path, MAX_PRIVATE_LEDGER_BYTES, true);
   }
   catch (error) {
     if (codeOf(error) !== "ENOENT") throw error;
@@ -1443,6 +1444,38 @@ export async function withPrivateLedgerTransaction<T>(
     if (error instanceof PrivateLedgerAnchorError) throw error.anchorCause;
     if (error instanceof PrivateLedgerValidationError) throw error.validationCause;
     if (error instanceof PrivateLedgerDuplicateError || error instanceof QualityStoreError) throw error;
+    const code = codeOf(error);
+    if (code === "lock_timeout" || code === "lock_unavailable") throw error as CorpusLockError;
+    throw safeError("integrity");
+  } finally { await closePrivateLedgerTree(tree); }
+}
+
+export async function withPrivateLedgerReadLock<T>(
+  root: string,
+  layout: PrivateLedgerLayout,
+  operation: (authority: Readonly<{ rootPath: string; assertCurrent: () => Promise<void> }>) => Promise<T>,
+  lockOptions: LockOptions = {},
+): Promise<T> {
+  const checkedRoot = validateRoot(root);
+  const names = privateLedgerNames(layout);
+  const paths: PrivateLedgerPaths = Object.freeze({
+    root: checkedRoot,
+    ledgerDir: join(checkedRoot, "ledger"),
+    eventsFile: join(checkedRoot, "ledger", names.eventsFileName),
+    lockFile: join(checkedRoot, "ledger", names.lockFileName),
+  });
+  const tree = await openPrivateLedgerTree(paths);
+  try {
+    const anchoredLock = anchoredPath(tree.ledger, basename(paths.lockFile));
+    return await withExistingCorpusLock(anchoredLock, async (lockIdentity) => {
+      const assertCurrent = () => assertPrivateLedgerTreeCurrent(paths, tree, lockIdentity);
+      await assertCurrent();
+      const result = await operation(Object.freeze({ rootPath: anchoredPath(tree.root), assertCurrent }));
+      await assertCurrent();
+      return result;
+    }, lockOptions);
+  } catch (error) {
+    if (error instanceof QualityStoreError) throw error;
     const code = codeOf(error);
     if (code === "lock_timeout" || code === "lock_unavailable") throw error as CorpusLockError;
     throw safeError("integrity");

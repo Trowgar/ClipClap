@@ -8,9 +8,9 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import type { Sha256 } from "../feedback-learning/types";
-import { DEFAULT_OUTCOME_ROOT, OutcomeStoreError, withOutcomePublication } from "./outcome-store";
+import { DEFAULT_OUTCOME_ROOT, OutcomeStoreError, withOutcomePublication, withOutcomeValidationLock } from "./outcome-store";
 import { MAX_OUTCOME_MATERIALIZATION_DELAY_MS, MAX_OUTCOME_REVIEW_DELAY_MS, outcomeFreshnessSha256, parseOutcomeCase, parseOutcomeLabel, type OutcomeCase, type OutcomeConfidence, type OutcomeDisposition, type OutcomeExpected, type OutcomeLabel, type OutcomeSet } from "./outcome-types";
-import type { BundleFilePayload, CommitResult, FileBackedPayload, QualityStoreFaultInjector } from "./store";
+import { MAX_PRIVATE_LEDGER_BYTES, type BundleFilePayload, type CommitResult, type FileBackedPayload, type QualityStoreFaultInjector } from "./store";
 import type { Subsystem } from "./types";
 
 const HASH = /^sha256:[0-9a-f]{64}$/;
@@ -22,6 +22,12 @@ const MAX_OUTCOME_FUTURE_SKEW_MS = 5 * 60 * 1000;
 export const MAX_OUTCOME_SOURCE_BYTES = 2 * 1024 * 1024 * 1024;
 const MAX_RECORDED_RESPONSES = 256;
 export const MAX_OUTCOME_CASE_BYTES = 1024 * 1024;
+/** Ledger ceiling: tens of thousands of compact immutable review events. */
+export const MAX_OUTCOME_LEDGER_BYTES = MAX_PRIVATE_LEDGER_BYTES;
+/** Full canonical transcript ceiling; comfortably above supported production jobs. */
+export const MAX_OUTCOME_TRANSCRIPT_BYTES = 64 * 1024 * 1024;
+/** At most 256 recorded model responses, with bounded decision-file inputs. */
+export const MAX_OUTCOME_RECORDED_RESPONSES_BYTES = 16 * 1024 * 1024;
 const REQUIRED_CASE_FILES = ["case.json", "recorded-responses.jsonl", "source.mp4", "transcript.json"] as const;
 
 export interface RecordedOutcomeResponse {
@@ -129,6 +135,12 @@ function fail(code: OutcomePromotionError["code"]): never { throw new OutcomePro
 export function isOutcomeSourceSizeAllowed(size: number): boolean {
   return Number.isSafeInteger(size) && size > 0 && size <= MAX_OUTCOME_SOURCE_BYTES;
 }
+export function isOutcomeArtifactSizeAllowed(name: "case.json" | "transcript.json" | "recorded-responses.jsonl", size: number): boolean {
+  const maximum = name === "case.json" ? MAX_OUTCOME_CASE_BYTES
+    : name === "transcript.json" ? MAX_OUTCOME_TRANSCRIPT_BYTES
+      : MAX_OUTCOME_RECORDED_RESPONSES_BYTES;
+  return Number.isSafeInteger(size) && size >= 0 && size <= maximum;
+}
 function hash(value: unknown): value is Sha256 { return typeof value === "string" && HASH.test(value); }
 function token(value: unknown): value is string { return typeof value === "string" && TOKEN.test(value); }
 function utc(value: unknown): value is string {
@@ -233,7 +245,15 @@ export function createPrismaOutcomePromotionRepository(client: PrismaClient): Ou
 }
 
 function recordedResponseBytes(responses: readonly RecordedOutcomeResponse[]): Buffer {
-  return Buffer.from(responses.map((entry) => canonicalJson(entry)).join("\n") + "\n");
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (const entry of responses) {
+    const chunk = Buffer.from(`${canonicalJson(entry)}\n`);
+    total += chunk.byteLength;
+    if (total > MAX_OUTCOME_RECORDED_RESPONSES_BYTES) fail("inputs_missing");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks, total);
 }
 
 async function spoolSource(body: Uint8Array | Buffer | ReadableStream<Uint8Array>, expectedSize: number, directory: string): Promise<FileBackedPayload> {
@@ -290,8 +310,10 @@ export async function promoteOutcomeCase(rawDecision: unknown, dependencies: Out
   projectionChecks(value, snapshot);
   let transcriptBytes: Buffer;
   try { transcriptBytes = Buffer.from(canonicalJson(snapshot.job.transcriptJson)); } catch { return fail("inputs_missing"); }
+  if (!isOutcomeArtifactSizeAllowed("transcript.json", transcriptBytes.byteLength)) fail("inputs_missing");
   if (sha256(transcriptBytes) !== value.transcriptSha256) fail("stale_input");
   const recordedBytes = recordedResponseBytes(value.recordedResponses);
+  if (!isOutcomeArtifactSizeAllowed("recorded-responses.jsonl", recordedBytes.byteLength)) fail("inputs_missing");
   if (sha256(recordedBytes) !== value.recordedResponsesSha256) fail("stale_input");
   const sourceKey = (snapshot.job.normalizedArtifactKey || snapshot.job.sourceArtifactKey)!;
   const sourceSize = await dependencies.getObjectSize(sourceKey);
@@ -591,7 +613,10 @@ async function assertExactExisting(directory: FileHandle, files: OutcomeCasePubl
   for (const name of REQUIRED_CASE_FILES) {
     const actual = await privateFileDigest(
       anchoredPath(directory, name),
-      name === "source.mp4" ? { minimum: 1, maximum: MAX_OUTCOME_SOURCE_BYTES } : {},
+      name === "source.mp4" ? { minimum: 1, maximum: MAX_OUTCOME_SOURCE_BYTES }
+        : name === "case.json" ? { maximum: MAX_OUTCOME_CASE_BYTES }
+          : name === "transcript.json" ? { maximum: MAX_OUTCOME_TRANSCRIPT_BYTES }
+            : { maximum: MAX_OUTCOME_RECORDED_RESPONSES_BYTES },
     );
     if (actual.size !== capturedPayloadSize(files[name]) || actual.sha256 !== capturedPayloadSha256(files[name])) fail("publication_failed");
   }
@@ -625,6 +650,9 @@ export async function publishOutcomeCase(input: OutcomeCasePublication): Promise
   const sourceSize = sourcePayload instanceof Uint8Array ? sourcePayload.byteLength : sourcePayload.size;
   if (Number.isSafeInteger(sourceSize) && sourceSize > MAX_OUTCOME_SOURCE_BYTES) fail("source_too_large");
   if (!isOutcomeSourceSizeAllowed(sourceSize)) fail("publication_failed");
+  for (const name of ["case.json", "transcript.json", "recorded-responses.jsonl"] as const) {
+    if (!isOutcomeArtifactSizeAllowed(name, capturedPayloadSize(input.files[name]))) fail("publication_failed");
+  }
   const prepared = await preparePublicationFiles(input.files, input.beforeSnapshotDestinationOpen);
   try {
     await input.afterPrepare?.();
@@ -839,7 +867,7 @@ async function auditPrivateHandle(directory: FileHandle, reasons: Record<string,
   }
 }
 
-export async function validateOutcomeStore(root: string, options: Readonly<{
+async function validateOutcomeStoreLocked(root: string, options: Readonly<{
   now?: Date;
   afterAnchor?: () => void | Promise<void>;
   afterCaseAnchor?: (caseVersion: Sha256) => void | Promise<void>;
@@ -865,7 +893,7 @@ export async function validateOutcomeStore(root: string, options: Readonly<{
       if (stats.isSymbolicLink() || !stats.isFile() || stats.nlink !== 1) addReason(reasons, "required_entry_type");
     }
     if (Object.keys(reasons).length > 0) return Object.freeze({ status: "invalid", counts: Object.freeze(counts), reasons: Object.freeze(reasons) });
-    const ledger = Buffer.from(await readRegularPrivate(anchoredPath(tree.ledger, "outcomes.jsonl"), Number.MAX_SAFE_INTEGER, options.afterLedgerAnchor)).toString("utf8");
+    const ledger = Buffer.from(await readRegularPrivate(anchoredPath(tree.ledger, "outcomes.jsonl"), MAX_OUTCOME_LEDGER_BYTES, options.afterLedgerAnchor)).toString("utf8");
     await assertValidationTreeCurrent(root, tree);
     if (ledger.length > 0 && !ledger.endsWith("\n")) addReason(reasons, "invalid_ledger");
     const active = new Map<string, OutcomeLabel>();
@@ -901,9 +929,9 @@ export async function validateOutcomeStore(root: string, options: Readonly<{
         if (names.length !== REQUIRED_CASE_FILES.length || names.some((entry) => entry.isSymbolicLink() || !entry.isFile() || !REQUIRED_CASE_FILES.includes(entry.name as never))) { addReason(reasons, "unsafe_path"); continue; }
         const caseBytes = await readRegularPrivate(anchoredPath(directory, "case.json"), MAX_OUTCOME_CASE_BYTES);
         const [transcriptFile, sourceFile, recordedFile] = await Promise.all([
-          privateFileDigest(anchoredPath(directory, "transcript.json")),
+          privateFileDigest(anchoredPath(directory, "transcript.json"), { maximum: MAX_OUTCOME_TRANSCRIPT_BYTES }),
           privateFileDigest(anchoredPath(directory, "source.mp4"), { minimum: 1, maximum: MAX_OUTCOME_SOURCE_BYTES }),
-          privateFileDigest(anchoredPath(directory, "recorded-responses.jsonl")),
+          privateFileDigest(anchoredPath(directory, "recorded-responses.jsonl"), { maximum: MAX_OUTCOME_RECORDED_RESPONSES_BYTES }),
         ]);
         await assertChildCurrent(tree.cases, label.caseVersion, directory);
         const caseText = Buffer.from(caseBytes).toString("utf8");
@@ -935,4 +963,17 @@ export async function validateOutcomeStore(root: string, options: Readonly<{
     else addReason(reasons, "missing_store");
   } finally { if (tree) await closeValidationTree(tree); }
   return Object.freeze({ status: Object.keys(reasons).length === 0 ? "valid" : "invalid", counts: Object.freeze(counts), reasons: Object.freeze(reasons) });
+}
+
+export async function validateOutcomeStore(root: string, options: Readonly<{
+  now?: Date;
+  afterAnchor?: () => void | Promise<void>;
+  afterCaseAnchor?: (caseVersion: Sha256) => void | Promise<void>;
+  afterLedgerAnchor?: () => void | Promise<void>;
+}> = {}): Promise<OutcomeValidationReport> {
+  try { return await withOutcomeValidationLock(root, () => validateOutcomeStoreLocked(root, options)); }
+  catch (error) {
+    const reasons = Object.freeze({ [(error instanceof OutcomeStoreError && error.code === "unsafe_path") ? "unsafe_path" : "missing_store"]: 1 });
+    return Object.freeze({ status: "invalid", counts: Object.freeze({ eval: 0, holdout: 0 }), reasons });
+  }
 }

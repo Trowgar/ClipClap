@@ -11,7 +11,11 @@ import {
   digestAnalyzeStep,
   isOutcomeSourceSizeAllowed,
   MAX_OUTCOME_CASE_BYTES,
+  MAX_OUTCOME_LEDGER_BYTES,
+  MAX_OUTCOME_RECORDED_RESPONSES_BYTES,
   MAX_OUTCOME_SOURCE_BYTES,
+  MAX_OUTCOME_TRANSCRIPT_BYTES,
+  isOutcomeArtifactSizeAllowed,
   promoteOutcomeCase,
   publishOutcomeCase,
   validateOutcomeStore,
@@ -206,6 +210,18 @@ describe("zero-outcome promotion", () => {
     const oversized = deps(snapshot(), { getObjectSize: vi.fn(async () => 2 * 1024 * 1024 * 1024 + 1) });
     await expect(promoteOutcomeCase(decision(), oversized)).rejects.toMatchObject({ code: "source_too_large" });
     expect(oversized.downloadFile).not.toHaveBeenCalled();
+  });
+
+  it("defines inclusive finite caps for every required non-source artifact", () => {
+    for (const [name, maximum] of [
+      ["case.json", MAX_OUTCOME_CASE_BYTES],
+      ["transcript.json", MAX_OUTCOME_TRANSCRIPT_BYTES],
+      ["recorded-responses.jsonl", MAX_OUTCOME_RECORDED_RESPONSES_BYTES],
+    ] as const) {
+      expect(isOutcomeArtifactSizeAllowed(name, maximum)).toBe(true);
+      expect(isOutcomeArtifactSizeAllowed(name, maximum + 1)).toBe(false);
+    }
+    expect(Number.isSafeInteger(MAX_OUTCOME_LEDGER_BYTES)).toBe(true);
   });
 
   it("cancels an R2 stream reader when spooling fails", async () => {
@@ -568,6 +584,23 @@ describe("zero-outcome promotion", () => {
     await expect(validateOutcomeStore(root)).resolves.toMatchObject({ status: "invalid", reasons: { missing_or_invalid_case: 1 } });
   });
 
+  it.each([
+    ["transcript.json", MAX_OUTCOME_TRANSCRIPT_BYTES],
+    ["recorded-responses.jsonl", MAX_OUTCOME_RECORDED_RESPONSES_BYTES],
+  ] as const)("rejects oversized stored %s before digesting", async (name, maximum) => {
+    const root = await temporaryRoot();
+    const promoted = await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
+    await truncate(join(root, "cases", promoted.caseVersion, name), maximum + 1);
+    await expect(validateOutcomeStore(root)).resolves.toMatchObject({ status: "invalid", reasons: { missing_or_invalid_case: 1 } });
+  });
+
+  it("rejects an oversized outcome ledger before allocation or parsing", async () => {
+    const root = await temporaryRoot();
+    await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
+    await truncate(join(root, "ledger", "outcomes.jsonl"), MAX_OUTCOME_LEDGER_BYTES + 1);
+    await expect(validateOutcomeStore(root)).resolves.toMatchObject({ status: "invalid" });
+  });
+
   it("refuses dedupe decisions based on a non-content-addressed stored case", async () => {
     const root = await temporaryRoot();
     const promoted = await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
@@ -607,6 +640,25 @@ describe("zero-outcome promotion", () => {
       },
     });
     expect(result.status).toBe("invalid");
+  });
+
+  it("holds the outcomes lock through final counts so a concurrent retirement cannot stale the snapshot", async () => {
+    const root = await temporaryRoot();
+    await promoteOutcomeCase(decision(), deps(snapshot(), { root, publish: undefined }));
+    let retirement!: Promise<unknown>;
+    let settled = false;
+    const report = await validateOutcomeStore(root, {
+      afterLedgerAnchor: async () => {
+        retirement = appendOutcomeEvent(root, {
+          schemaVersion: 1, action: "retire", eventId: "concurrent-retire", occurredAt: "2026-09-02T23:12:00.000Z", targetEventId: "outcome-event-1",
+        }).finally(() => { settled = true; });
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        expect(settled).toBe(false);
+      },
+    });
+    expect(report).toEqual({ status: "valid", counts: { eval: 1, holdout: 0 }, reasons: {} });
+    await retirement;
+    await expect(validateOutcomeStore(root)).resolves.toEqual({ status: "valid", counts: { eval: 0, holdout: 0 }, reasons: {} });
   });
 
   it("uses the current clock by default to reject future materialization", async () => {

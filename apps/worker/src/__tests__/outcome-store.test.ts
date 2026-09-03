@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { link, lstat, mkdir, mkdtemp, readFile, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, mkdtemp, readFile, rename, rm, symlink, truncate, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,6 +14,7 @@ import {
   type OutcomeRetirement,
 } from "../feedback-quality/outcome-store";
 import type { OutcomeLabel } from "../feedback-quality/outcome-types";
+import { MAX_PRIVATE_LEDGER_BYTES } from "../feedback-quality/store";
 
 const roots: string[] = [];
 const sha = (digit: string) => `sha256:${digit.repeat(64)}` as const;
@@ -82,14 +83,22 @@ describe("private zero-outcome store", () => {
     expect(await readFile(paths.eventsFile, "utf8")).toBe(`${canonicalJson(input)}\n`);
   });
 
-  it("normalizes an existing empty ledger to 0600 when reading it", async () => {
+  it("fails closed instead of parsing or normalizing a relaxed ledger under lock", async () => {
     const root = await temporaryRoot();
     const paths = await ensureOutcomeStore(root);
     await expect(readActiveOutcomeLabels(root)).resolves.toEqual([]);
     await expect(lstat(paths.eventsFile)).rejects.toMatchObject({ code: "ENOENT" });
     await writeFile(paths.eventsFile, "", { mode: 0o644 });
-    await expect(readActiveOutcomeLabels(root)).resolves.toEqual([]);
-    expect(mode(await lstat(paths.eventsFile))).toBe(0o600);
+    await expect(readActiveOutcomeLabels(root)).rejects.toMatchObject({ code: "unsafe_path" });
+    expect(mode(await lstat(paths.eventsFile))).toBe(0o644);
+  });
+
+  it("rejects an oversized private ledger before allocation or parsing", async () => {
+    const root = await temporaryRoot();
+    const paths = await ensureOutcomeStore(root);
+    await appendOutcomeEvent(root, label("event-before-oversize"));
+    await truncate(paths.eventsFile, MAX_PRIVATE_LEDGER_BYTES + 1);
+    await expect(readActiveOutcomeLabels(root)).rejects.toMatchObject({ code: "integrity" });
   });
 
   it("rejects duplicate event ids even for an identical replay", async () => {

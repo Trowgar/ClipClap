@@ -10,6 +10,7 @@ import {
   readPrivateLedgerEvents,
   type PrivateLedgerPaths,
   withPrivateLedgerTransaction,
+  withPrivateLedgerReadLock,
 } from "./store";
 import { parseOutcomeLabel, type OutcomeLabel } from "./outcome-types";
 import type { LockOptions } from "../feedback-learning/lock";
@@ -213,4 +214,9 @@ export async function withOutcomePublication<T>(
       }));
     });
   } catch (error) { return translateStoreError(error); }
+}
+
+export async function withOutcomeValidationLock<T>(root: string, operation: () => Promise<T>): Promise<T> {
+  try { return await withPrivateLedgerReadLock(root, LAYOUT, operation); }
+  catch (error) { return translateStoreError(error); }
 }
