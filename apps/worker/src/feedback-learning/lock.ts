@@ -60,11 +60,16 @@ async function openLockFile(lockPath: string): Promise<FileHandle> {
   try {
     handle = await open(
       lockPath,
-      constants.O_CREAT | constants.O_NOFOLLOW | constants.O_RDWR,
+      constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK | constants.O_RDWR,
       0o600
     );
-    if (!(await handle.stat()).isFile()) throw new CorpusLockError("lock_unavailable");
+    const initial = await handle.stat();
+    if (!initial.isFile() || initial.nlink !== 1) throw new CorpusLockError("lock_unavailable");
     await handle.chmod(0o600);
+    const secured = await handle.stat();
+    if (!secured.isFile() || secured.nlink !== 1 || secured.dev !== initial.dev || secured.ino !== initial.ino || (secured.mode & 0o7777) !== 0o600) {
+      throw new CorpusLockError("lock_unavailable");
+    }
     return handle;
   } catch (error) {
     if (handle) {

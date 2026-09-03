@@ -82,6 +82,16 @@ describe("private zero-outcome store", () => {
     expect(await readFile(paths.eventsFile, "utf8")).toBe(`${canonicalJson(input)}\n`);
   });
 
+  it("normalizes an existing empty ledger to 0600 when reading it", async () => {
+    const root = await temporaryRoot();
+    const paths = await ensureOutcomeStore(root);
+    await expect(readActiveOutcomeLabels(root)).resolves.toEqual([]);
+    await expect(lstat(paths.eventsFile)).rejects.toMatchObject({ code: "ENOENT" });
+    await writeFile(paths.eventsFile, "", { mode: 0o644 });
+    await expect(readActiveOutcomeLabels(root)).resolves.toEqual([]);
+    expect(mode(await lstat(paths.eventsFile))).toBe(0o600);
+  });
+
   it("rejects duplicate event ids even for an identical replay", async () => {
     const root = await temporaryRoot();
     await appendOutcomeEvent(root, label("event-duplicate"));

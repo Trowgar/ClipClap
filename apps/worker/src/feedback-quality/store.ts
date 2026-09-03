@@ -1219,17 +1219,19 @@ function parseCanonicalLedger(bytes: Uint8Array): Readonly<Record<string, unknow
   return result;
 }
 
-async function readPrivateLedgerFile(path: string): Promise<{ bytes: Uint8Array; events: Readonly<Record<string, unknown>>[] }> {
+async function readPrivateLedgerFile(path: string): Promise<{ present: boolean; bytes: Uint8Array; events: Readonly<Record<string, unknown>>[] }> {
   let bytes: Uint8Array<ArrayBufferLike> = new Uint8Array();
+  let present = false;
   try {
     const current = await lstat(path);
     if (current.isSymbolicLink() || !current.isFile() || current.nlink !== 1) throw safeError("unsafe_path");
+    present = true;
     bytes = await readRegular(path);
   }
   catch (error) {
     if (codeOf(error) !== "ENOENT") throw error;
   }
-  return { bytes, events: parseCanonicalLedger(bytes) };
+  return { present, bytes, events: parseCanonicalLedger(bytes) };
 }
 
 async function cleanupPrivateLedgerTemps(ledger: FileHandle, eventsFileName: string): Promise<void> {
@@ -1388,7 +1390,7 @@ export async function readPrivateLedgerEvents(
       await assertPrivateLedgerTreeCurrent(paths, tree, lockIdentity);
       const snapshot = await readPrivateLedgerFile(anchoredPath(tree.ledger, basename(paths.eventsFile)));
       await assertPrivateLedgerTreeCurrent(paths, tree, lockIdentity);
-      if (snapshot.bytes.byteLength > 0) await restoreLedgerMode(anchoredPath(tree.ledger, basename(paths.eventsFile)));
+      if (snapshot.present) await restoreLedgerMode(anchoredPath(tree.ledger, basename(paths.eventsFile)));
       await assertPrivateLedgerTreeCurrent(paths, tree, lockIdentity);
       return Object.freeze([...snapshot.events]);
     }, lockOptions);

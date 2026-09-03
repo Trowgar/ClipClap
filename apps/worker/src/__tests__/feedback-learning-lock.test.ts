@@ -1,5 +1,5 @@
 import { ChildProcess, execFileSync, spawn } from "node:child_process";
-import { chmod, lstat, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -149,6 +149,24 @@ describe("withCorpusLock", () => {
     expect(callbackRan).toBe(false);
     expect((await lstat(lockPath)).isSymbolicLink()).toBe(true);
     expect((await lstat(targetPath)).mode & 0o777).toBe(0o640);
+  });
+
+  it("refuses a hardlinked lock before chmod and leaves the external inode unchanged", async () => {
+    const lockPath = await temporaryLockPath();
+    const externalPath = `${lockPath}.external`;
+    await writeFile(externalPath, "external lock bytes", { mode: 0o640 });
+    await link(externalPath, lockPath);
+    let callbackRan = false;
+
+    await expect(withCorpusLock(lockPath, async () => { callbackRan = true; })).rejects.toMatchObject({
+      code: "lock_unavailable",
+      message: "lock_unavailable",
+    });
+
+    expect(callbackRan).toBe(false);
+    expect(await readFile(externalPath, "utf8")).toBe("external lock bytes");
+    expect((await lstat(externalPath)).mode & 0o777).toBe(0o640);
+    expect((await lstat(externalPath)).nlink).toBe(2);
   });
 
   it("runs the callback while reviews.lock is a regular 0600 file", async () => {
