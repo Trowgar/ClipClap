@@ -304,15 +304,10 @@ export async function trimClipFile(
 }
 
 /**
- * Builds an FFmpeg filter to crop video to 9:16 vertical format.
- * Centers the crop on the original video. Legacy fallback path - kept
- * verbatim as the REFRAME_ENGINE=off behavior and the failure fallback.
+ * Builds an FFmpeg filter to fill a 9:16 frame and center-crop it. Scaling
+ * first also handles sources narrower than 9:16, where the old `ih*9/16`
+ * crop requested pixels outside the input and made FFmpeg abort.
  */
 function buildCropFilter(): string {
-  // setsar=1: ih*9/16 is 607.5 on a 1080-tall source and cannot be integral, so
-  // `scale` to exactly 1080x1920 would otherwise tag the output SAR 1216:1215
-  // and give it a 76:135 display aspect. This path renders real clips whenever
-  // detection fails or REFRAME_ENGINE is off, so it needs the same guarantee as
-  // the reframe graphs (engine-notes §7h).
-  return "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920,setsar=1";
+  return "scale=1080:1920:force_original_aspect_ratio=increase,setsar=1,crop=1080:1920";
 }

@@ -2,14 +2,13 @@ import { describe, expect, it } from "vitest";
 import { buildCutArgs } from "../processors/cut";
 
 const OUT = "/tmp/out.mp4";
-// `,setsar=1` since 2026-08-08: ih*9/16 is 607.5 on a 1080-tall source, so the
-// scale to 1080x1920 tags a non-square SAR unless it is overridden. Spec
-// `2026-08-08-output-geometry-design.md`, measurement in engine-notes §7h.
+// Scale before cropping so a source narrower than 9:16 (the production
+// 384x848 failure) is never asked for a crop wider than its input.
 const LEGACY_CROP =
-  "crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920,setsar=1";
+  "scale=1080:1920:force_original_aspect_ratio=increase,setsar=1,crop=1080:1920";
 
 describe("buildCutArgs", () => {
-  it("keeps the legacy center crop when no FilterSpec is given", () => {
+  it("uses a center crop that also supports sources narrower than 9:16", () => {
     const args = buildCutArgs("/tmp/in.mp4", 10, 40, OUT);
     expect(args).toContain("-vf");
     expect(args[args.indexOf("-vf") + 1]).toBe(LEGACY_CROP);
