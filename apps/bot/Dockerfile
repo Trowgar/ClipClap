@@ -45,7 +45,10 @@ RUN npx prisma generate
 FROM deps AS development
 COPY . .
 WORKDIR /app/apps/bot
-CMD ["npx", "tsx", "watch", "src/index.ts"]
+# The production host bind-mounts prisma/, while node_modules (and therefore
+# Prisma Client) comes from the image. Regenerate on every container start so a
+# schema deploy cannot leave the live bot using the image's older client.
+CMD ["sh", "-c", "cd /app && npx prisma generate && cd apps/bot && exec npx tsx watch src/index.ts"]
 
 # --- Build ---
 FROM deps AS build
