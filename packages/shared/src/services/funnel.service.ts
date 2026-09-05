@@ -60,6 +60,10 @@ export const FUNNEL_EVENTS = {
    *  changing their mind - the two possibilities the whole revenue diagnosis
    *  hangs on. */
   CHECKOUT_ERROR: "checkout_error",
+  /** Bot: a post-delivery plan nudge was claimed once for this person and stage. */
+  POST_CLIP_OFFER_SOFT: "post_clip_offer_soft",
+  POST_CLIP_OFFER_STARTER: "post_clip_offer_starter",
+  POST_CLIP_OFFER_EXHAUSTED: "post_clip_offer_exhausted",
   /** Both: a User row was created for this person.
    *
    *  Not the same question as FIRST_SCREEN, which is about one

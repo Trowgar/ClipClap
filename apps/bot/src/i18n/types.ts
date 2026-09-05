@@ -91,6 +91,13 @@ export interface Dict {
    *  untagged (null) falls back to the generic line. */
   processingFailed: (code: JobErrorCode | null) => string;
   done: (n: number) => string;
+  postClipOffer: (
+    stage: "soft" | "starter" | "exhausted",
+    planMinutes: number,
+    planPriceEur: number
+  ) => string;
+  postClipPlansBtn: string;
+  postClipStarterBtn: string;
   donePartial: (sent: number, total: number) => string;
   /** Label of the inline button attached to a partial delivery summary. */
   resendRemainingBtn: string;

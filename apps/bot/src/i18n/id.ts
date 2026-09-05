@@ -68,6 +68,17 @@ const id: Dict = {
     `Video ini lebih dari 20 MB, batas Bot API Telegram. Untuk sekarang, unggah video panjang lewat situs: ${url}/dashboard. Kami sedang berusaha menghapus batas ini.`,
   processingFailed: (code) => (code && idFailure[code]) || idFailureGeneric,
   done: (n) => `Selesai. ${n} klip sudah siap.`,
+  postClipOffer: (stage, planMinutes, planPriceEur) => {
+    if (stage === "soft") {
+      return "Kalau kamu rutin membuat TikTok, Shorts, atau Reels, kami bisa membantu mengotomatiskan sebagian proses dan menghemat waktu editing.\n\nLihat paket 👇";
+    }
+    if (stage === "starter") {
+      return `Kamu sudah membuat beberapa klip dengan ClipClap.\n\nDengan Starter, kamu bisa menerbitkan lebih banyak konten dan menghabiskan lebih sedikit waktu untuk mengedit.\n\n${planMinutes} menit pemrosesan setiap minggu - €${planPriceEur}.\n\nAktifkan Starter 👇`;
+    }
+    return `Menit gratis kamu sudah habis.\n\nKami bisa membantu mengotomatiskan pembuatan video pendek agar kamu bisa menerbitkan lebih banyak konten dan punya lebih banyak peluang untuk menghasilkan uang dari TikTok, Shorts, dan Reels.\n\nStarter - ${planMinutes} menit pemrosesan setiap minggu seharga €${planPriceEur}.\n\nLanjutkan seharga €${planPriceEur} 👇`;
+  },
+  postClipPlansBtn: "Lihat paket",
+  postClipStarterBtn: "Lanjutkan seharga €3",
   donePartial: (sent, total) =>
     `Terkirim ${sent} dari ${total} klip: sisanya tidak lolos. Tekan tombol di bawah, nanti aku coba lagi.`,
   resendRemainingBtn: "Kirim sisanya",

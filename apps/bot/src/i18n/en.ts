@@ -117,6 +117,17 @@ const en: Dict = {
     `This video is over 20 MB - Telegram's Bot API limit. For now, upload longer videos on the website: ${url}/dashboard. We're working on lifting this limit soon.`,
   processingFailed: (code) => (code && enFailure[code]) || enFailureGeneric,
   done: (n) => `Done. ${n} clip${n === 1 ? "" : "s"} ${n === 1 ? "is" : "are"} ready.`,
+  postClipOffer: (stage, planMinutes, planPriceEur) => {
+    if (stage === "soft") {
+      return "If you regularly make TikToks, Shorts or Reels, we can automate part of the process and save you hours of editing.\n\nSee plans 👇";
+    }
+    if (stage === "starter") {
+      return `You have already made several clips with ClipClap.\n\nWith Starter, you can publish more content and spend less time editing.\n\n${planMinutes} minutes of processing every week - €${planPriceEur}.\n\nGet Starter 👇`;
+    }
+    return `Your free minutes are used up.\n\nWe can help automate short-form video creation so you can publish more content and have more opportunities to earn from TikTok, Shorts and Reels.\n\nStarter - ${planMinutes} minutes of processing every week for €${planPriceEur}.\n\nContinue for €${planPriceEur} 👇`;
+  },
+  postClipPlansBtn: "See plans",
+  postClipStarterBtn: "Continue for €3",
   donePartial: (sent, total) =>
     `Sent ${sent} of ${total} clip${total === 1 ? "" : "s"} - the rest did not go through. Tap below and I will try again.`,
   resendRemainingBtn: "Send the rest",

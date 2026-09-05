@@ -200,6 +200,17 @@ const ar: Dict = {
       `تم. ${isolate(n)} مقطعًا جاهزة.`,
       `تم. ${isolate(n)} مقطع جاهزة.`
     ),
+  postClipOffer: (stage, planMinutes, planPriceEur) => {
+    if (stage === "soft") {
+      return "إذا كنت تنشئ محتوى لـ TikTok أو Shorts أو Reels بانتظام، يمكننا مساعدتك في أتمتة جزء من العمل وتوفير ساعات من المونتاج.\n\nعرض الخطط 👇";
+    }
+    if (stage === "starter") {
+      return `لقد أنشأت بالفعل عدة مقاطع عبر ClipClap.\n\nمع Starter يمكنك نشر محتوى أكثر وقضاء وقت أقل في المونتاج.\n\n${planMinutes} دقيقة معالجة كل أسبوع - €${planPriceEur}.\n\nتفعيل Starter 👇`;
+    }
+    return `انتهت دقائقك المجانية.\n\nيمكننا مساعدتك في أتمتة إنشاء المقاطع القصيرة حتى تنشر محتوى أكثر وتزيد فرصك في تحقيق الدخل من TikTok وShorts وReels.\n\nStarter - ${planMinutes} دقيقة معالجة كل أسبوع مقابل €${planPriceEur}.\n\nالمتابعة مقابل €${planPriceEur} 👇`;
+  },
+  postClipPlansBtn: "عرض الخطط",
+  postClipStarterBtn: "المتابعة مقابل €3",
   donePartial: (sent, total) =>
     `${pluralizeAr(
       total,

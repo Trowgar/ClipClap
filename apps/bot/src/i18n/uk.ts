@@ -78,6 +78,17 @@ const uk: Dict = {
   processingFailed: (code) => (code && ukFailure[code]) || ukFailureGeneric,
   done: (n) =>
     `Готово. ${n} ${pluralizeUk(n, "кліп", "кліпи", "кліпів")} ${pluralizeUk(n, "готовий", "готові", "готові")}.`,
+  postClipOffer: (stage, planMinutes, planPriceEur) => {
+    if (stage === "soft") {
+      return "Якщо ти регулярно робиш TikTok, Shorts або Reels, ми можемо автоматизувати частину роботи та заощадити години на монтажі.\n\nПереглянути тарифи 👇";
+    }
+    if (stage === "starter") {
+      return `Ти вже створив кілька роликів через ClipClap.\n\nЗ Starter можна випускати більше контенту та витрачати менше часу на монтаж.\n\n${planMinutes} хвилин обробки щотижня - €${planPriceEur}.\n\nПідключити Starter 👇`;
+    }
+    return `Безкоштовні хвилини закінчилися.\n\nМи допоможемо автоматизувати створення коротких роликів, щоб ти випускав більше контенту та мав більше можливостей заробляти на TikTok, Shorts і Reels.\n\nStarter - ${planMinutes} хвилин обробки щотижня за €${planPriceEur}.\n\nПродовжити за €${planPriceEur} 👇`;
+  },
+  postClipPlansBtn: "Переглянути тарифи",
+  postClipStarterBtn: "Продовжити за €3",
   donePartial: (sent, total) =>
     `Надіслав ${sent} з ${total} ${pluralizeUk(total, "кліпа", "кліпів", "кліпів")} - решта не пройшла. Натисни нижче, і я спробую ще раз.`,
   resendRemainingBtn: "Надіслати решту",

@@ -72,6 +72,17 @@ const pt: Dict = {
   processingFailed: (code) => (code && ptFailure[code]) || ptFailureGeneric,
   done: (n) =>
     `Pronto. ${n} ${pluralPt(n, "clipe", "clipes")} ${n === 1 ? "está pronto" : "estão prontos"}.`,
+  postClipOffer: (stage, planMinutes, planPriceEur) => {
+    if (stage === "soft") {
+      return "Se você cria TikToks, Shorts ou Reels com frequência, podemos ajudar a automatizar parte do processo e economizar horas de edição.\n\nVer os planos 👇";
+    }
+    if (stage === "starter") {
+      return `Você já criou vários clipes com o ClipClap.\n\nCom o Starter, você publica mais conteúdo e passa menos tempo editando.\n\n${planMinutes} minutos de processamento por semana - €${planPriceEur}.\n\nAtivar o Starter 👇`;
+    }
+    return `Seus minutos grátis acabaram.\n\nPodemos ajudar a automatizar a criação de vídeos curtos para você publicar mais conteúdo e ter mais oportunidades de ganhar dinheiro com TikTok, Shorts e Reels.\n\nStarter - ${planMinutes} minutos de processamento por semana por €${planPriceEur}.\n\nContinuar por €${planPriceEur} 👇`;
+  },
+  postClipPlansBtn: "Ver os planos",
+  postClipStarterBtn: "Continuar por €3",
   donePartial: (sent, total) =>
     `Enviei ${sent} de ${total} ${pluralPt(total, "clipe", "clipes")}: o resto não saiu. Toca aqui embaixo que eu tento de novo.`,
   resendRemainingBtn: "Enviar o resto",

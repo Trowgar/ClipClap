@@ -1215,16 +1215,18 @@ function flushOwedWrite(deliveryId: string, owed: OwedWrite): Promise<unknown> {
  * the batch loop used to abort every row queued behind it AND leave this one
  * PENDING with a video already in the chat - a second copy on every poll.
  */
-async function settleDelivery(deliveryId: string, owed: OwedWrite) {
+async function settleDelivery(deliveryId: string, owed: OwedWrite): Promise<boolean> {
   owedWrites.set(deliveryId, owed);
   try {
     await flushOwedWrite(deliveryId, owed);
     owedWrites.delete(deliveryId);
+    return true;
   } catch (error) {
     console.error(
       `Telegram delivery ${deliveryId} is ${owed.kind} in the chat but the status write failed; will retry the write only:`,
       error instanceof Error ? error.message : error
     );
+    return false;
   }
 }
 
@@ -1375,6 +1377,112 @@ async function removeProgressBoard(
   } catch (error) {
     console.error(
       `[progress] could not remove the board for delivery ${delivery.id}:`,
+      error instanceof Error ? error.message : error
+    );
+  }
+}
+
+const POST_CLIP_OFFER_EVENTS = {
+  soft: FUNNEL_EVENTS.POST_CLIP_OFFER_SOFT,
+  starter: FUNNEL_EVENTS.POST_CLIP_OFFER_STARTER,
+  exhausted: FUNNEL_EVENTS.POST_CLIP_OFFER_EXHAUSTED,
+} as const;
+
+/** Claim before sending. A unique funnel row makes this idempotent across a
+ * resend, process restart, and two delivery polls racing for the same user.
+ * Failing closed is intentional: a duplicate sales message is worse than a
+ * missed optional nudge. */
+async function claimPostClipOffer(
+  chatId: string,
+  stage: keyof typeof POST_CLIP_OFFER_EVENTS,
+  locale: Locale
+): Promise<boolean> {
+  try {
+    await prisma.funnelEvent.create({
+      data: {
+        surface: "bot",
+        subjectId: chatId,
+        event: POST_CLIP_OFFER_EVENTS[stage],
+        locale,
+      },
+    });
+    return true;
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      error.code === "P2002"
+    ) {
+      return false;
+    }
+    console.error(
+      `[post-clip-offer] could not claim ${stage} for ${chatId}:`,
+      error instanceof Error ? error.message : error
+    );
+    return false;
+  }
+}
+
+/**
+ * A completed free run is the first moment the user has seen the product work.
+ * Offer plans there, but only at the three useful decision points: after the
+ * first delivered job, after the second, or when the free allowance is gone.
+ * The delivery row is settled BEFORE this best-effort message is sent, so a
+ * retry or a resend cannot turn a marketing nudge into a duplicate delivery.
+ */
+async function sendPostClipOffer(
+  client: TelegramClient,
+  delivery: { userId: string; chatId: string },
+  dict: Dict,
+  locale: Locale
+): Promise<void> {
+  try {
+    const usage = await getUsageForUser(delivery.userId);
+    if (usage.subscriptionState.live) return;
+
+    const deliveredJobs = await prisma.telegramDelivery.count({
+      where: { userId: delivery.userId, status: "DELIVERED" },
+    });
+    const remainingSeconds =
+      usage.plan === "NONE"
+        ? await freeBalanceSeconds(delivery.userId)
+        : null;
+
+    const stage =
+      remainingSeconds !== null && remainingSeconds <= 0
+        ? "exhausted"
+        : deliveredJobs === 1
+          ? "soft"
+          : deliveredJobs === 2
+            ? "starter"
+            : null;
+    if (!stage) return;
+
+    if (!(await claimPostClipOffer(delivery.chatId, stage, locale))) return;
+
+    const starter = getPlanLimits("STARTER", "WEEKLY");
+    await client.sendMessage(
+      delivery.chatId,
+      dict.postClipOffer(stage, starter.minutesPerPeriod, starter.priceUsd),
+      {
+        replyMarkup: {
+          inline_keyboard: [
+            [
+              stage === "soft"
+                ? { text: dict.postClipPlansBtn, callback_data: CALLBACK_PLANS_OPEN }
+                : { text: dict.postClipStarterBtn, callback_data: "sub:STARTER:WEEKLY" },
+            ],
+          ],
+        },
+      }
+    );
+  } catch (error) {
+    // This is a sales nudge, never part of delivery correctness. A Telegram,
+    // usage, or quota read failure must not make a successfully delivered job
+    // look failed or cause its clips to be sent again.
+    console.error(
+      `[post-clip-offer] could not notify ${delivery.userId}:`,
       error instanceof Error ? error.message : error
     );
   }
@@ -1576,7 +1684,7 @@ export async function deliverReadyTelegramJobs(
       // until the clips land, so it comes down only once they have.
       await removeProgressBoard(client, delivery);
 
-      await settleDelivery(
+      const settled = await settleDelivery(
         delivery.id,
         inChat < total
           ? {
@@ -1585,6 +1693,9 @@ export async function deliverReadyTelegramJobs(
             }
           : { kind: "DELIVERED" }
       );
+      if (settled && inChat === total) {
+        await sendPostClipOffer(client, delivery, strings, locale);
+      }
     } catch (error) {
       const message =
         error instanceof Error ? error.message : "Delivery failed";

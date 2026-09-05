@@ -90,6 +90,17 @@ const ru: Dict = {
   processingFailed: (code) => (code && ruFailure[code]) || ruFailureGeneric,
   done: (n) =>
     `Готово. ${n} ${pluralizeRu(n, "клип", "клипа", "клипов")} ${pluralizeRu(n, "готов", "готовы", "готовы")}.`,
+  postClipOffer: (stage, planMinutes, planPriceEur) => {
+    if (stage === "soft") {
+      return "Если ты регулярно делаешь TikTok, Shorts или Reels, мы можем автоматизировать часть работы и сэкономить часы на монтаже.\n\nПосмотреть тарифы 👇";
+    }
+    if (stage === "starter") {
+      return `Ты уже сделал несколько роликов через ClipClap.\n\nС Starter можно выпускать больше контента и меньше времени тратить на монтаж.\n\n${planMinutes} минут обработки каждую неделю - €${planPriceEur}.\n\nПодключить Starter 👇`;
+    }
+    return `Бесплатные минуты закончились.\n\nМы можем помочь автоматизировать создание коротких роликов, чтобы ты выпускал больше контента и мог больше зарабатывать на TikTok, Shorts и Reels.\n\nStarter - ${planMinutes} минут обработки каждую неделю за €${planPriceEur}.\n\nПродолжить за €${planPriceEur} 👇`;
+  },
+  postClipPlansBtn: "Посмотреть тарифы",
+  postClipStarterBtn: "Продолжить за €3",
   donePartial: (sent, total) =>
     `Отправил ${sent} из ${total} ${pluralizeRu(total, "клипа", "клипов", "клипов")} - остальные не прошли. Нажми ниже, и я попробую ещё раз.`,
   resendRemainingBtn: "Прислать оставшиеся",

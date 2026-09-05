@@ -21,6 +21,10 @@ const mocks = vi.hoisted(() => ({
   objectSize: vi.fn(),
   downloadToFile: vi.fn(),
   userFindUnique: vi.fn(),
+  getUsageForUser: vi.fn(),
+  freeBalanceSeconds: vi.fn(),
+  deliveryCount: vi.fn(),
+  funnelEventCreate: vi.fn(),
 }));
 
 vi.mock("../../../../packages/shared/src/lib/r2", () => ({
@@ -45,9 +49,20 @@ vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
       create: vi.fn(),
       findMany: (args: FindManyArgs) => store.findMany(args),
       update: (args: UpdateArgs) => store.update(args),
+      count: mocks.deliveryCount,
     },
+    funnelEvent: { create: mocks.funnelEventCreate },
   },
 }));
+
+vi.mock("@clipclap/shared", async () => {
+  const actual = await vi.importActual<typeof import("@clipclap/shared")>("@clipclap/shared");
+  return {
+    ...actual,
+    getUsageForUser: mocks.getUsageForUser,
+    freeBalanceSeconds: mocks.freeBalanceSeconds,
+  };
+});
 
 import { MAX_TELEGRAM_DELIVERY_ATTEMPTS } from "@clipclap/shared";
 import { deliverReadyTelegramJobs } from "../handlers";
@@ -320,6 +335,13 @@ beforeEach(() => {
   vi.clearAllMocks();
   delete process.env.CLIP_FEEDBACK_BOT;
   mocks.userFindUnique.mockResolvedValue({ telegramLocale: "en" });
+  mocks.getUsageForUser.mockResolvedValue({
+    plan: "PLUS",
+    subscriptionState: { live: true },
+  });
+  mocks.freeBalanceSeconds.mockResolvedValue(0);
+  mocks.deliveryCount.mockResolvedValue(1);
+  mocks.funnelEventCreate.mockResolvedValue({});
   mocks.presign.mockImplementation(async (key: string) => `https://r2/${key}`);
   mocks.objectSize.mockResolvedValue(1_000_000);
   mocks.downloadToFile.mockImplementation(async (key: string) => `/tmp/${key}`);
@@ -334,6 +356,61 @@ afterEach(() => {
 });
 
 describe("deliverReadyTelegramJobs", () => {
+  it("offers plans after the first successful free delivery", async () => {
+    mocks.getUsageForUser.mockResolvedValue({
+      plan: "NONE",
+      subscriptionState: { live: false },
+    });
+    mocks.freeBalanceSeconds.mockResolvedValue(1200);
+    mocks.deliveryCount.mockResolvedValue(1);
+    store = createStore({ job: doneJob("job1", [clip("c1")]) });
+    const client = makeClient();
+
+    await poll(client);
+
+    expect(client.sendMessage).toHaveBeenLastCalledWith(
+      "500",
+      t("en").postClipOffer("soft", 75, 3),
+      { replyMarkup: { inline_keyboard: [[{ text: t("en").postClipPlansBtn, callback_data: "plans:open" }]] } }
+    );
+  });
+
+  it("offers Starter directly after the free allowance is exhausted", async () => {
+    mocks.getUsageForUser.mockResolvedValue({
+      plan: "NONE",
+      subscriptionState: { live: false },
+    });
+    mocks.freeBalanceSeconds.mockResolvedValue(0);
+    mocks.deliveryCount.mockResolvedValue(1);
+    store = createStore({ job: doneJob("job1", [clip("c1")]) });
+    const client = makeClient();
+
+    await poll(client);
+
+    expect(client.sendMessage).toHaveBeenLastCalledWith(
+      "500",
+      t("en").postClipOffer("exhausted", 75, 3),
+      { replyMarkup: { inline_keyboard: [[{ text: t("en").postClipStarterBtn, callback_data: "sub:STARTER:WEEKLY" }]] } }
+    );
+  });
+
+  it("does not repeat an offer when its one-time claim already exists", async () => {
+    mocks.getUsageForUser.mockResolvedValue({
+      plan: "NONE",
+      subscriptionState: { live: false },
+    });
+    mocks.freeBalanceSeconds.mockResolvedValue(1200);
+    mocks.deliveryCount.mockResolvedValue(1);
+    mocks.funnelEventCreate.mockRejectedValue({ code: "P2002" });
+    store = createStore({ job: doneJob("job1", [clip("c1")]) });
+    const client = makeClient();
+
+    await poll(client);
+
+    expect(client.sendMessage).toHaveBeenCalledTimes(1);
+    expect(client.sendMessage).toHaveBeenLastCalledWith("500", t("en").done(1));
+  });
+
   it("delivers the clips when a job heals after a failed attempt", async () => {
     // Attempt 1 dies on something transient (an R2 5xx in the download stage),
     // and markJobFailed writes FAILED on EVERY attempt - so the poller sees a
