@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   Worker: vi.fn().mockImplementation(() => ({ on: vi.fn(), close: vi.fn() })),
   getRedis: vi.fn(() => ({ host: "redis" })),
   releaseNextQueued: vi.fn(async () => []),
+  notifyPipelineIncident: vi.fn(async () => true),
   download: vi.fn(),
   transcribe: vi.fn(),
   analyze: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock("@clipclap/shared", () => ({
   getRedis: mocks.getRedis,
   getQueueNameForStage: (role: string) => `video-${role}`,
   releaseNextQueued: mocks.releaseNextQueued,
+  notifyPipelineIncident: mocks.notifyPipelineIncident,
   parseWorkerRole: (role: string | undefined) => {
     if (
       role === "download" ||
@@ -99,6 +101,36 @@ describe("worker role config", () => {
     expect(handler).toBeDefined();
     await handler!({ data: { kind: "feedback-quality-canary", nonce: "n", decisionId: "d", rolloutInstanceId: "instance" } });
     expect(mocks.releaseNextQueued).not.toHaveBeenCalled();
+  });
+
+  it("reports only the terminal failed attempt", async () => {
+    const worker = createStageWorker("analyze");
+    const on = (worker as unknown as { on: ReturnType<typeof vi.fn> }).on;
+    const handler = on.mock.calls.find((call: unknown[]) => call[0] === "failed")?.[1] as ((job: unknown, error: Error) => Promise<void>) | undefined;
+    expect(handler).toBeDefined();
+
+    handler!({ id: "10", data: { jobId: "pipeline-1" }, attemptsMade: 2, opts: { attempts: 3 } }, new Error("temporary"));
+    expect(mocks.notifyPipelineIncident).not.toHaveBeenCalled();
+
+    handler!({ id: "10", data: { jobId: "pipeline-1", userId: "user-1" }, attemptsMade: 3, opts: { attempts: 3 } }, new Error("terminal"));
+    expect(mocks.notifyPipelineIncident).toHaveBeenCalledWith({
+      stage: "analyze",
+      queueJobId: "10",
+      pipelineJobId: "pipeline-1",
+      attemptsMade: 3,
+      error: expect.any(Error),
+    });
+  });
+
+  it("releases the slot without waiting for a pending incident alert", () => {
+    mocks.notifyPipelineIncident.mockReturnValueOnce(new Promise(() => {}));
+    const worker = createStageWorker("analyze");
+    const on = (worker as unknown as { on: ReturnType<typeof vi.fn> }).on;
+    const handler = on.mock.calls.find((call: unknown[]) => call[0] === "failed")?.[1] as ((job: unknown, error: Error) => void) | undefined;
+
+    handler!({ id: "10", data: { jobId: "pipeline-1", userId: "user-1" }, attemptsMade: 3, opts: { attempts: 3 } }, new Error("terminal"));
+
+    expect(mocks.releaseNextQueued).toHaveBeenCalled();
   });
 
   it("rejects canary work on the primary queue so stale consumers cannot answer", async () => {

@@ -2,6 +2,7 @@ import { Worker, type Job } from "bullmq";
 import {
   getQueueNameForStage,
   getRedis,
+  notifyPipelineIncident,
   parseWorkerRole,
   releaseNextQueued,
   type StageName,
@@ -75,6 +76,22 @@ export function createStageWorker(
   });
   worker.on("failed", (job, err) => {
     console.error(`[${role}] failed ${job?.id}:`, err.message);
+    const attemptsMade = job?.attemptsMade ?? 0;
+    const maxAttempts = job?.opts.attempts ?? 1;
+    if (job && !isQualityCanary(job.data) && attemptsMade >= maxAttempts) {
+      void notifyPipelineIncident({
+        stage: role,
+        queueJobId: String(job.id),
+        pipelineJobId: String((job.data as { jobId?: unknown }).jobId ?? "unknown"),
+        attemptsMade,
+        error: err,
+      }).catch((alertError) =>
+        console.error(
+          `[${role}] incident alert failed:`,
+          alertError instanceof Error ? alertError.message : alertError
+        )
+      );
+    }
     if (!isQualityCanary(job?.data)) void maybeReleaseAfterStageEvent(role, "failed", job ?? undefined);
   });
 
