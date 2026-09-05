@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   userFindUnique: vi.fn(),
   userUpdate: vi.fn(),
   notify: vi.fn(),
+  notifyAdmin: vi.fn(),
   recordCommission: vi.fn(),
 }));
 
@@ -41,7 +42,10 @@ vi.mock("../../lib/prisma", () => ({
   },
 }));
 
-vi.mock("../telegram-notification.service", () => ({ notifyPaymentEvent: mocks.notify }));
+vi.mock("../telegram-notification.service", () => ({
+  notifyPaymentEvent: mocks.notify,
+  notifyAdminPaymentEvent: mocks.notifyAdmin,
+}));
 vi.mock("../referral.service", () => ({ recordCommission: mocks.recordCommission }));
 
 import {
@@ -205,6 +209,16 @@ describe("applyPaidOrder - idempotency", () => {
       })
     );
     expect(mocks.notify).toHaveBeenCalledTimes(1);
+    expect(mocks.notifyAdmin).toHaveBeenCalledTimes(1);
+    expect(mocks.notifyAdmin).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "subscription_activated",
+      telegramId: "42",
+      plan: "STARTER",
+      billingCycle: "WEEKLY",
+      amount: 300,
+      currency: "eur",
+      periodEnd: expiresAt,
+    }));
 
     // Same order, same period, re-applied (e.g. by a reconcile poll after the
     // webhook already granted access): must be an idempotent skip, not a
@@ -214,6 +228,7 @@ describe("applyPaidOrder - idempotency", () => {
     expect(second).toEqual({ status: "stale_order", orderUuid: "ord-1" });
     expect(mocks.userUpdate).toHaveBeenCalledTimes(1);
     expect(mocks.notify).toHaveBeenCalledTimes(1);
+    expect(mocks.notifyAdmin).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -1,13 +1,23 @@
 import { prisma } from "../lib/prisma";
 import { getPlanLimits } from "../config/plans";
 import { detectLocale, isolate, plural, type Locale } from "../i18n";
-import type { Plan } from "@prisma/client";
+import type { BillingCycle, Plan } from "@prisma/client";
 
 export type PaymentEvent =
   | { kind: "subscription_activated"; plan: Plan; periodEnd: Date }
   | { kind: "subscription_renewed"; plan: Plan; periodEnd: Date }
   | { kind: "payment_failed"; manageUrl: string }
   | { kind: "subscription_canceled"; graceEndsAt: Date | null };
+
+export type AdminPaymentEvent = {
+  kind: "subscription_activated" | "subscription_renewed";
+  telegramId: string;
+  plan: Plan;
+  billingCycle: BillingCycle;
+  amount: number;
+  currency: string;
+  periodEnd: Date;
+};
 
 function formatDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -257,4 +267,37 @@ export async function notifyPaymentEvent(
   const locale = detectLocale(user.telegramLocale);
   const text = renderPaymentNotification(locale, event, opts);
   await sendTelegramMessage(user.telegramId, text);
+}
+
+function formatAdminAmount(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: currency.toUpperCase(),
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    }).format(amount / 100);
+  } catch {
+    return `${(amount / 100).toFixed(2)} ${currency.toUpperCase()}`;
+  }
+}
+
+export function renderAdminPaymentNotification(event: AdminPaymentEvent): string {
+  const kind = event.kind === "subscription_activated"
+    ? "Новая подписка"
+    : "Продление подписки";
+  const cycle = event.billingCycle === "WEEKLY" ? "неделя" : "месяц";
+
+  return `💰 ${kind}\n\nТариф: ${planTitle(event.plan)} — ${formatAdminAmount(event.amount, event.currency)} / ${cycle}\nПользователь: ${event.telegramId}\nДоступ до: ${formatDate(event.periodEnd)}`;
+}
+
+export async function notifyAdminPaymentEvent(event: AdminPaymentEvent): Promise<void> {
+  const adminIds = (process.env.REFERRAL_ADMIN_TELEGRAM_IDS ?? "")
+    .split(",")
+    .map((id) => id.trim())
+    .filter(Boolean);
+  if (adminIds.length === 0) return;
+
+  const text = renderAdminPaymentNotification(event);
+  await Promise.all(adminIds.map((adminId) => sendTelegramMessage(adminId, text)));
 }

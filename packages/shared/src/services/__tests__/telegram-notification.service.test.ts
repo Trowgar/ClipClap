@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
-import { renderPaymentNotification } from "../telegram-notification.service";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  notifyAdminPaymentEvent,
+  renderPaymentNotification,
+} from "../telegram-notification.service";
 
 describe("renderPaymentNotification", () => {
   const periodEnd = new Date("2026-06-24T00:00:00Z");
@@ -107,5 +110,54 @@ describe("renderPaymentNotification", () => {
       graceEndsAt: null,
     });
     expect(ru).toContain("Доступ к обработке прекращён");
+  });
+});
+
+describe("notifyAdminPaymentEvent", () => {
+  afterEach(() => {
+    delete process.env.REFERRAL_ADMIN_TELEGRAM_IDS;
+    vi.unstubAllGlobals();
+  });
+
+  it("sends a payment summary to every configured admin", async () => {
+    process.env.REFERRAL_ADMIN_TELEGRAM_IDS = "575308044,999";
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await notifyAdminPaymentEvent({
+      kind: "subscription_activated",
+      telegramId: "123456",
+      plan: "STARTER",
+      billingCycle: "WEEKLY",
+      amount: 300,
+      currency: "eur",
+      periodEnd: new Date("2026-09-10T00:00:00Z"),
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const bodies = fetchMock.mock.calls.map((call) => JSON.parse(call[1].body));
+    expect(bodies[0].chat_id).toBe("575308044");
+    expect(bodies[1].chat_id).toBe("999");
+    expect(bodies[0].text).toContain("Новая подписка");
+    expect(bodies[0].text).toContain("Starter — €3 / неделя");
+    expect(bodies[0].text).toContain("123456");
+    expect(bodies[0].text).toContain("2026-09-10");
+  });
+
+  it("does nothing when no admin is configured", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await notifyAdminPaymentEvent({
+      kind: "subscription_renewed",
+      telegramId: "123456",
+      plan: "PLUS",
+      billingCycle: "MONTHLY",
+      amount: 2900,
+      currency: "eur",
+      periodEnd: new Date("2026-10-01T00:00:00Z"),
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

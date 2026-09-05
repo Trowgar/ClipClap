@@ -1,6 +1,9 @@
 import { createHash, createHmac, timingSafeEqual } from "crypto";
 import { prisma } from "../lib/prisma";
-import { notifyPaymentEvent } from "./telegram-notification.service";
+import {
+  notifyAdminPaymentEvent,
+  notifyPaymentEvent,
+} from "./telegram-notification.service";
 import type { Plan, TributeOrder, TributeWebhookStatus } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 
@@ -240,6 +243,23 @@ export async function applyPaidOrder(
   } catch (err) {
     console.warn(
       "[tribute] notification failed (activation stands):",
+      err instanceof Error ? err.message : err
+    );
+  }
+
+  try {
+    await notifyAdminPaymentEvent({
+      kind: isRenewal ? "subscription_renewed" : "subscription_activated",
+      telegramId: order.telegramId,
+      plan: order.plan,
+      billingCycle: order.billingCycle,
+      amount: order.amount,
+      currency: order.currency,
+      periodEnd: expiresAt,
+    });
+  } catch (err) {
+    console.warn(
+      "[tribute] admin payment notification failed:",
       err instanceof Error ? err.message : err
     );
   }
