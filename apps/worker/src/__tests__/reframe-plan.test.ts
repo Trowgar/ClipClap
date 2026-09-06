@@ -1358,6 +1358,44 @@ describe("stream layout", () => {
       mouthActivity: 0.05,
     };
 
+    it("zooms a customer-shaped virtual webcam out enough to retain shoulder context", () => {
+      const customerFace: FaceTrack = {
+        id: 0,
+        box: {
+          x: 232.88772583007812,
+          y: 827.958251953125,
+          w: 87.27961349487305,
+          h: 114.31553649902344,
+        },
+        score: 0.8648213483393192,
+        samples: 16,
+        mouthActivity: 0.033522772043943404,
+      };
+      const plan = buildCropPlan(
+        oneShot,
+        withTracks([customerFace]),
+        1920,
+        1080,
+        { ...vStreamOpts, streamVirtualCam: true },
+        null
+      );
+
+      expect(plan?.profile?.virtualCam).toBe(true);
+      expect(plan?.stream).toEqual({
+        camCrop: { w: 360, h: 256, y: 742 },
+        contentCrop: { w: 1012, h: 1080 },
+        outCamH: 768,
+        outContentH: 1152,
+      });
+      expect(plan?.shots[0]).toEqual({
+        start: 0,
+        end: 30,
+        layout: "stream",
+        cam: { x: 96 },
+        content: { x: 504 },
+      });
+    });
+
     it("flag off (default) matches a run with the option omitted entirely, byte for byte", () => {
       const omitted = buildCropPlan(oneShot, withTracks([toxFace]), VSW, VSH, vStreamOpts, null);
       const explicitOff = buildCropPlan(
@@ -1387,16 +1425,12 @@ describe("stream layout", () => {
       expect(plan?.profile?.camRectScore).toBe(0); // synthesized: no edge evidence
       expect(plan?.version).toBe(2);
       // Full geometry, pinned like the sibling "emits a stream layout" test
-      // above: 3.2x face width centred on the face, height covers both the
-      // 16:9-of-width derivation AND the chin-coverage floor (whichever is
-      // taller), clamped to the frame (face right edge sits flush at 624,
-      // close to the 640 edge). Headroom 0.75 (owner-reviewed 2026-08-19,
-      // was 0.55 - the pompadour on the real tox render got cut by the tile
-      // edge): the chin floor still dominates the bottom (unaffected by
-      // headroom), so raising headroom only pushes the top up and grows h to
-      // match - w is untouched.
+      // above: 5.2x face width centred on the face, height covers both the
+      // 16:9-of-width derivation and the chin-coverage floor, then the result
+      // is clamped to this bottom-right frame edge. The containment assertions
+      // below keep the independent headroom and chin guarantees explicit.
       expect(plan?.stream).toEqual({
-        camCrop: { w: 120, h: 86, y: 254 },
+        camCrop: { w: 166, h: 118, y: 242 },
         contentCrop: { w: 338, h: 360 },
         outCamH: 770,
         outContentH: 1150,
@@ -1405,8 +1439,8 @@ describe("stream layout", () => {
         start: 0,
         end: 30,
         layout: "stream",
-        cam: { x: 520 },
-        content: { x: 152 },
+        cam: { x: 474 },
+        content: { x: 134 },
       });
 
       // The synthesized rect itself: contains the face box, with headroom
@@ -1418,7 +1452,7 @@ describe("stream layout", () => {
       // face bottom 325.3), and the hair-clipping owner feedback the
       // headroom bump exists for.
       const rect = synthesizeVirtualCamRect(toxFace.box, VSW, VSH);
-      expect(rect).toEqual({ x: 520, y: 242, w: 120, h: 108, score: 0 });
+      expect(rect).toEqual({ x: 472, y: 242, w: 168, h: 118, score: 0 });
       expect(rect.x).toBeLessThanOrEqual(toxFace.box.x);
       expect(rect.x + rect.w).toBeGreaterThanOrEqual(toxFace.box.x + toxFace.box.w);
       expect(rect.y).toBeLessThanOrEqual(toxFace.box.y);
@@ -1458,9 +1492,9 @@ describe("stream layout", () => {
     });
 
     it("a real, resolvable camRect wins via D5 - no virtualCam key, real score preserved", () => {
-      // Same geometry as the previous test's synthesized rect, so it is
-      // known to contain toxFace and to solve - only the score (5.2, not 0)
-      // marks it as a REAL rect this time.
+      // A fixed detected rect known to contain toxFace and solve. The virtual
+      // camera width must not alter this real-rectangle path; its score (5.2,
+      // not 0) marks it as detected rather than synthesized.
       const realRect: CamRect = { x: 520, y: 254, w: 120, h: 90, score: 5.2 };
       const plan = buildCropPlan(
         oneShot,
@@ -1493,9 +1527,8 @@ describe("stream layout", () => {
       // resolveCamRect before its own clamp (cam-rect.ts's closing comment).
       const cornerFace: FaceBox = { x: 620, y: 340, w: 20, h: 20 };
       const rect = synthesizeVirtualCamRect(cornerFace, VSW, VSH);
-      // Headroom 0.75 (owner-reviewed 2026-08-19, was 0.55): top moves up,
-      // so y drops and h grows to compensate.
-      expect(rect).toEqual({ x: 598, y: 324, w: 42, h: 36, score: 0 });
+      // The wider rect clamps against both the right and bottom frame edges.
+      expect(rect).toEqual({ x: 578, y: 324, w: 62, h: 36, score: 0 });
       expect(rect.x).toBeGreaterThanOrEqual(0);
       expect(rect.y).toBeGreaterThanOrEqual(0);
       expect(rect.x + rect.w).toBeLessThanOrEqual(VSW);
@@ -1517,13 +1550,9 @@ describe("stream layout", () => {
       // independently.
       const tlFace: FaceBox = { x: 0, y: 0, w: 40, h: 40 };
       const tlRect = synthesizeVirtualCamRect(tlFace, VSW, VSH);
-      // At headroom 0.75, the top clamps to 0 (already did at 0.55) but the
-      // UNCLAMPED top is now further above the frame, so the 16:9-derived
-      // bottom (top + fixed width-derived height) is correspondingly lower -
-      // the chin floor (unaffected by headroom) now governs instead of the
-      // aspect term, giving a SMALLER h here than at 0.55 (46 vs 50).
-      // Investigated, not assumed: still contains tlFace, checked below.
-      expect(tlRect).toEqual({ x: 0, y: 0, w: 84, h: 46, score: 0 });
+      // The top and left both clamp to 0; the wider 5.2x rectangle still
+      // contains the face, checked below.
+      expect(tlRect).toEqual({ x: 0, y: 0, w: 124, h: 88, score: 0 });
       expect(tlRect.x).toBeGreaterThanOrEqual(0);
       expect(tlRect.y).toBeGreaterThanOrEqual(0);
       expect(isInsideInset({ id: 0, box: tlFace, score: 0.9, samples: 5, mouthActivity: 0.05 }, tlRect))

@@ -54,7 +54,10 @@ export const MAX_PLAN_SHOTS = 90;
 // Exported so tests pin geometry by referencing these, not by re-typing their
 // values as literals that silently go stale the next time a real render moves
 // one (as the 0.55->0.75 headroom bump did on 2026-08-19).
-export const VIRTUAL_CAM_WIDTH_FACES = 3.2; // cam tile width, in multiples of face width
+// Owner-reviewed 2026-09-06 on the paid customer's retained stream source.
+// 3.2 made the face fill the tile; 5.2 was the first candidate that retained
+// the head, shoulders and microphone without pulling game UI into the cam crop.
+export const VIRTUAL_CAM_WIDTH_FACES = 5.2; // cam tile width, in multiples of face width
 // Owner-reviewed 2026-08-19 on the real rendered tox sample: at 0.55, the
 // streamer's pompadour extended above face.y - 0.55*face.h and got cut by
 // the cam tile's top edge - hair is not covered by the YuNet face box, so
