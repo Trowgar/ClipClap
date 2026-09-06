@@ -25,7 +25,7 @@ it("contains the complete source frame over blur in the content tile", () => {
   const graph = buildFiltergraph(streamPlan()).graph;
   expect(graph).toContain("[0:v]split=4[b0][c0][mbg0][mfg0]");
   expect(graph).toContain(
-    "[mbg0]scale=1080:1150:force_original_aspect_ratio=increase,crop=1080:1150,boxblur=luma_radius=20:luma_power=2,setsar=1[contbg]"
+    "[mbg0]scale=1080:1150:force_original_aspect_ratio=increase,setsar=1,crop=1080:1150,boxblur=luma_radius=20:luma_power=2[contbg]"
   );
   expect(graph).toContain(
     "[mfg0]scale=1080:1150:force_original_aspect_ratio=decrease,setsar=1[contfg]"
@@ -61,7 +61,7 @@ content chains to:
 
 ```ts
 `[0:v]split=4[b0][c0][mbg0][mfg0]`,
-`[mbg0]scale=1080:${geom.outContentH}:force_original_aspect_ratio=increase,crop=1080:${geom.outContentH},boxblur=luma_radius=20:luma_power=2,setsar=1[contbg]`,
+`[mbg0]scale=1080:${geom.outContentH}:force_original_aspect_ratio=increase,setsar=1,crop=1080:${geom.outContentH},boxblur=luma_radius=20:luma_power=2[contbg]`,
 `[mfg0]scale=1080:${geom.outContentH}:force_original_aspect_ratio=decrease,setsar=1[contfg]`,
 `[contbg][contfg]overlay=x='(W-w)/2':y='(H-h)/2'[cont]`,
 ```

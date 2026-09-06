@@ -140,7 +140,7 @@ describe("buildFiltergraph", () => {
         { start: 10, end: 20, layout: "safe-fit", reason: "coverage" },
       ],
     };
-    expect(buildFiltergraph(stream).graph).toContain("[legacyin]split=3[b0][c0][m0]");
+    expect(buildFiltergraph(stream).graph).toContain("[legacyin]split=4[b0][c0][mbg0][mfg0]");
     expect(buildFiltergraph(stream).graph).toContain(
       "enable='gte(t,10.00)*lt(t,20.00)'[vout]"
     );
@@ -301,17 +301,34 @@ describe("stream filtergraph", () => {
     expect(spec.kind).toBe("complex");
     expect(spec.graph).toContain("crop=w=336:h=240");
     expect(spec.graph).toContain("scale=1080:770");
-    expect(spec.graph).toContain("crop=w=676:h=ih");
-    expect(spec.graph).toContain("scale=1080:1150");
+    expect(spec.graph).toContain("force_original_aspect_ratio=decrease");
+    expect(spec.graph).not.toContain("crop=w=676:h=ih");
+  });
+
+  it("contains the complete source frame over blur in the content tile", () => {
+    const graph = buildFiltergraph(streamPlan()).graph;
+    expect(graph).toContain("[0:v]split=4[b0][c0][mbg0][mfg0]");
+    expect(graph).toContain(
+      "[mbg0]scale=1080:1150:force_original_aspect_ratio=increase,setsar=1,crop=1080:1150,boxblur=luma_radius=20:luma_power=2[contbg]"
+    );
+    expect(graph).toContain(
+      "[mfg0]scale=1080:1150:force_original_aspect_ratio=decrease,setsar=1[contfg]"
+    );
+    expect(graph).toContain(
+      "[contbg][contfg]overlay=x='(W-w)/2':y='(H-h)/2'[cont]"
+    );
+    expect(graph).not.toContain("crop=w=676:h=ih");
   });
 
   it("builds the exact stream graph, base crop centred on stream windows", () => {
     expect(buildFiltergraph(streamPlan()).graph).toBe(
       [
-        "[0:v]split=3[b0][c0][m0]",
+        "[0:v]split=4[b0][c0][mbg0][mfg0]",
         "[b0]crop=w=406:h=ih:x='if(lt(t,10.00),438,302)':y=0,scale=1080:1920,setsar=1[base]",
         "[c0]crop=w=336:h=240:x='if(lt(t,10.00),32,32)':y=0,scale=1080:770,setsar=1[cam]",
-        "[m0]crop=w=676:h=ih:x='if(lt(t,10.00),428,428)':y=0,scale=1080:1150,setsar=1[cont]",
+        "[mbg0]scale=1080:1150:force_original_aspect_ratio=increase,setsar=1,crop=1080:1150,boxblur=luma_radius=20:luma_power=2[contbg]",
+        "[mfg0]scale=1080:1150:force_original_aspect_ratio=decrease,setsar=1[contfg]",
+        "[contbg][contfg]overlay=x='(W-w)/2':y='(H-h)/2'[cont]",
         "[base][cam]overlay=x=0:y=0:enable='gte(t,0.00)*lt(t,10.00)'[o1]",
         "[o1][cont]overlay=x=0:y=770:enable='gte(t,0.00)*lt(t,10.00)'[vout]",
       ].join(";")
@@ -337,11 +354,11 @@ describe("stream filtergraph", () => {
     // three scales and the sum below stops being about the tiles at all - it
     // was 770 + 1150 and would become 1920 + 770. The labels are what make this
     // assertion mean what its name says.
-    const heights = [
-      ...graph.matchAll(/scale=1080:(\d+),setsar=1\[(?:cam|cont)\]/g),
-    ].map((m) => Number(m[1]));
-    expect(heights).toHaveLength(2);
-    expect(heights[0] + heights[1]).toBe(1920);
+    const cam = graph.match(/scale=1080:(\d+),setsar=1\[cam\]/);
+    const content = graph.match(/crop=1080:(\d+),boxblur=[^;]+\[contbg\]/);
+    expect(cam).not.toBeNull();
+    expect(content).not.toBeNull();
+    expect(Number(cam![1]) + Number(content![1])).toBe(1920);
   });
 
   it("enables the tiles only on stream windows, half-open", () => {
@@ -350,7 +367,7 @@ describe("stream filtergraph", () => {
     expect(graph).not.toContain("between(");
   });
 
-  it("joins multiple stream windows and carries the nearest tile geometry", () => {
+  it("joins multiple stream windows and carries the nearest webcam geometry", () => {
     const plan = streamPlan();
     plan.shots = [
       { start: 0, end: 10, layout: "stream", cam: { x: 32 }, content: { x: 428 } },
@@ -363,7 +380,7 @@ describe("stream filtergraph", () => {
     );
     // The gap window is disabled, so it carries the previous stream geometry.
     expect(graph).toContain("x='if(lt(t,10.00),32,if(lt(t,20.00),32,40))'");
-    expect(graph).toContain("x='if(lt(t,10.00),428,if(lt(t,20.00),428,430))'");
+    expect(graph).not.toContain("x='if(lt(t,10.00),428");
   });
 
   it("appends the subtitle burn last", () => {

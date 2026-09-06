@@ -458,20 +458,16 @@ export function buildFiltergraph(
         "[reframe] stream shots without stream geometry - falling back to base crop"
       );
     } else {
-      // Outside stream windows the overlays are disabled, so the tile x values
-      // there are irrelevant - carry the nearest stream geometry forward so the
-      // expressions stay total for every t.
+      // Outside stream windows the overlays are disabled, so the webcam x value
+      // there is irrelevant - carry the nearest stream geometry forward so the
+      // expression stays total for every t. Content uses the complete source.
       let lastCam = streams[0].cam.x;
-      let lastContent = streams[0].content.x;
       const camSegs: Array<{ end: number; x: number }> = [];
-      const contentSegs: Array<{ end: number; x: number }> = [];
       for (const s of plan.shots) {
         if (s.layout === "stream") {
           lastCam = s.cam.x;
-          lastContent = s.content.x;
         }
         camSegs.push({ end: s.end, x: lastCam });
-        contentSegs.push({ end: s.end, x: lastContent });
       }
       const enable = streams
         .map(
@@ -483,10 +479,12 @@ export function buildFiltergraph(
       // from its own crop aspect, so the stacked frame is assembled from three
       // different pixel aspects (and ffmpeg 8.x segfaulted here during design).
       const chains = [
-        `[0:v]split=3[b0][c0][m0]`,
+        `[0:v]split=4[b0][c0][mbg0][mfg0]`,
         `[b0]${baseChain}[base]`,
         `[c0]crop=w=${geom.camCrop.w}:h=${geom.camCrop.h}:x='${piecewiseX(camSegs)}':y=${geom.camCrop.y},scale=1080:${geom.outCamH},setsar=1[cam]`,
-        `[m0]crop=w=${geom.contentCrop.w}:h=ih:x='${piecewiseX(contentSegs)}':y=0,scale=1080:${geom.outContentH},setsar=1[cont]`,
+        `[mbg0]scale=1080:${geom.outContentH}:force_original_aspect_ratio=increase,setsar=1,crop=1080:${geom.outContentH},boxblur=luma_radius=20:luma_power=2[contbg]`,
+        `[mfg0]scale=1080:${geom.outContentH}:force_original_aspect_ratio=decrease,setsar=1[contfg]`,
+        `[contbg][contfg]overlay=x='(W-w)/2':y='(H-h)/2'[cont]`,
         `[base][cam]overlay=x=0:y=0:enable='${enable}'[o1]`,
         assSnippet
           ? `[o1][cont]overlay=x=0:y=${geom.outCamH}:enable='${enable}'[o2]`
