@@ -1392,8 +1392,52 @@ describe("stream layout", () => {
         end: 30,
         layout: "stream",
         cam: { x: 96 },
-        content: { x: 504 },
+        content: { x: 454 },
       });
+    });
+
+    it("keeps tile heights when a wider virtual display approaches the free band", () => {
+      const edgeFace: FaceTrack = {
+        id: 0,
+        box: { x: 790, y: 800, w: 40, h: 48 },
+        score: 0.9,
+        samples: 16,
+        mouthActivity: 0.04,
+      };
+      const plan = buildCropPlan(
+        oneShot,
+        withTracks([edgeFace]),
+        1920,
+        1080,
+        { ...vStreamOpts, streamVirtualCam: true },
+        null
+      );
+
+      expect(plan?.profile?.virtualCam).toBe(true);
+      expect(plan?.stream?.outCamH).toBe(768);
+      expect(plan?.stream?.outContentH).toBe(1152);
+    });
+
+    it("keeps an otherwise valid centred virtual stream classified", () => {
+      const centredFace: FaceTrack = {
+        id: 0,
+        box: { x: 930, y: 756, w: 40, h: 48 },
+        score: 0.9,
+        samples: 16,
+        mouthActivity: 0.04,
+      };
+      const plan = buildCropPlan(
+        oneShot,
+        withTracks([centredFace]),
+        1920,
+        1080,
+        { ...vStreamOpts, streamVirtualCam: true },
+        null
+      );
+
+      expect(plan?.profile?.virtualCam).toBe(true);
+      expect(plan?.stream?.outCamH).toBe(624);
+      expect(plan?.stream?.outContentH).toBe(1296);
     });
 
     it("flag off (default) matches a run with the option omitted entirely, byte for byte", () => {
@@ -1440,7 +1484,7 @@ describe("stream layout", () => {
         end: 30,
         layout: "stream",
         cam: { x: 474 },
-        content: { x: 134 },
+        content: { x: 152 },
       });
 
       // The synthesized rect itself: contains the face box, with headroom
@@ -1452,7 +1496,7 @@ describe("stream layout", () => {
       // face bottom 325.3), and the hair-clipping owner feedback the
       // headroom bump exists for.
       const rect = synthesizeVirtualCamRect(toxFace.box, VSW, VSH);
-      expect(rect).toEqual({ x: 472, y: 242, w: 168, h: 118, score: 0 });
+      expect(rect).toEqual({ x: 520, y: 242, w: 120, h: 108, score: 0 });
       expect(rect.x).toBeLessThanOrEqual(toxFace.box.x);
       expect(rect.x + rect.w).toBeGreaterThanOrEqual(toxFace.box.x + toxFace.box.w);
       expect(rect.y).toBeLessThanOrEqual(toxFace.box.y);
@@ -1527,8 +1571,8 @@ describe("stream layout", () => {
       // resolveCamRect before its own clamp (cam-rect.ts's closing comment).
       const cornerFace: FaceBox = { x: 620, y: 340, w: 20, h: 20 };
       const rect = synthesizeVirtualCamRect(cornerFace, VSW, VSH);
-      // The wider rect clamps against both the right and bottom frame edges.
-      expect(rect).toEqual({ x: 578, y: 324, w: 62, h: 36, score: 0 });
+      // The synthesized rect clamps against both the right and bottom frame edges.
+      expect(rect).toEqual({ x: 598, y: 324, w: 42, h: 36, score: 0 });
       expect(rect.x).toBeGreaterThanOrEqual(0);
       expect(rect.y).toBeGreaterThanOrEqual(0);
       expect(rect.x + rect.w).toBeLessThanOrEqual(VSW);
@@ -1550,9 +1594,9 @@ describe("stream layout", () => {
       // independently.
       const tlFace: FaceBox = { x: 0, y: 0, w: 40, h: 40 };
       const tlRect = synthesizeVirtualCamRect(tlFace, VSW, VSH);
-      // The top and left both clamp to 0; the wider 5.2x rectangle still
-      // contains the face, checked below.
-      expect(tlRect).toEqual({ x: 0, y: 0, w: 124, h: 88, score: 0 });
+      // The top and left both clamp to 0; the public conservative rectangle
+      // still contains the face, checked below.
+      expect(tlRect).toEqual({ x: 0, y: 0, w: 84, h: 46, score: 0 });
       expect(tlRect.x).toBeGreaterThanOrEqual(0);
       expect(tlRect.y).toBeGreaterThanOrEqual(0);
       expect(isInsideInset({ id: 0, box: tlFace, score: 0.9, samples: 5, mouthActivity: 0.05 }, tlRect))

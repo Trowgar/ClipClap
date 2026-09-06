@@ -29,6 +29,7 @@ import type { CamRectResolution } from "./cam-rect";
 import {
   freeBand,
   solveStreamGeometry,
+  streamCamCrop,
   streamCamX,
   streamContentX,
 } from "./stream-geometry";
@@ -54,10 +55,11 @@ export const MAX_PLAN_SHOTS = 90;
 // Exported so tests pin geometry by referencing these, not by re-typing their
 // values as literals that silently go stale the next time a real render moves
 // one (as the 0.55->0.75 headroom bump did on 2026-08-19).
-// Owner-reviewed 2026-09-06 on the paid customer's retained stream source.
-// 3.2 made the face fill the tile; 5.2 was the first candidate that retained
-// the head, shoulders and microphone without pulling game UI into the cam crop.
-export const VIRTUAL_CAM_WIDTH_FACES = 5.2; // cam tile width, in multiples of face width
+export const VIRTUAL_CAM_WIDTH_FACES = 3.2; // classification footprint, in face widths
+// Display-only: owner-reviewed 2026-09-06 on the paid customer's retained
+// source. 5.2 retained head, shoulders and microphone without game UI. It must
+// not feed free-band/tile solving: a wider footprint changes classification.
+export const VIRTUAL_CAM_DISPLAY_WIDTH_FACES = 5.2;
 // Owner-reviewed 2026-08-19 on the real rendered tox sample: at 0.55, the
 // streamer's pompadour extended above face.y - 0.55*face.h and got cut by
 // the cam tile's top edge - hair is not covered by the YuNet face box, so
@@ -563,12 +565,13 @@ export function widestFaceInInset(
  * `score` is 0: this rect was never detected, only inferred, so there is no
  * edge evidence to report.
  */
-export function synthesizeVirtualCamRect(
+function synthesizeVirtualCamRectAtWidth(
   face: FaceBox,
   sourceWidth: number,
-  sourceHeight: number
+  sourceHeight: number,
+  widthFaces: number
 ): CamRect {
-  const rawW = VIRTUAL_CAM_WIDTH_FACES * face.w;
+  const rawW = widthFaces * face.w;
   const rawY = face.y - VIRTUAL_CAM_HEADROOM_FRAC * face.h;
   const aspectBottom = rawY + (rawW * 9) / 16;
   const chinBottom = face.y + face.h + VIRTUAL_CAM_CHIN_FRAC * face.h;
@@ -589,6 +592,19 @@ export function synthesizeVirtualCamRect(
   };
 }
 
+export function synthesizeVirtualCamRect(
+  face: FaceBox,
+  sourceWidth: number,
+  sourceHeight: number
+): CamRect {
+  return synthesizeVirtualCamRectAtWidth(
+    face,
+    sourceWidth,
+    sourceHeight,
+    VIRTUAL_CAM_WIDTH_FACES
+  );
+}
+
 /**
  * D4's attempt: synthesize a rect around `face` and try to solve stream
  * geometry with it, exactly like a real rect would be tried. Null when the
@@ -601,10 +617,19 @@ function attemptVirtualCam(
   sourceWidth: number,
   sourceHeight: number,
   camShare: number
-): { rect: CamRect; geom: StreamGeometry } | null {
+): { rect: CamRect; displayRect: CamRect; geom: StreamGeometry } | null {
   const rect = synthesizeVirtualCamRect(face, sourceWidth, sourceHeight);
   const geom = solveStreamGeometry({ sourceWidth, sourceHeight, camRect: rect, camShare });
-  return geom ? { rect, geom } : null;
+  if (!geom) return null;
+  const displayRect = synthesizeVirtualCamRectAtWidth(
+    face,
+    sourceWidth,
+    sourceHeight,
+    VIRTUAL_CAM_DISPLAY_WIDTH_FACES
+  );
+  const displayCrop = streamCamCrop(displayRect, geom.outCamH);
+  if (!displayCrop) return null;
+  return { rect, displayRect, geom: { ...geom, camCrop: displayCrop } };
 }
 
 /**
@@ -891,6 +916,9 @@ export function buildCropPlan(
   // virtual cam and a real one, off the ONE rect this plan actually solved
   // geometry against.
   let effectiveCamRect: CamRect | null = camRect;
+  // Equal to effectiveCamRect except for virtual cams: classification and tile
+  // solving keep the conservative rect while display x uses the wider one.
+  let displayCamRect: CamRect | null = camRect;
 
   if (
     opts.stream &&
@@ -941,6 +969,7 @@ export function buildCropPlan(
     ));
     profile = { ...profile, virtualCam: true };
     effectiveCamRect = virtualCamAttempt.rect;
+    displayCamRect = virtualCamAttempt.displayRect;
   } else if (allTracks.length === 0) {
     profile = { class: "faceless", faceFrac };
   } else if (hasNormalSizedFace(widestFace, minFaceWidth)) {
@@ -1000,7 +1029,7 @@ export function buildCropPlan(
     const shotSpreadFrac = opts.musicMode
       ? (saliencyByIndex.get(i) ?? null)?.spreadFrac
       : undefined;
-    if (streamGeom && effectiveCamRect) {
+    if (streamGeom && effectiveCamRect && displayCamRect) {
       // A shot only splits if it actually shows the streamer: advertisement
       // cards, intermissions and replays have no face inside the inset.
       const inInset = faceInInset(tracks, effectiveCamRect);
@@ -1019,7 +1048,7 @@ export function buildCropPlan(
         layout: "stream",
         cam: {
           x: streamCamX(
-            effectiveCamRect,
+            displayCamRect,
             streamGeom.camCrop.w,
             inInset.box.x + inInset.box.w / 2
           ),

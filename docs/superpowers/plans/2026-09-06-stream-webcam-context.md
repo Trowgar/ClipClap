@@ -4,7 +4,7 @@
 
 **Goal:** Zoom out synthesized stream webcams for future videos while leaving detected webcam bounds and the full-frame gameplay tile unchanged.
 
-**Architecture:** Change the single virtual-camera width constant at the plan source from 3.2 to the visually selected 5.2 face widths. Existing geometry helpers continue to derive an even, in-frame crop and all downstream rendering remains unchanged.
+**Architecture:** Preserve the 3.2-face-width virtual rectangle for classification and tile solving, then derive only the displayed camera crop from a separate, visually selected 5.2-face-width rectangle. Existing persisted plans, detected camera rectangles, tile heights, and downstream rendering remain unchanged.
 
 **Tech Stack:** TypeScript, Vitest, FFmpeg, Docker Compose
 
@@ -69,41 +69,41 @@ docker compose exec -T worker-render sh -lc 'cd /app/apps/worker && npx vitest r
 
 Expected: FAIL because current geometry returns `camCrop.w = 282`, not `360`.
 
-### Task 2: Widen only synthesized webcam rectangles
+### Task 2: Separate virtual layout and display rectangles
 
 **Files:**
 - Modify: `apps/worker/src/reframe/plan.ts`
+- Modify: `apps/worker/src/reframe/stream-geometry.ts`
 - Modify: `apps/worker/src/__tests__/reframe-plan.test.ts`
 
-- [ ] **Step 1: Apply the minimal production change**
+- [ ] **Step 1: Preserve the layout footprint and add the display width**
 
-Change the existing constant and its comment:
-
-```ts
-export const VIRTUAL_CAM_WIDTH_FACES = 5.2;
-```
-
-Do not change `solveStreamGeometry`, detected `camRect` handling, tile heights,
-or the filtergraph.
-
-- [ ] **Step 2: Update existing exact virtual-camera fixtures**
-
-Update only expectations derived from `VIRTUAL_CAM_WIDTH_FACES`:
+Keep the existing layout constant and add the reviewed display constant:
 
 ```ts
-// tox plan
-camCrop: { w: 166, h: 118, y: 242 }
-// tox stream shot
-cam: { x: 474 }, content: { x: 134 }
-// tox synthesized rect
-{ x: 472, y: 242, w: 168, h: 118, score: 0 }
-// bottom-right corner rect
-{ x: 578, y: 324, w: 62, h: 36, score: 0 }
-// top-left corner rect
-{ x: 0, y: 0, w: 124, h: 88, score: 0 }
+export const VIRTUAL_CAM_WIDTH_FACES = 3.2;
+export const VIRTUAL_CAM_DISPLAY_WIDTH_FACES = 5.2;
 ```
 
-Keep their containment, even-dimension, frame-boundary, and real-rectangle assertions intact.
+Extract the solver's existing camera cover-crop arithmetic into a reusable
+`streamCamCrop` helper. In `attemptVirtualCam`, solve classification and tile
+heights with the 3.2x rectangle, then replace only `geom.camCrop` using the 5.2x
+display rectangle. Use that display rectangle only for virtual-camera shot x.
+Do not change detected `camRect` handling, tile heights, or the filtergraph.
+
+- [ ] **Step 2: Add borderline regressions and preserve existing fixtures**
+
+Add regressions for the two reviewer-reported 1920x1080 faces:
+
+```ts
+{ x: 790, y: 800, w: 40, h: 48 } // remains stream at 768/1152
+{ x: 930, y: 756, w: 40, h: 48 } // remains stream at 624/1296
+```
+
+The paid-customer fixture must keep the old content x (`454`) and tile heights
+while producing the wider `360x256` camera crop. Existing synthesized-rectangle,
+containment, even-dimension, frame-boundary, and real-rectangle expectations stay
+at their pre-change values; only displayed camera crop/x expectations change.
 
 - [ ] **Step 3: Run the complete plan and geometry tests**
 

@@ -55,6 +55,33 @@ export interface StreamSolveInput {
   camShare: number;
 }
 
+/** Cover-crop one camera rectangle to a fixed output tile aspect. */
+export function streamCamCrop(
+  camRect: CamRect,
+  outCamH: number
+): StreamGeometry["camCrop"] | null {
+  const aspect = OUT_W / outCamH;
+  let camW: number;
+  let camH: number;
+  if (camRect.w / camRect.h >= aspect) {
+    camH = camRect.h;
+    camW = evenRound(camH * aspect);
+  } else {
+    camW = camRect.w;
+    camH = evenRound(camW / aspect);
+  }
+  camW = Math.min(evenRound(camW), evenFloor(camRect.w));
+  camH = Math.min(evenRound(camH), evenFloor(camRect.h));
+  if (camW < 2 || camH < 2) return null;
+
+  const camY = clampEven(
+    camRect.y + (camRect.h - camH) / 2,
+    camRect.y,
+    camRect.y + camRect.h - camH
+  );
+  return { w: camW, h: camH, y: camY };
+}
+
 /**
  * Solves both tiles from one free parameter.
  *
@@ -102,28 +129,11 @@ export function solveStreamGeometry(
 
     // Cover-crop the inset to the cam tile's aspect: one branch or the other
     // always yields a rectangle inside camRect.
-    const aspect = OUT_W / outCamH;
-    let camW: number;
-    let camH: number;
-    if (camRect.w / camRect.h >= aspect) {
-      camH = camRect.h;
-      camW = evenRound(camH * aspect);
-    } else {
-      camW = camRect.w;
-      camH = evenRound(camW / aspect);
-    }
-    camW = Math.min(evenRound(camW), evenFloor(camRect.w));
-    camH = Math.min(evenRound(camH), evenFloor(camRect.h));
-    if (camW < 2 || camH < 2) continue;
-
-    const camY = clampEven(
-      camRect.y + (camRect.h - camH) / 2,
-      camRect.y,
-      camRect.y + camRect.h - camH
-    );
+    const camCrop = streamCamCrop(camRect, outCamH);
+    if (!camCrop) continue;
 
     return {
-      camCrop: { w: camW, h: camH, y: camY },
+      camCrop,
       contentCrop: { w: contentW, h: hs },
       outCamH,
       outContentH,

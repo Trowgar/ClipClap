@@ -22,17 +22,19 @@ place.
 
 ## Design
 
-Tune the synthesized virtual camera rectangle at its source in `plan.ts`.
-Generate candidate rectangles at several face-width multipliers around the
-current value, render them against the retained customer source, and choose the
-smallest multiplier that consistently shows the head, shoulders, and useful
-surrounding context. The selected value becomes the single shared virtual-camera
-constant.
+Keep the existing 3.2-face-width synthesized rectangle as the conservative
+layout footprint used by stream classification, free-band solving, and tile
+height selection. Separately synthesize a 5.2-face-width display rectangle and
+derive only the camera crop and its per-shot horizontal placement from it. The
+5.2 value is the smallest candidate that showed the head, shoulders, microphone,
+and useful surrounding context on the retained customer source without pulling
+game UI into the camera tile.
 
 Keep the existing face-centred horizontal placement, headroom/chin guarantees,
-even-pixel snapping, frame clamping, stream classification, and output tile
-geometry. Real camera rectangles continue through their current path unchanged.
-The renderer continues to contain the complete gameplay frame over blur.
+even-pixel snapping, frame clamping, stream classification, free-band result,
+and output tile geometry. Real camera rectangles continue through their current
+path unchanged. The renderer continues to contain the complete gameplay frame
+over blur.
 
 This is preferable to renderer-side padding because renderer padding cannot
 distinguish a borderless virtual camera from a hard-bordered inset in historical
@@ -42,17 +44,19 @@ recovering any source context.
 
 ## Compatibility
 
-Only newly computed virtual-camera plans receive the wider crop. Existing plans
-remain renderable byte-for-byte. No schema, API, queue, or persisted type changes
-are required.
+Only newly computed virtual-camera plans receive the wider display crop.
+Existing plans remain renderable byte-for-byte. No schema, API, queue, or
+persisted type changes are required.
 
 ## Verification
 
 1. Add a regression test showing that the customer-shaped face produces a
    materially wider virtual camera crop while remaining in-frame and even-sized.
-2. Confirm detected camera rectangles and non-stream plans are unchanged.
-3. Render the retained customer source and visually compare the face scale and
+2. Add borderline-position regressions proving the wider display crop cannot
+   reduce tile height or disable an otherwise valid virtual-stream plan.
+3. Confirm detected camera rectangles and non-stream plans are unchanged.
+4. Render the retained customer source and visually compare the face scale and
    surrounding context with the current production clip.
-4. Probe the output as 1080x1920, SAR 1:1, DAR 9:16.
-5. Run focused reframe tests, worker typecheck, and worker build before deploying
+5. Probe the output as 1080x1920, SAR 1:1, DAR 9:16.
+6. Run focused reframe tests, worker typecheck, and worker build before deploying
    only `worker-render` while its queue is idle.
