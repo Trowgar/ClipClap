@@ -1145,6 +1145,24 @@ describe("quality lane characterization", () => {
     expect(c.create).not.toHaveBeenCalled();
   });
 
+  it("returns an empty result and terminal rejection when the only clip has no payoff", async () => {
+    const { result, usage } = await directLane({
+      candidates: [laneCandidate("c0")],
+      criticResponse: laneCriticRows(["c0"]),
+      finalizerResponse: {
+        choices: [{ message: { content: JSON.stringify({ clips: [{
+          id: "c0", verdict: "drop", drop_reason: "no_payoff", duplicate_of: null,
+          shared_claim: null, title: null, title_evidence_nodes: null, trim_start_node: null,
+        }] }) }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 300, completion_tokens: 90 },
+      },
+    });
+    expect(result.highlights).toEqual([]);
+    expect(result.terminal.get("c0")).toBe("finalizer_rejected");
+    expect(result.telemetry.finalizerDrops).toEqual([{ id: "c0", reason: "no_payoff" }]);
+    expect(usage.requests).toBe(2);
+  });
+
   it("classifies a finalizer drop as finalizer_rejected", async () => {
     const { result, usage } = await directLane({
       candidates: [laneCandidate("c0"), laneCandidate("c1", 15, 19)],
