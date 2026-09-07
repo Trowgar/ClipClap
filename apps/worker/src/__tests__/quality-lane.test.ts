@@ -147,6 +147,8 @@ async function directLane(input: {
   criticResponse: unknown;
   finalizerResponse?: unknown;
   arcResponse?: unknown;
+  publishabilityResponse?: unknown;
+  lane?: "primary" | "recovery";
   cfg?: ReturnType<typeof loadAnalyzeConfig>;
 }) {
   const cfg = input.cfg ?? loadAnalyzeConfig({});
@@ -158,11 +160,12 @@ async function directLane(input: {
     if (schema === "critic_verdicts") return input.criticResponse;
     if (schema === "arc_audit") return input.arcResponse;
     if (schema === "clip_finalizer") return input.finalizerResponse ?? finalizer;
+    if (schema === "publishability_review") return input.publishabilityResponse;
     throw new Error(`unexpected schema ${schema}`);
   });
   return {
     result: await runQualityLane({
-      lane: "primary",
+      lane: input.lane ?? "primary",
       candidates: input.candidates,
       nodes,
       languageIso: "ru",
@@ -1270,5 +1273,52 @@ describe("quality lane characterization", () => {
         usage: { prompt_tokens: 200, completion_tokens: 80 },
       },
     })).rejects.toThrow(/0 usable verdicts/);
+  });
+});
+
+
+describe("publishability integration", () => {
+  const review = (patch: Record<string, unknown>) => ({
+    choices: [{ message: { content: JSON.stringify({ clips: [{
+      id: "c0", value_reason: "Only repeats its premise.", value: "generic",
+      title_reason: "Matches the speech.", title_supported: true,
+      corrected_title: null, title_evidence_nodes: [], ...patch,
+    }] }) }, finish_reason: "stop" }],
+    usage: { prompt_tokens: 40, completion_tokens: 20 },
+  });
+  it.each(["primary", "recovery"] as const)("records the last veto in the %s lane", async (lane) => {
+    const { result, create } = await directLane({ lane, candidates: [laneCandidate("c0")],
+      criticResponse: critic(), publishabilityResponse: review({}),
+      cfg: loadAnalyzeConfig({ ANALYZE_PUBLISHABILITY: "on" }) });
+    expect(result.highlights).toEqual([]);
+    expect(result.terminal.get("c0")).toBe("finalizer_rejected");
+    expect(result.counters.finalizerSurvivors).toBe(0);
+    expect(result.telemetry.finalizerSurvivors).toBe(0);
+    expect(result.telemetry.publishability).toMatchObject({ evaluated: 1, dropped: ["c0"] });
+    expect(create).toHaveBeenCalledTimes(3);
+  });
+  it("repairs the finalizer's actual title and exports the validated evidence", async () => {
+    const rewrite = { choices: [{ message: { content: JSON.stringify({ clips: [{
+      id: "c0", verdict: "ship", drop_reason: null, duplicate_of: null, shared_claim: null,
+      title: "Кто изменил номер?", title_evidence_nodes: [13], trim_start_node: null,
+    }] }) }, finish_reason: "stop" }] };
+    const { result, create } = await directLane({ candidates: [laneCandidate("c0")],
+      criticResponse: critic(), finalizerResponse: rewrite,
+      publishabilityResponse: review({ value: "substantive", title_supported: false,
+        corrected_title: "Какой номер он назвал?", title_evidence_nodes: [12] }),
+      cfg: loadAnalyzeConfig({ ANALYZE_PUBLISHABILITY: "on" }) });
+    expect(result.highlights[0]).toMatchObject({ title: "Какой номер он назвал?", _titleEvidenceNodes: [12] });
+    const request = create.mock.calls.at(-1)![0];
+    expect(JSON.parse(request.messages[1].content)[0].title).toBe("Кто изменил номер?");
+    expect(result.terminal.get("c0")).toBe("shipped");
+  });
+  it("cannot promote a recovery whose last review did not complete", async () => {
+    const { result, create } = await directLane({ lane: "recovery", candidates: [laneCandidate("c0")],
+      criticResponse: critic(), publishabilityResponse: { choices: [] },
+      cfg: loadAnalyzeConfig({ ANALYZE_PUBLISHABILITY: "on" }) });
+    expect(result.highlights).toHaveLength(1);
+    expect(result.finalizerAmbiguous).toBe(true);
+    expect(result.telemetry.publishability).toHaveProperty("skipped");
+    expect(create).toHaveBeenCalledTimes(3);
   });
 });

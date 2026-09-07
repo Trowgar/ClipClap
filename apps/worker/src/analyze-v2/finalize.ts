@@ -471,9 +471,9 @@ type RewriteAttempt =
  * paraphrase and inflection, and an honest rewrite of a Russian clip is exactly
  * a paraphrase (engine-notes §6).
  */
-function tryRewrite(
+export function tryRewrite(
   clip: SnappedClip,
-  entry: FinalizerEntry,
+  entry: Pick<FinalizerEntry, "title" | "titleEvidenceNodes">,
   nodes: SentenceNode[]
 ): RewriteAttempt {
   const title = (entry.title ?? "").trim();
