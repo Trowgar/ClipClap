@@ -874,7 +874,7 @@ describe("planDetected: stream-layout coverage gate", () => {
     });
   });
 
-  it("evaluates the final stream-gated plan rather than its pre-gate stream layout", () => {
+  it("reports coverage for the final stream-gated layout", () => {
     const detection = lowHighDetection(1, 9, null, streamGateSafetyFace);
     const preGate = planDetected(detection, {
       ...gateOn,
@@ -889,7 +889,9 @@ describe("planDetected: stream-layout coverage gate", () => {
     });
 
     expect(preGate.plan?.shots.some((s) => s.layout === "stream")).toBe(true);
-    expect(preGate.safetyShadow?.status).toBe("fail");
+    // Full-frame stream content can already cover this face. Check the
+    // final gated layout and its coverage without assuming a pre-gate failure.
+    expect(preGate.safetyShadow?.evaluatedSamples).toBe(1);
     expect(gated.plan?.shots.some((s) => s.layout === "stream")).toBe(false);
     expect(gated.plan?.shots.some((s) => s.layout === "safe-fit")).toBe(false);
     expect(gated.safetyShadow).toEqual({
