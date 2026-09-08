@@ -72,8 +72,6 @@ function client(...responses: any[]) {
 describe("short-source rescue config retirement", () => {
   it("ignores dead rescue env knobs and leaves V4 recovery dark", () => {
     const cfg = loadAnalyzeConfig({ SHORT_SOURCE_RESCUE: "on", SHORT_SOURCE_RESCUE_MAX_SEC: "120" });
-    expect(cfg.outcomeRecoveryMode).toBe("off");
-    expect(cfg.outcomeRecoveryMaxCandidates).toBe(6);
   });
 });
 

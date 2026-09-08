@@ -42,16 +42,9 @@ No customer speech, titles, IDs, or environment secrets belong in this record.
 
 ## Other recovery work
 
-`ANALYZE_OUTCOME_RECOVERY_V1=shadow` is unchanged. The current database has 30
-non-synthetic V4-attributed jobs: 19 not eligible, eight with no unjudged tail,
-and three `shadow_miss`; no `shadow_hit`. Switching those decisions to `on`
-would not have recovered a clip. V4 has not demonstrated recovery benefit in
-this traffic, and its documented release gate remains required for promotion.
-
-Rescue v2 remains an unmerged experiment on `feature/zero-result-rescue`.
-Its documented validation is derived rather than historical replay, and its
-required live shadow validation has not run. It is not part of this release
-and must not be reported as a delivered improvement.
+Later on 2026-09-08, Rescue v2 was deleted and V4 was retired after its real-source
+checks showed no additional clips. See [the retirement record](2026-09-08-v4-release.md).
+The publishability fix described above remains enabled.
 
 ## Disable the final review
 

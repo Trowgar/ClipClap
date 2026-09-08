@@ -372,7 +372,7 @@ describe("stage handlers", () => {
       data: expect.objectContaining({
         status: "ANALYZING",
         highlights: [{ start: 0, end: 10, title: "Clip", reason: "Hook" }],
-        analysisVersion: "core-v4-recovery-v1",
+        analysisVersion: "core-publishability-v1",
       }),
     });
     expect(mocks.queueAdd).toHaveBeenCalledWith("render", {
@@ -424,7 +424,7 @@ describe("stage handlers", () => {
       .find((data) => "highlights" in data);
     expect(analyzeWrite?.highlights).toBe(v2.highlights);
     expect(analyzeWrite).toMatchObject({
-      analysisVersion: "core-v4-recovery-v1",
+      analysisVersion: "core-publishability-v1",
     });
     expect(mocks.analyzeHighlightsV1).not.toHaveBeenCalled();
     expect(mocks.queueAdd).toHaveBeenCalledTimes(1);

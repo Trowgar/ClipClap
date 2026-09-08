@@ -45,7 +45,7 @@ import type {
 } from "./types";
 
 export interface QualityLaneInput {
-  lane: "primary" | "recovery";
+  lane: "primary";
   candidates: MergedCandidate[];
   nodes: SentenceNode[];
   languageIso: string;
@@ -65,17 +65,12 @@ export interface QualityLaneResult {
   lane: QualityLaneInput["lane"];
   highlights: V2Highlight[];
   telemetry: Record<string, unknown>;
-  /** Internal recovery-only veto signal. Never projected into primary output. */
-  finalizerAmbiguous?: boolean;
   counters: {
     judged: number;
     selectedForFinalizer: number;
     finalizerSurvivors: number;
   };
   terminal: ReadonlyMap<string, QualityLaneDisposition>;
-  /** Private candidate-level critic authority used only by the offline outcome
-   * observer. It is never copied to job telemetry or serialized. */
-  criticKeep: ReadonlyMap<string, boolean>;
 }
 
 interface SafeEndNormalTelemetry {
@@ -250,7 +245,7 @@ async function runSafeEndNormalAudit(
 
 
 export async function runQualityLane(input: QualityLaneInput): Promise<QualityLaneResult> {
-  if (input.lane !== "primary" && input.lane !== "recovery") {
+  if (input.lane !== "primary") {
     throw new AnalyzeTechnicalError("quality lane invariant: invalid lane");
   }
   const candidateIds = new Set<string>();
@@ -274,7 +269,7 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
     candidates,
     languageIso,
     cfg,
-    { retryDelayMs: options.retryDelayMs, recovery: input.lane === "recovery" },
+    { retryDelayMs: options.retryDelayMs },
     input.analysisMode
   );
 
@@ -921,18 +916,9 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
   // so both are almost always absent here.
   const { longClipsCompressed, longClipsDropped, finalizerFallbackUsed, ...rawFinalizedTelemetryRest } =
     finalized.telemetry;
-  // `clips` was absent from a malformed finalizer response. Before Task6 the
-  // primary lane treated that as a fail-open success with no skipped marker;
-  // retain that exact projection while exposing the ambiguity only through the
-  // recovery lane's internal result bit.
   const { finalizerSkipped, ...withoutMalformedSkipped } = rawFinalizedTelemetryRest;
   const finalizedTelemetryRest =
     finalizerSkipped === "malformed" ? withoutMalformedSkipped : rawFinalizedTelemetryRest;
-  const finalizerAmbiguous =
-    finalizerFallbackUsed === true || finalizerSkipped === "malformed" ||
-    (cfg.publishabilityEnabled && (publishability.telemetry.skipped !== undefined ||
-      publishability.telemetry.rewriteRejected.length > 0));
-
   const telemetry = {
     // Not-a-key discipline (spec 2026-08-19-stream-analyze-mode, S1), same as
     // arcAudit below: present only when cfg.streamModeEnabled is true, so a
@@ -1076,14 +1062,12 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
     lane: input.lane,
     highlights,
     telemetry,
-    ...(input.lane === "recovery" && finalizerAmbiguous ? { finalizerAmbiguous: true } : {}),
     counters: {
       judged: critic.verdicts.length,
       selectedForFinalizer: afterStandaloneFilter.length,
       finalizerSurvivors: finalSurvivors.length,
     },
     terminal,
-    criticKeep: new Map(critic.verdicts.map((verdict) => [verdict.id, verdict.keep])),
   };
 }
 /** `arcFlags` is keyed by clip id and absent whenever the stage did not audit
