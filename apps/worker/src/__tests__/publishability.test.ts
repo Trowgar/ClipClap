@@ -52,6 +52,26 @@ describe("finished clip review", () => {
     expect(create.mock.calls[0][1]).toEqual({ maxRetries: 0 });
     expect(usage.requests).toBe(1);
   });
+  it.each([3, 99])("checks every evidence node without cancelling sibling vetoes: last=%i", async (last) => {
+    const original = { ...clip(), finalStartNode: 0, startSec: 0 };
+    const evidence = [0, 1, 2, last];
+    const title = "Кто оставил башню без защиты?";
+    const { result } = await run({ clips: [
+      row({ title_supported: false, corrected_title: title, title_evidence_nodes: evidence }),
+      row({ id: "c1", value: "generic", title_evidence_nodes: [0, 1, 2, 3] }),
+    ] }, [original, clip("c1")]);
+    expect(result.telemetry.skipped).toBeUndefined();
+    expect(result.telemetry.evaluated).toBe(2);
+    expect(result.telemetry.dropped).toEqual(["c1"]);
+    if (last === 3) {
+      expect(result.clips).toEqual([{ ...original, verdict: { ...original.verdict,
+        title, titleEvidenceNodes: evidence } }]);
+      expect(result.telemetry.rewritten).toEqual(["c0"]);
+    } else {
+      expect(result.clips).toEqual([original]);
+      expect(result.telemetry.rewriteRejected).toEqual([{ id: "c0", reason: "evidence_out_of_range" }]);
+    }
+  });
   it("preserves an uncertain visual moment", async () => {
     const { result } = await run({ clips: [row({ value: "uncertain" })] });
     expect(result.clips).toEqual([clip()]);
@@ -72,6 +92,8 @@ describe("finished clip review", () => {
     {}, { clips: [] }, { clips: [row(), row()] }, { clips: [row({ id: "unknown" })] },
     { clips: [row({ value: "delete" })] }, { clips: [row({ title_supported: "false" })] },
     { clips: [null] },
+    { clips: [row({ title_evidence_nodes: [0, 1, 2, 3.5] })] },
+    { clips: [row({ title_evidence_nodes: [0, 1, 2, "3"] })] },
   ])("fails open on incomplete or malformed replies: %j", async (data) => {
     const { result } = await run(data);
     expect(result.clips).toEqual([clip()]);

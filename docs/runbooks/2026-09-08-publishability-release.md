@@ -40,6 +40,20 @@ Private evidence and the predeployment environment are under the ignored
 `apps/worker/.corpus/releases/2026-09-08-publishability/` directory.
 No customer speech, titles, IDs, or environment secrets belong in this record.
 
+## Evidence validation correction
+
+A later audit found valid model answers with more than three title evidence
+indices. The local row validator discarded the entire batch, suppressing generic
+content vetoes and title corrections. Removed that count limit; integer checks
+and `tryRewrite` validation of every index against the final clip remain intact.
+
+Validation: 198 tests across five suites, worker typecheck and worker/shared
+build passed. Replaying 32 captured responses for 44 historical speech clips
+reduced skipped reviews from eight to zero, applied five blocked title changes,
+and retained all eleven AS_IS clips. A separate subtitle-based diagnostic also
+restored the original BORING veto. These are deterministic replays, not new
+customer acceptance results. No model, prompt, boundary or rollout flag changed.
+
 ## Other recovery work
 
 Later on 2026-09-08, Rescue v2 was deleted and V4 was retired after its real-source

@@ -59,7 +59,7 @@ function validRow(row: unknown): row is ReviewRow {
     typeof r.title_reason === "string" && r.title_reason.trim().length > 0 &&
     typeof r.title_supported === "boolean" &&
     (r.corrected_title === null || typeof r.corrected_title === "string") &&
-    Array.isArray(r.title_evidence_nodes) && r.title_evidence_nodes.length <= 3 &&
+    Array.isArray(r.title_evidence_nodes) &&
     r.title_evidence_nodes.every(Number.isInteger);
 }
 
