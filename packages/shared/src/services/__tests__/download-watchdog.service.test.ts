@@ -17,7 +17,9 @@ vi.mock("../telegram-notification.service", () => ({
 
 import {
   runDownloadWatchdog,
+  watchdogGraceCutoff,
   watchdogWindowCutoff,
+  WATCHDOG_GRACE_MINUTES,
   WATCHDOG_WINDOW_HOURS,
   WATCHDOG_SUPPRESS_HOURS,
   DOWNLOAD_WATCHDOG_SUPPRESS_KEY,
@@ -41,8 +43,8 @@ afterEach(() => {
   process.env = { ...savedEnv };
 });
 
-function job(status: string, error: string | null = null) {
-  return { status, error };
+function job(downloadStatus: string, error: string | null = null) {
+  return { steps: [{ status: downloadStatus, error }] };
 }
 
 describe("download watchdog: the window", () => {
@@ -52,6 +54,13 @@ describe("download watchdog: the window", () => {
       "2026-08-18T12:00:00.000Z"
     );
   });
+
+  it("waits 15 minutes before judging a submission", () => {
+    expect(WATCHDOG_GRACE_MINUTES).toBe(15);
+    expect(watchdogGraceCutoff(NOW).toISOString()).toBe(
+      "2026-08-19T11:45:00.000Z"
+    );
+  });
 });
 
 describe("download watchdog: query shape", () => {
@@ -59,16 +68,24 @@ describe("download watchdog: query shape", () => {
   // so the shape has to be asserted directly - a where that forgot
   // `sourceUrl: { not: null }` would silently watch uploads instead of links
   // and this watchdog would never fire on the outage it exists to catch.
-  it("asks only for link jobs (sourceUrl not null) created in the window", async () => {
+  it("asks for mature link jobs and their download step", async () => {
     process.env.SUPPORT_CHAT_ID = "999";
     await runDownloadWatchdog(NOW);
 
     expect(findManyMock).toHaveBeenCalledWith({
       where: {
         sourceUrl: { not: null },
-        createdAt: { gte: watchdogWindowCutoff(NOW) },
+        createdAt: {
+          gte: watchdogWindowCutoff(NOW),
+          lte: watchdogGraceCutoff(NOW),
+        },
       },
-      select: { status: true, error: true },
+      select: {
+        steps: {
+          where: { step: "DOWNLOAD" },
+          select: { status: true, error: true },
+        },
+      },
     });
   });
 });
@@ -96,7 +113,7 @@ describe("download watchdog: alert condition", () => {
   // The condition is done === 0, not "every submission failed" - a job still
   // mid-pipeline must not buy silence, and one completion is what proves the
   // path still works.
-  it("stays silent when at least one submission completed", async () => {
+  it("stays silent when download completed while the job continues downstream", async () => {
     process.env.SUPPORT_CHAT_ID = "999";
     findManyMock.mockResolvedValue([job("FAILED", "boom"), job("DONE")]);
 
