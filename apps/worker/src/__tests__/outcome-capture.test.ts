@@ -1,7 +1,7 @@
 import { chmod, mkdtemp, open, readFile, readdir, stat, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { canonicalJson, sha256 } from "../feedback-learning/canonical";
 import { captureOutcomeDecisionAssist, readOutcomeCaptureFile, type OutcomeCaptureSnapshot } from "../feedback-quality/outcome-capture";
@@ -65,9 +65,50 @@ function recoveryTelemetry(mode: "shadow" | "on") {
   };
 }
 
-afterEach(async () => { await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))); });
+// Capture and promotion read the wall clock; keep it aligned with the fixed
+// review fixtures so freshness tests do not expire as the calendar advances.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-09-03T01:00:00.000Z"));
+});
+afterEach(async () => {
+  vi.useRealTimers();
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 describe("private outcome capture", () => {
+  it.each([false, true])("preserves invocation order when identical requests complete backwards (live=%s)", async (liveLaneCandidate) => {
+    const request = { model: "scanner", messages: [{ role: "system", content: "scan" }, { role: "user", content: "same scan window" }] };
+    const pending: Array<() => void> = [];
+    let ordinal = 0;
+    const realClient = { chat: { completions: { create: () => {
+      const invocation = ++ordinal;
+      return new Promise((resolve) => pending.push(() => resolve(completion(request, { invocation }, { id: `provider-${invocation}` }))));
+    } } } } as never;
+    const observed: number[][] = [];
+    const captured = await captureOutcomeDecisionAssist({
+      snapshot: snapshot(), config: { ...loadAnalyzeConfig({}), outcomeRecoveryMode: "shadow" },
+      outputDir: await outputDir(), realClient, sourceReader, liveLaneCandidate,
+      analyze: async (_transcript, options) => {
+        const first = options.client!.chat.completions.create(request as never);
+        const second = options.client!.chat.completions.create(request as never);
+        const completions = pending.splice(0);
+        if (completions.length) {
+          completions[1]();
+          await second;
+          completions[0]();
+        }
+        const responses = await Promise.all([first, second]);
+        observed.push(responses.map((response) => JSON.parse(response.choices[0].message.content!).invocation));
+        return { highlights: [], noClipsReason: "NO_VIABLE_MOMENTS", telemetry: {}, usage: { inputTokens: 0, outputTokens: 0, requests: 2, byModel: {} } } as never;
+      },
+    });
+    expect(observed).toEqual([[1, 2], [1, 2]]);
+    const stored = await readOutcomeCaptureFile(captured.path, captured.captureId);
+    expect(stored.recordedResponses.map((record) => record.result.invocation)).toEqual([1, 2]);
+    expect(stored.providerRequestIds).toEqual(["provider-1", "provider-2"]);
+  });
+
   it("captures baseline primary and shadow recovery completions as canonical phase-bound recordings", async () => {
     const dir = await outputDir();
     const body = { model: "model-a", messages: [{ role: "system", content: "system" }, { role: "user", content: "user" }] };
