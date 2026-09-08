@@ -148,7 +148,7 @@ async function directLane(input: {
   finalizerResponse?: unknown;
   arcResponse?: unknown;
   publishabilityResponse?: unknown;
-  lane?: "primary" | "recovery";
+  lane?: "primary";
   cfg?: ReturnType<typeof loadAnalyzeConfig>;
 }) {
   const cfg = input.cfg ?? loadAnalyzeConfig({});
@@ -1286,8 +1286,8 @@ describe("publishability integration", () => {
     }] }) }, finish_reason: "stop" }],
     usage: { prompt_tokens: 40, completion_tokens: 20 },
   });
-  it.each(["primary", "recovery"] as const)("records the last veto in the %s lane", async (lane) => {
-    const { result, create } = await directLane({ lane, candidates: [laneCandidate("c0")],
+  it("records the last publishability veto", async () => {
+    const { result, create } = await directLane({ candidates: [laneCandidate("c0")],
       criticResponse: critic(), publishabilityResponse: review({}),
       cfg: loadAnalyzeConfig({ ANALYZE_PUBLISHABILITY: "on" }) });
     expect(result.highlights).toEqual([]);
@@ -1311,14 +1311,5 @@ describe("publishability integration", () => {
     const request = create.mock.calls.at(-1)![0];
     expect(JSON.parse(request.messages[1].content)[0].title).toBe("Кто изменил номер?");
     expect(result.terminal.get("c0")).toBe("shipped");
-  });
-  it("cannot promote a recovery whose last review did not complete", async () => {
-    const { result, create } = await directLane({ lane: "recovery", candidates: [laneCandidate("c0")],
-      criticResponse: critic(), publishabilityResponse: { choices: [] },
-      cfg: loadAnalyzeConfig({ ANALYZE_PUBLISHABILITY: "on" }) });
-    expect(result.highlights).toHaveLength(1);
-    expect(result.finalizerAmbiguous).toBe(true);
-    expect(result.telemetry.publishability).toHaveProperty("skipped");
-    expect(create).toHaveBeenCalledTimes(3);
   });
 });

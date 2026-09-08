@@ -71,7 +71,7 @@ function client(...responses: any[]) {
 }
 
 describe("analyzeHighlightsV2", () => {
-  it("runs one bounded recovery quality lane for an honest empty tail and ships only its survivor", async () => {
+  it("ignores the retired V4 flag and never judges an extra tail after primary rejection", async () => {
     const scanTwoCandidates = {
       choices: [{
         message: {
@@ -102,46 +102,19 @@ describe("analyzeHighlightsV2", () => {
       }],
       usage: { prompt_tokens: 200, completion_tokens: 80 },
     };
-    const recoveryKeep = {
-      choices: [{
-        message: {
-          content: JSON.stringify({
-            results: [{
-              id: "c1", keep: true, score: 0.9, grounded: true, self_contained: true,
-              start_node: 20, payoff_node: 23, end_node: 24,
-              hook_start_node: 22, hook_end_node: 23,
-              title: "Он объяснил идею", description: "Спикер объясняет идею.",
-              title_evidence_nodes: [23], description_evidence_nodes: [23], language: "ru",
-            }],
-          }),
-        },
-        finish_reason: "stop",
-      }],
-      usage: { prompt_tokens: 220, completion_tokens: 90 },
-    };
-    const recoveryCfg = {
+    const primaryCfg = {
       ...cfg,
-      outcomeRecoveryMode: "on" as const,
+      ...loadAnalyzeConfig({ ANALYZE_OUTCOME_RECOVERY_V1: "on" }),
       criticMaxCandidates: 1,
       perWindowMinCandidates: 1,
       finalizerEnabled: true,
     };
-    const recoveryFinalizer = {
-      choices: [{ message: { content: JSON.stringify({ clips: [] }) }, finish_reason: "stop" }],
-      usage: { prompt_tokens: 40, completion_tokens: 10 },
-    };
-    const c = client(scanTwoCandidates, primaryReject, recoveryKeep, recoveryFinalizer);
-    const r = await analyzeHighlightsV2(transcript(), { client: c, cfg: recoveryCfg, transcriptPartial: false });
-
-    expect(r.highlights).toHaveLength(1);
-    expect(r.highlights[0].title).toBe("Он объяснил идею");
-    expect(r.telemetry.outcomeRecovery).toEqual(expect.objectContaining({
-      mode: "on",
-      outcome: "shipped",
-      poolSize: 1,
-      judged: 1,
-    }));
-    expect(c.chat.completions.create).toHaveBeenCalledTimes(4);
+    const c = client(scanTwoCandidates, primaryReject);
+    const r = await analyzeHighlightsV2(transcript(), { client: c, cfg: primaryCfg, transcriptPartial: false });
+    expect(r.highlights).toEqual([]);
+    expect(r.noClipsReason).toBe("NO_VIABLE_MOMENTS");
+    expect(r.telemetry).not.toHaveProperty("outcomeRecovery");
+    expect(c.chat.completions.create).toHaveBeenCalledTimes(2);
   });
 
   it("produces a scored, described highlight from scan + critic", async () => {

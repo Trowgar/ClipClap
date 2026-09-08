@@ -9,13 +9,12 @@ import { analyzeHighlightsV2, evaluateVisualRecall } from "../analyze-v2";
 import { AnalyzeTechnicalError } from "../analyze-v2/critic";
 import {
   loadAnalyzeConfig,
-  OUTCOME_RECOVERY_VERSION,
+  ANALYSIS_VERSION,
 } from "../analyze-v2/config";
 import { resolveEngine } from "../analyze-v2/dispatch";
 import { detectSong } from "../analyze-v2/song-gate";
 import { selectHookWindows, type HookWindow } from "../analyze-v2/music-hook";
 import { newUsage } from "../analyze-v2/llm";
-import { buildOutcomeRecoveryTelemetry } from "../analyze-v2/outcome-recovery";
 import type { V2Result } from "../analyze-v2/types";
 import { safeTagJobError } from "./job-error";
 import { asTranscription, type AnalyzeStagePayload } from "./types";
@@ -51,7 +50,7 @@ export async function runAnalyzeStage(
           analyzeMs,
           analyzeEngine: "LEGACY",
           highlightsVersion: 1,
-          analysisVersion: OUTCOME_RECOVERY_VERSION,
+          analysisVersion: ANALYSIS_VERSION,
         },
       });
 
@@ -177,25 +176,6 @@ export async function runAnalyzeStage(
           telemetry: {
             path: "music-shorts",
             songGate,
-            ...(cfg.outcomeRecoveryMode !== "off"
-              ? {
-                  outcomeRecovery: buildOutcomeRecoveryTelemetry({
-                    mode: cfg.outcomeRecoveryMode,
-                    eligible: false,
-                    reason: "music_short",
-                    tailSize: 0,
-                    poolSize: 0,
-                    excludedMissingRange: 0,
-                    judged: 0,
-                    counters: { selectedForFinalizer: 0, finalizerSurvivors: 0 },
-                    primaryDispositions: {},
-                    recoveryDispositions: {},
-                    addedUsage: newUsage(),
-                    elapsedMs: 0,
-                    outcome: "not_eligible",
-                  }),
-                }
-              : {}),
             ...(manualVisualRecall ? { visualRecall: manualVisualRecall } : {}),
             musicShorts: {
               windows: musicShorts.windows,
@@ -222,25 +202,6 @@ export async function runAnalyzeStage(
           telemetry: {
             path: "song-gate",
             songGate,
-            ...(cfg.outcomeRecoveryMode !== "off"
-              ? {
-                  outcomeRecovery: buildOutcomeRecoveryTelemetry({
-                    mode: cfg.outcomeRecoveryMode,
-                    eligible: false,
-                    reason: "song_gate",
-                    tailSize: 0,
-                    poolSize: 0,
-                    excludedMissingRange: 0,
-                    judged: 0,
-                    counters: { selectedForFinalizer: 0, finalizerSurvivors: 0 },
-                    primaryDispositions: {},
-                    recoveryDispositions: {},
-                    addedUsage: newUsage(),
-                    elapsedMs: 0,
-                    outcome: "not_eligible",
-                  }),
-                }
-              : {}),
             ...(manualVisualRecall ? { visualRecall: manualVisualRecall } : {}),
           },
           usage: newUsage(),
@@ -274,7 +235,7 @@ export async function runAnalyzeStage(
         analyzeMs,
         analyzeEngine: "RECALL_CRITIC",
         highlightsVersion: 2,
-        analysisVersion: OUTCOME_RECOVERY_VERSION,
+        analysisVersion: ANALYSIS_VERSION,
         noClipsReason: result.noClipsReason ?? null,
         analysisInputTokens: result.usage.inputTokens,
         analysisOutputTokens: result.usage.outputTokens,

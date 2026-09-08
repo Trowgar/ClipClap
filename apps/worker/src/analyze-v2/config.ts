@@ -4,8 +4,7 @@ export type PostBoundaryHookGateMode = "off" | "observe" | "shadow" | "enforce";
  * separately approved configuration and implementation. */
 export type SafeEndAuditMode = "off" | "shadow";
 export type VisualRecallMode = "off" | "shadow" | "on";
-export type OutcomeRecoveryMode = "off" | "shadow" | "on";
-export const OUTCOME_RECOVERY_VERSION = "core-v4-recovery-v1" as const;
+export const ANALYSIS_VERSION = "core-publishability-v1" as const;
 
 export interface AnalyzeConfig {
   engine: AnalyzeEngineSetting;
@@ -30,11 +29,6 @@ export interface AnalyzeConfig {
   scanWindowSec: number;
   scanOverlapSec: number;
   visualRecallMode: VisualRecallMode;
-  /** V4 first-result recovery rollout mode. Configuration is intentionally
-   * closed: unknown values fail dark to preserve the current analyzer output. */
-  outcomeRecoveryMode: OutcomeRecoveryMode;
-  /** Maximum candidates the future recovery lane may judge. */
-  outcomeRecoveryMaxCandidates: number;
   visualRecallMaxCandidates: number;
   visualRecallClusterSec: number;
   visualRecallPreSec: number;
@@ -490,10 +484,6 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     env.ANALYZE_VISUAL_RECALL_V1 === "shadow" || env.ANALYZE_VISUAL_RECALL_V1 === "on"
       ? env.ANALYZE_VISUAL_RECALL_V1
       : "off";
-  const outcomeRecoveryMode: OutcomeRecoveryMode =
-    env.ANALYZE_OUTCOME_RECOVERY_V1 === "shadow" || env.ANALYZE_OUTCOME_RECOVERY_V1 === "on"
-      ? env.ANALYZE_OUTCOME_RECOVERY_V1
-      : "off";
   return {
     engine:
       engine === "recall-critic" || engine === "shadow" ? engine : "legacy",
@@ -514,13 +504,6 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     scanWindowSec: num(env, "SCAN_WINDOW_SEC", 600),
     scanOverlapSec: num(env, "SCAN_OVERLAP_SEC", 90),
     visualRecallMode,
-    outcomeRecoveryMode,
-    outcomeRecoveryMaxCandidates: positiveIntBounded(
-      env,
-      "OUTCOME_RECOVERY_MAX_CANDIDATES",
-      6,
-      12,
-    ),
     visualRecallMaxCandidates: positiveIntBounded(env, "VISUAL_RECALL_MAX_CANDIDATES", 15, 100),
     visualRecallClusterSec: positiveBounded(env, "VISUAL_RECALL_CLUSTER_SEC", 12, 600),
     visualRecallPreSec: positiveBounded(env, "VISUAL_RECALL_PRE_SEC", 18, 600),

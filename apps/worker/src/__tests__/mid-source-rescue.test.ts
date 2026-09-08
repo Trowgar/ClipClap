@@ -75,8 +75,6 @@ describe("mid-source rescue config retirement", () => {
       RESCUE_MID_SOURCE: "on",
       RESCUE_MID_MAX_SOURCE_SEC: "900",
     });
-    expect(cfg.outcomeRecoveryMode).toBe("off");
-    expect(cfg.outcomeRecoveryMaxCandidates).toBe(6);
   });
 });
 

@@ -23,11 +23,6 @@
     "feedback-quality-deploy": "tsx src/scripts/feedback-quality-deploy.ts",
     "feedback-quality-release": "tsx src/scripts/feedback-quality-release.ts",
     "feedback-quality-rollback": "tsx src/scripts/feedback-quality-rollback.ts",
-    "outcome-promote": "tsx src/scripts/outcome-promote.ts",
-    "outcome-validate": "tsx src/scripts/outcome-validate.ts",
-    "outcome-observe": "tsx src/scripts/outcome-observe.ts",
-    "outcome-capture": "tsx src/scripts/outcome-capture.ts",
-    "outcome-recovery-gate": "tsx src/scripts/outcome-recovery-gate.ts",
     "eval:visual-recall": "tsx src/scripts/eval-visual-recall.ts"
   },
   "dependencies": {

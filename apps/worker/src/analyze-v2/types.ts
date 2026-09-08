@@ -226,13 +226,6 @@ export type CandidatePrimaryDisposition =
   | "finalizer_rejected"
   | "shipped";
 
-/** Recovery uses the same quality authorities, but has its own immutable lane
- * accounting so recovery never rewrites primary history. */
-export type CandidateRecoveryDisposition = Exclude<
-  CandidatePrimaryDisposition,
-  "not_selected_for_critic" | "missing_range_rejected"
-> | "finalizer_unjudged";
-
 /** Terminal vocabulary emitted by the shared quality lane. Partitioning is
  * the only stage allowed to say a candidate was not selected for critic. */
 export type QualityLaneDisposition = Exclude<
@@ -243,7 +236,6 @@ export type QualityLaneDisposition = Exclude<
 /** Backwards-friendly aliases for consumers that refer to the shared closed
  * disposition vocabulary without naming the lane. */
 export type CandidateDisposition = CandidatePrimaryDisposition;
-export type RecoveryDisposition = CandidateRecoveryDisposition;
 
 /** Closed defect vocabulary for a broken ENTRY, verbatim from the arc-audit
  *  design (spec 2026-08-10 §2a). Mirrored in ARC_AUDIT_SCHEMA's enum. */
