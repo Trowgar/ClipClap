@@ -9,6 +9,7 @@ import { recoverCuts, type CutRecoveryResult, type CutRecoveryTelemetry } from "
 import type { PlanOptions } from "./options";
 import type { CropPlan, Shot, ShotTracks } from "./types";
 import { faceTracksToRegionEvidence } from "./regions";
+import { cropWidthFor } from "./geometry";
 import {
   evaluatePlanCoverageDetailed,
   type SafetyShadowTelemetry,
@@ -327,6 +328,30 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
       }
     }
     if (activeRequested) {
+      const wideFacelessShots = new Set<number>();
+      if (!invalidAlignment) {
+        const availableWidthFrac = cropWidthFor(d.height) / d.width;
+        for (let index = 0; index < plan.shots.length; index++) {
+          const candidate = plan.shots[index];
+          if (candidate.layout !== "center") continue;
+          const overlapping = shots
+            .map((shot, shotIndex) => ({ shot, shotIndex }))
+            .filter(({ shot }) => shot.start < candidate.end && candidate.start < shot.end);
+          // The sidecar reports the minimum fraction of columns needed for
+          // 70% of edge energy. If even those columns cannot fit, preserve the
+          // full composition. This is not semantic object coverage; textured
+          // backgrounds can trigger it. Require every merged span to qualify.
+          if (overlapping.length > 0 && overlapping.every(({ shotIndex }) => {
+            const evidence = tracksByShot.get(shotIndex)!;
+            const spread = evidence.saliency?.spreadFrac;
+            return survivingTracks(evidence.tracks).length === 0
+              && typeof spread === "number" && Number.isFinite(spread)
+              && spread > availableWidthFrac && spread <= 1;
+          })) {
+            wideFacelessShots.add(index);
+          }
+        }
+      }
       const mandatoryEvidenceShots = new Set(
         detailed.shots
           .filter((verdict) => verdict.evaluatedSamples > 0)
@@ -337,6 +362,7 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
         mandatoryEvidenceShots,
         invalidEvidenceShots,
         invalidAlignment,
+        wideFacelessShots,
       });
       plan = applied.plan;
       safetyPlanner = applied.telemetry;

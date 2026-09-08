@@ -968,3 +968,59 @@ describe("planDetected: stream-layout coverage gate", () => {
     expect(gated.plan).toEqual(gateOff.plan);
   });
 });
+
+describe("active safety for broad faceless compositions", () => {
+  const active = { ...cfg, safetyPlanner: true, safeFit: true, saliencyShadow: false };
+  const faceless = (spread: number | null = 0.53): Detection => ({
+    width: 1280,
+    height: 720,
+    shots: [{ start: 0, end: 10 }],
+    candidates: [],
+    tracksByShot: [{ shotIndex: 0, tracks: [], camRect: null,
+      saliency: spread === null ? null : { x: 640, spreadFrac: spread } }],
+  });
+
+  it("preserves a broad graphic insert even with saliency shadow disabled", () => {
+    const result = planDetected(faceless(), active);
+    expect(result.plan?.shots).toEqual([{ start: 0, end: 10, layout: "safe-fit", reason: "coverage" }]);
+    expect(result.safetyPlanner).toMatchObject({ safeFitShots: 1, coverageFallbacks: 1, evaluatedShots: 0, minimumCoverage: null });
+  });
+
+  it.each([
+    { safetyPlanner: false }, { safeFit: false }, { musicMode: true },
+  ])("keeps existing behavior when the active policy is disabled: %o", (override) => {
+    expect(planDetected(faceless(), { ...active, ...override }).plan?.shots[0].layout).toBe("center");
+  });
+
+  it.each([null, 0, 0.2, 406 / 1280, Number.NaN, -0.5, 1.1])(
+    "does not infer broad composition from absent, concentrated, or invalid spread %s", (spread) => {
+      expect(planDetected(faceless(spread), active).plan?.shots[0].layout).toBe("center");
+    },
+  );
+
+  it("does not expand a merged center span from only one broad detector shot", () => {
+    const d = faceless();
+    d.shots = [{ start: 0, end: 5 }, { start: 5, end: 10 }];
+    d.tracksByShot.push({ shotIndex: 1, tracks: [], camRect: null, saliency: { x: 640, spreadFrac: 0.2 } });
+    expect(planDetected(d, active).plan?.shots.every((s) => s.layout === "center")).toBe(true);
+  });
+
+  it("uses source crop capacity rather than a fixed landscape threshold", () => {
+    const d = faceless(0.53);
+    d.width = 960;
+    d.height = 1280;
+    expect(planDetected(d, active).plan?.shots[0].layout).toBe("center");
+    d.tracksByShot[0].saliency!.spreadFrac = 0.9;
+    expect(planDetected(d, active).plan?.shots[0].layout).toBe("safe-fit");
+    d.width = 400;
+    d.height = 720;
+    expect(planDetected(d, active).plan).toBeNull();
+  });
+
+  it("keeps a contained face portrait despite broad background saliency", () => {
+    const d = faceless();
+    d.tracksByShot[0].tracks = [{ id: 1, box: { x: 530, y: 150, w: 160, h: 160 }, score: 0.95, samples: 8, mouthActivity: 0.3,
+      path: [{ t: 0, x: 530, y: 150, w: 160, h: 160 }, { t: 9, x: 530, y: 150, w: 160, h: 160 }] }];
+    expect(planDetected(d, active).plan?.shots[0].layout).toBe("single");
+  });
+});

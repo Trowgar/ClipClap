@@ -279,3 +279,14 @@ describe("applySafetyPlanner", () => {
     expect(result.telemetry.minimumCoverage).toBe(0.8);
   });
 });
+
+
+it("limits broad faceless fallback to center layouts", () => {
+  const original: CropPlan = {
+    ...plan([{ start: 0, end: 1, layout: "stream", cam: { x: 0 }, content: { x: 0 } }]),
+    stream: streamGeometry,
+  };
+  expect(applySafetyPlanner(original, input({ wideFacelessShots: new Set([0]) })).plan).toBe(original);
+  const single = plan([shot(0, 1)]);
+  expect(applySafetyPlanner(single, input({ wideFacelessShots: new Set([0]) })).plan).toBe(single);
+});
