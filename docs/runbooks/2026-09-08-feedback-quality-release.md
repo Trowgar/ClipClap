@@ -1,6 +1,7 @@
 # Feedback-driven core fixes, 2026-09-08
 
-Release candidate; production verification is recorded below after deployment.
+Released to main and the production source bind mounts on 2026-09-08.
+Production tag: `prod/core-2026-09-08-feedback-quality`.
 
 ## Behavior
 
@@ -61,4 +62,24 @@ customer jobs, feedback, billing records or deliveries were changed by replays.
 
 Integrated main-based candidate: 770 tests across 16 focused suites, worker
 typecheck and worker/shared build passed. Independent review found no remaining
-blockers. Exact live integration and production runtime verification follow.
+blockers. Exact integration with the host's existing stream/reframe changes
+passed another 314 focused tests, worker typecheck and worker/shared build. One
+old fixture assumed stream face coverage must fail; the unchanged live baseline
+reproduced that stale assertion. The fixture now checks the gated layout and
+samples without contradicting existing full-frame stream rendering.
+
+Production code was activated at `5b247333abf7507398b12283d4ea647831db4cc5` after
+all five queues were empty. All five workers stopped cleanly and restarted.
+Inside the restarted worker, replaying both final analysis captures matched
+exact requests and highlights (13 recorded calls, no new model requests).
+Eight captured detections produced the expected layouts; actual renders of the
+two repaired insert cases and both existing stream controls completed. Eleven
+changed runtime modules matched the tested checkout in analyze and render
+containers; their reframe configuration hashes also matched. Postdeployment,
+each queue was unpaused with one consumer and no active, waiting or delayed jobs.
+
+The host keeps its pre-existing operational and stream changes; it was not
+switched to main. No environment, schema, model or queue policy changed. Private
+replay inputs remain under `apps/worker/.corpus/publishability-feedback-2026-09-08/`;
+retained framing media and release evidence are under
+`apps/worker/.corpus/releases/2026-09-08-feedback-quality/`.
