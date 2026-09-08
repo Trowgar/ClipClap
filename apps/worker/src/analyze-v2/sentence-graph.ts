@@ -39,6 +39,25 @@ export function isReliableSegment(seg: WhisperSegment): boolean {
   return !wordsUnreliable(words);
 }
 
+/** Certify only the onset of an otherwise opaque segment whose defects are
+ * isolated interior zero-duration tokens. Preserve its text and coarse end;
+ * never invent word durations or promote the whole segment to word-reliable. */
+function hasReliableOpaqueStart(seg: WhisperSegment): boolean {
+  const words = seg.words ?? [];
+  if (!Number.isFinite(seg.start) || !Number.isFinite(seg.end) ||
+    words.length < 3 || !seg.text.trim() || !words[0].text.trim() || words[0].start !== seg.start ||
+    words[0].end <= words[0].start || words.at(-1)!.end <= words.at(-1)!.start) return false;
+  return words.every((w, i) => {
+    if (!Number.isFinite(w.start) || !Number.isFinite(w.end) ||
+      w.start < seg.start || w.end > seg.end || w.end < w.start ||
+      w.end - w.start > MAX_WORD_SPAN_SEC || (i > 0 && w.start < words[i - 1].start)) return false;
+    if (w.end > w.start) return true;
+    const before = words[i - 1], after = words[i + 1];
+    return !!before && !!after && before.end > before.start && after.end > after.start &&
+      w.start === before.end && w.end === after.start;
+  });
+}
+
 /** A node opens cleanly when its leading boundary is strong (>= 0.8: after
  *  terminal punctuation or a sentence-length pause) or it follows an opaque
  *  music/silence region. This is THE clean-start semantics - snap's guard and
@@ -54,10 +73,9 @@ function startsLowercase(text: string): boolean {
 export function isCleanStart(nodes: SentenceNode[], index: number): boolean {
   const n = nodes[index];
   if (!n) return false;
-  // The node itself must be word-bearing: an opaque node has no reliable onset
-  // to cut at, no matter how strong its leading boundary is. Without this
-  // guard the critic's window markers advertise starts snap must reject.
-  if (!n.hasWords) return false;
+  // Interior timing defects need not invalidate a separately verified onset.
+  // Uncertified opaque nodes still cannot advertise a start to the critic.
+  if (!n.hasWords && !n.hasReliableStart) return false;
   // Terminal-punctuation boundaries (leading 1.0) are trustworthy as-is.
   // Pause/segment boundaries (0.8) and post-opaque starts also need the
   // capitalization signal - a hesitation pause before "глаза на все её
@@ -235,6 +253,7 @@ export function buildSentenceGraph(
         end: seg.end,
         text: seg.text,
         hasWords: false,
+        ...(hasReliableOpaqueStart(seg) ? { hasReliableStart: true as const } : {}),
         trailingStrength: 0.2,
       });
       continue;

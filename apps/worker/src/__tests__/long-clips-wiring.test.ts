@@ -229,7 +229,7 @@ describe("long-clips policy wiring", () => {
     );
   });
 
-  it("compresses a clip arc-audit flagged on any axis, not blessed", async () => {
+  it.each([false, true])("compresses an arc-flagged clip (opaque onset: %s)", async opaque => {
     const liveCfg = loadAnalyzeConfig({ LONG_CLIPS: "on", ARC_AUDIT: "on" });
     const { client, requests } = stubClient({
       scan_candidates: scanResponse,
@@ -237,9 +237,17 @@ describe("long-clips policy wiring", () => {
       arc_audit: { results: [flaggedAuditRow] },
       clip_finalizer: finalizerResponse,
     });
-    const r = await analyzeHighlightsV2(transcript(), { client, cfg: liveCfg });
+    const source = transcript();
+    if (opaque) {
+      const segment = source.segments[11];
+      segment.words![1].start = segment.words![0].end;
+      segment.words!.splice(1, 0, { text: "же", start: 56, end: 56 });
+      segment.text = "Это же предложение номер 11.";
+    }
+    const r = await analyzeHighlightsV2(source, { client, cfg: liveCfg });
 
     expect(r.highlights[0].start).toBeCloseTo(COMPRESSED_START, 6);
+    expect(r.highlights[0]._boundaryConfidence).toBe(opaque ? "segment" : "word");
     expect(r.highlights[0].end - r.highlights[0].start).toBeCloseTo(COMPRESSED_DURATION, 6);
     expect(longClipsOf(r.telemetry)).toEqual({
       overLength: 1,

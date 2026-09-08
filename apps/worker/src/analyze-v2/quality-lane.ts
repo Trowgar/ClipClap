@@ -493,6 +493,7 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
           ...clip,
           startSec: compressed.startSec,
           finalStartNode: compressed.startNode,
+          boundaryConfidence: nodes[compressed.startNode].hasWords ? clip.boundaryConfidence : "segment",
           overLength: false,
           shortMoment: clip.endSec - compressed.startSec < cfg.targetMinSec,
         });

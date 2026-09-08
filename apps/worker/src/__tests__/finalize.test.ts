@@ -1198,18 +1198,21 @@ describe("finalizeClips - long-clip defence in depth (spec 2026-08-10 task 5)", 
     expect(r.telemetry.longClipsDropped).toBeUndefined();
   });
 
-  it("compresses a surviving unblessed overLength clip that has room to fit", async () => {
+  it.each([false, true])("compresses an unblessed overLength clip (opaque onset: %s)", async opaque => {
     // hookStartNode 60 gives compressToFit a long walk (21..60) to find a
     // legal earliest fit; node 30 (candidateStart 29.85) is 0.15s short of
     // the 90s cap, node 31 (30.85) fits - the measured earliest-fit target.
     const wide = wideClip("compressible", 20, 60, 20, 120); // 100s
+    wide.boundaryConfidence = "word";
+    const compressionGraph = graph.map(n => opaque && n.index === 31
+      ? { ...n, hasWords: false, hasReliableStart: true as const } : n);
     const client = seqClient([() => ok([row("compressible")])]);
     const arcFlags = new Map([["compressible", flaggedEntry]]); // NOT blessed
     const r = await finalizeClips(
       client,
       newUsage(),
       [wide],
-      graph,
+      compressionGraph,
       "ru",
       "Russian",
       longCfg,
@@ -1220,6 +1223,7 @@ describe("finalizeClips - long-clip defence in depth (spec 2026-08-10 task 5)", 
     const out = r.clips[0];
     expect(out.overLength).toBe(false);
     expect(out.finalStartNode).toBe(31);
+    expect(out.boundaryConfidence).toBe(opaque ? "segment" : "word");
     expect(out.startSec).toBeCloseTo(30.85, 2);
     expect(out.endSec - out.startSec).toBeLessThanOrEqual(longCfg.maxSec);
     expect(r.telemetry.longClipsCompressed).toBe(1);
