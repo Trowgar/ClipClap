@@ -93,6 +93,16 @@ export function scannerSystemPrompt(mode: AnalysisMode = "standard"): string {
   return `${SCANNER_PROMPT_HEAD}\n\n${SCANNER_STREAM_NUDGE}\n\n${SCANNER_PROMPT_TAIL}`;
 }
 
+const CRITIC_PAYOFF_RULE = `Before scoring, distinguish a standalone payoff from connective narration in the
+surrounding window. Routine progress or completion is not an experimental result
+merely because it reports effort or elapsed time. Keep process material when the
+selected range teaches a usable method, explains a choice, or contains a test and
+informative result. For reactions, identify a specific incident, exchange, comic
+turn, or distinct burst beyond the speaker’s ongoing chatter; emotional wording
+alone is insufficient. Brief triggered reactions and beginner methods count. If
+the candidate is only connective material, select a stronger complete beat within
+its window or return keep:false.`;
+
 export const CRITIC_PROMPT_TEMPLATE = `You are a ruthless short-form editor. You are handed a small set of candidate
 moments already flagged by a scanner. JUDGE HARD, refine the exact edges, and
 kill the weak ones. Quality over quantity - it is correct and expected to reject
@@ -138,6 +148,8 @@ keep: false - no matter how punchy the line sounds.
 Rhetorical questions are the classic trap: they smell like hooks but usually
 interrogate invisible context ("how does THIS affect people?"). A question
 hook is valid only when the thing it asks about is shown inside the clip.
+
+${CRITIC_PAYOFF_RULE}
 
 For EACH candidate return, in the clip's OWN language ({{LANGUAGE_NAME}}, {{LANGUAGE_ISO}}):
 
@@ -223,8 +235,8 @@ Output ONLY the JSON object described by the schema.`;
  *
  * 2. The standard template's "Be doubly strict with short clips (under ~15s)
  *    that are a single reaction" clause is REPLACED: an 8-20s reaction with
- *    its trigger inside the clip is declared the IDEAL stream clip, and only
- *    a trigger-less burst is rejected. WHY (spec §0, killer #2): that exact
+ *    its trigger inside the clip is declared the IDEAL stream clip. A missing
+ *    trigger is a context defect, separate from material quality. WHY (spec §0, killer #2): that exact
  *    clause is "a kill order for precisely the class humans clip on streams" -
  *    it punishes brevity a stream clip is supposed to have.
  *
@@ -290,12 +302,14 @@ referent in the title does NOT fix it; the SPEECH inside the clip must contain
 it. Never "fix" a dangling opening with the title or description - the VIDEO
 must make sense on its own, not the caption.
 An 8-20s reaction WITH its trigger inside the clip IS THE IDEAL STREAM CLIP -
-short, sharp, and rewatchable; do not penalize it for its length. Reject only a
-burst whose trigger is NOWHERE inside the window at all - no matter how punchy
+short, sharp, and rewatchable; do not penalize it for its length.
+For missing-context failures, reject a burst whose trigger is NOWHERE inside the window at all - no matter how punchy
 the line sounds, a trigger that cannot be found cannot be included.
 Rhetorical questions are the classic trap: they smell like hooks but usually
 interrogate invisible context ("how does THIS affect people?"). A question
 hook is valid only when the thing it asks about is shown inside the clip.
+
+${CRITIC_PAYOFF_RULE}
 
 For EACH candidate return, in the clip's OWN language ({{LANGUAGE_NAME}}, {{LANGUAGE_ISO}}):
 

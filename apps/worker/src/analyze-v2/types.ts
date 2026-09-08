@@ -7,6 +7,8 @@ export interface SentenceNode {
   text: string;
   /** false = opaque: no/unreliable word timings (music, crosstalk). */
   hasWords: boolean;
+  /** An opaque segment can still have a verified first-word onset. */
+  hasReliableStart?: true;
   /** 0..1 - how strong a boundary the END of this node is. */
   trailingStrength: number;
   /** prev node's trailingStrength; 1.0 for node 0. */

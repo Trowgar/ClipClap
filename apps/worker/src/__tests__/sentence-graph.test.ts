@@ -3,7 +3,9 @@ import {
   buildSentenceGraph,
   endsOnSentenceMark,
   isCleanEnd,
+  isCleanStart,
 } from "../analyze-v2/sentence-graph";
+import { criticCandidateBlock } from "../analyze-v2/prompts";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import type { SentenceNode } from "../analyze-v2/types";
 import type { WhisperSegment } from "@clipclap/shared";
@@ -24,6 +26,51 @@ function seg(
 }
 
 describe("buildSentenceGraph", () => {
+  const onsetSegment = () => seg(2, 5, [
+    ["Have", 2, 2.5], ["you", 2.5, 3], ["never", 3, 3],
+    ["shown", 3, 4], ["this?", 4, 5],
+  ]);
+  const onsetGraph = (segment: WhisperSegment) => buildSentenceGraph([
+    seg(0, 2, [["Earlier", 0, 1], ["topic", 1, 2]]), segment,
+    seg(5, 7, [["The", 5, 6], ["answer", 6, 7]]),
+  ], cfg);
+
+  it("preserves an opaque question but certifies its onset when only an interior token has zero duration", () => {
+    const segment = onsetSegment();
+    const before = structuredClone(segment);
+    const nodes = onsetGraph(segment);
+    expect(segment).toEqual(before);
+    expect(nodes.map(n => n.index)).toEqual([0, 1, 2]);
+    expect(nodes[1]).toMatchObject({ start: 2, end: 5, text: "Have you never shown this?", hasWords: false, trailingStrength: 0.2 });
+    expect(isCleanStart(nodes, 1)).toBe(true);
+    const block = criticCandidateBlock({ id: "question", startNode: 1, endNode: 2, payoffNode: 2, interest: 0.7, type: "question", windowIndex: 0 }, nodes);
+    expect(block).toContain("¶ #1 [2.0s-5.0s] Have you never shown this?");
+    expect(isCleanStart(nodes.map(n => n.index === 1 ? { ...n, text: "have you never shown this?" } : n), 1)).toBe(false);
+    expect(isCleanStart(nodes.map(n => n.index === 1 ? { ...n, leadingStrength: 0.4 } : n), 1)).toBe(false);
+  });
+
+  it.each([
+    ["empty", (s: WhisperSegment) => { s.words = []; }],
+    ["blank segment text", (s: WhisperSegment) => { s.text = " \t "; }],
+    ["blank first word", (s: WhisperSegment) => { s.words![0].text = " \t "; }],
+    ["zero first", (s: WhisperSegment) => { s.words![0].end = 2; }],
+    ["zero last", (s: WhisperSegment) => { s.words![4].start = 5; }],
+    ["negative span", (s: WhisperSegment) => { s.words![2].end = 2.9; }],
+    ["out of order", (s: WhisperSegment) => { s.words![3].start = 2.9; }],
+    ["long span", (s: WhisperSegment) => { s.words![3].end = 6.1; }],
+    ["nonfinite", (s: WhisperSegment) => { s.words![3].start = NaN; }],
+    ["nonfinite segment start", (s: WhisperSegment) => { s.start = NaN; }],
+    ["nonfinite segment end", (s: WhisperSegment) => { s.end = NaN; }],
+    ["unproven segment start", (s: WhisperSegment) => { s.start = 1.9; }],
+    ["unbracketed zero", (s: WhisperSegment) => { s.words![2].start = s.words![2].end = 3.1; }],
+  ])("keeps %s timing defects unavailable as clip starts", (_name, change) => {
+    const segment = onsetSegment();
+    change(segment);
+    const nodes = onsetGraph(segment);
+    expect(nodes[1].hasWords).toBe(false);
+    expect(isCleanStart(nodes, 1)).toBe(false);
+  });
+
   it("closes a node on terminal punctuation with strength 1.0 and starts the next", () => {
     const nodes = buildSentenceGraph(
       [seg(0, 4, [["Hello", 0, 0.5], ["world.", 0.6, 1.0], ["Next", 1.2, 1.6], ["thought", 1.7, 2.2]])],

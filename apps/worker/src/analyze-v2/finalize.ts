@@ -687,6 +687,7 @@ export async function finalizeClips(
           ...clip,
           startSec: compressed.startSec,
           finalStartNode: compressed.startNode,
+          boundaryConfidence: nodes[compressed.startNode].hasWords ? clip.boundaryConfidence : "segment",
           overLength: false,
           shortMoment: clip.endSec - compressed.startSec < cfg.targetMinSec,
         });

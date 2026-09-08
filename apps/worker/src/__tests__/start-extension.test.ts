@@ -185,6 +185,15 @@ describe("startExtensionWindow", () => {
 });
 
 describe("applyStartExtension", () => {
+  it("marks a move onto a certified opaque onset as segment confidence", () => {
+    const n = nodes(40);
+    n[10] = { ...n[10], hasWords: false, hasReliableStart: true };
+    const before = { ...clip(n, "c0", 15, 18), boundaryConfidence: "word" as const };
+    const out = clipOf(applyStartExtension(before, n, 10, cfg, null, []));
+    expect(out.finalStartNode).toBe(10);
+    expect(out.boundaryConfidence).toBe("segment");
+  });
+
   it("accepts a legal backward move and returns the widened clip", () => {
     const n = nodes(40);
     const out = clipOf(applyStartExtension(clip(n, "c0", 15, 18), n, 10, cfg, null, []));

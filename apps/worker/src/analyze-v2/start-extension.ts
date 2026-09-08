@@ -221,6 +221,7 @@ export function applyStartExtension(
     ...clip,
     startSec,
     finalStartNode: proposedStartNode,
+    boundaryConfidence: nodes[proposedStartNode].hasWords ? clip.boundaryConfidence : "segment",
     // shortMoment is a verdict on LENGTH and this stage changes the length -
     // the same argument end-extension's applyExtension makes for recomputing
     // it against its own new endSec. hookStart/hookEnd/payoff are NOT

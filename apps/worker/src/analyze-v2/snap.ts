@@ -137,8 +137,7 @@ export function compressToFit(
 ): CompressResult {
   for (let i = clip.startNode + 1; i <= clip.hookStartNode; i++) {
     const cand = nodes[i];
-    // isCleanStart already requires hasWords - an opaque node has no reliable
-    // onset to cut at - so there is no separate word-bearing test here.
+    // Shared onset validation also covers certified opaque segment starts.
     if (!isCleanStart(nodes, i)) continue;
     const candidateStart = startSecFor(nodes, cand, cfg);
     if (clip.endSec - candidateStart <= cfg.maxSec) {
@@ -185,7 +184,7 @@ export function snapNodes(
     for (let i = s.index - 1; i >= 0; i--) {
       const cand = nodes[i];
       if (s.start - cand.start > cfg.maxStartExpansionSec) break;
-      if (cand.hasWords && cleanStartAt(cand)) {
+      if (cleanStartAt(cand)) {
         found = cand;
         break;
       }
@@ -193,7 +192,7 @@ export function snapNodes(
     if (!found) return { ok: false, reason: "no_clean_start" };
     s = found;
   }
-  if (!s.hasWords) return { ok: false, reason: "no_clean_start" };
+  if (!s.hasWords && !cleanStartAt(s)) return { ok: false, reason: "no_clean_start" };
 
   // 2. payoff containment, then bounded tail.
   //    Honor the critic's end node - it is already a sentence boundary - but never
@@ -353,6 +352,7 @@ export function snapNodes(
 
   const duration = endSec - startSec;
   if (duration < cfg.hardMinSec) return { ok: false, reason: "too_short" };
+  if (!s.hasWords) boundaryConfidence = "segment";
 
   return {
     ok: true,

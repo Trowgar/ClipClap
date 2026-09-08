@@ -6,6 +6,8 @@ export interface SafetyPlannerInput {
   mandatoryEvidenceShots: ReadonlySet<number>;
   invalidEvidenceShots: ReadonlySet<number>;
   invalidAlignment: boolean;
+  /** Center shots whose measured faceless composition cannot fit portrait. */
+  wideFacelessShots?: ReadonlySet<number>;
 }
 
 export interface SafetyPlannerTelemetry {
@@ -38,6 +40,9 @@ function replacementReason(
 
   if (input.invalidAlignment || input.invalidEvidenceShots.has(shotIndex)) {
     return "invalid_evidence";
+  }
+  if (planShot.layout === "center" && input.wideFacelessShots?.has(shotIndex)) {
+    return "coverage";
   }
   if (!input.mandatoryEvidenceShots.has(shotIndex)) return null;
 

@@ -37,6 +37,7 @@ import { computeCropPlan, planDetected, STREAM_SHOT_COVERAGE_MIN, type Detection
 import type { ReframeConfig } from "../reframe/config";
 import { DEFAULT_CAMERA } from "../reframe/camera";
 import type { FaceTrack } from "../reframe/types";
+import { MAX_PLAN_SHOTS } from "../reframe/plan";
 
 const cfg: ReframeConfig = {
   engine: "faces",
@@ -966,5 +967,118 @@ describe("planDetected: stream-layout coverage gate", () => {
 
     const gateOff = planDetected(detection, { ...gateOn, streamCoverageGate: false });
     expect(gated.plan).toEqual(gateOff.plan);
+  });
+});
+
+describe("active safety for broad faceless compositions", () => {
+  const active = { ...cfg, safetyPlanner: true, safeFit: true, saliencyShadow: false };
+  const faceless = (spread: number | null = 0.53): Detection => ({
+    width: 1280,
+    height: 720,
+    shots: [{ start: 0, end: 10 }],
+    candidates: [],
+    tracksByShot: [{ shotIndex: 0, tracks: [], camRect: null,
+      saliency: spread === null ? null : { x: 640, spreadFrac: spread } }],
+  });
+
+  it("preserves a broad graphic insert even with saliency shadow disabled", () => {
+    const result = planDetected(faceless(), active);
+    expect(result.plan?.shots).toEqual([{ start: 0, end: 10, layout: "safe-fit", reason: "coverage" }]);
+    expect(result.safetyPlanner).toMatchObject({ safeFitShots: 1, coverageFallbacks: 1, evaluatedShots: 0, minimumCoverage: null });
+  });
+
+  it.each([
+    { safetyPlanner: false }, { safeFit: false }, { musicMode: true },
+  ])("keeps existing behavior when the active policy is disabled: %o", (override) => {
+    expect(planDetected(faceless(), { ...active, ...override }).plan?.shots[0].layout).toBe("center");
+  });
+
+  it.each([null, 0, 0.2, 406 / 1280, Number.NaN, -0.5, 1.1])(
+    "does not infer broad composition from absent, concentrated, or invalid spread %s", (spread) => {
+      expect(planDetected(faceless(spread), active).plan?.shots[0].layout).toBe("center");
+    },
+  );
+
+  it("does not expand a merged center span from only one broad detector shot", () => {
+    const d = faceless();
+    d.shots = [{ start: 0, end: 5 }, { start: 5, end: 10 }];
+    d.tracksByShot.push({ shotIndex: 1, tracks: [], camRect: null, saliency: { x: 640, spreadFrac: 0.2 } });
+    expect(planDetected(d, active).plan?.shots.every((s) => s.layout === "center")).toBe(true);
+  });
+
+  it("uses source crop capacity rather than a fixed landscape threshold", () => {
+    const d = faceless(0.53);
+    d.width = 960;
+    d.height = 1280;
+    expect(planDetected(d, active).plan?.shots[0].layout).toBe("center");
+    d.tracksByShot[0].saliency!.spreadFrac = 0.9;
+    expect(planDetected(d, active).plan?.shots[0].layout).toBe("safe-fit");
+    d.width = 400;
+    d.height = 720;
+    expect(planDetected(d, active).plan).toBeNull();
+  });
+
+  it("keeps a contained face portrait despite broad background saliency", () => {
+    const d = faceless();
+    d.tracksByShot[0].tracks = [{ id: 1, box: { x: 530, y: 150, w: 160, h: 160 }, score: 0.95, samples: 8, mouthActivity: 0.3,
+      path: [{ t: 0, x: 530, y: 150, w: 160, h: 160 }, { t: 9, x: 530, y: 150, w: 160, h: 160 }] }];
+    expect(planDetected(d, active).plan?.shots[0].layout).toBe("single");
+  });
+});
+
+describe("active safety before the first face observation", () => {
+  const active = { ...cfg, safetyPlanner: true, safeFit: true };
+  const delayed = (first = 7): Detection => ({
+    width: 1280, height: 720, shots: [{ start: 0, end: 10 }], candidates: [],
+    tracksByShot: [{ shotIndex: 0, camRect: null, saliency: { x: 640, spreadFrac: 0.53 },
+      tracks: [{ id: 1, box: { x: 530, y: 150, w: 160, h: 160 }, score: 0.95, samples: 6, mouthActivity: 0.3,
+        path: Array.from({ length: 6 }, (_, i) => ({ t: first + (9.5 - first) * i / 5, x: 530, y: 150, w: 160, h: 160 })) }] }],
+  });
+  it("preserves the leading composition without borrowing a later static face anchor", () => {
+    const result = planDetected(delayed(), active);
+    expect(result.plan?.shots).toEqual([
+      { start: 0, end: 7, layout: "safe-fit", reason: "coverage" },
+      { start: 7, end: 10, layout: "single", x: 408 },
+    ]);
+    expect(result.safetyPlanner).toMatchObject({ safeFitShots: 1, coverageFallbacks: 1, minimumCoverage: 1 });
+  });
+  it.each([0, 0.5, 0.75, 9.5])("does not split cadence uncertainty or too-short spans (%s)", (first) => {
+    expect(planDetected(delayed(first), active).plan?.shots).toHaveLength(1);
+  });
+  it.each([{ safetyPlanner: false }, { safeFit: false }, { musicMode: true }])("preserves disabled policy %o", (override) => {
+    expect(planDetected(delayed(), { ...active, ...override }).plan?.shots).toHaveLength(1);
+  });
+  it("splits an internal detector prefix after single layouts were merged, without changing evidence", () => {
+    const d = delayed(0);
+    const later = delayed(7);
+    d.shots.push({ start: 10, end: 20 });
+    d.tracksByShot.push({ ...later.tracksByShot[0], shotIndex: 1,
+      tracks: later.tracksByShot[0].tracks.map((t) => ({ ...t, path: t.path!.map((p) => ({ ...p, t: p.t + 10 })) })) });
+    const original = structuredClone(d);
+    expect(planDetected(d, active).plan?.shots).toEqual([
+      { start: 0, end: 10, layout: "single", x: 408 },
+      { start: 10, end: 17, layout: "safe-fit", reason: "coverage" },
+      { start: 17, end: 20, layout: "single", x: 408 },
+    ]);
+    expect(d).toEqual(original);
+  });
+  it("keeps the original layout when lifecycle splits would exceed the existing shot cap", () => {
+    const d = delayed(1);
+    const count = Math.floor(MAX_PLAN_SHOTS / 2) + 1;
+    const track = d.tracksByShot[0].tracks[0];
+    d.shots = Array.from({ length: count }, (_, i) => ({ start: i * 10, end: i * 10 + 10 }));
+    d.tracksByShot = d.shots.map((shot, i) => ({ shotIndex: i, camRect: null,
+      saliency: { x: 640, spreadFrac: 0.53 }, tracks: [{ ...track, path: track.path!.map((p) => ({ ...p, t: p.t + shot.start })) }] }));
+    expect(planDetected(d, active).plan?.shots).toHaveLength(1);
+  });
+  it("requires valid path and broad saliency evidence", () => {
+    const d = delayed();
+    d.tracksByShot[0].saliency = null;
+    expect(planDetected(d, active).plan?.shots).toHaveLength(1);
+    d.tracksByShot[0].saliency = { x: 640, spreadFrac: 0.53 };
+    d.tracksByShot[0].tracks[0].path = undefined;
+    const result = planDetected(d, active);
+    expect(result.plan?.shots).toHaveLength(1);
+    expect(result.plan?.shots[0]).toMatchObject({ layout: "safe-fit", reason: "invalid_evidence" });
   });
 });

@@ -41,6 +41,17 @@ function verdict(p: Partial<CriticVerdict>): CriticVerdict {
 }
 
 describe("snapNodes", () => {
+  it.each([2, 3])("uses a certified opaque onset without prepending the prior topic (requested start %i)", startNode => {
+    const nodes = strongNodes().map((n, i) => i === 2
+      ? { ...n, hasWords: false, hasReliableStart: true as const, trailingStrength: 0.2 }
+      : i === 3 ? { ...n, text: "continuation", leadingStrength: 0.3 } : n);
+    const r = snapNodes(verdict({ startNode }), nodes, cfg);
+    if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
+    expect(r.clip.finalStartNode).toBe(2);
+    expect(r.clip.startSec).toBeCloseTo(4 - cfg.leadInSec, 5);
+    expect(r.clip.boundaryConfidence).toBe("segment");
+  });
+
   it("snaps a clean clip to word edges with lead-in and tail-hold", () => {
     const r = snapNodes(verdict({}), strongNodes(), cfg);
     if (!r.ok) throw new Error(`unexpected drop: ${r.reason}`);
