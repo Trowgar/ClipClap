@@ -12,6 +12,9 @@ import { sendTelegramMessage } from "./telegram-notification.service";
  */
 export const WATCHDOG_WINDOW_HOURS = 24;
 
+/** Ignore fresh jobs that may still be downloading normally. */
+export const WATCHDOG_GRACE_MINUTES = 15;
+
 /**
  * How long the watchdog stays quiet after it fires, even if the condition it
  * alerted on is still true an hour later.
@@ -32,6 +35,7 @@ export const WATCHDOG_SUPPRESS_HOURS = 6;
 const ERROR_EXCERPT_LENGTH = 200;
 
 const MS_PER_HOUR = 60 * 60 * 1000;
+const MS_PER_MINUTE = 60 * 1000;
 
 /**
  * The Redis key that remembers "already alerted, still cooling down". A TTL
@@ -45,12 +49,16 @@ export function watchdogWindowCutoff(now: Date = new Date()): Date {
   return new Date(now.getTime() - WATCHDOG_WINDOW_HOURS * MS_PER_HOUR);
 }
 
+export function watchdogGraceCutoff(now: Date = new Date()): Date {
+  return new Date(now.getTime() - WATCHDOG_GRACE_MINUTES * MS_PER_MINUTE);
+}
+
 export interface DownloadWatchdogResult {
-  /** Link jobs (sourceUrl not null) created inside the window. */
+  /** Mature link jobs (sourceUrl not null) created inside the window. */
   submitted: number;
-  /** Of those, how many reached DONE. */
+  /** Of those, how many completed their download step. */
   done: number;
-  /** Of those, how many are FAILED. A job still mid-pipeline is neither. */
+  /** Of those, how many have a failed download step. */
   failed: number;
   /** True only when a Telegram message was actually sent on this run. */
   alerted: boolean;
@@ -96,8 +104,8 @@ function buildAlertMessage(
 }
 
 /**
- * Hourly check: over the last 24h, were any link submissions made, and did
- * NONE of them complete?
+ * Hourly check: over the last 24h, were any mature link submissions made,
+ * and did NONE of their download steps complete?
  *
  * WHY `submitted > 0` gates everything else. The failure this watchdog
  * exists to catch is "users are trying to submit links and it isn't
@@ -106,29 +114,35 @@ function buildAlertMessage(
  * page the owner on every slow night, which is exactly the kind of noise
  * that gets a channel muted.
  *
- * WHY `done === 0`, not "every submission failed". At the moment this runs a
- * job can still be mid-pipeline (PENDING/DOWNLOADING/...) without having
- * reached FAILED yet - on a queue with retries and flap-wait parking that
- * can take hours, so requiring an explicit FAILED on every row would leave
- * a real outage unreported for as long as the last attempt takes to exhaust
- * its retries. "Not one submission has finished" is the earliest true
- * signal that the download path is dead.
+ * A successful download proves the path works even while transcription,
+ * analysis, or rendering continues. The grace period prevents normal fresh
+ * downloads from being mistaken for an outage.
  */
 export async function runDownloadWatchdog(
   now: Date = new Date()
 ): Promise<DownloadWatchdogResult> {
   const cutoff = watchdogWindowCutoff(now);
+  const graceCutoff = watchdogGraceCutoff(now);
   const jobs = await prisma.job.findMany({
     where: {
       sourceUrl: { not: null },
-      createdAt: { gte: cutoff },
+      createdAt: { gte: cutoff, lte: graceCutoff },
     },
-    select: { status: true, error: true },
+    select: {
+      steps: {
+        where: { step: "DOWNLOAD" },
+        select: { status: true, error: true },
+      },
+    },
   });
 
   const submitted = jobs.length;
-  const done = jobs.filter((job) => job.status === "DONE").length;
-  const failedJobs = jobs.filter((job) => job.status === "FAILED");
+  const done = jobs.filter((job) =>
+    job.steps.some((step) => step.status === "DONE")
+  ).length;
+  const failedJobs = jobs
+    .flatMap((job) => job.steps)
+    .filter((step) => step.status === "FAILED");
   const failed = failedJobs.length;
 
   if (submitted === 0 || done > 0) {
