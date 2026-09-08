@@ -10,7 +10,7 @@ import {
 /**
  * Task T2 of spec 2026-08-19-stream-analyze-mode (S2 + S5). These tests pin:
  *  - standard mode (default, and the explicit "standard" literal) is
- *    byte-identical to the pre-T2 critic and scanner prompts;
+ *    consistent with their respective standard templates;
  *  - stream mode carries the three measured critic deltas (§S2) and the
  *    scanner nudge (§S5), without touching the shared JSON contract, the
  *    node/¶ boundary mechanics, or the language placeholders.
@@ -39,7 +39,15 @@ function headerMechanics(prompt: string): string {
 }
 
 describe("criticSystemPrompt - mode (T2 §S2)", () => {
-  it("default (no mode arg) is byte-identical to the untouched CRITIC_PROMPT_TEMPLATE", () => {
+  it.each(["standard", "stream"] as const)("%s distinguishes payoff from connective narration before scoring", (mode) => {
+    const prompt = criticSystemPrompt("en", "English", mode);
+    const rubric = prompt.slice(0, prompt.indexOf("For EACH candidate return")).replace(/\s+/g, " ");
+    expect(rubric).toContain("Routine progress or completion is not an experimental result merely because it reports effort or elapsed time.");
+    expect(rubric).toContain("Brief triggered reactions and beginner methods count.");
+    expect(rubric).toContain("select a stronger complete beat within its window or return keep:false.");
+  });
+
+  it("default (no mode arg) is identical to the current CRITIC_PROMPT_TEMPLATE", () => {
     const expected = CRITIC_PROMPT_TEMPLATE.replaceAll("{{LANGUAGE_NAME}}", "English").replaceAll(
       "{{LANGUAGE_ISO}}",
       "en"
@@ -72,10 +80,10 @@ describe("criticSystemPrompt - mode (T2 §S2)", () => {
     const stream = criticSystemPrompt("en", "English", "stream");
     expect(stream).not.toMatch(/doubly strict/i);
     // the replacement clause: an 8-20s reaction with its trigger inside is the
-    // ideal shape, and only a trigger-less burst is rejected
+    // ideal shape; missing context and weak material remain separate defects
     expect(stream).toMatch(/8-20s reaction WITH its trigger inside/);
     expect(stream).toMatch(/IDEAL STREAM CLIP/);
-    expect(stream).toMatch(/Reject only a\s+burst whose trigger is NOWHERE inside the window/);
+    expect(stream).toMatch(/For missing-context failures, reject a\s+burst whose trigger is NOWHERE inside the window/);
   });
 
   it("stream mode declares reaction bursts PRIME material and instructs moving start_node earlier to include the trigger", () => {
