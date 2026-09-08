@@ -235,8 +235,8 @@ Output ONLY the JSON object described by the schema.`;
  *
  * 2. The standard template's "Be doubly strict with short clips (under ~15s)
  *    that are a single reaction" clause is REPLACED: an 8-20s reaction with
- *    its trigger inside the clip is declared the IDEAL stream clip, and only
- *    a trigger-less burst is rejected. WHY (spec §0, killer #2): that exact
+ *    its trigger inside the clip is declared the IDEAL stream clip. A missing
+ *    trigger is a context defect, separate from material quality. WHY (spec §0, killer #2): that exact
  *    clause is "a kill order for precisely the class humans clip on streams" -
  *    it punishes brevity a stream clip is supposed to have.
  *

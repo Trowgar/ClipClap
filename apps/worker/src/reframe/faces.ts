@@ -95,10 +95,9 @@ export function parseDetectorOutput(raw: string, shotCount: number): ShotTracks[
     }
     // Saliency (spec 2026-08-23-music-shorts v1.1). Tolerant, NOT the strict
     // throw-on-malformed rule camRect follows above: absent OR malformed both
-    // collapse to null and never fail detection - this is a music-only
-    // anchoring hint, consulted only under an explicit musicMode
-    // (plan.ts/filtergraph.ts), and a defect this narrow must not take down
-    // face detection for every other clip.
+    // collapse to null and never fail detection. Music anchoring and active
+    // composition safety both treat missing saliency as no additional evidence;
+    // it must not take down face detection.
     let saliency: Saliency | null = null;
     const rawSaliency = (s as { saliency?: unknown }).saliency;
     if (rawSaliency != null) {

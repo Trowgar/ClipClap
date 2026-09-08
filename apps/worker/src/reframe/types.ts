@@ -40,9 +40,9 @@ export interface Keyframe {
  *  px; `spreadFrac` is the fraction of columns needed to cover 70% of the
  *  shot's total energy - small when the mass sits in a narrow cluster (a
  *  subject against a plain background), large when it is spread across the
- *  frame (a busy/close-up shot). Consulted ONLY under an explicit musicMode
- *  (plan.ts anchors a faceless shot's centre crop on it; filtergraph.ts gates
- *  the punch-in zoom on it) - see detect_faces.py's saliency_from_columns. */
+ *  frame (a busy/close-up shot). Music mode uses it for centering and zoom;
+ *  active safety also uses its spread to preserve broad compositions.
+ *  See detect_faces.py's saliency_from_columns. */
 export interface Saliency {
   x: number;
   spreadFrac: number;

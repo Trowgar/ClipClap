@@ -350,7 +350,7 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
     }
 
     // This is deliberately the only safety evaluation. It runs against the
-    // original final candidate (after stream gating), so shadow telemetry is
+    // candidate after stream gating and any lifecycle split, so shadow telemetry is
     // comparable even when active mode replaces shots below.
     const detailed = evaluatePlanCoverageDetailed(plan, regions);
     if (cfg.safetyShadow && !cfg.musicMode) {
