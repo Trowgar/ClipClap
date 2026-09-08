@@ -260,6 +260,8 @@ export interface AnalyzeConfig {
    *  layer still run, so the kill switch degrades quality without reverting
    *  the code half of the pair. */
   finalizerEnabled: boolean;
+  /** Independent review of final speech and title; explicit opt-in for rollout. */
+  publishabilityEnabled: boolean;
   /** Defaults to the critic model: the finalizer is a harder evaluative task
    *  than the critic's (cross-clip, full speech, veto authority) and runs ONCE
    *  per job, so it is the cheapest place in the engine to buy judgement. */
@@ -584,6 +586,7 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     teaserWindowSec: num(env, "TEASER_WINDOW_SEC", 120),
     teaserMinHits: num(env, "TEASER_MIN_HITS", 3),
     finalizerEnabled: env.ANALYZE_FINALIZER !== "off",
+    publishabilityEnabled: env.ANALYZE_PUBLISHABILITY === "on",
     finalizerModel:
       env.OPENAI_FINALIZER_MODEL || env.OPENAI_CRITIC_MODEL || "gpt-5.6-luna",
     finalizerHeadroom: num(env, "FINALIZER_HEADROOM", 4),

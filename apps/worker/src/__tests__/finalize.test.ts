@@ -89,6 +89,35 @@ const entry = (p: Partial<FinalizerEntry> & { id: string }): FinalizerEntry => (
 const ids = (clips: SnappedClip[]) => clips.map((c) => c.verdict.id);
 
 describe("applyFinalizerEntries - drops", () => {
+  it.each([1, 2, 3])("honors no_payoff for all %i clips even when the drop budget is exhausted", (count) => {
+    const clips = Array.from({ length: count }, (_, i) => clip(String(i), 0.9 - i * 0.1));
+    const r = applyFinalizerEntries(
+      clips,
+      clips.map((c) => entry({ id: c.verdict.id, verdict: "drop", dropReason: "no_payoff" })),
+      nodes(),
+      cfg
+    );
+    expect(r.clips).toEqual([]);
+    expect(r.telemetry.finalizerDrops).toHaveLength(count);
+    expect(r.telemetry.finalizerDrops.every((d) => d.reason === "no_payoff")).toBe(true);
+    expect(r.telemetry.dropCapHits).toBe(0);
+  });
+
+  it("keeps the alternative when its duplicate winner has no payoff", () => {
+    const r = applyFinalizerEntries(
+      [clip("a", 0.9), clip("b", 0.8, 8, 14)],
+      [
+        entry({ id: "a", verdict: "drop", dropReason: "no_payoff", duplicateOf: "b" }),
+        entry({ id: "b", verdict: "drop", dropReason: "duplicate", duplicateOf: "a" }),
+      ],
+      nodes(),
+      cfg
+    );
+    expect(ids(r.clips)).toEqual(["b"]);
+    expect(r.telemetry.finalizerDrops).toContainEqual({ id: "a", reason: "no_payoff" });
+    expect(r.telemetry.dropsProtected).toEqual([]);
+  });
+
   it("ships everything when the finalizer approves", () => {
     const clips = [clip("a", 0.9), clip("b", 0.8, 8, 14)];
     const r = applyFinalizerEntries(clips, [entry({ id: "a" }), entry({ id: "b" })], nodes(), cfg);

@@ -201,28 +201,29 @@ export function applyFinalizerEntries(
     if (!e || e.verdict !== "drop") continue;
     const reason: FinalizerDropReason =
       e.dropReason && DROP_REASONS.has(e.dropReason) ? e.dropReason : "incoherent";
-    if (e.duplicateOf && scores[e.duplicateOf] !== undefined && e.duplicateOf !== e.id) {
+    if (reason !== "no_payoff" && e.duplicateOf && scores[e.duplicateOf] !== undefined && e.duplicateOf !== e.id) {
       claims.push({ id: e.id, duplicateOf: e.duplicateOf });
     } else {
       plainDrops.push({ id: c.verdict.id, reason });
     }
   }
 
-  // ONE budget for both families, spent on duplicates first. A duplicate drop is
-  // the cheapest loss the set can take - the claim still ships in the survivor -
-  // while a content drop removes a moment outright. Two independent caps would
-  // also compose into "half plus half", i.e. no cap at all.
+  // Duplicates and soft content drops share a budget, spent on duplicates first.
+  // Explicit no-payoff vetoes are terminal and do not consume that soft budget.
   const budget = duplicateDropCap(clips.length);
-  const dup = resolveDuplicatesDetailed(claims, scores, budget);
+  const noPayoffIds = new Set(plainDrops.filter((drop) => drop.reason === "no_payoff").map((drop) => drop.id));
+  // A rejected rendition must not take a complete alternative down with it.
+  const duplicateClaims = claims.filter((claim) => !noPayoffIds.has(claim.id) && !noPayoffIds.has(claim.duplicateOf));
+  const dup = resolveDuplicatesDetailed(duplicateClaims, scores, budget);
   telemetry.dropCapHits = dup.dropCapHits;
 
   const dupDropped = new Set(dup.drops);
-  // The survivor of a duplicate group is immune to a content drop: honouring
+  // The survivor of a duplicate group is immune to a soft content drop: honouring
   // both "b duplicates a" and "a is incoherent" deletes the claim entirely while
   // telemetry calls it a duplicate. A judge that says both is contradicting
   // itself, and the conservative half of a contradiction is to keep the clip.
   const groupSurvivors = new Set<string>();
-  for (const claim of claims) {
+  for (const claim of duplicateClaims) {
     for (const id of [claim.id, claim.duplicateOf]) {
       if (!dupDropped.has(id)) groupSurvivors.add(id);
     }
@@ -235,16 +236,19 @@ export function applyFinalizerEntries(
   );
   for (const drop of orderedPlain) {
     if (dropped.has(drop.id)) continue;
-    if (groupSurvivors.has(drop.id)) {
+    // The finalizer cannot repair an end. Do not ship a missing-payoff verdict
+    // merely to preserve the output count, even when it is the only clip.
+    const terminalDrop = drop.reason === "no_payoff";
+    if (!terminalDrop && groupSurvivors.has(drop.id)) {
       telemetry.dropsProtected.push(drop.id);
       continue;
     }
-    if (remaining <= 0) {
+    if (!terminalDrop && remaining <= 0) {
       telemetry.dropCapHits += 1;
       continue;
     }
     dropped.add(drop.id);
-    remaining -= 1;
+    if (!terminalDrop) remaining -= 1;
     telemetry.finalizerDrops.push(drop);
   }
 
@@ -467,9 +471,9 @@ type RewriteAttempt =
  * paraphrase and inflection, and an honest rewrite of a Russian clip is exactly
  * a paraphrase (engine-notes §6).
  */
-function tryRewrite(
+export function tryRewrite(
   clip: SnappedClip,
-  entry: FinalizerEntry,
+  entry: Pick<FinalizerEntry, "title" | "titleEvidenceNodes">,
   nodes: SentenceNode[]
 ): RewriteAttempt {
   const title = (entry.title ?? "").trim();

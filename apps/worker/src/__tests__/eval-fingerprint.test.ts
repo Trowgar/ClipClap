@@ -9,6 +9,7 @@ import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { arcAuditMaxOutputTokens } from "../analyze-v2/arc-audit";
 import { criticMaxOutputTokens } from "../analyze-v2/critic";
 import { extensionMaxOutputTokens } from "../analyze-v2/end-extension";
+import { PUBLISHABILITY_REASONING_EFFORT } from "../analyze-v2/publishability";
 import { finalizerMaxOutputTokens } from "../analyze-v2/finalize";
 
 /** Fixture-free: everything here works off a synthetic config. */
@@ -25,6 +26,8 @@ describe("computeFingerprint", () => {
       criticMaxOutputTokensBase: criticMaxOutputTokens(0),
       criticMaxOutputTokensPerCandidate: criticMaxOutputTokens(1) - criticMaxOutputTokens(0),
       finalizerEnabled: baseCfg.finalizerEnabled,
+      publishabilityEnabled: baseCfg.publishabilityEnabled,
+      publishabilityReasoningEffort: PUBLISHABILITY_REASONING_EFFORT,
       finalizerModel: baseCfg.finalizerModel,
       finalizerMaxOutputTokensBase: finalizerMaxOutputTokens(0),
       finalizerMaxOutputTokensPerClip: finalizerMaxOutputTokens(1) - finalizerMaxOutputTokens(0),
@@ -533,3 +536,8 @@ describe("compareFingerprints", () => {
     });
   });
 });
+
+ it("detects enabling the final publishability review", () => {
+   const changed = computeFingerprint({ ...baseCfg, publishabilityEnabled: true });
+   expect(() => assertFingerprintMatches("fixture", computeFingerprint(baseCfg), changed)).toThrow(/publishabilityEnabled/);
+ });

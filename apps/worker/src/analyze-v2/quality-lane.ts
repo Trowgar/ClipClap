@@ -19,6 +19,7 @@ import { extendClipEnds } from "./end-extension";
 import { filterStandaloneClips, type StandaloneFilterTelemetry } from "./standalone-filter";
 import { applyPostBoundaryHookGate, type PostBoundaryHookGateTelemetry } from "./post-boundary-hook-gate";
 import { finalizeClips } from "./finalize";
+import { reviewPublishability } from "./publishability";
 import { callJsonSchema } from "./llm";
 import {
   SAFE_END_AUDIT_SYSTEM,
@@ -774,7 +775,7 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
   // The backstop for the OTHER thing that moves boundaries: the finalizer's
   // opening trim re-snaps a clip, and it may move the start arbitrarily far
   // forward. Same rule, applied where the boundaries finally stop.
-  const shipped = finalized.clips.slice(0, cfg.softCap).map((clip) => {
+  let shipped = finalized.clips.slice(0, cfg.softCap).map((clip) => {
     const result = regroundCopy(clip, nodes);
     if (result.regrounded.length > 0) {
       copyRegrounded.push({ id: clip.verdict.id, at: "shipped", fields: result.regrounded });
@@ -783,24 +784,9 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
     return result.clip;
   });
 
-  if (safeEndAuditTelemetry) {
-    safeEndAuditTelemetry = {
-      ...safeEndAuditTelemetry,
-      normal: {
-        ...safeEndAuditTelemetry.normal,
-        records: reconcileSafeEndNormalRecords(
-          safeEndAuditTelemetry.normal.records,
-          afterStandaloneFilter,
-          finalized.clips,
-          shipped,
-        ),
-      },
-    };
-  }
-
   // ---------------------------------------------------------------------------
-  // DEGENERATE TITLES - the last stage that can write copy, and the only one
-  // that runs after every stage that can destroy it.
+  // DEGENERATE TITLES - repair after every stage that can move boundaries.
+  // The independent publishability review below checks the resulting copy.
   // ---------------------------------------------------------------------------
   // podcast-answer-arc shipped a clip titled "Плюсы" - one word, "Pros" - at
   // score 0.66. The clip was fine: it passed the critic, the evidence gate and
@@ -906,6 +892,26 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
     (r) => r.outcome === "repaired"
   ).length;
 
+  const publishability = await reviewPublishability(client, usage, shipped, nodes, cfg);
+  shipped = publishability.clips;
+  const publishabilityRejected = new Set(publishability.telemetry.dropped);
+  const finalSurvivors = finalized.clips.filter((clip) => !publishabilityRejected.has(clip.verdict.id));
+
+  if (safeEndAuditTelemetry) {
+    safeEndAuditTelemetry = {
+      ...safeEndAuditTelemetry,
+      normal: {
+        ...safeEndAuditTelemetry.normal,
+        records: reconcileSafeEndNormalRecords(
+          safeEndAuditTelemetry.normal.records,
+          afterStandaloneFilter,
+          finalSurvivors,
+          shipped,
+        ),
+      },
+    };
+  }
+
   const highlights = shipped.map((clip) => toHighlight(clip, arcFlags));
 
   // Pulled out of the spread below so they land in the nested `longClips`
@@ -923,7 +929,9 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
   const finalizedTelemetryRest =
     finalizerSkipped === "malformed" ? withoutMalformedSkipped : rawFinalizedTelemetryRest;
   const finalizerAmbiguous =
-    finalizerFallbackUsed === true || finalizerSkipped === "malformed";
+    finalizerFallbackUsed === true || finalizerSkipped === "malformed" ||
+    (cfg.publishabilityEnabled && (publishability.telemetry.skipped !== undefined ||
+      publishability.telemetry.rewriteRejected.length > 0));
 
   const telemetry = {
     // Not-a-key discipline (spec 2026-08-19-stream-analyze-mode, S1), same as
@@ -933,6 +941,7 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
     // 2 observability) mirrors that same discipline via resolveMode itself
     // returning modeResolution: undefined when the flag is off.
     ...(cfg.streamModeEnabled ? { analysisMode: input.analysisMode, modeResolution: input.modeResolution } : {}),
+    ...(cfg.publishabilityEnabled ? { publishability: publishability.telemetry } : {}),
     criticVerdicts: critic.verdicts.length,
     verdictScores: critic.verdicts
       .map((v) => ({ id: v.id, keep: v.keep, score: v.score }))
@@ -988,7 +997,7 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
     // filter above can remove clips (droppedVerdicts carries the reason), and
     // with both dark the arrays stay identical.
     selectedForFinalizer: afterStandaloneFilter.length,
-    finalizerSurvivors: finalized.clips.length,
+    finalizerSurvivors: finalSurvivors.length,
     ...finalizedTelemetryRest,
     kept: highlights.length,
     meanLexicalOverlap: mean(
@@ -1027,7 +1036,7 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
   };
 
   const shippedIds = new Set(shipped.map((clip) => clip.verdict.id));
-  const finalizedIds = new Set(finalized.clips.map((clip) => clip.verdict.id));
+  const finalizedIds = new Set(finalSurvivors.map((clip) => clip.verdict.id));
   const finalizerInputIds = new Set(afterStandaloneFilter.map((clip) => clip.verdict.id));
   const selectedIds = new Set(selection.selected.map((clip) => clip.verdict.id));
   const terminal = new Map<string, QualityLaneDisposition>();
@@ -1053,6 +1062,7 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
     else if (drop?.stage === "post_boundary_hook_gate") terminal.set(candidate.id, "post_boundary_rejected");
     else if (drop?.stage === "arc_downrank") terminal.set(candidate.id, "arc_rejected");
     else if (drop?.stage === "standalone_filter") terminal.set(candidate.id, "standalone_rejected");
+    else if (publishabilityRejected.has(candidate.id)) terminal.set(candidate.id, "finalizer_rejected");
     else if (finalizedIds.has(candidate.id)) terminal.set(candidate.id, "selection_not_chosen");
     else if (!selectedIds.has(candidate.id) || !finalizerInputIds.has(candidate.id)) terminal.set(candidate.id, "selection_not_chosen");
     else terminal.set(candidate.id, "finalizer_rejected");
@@ -1070,7 +1080,7 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
     counters: {
       judged: critic.verdicts.length,
       selectedForFinalizer: afterStandaloneFilter.length,
-      finalizerSurvivors: finalized.clips.length,
+      finalizerSurvivors: finalSurvivors.length,
     },
     terminal,
     criticKeep: new Map(critic.verdicts.map((verdict) => [verdict.id, verdict.keep])),

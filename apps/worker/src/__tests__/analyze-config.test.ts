@@ -248,3 +248,9 @@ describe("loadAnalyzeConfig", () => {
     expect(loadAnalyzeConfig({ SCAN_PASSES: "  " }).scanPasses).toBe(1);
   });
 });
+
+ it("only explicitly enables publishability review", () => {
+   expect(loadAnalyzeConfig({}).publishabilityEnabled).toBe(false);
+   expect(loadAnalyzeConfig({ ANALYZE_PUBLISHABILITY: "true" }).publishabilityEnabled).toBe(false);
+   expect(loadAnalyzeConfig({ ANALYZE_PUBLISHABILITY: "on" }).publishabilityEnabled).toBe(true);
+ });

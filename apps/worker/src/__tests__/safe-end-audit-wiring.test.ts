@@ -468,3 +468,16 @@ describe("safe-end normal shadow wiring", () => {
   });
 
 });
+
+it("attributes a last publishability veto to the final editor, not the soft cap", async () => {
+  const stub = clientFor({ ...replies(), publishability_review: { clips: [{
+    id: "c0", value_reason: "Repeats the premise.", value: "generic",
+    title_reason: "Matches the speech.", title_supported: true,
+    corrected_title: null, title_evidence_nodes: [],
+  }] } });
+  const result = await analyzeHighlightsV2(transcript(), { client: stub.client,
+    cfg: loadAnalyzeConfig({ SAFE_END_AUDIT: "shadow", ANALYZE_PUBLISHABILITY: "on" }) });
+  expect(result.highlights).toEqual([]);
+  expect((result.telemetry.safeEndAudit as any).normal.records[0].reconciliation.state).toBe("removed_by_finalizer");
+  expect(result.telemetry.finalizerSurvivors).toBe(0);
+});

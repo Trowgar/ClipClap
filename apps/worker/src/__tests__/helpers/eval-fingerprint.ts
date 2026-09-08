@@ -5,6 +5,7 @@ import {
 import { arcAuditMaxOutputTokens } from "../../analyze-v2/arc-audit";
 import { criticMaxOutputTokens } from "../../analyze-v2/critic";
 import { extensionMaxOutputTokens } from "../../analyze-v2/end-extension";
+import { PUBLISHABILITY_REASONING_EFFORT } from "../../analyze-v2/publishability";
 import { finalizerMaxOutputTokens } from "../../analyze-v2/finalize";
 
 /**
@@ -366,6 +367,8 @@ export interface EngineFingerprint {
   /** Whether the FINALIZE LLM pass ran at all. Off makes no request, so the
    *  request hash cannot notice it. */
   finalizerEnabled: boolean;
+  publishabilityEnabled: boolean;
+  publishabilityReasoningEffort: string;
   finalizerModel: string;
   /** finalizerMaxOutputTokens(0) - the flat part of the finalizer budget. */
   finalizerMaxOutputTokensBase: number;
@@ -483,6 +486,8 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     criticMaxOutputTokensBase: base,
     criticMaxOutputTokensPerCandidate: criticMaxOutputTokens(1) - base,
     finalizerEnabled: cfg.finalizerEnabled,
+    publishabilityEnabled: cfg.publishabilityEnabled,
+    publishabilityReasoningEffort: PUBLISHABILITY_REASONING_EFFORT,
     finalizerModel: cfg.finalizerModel,
     finalizerMaxOutputTokensBase: finalizerBase,
     finalizerMaxOutputTokensPerClip: finalizerMaxOutputTokens(1) - finalizerBase,
