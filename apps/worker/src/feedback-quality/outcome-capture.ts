@@ -188,14 +188,25 @@ function recordingProxy(
   providerIds: string[],
   onProviderError: () => void,
 ): OpenAI {
+  let nextInvocation = 0;
+  const completed: number[] = [];
+  const recordOffset = recordings.length;
+  const providerOffset = providerIds.length;
   return { chat: { completions: { create: async (body: unknown, ...rest: unknown[]) => {
+    const invocation = nextInvocation++;
+    const requestPhase = phase();
+    const fingerprint = fingerprintOutcomeRequest(body);
     let raw: unknown;
     try { raw = await (realClient.chat.completions.create as unknown as (...args: unknown[]) => Promise<unknown>)(body, ...rest); }
     catch (error) { onProviderError(); throw error; }
-    const fingerprint = fingerprintOutcomeRequest(body);
     const result = captureCompletion(raw);
-    recordings.push(Object.freeze({ recordingVersion: 2 as const, phase: phase(), ...fingerprint, result }));
-    providerIds.push(typeof (raw as Record<string, unknown>).id === "string" ? (raw as Record<string, unknown>).id as string : "");
+    // Identical concurrent scan requests must replay in invocation order.
+    // Keep completed entries dense so byte limits also cover pending prefixes.
+    const following = completed.findIndex((index) => index > invocation);
+    const position = following < 0 ? completed.length : following;
+    completed.splice(position, 0, invocation);
+    recordings.splice(recordOffset + position, 0, Object.freeze({ recordingVersion: 2 as const, phase: requestPhase, ...fingerprint, result }));
+    providerIds.splice(providerOffset + position, 0, typeof (raw as Record<string, unknown>).id === "string" ? (raw as Record<string, unknown>).id as string : "");
     responseBytes(recordings);
     return raw;
   } } } } as unknown as OpenAI;
@@ -209,6 +220,7 @@ function hybridShadowProxy(
   phase: () => OutcomeCapturePhase,
   providerIds: string[],
 ): OpenAI & { assertPrimaryConsumed(): void } {
+  const live = recordingProxy(realClient, phase, recordings, providerIds, onProviderError);
   const queues = new Map<Sha256, OutcomeCaptureRecord[]>();
   for (const recording of primary) {
     const queue = queues.get(recording.requestFingerprint) ?? [];
@@ -228,14 +240,7 @@ function hybridShadowProxy(
       // Recovery never consumes a primary recording, even for an identical
       // request fingerprint. It must make a live provider call and receive
       // its own phase-bound recording.
-      let raw: unknown;
-      try { raw = await (realClient.chat.completions.create as unknown as (...args: unknown[]) => Promise<unknown>)(body, ...rest); }
-      catch (error) { onProviderError(); throw error; }
-      const result = captureCompletion(raw);
-      recordings.push(Object.freeze({ recordingVersion: 2 as const, phase: phase(), ...fingerprint, result }));
-      providerIds.push(typeof (raw as Record<string, unknown>).id === "string" ? (raw as Record<string, unknown>).id as string : "");
-      responseBytes(recordings);
-      return raw;
+      return (live.chat.completions.create as unknown as (...args: unknown[]) => Promise<unknown>)(body, ...rest);
     } } },
     assertPrimaryConsumed() { if ([...queues.values()].some((queue) => queue.length > 0)) fail("recording_not_consumed"); },
   } as unknown as OpenAI & { assertPrimaryConsumed(): void };
