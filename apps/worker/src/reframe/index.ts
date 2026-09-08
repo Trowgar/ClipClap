@@ -7,7 +7,7 @@ import { buildCropPlan, MAX_PLAN_SHOTS, survivingTracks } from "./plan";
 import { resolveCamRect } from "./cam-rect";
 import { recoverCuts, type CutRecoveryResult, type CutRecoveryTelemetry } from "./cut-recovery";
 import type { PlanOptions } from "./options";
-import type { CropPlan, Shot, ShotTracks } from "./types";
+import type { CropPlan, Shot, ShotLayout, ShotTracks } from "./types";
 import { faceTracksToRegionEvidence } from "./regions";
 import { cropWidthFor } from "./geometry";
 import {
@@ -295,6 +295,45 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
     }
     if (tracksByShot.size !== shots.length) invalidAlignment = true;
 
+    let leadingCoverageFallbacks = 0;
+    if (activeRequested && !invalidAlignment) {
+      const expanded: ShotLayout[] = [];
+      let prefixes = 0;
+      for (const candidate of plan.shots) {
+        // Static layouts only: retain trajectory behavior until lifecycle
+        // splitting can preserve its interpolated boundary positions.
+        if (candidate.layout !== "single" || candidate.xs?.length) {
+          expanded.push(candidate);
+          continue;
+        }
+        let cursor = candidate.start;
+        for (let index = 0; index < shots.length; index++) {
+          const span = shots[index];
+          if (span.start < cursor || span.end > candidate.end) continue;
+          const evidence = tracksByShot.get(index)!;
+          const surviving = survivingTracks(evidence.tracks);
+          const spread = evidence.saliency?.spreadFrac;
+          if (!surviving.length || typeof spread !== "number"
+            || !Number.isFinite(spread) || spread <= cropWidthFor(d.height) / d.width || spread > 1
+            || faceTracksToRegionEvidence(surviving, span, "prefix").invalid) continue;
+          const first = Math.min(...surviving.map((track) => track.path![0].t));
+          if (first - span.start < cfg.minShotSec || first - span.start <= 1 / cfg.sampleFps
+            || span.end - first < cfg.minShotSec) continue;
+          // Whole-shot saliency is conservative evidence for this prefix;
+          // no face box or observation is invented before its first sample.
+          if (span.start > cursor) expanded.push({ ...candidate, start: cursor, end: span.start });
+          expanded.push({ start: span.start, end: first, layout: "safe-fit", reason: "coverage" });
+          cursor = first;
+          prefixes++;
+        }
+        expanded.push(cursor === candidate.start ? candidate : { ...candidate, start: cursor });
+      }
+      if (prefixes > 0 && expanded.length <= MAX_PLAN_SHOTS) {
+        plan = { ...plan, version: 4, shots: expanded };
+        leadingCoverageFallbacks = prefixes;
+      }
+    }
+
     const regions = [] as ReturnType<typeof faceTracksToRegionEvidence>["regions"];
     const invalidSpans: Shot[] = [];
     if (!invalidAlignment) {
@@ -365,6 +404,8 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
         wideFacelessShots,
       });
       plan = applied.plan;
+      applied.telemetry.safeFitShots += leadingCoverageFallbacks;
+      applied.telemetry.coverageFallbacks += leadingCoverageFallbacks;
       safetyPlanner = applied.telemetry;
     }
   }

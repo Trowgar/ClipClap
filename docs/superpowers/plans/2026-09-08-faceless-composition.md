@@ -12,3 +12,12 @@
 - [x] Pass an explicit wide-faceless shot set into the existing safety planner; use its coverage fallback and merge behavior.
 - [x] Run focused compute/planner/safety/render tests.
 - [x] Replay the implementation against recovered detection captures and render case16 plus approved controls; provide diff for review without deploying.
+
+## Follow-up: leading lifecycle gap (case7)
+
+The retained595–620s source window shows a text card in detector span13.28–25s; the first surviving face sample is22s. The static median anchor covered the card before the face existed. Under the same active flags, splice existing safe-fit into a broad composition's unobserved leading interval, retaining the exact static crop geometry outside it. Both resulting detector portions must satisfy existing minShotSec, the prefix must exceed one sample interval, and final segments must stay within MAX_PLAN_SHOTS. Do not alter detector samples, invent face times, re-run planning, or modify stream/split/trajectory layouts. Aggregate shot saliency is conservative evidence for the prefix, not an independent prefix measurement.
+
+- [x] Demonstrate failed regression against612747f and preserve internal merged-span geometry/evidence.
+- [x] Verify flags, cadence/short spans, missing evidence, and existing shot cap.
+- [x] Pass164 focused tests and strict changed-file typecheck.
+- [x] Render actual implementationcase7; verify full text card while surrounding portrait crops stay intact. Existing seven capture compositions remain as before this follow-up (case16 fallback count changes because segments split before merging).
