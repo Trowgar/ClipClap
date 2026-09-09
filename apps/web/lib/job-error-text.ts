@@ -49,7 +49,7 @@ const TEXT: Record<JobErrorCode, string> = {
   ANALYSIS_UNAVAILABLE:
     "We could not work out which moments to clip from this video, and your minutes were not used. We cannot tell yet whether this one will finish - wait a few minutes and check back here before uploading it again, so the same video does not use your minutes twice. If nothing has changed by then, upload it again or send us a different file.",
   UNSUPPORTED_INPUT:
-    "This file has no video track - only sound. Upload a video file and we will clip it.",
+    "We could not read this file as a video. It may be damaged, incomplete, or have no video track. Check that the original file plays to the end, then upload a complete video file. Your minutes were not used.",
   // Hedged on purpose. All we know is that the download produced no file; the
   // exit code cannot distinguish a private video from a stale extractor or a
   // rate limit, and telling someone their working link is private sends them to

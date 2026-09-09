@@ -33,8 +33,9 @@ export const JOB_ERROR_CODES = [
    *  assert neither transience nor permanence, and never instruct an action
    *  that could bill the same video twice. */
   "ANALYSIS_UNAVAILABLE",
-  /** The upload itself cannot be clipped (audio-only file). Permanent: a retry
-   *  cannot change it, so the copy must ask for a different file. */
+  /** The upload itself cannot be clipped (damaged, incomplete, or audio-only).
+   *  Permanent: a retry cannot change it, so the copy must ask for a complete
+   *  playable video file. */
   "UNSUPPORTED_INPUT",
   /** The pasted link did not yield a file. The downloader cannot tell the cause
    *  apart (private, removed, region-locked, login-walled, a stale extractor),

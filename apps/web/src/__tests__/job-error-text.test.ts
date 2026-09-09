@@ -16,9 +16,12 @@ describe("web job failure copy", () => {
     expect(text).not.toContain("temporary");
   });
 
-  it("asks for a different file on unsupported input, without promising a retry", () => {
+  it("explains how to replace a damaged or incomplete video", () => {
     const text = jobErrorText("UNSUPPORTED_INPUT");
-    expect(text).toContain("no video track");
+    expect(text).toContain("damaged");
+    expect(text).toContain("incomplete");
+    expect(text).toContain("plays to the end");
+    expect(text).toContain("minutes were not used");
     expect(text).not.toContain("retrying");
   });
 

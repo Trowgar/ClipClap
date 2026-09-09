@@ -644,13 +644,19 @@ describe("bot i18n", () => {
     expect(ru).not.toContain("временная");
   });
 
-  it("asks for a different file on unsupported input in both locales", () => {
+  it("explains how to replace a damaged or incomplete video in both locales", () => {
     // permanent failure: the copy must NOT promise an automatic retry
     const en = t("en").processingFailed("UNSUPPORTED_INPUT");
-    expect(en).toContain("no video track");
+    expect(en).toContain("damaged");
+    expect(en).toContain("incomplete");
+    expect(en).toContain("plays to the end");
+    expect(en).toContain("minutes were not used");
     expect(en).not.toContain("retrying");
     const ru = t("ru").processingFailed("UNSUPPORTED_INPUT");
-    expect(ru).toContain("нет видеодорожки");
+    expect(ru).toContain("повреждён");
+    expect(ru).toContain("не полностью");
+    expect(ru).toContain("воспроизводится до конца");
+    expect(ru).toContain("Минуты не списаны");
     expect(ru).not.toContain("Пробую автоматически");
   });
 

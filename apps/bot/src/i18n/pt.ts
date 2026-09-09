@@ -11,7 +11,7 @@ function pluralPt(n: number, one: string, other: string): string {
 
 const ptFailure: Record<JobErrorCode, string> = {
   UNSUPPORTED_INPUT:
-    "Este arquivo não tem faixa de vídeo, só áudio. Manda um arquivo de vídeo que eu corto.",
+    "Não consegui ler este arquivo como vídeo. Ele pode estar corrompido, incompleto ou sem faixa de vídeo. Verifique se o arquivo original reproduz até o fim e envie um arquivo de vídeo completo. Seus minutos não foram usados.",
   ANALYSIS_UNAVAILABLE:
     "Não consegui identificar quais momentos cortar deste vídeo, e seus minutos não foram usados. Ainda não dá pra saber se este vai terminar: espera alguns minutos pra ver se os clipes chegam antes de mandar de novo, assim o mesmo vídeo não gasta seus minutos duas vezes. Se não chegar nada, manda de novo ou tenta outro arquivo.",
   SOURCE_UNAVAILABLE:

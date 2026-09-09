@@ -93,7 +93,7 @@ function daysAr(n: number): string {
  *  is a second Job row and usage.service bills both. */
 const arFailure: Record<JobErrorCode, string> = {
   UNSUPPORTED_INPUT:
-    "لا يحتوي هذا الملف على مسار فيديو - صوت فقط. أرسل ملف فيديو وسأقطّعه إلى مقاطع.",
+    "تعذّر عليّ قراءة هذا الملف كفيديو. قد يكون تالفًا أو غير مكتمل أو لا يحتوي على مسار فيديو. تأكد من أن الملف الأصلي يعمل حتى النهاية، ثم أرسل ملف فيديو كاملًا. لم تُخصم دقائقك.",
   // See the note on ANALYSIS_UNAVAILABLE in enFailure: all this code knows is
   // that analysis failed. It is written on attempt 1 of 3 and on the last
   // burned one alike, so neither "أعيد المحاولة الآن" nor "أرسله من جديد" may

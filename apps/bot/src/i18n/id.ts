@@ -8,7 +8,7 @@ import type { Dict } from "./types";
 
 const idFailure: Record<JobErrorCode, string> = {
   UNSUPPORTED_INPUT:
-    "File ini tidak punya track video, hanya suara. Kirim file video dan aku akan memotongnya.",
+    "Saya tidak dapat membaca file ini sebagai video. File mungkin rusak, tidak lengkap, atau tidak memiliki trek video. Pastikan file asli dapat diputar hingga selesai, lalu kirim file video yang lengkap. Menit Anda tidak digunakan.",
   ANALYSIS_UNAVAILABLE:
     "Aku tidak bisa menentukan momen mana yang perlu dipotong dari video ini, dan menitmu tidak terpakai. Belum bisa dipastikan apakah yang ini akan selesai: tunggu beberapa menit untuk melihat apakah klipnya datang sebelum mengirim ulang, supaya video yang sama tidak menghabiskan menitmu dua kali. Kalau tidak ada yang datang, kirim lagi atau coba file lain.",
   SOURCE_UNAVAILABLE:

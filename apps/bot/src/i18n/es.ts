@@ -10,7 +10,7 @@ function pluralEs(n: number, one: string, other: string): string {
 
 const esFailure: Record<JobErrorCode, string> = {
   UNSUPPORTED_INPUT:
-    "Este archivo no tiene pista de video, solo sonido. Envía un archivo de video y lo corto.",
+    "No pude leer este archivo como vídeo. Puede estar dañado, incompleto o no tener pista de vídeo. Comprueba que el archivo original se reproduce hasta el final y envía un archivo de vídeo completo. No se usaron tus minutos.",
   ANALYSIS_UNAVAILABLE:
     "No pude determinar qué momentos cortar de este video, y no se usaron tus minutos. Todavía no puedo saber si este va a terminar: espera unos minutos por si llegan los clips antes de enviarlo otra vez, así el mismo video no gasta tus minutos dos veces. Si no llega nada, envíalo de nuevo o prueba con otro archivo.",
   SOURCE_UNAVAILABLE:

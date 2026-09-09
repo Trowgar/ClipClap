@@ -13,7 +13,7 @@ import type { Dict } from "./types";
  *  at all about the failed job. */
 const enFailure: Record<JobErrorCode, string> = {
   UNSUPPORTED_INPUT:
-    "This file has no video track - only sound. Send a video file and I'll clip it.",
+    "I could not read this file as a video. It may be damaged, incomplete, or have no video track. Check that the original file plays to the end, then send me a complete video file. Your minutes were not used.",
   // Same rule as enFailureGeneric, for the same reason: all this code knows is
   // that the failure was in analysis. It is written on attempt 1 of 3 and on
   // the last burned one alike, so "I'm retrying automatically" is a promise it

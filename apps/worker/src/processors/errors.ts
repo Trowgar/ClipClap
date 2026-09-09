@@ -6,8 +6,9 @@ import { UnrecoverableError } from "bullmq";
  *  it without importing - and therefore without a test having to un-mock - the
  *  ffmpeg processor that raises it. */
 
-/** The input itself cannot be clipped, e.g. an audio-only file. Permanent: a
- *  BullMQ retry re-runs the exact same file, so the user must send another. */
+/** The input itself cannot be clipped, e.g. a damaged, incomplete, or
+ *  audio-only file. Permanent: a BullMQ retry re-runs the exact same file, so
+ *  the user must send another. */
 export class UnsupportedInputError extends UnrecoverableError {}
 
 /** yt-dlp looked at the pasted link and produced no usable file. Raised for two
