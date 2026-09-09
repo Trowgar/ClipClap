@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { UnrecoverableError } from "bullmq";
 
 const mocks = vi.hoisted(() => ({
   releaseNextQueued: vi.fn(async () => []),
@@ -60,6 +61,20 @@ describe("maybeReleaseAfterStageEvent", () => {
       opts: { attempts: 3 },
     } as never);
     expect(mocks.releaseNextQueued).not.toHaveBeenCalled();
+  });
+
+  it("releases an unrecoverable failure before the attempt budget is exhausted", async () => {
+    await maybeReleaseAfterStageEvent(
+      "download",
+      "failed",
+      {
+        data: { jobId: "j1", userId: "u1" },
+        attemptsMade: 1,
+        opts: { attempts: 3 },
+      } as never,
+      new UnrecoverableError("invalid video")
+    );
+    expect(mocks.releaseNextQueued).toHaveBeenCalledWith("u1");
   });
 
   it("treats missing opts.attempts as 1 - a single-attempt failure is terminal", async () => {

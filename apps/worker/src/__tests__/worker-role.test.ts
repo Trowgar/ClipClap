@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("bullmq", () => ({
   Worker: mocks.Worker,
+  UnrecoverableError: class UnrecoverableError extends Error {},
 }));
 
 vi.mock("@clipclap/shared", () => ({
@@ -43,7 +44,7 @@ vi.mock("../stages/analyze", () => ({ runAnalyzeStage: mocks.analyze }));
 vi.mock("../stages/render", () => ({ runRenderStage: mocks.render }));
 vi.mock("../stages/finalize", () => ({ runFinalizeStage: mocks.finalize }));
 
-import { Worker } from "bullmq";
+import { UnrecoverableError, Worker } from "bullmq";
 import { createStageWorker, getWorkerConcurrency } from "../worker-app";
 
 describe("worker role config", () => {
@@ -131,6 +132,25 @@ describe("worker role config", () => {
     handler!({ id: "10", data: { jobId: "pipeline-1", userId: "user-1" }, attemptsMade: 3, opts: { attempts: 3 } }, new Error("terminal"));
 
     expect(mocks.releaseNextQueued).toHaveBeenCalled();
+  });
+
+  it("releases an unrecoverable first failure without raising an incident", () => {
+    const worker = createStageWorker("download");
+    const on = (worker as unknown as { on: ReturnType<typeof vi.fn> }).on;
+    const handler = on.mock.calls.find((call: unknown[]) => call[0] === "failed")?.[1] as ((job: unknown, error: Error) => void) | undefined;
+
+    handler!(
+      {
+        id: "10",
+        data: { jobId: "pipeline-1", userId: "user-1" },
+        attemptsMade: 1,
+        opts: { attempts: 3 },
+      },
+      new UnrecoverableError("invalid video")
+    );
+
+    expect(mocks.releaseNextQueued).toHaveBeenCalledWith("user-1");
+    expect(mocks.notifyPipelineIncident).not.toHaveBeenCalled();
   });
 
   it("rejects canary work on the primary queue so stale consumers cannot answer", async () => {

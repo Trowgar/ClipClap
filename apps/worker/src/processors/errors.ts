@@ -1,3 +1,5 @@
+import { UnrecoverableError } from "bullmq";
+
 /** Domain errors the stage boundary maps to a user-facing code.
  *
  *  Lives in its own module (not in normalize.ts) so a stage can `instanceof`
@@ -6,7 +8,7 @@
 
 /** The input itself cannot be clipped, e.g. an audio-only file. Permanent: a
  *  BullMQ retry re-runs the exact same file, so the user must send another. */
-export class UnsupportedInputError extends Error {}
+export class UnsupportedInputError extends UnrecoverableError {}
 
 /** yt-dlp looked at the pasted link and produced no usable file. Raised for two
  *  distinct observations:
@@ -26,7 +28,7 @@ export class UnsupportedInputError extends Error {}
  *  with the identical binary, so the copy must offer the user a way out (check
  *  the link, or send the file directly) instead of promising an automatic
  *  retry. */
-export class SourceUnavailableError extends Error {}
+export class SourceUnavailableError extends UnrecoverableError {}
 
 /** The source is over MAX_SOURCE_FILESIZE_BYTES. yt-dlp read the size, refused
  *  the download and said so in as many words, so unlike its sibling this error
@@ -38,7 +40,7 @@ export class SourceUnavailableError extends Error {}
  *  have opposite remedies. SourceUnavailableError sends the user to upload the
  *  file directly; here that is the one action guaranteed to fail, because the
  *  upload path enforces the very same cap. */
-export class SourceTooLargeError extends Error {}
+export class SourceTooLargeError extends UnrecoverableError {}
 
 /** A free-tier job whose measured duration does not fit in the allowance the
  *  account has left. Raised by the download stage's re-check, never by a
@@ -55,4 +57,4 @@ export class SourceTooLargeError extends Error {}
  *  the identical verdict, so unlike every other stage failure there is no
  *  attempt on which this job could still succeed after its allowance has been
  *  handed back. */
-export class FreeAllowanceExceededError extends Error {}
+export class FreeAllowanceExceededError extends UnrecoverableError {}

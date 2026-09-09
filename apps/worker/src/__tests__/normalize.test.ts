@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { UnrecoverableError } from "bullmq";
 import { needsNormalization, normalizeSource, parseTimelineProbe } from "../processors/normalize";
 import { UnsupportedInputError } from "../processors/errors";
 
@@ -77,6 +78,7 @@ describe("normalizeSource", () => {
 
     const error = await normalizeSource("/tmp/damaged.mp4").catch((caught) => caught);
     expect(error).toBeInstanceOf(UnsupportedInputError);
+    expect(error).toBeInstanceOf(UnrecoverableError);
     expect(error.message).toMatch(/damaged or incomplete/i);
   });
 

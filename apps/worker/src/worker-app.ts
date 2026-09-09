@@ -1,4 +1,4 @@
-import { Worker, type Job } from "bullmq";
+import { UnrecoverableError, Worker, type Job } from "bullmq";
 import {
   getQueueNameForStage,
   getRedis,
@@ -77,8 +77,13 @@ export function createStageWorker(
   worker.on("failed", (job, err) => {
     console.error(`[${role}] failed ${job?.id}:`, err.message);
     const attemptsMade = job?.attemptsMade ?? 0;
-    const maxAttempts = job?.opts.attempts ?? 1;
-    if (job && !isQualityCanary(job.data) && attemptsMade >= maxAttempts) {
+    const unrecoverable = err instanceof UnrecoverableError;
+    if (
+      job &&
+      !isQualityCanary(job.data) &&
+      isTerminalFailure(job, err) &&
+      !unrecoverable
+    ) {
       void notifyPipelineIncident({
         stage: role,
         queueJobId: String(job.id),
@@ -92,7 +97,9 @@ export function createStageWorker(
         )
       );
     }
-    if (!isQualityCanary(job?.data)) void maybeReleaseAfterStageEvent(role, "failed", job ?? undefined);
+    if (!isQualityCanary(job?.data)) {
+      void maybeReleaseAfterStageEvent(role, "failed", job ?? undefined, err);
+    }
   });
 
   return worker;
@@ -165,15 +172,13 @@ export async function maybeReleaseAfterStageEvent(
         attemptsMade?: number;
         opts?: { attempts?: number };
       }
-    | undefined
+    | undefined,
+  error?: Error
 ): Promise<void> {
   try {
     if (!job) return;
     if (event === "completed" && role !== "finalize") return;
-    if (event === "failed") {
-      const attempts = job.opts?.attempts ?? 1;
-      if ((job.attemptsMade ?? 0) < attempts) return;
-    }
+    if (event === "failed" && !isTerminalFailure(job, error)) return;
     const userId = (job.data as { userId?: string } | undefined)?.userId;
     if (!userId) return;
     const released = await releaseNextQueued(userId);
@@ -185,6 +190,16 @@ export async function maybeReleaseAfterStageEvent(
   } catch (error) {
     console.error(`[queue] post-${event} release failed:`, error);
   }
+}
+
+function isTerminalFailure(
+  job: { attemptsMade?: number; opts?: { attempts?: number } },
+  error?: Error
+): boolean {
+  return (
+    error instanceof UnrecoverableError ||
+    (job.attemptsMade ?? 0) >= (job.opts?.attempts ?? 1)
+  );
 }
 
 function readPositiveInt(value: string | undefined, fallback: number): number {
