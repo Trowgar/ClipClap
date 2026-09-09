@@ -472,19 +472,8 @@ function PlanCard({ plan }: { plan: Plan }) {
       </ul>
 
       <div className="mt-auto pt-6">
-        {/* The highest-intent button on the page, and until 2026-08-25 it sent people to
-            the web signup. Measured that day across every real account: Telegram arrivals
-            activate at 36.7% and have produced 112 of the product's 116 jobs, against 7.3%
-            and 4 jobs for web-only accounts. Somebody ready to pay was being routed to the
-            surface that has barely ever worked - and to Stripe, which has still never
-            completed a verified purchase, rather than to the bot's checkout, which has.
-
-            The source tag is not decoration: it is the only way to tell later whether the
-            pricing cards send anybody at all (funnel event bot_start_src_pricing). */}
-        <a
-          href="https://t.me/clipclapio_bot?start=src_pricing"
-          target="_blank"
-          rel="noopener noreferrer"
+        <Link
+          href="/login"
           className={`block rounded-lg px-4 py-2.5 text-center text-sm font-medium transition-all ${
             plan.popular
               ? "bg-white text-black hover:bg-neutral-200"
@@ -492,7 +481,7 @@ function PlanCard({ plan }: { plan: Plan }) {
           }`}
         >
           {plan.cta}
-        </a>
+        </Link>
       </div>
     </div>
   );
@@ -528,18 +517,12 @@ export default function LandingPage() {
             >
               Sign in
             </Link>
-            {/* Telegram first: measured 2026-08-20, bot arrivals activate at 90.3% against
-                5.9% on the web signup, so the primary button sends people where the product
-                actually works. Sign in stays for people who want the web app. */}
-            <a
-              href="https://t.me/clipclapio_bot?start=src_web_header"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-black transition-all hover:bg-neutral-200 active:scale-[0.97]"
+            <Link
+              href="/login"
+              className="rounded-lg bg-white px-4 py-2 text-sm font-medium text-black transition-all hover:bg-neutral-200 active:scale-[0.97]"
             >
-              <TelegramPlane className="w-3.5 h-3.5 fill-black" />
-              Start free
-            </a>
+              Get Started
+            </Link>
           </div>
         </div>
       </header>
@@ -602,48 +585,6 @@ export default function LandingPage() {
             Drop any stream, podcast, or VOD. AI finds the viral moments,
             cuts vertical clips with subtitles. Built for clippers.
           </motion.p>
-
-          {/* Hero CTA. There was none here before - visitors read the headline and scrolled.
-              Telegram leads because that is the path that converts (90.3% of bot arrivals run
-              a job, against 5.9% of web signups, measured 2026-08-20). */}
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.16 }}
-            className="mt-7 flex flex-col items-center gap-3 sm:flex-row sm:justify-center"
-          >
-            <a
-              href="https://t.me/clipclapio_bot?start=src_web_hero"
-              target="_blank"
-              rel="noopener noreferrer"
-              // White, not Telegram blue: the same action is already a white button in the
-              // header, and this page is monochrome everywhere else - grain, dot grid, every
-              // other control. A saturated blue pill in the hero reads as a pasted-in widget.
-              // The plane icon carries "this opens Telegram" without spending the only colour
-              // on the page. The dedicated Telegram section further down keeps its blue button,
-              // where the colour belongs to the whole block.
-              className="group inline-flex items-center gap-2.5 rounded-xl bg-white px-6 py-3 text-sm font-semibold text-black transition-all hover:bg-neutral-200 hover:scale-[1.02] active:scale-[0.98]"
-            >
-              <TelegramPlane className="w-4 h-4 fill-black" />
-              Start free in Telegram
-              <ArrowRight className="w-4 h-4 transition-transform group-hover:translate-x-0.5" />
-            </a>
-            {/* The browser path, kept as a real second option rather than removed.
-                Telegram leads because it converts 5x better, but a Telegram-ONLY page
-                throws away everybody who does not use Telegram - and the comparison pages
-                now bringing people from search are exactly where those people arrive. The
-                hierarchy does the work: one button, one quiet link beside it. */}
-            <Link
-              href="/login"
-              className="text-sm text-neutral-500 transition-colors hover:text-neutral-300"
-            >
-              or use it in your browser
-            </Link>
-          </motion.div>
-
-          <p className="mt-3.5 text-xs text-neutral-400">
-            First {FREE_MINUTES} minutes of source video are free - no card needed.
-          </p>
         </div>
 
         {/* ── Visual Pipeline ── */}
@@ -915,15 +856,13 @@ export default function LandingPage() {
                   </span>{" "}
                   are free - one-time, on a new account.
                 </p>
-                <a
-                  href="https://t.me/clipclapio_bot?start=src_web_section"
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <Link
+                  href="/login"
                   className="group inline-flex flex-shrink-0 items-center gap-1.5 text-sm font-medium text-white transition-colors hover:text-neutral-300"
                 >
-                  Start free in Telegram
+                  Start free
                   <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
-                </a>
+                </Link>
               </div>
             </div>
           </FadeIn>
@@ -936,20 +875,6 @@ export default function LandingPage() {
             ))}
           </div>
 
-          {/* The plan buttons open the bot, because that is where a checkout has actually
-              completed. This line is for the other person: somebody who wants the same
-              plan without Telegram at all. One line, under the grid, so it is findable
-              without competing with three buttons. */}
-          <p className="mt-6 text-center text-xs text-neutral-500">
-            Prefer the browser?{" "}
-            <Link
-              href="/login"
-              className="text-neutral-400 underline underline-offset-4 transition-colors hover:text-white"
-            >
-              Create a web account
-            </Link>{" "}
-            - same plans, same clips.
-          </p>
         </div>
       </section>
 
