@@ -2,7 +2,8 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { motion } from "framer-motion";
+import Image from "next/image";
+import { LandingSeo } from "@/components/landing-seo";
 import { ArrowRight, ArrowDown, Play, Check, Handshake } from "@phosphor-icons/react";
 import { Logo } from "@/components/logo";
 // The config module directly, NOT the package root: this is a client component and the
@@ -123,15 +124,11 @@ function FadeIn({
   className?: string;
 }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true, margin: "-60px" }}
-      transition={{ duration: 0.5, delay, ease: [0.22, 1, 0.36, 1] }}
+    <div
       className={className}
     >
       {children}
-    </motion.div>
+    </div>
   );
 }
 
@@ -152,10 +149,7 @@ function PipelineSignal() {
   }, []);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 10 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.5 }}
+    <div
       className="inline-flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1 mb-6 font-mono text-[11px] sm:text-xs"
     >
       {/* Softly pulsing status dot — neutral, not a status-green */}
@@ -186,7 +180,7 @@ function PipelineSignal() {
           ))}
         </span>
       </span>
-    </motion.div>
+    </div>
   );
 }
 
@@ -198,33 +192,22 @@ function ClipCard({
   index: number;
 }) {
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 60, rotate: 0 }}
-      animate={{ opacity: 1, y: 0, rotate: clip.rotation }}
-      transition={{
-        delay: 1.0 + index * 0.1,
-        duration: 0.8,
-        ease: [0.22, 1, 0.36, 1],
-      }}
+    <div
       /* On phones the gap is fluid so the four cards plus the bleed from their
          rotation always fit the viewport; from md up it is the container's gap. */
       className={`relative flex-shrink-0 ${index > 0 ? "ml-[min(2.2vw,16px)] md:ml-0" : ""}`}
-      style={{ marginTop: clip.offset, zIndex: index === 1 || index === 2 ? 20 : 10 }}
+      style={{ marginTop: clip.offset, transform: `rotate(${clip.rotation}deg)`, zIndex: index === 1 || index === 2 ? 20 : 10 }}
     >
-      <motion.div
-        animate={{ y: [0, -8, 0] }}
-        transition={{
-          duration: 4 + index * 0.4,
-          repeat: Infinity,
-          ease: "easeInOut",
-          delay: index * 0.5,
-        }}
+      <div
       >
         <div className="w-[min(20vw,150px)] md:w-[150px] aspect-[9/16] rounded-[20px] border border-white/[0.08] overflow-hidden relative shadow-2xl shadow-black/60 group">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
+          <Image
             src={clip.img}
             alt=""
+            fill
+            quality={90}
+            // Landscape sources cover a 9:16 card: fetch enough pixels for its height.
+            sizes="(max-width: 768px) 62vw, 480px"
             className="absolute inset-0 w-full h-full object-cover"
           />
           <div className="absolute inset-0 bg-black/10" />
@@ -258,8 +241,8 @@ function ClipCard({
             />
           </div>
         </div>
-      </motion.div>
-    </motion.div>
+      </div>
+    </div>
   );
 }
 
@@ -302,12 +285,8 @@ function TelegramMock() {
           {chatMessages.map((msg, i) => {
             if (msg.type === "clips") {
               return (
-                <motion.div
+                <div
                   key={i}
-                  initial={{ opacity: 0, y: 10 }}
-                  whileInView={{ opacity: 1, y: 0 }}
-                  viewport={{ once: true }}
-                  transition={{ delay: 0.15 * i, duration: 0.4 }}
                   className="flex justify-start"
                 >
                   <div className="rounded-2xl rounded-bl-md bg-[#1a1a1a] border border-white/[0.06] px-3 py-2.5 max-w-[85%]">
@@ -321,8 +300,10 @@ function TelegramMock() {
                             key={j}
                             className="w-[52px] h-[92px] rounded-lg overflow-hidden relative border border-white/[0.06]"
                           >
-                            {/* eslint-disable-next-line @next/next/no-img-element */}
-                            <img
+                            <Image
+                              fill
+                              quality={90}
+                              sizes="160px"
                               src={img}
                               alt=""
                               className="absolute inset-0 w-full h-full object-cover"
@@ -342,18 +323,14 @@ function TelegramMock() {
                     </div>
                     <p className="text-[10px] text-neutral-600 mt-2">4 clips ready to download</p>
                   </div>
-                </motion.div>
+                </div>
               );
             }
 
             const isUser = msg.from === "user";
             return (
-              <motion.div
+              <div
                 key={i}
-                initial={{ opacity: 0, y: 10 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true }}
-                transition={{ delay: 0.15 * i, duration: 0.4 }}
                 className={`flex ${isUser ? "justify-end" : "justify-start"}`}
               >
                 <div
@@ -371,7 +348,7 @@ function TelegramMock() {
                     {msg.text}
                   </p>
                 </div>
-              </motion.div>
+              </div>
             );
           })}
         </div>
@@ -430,10 +407,8 @@ function PlanCard({ plan }: { plan: Plan }) {
                 }`}
               >
                 {i === cycle && (
-                  <motion.span
-                    layoutId={`${plan.name}-cycle-pill`}
+                  <span
                     className="absolute inset-0 rounded-full bg-white"
-                    transition={{ type: "spring", bounce: 0.2, duration: 0.45 }}
                   />
                 )}
                 <span className="relative z-10">{c.label}</span>
@@ -447,16 +422,13 @@ function PlanCard({ plan }: { plan: Plan }) {
         )}
       </div>
 
-      <motion.p
+      <p
         key={active.key}
-        initial={{ opacity: 0, y: 6 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
         className="mt-3 text-center"
       >
         <span className="text-3xl font-bold text-white tabular-nums">{active.price}</span>
         <span className="text-sm text-neutral-600">{active.period}</span>
-      </motion.p>
+      </p>
 
       <ul className="mt-5 space-y-2.5 text-sm text-neutral-400">
         <li className="flex items-center justify-center gap-2">
@@ -544,18 +516,9 @@ export default function LandingPage() {
           }}
         />
 
-        {/* Animated breathing spotlight */}
-        <motion.div
+        {/* Static spotlight keeps the first screen inexpensive to render. */}
+        <div
           aria-hidden
-          animate={{
-            opacity: [0.6, 1, 0.6],
-            scale: [1, 1.08, 1],
-          }}
-          transition={{
-            duration: 8,
-            repeat: Infinity,
-            ease: "easeInOut",
-          }}
           className="absolute top-0 left-1/2 -translate-x-1/2 w-[900px] h-[600px] bg-white/[0.03] rounded-full blur-[120px] pointer-events-none"
         />
 
@@ -564,41 +527,31 @@ export default function LandingPage() {
           <PipelineSignal />
 
           {/* Headline */}
-          <motion.h1
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.6, delay: 0.08 }}
+          <h1
             className="text-3xl sm:text-5xl lg:text-[56px] font-bold tracking-[-0.04em] leading-[1.08]"
           >
-            <span className="text-white">Stop scrubbing.</span>
+            <span className="text-white">AI video clipper</span>
             <br />
-            <span className="text-neutral-500">Start clipping.</span>
-          </motion.h1>
+            <span className="text-neutral-400">for long videos.</span>
+          </h1>
 
           {/* Subtitle */}
-          <motion.p
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.5, delay: 0.12 }}
+          <p
             className="mt-3 text-sm sm:text-[15px] text-neutral-400 max-w-lg mx-auto leading-relaxed"
           >
-            Drop any stream, podcast, or VOD. AI finds the viral moments,
-            cuts vertical clips with subtitles. Built for clippers.
-          </motion.p>
+            Turn streams, video podcasts and VODs into short vertical clips with
+            subtitles for TikTok, Reels and YouTube Shorts. Stop scrubbing. Start clipping.
+          </p>
+          <p className="mt-3 text-sm text-neutral-400">
+            {FREE_MINUTES} source minutes free. No card. No watermark.
+          </p>
         </div>
 
         {/* ── Visual Pipeline ── */}
         <div className="relative z-10 mt-10 sm:mt-12 max-w-5xl mx-auto px-6">
           <div className="flex flex-col items-center gap-0">
             {/* Step 1: Source video (16:9) */}
-            <motion.div
-              initial={{ opacity: 0, y: 30 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{
-                delay: 0.5,
-                duration: 0.7,
-                ease: [0.22, 1, 0.36, 1],
-              }}
+            <div
               className="w-full max-w-2xl"
             >
               <div className="flex items-center gap-2 mb-3">
@@ -610,10 +563,13 @@ export default function LandingPage() {
                 </span>
               </div>
               <div className="relative aspect-video rounded-xl border border-white/[0.08] overflow-hidden bg-neutral-950">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
+                <Image
                   src="/clips/source-podcast.png"
-                  alt="Source video"
+                  alt="Landscape podcast footage illustrating a long video input"
+                  fill
+                  priority
+                  quality={90}
+                  sizes="(max-width: 720px) calc(100vw - 48px), 672px"
                   className="absolute inset-0 w-full h-full object-cover"
                 />
                 <div className="absolute top-0 left-0 right-0 h-[8%] bg-gradient-to-b from-black/40 to-transparent" />
@@ -639,13 +595,10 @@ export default function LandingPage() {
                   <div className="h-full bg-white/30 w-[15%]" />
                 </div>
               </div>
-            </motion.div>
+            </div>
 
             {/* Arrow connector */}
-            <motion.div
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: 0.8, duration: 0.4 }}
+            <div
               className="flex flex-col items-center py-5"
             >
               <div className="flex items-center gap-3">
@@ -659,17 +612,10 @@ export default function LandingPage() {
                 <div className="h-px w-8 bg-gradient-to-l from-transparent to-neutral-700" />
               </div>
               <ArrowDown className="w-4 h-4 text-neutral-600 mt-3" />
-            </motion.div>
+            </div>
 
             {/* Step 2: Output clips (9:16) */}
-            <motion.div
-              initial={{ opacity: 0, y: 30 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{
-                delay: 1.0,
-                duration: 0.7,
-                ease: [0.22, 1, 0.36, 1],
-              }}
+            <div
               className="w-full max-w-2xl"
             >
               <div className="flex items-center gap-2 mb-3">
@@ -687,23 +633,17 @@ export default function LandingPage() {
                   <ClipCard key={i} clip={clip} index={i} />
                 ))}
               </div>
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                transition={{ delay: 1.6 }}
+              <div
                 className="mt-3 flex items-center justify-center"
               >
                 <span className="text-[11px] text-neutral-600">
                   9:16 vertical · subtitles burned in · ready to post
                 </span>
-              </motion.div>
-            </motion.div>
+              </div>
+            </div>
 
             {/* Platforms */}
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 1.8, duration: 0.5 }}
+            <div
               className="mt-12 flex flex-col items-center gap-5"
             >
               <span className="text-sm font-medium text-neutral-500 uppercase tracking-wider">
@@ -732,7 +672,7 @@ export default function LandingPage() {
                   <span className="text-sm font-medium">Shorts</span>
                 </div>
               </div>
-            </motion.div>
+            </div>
 
           </div>
         </div>
@@ -833,11 +773,7 @@ export default function LandingPage() {
               {/* Timeline - fills to the full allowance on scroll */}
               <div className="mt-3">
                 <div className="h-[3px] overflow-hidden rounded-full bg-white/10">
-                  <motion.div
-                    initial={{ width: 0 }}
-                    whileInView={{ width: "100%" }}
-                    viewport={{ once: true, margin: "-40px" }}
-                    transition={{ duration: 1.4, ease: [0.22, 1, 0.36, 1], delay: 0.2 }}
+                  <div
                     className="h-full rounded-full bg-white/40"
                   />
                 </div>
@@ -877,6 +813,8 @@ export default function LandingPage() {
 
         </div>
       </section>
+
+      <LandingSeo />
 
       {/* ── Affiliate ── */}
       <section

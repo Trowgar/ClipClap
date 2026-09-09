@@ -21,19 +21,19 @@ const SITE = process.env.NEXT_PUBLIC_APP_URL ?? "https://clipclap.io";
  *
  * /login is deliberately absent. It is thin, it cannot rank, and it is noindex.
  */
-const HOME_LAST_MODIFIED = "2026-08-24";
+const HOME_LAST_MODIFIED = "2026-09-09";
 
 const COMPARISON_LAST_MODIFIED: Record<
   (typeof COMPARISON_PAGES)[number]["slug"],
   string
 > = {
-  "opus-clip-alternative": "2026-08-24",
-  "submagic-alternative": "2026-08-24",
-  "eklipse-alternative": "2026-08-24",
-  "klap-alternative": "2026-08-24",
-  "crayo-alternative": "2026-08-24",
-  "telegram-video-clipper-bots": "2026-08-25",
-  "ai-clipping-tools-compared": "2026-08-25",
+  "opus-clip-alternative": "2026-09-09",
+  "submagic-alternative": "2026-09-09",
+  "eklipse-alternative": "2026-09-09",
+  "klap-alternative": "2026-09-09",
+  "crayo-alternative": "2026-09-09",
+  "telegram-video-clipper-bots": "2026-09-09",
+  "ai-clipping-tools-compared": "2026-09-09",
 };
 
 export default function sitemap(): MetadataRoute.Sitemap {

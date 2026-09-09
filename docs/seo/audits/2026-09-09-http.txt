@@ -1,0 +1,9 @@
+PASS / 200 / canonical / indexable / SSR H1 / valid JSON-LD
+PASS /opus-clip-alternative 200 / canonical / indexable / SSR H1 / valid JSON-LD
+PASS /submagic-alternative 200 / canonical / indexable / SSR H1 / valid JSON-LD
+PASS /eklipse-alternative 200 / canonical / indexable / SSR H1 / valid JSON-LD
+PASS /klap-alternative 200 / canonical / indexable / SSR H1 / valid JSON-LD
+PASS /crayo-alternative 200 / canonical / indexable / SSR H1 / valid JSON-LD
+PASS /telegram-video-clipper-bots 200 / canonical / indexable / SSR H1 / valid JSON-LD
+PASS /ai-clipping-tools-compared 200 / canonical / indexable / SSR H1 / valid JSON-LD
+PASS priority internal links and login noindex; this does not confirm Google indexing.

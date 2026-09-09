@@ -18,14 +18,14 @@ import Link from "next/link";
  * outside the link graph - which is the failure this file exists to prevent.
  */
 export const COMPARISON_PAGES = [
-  { slug: "opus-clip-alternative", linkText: "ClipClap compared with Opus Clip" },
+  { slug: "opus-clip-alternative", linkText: "Opus Clip alternative: pricing and free exports" },
   { slug: "submagic-alternative", linkText: "ClipClap compared with Submagic" },
   { slug: "eklipse-alternative", linkText: "ClipClap compared with Eklipse" },
   { slug: "klap-alternative", linkText: "ClipClap compared with Klap" },
   { slug: "crayo-alternative", linkText: "ClipClap compared with Crayo" },
   {
     slug: "telegram-video-clipper-bots",
-    linkText: "Every Telegram bot that clips video, compared",
+    linkText: "Telegram video clipper bots: workflow and comparison",
   },
   {
     slug: "ai-clipping-tools-compared",

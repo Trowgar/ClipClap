@@ -282,6 +282,11 @@ export default function SubmagicAlternativePage() {
           </p>
         </section>
 
+        <p className="mt-10 text-[15px] leading-relaxed text-neutral-300">
+          Prefer working in chat? Follow the <Link href="/telegram-video-clipper-bots" className="text-white underline underline-offset-4">Telegram video clipper bot guide</Link>.
+          Still comparing browser tools? See our <Link href="/opus-clip-alternative" className="text-white underline underline-offset-4">Opus Clip alternative comparison</Link> for free exports and billing differences.
+        </p>
+
         <RelatedComparisons current="submagic-alternative" />
       </main>
     </div>

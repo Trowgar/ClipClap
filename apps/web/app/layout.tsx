@@ -57,23 +57,21 @@ const ENTRY = PLAN_LIMITS.STARTER.WEEKLY!;
  */
 export const metadata: Metadata = {
   metadataBase: new URL(SITE),
-  title: "ClipClap - AI clipper for streams, podcasts and VODs",
+  title: "AI Video Clipper for Long Videos | ClipClap",
   description: `Turn a long stream, podcast or VOD into vertical clips with burned-in subtitles. First ${FREE_MINUTES} minutes of source video are free, no card needed; paid plans start at $${ENTRY.priceUsd} a week for ${ENTRY.minutesPerPeriod} minutes. Works in Telegram or in the browser.`,
   alternates: { canonical: "/" },
   openGraph: {
     type: "website",
     url: SITE,
     siteName: "ClipClap",
-    title: "ClipClap - AI clipper for streams, podcasts and VODs",
+    title: "AI Video Clipper for Long Videos | ClipClap",
     description:
-      "Long video in, vertical subtitled clips out. 40 source minutes free, no card. Plans from $3 a week.",
+      `Long video in, vertical subtitled clips out. ${FREE_MINUTES} source minutes free, no card. Plans from $${ENTRY.priceUsd} a week.`,
     images: [{ url: "/icon-512.png", width: 512, height: 512, alt: "ClipClap" }],
   },
+  // Page-specific Open Graph titles/descriptions supply the Twitter fallback.
   twitter: {
     card: "summary",
-    title: "ClipClap - AI clipper for streams, podcasts and VODs",
-    description:
-      "Long video in, vertical subtitled clips out. 40 source minutes free, no card. Plans from $3 a week.",
     images: ["/icon-512.png"],
   },
   // Order matters: the .ico carries sizes="32x32" so SVG-capable browsers
@@ -113,7 +111,13 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{
             __html: JSON.stringify({
               "@context": "https://schema.org",
+              "@graph": [
+                { "@type": "Organization", "@id": `${SITE}/#organization`, name: "ClipClap", url: SITE, logo: `${SITE}/icon-512.png`, sameAs: ["https://t.me/clipclapio_bot"] },
+                { "@type": "WebSite", "@id": `${SITE}/#website`, name: "ClipClap", url: SITE, inLanguage: "en", publisher: { "@id": `${SITE}/#organization` } },
+                {
               "@type": "SoftwareApplication",
+              "@id": `${SITE}/#software`,
+              publisher: { "@id": `${SITE}/#organization` },
               name: "ClipClap",
               url: SITE,
               applicationCategory: "MultimediaApplication",
@@ -130,6 +134,8 @@ export default function RootLayout({
                   description: `${FREE_MINUTES} minutes of source video, one-time, no card required.`,
                 },
                 ...PAID_OFFERS,
+              ],
+                },
               ],
             }),
           }}

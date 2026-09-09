@@ -76,9 +76,9 @@ const TOOLS = [
   {
     name: "Opus Clip",
     price: "$15/month",
-    unit: "Not published",
-    free: "Renewing, watermarked, 3-day expiry",
-    note: "Minutes per plan not on the pricing page.",
+    unit: "Credits (150/month on Starter)",
+    free: "60 credits/month; watermark; 3-day export window",
+    note: "Opus pricing rechecked 9 September 2026.",
   },
   {
     name: "Ssemble",
@@ -166,17 +166,17 @@ const TOOLS = [
   },
   {
     name: "Clipline",
-    price: "About $3, $9, $22.50",
-    unit: "Each clip delivered, refunded if rejected",
-    free: "5 minutes and 2 clips",
-    note: "Telegram bot only. Figures from a Product Hunt listing.",
+    price: "Check in bot",
+    unit: "Check in bot",
+    free: "Not listed on public bot profile",
+    note: "Public profile checked 9 September 2026; old listing prices removed.",
   },
   {
     name: "Vyexa",
     price: "Not published",
     unit: "Credits and clips",
-    free: "20 clips on signup",
-    note: "Its Telegram bot cuts manually; AI is on the website.",
+    free: "3 on first bot launch; 20/month on website",
+    note: "Bot guide checked 9 September 2026: manual trims in chat; AI on website.",
   },
 ] as const;
 
@@ -206,7 +206,7 @@ export default function AiClippingToolsComparedPage() {
         <p className="mt-3 text-sm text-neutral-500">
           Eighteen tools, every figure read on the vendor&apos;s own page on {CHECKED}
           unless the row says otherwise. ClipClap is our own product, and this page is
-          ordered by price rather than by preference. Where a vendor does not publish
+          a dated research snapshot, not a ranking. Where a vendor does not publish
           something, the cell says so.
         </p>
 
@@ -241,7 +241,7 @@ export default function AiClippingToolsComparedPage() {
 
         <section className="mt-10">
           <h2 className="text-xl font-semibold text-white">
-            The table, cheapest entry plan first
+            Pricing snapshot: compare the billing units
           </h2>
           <div className="mt-4 overflow-x-auto">
             <table className="w-full border-collapse text-left text-sm">
@@ -315,9 +315,9 @@ export default function AiClippingToolsComparedPage() {
         <section className="mt-10 space-y-4 text-[15px] leading-relaxed text-neutral-300">
           <h2 className="text-xl font-semibold text-white">Where we fit, honestly</h2>
           <p>
-            ClipClap is the cheapest entry on this table and the only one billed by the
-            week, it gives the largest unwatermarked free allowance, and it is one of three
-            that work inside Telegram. Those are the reasons to try it.
+            ClipClap offers weekly billing, 40 source minutes free once with no watermark,
+            and a Telegram workflow alongside its browser app. Start with a sample
+            recording to see whether the output meets your needs.
           </p>
           <p>
             It is also the youngest product here with no public reviews at all, it has no
@@ -338,11 +338,18 @@ export default function AiClippingToolsComparedPage() {
           </p>
         </section>
 
+        <p className="mt-4 text-[15px] leading-relaxed text-neutral-300">
+          Working from your phone? See the <Link href="/telegram-video-clipper-bots" className="text-white underline underline-offset-4">Telegram video clipper bot workflow</Link>.
+          Comparing free exports and allowances? Read the <Link href="/opus-clip-alternative" className="text-white underline underline-offset-4">Opus Clip alternative comparison</Link>.
+        </p>
+        <p className="mt-4 text-sm leading-relaxed text-neutral-400">
+          Updates on 9 September 2026: <a href="https://www.opus.pro/pricing" className="underline">Opus Clip pricing</a>, <a href="https://t.me/clipline_bot" className="underline">Clipline bot profile</a> and <a href="https://vyexa.net/bot-crop-short" className="underline">Vyexa bot guide</a>. Other rows retain the August research date; confirm current terms before buying.
+        </p>
         <RelatedComparisons current="ai-clipping-tools-compared" />
 
         <section className="mt-12 rounded-xl border border-white/10 bg-white/[0.02] p-6">
           <h2 className="text-lg font-semibold text-white">
-            Try the cheapest row on your own footage
+            Try ClipClap on your own footage
           </h2>
           <p className="mt-2 text-[15px] leading-relaxed text-neutral-300">
             40 minutes of source video, no card, no watermark. Send a link or a file to the

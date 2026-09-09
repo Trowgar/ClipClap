@@ -1,0 +1,16 @@
+/ {"width":390,"overflow":false,"h1":"AI video clipperfor long videos.","title":"AI Video Clipper for Long Videos | ClipClap","brokenImages":[]}
+PASS Starter monthly $9 / weekly $3
+/telegram-video-clipper-bots {"width":390,"overflow":false,"h1":"Telegram video clipper bots: turn long videos into shorts","title":"Telegram Video Clipper Bots: AI Clips & Manual Trims","brokenImages":[]}
+/opus-clip-alternative {"width":390,"overflow":false,"h1":"Opus Clip alternative: an honest comparison with ClipClap","title":"Opus Clip alternative: an honest comparison with ClipClap","brokenImages":[]}
+/ai-clipping-tools-compared {"width":390,"overflow":false,"h1":"AI clipping tools compared: prices, units and free tiers","title":"AI clipping tools compared: prices, units and free tiers (2026)","brokenImages":[]}
+no-JS { text: 'AI video clipperfor long videos.', opacity: '1' }
+/ {"width":1440,"overflow":false,"h1":"AI video clipperfor long videos.","title":"AI Video Clipper for Long Videos | ClipClap","brokenImages":[]}
+PASS Starter monthly $9 / weekly $3
+/telegram-video-clipper-bots {"width":1440,"overflow":false,"h1":"Telegram video clipper bots: turn long videos into shorts","title":"Telegram Video Clipper Bots: AI Clips & Manual Trims","brokenImages":[]}
+/opus-clip-alternative {"width":1440,"overflow":false,"h1":"Opus Clip alternative: an honest comparison with ClipClap","title":"Opus Clip alternative: an honest comparison with ClipClap","brokenImages":[]}
+/ai-clipping-tools-compared {"width":1440,"overflow":false,"h1":"AI clipping tools compared: prices, units and free tiers","title":"AI clipping tools compared: prices, units and free tiers (2026)","brokenImages":[]}
+no-JS { text: 'AI video clipperfor long videos.', opacity: '1' }
+
+Final build rLF6wYyxo7KcVBAB2_Pao tested on isolated candidate before publication.
+Earlier content build also passed the same 4-page / 2-width checks on the public domain.
+Final production HTTP checks are recorded separately in 2026-09-09-http.txt.

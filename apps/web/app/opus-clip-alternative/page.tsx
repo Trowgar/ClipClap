@@ -6,7 +6,7 @@ import { RelatedComparisons } from "@/components/related-comparisons";
  * A comparison page that names a competitor, written to two rules that are not negotiable:
  *
  * 1. Every number about someone else was read on their own pricing page on the date stated. If
- *    they do not publish a figure - Opus Clip does not publish minutes - this page says so
+ *    they do not publish a figure - a vendor does not publish a limit - this page says so
  *    instead of repeating a number from a blog. An unverified competitor price is worse than no
  *    page at all.
  * 2. It states where ClipClap loses. Every page that ranks for this query today is one-sided
@@ -16,7 +16,7 @@ import { RelatedComparisons } from "@/components/related-comparisons";
  * nominative use to identify the product being compared.
  */
 
-const CHECKED = "20 August 2026";
+const CHECKED = "9 September 2026";
 const SITE = process.env.NEXT_PUBLIC_APP_URL ?? "https://clipclap.io";
 /** Tagged per page, so "did SEO send anybody into the bot" is a number rather than
  *  a guess about signup spikes. The bot records a bot_start_src_<slug> funnel event
@@ -44,11 +44,11 @@ const faq = [
   },
   {
     q: "What does ClipClap cost compared with Opus Clip?",
-    a: "ClipClap: $3 a week for 75 source minutes, $9 a month for 270, $29 a month for 1000, $89 a month for 3500. Opus Clip: Starter $15 a month, Pro $29 a month, Business by quote, all read on opus.pro/pricing on 20 August 2026. A per-minute comparison is not possible from public information, because Opus Clip does not publish how many minutes a plan includes.",
+    a: "ClipClap: $3 a week for 75 source minutes, $9 a month for 270, $29 a month for 1000, $89 a month for 3500. Opus Clip: Starter $15 a month, Pro $29 a month, Business by quote, checked on 9 September 2026. Starter includes 150 credits monthly. Compare credit usage rules with source-minute billing before choosing.",
   },
   {
     q: "What can I clip from?",
-    a: "Paste a YouTube, Twitch or TikTok link, or upload a video file directly. Sources up to three hours and files up to 2 GB. YouTube links go through a proxy and occasionally fail - uploading the file or using a Twitch or TikTok link is the reliable path.",
+    a: "Paste a YouTube, Twitch or TikTok link, or upload a video file directly. Paid plans accept sources up to three hours; files can be up to 2 GB. The free allowance is 40 source minutes total. If a link cannot be imported, upload a file you have permission to use.",
   },
   {
     q: "Does ClipClap work in Telegram?",
@@ -56,7 +56,7 @@ const faq = [
   },
   {
     q: "What does ClipClap not do?",
-    a: "There is no public API, no post scheduling, no dubbing or voice cloning, and no team seats. Clips are kept 7 days on the free and Starter plans, 30 on Plus and 90 on Max. ClipClap is also a young product with no public review footprint, which is a fair reason to try the free allowance before paying anything.",
+    a: "There is no public API, no post scheduling, no dubbing or voice cloning, and no team seats. Clips are kept 3 days on the free plan, 7 on Starter, 30 on Plus and 90 on Max. ClipClap is also a young product with no public review footprint, which is a fair reason to try the free allowance before paying anything.",
   },
 ];
 
@@ -124,10 +124,10 @@ export default function OpusClipAlternativePage() {
             <strong className="text-white">Opus Clip&apos;s paid plans start at $15 a month</strong> for
             Starter and $29 a month for Pro, with a Business tier by quote that adds an
             API. Its free plan renews rather than running out once, but free exports
-            carry a watermark and expire after three days. Opus Clip does not publish how
-            many minutes or clips a plan includes on its pricing page, so an honest
-            per-minute comparison between the two is not possible from public
-            information.
+            carry a watermark and stop being exportable after three days. Starter includes
+            150 credits per month; Free includes 60 credits per month. Credits and source
+            minutes are different labels: check how each product meters your workflow.
+            See the <a href="https://www.opus.pro/pricing" className="text-white underline underline-offset-4">Opus Clip pricing page</a>.
           </p>
         </section>
 
@@ -162,7 +162,7 @@ export default function OpusClipAlternativePage() {
                   [
                     "Unit you buy",
                     "Minutes of source video",
-                    "Not published on the pricing page",
+                    "Credits",
                   ],
                   [
                     "Where it runs",
@@ -174,7 +174,7 @@ export default function OpusClipAlternativePage() {
                     "YouTube, Twitch, TikTok links or a file up to 2 GB, source up to 3 hours",
                     "YouTube links and local upload, 10 GB per video",
                   ],
-                  ["API", "No", "Business tier"],
+                  ["API", "No public API", "Limited on Pro; custom integrations on Business"],
                 ].map(([label, ours, theirs]) => (
                   <tr key={label} className="border-b border-white/[0.06]">
                     <td className="py-3 pr-4 text-neutral-500">{label}</td>
@@ -201,8 +201,8 @@ export default function OpusClipAlternativePage() {
             ClipClap is also young. It has no public review footprint to check, which is
             a real reason to spend the free 40 minutes on your own footage before paying
             for anything. And YouTube links are the one input that sometimes fails,
-            because they are fetched through a proxy - uploading the file directly, or
-            using a Twitch or TikTok link, avoids it entirely.
+            so use a direct upload if an import fails. Always review a sample before
+            spending your allowance on a long recording.
           </p>
         </section>
 
@@ -268,6 +268,14 @@ export default function OpusClipAlternativePage() {
               or use it in your browser
             </Link>
           </div>
+        </section>
+
+
+        <section className="mt-10 space-y-4 text-[15px] leading-relaxed text-neutral-300">
+          <h2 className="text-xl font-semibold text-white">Test the same recording before switching</h2>
+          <p>Use a 5–10-minute recording you own in both tools. ClipClap requires at least 60 seconds of source video. Compare whether each clip starts with enough context, finishes the thought, keeps the subject in frame and transcribes names correctly. Count the clips you would actually publish, not just the clips generated.</p>
+          <p>Check the source allowance and export window against your normal workload. ClipClap&apos;s free allowance is one-time; a weekly subscription suits occasional work, while a monthly plan can suit recurring episodes.</p>
+          <p>Prefer to send videos from your phone? Follow the <Link href="/telegram-video-clipper-bots" className="text-white underline underline-offset-4">Telegram video clipper bot workflow</Link>. For a wider shortlist, <Link href="/ai-clipping-tools-compared" className="text-white underline underline-offset-4">compare AI clipping tools and billing units</Link>.</p>
         </section>
 
         <RelatedComparisons current="opus-clip-alternative" />
