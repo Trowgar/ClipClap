@@ -1,9 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { needsNormalization, normalizeSource, parseTimelineProbe } from "../processors/normalize";
 import { UnsupportedInputError } from "../processors/errors";
 
 // normalizeSource shells out to ffprobe; only the probe leg matters here.
-const ffprobeOutput = vi.hoisted(() => ({ json: "" }));
+const ffprobeOutput = vi.hoisted(() => ({
+  json: "",
+  error: null as (Error & { code?: string | number; killed?: boolean; stderr?: string }) | null,
+}));
 vi.mock("child_process", () => ({
   // promisify(execFile) always passes the callback LAST, so adding an options
   // object moves it from the 3rd argument to the 4th.
@@ -16,7 +19,10 @@ vi.mock("child_process", () => ({
       err: Error | null,
       res: { stdout: string; stderr: string }
     ) => void;
-    return cb(null, { stdout: ffprobeOutput.json, stderr: "" });
+    return cb(ffprobeOutput.error, {
+      stdout: ffprobeOutput.json,
+      stderr: ffprobeOutput.error?.stderr ?? "",
+    });
   },
 }));
 
@@ -58,6 +64,31 @@ describe("parseTimelineProbe", () => {
 });
 
 describe("normalizeSource", () => {
+  beforeEach(() => {
+    ffprobeOutput.error = null;
+  });
+
+  it("rejects a damaged video as unsupported input", async () => {
+    ffprobeOutput.error = Object.assign(new Error("Command failed: ffprobe"), {
+      code: 1,
+      killed: false,
+      stderr: "moov atom not found\nInvalid data found when processing input",
+    });
+
+    const error = await normalizeSource("/tmp/damaged.mp4").catch((caught) => caught);
+    expect(error).toBeInstanceOf(UnsupportedInputError);
+    expect(error.message).toMatch(/damaged or incomplete/i);
+  });
+
+  it("keeps an ffprobe spawn failure retryable", async () => {
+    const spawnError = Object.assign(new Error("spawn ffprobe ENOENT"), {
+      code: "ENOENT",
+    });
+    ffprobeOutput.error = spawnError;
+
+    await expect(normalizeSource("/tmp/video.mp4")).rejects.toBe(spawnError);
+  });
+
   it("rejects an audio-only file with UnsupportedInputError", async () => {
     // The download stage keys the UNSUPPORTED_INPUT tag off this exact class,
     // and that tag is what stops the UI promising an automatic retry for a file

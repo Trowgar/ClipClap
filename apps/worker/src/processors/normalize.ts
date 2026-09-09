@@ -55,7 +55,17 @@ export interface NormalizeOutcome {
 
 /** Probe -> conditional remux -> verify -> re-encode fallback (spec §10). */
 export async function normalizeSource(localPath: string): Promise<NormalizeOutcome> {
-  const probe = await probeTimeline(localPath);
+  let probe: TimelineProbe;
+  try {
+    probe = await probeTimeline(localPath);
+  } catch (error) {
+    if (isProcessExitFailure(error)) {
+      throw new UnsupportedInputError(
+        "The file could not be read as a video; it may be damaged or incomplete"
+      );
+    }
+    throw error;
+  }
   if (!probe.hasVideo) {
     // clear user-facing outcome instead of a confusing downstream failure;
     // a video WITHOUT audio proceeds and ends at the degenerate 0-clip guard
@@ -93,6 +103,12 @@ export async function normalizeSource(localPath: string): Promise<NormalizeOutco
     reencodePath, "-y",
   ], { maxBuffer: CHILD_MAX_BUFFER_BYTES });
   return { path: reencodePath, action: "reencode" };
+}
+
+function isProcessExitFailure(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const { code, killed } = error as { code?: unknown; killed?: unknown };
+  return typeof code === "number" && killed !== true;
 }
 
 export async function probeTimeline(path: string): Promise<TimelineProbe> {
