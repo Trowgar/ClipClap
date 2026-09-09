@@ -801,6 +801,7 @@ describe("stage handlers", () => {
       where: { id: "job1" },
       data: { status: "FAILED", error: `[UNSUPPORTED_INPUT] ${raw}` },
     });
+    expect(mocks.uploadFile).not.toHaveBeenCalled();
   });
 
   it("tags an unfetchable link as an unavailable source", async () => {

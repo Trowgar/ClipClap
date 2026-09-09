@@ -152,12 +152,12 @@ export async function dispatchStageJob(
 /**
  * Free a queue slot when - and only when - a job's PIPELINE ended.
  *
- * "Ended" is finalize completing (the one stage that runs last) or any stage
- * exhausting its BullMQ attempts (a mid-pipeline terminal failure never
- * reaches finalize). A retriable failure keeps its slot: the job is still
- * alive and about to run again, and releasing on it would put two of the
- * user's jobs on workers with a limit of one - exactly what the advisory
- * lock in createJob exists to prevent.
+ * "Ended" is finalize completing (the one stage that runs last), any stage
+ * exhausting its BullMQ attempts, or an UnrecoverableError ending before the
+ * attempt budget is spent. A retriable failure keeps its slot: the job is
+ * still alive and about to run again, and releasing on it would put two of the
+ * user's jobs on workers with a limit of one - exactly what the advisory lock
+ * in createJob exists to prevent.
  *
  * Swallows everything. This runs inside BullMQ event handlers; the queue is
  * self-healing (next completion or the hourly stall guard retries), a downed

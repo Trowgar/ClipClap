@@ -87,7 +87,6 @@ export async function runDownloadStage(
     });
 
     const sourceArtifactKey = buildSourceArtifactKey(payload.userId, payload.jobId);
-    await uploadFile(sourceArtifactKey, localPath, "video/mp4");
 
     // A/V timeline normalization (idempotent: BullMQ retries skip when done)
     let normalizedArtifactKey = job.normalizedArtifactKey;
@@ -103,6 +102,11 @@ export async function runDownloadStage(
         tempNormalizedPath = outcome.path;
       }
     }
+
+    // Validate before copying the raw source into work storage. A permanent
+    // input failure has no sourceArtifactKey persisted on the job, so uploading
+    // first would leave an unreferenced object that retention cannot find.
+    await uploadFile(sourceArtifactKey, localPath, "video/mp4");
 
     await prisma.job.update({
       where: { id: payload.jobId },
