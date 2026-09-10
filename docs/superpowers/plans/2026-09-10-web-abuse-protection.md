@@ -71,7 +71,7 @@ Define IP-keyed zones for 10 requests/second dynamic traffic, 5 requests/minute 
 
 **Step 2: Define server-level enforcement**
 
-Use a dedicated `/var/log/nginx/clipclap.access.log`, set `client_max_body_size 2m`, apply connection/general request limits, apply strict credential/Server Action budgets without limiting OAuth callback GETs, and exclude immutable Next assets from the general budget.
+Use a dedicated `/var/log/nginx/clipclap.access.log`, set `client_max_body_size 1m`, apply connection/general request limits, apply strict credential/Server Action budgets without limiting OAuth callback GETs, and exclude immutable Next assets from the general budget.
 
 **Step 3: Define Fail2ban escalation**
 
@@ -89,7 +89,7 @@ Run the shell regression, `nginx -t` in an isolated test configuration, and `fai
 
 **Step 1: Update within compatible release lines**
 
-Upgrade Next.js from `15.5.14` to patched `15.5.18` and Auth.js from beta 30 to beta 32 (including the compatible Prisma adapter lockfile resolution). Do not run a broad major-version audit fix.
+Upgrade Next.js from `15.5.14` to the current patched 15.x release (`15.5.25` at implementation time) and Auth.js from beta 30 to beta 32 (including the compatible Prisma adapter lockfile resolution). Do not run a broad major-version audit fix.
 
 **Step 2: Verify dependency resolution and build**
 
