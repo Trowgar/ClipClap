@@ -10,7 +10,7 @@ ClipClap rejects impossible scanner paths in Nginx, rate-limits expensive unauth
 
 ## Active policy
 
-- Known CMS, secret-file, VCS, PHP/backdoor, and WordPress REST probes: Nginx `444` before proxying.
+- The retired `/api/auth/check-email` oracle and known CMS, secret-file, VCS, PHP/backdoor, and WordPress REST probes: Nginx `444` before proxying.
 - General dynamic traffic: 10 requests/second, burst 30.
 - Registration, password recovery/reset, and credential callback POSTs: 5 requests/minute, burst 5.
 - Requests carrying `Next-Action`: 10 requests/minute, burst 10.
