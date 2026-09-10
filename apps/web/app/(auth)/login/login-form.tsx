@@ -24,32 +24,10 @@ export function LoginForm() {
    *  locked by then. */
   const [mailFailed, setMailFailed] = useState(false);
 
-  const handleEmailSubmit = useCallback(async () => {
+  const handleEmailSubmit = useCallback(() => {
     if (!email) return;
     setError("");
-    setLoading(true);
-
-    try {
-      const res = await fetch("/api/auth/check-email", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email }),
-      });
-      const data = await res.json();
-
-      if (data.exists && data.hasPassword) {
-        setStep("login");
-      } else if (data.exists && !data.hasPassword) {
-        // User exists via Google OAuth, no password set
-        setError("This email is linked to Google. Use Google sign-in.");
-      } else {
-        setStep("register");
-      }
-    } catch {
-      setStep("register");
-    } finally {
-      setLoading(false);
-    }
+    setStep("login");
   }, [email]);
 
   const handleLogin = useCallback(async () => {
@@ -315,6 +293,17 @@ export function LoginForm() {
               className={authPrimaryButtonClass}
             >
               {loading ? "Signing in..." : "Sign in"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setPassword("");
+                setError("");
+                setStep("register");
+              }}
+              className="w-full rounded-lg px-4 py-2 text-sm text-neutral-400 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+            >
+              Create account instead
             </button>
           </div>
         </motion.div>
