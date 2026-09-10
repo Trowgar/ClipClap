@@ -5,7 +5,7 @@ const nextConfig: NextConfig = {
   transpilePackages: ["@clipclap/shared"],
   experimental: {
     serverActions: {
-      bodySizeLimit: "5gb",
+      bodySizeLimit: "1mb",
     },
   },
 };

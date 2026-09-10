@@ -1,0 +1,14 @@
+[clipclap-scanner]
+enabled = true
+filter = clipclap-scanner
+logpath = /var/log/nginx/clipclap.access.log
+backend = auto
+port = http,https
+protocol = tcp
+maxretry = 3
+findtime = 10m
+bantime = 24h
+bantime.increment = true
+bantime.factor = 2
+bantime.maxtime = 30d
+banaction = ufw[application="Nginx Full", kill-mode=ss]
