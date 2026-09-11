@@ -15,26 +15,52 @@ export async function GET(
   const userId = session.user.id;
 
   const encoder = new TextEncoder();
+  let interval: ReturnType<typeof setInterval> | undefined;
+  let stopped = false;
+  const stop = () => {
+    stopped = true;
+    if (interval !== undefined) {
+      clearInterval(interval);
+      interval = undefined;
+    }
+  };
+
   const stream = new ReadableStream({
     async start(controller) {
+      const close = () => {
+        if (stopped) return;
+        stop();
+        try {
+          controller.close();
+        } catch {
+          // The client may have cancelled between the status read and close.
+        }
+      };
+
       const send = (data: Record<string, unknown>) => {
-        controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify(data)}\n\n`)
-        );
+        if (stopped) return;
+        try {
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify(data)}\n\n`)
+          );
+        } catch {
+          stop();
+        }
       };
 
       // Poll job status every 2 seconds
-      const interval = setInterval(async () => {
+      interval = setInterval(async () => {
+        if (stopped) return;
         try {
           const job = await prisma.job.findFirst({
             where: { id, userId },
             include: { clips: true },
           });
+          if (stopped) return;
 
           if (!job) {
             send({ error: "Job not found" });
-            clearInterval(interval);
-            controller.close();
+            close();
             return;
           }
 
@@ -47,14 +73,15 @@ export async function GET(
           });
 
           if (job.status === "DONE" || job.status === "FAILED") {
-            clearInterval(interval);
-            controller.close();
+            close();
           }
         } catch {
-          clearInterval(interval);
-          controller.close();
+          close();
         }
       }, 2000);
+    },
+    cancel() {
+      stop();
     },
   });
 
