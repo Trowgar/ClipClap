@@ -66,6 +66,13 @@ npx prisma db push            # push schema changes
 # Plain `docker compose up -d` (dev target) IS the production mode on this host.
 ```
 
+## Persistent Browser QA Account
+
+Credentials and fixture IDs for the production synthetic browser account live
+in `.env.codex-test-account` (gitignored). The user is marked `isSynthetic`, so
+its account, project, clip, and feedback stay out of analytics. Reuse this
+account for authenticated browser checks instead of creating throwaway users.
+
 ## Environment Variables
 
 See `.env.example` for all required variables. Never commit `.env`.
