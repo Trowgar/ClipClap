@@ -90,7 +90,7 @@ export function ClipFeedback({ clipId }: { clipId: string }) {
             onChange={(e) => setNote(e.target.value)}
             onBlur={() => note.trim() && send({ note: note.trim() })}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && note.trim()) send({ note: note.trim() });
+              if (e.key === "Enter") e.currentTarget.blur();
             }}
           />
         </>

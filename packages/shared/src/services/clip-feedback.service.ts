@@ -180,7 +180,7 @@ export async function recordClipFeedback(
 
   const existing = await prisma.clipFeedback.findUnique({
     where: { clipId_userId: { clipId: clip.id, userId: input.userId } },
-    select: { id: true, evidenceKey: true, verdict: true, reason: true },
+    select: { id: true, evidenceKey: true, verdict: true, reason: true, note: true },
   });
 
   let evidenceKey = existing?.evidenceKey ?? null;
@@ -278,7 +278,9 @@ export async function recordClipFeedback(
 
   // Skipped for `note: ""` on purpose: an empty note is still written to the
   // row above, but relaying an empty message to the owner would be noise.
-  if (input.note) await relayToOwner(clip.title, input, row.id);
+  if (input.note && input.note !== existing?.note) {
+    await relayToOwner(clip.title, input, row.id);
+  }
 
   return {
     ok: true,
