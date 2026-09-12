@@ -6,7 +6,7 @@ export interface SafetyPlannerInput {
   mandatoryEvidenceShots: ReadonlySet<number>;
   invalidEvidenceShots: ReadonlySet<number>;
   invalidAlignment: boolean;
-  /** Center shots whose measured faceless composition cannot fit portrait. */
+  /** Center shots whose crop excludes measured faceless detail (width or position). */
   wideFacelessShots?: ReadonlySet<number>;
 }
 

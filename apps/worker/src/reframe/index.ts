@@ -377,15 +377,23 @@ export function planDetected(d: Detection, cfg: ReframeConfig): PlannedDetection
             .map((shot, shotIndex) => ({ shot, shotIndex }))
             .filter(({ shot }) => shot.start < candidate.end && candidate.start < shot.end);
           // The sidecar reports the minimum fraction of columns needed for
-          // 70% of edge energy. If even those columns cannot fit, preserve the
-          // full composition. This is not semantic object coverage; textured
-          // backgrounds can trigger it. Require every merged span to qualify.
+          // 70% of edge energy. Preserve the full frame if that cannot fit OR
+          // its measured centroid falls outside the actual crop (screen demos
+          // can have narrow, off-center detail). ponytail: edge energy is not
+          // semantic object coverage; textured backgrounds can trigger it.
+          // Use object evidence if this proves too conservative. Require every
+          // merged span to qualify.
           if (overlapping.length > 0 && overlapping.every(({ shotIndex }) => {
             const evidence = tracksByShot.get(shotIndex)!;
             const spread = evidence.saliency?.spreadFrac;
+            const x = evidence.saliency?.x;
+            const outside = typeof x === "number" && Number.isFinite(x)
+              && x >= 0 && x < d.width
+              && (x < candidate.x || x > candidate.x + cropWidthFor(d.height));
             return survivingTracks(evidence.tracks).length === 0
               && typeof spread === "number" && Number.isFinite(spread)
-              && spread > availableWidthFrac && spread <= 1;
+              && spread > 0 && spread <= 1
+              && (spread > availableWidthFrac || outside);
           })) {
             wideFacelessShots.add(index);
           }
