@@ -200,19 +200,28 @@ Targeted suite: 308/308 passed. Worker typecheck, shared build и worker build
 live baseline нет; четыре прежних имени больше не падают. Оставшиеся failures —
 stale/missing replay responses в `eval-snapshot` и вложенный Docker-вызов, которого
 нет внутри test container. Fixtures не перезаписывались ради зелёного отчёта.
-Поскольку suite остаётся не all-green и независимый holdout отсутствует, это ещё
-одна причина не выполнять production rollout.
+Suite остаётся не all-green, а независимый holdout отсутствует. Эти ограничения
+сохранены как известный риск релиза и не переопределяют результаты парного replay.
 
 ## 9. Production
 
-Production rollout не выполнен. Финальный кандидат не ухудшает исходный holdout,
-но не улучшает его, а `s011` и `b002` были открыты при разработке. Это не проходит
-собственный release gate и требование независимого holdout. Код подготовлен под
-флагами в ветке `feature/september-top-quality`; включение откладывается до нового
-нетронутого клиентского набора. Live остался на `a9fabbd`, `worker-analyze` работает с
-restart count 0, analyze queue не приостановлена и пуста.
-Rollback: выключить три флага и recreate worker; сохранена ветка
-`rollback/core-live-2026-09-13-a9fabbd`, schema и миграции не менялись.
+13 сентября 2026 года выполнен owner-approved rollout с явно принятым риском
+неполностью независимого holdout. Production-ветка fast-forward обновлена с
+`a9fabbd` до `63962e0`; включены `ANALYZE_DELIVERED_PAYOFF_AUDIT_V1`,
+`ANALYZE_REPAIRED_OPENING_PROTECTION` и
+`ANALYZE_SCANNER_SETUP_PROTECTION_V1`. Effective config внутри analyze-worker
+сообщил `recall-critic`, все три флага `true` и analysis version
+`core-top-quality-v2`.
+
+Во время rollout analyze queue была приостановлена уже пустой (active/waiting =
+0/0), после smoke-check возобновлена и осталась пустой. Пересоздан только
+`worker-analyze`; Prisma Client и shared package собраны в контейнере. Контейнер
+работает с restart count 0, OOM=false, ошибок запуска в свежих логах нет.
+
+Rollback: выключить три флага, вернуть production-ветку на сохранённую
+`rollback/core-live-2026-09-13-a9fabbd` и recreate только analyze-worker с тем же
+compose overlay. Предрелизная `.env` сохранена приватно; schema и миграции не
+менялись.
 
 ## 10. Следующие приоритеты
 
