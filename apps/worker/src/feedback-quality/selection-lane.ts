@@ -56,9 +56,8 @@ function deterministicBoundaryErrors(highlight: { start: number; end: number }, 
 
 function selectionMetrics(result: SelectionAttempt["result"], qualityCase: MaterializedCase, options: SelectionLaneOptions): QualityMetrics {
   const highlights = Array.isArray(result.highlights) ? result.highlights : [];
-  const expected = qualityCase.expected.sourceWindow;
-  const approvedMomentRetained = highlights.length > 0 && qualityCase.expected.approvedMoment ? 1 : 0;
-  let approvedWindowOverlap = approvedMomentRetained;
+  const expected = qualityCase.expected.sourceWindow ?? qualityCase.replay.highlight;
+  let approvedWindowOverlap = 0;
   if (expected && highlights.length > 0) {
     const best = highlights.reduce((max, item) => {
       const value = item as { start?: number; end?: number };
@@ -68,6 +67,8 @@ function selectionMetrics(result: SelectionAttempt["result"], qualityCase: Mater
     }, 0);
     approvedWindowOverlap = best;
   }
+  // Retention must refer to the reviewed moment, never merely a nonempty output.
+  const approvedMomentRetained = qualityCase.expected.approvedMoment && approvedWindowOverlap >= 1 - 1e-6 ? 1 : 0;
   const telemetry = result.telemetry ?? {};
   const requiredTelemetry = ["kept", "criticVerdicts", "omittedDrops", "truncatedDrops", "refusalDrops", "invariantDrops"];
   if (requiredTelemetry.some((key) => !Object.prototype.hasOwnProperty.call(telemetry, key))) throw new Error("selection telemetry missing");

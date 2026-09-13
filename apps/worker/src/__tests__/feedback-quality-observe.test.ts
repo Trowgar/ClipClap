@@ -469,3 +469,12 @@ describe("feedback quality observation runner", () => {
     expect(result.contentMatch).toBe(1);
   });
 });
+
+it("does not count an unrelated output as retention of the approved source moment", async () => {
+  const qualityCase = { ...sampleCase(), expected: { ...sampleCase().expected, approvedMoment: true, sourceWindow: { start: 10, end: 20 } } };
+  const result = await observeSelectionCase(qualityCase, {
+    transcript: { text: "source", segments: [{ start: 0, end: 50, text: "source", words: [] }] } as never,
+    analyze: async () => ({ highlights: [{ start: 30, end: 40, hookStart: 31, payoffAt: 35, score: 0.9 }], telemetry: { kept: 1, criticVerdicts: 1, omittedDrops: 0, truncatedDrops: 0, refusalDrops: 0, invariantDrops: 0 } }),
+  });
+  expect(result.metrics).toMatchObject({ approvedMomentRetained: 0, approvedWindowOverlap: 0, emptyResult: 0 });
+});

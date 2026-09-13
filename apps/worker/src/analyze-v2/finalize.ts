@@ -330,8 +330,8 @@ export function applyFinalizerEntries(
     if (proposed[i]) {
       telemetry.openingTrims.push({
         id: clip.verdict.id,
-        fromNode: clip.verdict.startNode,
-        toNode: state[i].verdict.startNode,
+        fromNode: clip.finalStartNode,
+        toNode: state[i].finalStartNode,
       });
     }
   });
@@ -427,7 +427,7 @@ function tryTrim(
   nodes: SentenceNode[],
   cfg: AnalyzeConfig
 ): TrimAttempt {
-  const v = clip.verdict;
+  const v = { ...clip.verdict, startNode: clip.finalStartNode, endNode: clip.finalEndNode };
   if (!Number.isInteger(target) || target < 0 || target >= nodes.length) {
     return { ok: false, reason: "not_an_index" };
   }
@@ -454,7 +454,13 @@ function tryTrim(
     cfg
   );
   if (!snapped.ok) return { ok: false, reason: "snap_rejected" };
-  return { ok: true, clip: { ...clip, ...snapped.clip } };
+  // This operation changes only the opening. The existing end has already
+  // passed snap/extension validation; re-snapping the original payoff can
+  // otherwise silently undo a later, validated answer or reaction.
+  return { ok: true, clip: { ...clip, ...snapped.clip,
+    endSec: clip.endSec, finalEndNode: clip.finalEndNode, endsOnQuestion: clip.endsOnQuestion,
+    shortMoment: clip.endSec - snapped.clip.startSec < cfg.targetMinSec,
+  } };
 }
 
 type RewriteAttempt =
