@@ -208,7 +208,9 @@ stale/missing replay responses в `eval-snapshot` и вложенный Docker-�
 Production rollout не выполнен. Финальный кандидат не ухудшает исходный holdout,
 но не улучшает его, а `s011` и `b002` были открыты при разработке. Это не проходит
 собственный release gate и требование независимого holdout. Код подготовлен под
-флагами; включение откладывается до нового нетронутого клиентского набора.
+флагами в ветке `feature/september-top-quality`; включение откладывается до нового
+нетронутого клиентского набора. Live остался на `a9fabbd`, `worker-analyze` работает с
+restart count 0, analyze queue не приостановлена и пуста.
 Rollback: выключить три флага и recreate worker; сохранена ветка
 `rollback/core-live-2026-09-13-a9fabbd`, schema и миграции не менялись.
 
