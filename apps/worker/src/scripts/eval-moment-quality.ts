@@ -1,7 +1,7 @@
 /** Offline comparison of recorded real-source runs and separately authored labels.
  * tsx src/scripts/eval-moment-quality.ts /private/manifest.json
  * Manifest: [{ id, baselineFile, candidateFile, momentsFile,
- *              baselineReviewsFile?, candidateReviewsFile? }]
+ *              baselineReviewsFile?, candidateReviewsFile?, feedbackFile? }]
  * Paths are relative to the manifest. Run files hold {result:{highlights:[]}}
  * or a raw analyzer result. Review absence stays unknown, never a negative.
  * Output is aggregate metrics plus per-source results; no transcript or title.
@@ -9,8 +9,9 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { measureMomentQuality, type ClipReview, type MomentLabel } from "../evaluation/moment-metrics";
+import { measureCustomerFeedback } from "../evaluation/customer-feedback";
 
-interface ComparisonCase { id: string; baselineFile: string; candidateFile: string; momentsFile: string; baselineReviewsFile?: string; candidateReviewsFile?: string }
+interface ComparisonCase { id: string; baselineFile: string; candidateFile: string; momentsFile: string; baselineReviewsFile?: string; candidateReviewsFile?: string; feedbackFile?: string }
 type RecordedCall = { response?: { choices?: { finish_reason?: string; message?: { content?: string; refusal?: string } }[] } };
 function completedCall(record: RecordedCall | null): boolean {
   const choice = record?.response?.choices?.[0];
@@ -30,15 +31,30 @@ export function compareMomentRuns(manifestPath: string) {
       if (value.error || (value.records !== undefined && (!Array.isArray(value.records) || !value.records.every(completedCall)))) {
         throw new Error(`${c.id}: incomplete model call or failed run in ${path}`);
       }
+      const supplemental = (value.result ?? value).telemetry?.supplementalRecall;
+      if (supplemental && ["failed", "degraded"].includes(supplemental.status)) {
+        throw new Error(`${c.id}: incomplete supplemental review in ${path}`);
+      }
       const reviews: ClipReview[] = reviewsPath ? read(reviewsPath) : [];
-      return measureMomentQuality((value.result ?? value).highlights, moments, reviews);
+      const clips = (value.result ?? value).highlights;
+      return { ...measureMomentQuality(clips, moments, reviews),
+        ...(c.feedbackFile ? { customerFeedback: measureCustomerFeedback(clips, read(c.feedbackFile)) } : {}) };
+
     };
     return { id: c.id, baseline: run(c.baselineFile, c.baselineReviewsFile), candidate: run(c.candidateFile, c.candidateReviewsFile) };
   });
   const aggregate = (mode: "baseline" | "candidate") => {
     const sum = (field: "moments" | "found" | "publishableClips" | "boringClips" | "clips" | "unknownClips") => rows.reduce((n, r) => n + r[mode][field], 0);
     const moments = sum("moments"), found = sum("found");
-    return { sources: rows.length, moments, found, missed: moments - found, recall: moments ? found / moments : null,
+    const feedbackSum = (key: keyof ReturnType<typeof measureCustomerFeedback>) =>
+      rows.reduce((n, r) => n + (r[mode].customerFeedback?.[key] ?? 0), 0);
+    const customerFeedback = cases.some(c => c.feedbackFile) ? {
+      measuredSources: cases.filter(c => c.feedbackFile).length,
+      accepted: feedbackSum("accepted"), acceptedCovered: feedbackSum("acceptedCovered"),
+      rejected: feedbackSum("rejected"), rejectedRepeated: feedbackSum("rejectedRepeated"),
+      editRequested: feedbackSum("editRequested"),
+    } : undefined;
+    return { ...(customerFeedback ? { customerFeedback } : {}), sources: rows.length, moments, found, missed: moments - found, recall: moments ? found / moments : null,
       clips: sum("clips"), publishableClipsPerSource: sum("unknownClips") ? null : sum("publishableClips") / rows.length,
       publishableClipsPerSourceLowerBound: sum("publishableClips") / rows.length,
       boringClips: sum("boringClips"), unknownClips: sum("unknownClips"),

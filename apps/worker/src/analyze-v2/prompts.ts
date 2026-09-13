@@ -728,7 +728,8 @@ export function finalizerUserPrompt(
   clips: SnappedClip[],
   nodes: SentenceNode[],
   arcFlags: Map<string, ArcFlags> = new Map(),
-  cfg: ArcNoteCfg = { arcFinalizerNotesEnabled: false, arcAuditEnabled: false }
+  cfg: ArcNoteCfg = { arcFinalizerNotesEnabled: false, arcAuditEnabled: false },
+  useFinalBounds = false
 ): string {
   return clips
     .map((c) => {
@@ -749,8 +750,8 @@ export function finalizerUserPrompt(
         `description: ${v.description}`,
         "speech:"
       );
-      const from = Math.max(0, c.finalStartNode);
-      const to = Math.min(nodes.length - 1, c.finalEndNode);
+      const from = Math.max(0, useFinalBounds ? c.finalStartNode : v.startNode);
+      const to = Math.min(nodes.length - 1, useFinalBounds ? c.finalEndNode : v.endNode);
       for (let i = from; i <= to; i++) {
         const n = nodes[i];
         const marker = isCleanStart(nodes, i) ? "¶ " : "  ";

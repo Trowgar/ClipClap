@@ -532,7 +532,7 @@ export async function analyzeHighlightsV2(
         criticUnjudgedPoolAfter: unselected.length - extras.length };
       try {
         const supplement = await runQualityLane({
-          lane: "primary", candidates: extras, nodes, languageIso,
+          lane: "supplemental", candidates: extras, nodes, languageIso,
           cfg: options.supplementalRecall === "delivered-payoff-medium" ? { ...cfg, reasoningEffort: "medium" } : cfg,
           usage, client,
           requireDeliveredPayoff: options.supplementalRecall !== "existing-rubric",

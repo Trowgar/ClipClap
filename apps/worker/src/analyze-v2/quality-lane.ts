@@ -46,7 +46,7 @@ import type {
 
 export interface QualityLaneInput {
   requireDeliveredPayoff?: boolean;
-  lane: "primary";
+  lane: "primary" | "supplemental";
   candidates: MergedCandidate[];
   nodes: SentenceNode[];
   languageIso: string;
@@ -248,7 +248,7 @@ async function runSafeEndNormalAudit(
 
 
 export async function runQualityLane(input: QualityLaneInput): Promise<QualityLaneResult> {
-  if (input.lane !== "primary") {
+  if (input.lane !== "primary" && input.lane !== "supplemental") {
     throw new AnalyzeTechnicalError("quality lane invariant: invalid lane");
   }
   const candidateIds = new Set<string>();
@@ -756,7 +756,7 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
     languageIso,
     isoToLanguageName(languageIso),
     cfg,
-    { retryDelayMs: options.retryDelayMs },
+    { retryDelayMs: options.retryDelayMs, useFinalBounds: input.lane === "supplemental" },
     // arcFlags (spec 2026-08-10 task 5): the defence-in-depth gate for a
     // surviving unblessed overLength clip - unreachable if the policy above
     // is correct, checked anyway. Trailing positional argument so every

@@ -177,7 +177,8 @@ export function applyFinalizerEntries(
   clips: SnappedClip[],
   entries: FinalizerEntry[],
   nodes: SentenceNode[],
-  cfg: AnalyzeConfig
+  cfg: AnalyzeConfig,
+  useFinalBounds = false
 ): FinalizeResult {
   const telemetry = emptyFinalizeTelemetry();
 
@@ -277,7 +278,7 @@ export function applyFinalizerEntries(
   survivors.forEach((clip, i) => {
     const e = byId.get(clip.verdict.id);
     if (!e || e.trimStartNode === null || capRefused.has(clip.verdict.id)) return;
-    const attempt = tryTrim(clip, e.trimStartNode, nodes, cfg);
+    const attempt = tryTrim(clip, e.trimStartNode, nodes, cfg, useFinalBounds);
     if (attempt.ok) proposed[i] = attempt.clip;
     else rejects.set(i, { node: e.trimStartNode, reason: attempt.reason });
   });
@@ -330,8 +331,8 @@ export function applyFinalizerEntries(
     if (proposed[i]) {
       telemetry.openingTrims.push({
         id: clip.verdict.id,
-        fromNode: clip.finalStartNode,
-        toNode: state[i].finalStartNode,
+        fromNode: useFinalBounds ? clip.finalStartNode : clip.verdict.startNode,
+        toNode: useFinalBounds ? state[i].finalStartNode : state[i].verdict.startNode,
       });
     }
   });
@@ -425,9 +426,12 @@ function tryTrim(
   clip: SnappedClip,
   target: number,
   nodes: SentenceNode[],
-  cfg: AnalyzeConfig
+  cfg: AnalyzeConfig,
+  useFinalBounds: boolean
 ): TrimAttempt {
-  const v = { ...clip.verdict, startNode: clip.finalStartNode, endNode: clip.finalEndNode };
+  const v = useFinalBounds
+    ? { ...clip.verdict, startNode: clip.finalStartNode, endNode: clip.finalEndNode }
+    : clip.verdict;
   if (!Number.isInteger(target) || target < 0 || target >= nodes.length) {
     return { ok: false, reason: "not_an_index" };
   }
@@ -454,13 +458,12 @@ function tryTrim(
     cfg
   );
   if (!snapped.ok) return { ok: false, reason: "snap_rejected" };
-  // This operation changes only the opening. The existing end has already
-  // passed snap/extension validation; re-snapping the original payoff can
-  // otherwise silently undo a later, validated answer or reaction.
-  return { ok: true, clip: { ...clip, ...snapped.clip,
+  // Supplemental review must retain the ending already validated by repair.
+  // The opt-out path preserves production primary behavior and requests.
+  return { ok: true, clip: { ...clip, ...snapped.clip, ...(useFinalBounds ? {
     endSec: clip.endSec, finalEndNode: clip.finalEndNode, endsOnQuestion: clip.endsOnQuestion,
     shortMoment: clip.endSec - snapped.clip.startSec < cfg.targetMinSec,
-  } };
+  } : {}) } };
 }
 
 type RewriteAttempt =
@@ -518,6 +521,8 @@ export function tryRewrite(
 }
 
 export interface FinalizeOptions {
+  /** Opt-in boundary authority for the independent supplemental lane. */
+  useFinalBounds?: boolean;
   /** Test hook - forwarded to callJsonSchema. */
   retryDelayMs?: number;
 }
@@ -614,7 +619,7 @@ export async function finalizeClips(
       callJsonSchema<{ clips?: unknown }>(client, usage, {
         model,
         system: finalizerSystemPrompt(languageIso, languageName),
-        user: finalizerUserPrompt(survivors, nodes, arcFlags, cfg),
+        user: finalizerUserPrompt(survivors, nodes, arcFlags, cfg, options.useFinalBounds),
         schema: FINALIZER_SCHEMA as unknown as {
           name: string;
           strict: boolean;
@@ -651,7 +656,7 @@ export async function finalizeClips(
       return entry ? [entry] : [];
     });
 
-    const applied = applyFinalizerEntries(survivors, entries, nodes, cfg);
+    const applied = applyFinalizerEntries(survivors, entries, nodes, cfg, options.useFinalBounds);
 
     if (!cfg.longClipsEnabled) {
       return {

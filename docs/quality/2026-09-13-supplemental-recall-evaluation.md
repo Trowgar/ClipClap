@@ -1,5 +1,7 @@
 # Supplemental recall experiment — rejected for release
 
+**Correction:** earlier s037 feedback was reversed. Customer approval and original positive-label metrics in this historical report are superseded by [the snapshot correction](2026-09-13-feedback-correction.md). No production-quality success is established.
+
 The opt-in candidate improves sparse development coverage but fails fresh holdout. It is a reviewable experiment, not an enabled production feature.
 
 ## Implementation and evidence

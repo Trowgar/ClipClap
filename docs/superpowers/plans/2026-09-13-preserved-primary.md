@@ -1,0 +1,7 @@
+# Supplemental recall over the unchanged production primary
+
+The previous supplemental experiment preserved f48094d output, not production c34dc27. The boundary-prompt change in f48094d rerolled finalizer decisions and lost known good moments on development and fresh holdout. Keep that mechanical fix as a separate rejected release candidate. Here restore production finalizer/prompt code and its tests exactly; retain the independent optional supplemental lane and evaluation tools. No default or production toggle changes.
+
+Compare all 33 development sources, requiring the complete baseline output sequence to survive, not merely equal aggregate recall. Reuse recorded unchanged requests, including prior supplemental answers when exact requests match. Inspect new clips and customer acceptance, plus semantic duplicate/boring risks. Previously exposed holdouts may provide regression evidence but are no longer sufficient independent validation after design decisions informed by them. Record this limitation explicitly.
+
+Final checkpoint: optional finalizer boundary authority is limited to supplemental. Runtime guard and incomplete-supplemental eval failures fixed; all real comparisons rerun. Customer feedback association was corrected from immutable snapshots: 19/32→21/32, AS_IS 0/2→1/2, rejected repeats unchanged. Uncached runs do not reproduce the recall gains. No independent new holdout available and no production engine deployment. Full report: docs/quality/2026-09-13-preserved-primary-evaluation.md.

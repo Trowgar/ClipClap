@@ -1286,7 +1286,7 @@ describe("finalizeClips - long-clip defence in depth (spec 2026-08-10 task 5)", 
 it("trimming an opening preserves the already validated extended ending", () => {
   const graph = nodes();
   const original = { ...clip("a", 0.9, 0, 6, graph), finalEndNode: 9, endSec: clip("a", 0.9, 0, 9, graph).endSec };
-  const result = applyFinalizerEntries([original], [entry({ id: "a", trimStartNode: 2 })], graph, cfg);
+  const result = applyFinalizerEntries([original], [entry({ id: "a", trimStartNode: 2 })], graph, cfg, true);
   expect(result.clips[0].finalStartNode).toBe(2);
   expect(result.clips[0].finalEndNode).toBe(9);
   expect(result.clips[0].endSec).toBe(original.endSec);
@@ -1297,7 +1297,7 @@ it("cannot trim away a question restored by start repair", () => {
   graph[0].text = "Почему проект провалился?";
   graph[1].text = "Из-за отсутствия времени.";
   const original = { ...clip("a", 0.9, 2, 6, graph), finalStartNode: 0, startSec: 0 };
-  const result = applyFinalizerEntries([original], [entry({ id: "a", trimStartNode: 1 })], graph, cfg);
+  const result = applyFinalizerEntries([original], [entry({ id: "a", trimStartNode: 1 })], graph, cfg, true);
   expect(result.telemetry.trimRejected).toContainEqual({ id: "a", node: 1, reason: "orphans_question" });
   expect(result.clips[0]).toEqual(original);
 });

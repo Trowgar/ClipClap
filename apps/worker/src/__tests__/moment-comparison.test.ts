@@ -62,3 +62,35 @@ it("accepts successful recorded structured responses", () => {
     expect(compareMomentRuns(join(dir, "manifest.json")).baseline.clips).toBe(0);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+
+it.each(["failed", "degraded"])("rejects %s optional review even with completed primary calls", status => {
+  const dir = mkdtempSync(join(tmpdir(), "moment-comparison-"));
+  try {
+    writeFileSync(join(dir, "run.json"), JSON.stringify({ records: [], result: {
+      highlights: [{ start: 1, end: 2 }], telemetry: { supplementalRecall: { status, added: 0 } },
+    } }));
+    writeFileSync(join(dir, "labels.json"), "[]");
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify([{ id: "one", baselineFile: "run.json", candidateFile: "run.json", momentsFile: "labels.json" }]));
+    expect(() => compareMomentRuns(join(dir, "manifest.json"))).toThrow(/supplemental review/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+it("compares real feedback from snapshots separately from editorial opportunities", () => {
+  const dir = mkdtempSync(join(tmpdir(), "moment-comparison-"));
+  try {
+    writeFileSync(join(dir, "old.json"), JSON.stringify({ highlights: [{ start: 10, end: 20 }] }));
+    writeFileSync(join(dir, "new.json"), JSON.stringify({ highlights: [{ start: 10, end: 20 }, { start: 40, end: 60 }] }));
+    writeFileSync(join(dir, "labels.json"), "[]");
+    writeFileSync(join(dir, "feedback.json"), JSON.stringify([
+      { verdict: "AS_IS", snapshot: { startTime: 40, endTime: 60 } },
+      { verdict: "NO", snapshot: { startTime: 10, endTime: 20 } },
+    ]));
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify([{ id: "one", baselineFile: "old.json", candidateFile: "new.json", momentsFile: "labels.json", feedbackFile: "feedback.json" }]));
+    const result = compareMomentRuns(join(dir, "manifest.json"));
+    expect(result.baseline.customerFeedback).toMatchObject({ accepted: 1, acceptedCovered: 0, rejectedRepeated: 1 });
+    expect(result.candidate.customerFeedback).toMatchObject({ accepted: 1, acceptedCovered: 1, rejectedRepeated: 1 });
+    expect(result.candidate.publishableClipsPerSource).toBeNull();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

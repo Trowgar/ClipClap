@@ -1,5 +1,7 @@
 # September 2026 clipping-engine investigation
 
+**Correction:** earlier s037 feedback was reversed. Customer approval and original positive-label metrics in this historical report are superseded by [the snapshot correction](2026-09-13-feedback-correction.md). No production-quality success is established.
+
 Status: first candidate frozen; investigation continues; **release blocked, no production deployment**. The frozen candidate fixes a demonstrated boundary bug, but broad quality superiority and the requested release gates have not been established. This is an interim evidence report, not a successful production-improvement claim.
 
 ## 1. Real data and exclusions
