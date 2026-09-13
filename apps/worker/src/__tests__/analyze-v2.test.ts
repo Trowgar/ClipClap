@@ -1548,7 +1548,8 @@ it('keeps primary technical failure fatal with supplemental review enabled', asy
 it('appends a verified supplemental clip with total output telemetry and explicit primary scope', async () => {
   const f = supplementalFixture();
   const result = await analyzeHighlightsV2(transcript(), {
-    cfg: f.config, client: client(f.scan, criticResponse(.85), f.extra), supplementalRecall: 'delivered-payoff',
+    cfg: { ...f.config, supplementalRecallEnabled: true },
+    client: client(f.scan, criticResponse(.85), f.extra),
   });
   expect(result.highlights).toHaveLength(2);
   expect(result.highlights[0]._startNode).toBe(10);
@@ -1557,7 +1558,7 @@ it('appends a verified supplemental clip with total output telemetry and explici
   expect(result.telemetry.durations).toHaveLength(2);
   expect(result.telemetry.supplementalRecall).toMatchObject({
     status: 'completed', added: 1, failures: [], primaryKept: 1,
-    variant: 'delivered-payoff', qualityCountersScope: 'primary',
+    variant: 'delivered-payoff-medium', qualityCountersScope: 'primary',
     totalCriticCandidates: 2, criticUnjudgedPoolAfter: 0,
   });
 });

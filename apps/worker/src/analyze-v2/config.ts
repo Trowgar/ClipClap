@@ -4,7 +4,7 @@ export type PostBoundaryHookGateMode = "off" | "observe" | "shadow" | "enforce";
  * separately approved configuration and implementation. */
 export type SafeEndAuditMode = "off" | "shadow";
 export type VisualRecallMode = "off" | "shadow" | "on";
-export const ANALYSIS_VERSION = "core-publishability-v1" as const;
+export const ANALYSIS_VERSION = "core-supplemental-recall-v1" as const;
 
 export interface AnalyzeConfig {
   engine: AnalyzeEngineSetting;
@@ -34,6 +34,8 @@ export interface AnalyzeConfig {
   visualRecallPreSec: number;
   visualRecallPostSec: number;
   visualRecallMaxNodeDistanceSec: number;
+  /** Optional second pass over candidates left outside the primary critic set. */
+  supplementalRecallEnabled: boolean;
   /** Which node spans buildScanWindows may count toward the per-window budget
    *  (spec 2026-08-11 "Scan recall remedy", engine-notes §6a/§3). "speech" -
    *  the default, and BYTE-IDENTICAL to every behavior this repo had before
@@ -514,6 +516,7 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
       20,
       600,
     ),
+    supplementalRecallEnabled: env.ANALYZE_SUPPLEMENTAL_RECALL_V1 === "on",
     // Exact literal "source", same discipline as every other stage switch in
     // this file: a stray truthy env value must not silently double the
     // scanner's candidate pool and critic spend.

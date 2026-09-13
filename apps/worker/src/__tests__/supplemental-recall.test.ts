@@ -1,5 +1,39 @@
 import {expect,it} from 'vitest';
-import {appendSupplementalClips} from '../analyze-v2/supplemental';
+import {appendSupplementalClips, shouldRunSupplementalRecall, supplementalQualityConfig} from '../analyze-v2/supplemental';
+import {loadAnalyzeConfig} from '../analyze-v2/config';
+
+const cleanArc = { entry: { ok: true }, exit: { ok: true }, standalone: { ok: true } };
+
+it('lets the episode-recall lane reach a payoff anywhere inside the normal clip cap',()=>{
+ const cfg=loadAnalyzeConfig({END_EXTENSION_WINDOW_SEC:'25',CLIP_MAX_SEC:'90'});
+ const widened=supplementalQualityConfig(cfg,'delivered-payoff-medium');
+ expect(widened.endExtensionWindowSec).toBe(90);
+ expect(widened.reasoningEffort).toBe('medium');
+ expect(cfg.endExtensionWindowSec).toBe(25);
+});
+
+it('replaces a setup-only teaser with a complete supplemental episode',()=>{
+ const teaser={start:0,end:10,score:.72,_arcFlags:{entry:{ok:true},exit:{ok:false,defect:'setup_no_payoff'},standalone:{ok:true}}};
+ const other={start:130,end:154,score:.64,_arcFlags:cleanArc};
+ const complete={start:0,end:65,score:.68,_arcFlags:cleanArc};
+ expect(appendSupplementalClips([teaser,other],[complete],3)).toEqual([complete,other]);
+});
+
+it('can repair a setup-only teaser when the primary set is already at the cap',()=>{
+ const teaser={start:0,end:10,_arcFlags:{entry:{ok:true},exit:{ok:false,defect:'setup_no_payoff'},standalone:{ok:true}}};
+ const other={start:130,end:154,_arcFlags:cleanArc};
+ const complete={start:0,end:65,_arcFlags:cleanArc};
+ expect(appendSupplementalClips([teaser,other],[complete],2)).toEqual([complete,other]);
+ expect(shouldRunSupplementalRecall([teaser,other],2)).toBe(true);
+ expect(shouldRunSupplementalRecall([{...teaser,_arcFlags:cleanArc},other],2)).toBe(false);
+});
+
+it('does not replace more than one primary clip with a broad supplemental range',()=>{
+ const setup=(start:number,end:number)=>({start,end,_arcFlags:{entry:{ok:true},exit:{ok:false,defect:'setup_no_payoff'},standalone:{ok:true}}});
+ const primary=[setup(0,10),setup(20,30)];
+ expect(appendSupplementalClips(primary,[{start:0,end:40,_arcFlags:cleanArc}],2)).toEqual(primary);
+});
+
 it('preserves primary choices and their order even against higher-scored overlapping alternatives',()=>{
  const primary=[{start:30,end:50,score:.6},{start:0,end:20,score:.7}];
  const extras=[{start:32,end:49,score:.99},{start:60,end:80,score:.8},{start:61,end:79,score:.95},{start:90,end:110,score:.9}];

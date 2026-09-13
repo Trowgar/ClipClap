@@ -21,6 +21,13 @@ describe("loadAnalyzeConfig", () => {
     expect(cfg.visualRecallPreSec).toBe(18);
     expect(cfg.visualRecallPostSec).toBe(18);
     expect(cfg.visualRecallMaxNodeDistanceSec).toBe(20);
+    expect(cfg.supplementalRecallEnabled).toBe(false);
+  });
+
+  it("enables supplemental episode recall only for the exact on switch", () => {
+    expect(loadAnalyzeConfig({ ANALYZE_SUPPLEMENTAL_RECALL_V1: "on" }).supplementalRecallEnabled).toBe(true);
+    expect(loadAnalyzeConfig({ ANALYZE_SUPPLEMENTAL_RECALL_V1: "ON" }).supplementalRecallEnabled).toBe(false);
+    expect(loadAnalyzeConfig({ ANALYZE_SUPPLEMENTAL_RECALL_V1: "true" }).supplementalRecallEnabled).toBe(false);
   });
 
   it("accepts only the closed visual recall rollout modes", () => {

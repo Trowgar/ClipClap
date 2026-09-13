@@ -22,6 +22,7 @@ describe("computeFingerprint", () => {
       criticModel: baseCfg.criticModel,
       criticModelFallback: baseCfg.criticModelFallback,
       reasoningEffort: baseCfg.reasoningEffort,
+      supplementalRecallEnabled: baseCfg.supplementalRecallEnabled,
       criticBatchSize: baseCfg.criticBatchSize,
       criticMaxOutputTokensBase: criticMaxOutputTokens(0),
       criticMaxOutputTokensPerCandidate: criticMaxOutputTokens(1) - criticMaxOutputTokens(0),
@@ -190,6 +191,13 @@ describe("assertFingerprintMatches", () => {
     const changed = computeFingerprint({ ...baseCfg, finalizerEnabled: false });
     expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
       /finalizerEnabled/
+    );
+  });
+
+  it("fails when supplemental recall would add otherwise invisible model calls", () => {
+    const changed = computeFingerprint({ ...baseCfg, supplementalRecallEnabled: true });
+    expect(() => assertFingerprintMatches("case", { ...current }, changed, vi.fn())).toThrow(
+      /supplementalRecallEnabled/
     );
   });
 

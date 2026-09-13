@@ -356,6 +356,8 @@ export interface EngineFingerprint {
   criticModel: string;
   criticModelFallback: string;
   reasoningEffort: string;
+  /** Enables a second quality lane and otherwise invisible model calls. */
+  supplementalRecallEnabled: boolean;
   criticBatchSize: number;
   /** criticMaxOutputTokens(0) - the flat part of the critic output budget. */
   criticMaxOutputTokensBase: number;
@@ -472,6 +474,7 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     criticModel: cfg.criticModel,
     criticModelFallback: cfg.criticModelFallback,
     reasoningEffort: cfg.reasoningEffort,
+    supplementalRecallEnabled: cfg.supplementalRecallEnabled,
     criticBatchSize: cfg.criticBatchSize,
     criticMaxOutputTokensBase: base,
     criticMaxOutputTokensPerCandidate: criticMaxOutputTokens(1) - base,
