@@ -1459,3 +1459,105 @@ describe("analyzeHighlightsV2", () => {
     expect(r.telemetry.evidenceDrops).toBe(2);
   });
 });
+
+it('isolates supplemental review from primary requests and retains primary on supplemental provider failure', async () => {
+  const scan = scanResponse();
+  const scanData = JSON.parse(scan.choices[0].message.content);
+  scanData.candidates.push({ start_node: 20, end_node: 24, payoff_node: 23, interest: .7, type: 'insight', thread: null });
+  scan.choices[0].message.content = JSON.stringify(scanData);
+  const config = { ...cfg, regionMaxCandidates: 1, perWindowMinCandidates: 1, finalizerEnabled: false };
+  const normal = client(scan, criticResponse(.85));
+  const primary = await analyzeHighlightsV2(transcript(), { cfg: config, client: normal });
+  let calls = 0;
+  const create = vi.fn(async () => {
+    calls++;
+    if (calls === 1) return scan;
+    if (calls === 2) return criticResponse(.85);
+    throw Object.assign(new Error('test provider unavailable'), { status: 400 });
+  });
+  const result = await analyzeHighlightsV2(transcript(), {
+    cfg: config, client: { chat: { completions: { create } } } as never,
+    supplementalRecall: 'delivered-payoff', retryDelayMs: 1,
+  });
+  expect(result.highlights).toEqual(primary.highlights);
+  expect(create.mock.calls.slice(0, 2)).toEqual(normal.chat.completions.create.mock.calls);
+  expect(result.telemetry.supplementalRecall).toMatchObject({ status: 'failed', added: 0 });
+});
+
+it('does not spend supplemental calls when the existing critic budget is exhausted', async () => {
+  const scan = scanResponse();
+  const data = JSON.parse(scan.choices[0].message.content);
+  data.candidates.push({ start_node: 20, end_node: 24, payoff_node: 23, interest: .7, type: 'insight', thread: null });
+  scan.choices[0].message.content = JSON.stringify(data);
+  const api = client(scan, criticResponse(.85));
+  const result = await analyzeHighlightsV2(transcript(), {
+    cfg: { ...cfg, criticMaxCandidates: 1, perWindowMinCandidates: 1, finalizerEnabled: false },
+    client: api, supplementalRecall: 'delivered-payoff',
+  });
+  expect(result.highlights).toHaveLength(1);
+  expect(api.chat.completions.create).toHaveBeenCalledTimes(2);
+  expect(result.telemetry).not.toHaveProperty('supplementalRecall');
+});
+
+function supplementalFixture() {
+  const scan = scanResponse();
+  const data = JSON.parse(scan.choices[0].message.content);
+  data.candidates.push({ start_node: 22, end_node: 26, payoff_node: 25, interest: .7, type: 'insight', thread: null });
+  scan.choices[0].message.content = JSON.stringify(data);
+  const extra = criticResponse(.85);
+  const rows = JSON.parse(extra.choices[0].message.content);
+  Object.assign(rows.results[0], { id: 'c1', start_node: 18, end_node: 26, payoff_node: 25,
+    hook_start_node: 22, hook_end_node: 25, title_evidence_nodes: [25], description_evidence_nodes: [25] });
+  extra.choices[0].message.content = JSON.stringify(rows);
+  return { scan, extra, config: { ...cfg, regionMaxCandidates: 1, perWindowMinCandidates: 1, finalizerEnabled: false } };
+}
+
+it('filters supplemental final boundaries after critic expansion across a transcript hole', async () => {
+  const f = supplementalFixture();
+  const result = await analyzeHighlightsV2({ ...transcript(), missingRanges: [{ start: 94.5, end: 105, reason: 'missing audio' }] }, {
+    cfg: f.config, client: client(f.scan, criticResponse(.85), f.extra), supplementalRecall: 'delivered-payoff',
+  });
+  expect(result.highlights).toHaveLength(1);
+  expect(result.highlights[0].end).toBeLessThan(94.5);
+  expect(result.telemetry.supplementalRecall).toMatchObject({ candidates: 1, added: 0 });
+});
+
+it('does not append fail-open supplemental finalizer output', async () => {
+  const f = supplementalFixture();
+  const ship = { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ clips: [{
+    id: 'c0', verdict: 'ship', drop_reason: null, duplicate_of: null, shared_claim: null,
+    title: null, title_evidence_nodes: null, trim_start_node: null,
+  }] }) } }], usage: { prompt_tokens: 1, completion_tokens: 1 } };
+  const unavailable = { choices: [], usage: { prompt_tokens: 1, completion_tokens: 0 } };
+  const result = await analyzeHighlightsV2(transcript(), {
+    cfg: { ...f.config, finalizerEnabled: true }, client: client(f.scan, criticResponse(.85), ship, f.extra, unavailable),
+    supplementalRecall: 'delivered-payoff', retryDelayMs: 1,
+  });
+  expect(result.highlights).toHaveLength(1);
+  expect(result.telemetry.supplementalRecall).toMatchObject({ status: 'degraded', added: 0, failures: expect.arrayContaining(['finalizer_unavailable']) });
+});
+
+it('keeps primary technical failure fatal with supplemental review enabled', async () => {
+  const f = supplementalFixture();
+  await expect(analyzeHighlightsV2(transcript(), {
+    cfg: f.config, client: client(f.scan, { choices: [], usage: {} }),
+    supplementalRecall: 'delivered-payoff', retryDelayMs: 1,
+  })).rejects.toBeInstanceOf(AnalyzeTechnicalError);
+});
+
+it('appends a verified supplemental clip with total output telemetry and explicit primary scope', async () => {
+  const f = supplementalFixture();
+  const result = await analyzeHighlightsV2(transcript(), {
+    cfg: f.config, client: client(f.scan, criticResponse(.85), f.extra), supplementalRecall: 'delivered-payoff',
+  });
+  expect(result.highlights).toHaveLength(2);
+  expect(result.highlights[0]._startNode).toBe(10);
+  expect(result.highlights[1]._startNode).toBe(18);
+  expect(result.telemetry.kept).toBe(2);
+  expect(result.telemetry.durations).toHaveLength(2);
+  expect(result.telemetry.supplementalRecall).toMatchObject({
+    status: 'completed', added: 1, failures: [], primaryKept: 1,
+    variant: 'delivered-payoff', qualityCountersScope: 'primary',
+    totalCriticCandidates: 2, criticUnjudgedPoolAfter: 0,
+  });
+});

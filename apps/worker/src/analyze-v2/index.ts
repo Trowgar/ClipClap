@@ -2,6 +2,8 @@ import OpenAI from "openai";
 import type { TranscriptionResult } from "@clipclap/shared";
 import { loadAnalyzeConfig, type AnalyzeConfig } from "./config";
 import { runQualityLane } from "./quality-lane";
+import { appendSupplementalClips } from "./supplemental";
+import { nmsCollides } from "./select";
 import { buildSentenceGraph } from "./sentence-graph";
 import { resolveMode } from "./mode";
 import { runScanner } from "./scanner";
@@ -31,6 +33,8 @@ const DEGENERATE_MIN_WORDS = 5;
 const DEGENERATE_MIN_SPEECH_SEC = 4;
 const TINY_MAX_WORDS = 24;
 export interface AnalyzeV2Options {
+  /** Opt-in real-source experiment; no production default/config change. */
+  supplementalRecall?: "existing-rubric" | "delivered-payoff" | "delivered-payoff-medium";
   client?: OpenAI;
   cfg?: AnalyzeConfig;
   transcriptPartial?: boolean;
@@ -182,6 +186,7 @@ export async function analyzeHighlightsV2(
   };
   const { mode, modeResolution } = resolveMode(modeInput, cfg);
   let candidates: MergedCandidate[];
+  let unselected: MergedCandidate[] = [];
   let scannerTelemetry: Record<string, unknown> = {};
   let visualTelemetry: Record<string, unknown> | undefined = visualEvaluation?.telemetry;
   const visualMode = cfg.visualRecallMode;
@@ -283,6 +288,7 @@ export async function analyzeHighlightsV2(
       mode
     );
     candidates = criticPartition.selected;
+    unselected = criticPartition.unselected;
     if (visualTelemetry) visualTelemetry.criticByType = countCandidateTypes(candidates);
     scannerTelemetry = {
       path: "full",
@@ -385,8 +391,8 @@ export async function analyzeHighlightsV2(
     sourceDurationSec: options.sourceDurationSec,
     safeEndAuditTelemetryTestHook: options.safeEndAuditTelemetryTestHook,
   });
-  const highlights = quality.highlights;
-  const telemetry = {
+  let highlights = quality.highlights;
+  const telemetry: Record<string, unknown> = {
     ...scannerTelemetry,
     ...quality.telemetry,
     ...(visualTelemetry ? { visualRecall: visualTelemetry } : {}),
@@ -507,13 +513,53 @@ export async function analyzeHighlightsV2(
     // own evidence/snap/selection bar - made on audio we really heard. Never
     // technical: PARTIAL_TRANSCRIPT tells the user both halves (we lost some
     // audio, and the rest held no strong moments).
-    return {
-      highlights: [],
-      noClipsReason: partial ? "PARTIAL_TRANSCRIPT" : "NO_VIABLE_MOMENTS",
-      telemetry,
-      usage,
-    };
   }
+
+  if (options.supplementalRecall && highlights.length < cfg.softCap) {
+    const budget = criticBudget(nodes, { ...cfg,
+      criticMaxCandidates: mode === "stream" ? cfg.streamCriticMaxCandidates : cfg.criticMaxCandidates,
+    });
+    const extras = unselected.filter(c => {
+      const start = nodes[c.startNode].start, end = nodes[c.endNode].end;
+      return !missingRanges.some(r => start < r.end && end > r.start) &&
+        !highlights.some(h => nmsCollides({ startSec: start, endSec: end }, { startSec: h.start, endSec: h.end }));
+    }).sort((a, b) => b.interest - a.interest).slice(0, Math.max(0, budget - candidates.length));
+    if (extras.length) {
+      const scope = { variant: options.supplementalRecall, primaryKept: highlights.length,
+        // Legacy quality counters remain primary-scoped; expose the full
+        // independent lane and explicit combined selection totals alongside.
+        qualityCountersScope: "primary", totalCriticCandidates: candidates.length + extras.length,
+        criticUnjudgedPoolAfter: unselected.length - extras.length };
+      try {
+        const supplement = await runQualityLane({
+          lane: "primary", candidates: extras, nodes, languageIso,
+          cfg: options.supplementalRecall === "delivered-payoff-medium" ? { ...cfg, reasoningEffort: "medium" } : cfg,
+          usage, client,
+          requireDeliveredPayoff: options.supplementalRecall !== "existing-rubric",
+          retryDelayMs: options.retryDelayMs, analysisMode: mode, modeResolution,
+          missingRanges, transcription, sourceDurationSec: options.sourceDurationSec,
+          safeEndAuditTelemetryTestHook: options.safeEndAuditTelemetryTestHook,
+        });
+        const before = highlights.length;
+        if (!supplement.reviewFailures.length) {
+          highlights = appendSupplementalClips(highlights, supplement.highlights, cfg.softCap, missingRanges);
+        }
+        telemetry.supplementalRecall = { ...scope, candidates: extras.length, added: highlights.length - before,
+          status: supplement.reviewFailures.length ? "degraded" : "completed",
+          failures: supplement.reviewFailures, telemetry: supplement.telemetry };
+      } catch {
+        // The primary answer is already complete. Never turn optional extra
+        // review failure into primary clip loss or a misleading extra verdict.
+        telemetry.supplementalRecall = { ...scope, candidates: extras.length, added: 0, status: "failed" };
+      }
+    }
+    telemetry.kept = highlights.length;
+    telemetry.durations = highlights.map(h => Math.round((h.end - h.start) * 10) / 10);
+  }
+
+  if (highlights.length === 0) return {
+    highlights: [], noClipsReason: partial ? "PARTIAL_TRANSCRIPT" : "NO_VIABLE_MOMENTS", telemetry, usage,
+  };
 
   return {
     highlights,

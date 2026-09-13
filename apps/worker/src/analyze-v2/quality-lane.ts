@@ -45,6 +45,7 @@ import type {
 } from "./types";
 
 export interface QualityLaneInput {
+  requireDeliveredPayoff?: boolean;
   lane: "primary";
   candidates: MergedCandidate[];
   nodes: SentenceNode[];
@@ -62,6 +63,8 @@ export interface QualityLaneInput {
 }
 
 export interface QualityLaneResult {
+  /** Fail-open primary output must not masquerade as verified extra recall. */
+  reviewFailures: string[];
   lane: QualityLaneInput["lane"];
   highlights: V2Highlight[];
   telemetry: Record<string, unknown>;
@@ -269,7 +272,7 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
     candidates,
     languageIso,
     cfg,
-    { retryDelayMs: options.retryDelayMs },
+    { retryDelayMs: options.retryDelayMs, requireDeliveredPayoff: input.requireDeliveredPayoff },
     input.analysisMode
   );
 
@@ -1061,6 +1064,14 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
   }
   return {
     lane: input.lane,
+    reviewFailures: [
+      ...(critic.telemetry.fallbackModelUsed ? ["critic_fallback"] : []),
+      ...(critic.telemetry.omittedDrops + critic.telemetry.truncatedDrops + critic.telemetry.refusalDrops > 0 ? ["critic_incomplete"] : []),
+      ...(arcAuditTelemetry?.unaudited ? ["arc_incomplete"] : []),
+      ...(finalized.telemetry.finalizerFallbackUsed ? ["finalizer_fallback"] : []),
+      ...(cfg.finalizerEnabled && afterStandaloneFilter.length > 0 && finalized.telemetry.finalizerSkipped ? ["finalizer_unavailable"] : []),
+      ...(cfg.publishabilityEnabled && publishability.telemetry.skipped ? ["publishability_unavailable"] : []),
+    ],
     highlights,
     telemetry,
     counters: {

@@ -1313,3 +1313,22 @@ describe("publishability integration", () => {
     expect(result.terminal.get("c0")).toBe("shipped");
   });
 });
+
+it('marks fail-open finalizer output as unverified for supplemental use', async () => {
+  const { result } = await directLane({
+    candidates: [laneCandidate('c0')], criticResponse: critic(),
+    finalizerResponse: { choices: [], usage: { prompt_tokens: 1, completion_tokens: 0 } },
+  });
+  expect(result.highlights).toHaveLength(1);
+  expect(result.reviewFailures).toContain('finalizer_unavailable');
+});
+
+it('marks fail-open publishability output as unverified for supplemental use', async () => {
+  const { result } = await directLane({
+    candidates: [laneCandidate('c0')], criticResponse: critic(),
+    cfg: loadAnalyzeConfig({ ANALYZE_PUBLISHABILITY: 'on' }),
+    publishabilityResponse: { choices: [], usage: { prompt_tokens: 1, completion_tokens: 0 } },
+  });
+  expect(result.highlights).toHaveLength(1);
+  expect(result.reviewFailures).toContain('publishability_unavailable');
+});

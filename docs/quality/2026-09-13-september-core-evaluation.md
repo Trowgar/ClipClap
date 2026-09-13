@@ -1,6 +1,6 @@
 # September 2026 clipping-engine investigation
 
-Status: implementation and development experiments completed; **release blocked, no production deployment**. The frozen candidate fixes a demonstrated boundary bug, but broad quality superiority and the requested release gates have not been established. This is an interim evidence report, not a successful production-improvement claim.
+Status: first candidate frozen; investigation continues; **release blocked, no production deployment**. The frozen candidate fixes a demonstrated boundary bug, but broad quality superiority and the requested release gates have not been established. This is an interim evidence report, not a successful production-improvement claim.
 
 ## 1. Real data and exclusions
 
@@ -67,11 +67,9 @@ Only direct approved-cut identity and the frame-confirmed cross-scene defect are
 
 Code was frozen before opening holdout source content; no runtime tuning followed. Eighteen jobs have analyzable transcripts; two failed jobs have none. Nine provisional source-transcript positives were recorded on five jobs before inspecting their outputs. No claim of holdout visual publishability is made.
 
-Twelve candidate jobs contain incomplete calls with `429 credit_balance_exhausted` and fallback behavior. They are invalid quality comparisons and the new comparator rejects the complete holdout manifest. The remaining six jobs contain 11 clips in both versions, with identical output ranges and zero changed live model calls. On the six labeled opportunities within this valid subset, both cover 3/6. The subset provides no evidence of improvement and cannot substitute for the planned holdout.
+The replacement API key restored provider access. All twelve invalid candidate calls were rerun with the frozen code; the remaining six valid runs were retained. The completed 18-source comparison has 69 old outputs versus 65 new, and **3/9 sparse opportunities covered in both versions**. This establishes no quality superiority. Invalid quota-era files remain separate from the restored manifest.
 
-A fresh single-source retry after resuming on September 13 also returned credit_balance_exhausted on both the primary and fallback models; its degraded output is retained separately as holdout-final-resume and excluded from metrics.
-
-The baseline holdout calls completed. Preserve the frozen candidate and existing labels; rerun affected jobs after provider capacity is restored, without tuning on the exposed holdout. A subsequent design iteration requires a new untouched evaluation split, not repeated optimization against this one.
+Original holdout is now exposed. No solution was tuned on it. A separate opt-in supplemental experiment was designed on development data and checked on newly reserved accounts; see the supplemental report below.
 
 ## 8. Regressions and rejected experiments
 
@@ -90,13 +88,13 @@ The baseline holdout calls completed. Preserve the frozen candidate and existing
 - Clean-environment baseline worker/shared suite: 3,597 passed, 55 failed. Final candidate run: **3,612 passed, 55 failed**, with exactly the same 55 failing test names and no new failures.
 - Existing failures: 52 recorded-eval cases with missing critic recordings, one Docker-dependent render-artifact test without Docker inside the test container, one analytics event expectation and one Telegram notification expectation. These are baseline failures, but the requested all-green release gate is still unmet. Snapshots were not blindly updated.
 - Source-derived ablation media encoding/probe passed. Full production ASR/reframe/end-to-end stability is not established by that check.
-- **Nothing deployed.** Live source and queues were not modified. Changes are isolated on `feature/september-core-improvement`; detached baseline worktree and effective configuration are retained. Live workers bind-mount source and watch it, so merging/copying into the live tree would itself be a runtime change.
+- **No engine code deployed.** After the user restored access with a replacement key, analyzer/transcriber queues were drained and briefly paused, those two services were recreated with the same images/source and the new key, and prior unpaused queue states were restored. Startup checks passed; live code remains `c34dc27`. This was credential maintenance, not deployment of an improved engine. Changes are isolated on `feature/september-core-improvement`; detached baseline worktree and effective configuration are retained. Live workers bind-mount source and watch it, so merging/copying into the live tree would itself be a runtime change.
 
-Release remains blocked by incomplete holdout, insufficient publishability assessment, unresolved quality regressions and non-green existing tests. If later gates pass, follow the repository queue-drain/source-update/restart procedure with the baseline commit and prior effective configuration retained for rollback. Do not deploy this branch on the strength of the mechanical ablation alone.
+Release remains blocked by absent holdout superiority, insufficient publishability assessment, unresolved quality regressions and non-green existing tests. If later gates pass, follow the repository queue-drain/source-update/restart procedure with the baseline commit and prior effective configuration retained for rollback. Do not deploy this branch on the strength of the mechanical ablation alone.
 
 ## 10. Next priorities and reproducibility
 
-1. Restore provider capacity and complete the frozen holdout comparison; no tuning against exposed holdout.
+1. Address the demonstrated episode and boundary losses; provider access is restored and the first holdout comparison is complete.
 2. Establish independent audiovisual publishability reviews, including ranking, boring clips, semantic start/end and setup/payoff, on a broader positive set.
 3. Make critic episode construction deliver the nominated outcome without drifting to nearby teasers; preserve accepted examples and test new designs on a fresh untouched split.
 4. Add semantic visual event/scene evidence for physical action and compilation boundaries, distinguishing camera switches from episode changes.
@@ -111,8 +109,7 @@ npx tsx src/scripts/eval-moment-quality.ts tmp/september-core/manifest-developme
 npx tsx src/scripts/eval-moment-quality.ts tmp/september-core/manifest-repeat-2.json
 npx tsx src/scripts/eval-moment-quality.ts tmp/september-core/manifest-repeat-3.json
 npx tsx src/scripts/eval-moment-quality.ts tmp/september-core/manifest-holdout-valid.json
-# Expected to fail until affected recorded runs are replaced with valid reruns:
-npx tsx src/scripts/eval-moment-quality.ts tmp/september-core/manifest-holdout-all.json
+npx tsx src/scripts/eval-moment-quality.ts tmp/september-core/manifest-holdout-restored.json
 ```
 
 The generic comparator accepts a manifest of source IDs and paths to baseline/candidate runs, independent moment labels and optional clip reviews. It makes no network calls. The private replay harness is `tmp/september-core/run.ts`; use a new mode/output filename for retries to preserve failed-run evidence.
