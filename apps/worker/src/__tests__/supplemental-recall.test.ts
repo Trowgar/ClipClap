@@ -52,3 +52,10 @@ it('rejects a final supplemental cut expanded across missing audio', () => {
   expect(appendSupplementalClips(primary, [{ start: 89.85, end: 129.8 }], 3,
     [{ start: 94.5, end: 105 }])).toEqual(primary);
 });
+
+it('does not let a quarantined supplemental replace a primary setup clip', () => {
+ const teaser={start:0,end:10,_arcFlags:{entry:{ok:true},exit:{ok:false,defect:'setup_no_payoff'},standalone:{ok:true}}};
+ const quarantined={start:0,end:65,_arcFlags:cleanArc,_deliveredPayoffQuarantined:true as const};
+ const verified={start:80,end:100,_arcFlags:cleanArc};
+ expect(appendSupplementalClips([teaser],[quarantined,verified],2)).toEqual([teaser,verified]);
+});

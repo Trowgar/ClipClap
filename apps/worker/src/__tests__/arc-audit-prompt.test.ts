@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { ARC_AUDIT_SYSTEM, arcAuditClipBlock, arcAuditUserPrompt } from "../analyze-v2/prompts";
+import {
+  ARC_AUDIT_DELIVERED_PAYOFF_SYSTEM,
+  ARC_AUDIT_SYSTEM,
+  arcAuditClipBlock,
+  arcAuditUserPrompt,
+} from "../analyze-v2/prompts";
 import type { CriticVerdict, SentenceNode, SnappedClip } from "../analyze-v2/types";
 
 /** 45 unique, individually-addressable nodes so a leaked line is unmistakable -
@@ -75,6 +80,33 @@ function sections(block: string): { viewer: string; before: string; after: strin
 }
 
 describe("arcAuditClipBlock", () => {
+  it("keeps the primary audit prompt identical to the live baseline", () => {
+    const n = nodes();
+    const c = clip(n, "c0", 20, 23);
+    c.verdict.title = "Will the vault finally open?";
+    c.verdict.description = "The attempt ends with the vault opening.";
+    const block = arcAuditClipBlock(c, n);
+    expect(block).not.toContain("DELIVERED TITLE");
+    expect(block).not.toContain("DELIVERED DESCRIPTION");
+    expect(ARC_AUDIT_SYSTEM).not.toContain("promise made by the DELIVERED TITLE and DESCRIPTION");
+  });
+
+  it("shows delivered metadata only for the stricter supplemental payoff audit", () => {
+    const n = nodes();
+    const c = clip(n, "c0", 20, 23);
+    c.verdict.title = "Will the vault finally open?";
+    c.verdict.description = "The attempt ends with the vault opening.";
+    const block = arcAuditClipBlock(c, n, { auditDeliveredPromise: true });
+    expect(block).toContain("DELIVERED TITLE: Will the vault finally open?");
+    expect(block).toContain("DELIVERED DESCRIPTION: The attempt ends with the vault opening.");
+    expect(ARC_AUDIT_DELIVERED_PAYOFF_SYSTEM).toContain(
+      "promise made by the DELIVERED TITLE and DESCRIPTION"
+    );
+    expect(ARC_AUDIT_DELIVERED_PAYOFF_SYSTEM).toContain(
+      "metadata cannot supply missing context, repair the opening, or make the transcript standalone"
+    );
+  });
+
   it("renders the header with id, duration and the node range", () => {
     const n = nodes();
     const c = clip(n, "c7", 20, 23);

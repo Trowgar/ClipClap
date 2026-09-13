@@ -9,6 +9,8 @@ export interface ClipReview {
   startOk?: boolean;
   endOk?: boolean;
   contextOk?: boolean;
+  completeEpisode?: boolean;
+  crossScene?: boolean;
 }
 type Range = { start: number; end: number };
 const validRange = (r: Range) => Number.isFinite(r.start) && Number.isFinite(r.end) && r.start >= 0 && r.end > r.start;
@@ -34,16 +36,33 @@ export function measureMomentQuality(clips: readonly Range[], moments: readonly 
     const rs = reviewed.filter(r => r.index < n);
     const yes = rs.filter(r => r.verdict === "publishable").length;
     const unknown = n - rs.length;
-    return { delivered: n, reviewed: rs.length, precision: n && !unknown ? yes / n : null,
+    return { delivered: n, reviewed: rs.length, publishable: yes, precision: n && !unknown ? yes / n : null,
       lowerBound: n ? yes / n : null, upperBound: n ? (yes + unknown) / n : null,
       fixedKYield: unknown ? null : uniquePublishable(rs) / k, fixedKYieldLowerBound: uniquePublishable(rs) / k };
   };
-  const boundary = (key: "startOk" | "endOk" | "contextOk") => ({ assessed: reviews.filter(r => typeof r[key] === "boolean").length, failed: reviews.filter(r => r[key] === false).length });
+  const assessment = (assessed: readonly ClipReview[], failed: readonly ClipReview[]) => ({
+    assessed: assessed.length, failed: failed.length, rate: assessed.length ? failed.length / assessed.length : null,
+  });
+  const boundary = (key: "startOk" | "endOk" | "contextOk") => {
+    const assessed = reviews.filter(r => typeof r[key] === "boolean");
+    return assessment(assessed, assessed.filter(r => r[key] === false));
+  };
+  const boundaryAssessed = reviews.filter(r =>
+    (typeof r.startOk === "boolean" && typeof r.endOk === "boolean") ||
+    r.startOk === false ||
+    r.endOk === false
+  );
+  const completeAssessed = reviews.filter(r => typeof r.completeEpisode === "boolean");
+  const sceneAssessed = reviews.filter(r => typeof r.crossScene === "boolean");
   return {
     moments: moments.length, found: found.length, missed: moments.filter(m => !foundIds.has(m.id)).map(m => m.id),
     recall: moments.length ? found.length / moments.length : null,
     clips: clips.length, empty: clips.length === 0, reviewedClips: reviewed.length, unknownClips: clips.length - reviewed.length,
     publishableClips: uniquePublishable(publishable), boringClips: reviewed.filter(r => r.verdict === "boring").length,
+    boringRate: reviewed.length ? reviewed.filter(r => r.verdict === "boring").length / reviewed.length : null,
     top3: top(3), top5: top(5), start: boundary("startOk"), end: boundary("endOk"), context: boundary("contextOk"),
+    boundaries: assessment(boundaryAssessed, boundaryAssessed.filter(r => r.startOk === false || r.endOk === false)),
+    incomplete: assessment(completeAssessed, completeAssessed.filter(r => r.completeEpisode === false)),
+    crossScene: assessment(sceneAssessed, sceneAssessed.filter(r => r.crossScene === true)),
   };
 }

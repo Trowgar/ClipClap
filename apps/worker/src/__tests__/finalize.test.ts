@@ -124,6 +124,116 @@ it("rejects a stale opening trim that would lengthen a validated long clip", () 
 });
 
 describe("applyFinalizerEntries - drops", () => {
+  it("preserves live duplicate routing when repaired-opening protection is off", () => {
+    const clips = [clip("a", 0.9), clip("b", 0.8, 8, 14)];
+    const r = applyFinalizerEntries(
+      clips,
+      [entry({ id: "a", verdict: "drop", dropReason: "broken_opening", duplicateOf: "b" }), entry({ id: "b" })],
+      nodes(),
+      { ...cfg, repairedOpeningProtectionEnabled: false }
+    );
+    expect(ids(r.clips)).toEqual(["a"]);
+  });
+
+  it("protects a clean repaired opening from a stale broken_opening veto", () => {
+    const flags = new Map<string, ArcFlags>([["a", {
+      entry: { ok: false, defect: "borrowed_answer", repaired: true },
+      exit: { ok: true },
+      standalone: { ok: true },
+    }]]);
+    const clips = [clip("a", 0.9), clip("b", 0.8, 8, 14)];
+    const r = applyFinalizerEntries(
+      clips,
+      [entry({ id: "a", verdict: "drop", dropReason: "broken_opening" }), entry({ id: "b" })],
+      nodes(),
+      { ...cfg, repairedOpeningProtectionEnabled: true },
+      false,
+      flags
+    );
+    expect(ids(r.clips)).toEqual(["a", "b"]);
+    expect(r.telemetry.repairedOpeningDropsProtected).toContain("a");
+  });
+
+  it("ignores trim and rewrite advice attached to a protected stale drop", () => {
+    const flags = new Map<string, ArcFlags>([["a", {
+      entry: { ok: false, defect: "borrowed_answer", repaired: true },
+      exit: { ok: true },
+      standalone: { ok: true },
+    }]]);
+    const original = clip("a", 0.9);
+    const r = applyFinalizerEntries(
+      [original],
+      [entry({
+        id: "a",
+        verdict: "drop",
+        dropReason: "broken_opening",
+        trimStartNode: 2,
+        title: "Переписанный заголовок",
+        titleEvidenceNodes: [3],
+      })],
+      nodes(),
+      { ...cfg, repairedOpeningProtectionEnabled: true },
+      false,
+      flags,
+    );
+    expect(r.clips).toEqual([original]);
+    expect(r.telemetry.openingTrims).toEqual([]);
+    expect(r.telemetry.titleRewrites).toEqual([]);
+  });
+
+  it("does not protect an unrepaired or non-standalone opening", () => {
+    const clips = [clip("a", 0.9), clip("b", 0.8, 8, 14)];
+    const flags = new Map<string, ArcFlags>([["a", {
+      entry: { ok: false, defect: "borrowed_answer", repaired: true },
+      exit: { ok: true },
+      standalone: { ok: false, missing: "speaker identity" },
+    }]]);
+    const r = applyFinalizerEntries(
+      clips,
+      [entry({ id: "a", verdict: "drop", dropReason: "broken_opening" }), entry({ id: "b" })],
+      nodes(),
+      { ...cfg, repairedOpeningProtectionEnabled: true },
+      false,
+      flags
+    );
+    expect(ids(r.clips)).toEqual(["b"]);
+  });
+
+  it("does not override a supplemental finalizer that saw the repaired bounds", () => {
+    const flags = new Map<string, ArcFlags>([["a", {
+      entry: { ok: false, defect: "borrowed_answer", repaired: true },
+      exit: { ok: true },
+      standalone: { ok: true },
+    }]]);
+    const r = applyFinalizerEntries(
+      [clip("a", 0.9), clip("b", 0.8, 8, 14)],
+      [entry({ id: "a", verdict: "drop", dropReason: "broken_opening" }), entry({ id: "b" })],
+      nodes(),
+      { ...cfg, repairedOpeningProtectionEnabled: true },
+      true,
+      flags
+    );
+    expect(ids(r.clips)).toEqual(["b"]);
+  });
+
+  it("ignores duplicate metadata attached to a repaired-opening verdict", () => {
+    const flags = new Map<string, ArcFlags>([["a", {
+      entry: { ok: false, defect: "borrowed_answer", repaired: true },
+      exit: { ok: true },
+      standalone: { ok: true },
+    }]]);
+    const r = applyFinalizerEntries(
+      [clip("a", 0.7), clip("b", 0.8, 8, 14)],
+      [entry({ id: "a", verdict: "drop", dropReason: "broken_opening", duplicateOf: "b" }), entry({ id: "b" })],
+      nodes(),
+      { ...cfg, repairedOpeningProtectionEnabled: true },
+      false,
+      flags
+    );
+    expect(ids(r.clips)).toEqual(["a", "b"]);
+    expect(r.telemetry.repairedOpeningDropsProtected).toEqual(["a"]);
+  });
+
   it.each([1, 2, 3])("honors no_payoff for all %i clips even when the drop budget is exhausted", (count) => {
     const clips = Array.from({ length: count }, (_, i) => clip(String(i), 0.9 - i * 0.1));
     const r = applyFinalizerEntries(

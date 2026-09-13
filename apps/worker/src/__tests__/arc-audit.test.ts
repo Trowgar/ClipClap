@@ -9,7 +9,7 @@ import {
   runArcAudit,
   type ArcAuditTelemetry,
 } from "../analyze-v2/arc-audit";
-import { ARC_AUDIT_SYSTEM } from "../analyze-v2/prompts";
+import { ARC_AUDIT_DELIVERED_PAYOFF_SYSTEM, ARC_AUDIT_SYSTEM } from "../analyze-v2/prompts";
 import { ARC_AUDIT_SCHEMA } from "../analyze-v2/schemas";
 import { loadAnalyzeConfig } from "../analyze-v2/config";
 import { newUsage } from "../analyze-v2/llm";
@@ -373,6 +373,25 @@ describe("runArcAudit - config knobs", () => {
 });
 
 describe("runArcAudit - the request it makes", () => {
+  it("uses the delivered-payoff audit only when the caller opts in", async () => {
+    const n = nodes(30);
+    const c = clip(n, "a", 0, 1);
+    c.verdict.title = "Will it work?";
+    const baseline = stubClient(() => ok([okRow("a")]));
+    await runArcAudit(baseline, newUsage(), [c], n, cfg);
+    const baselineBody = baseline.chat.completions.create.mock.calls[0][0];
+    expect(baselineBody.messages[0].content).toBe(ARC_AUDIT_SYSTEM);
+    expect(baselineBody.messages[1].content).not.toContain("DELIVERED TITLE");
+
+    const supplemental = stubClient(() => ok([okRow("a")]));
+    await runArcAudit(supplemental, newUsage(), [c], n, cfg, {
+      auditDeliveredPromise: true,
+    });
+    const supplementalBody = supplemental.chat.completions.create.mock.calls[0][0];
+    expect(supplementalBody.messages[0].content).toBe(ARC_AUDIT_DELIVERED_PAYOFF_SYSTEM);
+    expect(supplementalBody.messages[1].content).toContain("DELIVERED TITLE: Will it work?");
+  });
+
   it("batches clips by arcAuditBatchSize, one call per batch, on the critic model", async () => {
     const n = nodes(80);
     const clips = [

@@ -23,6 +23,8 @@ describe("computeFingerprint", () => {
       criticModelFallback: baseCfg.criticModelFallback,
       reasoningEffort: baseCfg.reasoningEffort,
       supplementalRecallEnabled: baseCfg.supplementalRecallEnabled,
+      deliveredPayoffAuditEnabled: baseCfg.deliveredPayoffAuditEnabled,
+      scannerSetupProtectionEnabled: baseCfg.scannerSetupProtectionEnabled,
       criticBatchSize: baseCfg.criticBatchSize,
       criticMaxOutputTokensBase: criticMaxOutputTokens(0),
       criticMaxOutputTokensPerCandidate: criticMaxOutputTokens(1) - criticMaxOutputTokens(0),
@@ -46,6 +48,7 @@ describe("computeFingerprint", () => {
       longClipsEnabled: baseCfg.longClipsEnabled,
       longClipMaxSec: baseCfg.longClipMaxSec,
       arcFinalizerNotesEnabled: baseCfg.arcFinalizerNotesEnabled,
+      repairedOpeningProtectionEnabled: baseCfg.repairedOpeningProtectionEnabled,
       arcDownrankEnabled: baseCfg.arcDownrankEnabled,
       standaloneFilterEnabled: baseCfg.standaloneFilterEnabled,
       arcDownrankPenalty2: baseCfg.arcDownrankPenalty2,
@@ -124,6 +127,23 @@ describe("computeFingerprint", () => {
   });
 
   it("records outcome recovery dark and versioned on the default config", () => {
+  });
+
+  it("fingerprints both delivered-payoff enforcement switches", () => {
+    const baseline = computeFingerprint(baseCfg);
+    const enabled = computeFingerprint({
+      ...baseCfg,
+      deliveredPayoffAuditEnabled: true,
+      repairedOpeningProtectionEnabled: true,
+    });
+
+    expect(baseline.deliveredPayoffAuditEnabled).toBe(false);
+    expect(baseline.repairedOpeningProtectionEnabled).toBe(false);
+    expect(enabled.deliveredPayoffAuditEnabled).toBe(true);
+    expect(enabled.repairedOpeningProtectionEnabled).toBe(true);
+    expect(() => assertFingerprintMatches("top-quality", baseline, enabled)).toThrow(
+      /deliveredPayoffAuditEnabled|repairedOpeningProtectionEnabled/,
+    );
   });
 });
 

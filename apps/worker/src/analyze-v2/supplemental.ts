@@ -22,6 +22,7 @@ export function supplementalQualityConfig(
 type ArcAwareRange = {
   start: number;
   end: number;
+  _deliveredPayoffQuarantined?: true;
   _arcFlags?: {
     entry: { ok: boolean };
     exit: { ok: boolean; defect?: string };
@@ -67,6 +68,7 @@ export function appendSupplementalClips<T extends ArcAwareRange>(
     const existing = kept[index];
     if (
       setupOnly(existing) &&
+      clip._deliveredPayoffQuarantined !== true &&
       completeArc(clip) &&
       clip.start <= existing.start &&
       clip.end > existing.end

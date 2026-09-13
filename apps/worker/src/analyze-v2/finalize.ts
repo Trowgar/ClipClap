@@ -102,6 +102,8 @@ export interface FinalizeTelemetry {
   dropCapHits: number;
   /** Ids whose content drop was refused because they anchor a duplicate group. */
   dropsProtected: string[];
+  /** Repaired primary openings protected from a stale pre-repair verdict. */
+  repairedOpeningDropsProtected?: string[];
   /** Present whenever the LLM half did not run: "disabled" or a call outcome. */
   finalizerSkipped?: string;
   /** The configured judge failed and a fallback judge answered. Recovery treats
@@ -178,7 +180,8 @@ export function applyFinalizerEntries(
   entries: FinalizerEntry[],
   nodes: SentenceNode[],
   cfg: AnalyzeConfig,
-  useFinalBounds = false
+  useFinalBounds = false,
+  arcFlags: Map<string, ArcFlags> = new Map()
 ): FinalizeResult {
   const telemetry = emptyFinalizeTelemetry();
 
@@ -197,11 +200,25 @@ export function applyFinalizerEntries(
   // and this one. Everything else is a plain content drop.
   const claims: DuplicateClaim[] = [];
   const plainDrops: Array<{ id: string; reason: FinalizerDropReason }> = [];
+  const protectedDropIds = new Set<string>();
   for (const c of clips) {
     const e = byId.get(c.verdict.id);
     if (!e || e.verdict !== "drop") continue;
     const reason: FinalizerDropReason =
       e.dropReason && DROP_REASONS.has(e.dropReason) ? e.dropReason : "incoherent";
+    const flags = arcFlags.get(e.id);
+    if (
+      cfg.repairedOpeningProtectionEnabled &&
+      !useFinalBounds &&
+      reason === "broken_opening" &&
+      flags?.entry.repaired === true &&
+      flags.exit.ok &&
+      flags.standalone.ok
+    ) {
+      (telemetry.repairedOpeningDropsProtected ??= []).push(e.id);
+      protectedDropIds.add(e.id);
+      continue;
+    }
     if (reason !== "no_payoff" && e.duplicateOf && scores[e.duplicateOf] !== undefined && e.duplicateOf !== e.id) {
       claims.push({ id: e.id, duplicateOf: e.duplicateOf });
     } else {
@@ -272,6 +289,7 @@ export function applyFinalizerEntries(
   const capRefused = new Set(
     plainDrops.map((d) => d.id).filter((id) => !dropped.has(id))
   );
+  for (const id of protectedDropIds) capRefused.add(id);
   const proposed: Array<SnappedClip | null> = survivors.map(() => null);
   const rejects = new Map<number, { node: number; reason: TrimRejectReason }>();
 
@@ -664,7 +682,14 @@ export async function finalizeClips(
       return entry ? [entry] : [];
     });
 
-    const applied = applyFinalizerEntries(survivors, entries, nodes, cfg, options.useFinalBounds);
+    const applied = applyFinalizerEntries(
+      survivors,
+      entries,
+      nodes,
+      cfg,
+      options.useFinalBounds,
+      arcFlags
+    );
 
     if (!cfg.longClipsEnabled) {
       return {

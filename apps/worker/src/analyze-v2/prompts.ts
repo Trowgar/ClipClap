@@ -1020,6 +1020,31 @@ defect, fix_end_node); standalone (ok, missing). Include EVERY clip id you were
 shown.
 Output ONLY the JSON object described by the schema.`;
 
+/** Post-final variant. The primary construction audit stays byte-identical;
+ * this second pass checks whether the delivered cut fulfils the title and
+ * description after every boundary and finalizer change has been applied. */
+export const ARC_AUDIT_DELIVERED_PAYOFF_SYSTEM = ARC_AUDIT_SYSTEM
+  .replace(
+    "viewer cannot.\n\nJudge three things",
+    `viewer cannot.
+
+The DELIVERED TITLE and DESCRIPTION are promises to audit, not evidence about
+the source: metadata cannot supply missing context, repair the opening, or make the transcript standalone.
+For ENTRY and STANDALONE, use only THE VIEWER SEES. Metadata may only make EXIT
+stricter when it promises a payoff the viewer never receives.
+
+Judge three things`
+  )
+  .replace(
+    "the answer delivered, the punchline landed, the claim supported? A",
+    `the answer delivered, the punchline landed, the claim supported? Also test
+   the promise made by the DELIVERED TITLE and DESCRIPTION: if they promise an
+   answer, reaction, result, reveal, or consequence that is absent from THE
+   VIEWER SEES, the exit is setup_no_payoff even when its last sentence is
+   locally complete. If CONTEXT AFTER contains that promised beat, point to the
+   node where it finishes. A`
+  );
+
 /** Backward reach for CONTEXT BEFORE / forward reach for CONTEXT AFTER, shared
  *  with the critic's own padding (CONTEXT_BEFORE/CONTEXT_AFTER above) rather
  *  than duplicated: it is the same "enough to judge self-containment and find
@@ -1042,14 +1067,24 @@ function arcAuditContextBlock(
 /** One clip's full arc-audit block: header, THE VIEWER SEES, CONTEXT BEFORE,
  *  CONTEXT AFTER. Exported on its own (not only as part of the batch joiner)
  *  so a snapshot test can pin one clip's rendering without parsing a batch. */
-export function arcAuditClipBlock(clip: SnappedClip, nodes: SentenceNode[]): string {
+export function arcAuditClipBlock(
+  clip: SnappedClip,
+  nodes: SentenceNode[],
+  options: { auditDeliveredPromise?: boolean } = {}
+): string {
   const startNode = clip.finalStartNode;
   const endNode = clip.finalEndNode;
   const lines: string[] = [
     `CLIP ${clip.verdict.id} | ${Math.round(clip.endSec - clip.startSec)}s | ` +
       `nodes #${startNode}..#${endNode}`,
-    "THE VIEWER SEES (exactly this, nothing more):",
   ];
+  if (options.auditDeliveredPromise) {
+    lines.push(
+      `DELIVERED TITLE: ${clip.verdict.title}`,
+      `DELIVERED DESCRIPTION: ${clip.verdict.description}`
+    );
+  }
+  lines.push("THE VIEWER SEES (exactly this, nothing more):");
   for (let i = startNode; i <= endNode; i++) {
     const n = nodes[i];
     const marker = isCleanStart(nodes, i) ? "¶ " : "  ";
@@ -1079,6 +1114,10 @@ export function arcAuditClipBlock(clip: SnappedClip, nodes: SentenceNode[]): str
   return lines.join("\n");
 }
 
-export function arcAuditUserPrompt(clips: SnappedClip[], nodes: SentenceNode[]): string {
-  return clips.map((c) => arcAuditClipBlock(c, nodes)).join("\n\n---\n\n");
+export function arcAuditUserPrompt(
+  clips: SnappedClip[],
+  nodes: SentenceNode[],
+  options: { auditDeliveredPromise?: boolean } = {}
+): string {
+  return clips.map((c) => arcAuditClipBlock(c, nodes, options)).join("\n\n---\n\n");
 }

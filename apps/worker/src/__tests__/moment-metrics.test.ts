@@ -25,3 +25,27 @@ it("requires a moment identity and counts repeated publishable cuts once", () =>
   const reviews = clips.map((_, index) => ({ index, verdict: "publishable" as const, momentId: "one-moment" }));
   expect(measureMomentQuality(clips, [], reviews)).toMatchObject({ publishableClips: 1, top3: { precision: 1, fixedKYield: 1 / 3 } });
 });
+
+it("measures finished clip failure rates only over independently assessed clips", () => {
+  const result = measureMomentQuality([
+    { start: 0, end: 10 }, { start: 20, end: 30 }, { start: 40, end: 50 },
+  ], [], [
+    { index: 0, verdict: "publishable", momentId: "a", startOk: true, endOk: true, contextOk: true, completeEpisode: true, crossScene: false },
+    { index: 1, verdict: "boring", startOk: true, endOk: false, contextOk: false, completeEpisode: false, crossScene: true },
+    { index: 2, verdict: "not_publishable", startOk: false, endOk: true },
+  ]);
+
+  expect(result).toMatchObject({
+    boringRate: 1 / 3,
+    boundaries: { assessed: 3, failed: 2, rate: 2 / 3 },
+    incomplete: { assessed: 2, failed: 1, rate: 1 / 2 },
+    crossScene: { assessed: 2, failed: 1, rate: 1 / 2 },
+  });
+});
+
+it("counts a known bad boundary even when the other boundary is unknown", () => {
+  const result = measureMomentQuality([{ start: 0, end: 10 }], [], [
+    { index: 0, verdict: "not_publishable", startOk: false },
+  ]);
+  expect(result.boundaries).toEqual({ assessed: 1, failed: 1, rate: 1 });
+});

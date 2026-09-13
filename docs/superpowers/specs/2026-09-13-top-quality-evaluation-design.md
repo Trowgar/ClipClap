@@ -23,3 +23,27 @@ For every labeled good moment absent from a publishable Top-3 clip, trace candid
 ## Release gate
 
 Do not deploy unless development and sealed holdout improve publishable Top-3/Top-5 yield without a material recall regression, existing safety tests and builds pass, production smoke is stable, and the existing rollback branch remains valid.
+
+## Iteration 2: episode integrity after finalization
+
+The first candidate improved development quality but did not recover the traced
+setup loss. A critic-prompt experiment was tested and rejected after labeled
+pilot coverage fell from 3/11 to 2/11. Generic end extension was also rejected:
+it reduced one source from five clips to four without recovering its moment.
+
+The selected design restores only scanner setup that the critic removed: at most
+two nodes and eight seconds, inside the same scene, with a clean start and without
+violating hook, NMS, or duration gates. Restoration runs after finalization so a
+later stage cannot repeat the loss. Every changed delivered cut must receive a
+clean post-final entry, exit, and standalone audit; a missing or adverse audit
+restores the already-reviewed old geometry. The exact-literal switch therefore
+depends on the delivered-payoff audit switch and leaves the dark path unchanged.
+
+Strict deletion of an audited supplemental terminal failure caused a publishable
+Top-5 regression on `b002`. The final design quarantines such clips behind verified
+supplemental results and prevents them from replacing primary clips. This keeps
+recall when the model cannot supply a safe repair. The eight-source set was opened
+to diagnose this regression and is consequently a regression set, not a clean
+final holdout. The original 18-source holdout was also opened for the `s011`
+setup fix; final reporting must state both limitations rather than describe either
+set as independently sealed.

@@ -12,11 +12,12 @@ import {
   lexicalOverlap,
 } from "./gates";
 import { isoToLanguageName, scriptMismatch } from "./language";
-import { selectAndOrder } from "./select";
+import { nmsCollides, selectAndOrder } from "./select";
 import { runArcAudit, isFullyOk, type ArcAuditTelemetry } from "./arc-audit";
 import { extendClipStarts, type StartExtensionTelemetry } from "./start-extension";
 import { extendClipEnds } from "./end-extension";
 import { filterStandaloneClips, type StandaloneFilterTelemetry } from "./standalone-filter";
+import { restoreScannerQuestionSetup } from "./scanner-setup-protection";
 import { applyPostBoundaryHookGate, type PostBoundaryHookGateTelemetry } from "./post-boundary-hook-gate";
 import { finalizeClips } from "./finalize";
 import { reviewPublishability } from "./publishability";
@@ -322,6 +323,8 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
    * two.
    */
   const snippetTitleIds = new Set<string>();
+  const candidateById = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  let scannerSetupsRestored = 0;
   /** Ids that have already spent their one repairCopy call, wherever it was
    *  spent. The bound is per CLIP and global, not per site. */
   const copyRepairAttempted = new Set<string>();
@@ -370,7 +373,6 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
       droppedVerdicts.push({ id: verdict.id, stage: "snap", reason: snapped.reason, score: verdict.score });
       continue;
     }
-
     // The evidence gate above judged the critic's PROPOSED range; snap has just
     // moved the boundaries. Re-checking HERE, and not only after the finalizer,
     // is what lets the judge repair the damage: the finalizer is the one stage
@@ -894,7 +896,147 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
   const publishability = await reviewPublishability(client, usage, shipped, nodes, cfg);
   shipped = publishability.clips;
   const publishabilityRejected = new Set(publishability.telemetry.dropped);
-  const finalSurvivors = finalized.clips.filter((clip) => !publishabilityRejected.has(clip.verdict.id));
+
+  let scannerSetupCollisions = 0;
+  let scannerSetupHookGateRefusals = 0;
+  let scannerSetupAuditRefusals = 0;
+  const scannerSetupOriginals = new Map<string, SnappedClip>();
+  if (
+    cfg.scannerSetupProtectionEnabled &&
+    cfg.deliveredPayoffAuditEnabled &&
+    cfg.arcAuditEnabled &&
+    input.lane !== "supplemental"
+  ) {
+    for (let index = 0; index < shipped.length; index++) {
+      const original = shipped[index];
+      const clip = { ...original };
+      if (!restoreScannerQuestionSetup(clip, candidateById.get(clip.verdict.id), nodes, cfg)) continue;
+      if (cfg.postBoundaryHookGateMode === "enforce") {
+        const regated = applyPostBoundaryHookGate([clip], nodes, {
+          mode: "enforce",
+          maxDelaySec: cfg.postBoundaryHookMaxDelaySec,
+          maxPreHookGapSec: cfg.postBoundaryHookMaxPreHookGapSec,
+          scoreThreshold: cfg.scoreThreshold,
+          targetMinSec: cfg.targetMinSec,
+          maxSec: cfg.maxSec,
+        });
+        if (regated.clips.length === 0) {
+          scannerSetupHookGateRefusals += 1;
+          continue;
+        }
+      }
+      const collidesUnderRollback = shipped.some((other, otherIndex) => {
+        if (otherIndex === index) return false;
+        const otherOriginal = scannerSetupOriginals.get(other.verdict.id) ?? other;
+        return [clip, original].some((candidateBounds) =>
+          [other, otherOriginal].some((otherBounds) =>
+            nmsCollides(candidateBounds, otherBounds)
+          )
+        );
+      });
+      if (collidesUnderRollback) {
+        scannerSetupCollisions += 1;
+        continue;
+      }
+      shipped[index] = clip;
+      scannerSetupOriginals.set(clip.verdict.id, original);
+      scannerSetupsRestored += 1;
+    }
+  }
+
+  // Audit the delivered cut without feeding this stricter verdict back into
+  // construction or ranking. A failed audit keeps the live result. The
+  // primary lane needs two independent defects before a veto: the original
+  // audit found missing standalone context, while this final audit finds a
+  // missing payoff and cannot locate a safe extension. Supplemental clips with
+  // a completing-node pointer are quarantined behind verified supplemental
+  // clips instead of deleted: real holdout data showed that deletion improved
+  // Top-3 while losing a publishable Top-5 result.
+  let deliveredPayoffAuditTelemetry:
+    | (ArcAuditTelemetry & { dropped: string[]; quarantined?: string[] })
+    | undefined;
+  const deliveredPayoffRejected = new Set<string>();
+  const deliveredPayoffDropped = new Set<string>();
+  const scannerSetupRolledBack = new Set<string>();
+  const deliveredPayoffAuditCandidates =
+    input.lane === "supplemental"
+      ? shipped
+      : shipped.filter(
+          (clip) =>
+            arcFlags.get(clip.verdict.id)?.standalone.ok === false ||
+            scannerSetupOriginals.has(clip.verdict.id)
+        );
+  if (
+    cfg.deliveredPayoffAuditEnabled &&
+    cfg.arcAuditEnabled &&
+    deliveredPayoffAuditCandidates.length > 0
+  ) {
+    const audit = await runArcAudit(
+      client,
+      usage,
+      deliveredPayoffAuditCandidates,
+      nodes,
+      cfg,
+      { retryDelayMs: options.retryDelayMs, auditDeliveredPromise: true }
+    );
+    // A restored opening was not seen by finalizer/publishability. The exact
+    // delivered-cut audit is therefore its mandatory acceptance gate. On any
+    // missing row or defect, return to the already-reviewed original bounds.
+    for (const [id, original] of scannerSetupOriginals) {
+      const delivered = audit.flags.get(id);
+      if (
+        delivered?.entry.ok === true &&
+        delivered.exit.ok === true &&
+        delivered.standalone.ok === true
+      ) continue;
+      const index = shipped.findIndex((clip) => clip.verdict.id === id);
+      if (index >= 0) shipped[index] = original;
+      scannerSetupOriginals.delete(id);
+      scannerSetupRolledBack.add(id);
+      scannerSetupsRestored -= 1;
+      scannerSetupAuditRefusals += 1;
+    }
+    for (const clip of shipped) {
+      if (scannerSetupRolledBack.has(clip.verdict.id)) continue;
+      const delivered = audit.flags.get(clip.verdict.id);
+      const exit = delivered?.exit;
+      const original = arcFlags.get(clip.verdict.id);
+      const supplementalRepair =
+        input.lane === "supplemental" &&
+        input.requireDeliveredPayoff === true &&
+        exit?.ok === false &&
+        exit.fixEndNode !== undefined;
+      const corroboratedTerminalFailure =
+        exit?.ok === false &&
+        exit.fixEndNode === undefined &&
+        original?.standalone.ok === false &&
+        delivered?.standalone.ok === false;
+      if (supplementalRepair || corroboratedTerminalFailure) {
+        deliveredPayoffRejected.add(clip.verdict.id);
+      }
+    }
+    if (input.lane === "supplemental") {
+      shipped = [
+        ...shipped.filter((clip) => !deliveredPayoffRejected.has(clip.verdict.id)),
+        ...shipped.filter((clip) => deliveredPayoffRejected.has(clip.verdict.id)),
+      ];
+    } else {
+      for (const id of deliveredPayoffRejected) deliveredPayoffDropped.add(id);
+      shipped = shipped.filter((clip) => !deliveredPayoffDropped.has(clip.verdict.id));
+    }
+    deliveredPayoffAuditTelemetry = {
+      ...audit.telemetry,
+      dropped: [...deliveredPayoffDropped],
+      ...(input.lane === "supplemental"
+        ? { quarantined: [...deliveredPayoffRejected] }
+        : {}),
+    };
+  }
+  const finalSurvivors = finalized.clips.filter(
+    (clip) =>
+      !publishabilityRejected.has(clip.verdict.id) &&
+      !deliveredPayoffDropped.has(clip.verdict.id)
+  );
 
   if (safeEndAuditTelemetry) {
     safeEndAuditTelemetry = {
@@ -911,7 +1053,12 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
     };
   }
 
-  const highlights = shipped.map((clip) => toHighlight(clip, arcFlags));
+  const highlights = shipped.map((clip) => ({
+    ...toHighlight(clip, arcFlags),
+    ...(input.lane === "supplemental" && deliveredPayoffRejected.has(clip.verdict.id)
+      ? { _deliveredPayoffQuarantined: true as const }
+      : {}),
+  }));
 
   // Pulled out of the spread below so they land in the nested `longClips`
   // block instead of leaking as flat top-level keys (spec 2026-08-10 task 5)
@@ -932,6 +1079,17 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
     // returning modeResolution: undefined when the flag is off.
     ...(cfg.streamModeEnabled ? { analysisMode: input.analysisMode, modeResolution: input.modeResolution } : {}),
     ...(cfg.publishabilityEnabled ? { publishability: publishability.telemetry } : {}),
+    ...(deliveredPayoffAuditTelemetry
+      ? { deliveredPayoffAudit: deliveredPayoffAuditTelemetry }
+      : {}),
+    ...(cfg.scannerSetupProtectionEnabled
+      ? { scannerSetupProtection: {
+          restored: scannerSetupsRestored,
+          refusedCollision: scannerSetupCollisions,
+          refusedHookGate: scannerSetupHookGateRefusals,
+          refusedDeliveredAudit: scannerSetupAuditRefusals,
+        } }
+      : {}),
     criticVerdicts: critic.verdicts.length,
     verdictScores: critic.verdicts
       .map((v) => ({ id: v.id, keep: v.keep, score: v.score }))
@@ -1052,6 +1210,7 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
     else if (drop?.stage === "post_boundary_hook_gate") terminal.set(candidate.id, "post_boundary_rejected");
     else if (drop?.stage === "arc_downrank") terminal.set(candidate.id, "arc_rejected");
     else if (drop?.stage === "standalone_filter") terminal.set(candidate.id, "standalone_rejected");
+    else if (deliveredPayoffDropped.has(candidate.id)) terminal.set(candidate.id, "delivered_payoff_rejected");
     else if (publishabilityRejected.has(candidate.id)) terminal.set(candidate.id, "finalizer_rejected");
     else if (finalizedIds.has(candidate.id)) terminal.set(candidate.id, "selection_not_chosen");
     else if (!selectedIds.has(candidate.id) || !finalizerInputIds.has(candidate.id)) terminal.set(candidate.id, "selection_not_chosen");
@@ -1071,6 +1230,7 @@ export async function runQualityLane(input: QualityLaneInput): Promise<QualityLa
       ...(finalized.telemetry.finalizerFallbackUsed ? ["finalizer_fallback"] : []),
       ...(cfg.finalizerEnabled && afterStandaloneFilter.length > 0 && finalized.telemetry.finalizerSkipped ? ["finalizer_unavailable"] : []),
       ...(cfg.publishabilityEnabled && publishability.telemetry.skipped ? ["publishability_unavailable"] : []),
+      ...(deliveredPayoffAuditTelemetry?.unaudited ? ["delivered_payoff_incomplete"] : []),
     ],
     highlights,
     telemetry,

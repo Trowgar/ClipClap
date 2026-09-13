@@ -56,10 +56,71 @@ it.each([
 it("accepts successful recorded structured responses", () => {
   const dir = mkdtempSync(join(tmpdir(), "moment-comparison-"));
   try {
-    writeFileSync(join(dir, "run.json"), JSON.stringify({ records: [{ response: { choices: [{ finish_reason: "stop", message: { content: "{}" } }] } }], result: { highlights: [] } }));
+    writeFileSync(join(dir, "run.json"), JSON.stringify({ records: [{
+      request: { response_format: { json_schema: { name: "arc_audit" } } },
+      response: { choices: [{ finish_reason: "stop", message: { content: '{"results":[]}' } }] },
+    }], result: { highlights: [] } }));
     writeFileSync(join(dir, "labels.json"), "[]");
     writeFileSync(join(dir, "manifest.json"), JSON.stringify([{ id: "one", baselineFile: "run.json", candidateFile: "run.json", momentsFile: "labels.json" }]));
     expect(compareMomentRuns(join(dir, "manifest.json")).baseline.clips).toBe(0);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+it("rejects parseable responses that do not satisfy the requested top-level schema", () => {
+  const dir = mkdtempSync(join(tmpdir(), "moment-comparison-"));
+  try {
+    writeFileSync(join(dir, "run.json"), JSON.stringify({ records: [{
+      request: { response_format: { json_schema: { name: "arc_audit" } } },
+      response: { choices: [{ finish_reason: "stop", message: { content: "{}" } }] },
+    }], result: { highlights: [] } }));
+    writeFileSync(join(dir, "labels.json"), "[]");
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify([{ id: "one", baselineFile: "run.json", candidateFile: "run.json", momentsFile: "labels.json" }]));
+    expect(() => compareMomentRuns(join(dir, "manifest.json"))).toThrow(/incomplete model call/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+it("rejects a structurally valid run whose quality telemetry says a review was incomplete", () => {
+  const dir = mkdtempSync(join(tmpdir(), "moment-comparison-"));
+  try {
+    writeFileSync(join(dir, "run.json"), JSON.stringify({ records: [{
+      request: {
+        messages: [{ role: "user", content: "CLIP c0 | 10s" }],
+        response_format: { json_schema: { name: "arc_audit" } },
+      },
+      response: { choices: [{ finish_reason: "stop", message: { content: '{"results":[{"id":"c0"}]}' } }] },
+    }], result: { highlights: [], telemetry: { arcAudit: { unaudited: 1 } } } }));
+    writeFileSync(join(dir, "labels.json"), "[]");
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify([{ id: "one", baselineFile: "run.json", candidateFile: "run.json", momentsFile: "labels.json" }]));
+    expect(() => compareMomentRuns(join(dir, "manifest.json"))).toThrow(/incomplete model call|incomplete quality review/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+it("rejects a structured response that omits an expected clip id", () => {
+  const dir = mkdtempSync(join(tmpdir(), "moment-comparison-"));
+  try {
+    writeFileSync(join(dir, "run.json"), JSON.stringify({ records: [{
+      request: {
+        messages: [{ role: "user", content: "CLIP c0 | 10s" }],
+        response_format: { json_schema: { name: "arc_audit" } },
+      },
+      response: { choices: [{ finish_reason: "stop", message: { content: '{"results":[]}' } }] },
+    }], result: { highlights: [] } }));
+    writeFileSync(join(dir, "labels.json"), "[]");
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify([{ id: "one", baselineFile: "run.json", candidateFile: "run.json", momentsFile: "labels.json" }]));
+    expect(() => compareMomentRuns(join(dir, "manifest.json"))).toThrow(/incomplete model call/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+it("rejects an unrecognized recorded response schema", () => {
+  const dir = mkdtempSync(join(tmpdir(), "moment-comparison-"));
+  try {
+    writeFileSync(join(dir, "run.json"), JSON.stringify({ records: [{
+      request: { response_format: { json_schema: { name: "unknown_schema" } } },
+      response: { choices: [{ finish_reason: "stop", message: { content: '{"anything":true}' } }] },
+    }], result: { highlights: [] } }));
+    writeFileSync(join(dir, "labels.json"), "[]");
+    writeFileSync(join(dir, "manifest.json"), JSON.stringify([{ id: "one", baselineFile: "run.json", candidateFile: "run.json", momentsFile: "labels.json" }]));
+    expect(() => compareMomentRuns(join(dir, "manifest.json"))).toThrow(/incomplete model call/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -92,5 +153,30 @@ it("compares real feedback from snapshots separately from editorial opportunitie
     expect(result.baseline.customerFeedback).toMatchObject({ accepted: 1, acceptedCovered: 0, rejectedRepeated: 1 });
     expect(result.candidate.customerFeedback).toMatchObject({ accepted: 1, acceptedCovered: 1, rejectedRepeated: 1 });
     expect(result.candidate.publishableClipsPerSource).toBeNull();
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+it("aggregates micro Precision@K and finished-clip quality rates", () => {
+  const dir = mkdtempSync(join(tmpdir(), "moment-comparison-"));
+  const save = (name: string, value: unknown) => writeFileSync(join(dir, name), JSON.stringify(value));
+  try {
+    save("run.json", { highlights: [{ start: 0, end: 10 }, { start: 20, end: 30 }] });
+    save("labels.json", []);
+    save("reviews.json", [
+      { index: 0, verdict: "publishable", momentId: "a", startOk: true, endOk: true, completeEpisode: true, crossScene: false },
+      { index: 1, verdict: "boring", startOk: true, endOk: false, completeEpisode: false, crossScene: true },
+    ]);
+    save("manifest.json", [{ id: "one", baselineFile: "run.json", candidateFile: "run.json", momentsFile: "labels.json", baselineReviewsFile: "reviews.json", candidateReviewsFile: "reviews.json" }]);
+
+    expect(compareMomentRuns(join(dir, "manifest.json")).candidate).toMatchObject({
+      precisionAt3: 1 / 3,
+      precisionAt5: 1 / 5,
+      publishableClipsPerSource: 1,
+      boringRate: 1 / 2,
+      badBoundaryRate: 1 / 2,
+      incompleteRate: 1 / 2,
+      crossSceneRate: 1 / 2,
+      missedGoodMomentsPerSource: 0,
+    });
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
