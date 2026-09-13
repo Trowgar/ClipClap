@@ -88,6 +88,41 @@ const entry = (p: Partial<FinalizerEntry> & { id: string }): FinalizerEntry => (
 
 const ids = (clips: SnappedClip[]) => clips.map((c) => c.verdict.id);
 
+it("opening trim preserves an ending already extended by episode repair", () => {
+  const graph = nodes();
+  const original = { ...clip("a", 0.9, 0, 6, graph),
+    finalEndNode: 9, endSec: clip("a", 0.9, 0, 9, graph).endSec,
+    endsOnQuestion: true,
+  };
+  const result = applyFinalizerEntries([original], [entry({ id: "a", trimStartNode: 2 })], graph, cfg);
+  expect(result.clips[0].finalStartNode).toBe(2);
+  expect(result.clips[0].endSec).toBe(original.endSec);
+  expect(result.clips[0].finalEndNode).toBe(9);
+  expect(result.clips[0].endsOnQuestion).toBe(true);
+  expect(result.clips[0].shortMoment).toBe(original.endSec - result.clips[0].startSec < cfg.targetMinSec);
+});
+
+it("opening trim also preserves a previously shortened ending", () => {
+  const graph = denseNodes();
+  const proposal = clip("a", 0.9, 0, 10, graph);
+  const original = { ...proposal, verdict: { ...proposal.verdict, payoffNode: 8 },
+    finalEndNode: 9, endSec: clip("a", 0.9, 0, 9, graph).endSec };
+  const result = applyFinalizerEntries([original], [entry({ id: "a", trimStartNode: 2 })], graph, cfg);
+  expect(result.clips[0].finalStartNode).toBe(2);
+  expect(result.clips[0].endSec).toBe(original.endSec);
+  expect(result.clips[0].finalEndNode).toBe(9);
+});
+
+it("rejects a stale opening trim that would lengthen a validated long clip", () => {
+  const graph = nodes(60);
+  const proposal = clip("a", 0.9, 10, 20, graph);
+  const original = { ...proposal, verdict: { ...proposal.verdict, startNode: 0 },
+    finalEndNode: 43, endSec: clip("a", 0.9, 10, 43, graph).endSec, overLength: true };
+  const result = applyFinalizerEntries([original], [entry({ id: "a", trimStartNode: 2 })], graph, cfg);
+  expect(result.clips[0]).toEqual(original);
+  expect(result.telemetry.trimRejected).toContainEqual({ id: "a", node: 2, reason: "snap_rejected" });
+});
+
 describe("applyFinalizerEntries - drops", () => {
   it.each([1, 2, 3])("honors no_payoff for all %i clips even when the drop budget is exhausted", (count) => {
     const clips = Array.from({ length: count }, (_, i) => clip(String(i), 0.9 - i * 0.1));

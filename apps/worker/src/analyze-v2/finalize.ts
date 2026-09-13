@@ -458,12 +458,20 @@ function tryTrim(
     cfg
   );
   if (!snapped.ok) return { ok: false, reason: "snap_rejected" };
-  // Supplemental review must retain the ending already validated by repair.
-  // The opt-out path preserves production primary behavior and requests.
-  return { ok: true, clip: { ...clip, ...snapped.clip, ...(useFinalBounds ? {
-    endSec: clip.endSec, finalEndNode: clip.finalEndNode, endsOnQuestion: clip.endsOnQuestion,
-    shortMoment: clip.endSec - snapped.clip.startSec < cfg.targetMinSec,
-  } : {}) } };
+  // An opening trim must not undo an ending already validated by episode repair.
+  const duration = clip.endSec - snapped.clip.startSec;
+  if (
+    duration < cfg.hardMinSec ||
+    duration > Math.max(cfg.maxSec, clip.endSec - clip.startSec) ||
+    snapped.clip.payoffSec > clip.endSec ||
+    snapped.clip.hookEndSec > clip.endSec
+  ) return { ok: false, reason: "snap_rejected" };
+  return { ok: true, clip: { ...clip, ...snapped.clip,
+    endSec: clip.endSec,
+    finalEndNode: clip.finalEndNode,
+    endsOnQuestion: clip.endsOnQuestion,
+    shortMoment: duration < cfg.targetMinSec,
+  } };
 }
 
 type RewriteAttempt =
