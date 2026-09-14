@@ -356,6 +356,12 @@ export interface EngineFingerprint {
   criticModel: string;
   criticModelFallback: string;
   reasoningEffort: string;
+  /** Enables a second quality lane and otherwise invisible model calls. */
+  supplementalRecallEnabled: boolean;
+  /** Enables the final delivered-payoff audit and its drop authority. */
+  deliveredPayoffAuditEnabled: boolean;
+  /** Changes kept critic geometry without changing the critic request. */
+  scannerSetupProtectionEnabled: boolean;
   criticBatchSize: number;
   /** criticMaxOutputTokens(0) - the flat part of the critic output budget. */
   criticMaxOutputTokensBase: number;
@@ -412,6 +418,8 @@ export interface EngineFingerprint {
    *  boundary this key closes - the same shape endExtensionHintsEnabled's
    *  own key exists for. */
   arcFinalizerNotesEnabled: boolean;
+  /** Changes finalizer drop application without changing its request. */
+  repairedOpeningProtectionEnabled: boolean;
   /** Whether the unrepairable-flag downrank policy (task 7) may drop a clip
    *  before the finalizer sees it. See the doc comment above for why this
    *  earns a key despite making no request of its own - the same
@@ -472,6 +480,9 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     criticModel: cfg.criticModel,
     criticModelFallback: cfg.criticModelFallback,
     reasoningEffort: cfg.reasoningEffort,
+    supplementalRecallEnabled: cfg.supplementalRecallEnabled,
+    deliveredPayoffAuditEnabled: cfg.deliveredPayoffAuditEnabled,
+    scannerSetupProtectionEnabled: cfg.scannerSetupProtectionEnabled,
     criticBatchSize: cfg.criticBatchSize,
     criticMaxOutputTokensBase: base,
     criticMaxOutputTokensPerCandidate: criticMaxOutputTokens(1) - base,
@@ -494,6 +505,7 @@ export function computeFingerprint(cfg: AnalyzeConfig): EngineFingerprint {
     longClipsEnabled: cfg.longClipsEnabled,
     longClipMaxSec: cfg.longClipMaxSec,
     arcFinalizerNotesEnabled: cfg.arcFinalizerNotesEnabled,
+    repairedOpeningProtectionEnabled: cfg.repairedOpeningProtectionEnabled,
     arcDownrankEnabled: cfg.arcDownrankEnabled,
     standaloneFilterEnabled: cfg.standaloneFilterEnabled,
     arcDownrankPenalty2: cfg.arcDownrankPenalty2,

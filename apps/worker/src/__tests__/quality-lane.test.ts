@@ -6,6 +6,7 @@ const authoritySpies = vi.hoisted(() => ({
   snapNodes: vi.fn(),
   filterStandaloneClips: vi.fn(),
   finalizeClips: vi.fn(),
+  restoreScannerQuestionSetup: vi.fn(),
 }));
 
 vi.mock("../analyze-v2/critic", async () => {
@@ -36,6 +37,13 @@ vi.mock("../analyze-v2/finalize", async () => {
   const actual = await vi.importActual<typeof import("../analyze-v2/finalize")>("../analyze-v2/finalize");
   authoritySpies.finalizeClips.mockImplementation((...args: any[]) => (actual.finalizeClips as any)(...args));
   return { ...actual, finalizeClips: authoritySpies.finalizeClips };
+});
+
+vi.mock("../analyze-v2/scanner-setup-protection", async () => {
+  const actual = await vi.importActual<typeof import("../analyze-v2/scanner-setup-protection")>("../analyze-v2/scanner-setup-protection");
+  authoritySpies.restoreScannerQuestionSetup.mockImplementation((...args: any[]) =>
+    (actual.restoreScannerQuestionSetup as any)(...args));
+  return { ...actual, restoreScannerQuestionSetup: authoritySpies.restoreScannerQuestionSetup };
 });
 
 beforeEach(() => {
@@ -146,19 +154,24 @@ async function directLane(input: {
   candidates: ReturnType<typeof laneCandidate>[];
   criticResponse: unknown;
   finalizerResponse?: unknown;
-  arcResponse?: unknown;
+  arcResponse?: unknown | unknown[];
   publishabilityResponse?: unknown;
-  lane?: "primary";
+  lane?: "primary" | "supplemental";
+  requireDeliveredPayoff?: boolean;
   cfg?: ReturnType<typeof loadAnalyzeConfig>;
 }) {
   const cfg = input.cfg ?? loadAnalyzeConfig({});
   const nodes = buildSentenceGraph(transcript().segments, cfg);
   const c = client([]);
   const usage = newUsage();
+  let arcResponseIndex = 0;
   c.create.mockImplementation(async (body: any) => {
     const schema = body.response_format.json_schema.name;
     if (schema === "critic_verdicts") return input.criticResponse;
-    if (schema === "arc_audit") return input.arcResponse;
+    if (schema === "arc_audit") {
+      const responses = Array.isArray(input.arcResponse) ? input.arcResponse : [input.arcResponse];
+      return responses[Math.min(arcResponseIndex++, responses.length - 1)];
+    }
     if (schema === "clip_finalizer") return input.finalizerResponse ?? finalizer;
     if (schema === "publishability_review") return input.publishabilityResponse;
     throw new Error(`unexpected schema ${schema}`);
@@ -172,6 +185,7 @@ async function directLane(input: {
       cfg,
       usage,
       client: c.client,
+      requireDeliveredPayoff: input.requireDeliveredPayoff,
       retryDelayMs: 1,
       analysisMode: "standard",
       modeResolution: undefined,
@@ -1086,6 +1100,337 @@ describe("quality lane characterization", () => {
     expect(authoritySpies.finalizeClips.mock.calls[0][2]).toHaveLength(1);
   });
 
+  it("keeps the live arc audit unchanged and adds a separate final payoff audit", async () => {
+    const cfg = loadAnalyzeConfig({
+      ARC_AUDIT: "on", ANALYZE_DELIVERED_PAYOFF_AUDIT_V1: "on",
+    });
+    const arcResponse = {
+      choices: [{ message: { content: JSON.stringify({ results: [{
+        id: "c0",
+        entry: { ok: true, defect: null, fix_start_node: null },
+        exit: { ok: true, defect: null, fix_end_node: null },
+        standalone: { ok: true, missing: null },
+      }] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 4 },
+    };
+    const primary = await directLane({
+      candidates: [laneCandidate("c0")], criticResponse: laneCriticRows(["c0"]), arcResponse, cfg,
+    });
+    const supplemental = await directLane({
+      candidates: [laneCandidate("c0")], criticResponse: laneCriticRows(["c0"]), arcResponse, cfg,
+      lane: "supplemental", requireDeliveredPayoff: true,
+    });
+    const arcUsers = (x: typeof primary) => x.create.mock.calls
+      .filter(([body]: any[]) => body.response_format.json_schema.name === "arc_audit")
+      .map(([body]: any[]) => body.messages[1].content);
+    expect(arcUsers(primary)).toHaveLength(1);
+    expect(arcUsers(primary)[0]).not.toContain("DELIVERED TITLE");
+    expect(arcUsers(supplemental)).toHaveLength(2);
+    expect(arcUsers(supplemental)[0]).not.toContain("DELIVERED TITLE");
+    expect(arcUsers(supplemental)[1]).toContain("DELIVERED TITLE: Он назвал номер c0");
+  });
+
+  it("requires a clean delivered audit before shipping restored scanner setup", async () => {
+    const response = (clean: boolean) => ({
+      choices: [{ message: { content: JSON.stringify({ results: [{
+        id: "c0",
+        entry: { ok: clean, defect: clean ? null : "mid_sentence", fix_start_node: null },
+        exit: { ok: true, defect: null, fix_end_node: null },
+        standalone: { ok: clean, missing: clean ? null : "opening context" },
+      }] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 4 },
+    });
+    authoritySpies.restoreScannerQuestionSetup.mockImplementationOnce((clip: any) => {
+      clip.finalStartNode = 9;
+      clip.startSec -= 5;
+      return true;
+    });
+    const accepted = await directLane({
+      candidates: [laneCandidate("c0")], criticResponse: laneCriticRows(["c0"]),
+      arcResponse: [response(true), response(true)],
+      cfg: loadAnalyzeConfig({
+        ARC_AUDIT: "on", ANALYZE_DELIVERED_PAYOFF_AUDIT_V1: "on",
+        ANALYZE_SCANNER_SETUP_PROTECTION_V1: "on",
+      }),
+    });
+    expect(accepted.result.highlights[0]._startNode).toBe(9);
+    expect(accepted.result.telemetry.scannerSetupProtection).toMatchObject({
+      restored: 1, refusedDeliveredAudit: 0,
+    });
+    expect(accepted.create.mock.calls.filter(([body]: any[]) =>
+      body.response_format.json_schema.name === "arc_audit"
+    )).toHaveLength(2);
+
+    authoritySpies.restoreScannerQuestionSetup.mockImplementationOnce((clip: any) => {
+      clip.finalStartNode = 9;
+      clip.startSec -= 5;
+      return true;
+    });
+    const refused = await directLane({
+      candidates: [laneCandidate("c0")], criticResponse: laneCriticRows(["c0"]),
+      arcResponse: [response(true), response(false)],
+      cfg: loadAnalyzeConfig({
+        ARC_AUDIT: "on", ANALYZE_DELIVERED_PAYOFF_AUDIT_V1: "on",
+        ANALYZE_SCANNER_SETUP_PROTECTION_V1: "on",
+      }),
+    });
+    expect(refused.result.highlights[0]._startNode).toBe(10);
+    expect(refused.result.telemetry.scannerSetupProtection).toMatchObject({
+      restored: 0, refusedDeliveredAudit: 1,
+    });
+  });
+
+  it("does not apply an expanded-cut payoff veto after scanner setup rolls back", async () => {
+    const response = (entryOk: boolean, exitOk: boolean) => ({
+      choices: [{ message: { content: JSON.stringify({ results: [{
+        id: "c0",
+        entry: { ok: entryOk, defect: entryOk ? null : "mid_sentence", fix_start_node: null },
+        exit: { ok: exitOk, defect: exitOk ? null : "setup_no_payoff", fix_end_node: null },
+        standalone: { ok: false, missing: "setup" },
+      }] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 4 },
+    });
+    authoritySpies.restoreScannerQuestionSetup.mockImplementationOnce((clip: any) => {
+      clip.finalStartNode = 9;
+      clip.startSec -= 5;
+      return true;
+    });
+    const { result } = await directLane({
+      candidates: [laneCandidate("c0")],
+      criticResponse: laneCriticRows(["c0"]),
+      arcResponse: [response(true, true), response(true, false)],
+      cfg: loadAnalyzeConfig({
+        ARC_AUDIT: "on", ANALYZE_DELIVERED_PAYOFF_AUDIT_V1: "on",
+        ANALYZE_SCANNER_SETUP_PROTECTION_V1: "on",
+      }),
+    });
+    expect(result.highlights).toHaveLength(1);
+    expect(result.highlights[0]._startNode).toBe(10);
+    expect(result.terminal.get("c0")).toBe("shipped");
+    expect(result.telemetry.deliveredPayoffAudit).toMatchObject({ dropped: [] });
+  });
+
+  it("refuses setup geometry that would collide after either clip rolls back", async () => {
+    const cleanAudit = {
+      choices: [{ message: { content: JSON.stringify({ results: ["c0", "c1"].map((id) => ({
+        id,
+        entry: { ok: true, defect: null, fix_start_node: null },
+        exit: { ok: true, defect: null, fix_end_node: null },
+        standalone: { ok: true, missing: null },
+      })) }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 4 },
+    };
+    const finalizerPair = {
+      choices: [{ message: { content: JSON.stringify({ clips: ["c0", "c1"].map((id) => ({
+        id, verdict: "ship", drop_reason: null, duplicate_of: null,
+        shared_claim: null, title: null, title_evidence_nodes: null,
+        trim_start_node: null,
+      })) }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 20, completion_tokens: 8 },
+    };
+    let firstOriginal: { startSec: number; endSec: number } | undefined;
+    authoritySpies.restoreScannerQuestionSetup.mockImplementation((clip: any) => {
+      if (clip.verdict.id === "c0") {
+        firstOriginal = { startSec: clip.startSec, endSec: clip.endSec };
+        clip.finalStartNode = 7;
+        clip.startSec = 0;
+      } else {
+        if (!firstOriginal) throw new Error("c0 must be considered first");
+        clip.finalStartNode = 14;
+        clip.startSec = firstOriginal.endSec -
+          (firstOriginal.endSec - firstOriginal.startSec) * 0.24;
+      }
+      return true;
+    });
+    const { result } = await directLane({
+      candidates: [laneCandidate("c0"), laneCandidate("c1", 15, 19)],
+      criticResponse: laneCriticRows(["c0", "c1"]),
+      finalizerResponse: finalizerPair,
+      arcResponse: [cleanAudit, cleanAudit],
+      cfg: loadAnalyzeConfig({
+        ARC_AUDIT: "on", ANALYZE_DELIVERED_PAYOFF_AUDIT_V1: "on",
+        ANALYZE_SCANNER_SETUP_PROTECTION_V1: "on",
+      }),
+    });
+    expect(result.telemetry.scannerSetupProtection).toMatchObject({
+      restored: 1, refusedCollision: 1,
+    });
+    expect(result.highlights[0]._startNode).toBe(7);
+  });
+
+  it("vetoes a primary clip only when missing context and missing payoff corroborate", async () => {
+    const response = (standaloneOk: boolean, exitOk: boolean) => ({
+      choices: [{ message: { content: JSON.stringify({ results: [{
+        id: "c0",
+        entry: { ok: true, defect: null, fix_start_node: null },
+        exit: {
+          ok: exitOk,
+          defect: exitOk ? null : "setup_no_payoff",
+          fix_end_node: null,
+        },
+        standalone: { ok: standaloneOk, missing: standaloneOk ? null : "the setup" },
+      }] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 4 },
+    });
+    const { result } = await directLane({
+      candidates: [laneCandidate("c0")],
+      criticResponse: laneCriticRows(["c0"]),
+      arcResponse: [response(false, true), response(false, false)],
+      cfg: loadAnalyzeConfig({
+        ARC_AUDIT: "on", ANALYZE_DELIVERED_PAYOFF_AUDIT_V1: "on",
+      }),
+    });
+    expect(result.highlights).toEqual([]);
+    expect(result.terminal.get("c0")).toBe("delivered_payoff_rejected");
+  });
+
+  it("keeps a primary clip when the delivered geometry is now standalone", async () => {
+    const response = (standaloneOk: boolean, exitOk: boolean) => ({
+      choices: [{ message: { content: JSON.stringify({ results: [{
+        id: "c0",
+        entry: { ok: true, defect: null, fix_start_node: null },
+        exit: { ok: exitOk, defect: exitOk ? null : "setup_no_payoff", fix_end_node: null },
+        standalone: { ok: standaloneOk, missing: standaloneOk ? null : "setup" },
+      }] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 4 },
+    });
+    const { result } = await directLane({
+      candidates: [laneCandidate("c0")],
+      criticResponse: laneCriticRows(["c0"]),
+      arcResponse: [response(false, true), response(true, false)],
+      cfg: loadAnalyzeConfig({
+        ARC_AUDIT: "on", ANALYZE_DELIVERED_PAYOFF_AUDIT_V1: "on",
+      }),
+    });
+    expect(result.highlights).toHaveLength(1);
+    expect(result.terminal.get("c0")).toBe("shipped");
+  });
+
+  it("skips the final audit when the original primary standalone check is clean", async () => {
+    const response = (exitOk: boolean) => ({
+      choices: [{ message: { content: JSON.stringify({ results: [{
+        id: "c0",
+        entry: { ok: true, defect: null, fix_start_node: null },
+        exit: {
+          ok: exitOk,
+          defect: exitOk ? null : "setup_no_payoff",
+          fix_end_node: null,
+        },
+        standalone: { ok: true, missing: null },
+      }] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 4 },
+    });
+    const { result, create } = await directLane({
+      candidates: [laneCandidate("c0")],
+      criticResponse: laneCriticRows(["c0"]),
+      arcResponse: [response(true), response(false)],
+      cfg: loadAnalyzeConfig({
+        ARC_AUDIT: "on", ANALYZE_DELIVERED_PAYOFF_AUDIT_V1: "on",
+      }),
+    });
+    expect(result.highlights).toHaveLength(1);
+    expect(result.terminal.get("c0")).toBe("shipped");
+    expect(create.mock.calls.filter(([body]: any[]) =>
+      body.response_format.json_schema.name === "arc_audit"
+    )).toHaveLength(1);
+  });
+
+  it("keeps a primary clip when the final audit proposes a repair instead of corroborating a terminal failure", async () => {
+    const response = (exitOk: boolean, fixEndNode: number | null) => ({
+      choices: [{ message: { content: JSON.stringify({ results: [{
+        id: "c0",
+        entry: { ok: true, defect: null, fix_start_node: null },
+        exit: {
+          ok: exitOk,
+          defect: exitOk ? null : "setup_no_payoff",
+          fix_end_node: fixEndNode,
+        },
+        standalone: { ok: false, missing: "the setup" },
+      }] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 4 },
+    });
+    const { result } = await directLane({
+      candidates: [laneCandidate("c0")],
+      criticResponse: laneCriticRows(["c0"]),
+      arcResponse: [response(true, null), response(false, 14)],
+      cfg: loadAnalyzeConfig({
+        ARC_AUDIT: "on", ANALYZE_DELIVERED_PAYOFF_AUDIT_V1: "on",
+      }),
+    });
+    expect(result.highlights).toHaveLength(1);
+    expect(result.terminal.get("c0")).toBe("shipped");
+  });
+
+  it("quarantines a final supplemental clip instead of deleting recall", async () => {
+    const badExit = {
+      choices: [{ message: { content: JSON.stringify({ results: [{
+        id: "c0",
+        entry: { ok: true, defect: null, fix_start_node: null },
+        exit: { ok: false, defect: "setup_no_payoff", fix_end_node: 14 },
+        standalone: { ok: true, missing: null },
+      }] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 4 },
+    };
+    const { result } = await directLane({
+      candidates: [laneCandidate("c0")], criticResponse: laneCriticRows(["c0"]),
+      arcResponse: badExit, cfg: loadAnalyzeConfig({
+        ARC_AUDIT: "on", ANALYZE_DELIVERED_PAYOFF_AUDIT_V1: "on",
+      }),
+      lane: "supplemental", requireDeliveredPayoff: true,
+    });
+    expect(result.highlights).toHaveLength(1);
+    expect(result.highlights[0]._deliveredPayoffQuarantined).toBe(true);
+    expect(result.terminal.get("c0")).toBe("shipped");
+    expect(result.telemetry.deliveredPayoffAudit).toMatchObject({
+      audited: 1, unaudited: 0, dropped: [], quarantined: ["c0"],
+    });
+  });
+
+  it("keeps a supplemental clip when the payoff audit cannot locate a completing beat", async () => {
+    const uncertainExit = {
+      choices: [{ message: { content: JSON.stringify({ results: [{
+        id: "c0",
+        entry: { ok: true, defect: null, fix_start_node: null },
+        exit: { ok: false, defect: "setup_no_payoff", fix_end_node: null },
+        standalone: { ok: true, missing: null },
+      }] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 4 },
+    };
+    const { result } = await directLane({
+      candidates: [laneCandidate("c0")], criticResponse: laneCriticRows(["c0"]),
+      arcResponse: uncertainExit, cfg: loadAnalyzeConfig({
+        ARC_AUDIT: "on", ANALYZE_DELIVERED_PAYOFF_AUDIT_V1: "on",
+      }),
+      lane: "supplemental", requireDeliveredPayoff: true,
+    });
+    expect(result.highlights).toHaveLength(1);
+    expect(result.terminal.get("c0")).toBe("shipped");
+    expect(result.telemetry.deliveredPayoffAudit).toMatchObject({ dropped: [] });
+  });
+
+  it("keeps the lane output but marks it unverified when the final payoff audit is unavailable", async () => {
+    const okArc = {
+      choices: [{ message: { content: JSON.stringify({ results: [{
+        id: "c0",
+        entry: { ok: true, defect: null, fix_start_node: null },
+        exit: { ok: true, defect: null, fix_end_node: null },
+        standalone: { ok: true, missing: null },
+      }] }) }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 10, completion_tokens: 4 },
+    };
+    const unavailable = { choices: [], usage: { prompt_tokens: 1, completion_tokens: 0 } };
+    const { result } = await directLane({
+      candidates: [laneCandidate("c0")], criticResponse: laneCriticRows(["c0"]),
+      arcResponse: [okArc, unavailable], cfg: loadAnalyzeConfig({
+        ARC_AUDIT: "on", ANALYZE_DELIVERED_PAYOFF_AUDIT_V1: "on",
+      }),
+      lane: "supplemental", requireDeliveredPayoff: true,
+    });
+    expect(result.highlights).toHaveLength(1);
+    expect(result.reviewFailures).toContain("delivered_payoff_incomplete");
+    expect(result.telemetry.deliveredPayoffAudit).toMatchObject({ unaudited: 1, dropped: [] });
+  });
+
   it("classifies an omitted critic row as critic_unjudged while shipping a partial survivor", async () => {
     const { result, usage } = await directLane({
       candidates: [laneCandidate("c0"), laneCandidate("c1", 15, 19)],
@@ -1312,4 +1657,23 @@ describe("publishability integration", () => {
     expect(JSON.parse(request.messages[1].content)[0].title).toBe("Кто изменил номер?");
     expect(result.terminal.get("c0")).toBe("shipped");
   });
+});
+
+it('marks fail-open finalizer output as unverified for supplemental use', async () => {
+  const { result } = await directLane({
+    candidates: [laneCandidate('c0')], criticResponse: critic(),
+    finalizerResponse: { choices: [], usage: { prompt_tokens: 1, completion_tokens: 0 } },
+  });
+  expect(result.highlights).toHaveLength(1);
+  expect(result.reviewFailures).toContain('finalizer_unavailable');
+});
+
+it('marks fail-open publishability output as unverified for supplemental use', async () => {
+  const { result } = await directLane({
+    candidates: [laneCandidate('c0')], criticResponse: critic(),
+    cfg: loadAnalyzeConfig({ ANALYZE_PUBLISHABILITY: 'on' }),
+    publishabilityResponse: { choices: [], usage: { prompt_tokens: 1, completion_tokens: 0 } },
+  });
+  expect(result.highlights).toHaveLength(1);
+  expect(result.reviewFailures).toContain('publishability_unavailable');
 });

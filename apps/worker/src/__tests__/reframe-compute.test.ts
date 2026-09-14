@@ -989,6 +989,31 @@ describe("active safety for broad faceless compositions", () => {
     expect(result.safetyPlanner).toMatchObject({ safeFitShots: 1, coverageFallbacks: 1, evaluatedShots: 0, minimumCoverage: null });
   });
 
+  it("preserves the reported screen recording whose detail centroid is outside the crop", () => {
+    const d = faceless(0.2640625);
+    d.width = 1920;
+    d.height = 1080;
+    d.tracksByShot[0].saliency!.x = 634.4885386840028;
+    expect(planDetected(d, active).plan?.shots).toEqual([
+      { start: 0, end: 10, layout: "safe-fit", reason: "coverage" },
+    ]);
+  });
+
+  it.each([100, 1180])("preserves narrow details outside either crop edge: x=%s", (x) => {
+    const d = faceless(0.2);
+    d.tracksByShot[0].saliency!.x = x;
+    expect(planDetected(d, active).plan?.shots[0].layout).toBe("safe-fit");
+    expect(planDetected(d, { ...active, safeFit: false }).plan?.shots[0].layout).toBe("center");
+  });
+
+  it.each([Number.NaN, -1, 1281, Number.POSITIVE_INFINITY, 640])(
+    "does not infer an off-crop subject from invalid or centered x=%s", (x) => {
+      const d = faceless(0.2);
+      d.tracksByShot[0].saliency!.x = x;
+      expect(planDetected(d, active).plan?.shots[0].layout).toBe("center");
+    },
+  );
+
   it.each([
     { safetyPlanner: false }, { safeFit: false }, { musicMode: true },
   ])("keeps existing behavior when the active policy is disabled: %o", (override) => {

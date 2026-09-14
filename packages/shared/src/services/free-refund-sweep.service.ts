@@ -130,14 +130,12 @@ async function findUnsettledCharges(
  * stands for ever. The user loses their one look at the product to a failure
  * that was ours, which is the exact outcome refundFailedJob exists to prevent.
  *
- * WHY A SWEEP rather than a BullMQ `failed` handler. A handler would have to be
- * wired into five separate stage workers, would need each of them to know
- * whether the attempt it just lost was the last one, and would still miss the
- * case a handler cannot observe: a worker killed mid-attempt, where no callback
- * of any kind runs. A sweep is one query in one place, and it is self-healing -
- * it catches whatever every other path missed, including paths that do not
- * exist yet. That is also why it does not try to be clever about WHICH failure
- * it is settling: anything terminal and unrefunded is its business.
+ * WHY THE SWEEP STILL EXISTS. The shared BullMQ failed handler now refunds a
+ * terminal failure immediately, but no handler can observe a worker killed
+ * mid-attempt, and its best-effort database write can itself fail. This query is
+ * the self-healing backstop for both cases and for any future failure path that
+ * bypasses the handler. That is why it does not try to be clever about WHICH
+ * failure it is settling: anything terminal and unrefunded is its business.
  *
  * KILLSWITCH, INVERTED relative to the retention sweep, and for the same
  * reasoning applied to an opposite risk. Retention deletes user data

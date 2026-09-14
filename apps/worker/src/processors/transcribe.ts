@@ -86,22 +86,32 @@ export async function transcribeVideo(
     // are captured by this one video pass.
     const videoEnvelopesPromise = videoEnvelopes(videoPath);
     const envelopePromise = rmsEnvelope(audioPath);
+    let skipLanguageProbe = false;
 
     if (bytes <= CHUNK_BYTES_THRESHOLD && durationSec <= CHUNK_DURATION_THRESHOLD_SEC) {
-      const [raw, energyEnvelope, videoEnv] = await Promise.all([
-        whisperCall(audioPath, undefined),
-        envelopePromise,
-        videoEnvelopesPromise,
-      ]);
-      return {
-        transcription: toTranscription(raw, 0),
-        coverage: 1,
-        partial: false,
-        missingRanges: [],
-        energyEnvelope,
-        lumaEnvelope: videoEnv.lumaEnvelope,
-        motionEnvelope: videoEnv.motionEnvelope,
-      };
+      try {
+        const raw = await whisperCall(audioPath, undefined);
+        const [energyEnvelope, videoEnv] = await Promise.all([
+          envelopePromise,
+          videoEnvelopesPromise,
+        ]);
+        return {
+          transcription: toTranscription(raw, 0),
+          coverage: 1,
+          partial: false,
+          missingRanges: [],
+          energyEnvelope,
+          lumaEnvelope: videoEnv.lumaEnvelope,
+          motionEnvelope: videoEnv.motionEnvelope,
+        };
+      } catch (error) {
+        if (!(error instanceof OpenAI.APIConnectionError)) throw error;
+        console.warn(
+          "[transcribe] full-file connection failed; falling back to chunks:",
+          error.cause ?? error
+        );
+        skipLanguageProbe = true;
+      }
     }
 
     // ---- chunked path (spec §9) ----
@@ -112,10 +122,13 @@ export async function transcribeVideo(
     );
 
     // language locked from a speech-rich probe of the beginning (spec §8)
-    const probed = await probeLanguage(audioPath, silences, tempFiles);
+    const probed = skipLanguageProbe
+      ? null
+      : await probeLanguage(audioPath, silences, tempFiles);
 
     const rawChunks: RawChunkTranscript[] = [];
     const missingRanges: Array<{ start: number; end: number; reason: string }> = [];
+    let detectedLanguageRaw: string | undefined;
 
     for (let i = 0; i < plans.length; i += CHUNK_CONCURRENCY) {
       const batch = plans.slice(i, i + CHUNK_CONCURRENCY);
@@ -140,6 +153,7 @@ export async function transcribeVideo(
       for (let j = 0; j < settled.length; j++) {
         const s = settled[j];
         if (s.status === "fulfilled") {
+          detectedLanguageRaw ??= s.value.raw.language;
           rawChunks.push({
             offsetSec: s.value.from,
             text: s.value.raw.text,
@@ -159,13 +173,17 @@ export async function transcribeVideo(
       totalDurationSec: durationSec,
       missingRanges,
     });
+    const languageRaw = probed?.raw ?? detectedLanguageRaw;
+    const language = probed?.iso ?? (
+      languageRaw ? whisperLanguageToIso(languageRaw) ?? undefined : undefined
+    );
 
     return {
       transcription: {
         text: stitched.text,
         segments: stitched.segments,
-        language: probed?.iso ?? undefined,
-        languageRaw: probed?.raw,
+        language,
+        languageRaw,
         // persisted inside transcriptJson so analyze can refuse candidates
         // that would span a hole (spec §9)
         ...(missingRanges.length > 0 ? { missingRanges } : {}),
@@ -192,7 +210,7 @@ async function whisperCall(
     response_format: "verbose_json",
     timestamp_granularities: ["segment", "word"],
     ...(languageIso ? { language: languageIso } : {}),
-  });
+  }, { maxRetries: 0 });
   return response as unknown as RawWhisperResponse;
 }
 

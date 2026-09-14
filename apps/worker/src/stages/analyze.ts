@@ -8,8 +8,8 @@ import { analyzeHighlightsV1 } from "../processors/analyze";
 import { analyzeHighlightsV2, evaluateVisualRecall } from "../analyze-v2";
 import { AnalyzeTechnicalError } from "../analyze-v2/critic";
 import {
+  analysisVersionForConfig,
   loadAnalyzeConfig,
-  ANALYSIS_VERSION,
 } from "../analyze-v2/config";
 import { resolveEngine } from "../analyze-v2/dispatch";
 import { detectSong } from "../analyze-v2/song-gate";
@@ -35,6 +35,7 @@ export async function runAnalyzeStage(
     const transcription = asTranscription(job.transcriptJson);
     const cfg = loadAnalyzeConfig();
     const engine = resolveEngine(payload.jobId, cfg);
+    const analysisVersion = analysisVersionForConfig(cfg, engine);
 
     const startedAt = Date.now();
 
@@ -50,7 +51,7 @@ export async function runAnalyzeStage(
           analyzeMs,
           analyzeEngine: "LEGACY",
           highlightsVersion: 1,
-          analysisVersion: ANALYSIS_VERSION,
+          analysisVersion,
         },
       });
 
@@ -235,7 +236,7 @@ export async function runAnalyzeStage(
         analyzeMs,
         analyzeEngine: "RECALL_CRITIC",
         highlightsVersion: 2,
-        analysisVersion: ANALYSIS_VERSION,
+        analysisVersion,
         noClipsReason: result.noClipsReason ?? null,
         analysisInputTokens: result.usage.inputTokens,
         analysisOutputTokens: result.usage.outputTokens,

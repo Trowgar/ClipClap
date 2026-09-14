@@ -581,3 +581,17 @@ describe("FINALIZER_SCHEMA", () => {
     expect(item.properties.trim_start_node.type).toEqual(["integer", "null"]);
   });
 });
+
+
+it("shows the current cut after boundary repair or compression, not stale critic bounds", () => {
+  const expanded = { ...clip("expanded", 2, 3), finalStartNode: 1, finalEndNode: 5 };
+  const compressed = { ...clip("compressed", 0, 5), finalStartNode: 2, finalEndNode: 3 };
+  const wider = finalizerUserPrompt([expanded], nodes, undefined, undefined, true);
+  expect(wider).toContain("Уникальная единица.");
+  expect(wider).toContain("Уникальная пятёрка.");
+  expect(wider).not.toContain("Уникальный ноль.");
+  const narrower = finalizerUserPrompt([compressed], nodes, undefined, undefined, true);
+  expect(narrower).not.toContain("Уникальный ноль.");
+  expect(narrower).not.toContain("Уникальная пятёрка.");
+  expect(narrower).toContain("Уникальная двойка.");
+});

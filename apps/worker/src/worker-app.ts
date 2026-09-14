@@ -4,6 +4,7 @@ import {
   getRedis,
   notifyPipelineIncident,
   parseWorkerRole,
+  refundFailedJob,
   releaseNextQueued,
   type StageName,
 } from "@clipclap/shared";
@@ -78,24 +79,30 @@ export function createStageWorker(
     console.error(`[${role}] failed ${job?.id}:`, err.message);
     const attemptsMade = job?.attemptsMade ?? 0;
     const unrecoverable = err instanceof UnrecoverableError;
-    if (
-      job &&
-      !isQualityCanary(job.data) &&
-      isTerminalFailure(job, err) &&
-      !unrecoverable
-    ) {
-      void notifyPipelineIncident({
-        stage: role,
-        queueJobId: String(job.id),
-        pipelineJobId: String((job.data as { jobId?: unknown }).jobId ?? "unknown"),
-        attemptsMade,
-        error: err,
-      }).catch((alertError) =>
-        console.error(
-          `[${role}] incident alert failed:`,
-          alertError instanceof Error ? alertError.message : alertError
-        )
-      );
+    if (job && !isQualityCanary(job.data) && isTerminalFailure(job, err)) {
+      const data = job.data as { jobId?: unknown; userId?: unknown };
+      if (typeof data.jobId === "string" && typeof data.userId === "string") {
+        void refundFailedJob(data.userId, data.jobId).catch((refundError) =>
+          console.error(
+            `[${role}] immediate failed-job refund failed:`,
+            refundError instanceof Error ? refundError.message : refundError
+          )
+        );
+      }
+      if (!unrecoverable) {
+        void notifyPipelineIncident({
+          stage: role,
+          queueJobId: String(job.id),
+          pipelineJobId: String(data.jobId ?? "unknown"),
+          attemptsMade,
+          error: err,
+        }).catch((alertError) =>
+          console.error(
+            `[${role}] incident alert failed:`,
+            alertError instanceof Error ? alertError.message : alertError
+          )
+        );
+      }
     }
     if (!isQualityCanary(job?.data)) {
       void maybeReleaseAfterStageEvent(role, "failed", job ?? undefined, err);

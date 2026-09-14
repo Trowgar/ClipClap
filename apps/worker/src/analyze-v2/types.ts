@@ -225,6 +225,7 @@ export type CandidatePrimaryDisposition =
   | "arc_rejected"
   | "post_boundary_rejected"
   | "standalone_rejected"
+  | "delivered_payoff_rejected"
   | "finalizer_rejected"
   | "shipped";
 
@@ -296,6 +297,8 @@ export type V2Highlight = Highlight & {
   _descriptionEvidenceNodes?: number[];
   _grounded?: boolean;
   _boundaryConfidence?: "word" | "segment";
+  /** Supplemental result retained for recall but denied primary replacement. */
+  _deliveredPayoffQuarantined?: true;
   /** Absent unless arcAuditEnabled and the clip was actually audited - see
    *  ArcFlags. Dark-stage control: this key must not exist when the stage is
    *  off (spec 2026-08-10, task 2). */

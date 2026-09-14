@@ -405,6 +405,34 @@ describe("evidence copy", () => {
 });
 
 describe("owner relay", () => {
+  it("reports the persisted verdict and reason with a later note", async () => {
+    process.env.SUPPORT_CHAT_ID = "999";
+    feedbackFindUnique.mockResolvedValue({
+      id: "fb-1",
+      evidenceKey: "feedback/clip-1.mp4",
+      verdict: "NO",
+      reason: "CUTOFF",
+      note: null,
+    });
+    feedbackUpsert.mockResolvedValue({
+      id: "fb-1",
+      verdict: "NO",
+      reason: "CUTOFF",
+    });
+
+    await recordClipFeedback({
+      clipId: "clip-1",
+      userId: "user-1",
+      surface: "web",
+      note: "the ending is missing",
+    });
+
+    expect(String(sendTelegramMessageMock.mock.calls[0][1])).toContain(
+      "Verdict: NO  Reason: CUTOFF"
+    );
+    delete process.env.SUPPORT_CHAT_ID;
+  });
+
   it("relays feedback that carries text", async () => {
     process.env.SUPPORT_CHAT_ID = "999";
     await recordClipFeedback({
@@ -449,6 +477,28 @@ describe("owner relay", () => {
     expect(sendTelegramMessageMock).not.toHaveBeenCalled();
     expect(result.ok).toBe(true);
     expect(feedbackUpsert.mock.calls[0][0].create.note).toBe("");
+    delete process.env.SUPPORT_CHAT_ID;
+  });
+
+  it("does not relay an unchanged note again", async () => {
+    process.env.SUPPORT_CHAT_ID = "999";
+    feedbackFindUnique.mockResolvedValue({
+      id: "fb-1",
+      evidenceKey: "feedback/clip-1.mp4",
+      verdict: "NO",
+      reason: null,
+      note: "the face is cut off on the left",
+    });
+
+    await recordClipFeedback({
+      clipId: "clip-1",
+      userId: "user-1",
+      surface: "web",
+      note: "the face is cut off on the left",
+    });
+
+    expect(feedbackFindUnique.mock.calls[0][0].select.note).toBe(true);
+    expect(sendTelegramMessageMock).not.toHaveBeenCalled();
     delete process.env.SUPPORT_CHAT_ID;
   });
 });

@@ -166,6 +166,7 @@ export interface CriticRunResult {
 }
 
 export interface CriticOptions {
+  requireDeliveredPayoff?: boolean;
   /** Test hook - forwarded to callJsonSchema. */
   retryDelayMs?: number;
 }
@@ -181,7 +182,17 @@ export async function runCritic(
   // consumed by tasks T2-T4 of the stream-analyze-mode spec
   mode: AnalysisMode = "standard"
 ): Promise<CriticRunResult> {
-  const system = criticSystemPrompt(languageIso, isoToLanguageName(languageIso), mode);
+  const system = criticSystemPrompt(languageIso, isoToLanguageName(languageIso), mode) +
+    (options.requireDeliveredPayoff ? `\n\nFINISH THE PROMISE INSIDE THE CUT. Identify what the opening makes a viewer
+wait to learn or see, then include the actual delivery using the surrounding
+nodes when necessary. Announcing that a list, method or solution exists is a
+hook; giving the list, usable steps or explanation is the payoff. Preparation
+for a challenge or demonstration needs the result and immediate consequence.
+Do not stop on anticipation when delivery is nearby. Select the shortest
+complete setup-through-result episode, not the shortest exciting sentence.
+A triggered reaction or self-contained joke can itself be the payoff when
+its incident is inside the cut. Never invent an unseen outcome. If the window
+contains only a promise and cannot deliver it, return keep:false.` : "");
   const telemetry = {
     batchSplits: 0,
     refusalDrops: 0,

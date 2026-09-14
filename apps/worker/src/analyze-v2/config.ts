@@ -4,7 +4,8 @@ export type PostBoundaryHookGateMode = "off" | "observe" | "shadow" | "enforce";
  * separately approved configuration and implementation. */
 export type SafeEndAuditMode = "off" | "shadow";
 export type VisualRecallMode = "off" | "shadow" | "on";
-export const ANALYSIS_VERSION = "core-publishability-v1" as const;
+export const ANALYSIS_VERSION = "core-top-quality-v2" as const;
+export const BASE_ANALYSIS_VERSION = "core-supplemental-recall-v1" as const;
 
 export interface AnalyzeConfig {
   engine: AnalyzeEngineSetting;
@@ -34,6 +35,12 @@ export interface AnalyzeConfig {
   visualRecallPreSec: number;
   visualRecallPostSec: number;
   visualRecallMaxNodeDistanceSec: number;
+  /** Optional second pass over candidates left outside the primary critic set. */
+  supplementalRecallEnabled: boolean;
+  /** Final, fail-open audit for delivered-payoff failures. */
+  deliveredPayoffAuditEnabled: boolean;
+  /** Restores a short scanner question/setup removed by the critic. */
+  scannerSetupProtectionEnabled: boolean;
   /** Which node spans buildScanWindows may count toward the per-window budget
    *  (spec 2026-08-11 "Scan recall remedy", engine-notes §6a/§3). "speech" -
    *  the default, and BYTE-IDENTICAL to every behavior this repo had before
@@ -191,6 +198,9 @@ export interface AnalyzeConfig {
    *  dependency on the audit, checked again where `finalizerUserPrompt` looks
    *  up a clip's flags rather than trusted from an empty map alone. */
   arcFinalizerNotesEnabled: boolean;
+  /** Prevents a stale finalizer broken-opening veto after the audited opening
+   * was widened successfully and the other arc axes are clean. */
+  repairedOpeningProtectionEnabled: boolean;
   /** Master switch for the unrepairable-flag DOWNRANK stage (spec 2026-08-10
    *  task 7) - the first drop authority the arc audit ever earns. Placed where
    *  the task 5 long-clip policy already sits: after arcAudit and BOTH
@@ -382,6 +392,17 @@ export interface AnalyzeConfig {
   musicShortsCount: number;
 }
 
+export function analysisVersionForConfig(
+  cfg: AnalyzeConfig,
+  engine: AnalyzeEngineSetting,
+) {
+  return engine === "recall-critic" &&
+    cfg.arcAuditEnabled &&
+    (cfg.deliveredPayoffAuditEnabled || cfg.repairedOpeningProtectionEnabled)
+    ? ANALYSIS_VERSION
+    : BASE_ANALYSIS_VERSION;
+}
+
 type Env = Record<string, string | undefined>;
 
 function num(env: Env, key: string, fallback: number): number {
@@ -514,6 +535,11 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
       20,
       600,
     ),
+    supplementalRecallEnabled: env.ANALYZE_SUPPLEMENTAL_RECALL_V1 === "on",
+    deliveredPayoffAuditEnabled:
+      env.ANALYZE_DELIVERED_PAYOFF_AUDIT_V1 === "on",
+    scannerSetupProtectionEnabled:
+      env.ANALYZE_SCANNER_SETUP_PROTECTION_V1 === "on",
     // Exact literal "source", same discipline as every other stage switch in
     // this file: a stray truthy env value must not silently double the
     // scanner's candidate pool and critic spend.
@@ -559,6 +585,8 @@ export function loadAnalyzeConfig(env: Env = process.env): AnalyzeConfig {
     // file: a stray truthy env value must not render an arc-audit finding
     // into the finalizer's prompt for a real user's job.
     arcFinalizerNotesEnabled: env.ARC_AUDIT_FINALIZER_NOTES === "on",
+    repairedOpeningProtectionEnabled:
+      env.ANALYZE_REPAIRED_OPENING_PROTECTION === "on",
     // Exact literal "on", same discipline as every other stage switch in this
     // file: a stray truthy env value must not give the arc audit drop
     // authority over a real user's clip.

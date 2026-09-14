@@ -1,7 +1,11 @@
 import type OpenAI from "openai";
 import type { AnalyzeConfig } from "./config";
 import { callJsonSchema, mapWithConcurrency } from "./llm";
-import { ARC_AUDIT_SYSTEM, arcAuditUserPrompt } from "./prompts";
+import {
+  ARC_AUDIT_DELIVERED_PAYOFF_SYSTEM,
+  ARC_AUDIT_SYSTEM,
+  arcAuditUserPrompt,
+} from "./prompts";
 import { ARC_AUDIT_SCHEMA } from "./schemas";
 import { isCleanStart } from "./sentence-graph";
 import type {
@@ -333,7 +337,7 @@ export async function runArcAudit(
   clips: SnappedClip[],
   nodes: SentenceNode[],
   cfg: AnalyzeConfig,
-  options: { retryDelayMs?: number } = {}
+  options: { retryDelayMs?: number; auditDeliveredPromise?: boolean } = {}
 ): Promise<ArcAuditResult> {
   const telemetry = emptyTelemetry();
   const flags = new Map<string, ArcFlags>();
@@ -356,8 +360,12 @@ export async function runArcAudit(
   await mapWithConcurrency(batches, ARC_AUDIT_CONCURRENCY, async (batch) => {
     const result = await callJsonSchema<{ results?: unknown }>(client, usage, {
       model: cfg.criticModel,
-      system: ARC_AUDIT_SYSTEM,
-      user: arcAuditUserPrompt(batch, nodes),
+      system: options.auditDeliveredPromise
+        ? ARC_AUDIT_DELIVERED_PAYOFF_SYSTEM
+        : ARC_AUDIT_SYSTEM,
+      user: arcAuditUserPrompt(batch, nodes, {
+        auditDeliveredPromise: options.auditDeliveredPromise,
+      }),
       schema: ARC_AUDIT_SCHEMA,
       reasoningEffort: cfg.reasoningEffort,
       maxOutputTokens: arcAuditMaxOutputTokens(batch.length),

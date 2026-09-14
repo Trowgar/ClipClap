@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  APIConnectionError: class APIConnectionError extends Error {},
   execFile: vi.fn(),
   createReadStream: vi.fn(() => "audio-stream"),
   statSync: vi.fn(() => ({ size: 1024 })),
@@ -22,13 +23,16 @@ vi.mock("fs/promises", () => ({
 }));
 
 vi.mock("openai", () => ({
-  default: vi.fn().mockImplementation(() => ({
-    audio: {
-      transcriptions: {
-        create: mocks.transcriptionCreate,
+  default: Object.assign(
+    vi.fn().mockImplementation(() => ({
+      audio: {
+        transcriptions: {
+          create: mocks.transcriptionCreate,
+        },
       },
-    },
-  })),
+    })),
+    { APIConnectionError: mocks.APIConnectionError }
+  ),
 }));
 
 import { transcribeVideo } from "../transcribe";
@@ -61,7 +65,8 @@ describe("transcribeVideo", () => {
     expect(mocks.transcriptionCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         timestamp_granularities: ["segment", "word"],
-      })
+      }),
+      { maxRetries: 0 }
     );
   });
 
@@ -80,6 +85,46 @@ describe("transcribeVideo", () => {
     });
     const result = await transcribeVideo("/tmp/source.mp4");
     expect(result.transcription.segments[0].words).toBeUndefined();
+  });
+
+  it("falls back to chunks when the full-file connection dies", async () => {
+    mocks.execFile.mockImplementation((_cmd, args, optsOrCb, maybeCb) => {
+      const callback = typeof optsOrCb === "function" ? optsOrCb : maybeCb;
+      const argv = args as string[];
+      if (argv.includes("format=duration")) {
+        return callback(null, { stdout: "1872", stderr: "" });
+      }
+      return callback(null, { stdout: "", stderr: "" });
+    });
+    mocks.transcriptionCreate.mockRejectedValueOnce(
+      new mocks.APIConnectionError("Connection error.")
+    );
+    mocks.transcriptionCreate.mockResolvedValue({
+      text: "hola mundo",
+      language: "spanish",
+      segments: [{ start: 0, end: 1.5, text: " hola mundo " }],
+      words: [
+        { word: "hola", start: 0, end: 0.6 },
+        { word: "mundo", start: 0.7, end: 1.4 },
+      ],
+    });
+
+    const result = await transcribeVideo("/tmp/source.mp4");
+
+    expect(result.coverage).toBe(1);
+    expect(result.partial).toBe(false);
+    expect(result.transcription.language).toBe("es");
+    expect(result.transcription.languageRaw).toBe("spanish");
+    // Failed full file, then two <=20 minute chunks. A transport failure makes
+    // another probe request pure delay; each chunk can auto-detect instead.
+    expect(mocks.transcriptionCreate).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not turn a non-connection API refusal into chunk requests", async () => {
+    mocks.transcriptionCreate.mockRejectedValueOnce(new Error("401 invalid API key"));
+
+    await expect(transcribeVideo("/tmp/source.mp4")).rejects.toThrow("401");
+    expect(mocks.transcriptionCreate).toHaveBeenCalledTimes(1);
   });
 
   it("includes an energy envelope key on both return paths", async () => {

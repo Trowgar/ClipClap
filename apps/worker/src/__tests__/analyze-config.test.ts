@@ -1,7 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { loadAnalyzeConfig } from "../analyze-v2/config";
+import {
+  analysisVersionForConfig,
+  loadAnalyzeConfig,
+} from "../analyze-v2/config";
 
 describe("loadAnalyzeConfig", () => {
+  it("attributes the baseline until a top-quality behavior flag is enabled", () => {
+    expect(analysisVersionForConfig(loadAnalyzeConfig({}), "recall-critic")).toBe(
+      "core-supplemental-recall-v1",
+    );
+
+    for (const env of [
+      { ARC_AUDIT: "on", ANALYZE_DELIVERED_PAYOFF_AUDIT_V1: "on" },
+      { ARC_AUDIT: "on", ANALYZE_REPAIRED_OPENING_PROTECTION: "on" },
+    ]) {
+      expect(analysisVersionForConfig(loadAnalyzeConfig(env), "recall-critic")).toBe(
+        "core-top-quality-v2",
+      );
+    }
+
+    const allOn = loadAnalyzeConfig({
+      ARC_AUDIT: "on",
+      ANALYZE_DELIVERED_PAYOFF_AUDIT_V1: "on",
+      ANALYZE_SCANNER_SETUP_PROTECTION_V1: "on",
+    });
+    expect(analysisVersionForConfig(allOn, "recall-critic")).toBe(
+      "core-top-quality-v2",
+    );
+    expect(analysisVersionForConfig(allOn, "legacy")).toBe(
+      "core-supplemental-recall-v1",
+    );
+    expect(analysisVersionForConfig(allOn, "shadow")).toBe(
+      "core-supplemental-recall-v1",
+    );
+    expect(analysisVersionForConfig(
+      loadAnalyzeConfig({ ANALYZE_SCANNER_SETUP_PROTECTION_V1: "on" }),
+      "recall-critic",
+    )).toBe("core-supplemental-recall-v1");
+  });
+
   it("returns spec defaults when env is empty", () => {
     const cfg = loadAnalyzeConfig({});
     expect(cfg.engine).toBe("legacy");
@@ -21,6 +58,43 @@ describe("loadAnalyzeConfig", () => {
     expect(cfg.visualRecallPreSec).toBe(18);
     expect(cfg.visualRecallPostSec).toBe(18);
     expect(cfg.visualRecallMaxNodeDistanceSec).toBe(20);
+    expect(cfg.supplementalRecallEnabled).toBe(false);
+  });
+
+  it("enables supplemental episode recall only for the exact on switch", () => {
+    expect(loadAnalyzeConfig({ ANALYZE_SUPPLEMENTAL_RECALL_V1: "on" }).supplementalRecallEnabled).toBe(true);
+    expect(loadAnalyzeConfig({ ANALYZE_SUPPLEMENTAL_RECALL_V1: "ON" }).supplementalRecallEnabled).toBe(false);
+    expect(loadAnalyzeConfig({ ANALYZE_SUPPLEMENTAL_RECALL_V1: "true" }).supplementalRecallEnabled).toBe(false);
+  });
+
+  it("keeps delivered-payoff postflight behind an exact rollback switch", () => {
+    expect(loadAnalyzeConfig({}).deliveredPayoffAuditEnabled).toBe(false);
+    expect(
+      loadAnalyzeConfig({ ANALYZE_DELIVERED_PAYOFF_AUDIT_V1: "on" })
+        .deliveredPayoffAuditEnabled
+    ).toBe(true);
+    expect(
+      loadAnalyzeConfig({ ANALYZE_DELIVERED_PAYOFF_AUDIT_V1: "true" })
+        .deliveredPayoffAuditEnabled
+    ).toBe(false);
+  });
+
+  it("keeps scanner setup protection behind an exact rollback switch", () => {
+    expect(loadAnalyzeConfig({}).scannerSetupProtectionEnabled).toBe(false);
+    expect(loadAnalyzeConfig({ ANALYZE_SCANNER_SETUP_PROTECTION_V1: "on" }).scannerSetupProtectionEnabled).toBe(true);
+    expect(loadAnalyzeConfig({ ANALYZE_SCANNER_SETUP_PROTECTION_V1: "true" }).scannerSetupProtectionEnabled).toBe(false);
+  });
+
+  it("keeps repaired-opening finalizer protection behind an exact rollback switch", () => {
+    expect(loadAnalyzeConfig({}).repairedOpeningProtectionEnabled).toBe(false);
+    expect(
+      loadAnalyzeConfig({ ANALYZE_REPAIRED_OPENING_PROTECTION: "on" })
+        .repairedOpeningProtectionEnabled
+    ).toBe(true);
+    expect(
+      loadAnalyzeConfig({ ANALYZE_REPAIRED_OPENING_PROTECTION: "true" })
+        .repairedOpeningProtectionEnabled
+    ).toBe(false);
   });
 
   it("accepts only the closed visual recall rollout modes", () => {
