@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   Worker: vi.fn().mockImplementation(() => ({ on: vi.fn(), close: vi.fn() })),
   getRedis: vi.fn(() => ({ host: "redis" })),
   releaseNextQueued: vi.fn(async () => []),
+  refundFailedJob: vi.fn(async () => undefined),
   notifyPipelineIncident: vi.fn(async () => true),
   download: vi.fn(),
   transcribe: vi.fn(),
@@ -21,6 +22,7 @@ vi.mock("@clipclap/shared", () => ({
   getRedis: mocks.getRedis,
   getQueueNameForStage: (role: string) => `video-${role}`,
   releaseNextQueued: mocks.releaseNextQueued,
+  refundFailedJob: mocks.refundFailedJob,
   notifyPipelineIncident: mocks.notifyPipelineIncident,
   parseWorkerRole: (role: string | undefined) => {
     if (
@@ -132,6 +134,18 @@ describe("worker role config", () => {
     handler!({ id: "10", data: { jobId: "pipeline-1", userId: "user-1" }, attemptsMade: 3, opts: { attempts: 3 } }, new Error("terminal"));
 
     expect(mocks.releaseNextQueued).toHaveBeenCalled();
+  });
+
+  it("refunds only a terminal pipeline failure immediately", () => {
+    const worker = createStageWorker("transcribe");
+    const on = (worker as unknown as { on: ReturnType<typeof vi.fn> }).on;
+    const handler = on.mock.calls.find((call: unknown[]) => call[0] === "failed")?.[1] as ((job: unknown, error: Error) => void) | undefined;
+
+    handler!({ id: "10", data: { jobId: "pipeline-1", userId: "user-1" }, attemptsMade: 1, opts: { attempts: 3 } }, new Error("temporary"));
+    expect(mocks.refundFailedJob).not.toHaveBeenCalled();
+
+    handler!({ id: "10", data: { jobId: "pipeline-1", userId: "user-1" }, attemptsMade: 3, opts: { attempts: 3 } }, new Error("terminal"));
+    expect(mocks.refundFailedJob).toHaveBeenCalledWith("user-1", "pipeline-1");
   });
 
   it("releases an unrecoverable first failure without raising an incident", () => {
