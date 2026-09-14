@@ -279,7 +279,7 @@ export async function recordClipFeedback(
   // Skipped for `note: ""` on purpose: an empty note is still written to the
   // row above, but relaying an empty message to the owner would be noise.
   if (input.note && input.note !== existing?.note) {
-    await relayToOwner(clip.title, input, row.id);
+    await relayToOwner(clip.title, input, row);
   }
 
   return {
@@ -308,18 +308,18 @@ export async function recordClipFeedback(
 async function relayToOwner(
   clipTitle: string,
   input: RecordClipFeedbackInput,
-  feedbackId: string
+  feedback: { id: string; verdict: string; reason: string | null }
 ): Promise<void> {
   const chat = process.env.SUPPORT_CHAT_ID?.trim();
   if (!chat) return;
   const lines = [
     `Clip feedback (${input.surface})`,
     `Clip: ${clipTitle}`,
-    `Verdict: ${input.verdict ?? "-"}  Reason: ${input.reason ?? "-"}`,
+    `Verdict: ${feedback.verdict || "-"}  Reason: ${feedback.reason ?? "-"}`,
     "",
     input.note ?? "",
     "",
-    `clipId ${input.clipId} - feedbackId ${feedbackId}`,
+    `clipId ${input.clipId} - feedbackId ${feedback.id}`,
   ];
   // sendTelegramMessage swallows its own failures and reports them as false, so
   // there is nothing to catch here - only a boolean worth logging. A lost relay

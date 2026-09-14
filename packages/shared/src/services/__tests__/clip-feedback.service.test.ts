@@ -405,6 +405,34 @@ describe("evidence copy", () => {
 });
 
 describe("owner relay", () => {
+  it("reports the persisted verdict and reason with a later note", async () => {
+    process.env.SUPPORT_CHAT_ID = "999";
+    feedbackFindUnique.mockResolvedValue({
+      id: "fb-1",
+      evidenceKey: "feedback/clip-1.mp4",
+      verdict: "NO",
+      reason: "CUTOFF",
+      note: null,
+    });
+    feedbackUpsert.mockResolvedValue({
+      id: "fb-1",
+      verdict: "NO",
+      reason: "CUTOFF",
+    });
+
+    await recordClipFeedback({
+      clipId: "clip-1",
+      userId: "user-1",
+      surface: "web",
+      note: "the ending is missing",
+    });
+
+    expect(String(sendTelegramMessageMock.mock.calls[0][1])).toContain(
+      "Verdict: NO  Reason: CUTOFF"
+    );
+    delete process.env.SUPPORT_CHAT_ID;
+  });
+
   it("relays feedback that carries text", async () => {
     process.env.SUPPORT_CHAT_ID = "999";
     await recordClipFeedback({
