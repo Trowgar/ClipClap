@@ -45,9 +45,6 @@ const PAID_OFFERS = Object.entries(PLAN_LIMITS).flatMap(([plan, cycles]) =>
   })
 );
 
-/** The cheapest paid plan, for the one sentence in the meta description that quotes it. */
-const ENTRY = PLAN_LIMITS.STARTER.WEEKLY!;
-
 /**
  * Title and description carry facts on purpose. An answer engine asked "cheap tool to clip
  * streams into shorts" can only quote what is written as a sentence, and the old copy ("Turn

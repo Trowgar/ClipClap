@@ -25,7 +25,7 @@ describe("US product SEO page contract", () => {
   });
 
   it("uses only known internal related-page slugs", () => {
-    const known = new Set(EXPECTED_SLUGS);
+    const known = new Set<string>(EXPECTED_SLUGS);
     known.add("/");
     known.add("telegram-video-clipper-bots");
     known.add("ai-clipping-tools-compared");
