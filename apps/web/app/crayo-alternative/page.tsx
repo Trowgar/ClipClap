@@ -31,14 +31,14 @@ const BOT = "https://t.me/clipclapio_bot?start=src_cmp_crayo";
 export const metadata: Metadata = {
   title: "Crayo alternative: an honest comparison with ClipClap",
   description:
-    "Crayo has no free tier and bills export minutes - 40 a month at $19. ClipClap bills source minutes from $3 a week and gives 40 minutes free. Why those units are not the same, and what ClipClap does worse.",
+    "Compare Crayo and ClipClap on export minutes, source minutes, free access and trade-offs before choosing.",
   alternates: { canonical: "/crayo-alternative" },
   openGraph: {
     type: "article",
     url: `${SITE}/crayo-alternative`,
     title: "Crayo alternative: an honest comparison with ClipClap",
     description:
-      "Export minutes against source minutes, no free tier against 40 free minutes, and where ClipClap is the wrong choice.",
+      "Compare export-minute and source-minute billing, free access and where ClipClap is the wrong choice.",
   },
 };
 

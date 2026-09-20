@@ -31,14 +31,14 @@ const BOT = "https://t.me/clipclapio_bot?start=src_cmp_submagic";
 export const metadata: Metadata = {
   title: "Submagic alternative: an honest comparison with ClipClap",
   description:
-    "Submagic is a captioning tool whose long-to-short clipping is a paid add-on, and its source-length caps run 1:30 to 30 minutes. ClipClap clips sources up to 3 hours from $3 a week. Prices read on both vendors' own pages, plus what ClipClap does worse.",
+    "Compare Submagic and ClipClap for long-to-short clipping, source length, price and features, including where ClipClap is weaker.",
   alternates: { canonical: "/submagic-alternative" },
   openGraph: {
     type: "article",
     url: `${SITE}/submagic-alternative`,
     title: "Submagic alternative: an honest comparison with ClipClap",
     description:
-      "Where the two products actually differ: what clipping costs, how long a source each will take, and what ClipClap does worse.",
+      "Compare clipping cost, source length, product scope and what ClipClap does worse.",
   },
 };
 

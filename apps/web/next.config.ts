@@ -8,6 +8,15 @@ const nextConfig: NextConfig = {
       bodySizeLimit: "1mb",
     },
   },
+  async redirects() {
+    return [
+      {
+        source: "/crayo-ai-alternative",
+        destination: "/crayo-alternative",
+        permanent: true,
+      },
+    ];
+  },
 };
 
 export default nextConfig;

@@ -8,7 +8,7 @@ const BOT = "https://t.me/clipclapio_bot?start=src_cmp_tgbots";
 const FREE_MINUTES = Math.floor(FREE_TIER.lifetimeSeconds / 60);
 const STARTER = PLAN_LIMITS.STARTER.WEEKLY!;
 const TITLE = "Telegram Video Clipper Bots: AI Clips & Manual Trims";
-const DESCRIPTION = "Turn long videos into subtitled clips in Telegram. Follow the ClipClap workflow and compare ClipClap, Clipline and Vyexa.";
+const DESCRIPTION = "Send a YouTube, Twitch or TikTok link to a Telegram clipper bot and get subtitled vertical clips back. Compare ClipClap, Clipline and Vyexa.";
 
 export const metadata: Metadata = {
   title: TITLE,
@@ -31,7 +31,7 @@ export default function TelegramClipperBotsPage() {
         <h1 className="text-3xl font-bold tracking-tight text-white sm:text-4xl">Telegram video clipper bots: turn long videos into shorts</h1>
         <p className="mt-4 text-base leading-relaxed text-neutral-300">
           A Telegram video clipper bot lets you send a recording in chat and get short video files back.
-          ClipClap selects highlights with AI and adds vertical framing and subtitles. A manual trimming bot
+          <Link href="/telegram-video-clipper" className="text-white underline underline-offset-4">ClipClap&apos;s Telegram video clipper workflow</Link> selects highlights with AI and adds vertical framing and subtitles. A manual trimming bot
           is useful when you already know the timestamps. Choose based on which job you need done.
         </p>
         <p className="mt-3 text-sm text-neutral-400">Updated 9 September 2026 by the ClipClap team. ClipClap is our product. Competitor details below describe public documentation, not a hands-on benchmark or an exhaustive list of bots.</p>

@@ -32,14 +32,14 @@ const BOT = "https://t.me/clipclapio_bot?start=src_cmp_eklipse";
 export const metadata: Metadata = {
   title: "Eklipse alternative: an honest comparison with ClipClap",
   description:
-    "Eklipse is built for Twitch and gaming, with a free tier that watermarks at 720p and Premium at $24.99 a month. ClipClap starts at $3 a week, keeps webcam and gameplay both visible in the vertical crop, and has no reviews yet. Includes what ClipClap does worse.",
+    "Compare Eklipse and ClipClap for Twitch clips, price, free output, framing and limits, including where ClipClap is weaker.",
   alternates: { canonical: "/eklipse-alternative" },
   openGraph: {
     type: "article",
     url: `${SITE}/eklipse-alternative`,
     title: "Eklipse alternative: an honest comparison with ClipClap",
     description:
-      "What each one costs, what the free tiers really give you, and the one thing ClipClap does that matters for gameplay clips.",
+      "Compare Twitch clip pricing, free output, vertical framing and the gameplay trade-offs.",
   },
 };
 

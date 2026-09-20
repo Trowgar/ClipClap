@@ -26,14 +26,14 @@ const BOT = "https://t.me/clipclapio_bot?start=src_cmp_opus";
 export const metadata: Metadata = {
   title: "Opus Clip alternative: an honest comparison with ClipClap",
   description:
-    "A side-by-side comparison of ClipClap and Opus Clip, checked on their own pricing pages. ClipClap starts at $3 a week for 75 source minutes with 40 minutes free; Opus Clip's Starter is $15 a month and its free plan watermarks clips. Includes what ClipClap does worse.",
+    "Compare ClipClap and Opus Clip on price, source limits, free exports and watermarking, including where ClipClap is weaker.",
   alternates: { canonical: "/opus-clip-alternative" },
   openGraph: {
     type: "article",
     url: `${SITE}/opus-clip-alternative`,
     title: "Opus Clip alternative: an honest comparison with ClipClap",
     description:
-      "Prices read on both vendors' own pages, a table, and a plain list of what ClipClap does worse.",
+      "Compare prices, source limits, free exports and what ClipClap does worse.",
   },
 };
 

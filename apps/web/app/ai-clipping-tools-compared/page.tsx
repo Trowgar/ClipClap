@@ -38,14 +38,14 @@ const BOT = "https://t.me/clipclapio_bot?start=src_cmp_hub";
 export const metadata: Metadata = {
   title: "AI clipping tools compared: prices, units and free tiers (2026)",
   description:
-    "Eighteen tools that cut long video into shorts, with prices read on their own pages on 19 August 2026 - and the column nobody else publishes: what each one actually bills you for. Clips, export minutes, source minutes and credits are not the same unit.",
+    "Compare 18 AI clipping tools by price, free tier and billing unit. Source minutes, credits, export minutes and clips are not interchangeable.",
   alternates: { canonical: "/ai-clipping-tools-compared" },
   openGraph: {
     type: "article",
     url: `${SITE}/ai-clipping-tools-compared`,
     title: "AI clipping tools compared: prices, units and free tiers (2026)",
     description:
-      "The prices, the free tiers, and what each vendor actually charges you for - with UNKNOWN left in wherever a vendor does not publish it.",
+      "Compare prices, free tiers and billing units, with UNKNOWN left wherever a vendor does not publish a material limit.",
   },
 };
 

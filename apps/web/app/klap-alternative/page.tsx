@@ -25,14 +25,14 @@ const BOT = "https://t.me/clipclapio_bot?start=src_cmp_klap";
 export const metadata: Metadata = {
   title: "Klap alternative: an honest comparison with ClipClap",
   description:
-    "Klap sells clips - 100 a month at $14 - and shows no free tier and no monthly price. ClipClap sells source minutes from $3 a week with 40 minutes free. Why the two prices cannot be compared directly, and what ClipClap does worse.",
+    "Compare Klap and ClipClap when one bills clips and the other source minutes. See prices, free tiers and trade-offs.",
   alternates: { canonical: "/klap-alternative" },
   openGraph: {
     type: "article",
     url: `${SITE}/klap-alternative`,
     title: "Klap alternative: an honest comparison with ClipClap",
     description:
-      "Clip count against source minutes: why the headline prices are not comparable, and which one fits the footage you actually have.",
+      "See why clip-count and source-minute billing are not directly comparable, and which workflow fits your footage.",
   },
 };
 
