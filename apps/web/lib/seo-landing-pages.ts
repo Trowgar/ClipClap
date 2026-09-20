@@ -1,3 +1,9 @@
+import {
+  FREE_TIER,
+  PLAN_LIMITS,
+  SOURCE_FLOOR,
+} from "@clipclap/shared/config/plans";
+
 export type SeoLandingPage = {
   slug: string;
   path: `/${string}`;
@@ -22,15 +28,19 @@ export type SeoLandingPage = {
 const BROWSER_CTA = "/login";
 const TELEGRAM_BOT =
   "https://t.me/clipclapio_bot?start=src_seo_telegram_video_clipper";
+const FREE_MINUTES = Math.floor(FREE_TIER.lifetimeSeconds / 60);
+const ENTRY_PLAN = PLAN_LIMITS.STARTER.WEEKLY!;
+const MAX_SOURCE_MINUTES = ENTRY_PLAN.maxSourceDurationMinutes;
+const MAX_FILE_SIZE_GB = ENTRY_PLAN.maxFileSizeBytes / 1024 ** 3;
+const MIN_SOURCE_SECONDS = SOURCE_FLOOR.minDurationSec;
 
 export const PRODUCT_SEO_PAGES = [
   {
     slug: "ai-video-clipper",
     path: "/ai-video-clipper",
     primaryKeyword: "AI video clipper",
-    title: "AI Video Clipper for Long Videos | ClipClap",
-    description:
-      "Turn long videos into vertical clips with AI subtitles. Get 40 free source minutes with no card or watermark in ClipClap.",
+    title: "AI Video Clipper Online for Long Videos | ClipClap",
+    description: `Turn long videos into vertical clips with AI subtitles. Get ${FREE_MINUTES} free source minutes with no card or watermark in ClipClap.`,
     breadcrumb: "AI video clipper",
     eyebrow: "Long-form to short-form",
     h1: "AI Video Clipper for Long Videos",
@@ -43,12 +53,12 @@ export const PRODUCT_SEO_PAGES = [
     proofPoints: [
       { label: "Bring", value: "YouTube, Twitch or TikTok links, or a file" },
       { label: "Get", value: "9:16 clips with burned-in subtitles" },
-      { label: "Try", value: "40 source minutes free, no card" },
+      { label: "Try", value: `${FREE_MINUTES} source minutes free, no card` },
     ],
     workflow: [
       {
         title: "Send long-form footage",
-        text: "Paste a supported video link or upload a file you own or have permission to reuse. Files can be up to 2 GB and must be at least 60 seconds long.",
+        text: `Paste a supported video link or upload a file you own or have permission to reuse. Files can be up to ${MAX_FILE_SIZE_GB} GB and must be at least ${MIN_SOURCE_SECONDS} seconds long.`,
       },
       {
         title: "Let ClipClap find moments",
@@ -67,7 +77,7 @@ export const PRODUCT_SEO_PAGES = [
       {
         question: "Is ClipClap free to try?",
         answer:
-          "You get 40 source minutes once per account, with no card required and no watermark on the free clips. The allowance does not renew automatically.",
+          `You get ${FREE_MINUTES} source minutes once per account, with no card required and no watermark on the free clips. The allowance does not renew automatically.`,
       },
       {
         question: "Can I use ClipClap from Telegram?",
@@ -87,8 +97,7 @@ export const PRODUCT_SEO_PAGES = [
     path: "/podcast-to-shorts",
     primaryKeyword: "podcast to Shorts",
     title: "Podcast to Shorts Converter with AI | ClipClap",
-    description:
-      "Convert podcast and interview recordings into subtitled vertical Shorts. Try 40 free source minutes in ClipClap with no card or watermark.",
+    description: `Convert podcast and interview recordings into subtitled vertical Shorts. Try ${FREE_MINUTES} free source minutes in ClipClap with no card or watermark.`,
     breadcrumb: "Podcast to Shorts",
     eyebrow: "For podcasts and interviews",
     h1: "Podcast to Shorts Converter for Long Interviews",
@@ -125,7 +134,7 @@ export const PRODUCT_SEO_PAGES = [
       {
         question: "Does it choose clips from the whole podcast?",
         answer:
-          "It can process long source video on paid plans within the published source-duration limit. The result is a set of candidate moments, not a promise that every important exchange will be selected.",
+          `It can process paid-plan sources up to ${MAX_SOURCE_MINUTES} minutes. The result is a set of candidate moments, not a promise that every important exchange will be selected.`,
       },
       {
         question: "Can I add the clips to YouTube Shorts?",
@@ -159,7 +168,7 @@ export const PRODUCT_SEO_PAGES = [
     proofPoints: [
       { label: "Source", value: "Twitch links or uploaded VOD files" },
       { label: "Frame", value: "Gameplay and webcam context in 9:16" },
-      { label: "Try", value: "40 source minutes free, no watermark" },
+      { label: "Try", value: `${FREE_MINUTES} source minutes free, no watermark` },
     ],
     workflow: [
       {
@@ -188,7 +197,7 @@ export const PRODUCT_SEO_PAGES = [
       {
         question: "Is the free output watermarked?",
         answer:
-          "The one-time 40-minute source allowance produces clips without a watermark and does not require a card. Review the results before choosing a paid plan.",
+          `The one-time ${FREE_MINUTES}-minute source allowance produces clips without a watermark and does not require a card. Review the results before choosing a paid plan.`,
       },
     ],
     relatedSlugs: [
@@ -203,8 +212,7 @@ export const PRODUCT_SEO_PAGES = [
     path: "/youtube-to-shorts",
     primaryKeyword: "YouTube to Shorts",
     title: "YouTube to Shorts Converter with AI | ClipClap",
-    description:
-      "Convert a YouTube video you can reuse into vertical Shorts with AI-selected moments and subtitles. Try 40 source minutes free in ClipClap.",
+    description: `Convert a YouTube video you can reuse into vertical Shorts with AI-selected moments and subtitles. Try ${FREE_MINUTES} source minutes free in ClipClap.`,
     breadcrumb: "YouTube to Shorts",
     eyebrow: "From YouTube video to Shorts",
     h1: "YouTube to Shorts Converter With AI",
@@ -246,7 +254,7 @@ export const PRODUCT_SEO_PAGES = [
       {
         question: "How many free minutes do I get?",
         answer:
-          "ClipClap includes 40 source minutes once per account, with no card required and no watermark on the free clips. The allowance is based on source video, not exported clip length.",
+          `ClipClap includes ${FREE_MINUTES} source minutes once per account, with no card required and no watermark on the free clips. The allowance is based on source video, not exported clip length.`,
       },
     ],
     relatedSlugs: [
@@ -261,8 +269,7 @@ export const PRODUCT_SEO_PAGES = [
     path: "/telegram-video-clipper",
     primaryKeyword: "Telegram video clipper",
     title: "Telegram Video Clipper for Long Videos | ClipClap",
-    description:
-      "Send a YouTube, Twitch or TikTok link to a Telegram video clipper and get subtitled vertical clips back. Try ClipClap with 40 free minutes.",
+    description: `Send a YouTube, Twitch or TikTok link to a Telegram video clipper and get subtitled vertical clips back. Try ClipClap with ${FREE_MINUTES} free minutes.`,
     breadcrumb: "Telegram video clipper",
     eyebrow: "Clip from the chat",
     h1: "Telegram Video Clipper for Long Videos",
@@ -275,7 +282,7 @@ export const PRODUCT_SEO_PAGES = [
     proofPoints: [
       { label: "Send", value: "A YouTube, Twitch or TikTok link, or a file" },
       { label: "Receive", value: "Vertical subtitled clips in the same chat" },
-      { label: "Try", value: "40 source minutes, no card or watermark" },
+      { label: "Try", value: `${FREE_MINUTES} source minutes, no card or watermark` },
     ],
     workflow: [
       {
