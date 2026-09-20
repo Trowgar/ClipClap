@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PRODUCT_SEO_PAGES } from "../../lib/seo-landing-pages";
+import { createSeoMetadata } from "../../lib/seo-metadata";
 
 const EXPECTED_SLUGS = [
   "ai-video-clipper",
@@ -44,5 +45,13 @@ describe("US product SEO page contract", () => {
       expect(page.limitations.length).toBeGreaterThanOrEqual(2);
       expect(page.intro.toLowerCase()).toContain(page.primaryKeyword.toLowerCase());
     }
+  });
+
+  it("creates a self-canonical metadata object", () => {
+    const metadata = createSeoMetadata(PRODUCT_SEO_PAGES[0]);
+    expect(metadata.title).toBe(PRODUCT_SEO_PAGES[0].title);
+    expect(metadata.description).toBe(PRODUCT_SEO_PAGES[0].description);
+    expect(metadata.alternates?.canonical).toBe(PRODUCT_SEO_PAGES[0].path);
+    expect(metadata.openGraph?.url).toContain(PRODUCT_SEO_PAGES[0].path);
   });
 });
