@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 import { COMPARISON_PAGES } from "@/components/related-comparisons";
+import { PRODUCT_SEO_PAGES } from "@/lib/seo-landing-pages";
 
 const SITE = process.env.NEXT_PUBLIC_APP_URL ?? "https://clipclap.io";
 
@@ -47,6 +48,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
     ...COMPARISON_PAGES.map((page) => ({
       url: `${SITE}/${page.slug}`,
       lastModified: new Date(COMPARISON_LAST_MODIFIED[page.slug]),
+      changeFrequency: "monthly" as const,
+      priority: 0.8,
+    })),
+    ...PRODUCT_SEO_PAGES.map((page) => ({
+      url: `${SITE}${page.path}`,
+      lastModified: new Date(page.lastModified),
       changeFrequency: "monthly" as const,
       priority: 0.8,
     })),

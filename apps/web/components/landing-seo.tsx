@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { FREE_TIER, PLAN_LIMITS } from "@clipclap/shared/config/plans";
+import { PRODUCT_SEO_PAGES } from "@/lib/seo-landing-pages";
 
 const freeMinutes = Math.floor(FREE_TIER.lifetimeSeconds / 60);
 const starter = PLAN_LIMITS.STARTER.WEEKLY!;
@@ -25,6 +26,25 @@ export function LandingSeo() {
             </li>
           ))}
         </ol>
+      </section>
+
+      <section aria-labelledby="use-cases-heading" className="mt-16 border-t border-white/10 pt-10">
+        <p className="font-mono text-xs uppercase tracking-widest text-neutral-500">Start with your footage</p>
+        <h2 id="use-cases-heading" className="mt-3 text-2xl font-semibold tracking-tight text-white sm:text-3xl">
+          Choose a clipping workflow
+        </h2>
+        <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {PRODUCT_SEO_PAGES.map((page) => (
+            <Link
+              key={page.slug}
+              href={page.path}
+              className="group rounded-xl border border-white/10 p-5 transition-colors hover:border-white/30 focus-visible:outline-2 focus-visible:outline-white"
+            >
+              <h3 className="font-medium text-white group-hover:underline">{page.breadcrumb}</h3>
+              <p className="mt-3 text-sm leading-relaxed text-neutral-400">{page.summary}</p>
+            </Link>
+          ))}
+        </div>
       </section>
 
       <section aria-labelledby="footage-heading" className="mt-16 border-t border-white/10 pt-10">

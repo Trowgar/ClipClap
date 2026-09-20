@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { RelatedProductPages } from "@/components/seo-landing-page";
 
 /**
  * The one list of comparison pages, and the reason it exists as a component rather than as
@@ -33,25 +34,38 @@ export const COMPARISON_PAGES = [
   },
 ] as const;
 
+const PRODUCT_LINKS_BY_PAGE: Partial<Record<string, readonly string[]>> = {
+  "ai-clipping-tools-compared": ["ai-video-clipper", "podcast-to-shorts"],
+  "telegram-video-clipper-bots": ["telegram-video-clipper"],
+  "opus-clip-alternative": ["ai-video-clipper"],
+  "submagic-alternative": ["ai-video-clipper"],
+  "eklipse-alternative": ["twitch-clip-maker"],
+  "klap-alternative": ["ai-video-clipper"],
+  "crayo-alternative": ["ai-video-clipper"],
+};
+
 export function RelatedComparisons({ current }: { current: string }) {
   const others = COMPARISON_PAGES.filter((p) => p.slug !== current);
   if (others.length === 0) return null;
 
   return (
-    <nav className="mt-10 border-t border-white/[0.06] pt-6 text-sm">
-      <p className="text-neutral-500">Related comparisons</p>
-      <ul className="mt-2 space-y-1">
-        {others.map((p) => (
-          <li key={p.slug}>
-            <Link
-              href={`/${p.slug}`}
-              className="text-neutral-300 underline-offset-4 hover:text-white hover:underline"
-            >
-              {p.linkText}
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </nav>
+    <>
+      <nav className="mt-10 border-t border-white/[0.06] pt-6 text-sm">
+        <p className="text-neutral-500">Related comparisons</p>
+        <ul className="mt-2 space-y-1">
+          {others.map((p) => (
+            <li key={p.slug}>
+              <Link
+                href={`/${p.slug}`}
+                className="text-neutral-300 underline-offset-4 hover:text-white hover:underline"
+              >
+                {p.linkText}
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </nav>
+      <RelatedProductPages current={current} slugs={PRODUCT_LINKS_BY_PAGE[current]} />
+    </>
   );
 }
