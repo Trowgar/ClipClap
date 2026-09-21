@@ -220,35 +220,33 @@ export function SupportChat({
 
       <div className="border-t border-border bg-background/80 p-3 backdrop-blur sm:p-4">
         {error && <p role="alert" className="mb-2 text-xs text-red-300">{error}</p>}
-        <div className="flex items-end gap-2">
-          <div className="min-w-0 flex-1">
-            <label htmlFor="support-message" className="sr-only">Message to support</label>
-            <textarea
-              id="support-message"
-              aria-label="Message to support"
-              value={text}
-              onChange={event => setText(event.target.value)}
-              onKeyDown={event => {
-                if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
-                  event.preventDefault();
-                  void send(text);
-                }
-              }}
-              maxLength={4000}
-              rows={3}
-              placeholder="Describe what happened…"
-              className="block max-h-40 min-h-20 w-full resize-y rounded-lg border border-border bg-card px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-white/30"
-            />
-            <div className="mt-1 flex justify-between px-1 text-[10px] text-muted-foreground">
-              <span>Ctrl/⌘ + Enter to send</span>
-              {text.length >= 3500 && <span>{text.length}/4000</span>}
-            </div>
+        <div className="space-y-2">
+          <label htmlFor="support-message" className="sr-only">Message to support</label>
+          <textarea
+            id="support-message"
+            aria-label="Message to support"
+            value={text}
+            onChange={event => setText(event.target.value)}
+            onKeyDown={event => {
+              if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                event.preventDefault();
+                void send(text);
+              }
+            }}
+            maxLength={4000}
+            rows={3}
+            placeholder="Describe what happened…"
+            className="block h-20 w-full resize-none rounded-lg border border-border bg-card px-3 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-white/30"
+          />
+          <div className="flex justify-between px-1 text-[10px] text-muted-foreground">
+            <span>Ctrl/⌘ + Enter to send</span>
+            {text.length >= 3500 && <span>{text.length}/4000</span>}
           </div>
           <button type="button" onClick={() => void send(text)}
             disabled={sending || !text.trim() || text.length > 4000}
-            className="flex h-10 shrink-0 items-center gap-2 rounded-lg bg-white px-4 text-sm font-medium text-black transition-colors hover:bg-neutral-200 disabled:cursor-not-allowed disabled:opacity-40">
+            className="flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-white px-4 text-sm font-medium text-black transition-colors hover:bg-neutral-200 disabled:cursor-not-allowed disabled:opacity-40">
             <PaperPlaneTilt size={16} weight="fill" />
-            <span className="hidden sm:inline">Send</span>
+            <span>Send</span>
           </button>
         </div>
       </div>
