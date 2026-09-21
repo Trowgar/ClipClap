@@ -10,7 +10,13 @@ vi.mock("next/navigation", () => ({
   usePathname: pathname,
   useSearchParams: searchParams,
 }));
-vi.mock("../../components/support-chat", () => ({ SupportChat: () => null }));
+vi.mock("../../components/support-chat", () => ({
+  SupportChat: ({ active, contextPath }: { active?: boolean; contextPath?: string }) =>
+    React.createElement("div", {
+      "data-active": String(active),
+      "data-context-path": contextPath,
+    }),
+}));
 
 import { SupportWidget } from "../../components/support-widget";
 
@@ -54,4 +60,6 @@ it("opens from the support query parameter", () => {
   const html = renderWidget(0);
   expect(html).toContain('aria-label="Support chat"');
   expect(html).toContain('aria-label="Close support chat"');
+  expect(html).toContain('data-active="true"');
+  expect(html).toContain('data-context-path="/dashboard/projects/p1"');
 });

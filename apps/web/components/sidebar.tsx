@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import { ChatCircleDots, CreditCard, FolderOpen, House, Receipt, Gear, Handshake, Wallet } from "@phosphor-icons/react";
+import { usePathname } from "next/navigation";
+import { CreditCard, FolderOpen, House, Receipt, Gear, Handshake, Wallet } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
 import { UsageBar } from "./usage-bar";
 import { UserNav } from "./user-nav";
@@ -47,7 +47,6 @@ const navSections: {
     items: [
       { href: "/dashboard/plans", label: "Plans", icon: CreditCard },
       { href: "/dashboard/billing", label: "Billing", icon: Receipt },
-      { href: "/dashboard/support", label: "Support", icon: ChatCircleDots },
       { href: "/dashboard/settings", label: "Settings", icon: Gear },
     ],
   },
@@ -56,11 +55,9 @@ const navSections: {
 export function SidebarContent({
   user,
   usage,
-  supportUnread = 0,
   onNavigate,
 }: SidebarProps & { onNavigate?: () => void }) {
   const pathname = usePathname();
-  const router = useRouter();
 
   return (
     <div className="flex h-full flex-col">
@@ -86,16 +83,11 @@ export function SidebarContent({
                   ? pathname === "/dashboard"
                   : pathname.startsWith(item.href);
 
-              const href = item.href === "/dashboard/support" && pathname !== "/dashboard/support"
-                ? `${item.href}?from=${encodeURIComponent(pathname)}` : item.href;
               return (
                 <Link
                   key={item.href}
-                  href={href}
-                  onClick={() => {
-                    onNavigate?.();
-                    if (item.href === "/dashboard/support") router.refresh();
-                  }}
+                  href={item.href}
+                  onClick={onNavigate}
                   className={cn(
                     "flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors",
                     isActive
@@ -105,12 +97,6 @@ export function SidebarContent({
                 >
                   <item.icon className="h-4 w-4" />
                   <span>{item.label}</span>
-                  {item.href === "/dashboard/support" && supportUnread > 0 && (
-                    <span aria-label={`${supportUnread} unread support replies`}
-                      className="ml-auto min-w-5 rounded-full bg-white px-1.5 py-0.5 text-center text-[10px] font-semibold leading-none text-black">
-                      {supportUnread > 99 ? "99+" : supportUnread}
-                    </span>
-                  )}
                 </Link>
               );
             })}

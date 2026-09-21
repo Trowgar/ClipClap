@@ -284,7 +284,7 @@ export async function sendPasswordResetEmail(
 }
 
 export function supportReplyEmailContent() {
-  const href = `${APP_URL}/dashboard/support`;
+  const href = `${APP_URL}/dashboard?support=open`;
   const heading = "Support replied";
   const body = "A reply from ClipClap support is waiting in your Dashboard.";
   const expiry = "Sign in to ClipClap to read it and continue the conversation.";

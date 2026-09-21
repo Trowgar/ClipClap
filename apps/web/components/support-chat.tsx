@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowClockwise, ChatCircleDots, PaperPlaneTilt } from "@phosphor-icons/react";
+import { cn } from "@/lib/utils";
 
 export type SupportMessage = {
   id: string;
@@ -35,7 +36,11 @@ export function mergeSupportMessages(
   );
 }
 
-export function SupportChat({ contextPath }: { contextPath?: string }) {
+export function SupportChat({
+  contextPath,
+  active = true,
+  className,
+}: { contextPath?: string; active?: boolean; className?: string }) {
   const router = useRouter();
   const [messages, setMessages] = useState<SupportMessage[]>([]);
   const [text, setText] = useState("");
@@ -68,6 +73,7 @@ export function SupportChat({ contextPath }: { contextPath?: string }) {
   }, [router]);
 
   useEffect(() => {
+    if (!active) return;
     void refresh();
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void refresh();
@@ -78,7 +84,7 @@ export function SupportChat({ contextPath }: { contextPath?: string }) {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [refresh]);
+  }, [active, refresh]);
 
   useEffect(() => { endRef.current?.scrollIntoView({ block: "nearest" }); }, [messages]);
 
@@ -123,7 +129,10 @@ export function SupportChat({ contextPath }: { contextPath?: string }) {
   };
 
   return (
-    <section className="flex min-h-[32rem] flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card/40 shadow-[0_16px_60px_rgba(0,0,0,0.22)]">
+    <section className={cn(
+      "flex min-h-[32rem] flex-1 flex-col overflow-hidden rounded-xl border border-border bg-card/40 shadow-[0_16px_60px_rgba(0,0,0,0.22)]",
+      className
+    )}>
       <div
         aria-label="Support conversation"
         aria-live="polite"

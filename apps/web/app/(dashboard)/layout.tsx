@@ -3,6 +3,7 @@ import { auth } from "@/lib/auth";
 import { userService, getFreeTrialStatus, countUnreadWebSupport } from "@clipclap/shared";
 import { Sidebar } from "@/components/sidebar";
 import { MobileHeader } from "@/components/mobile-header";
+import { SupportWidget } from "@/components/support-widget";
 
 export default async function DashboardLayout({
   children,
@@ -52,6 +53,7 @@ export default async function DashboardLayout({
       <MobileHeader user={user} usage={usageProps} supportUnread={supportUnread} />
       <Sidebar user={user} usage={usageProps} supportUnread={supportUnread} />
       <main className="flex-1 overflow-y-auto p-4 sm:p-6">{children}</main>
+      <SupportWidget unread={supportUnread} />
     </div>
   );
 }
