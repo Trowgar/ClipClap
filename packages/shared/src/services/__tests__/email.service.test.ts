@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { escapeHtml, layout } from "../email.service";
+import { escapeHtml, layout, supportReplyEmailContent } from "../email.service";
 
 /** Fix 5 replaced a "callers must be careful" comment with escaping done by
  *  construction. These tests are what actually holds that in place. */
@@ -24,6 +24,16 @@ describe("escapeHtml", () => {
 
   it("leaves ordinary text untouched", () => {
     expect(escapeHtml("Confirm your email")).toBe("Confirm your email");
+  });
+});
+
+describe("support reply email", () => {
+  it("links back to the authenticated chat without copying the transcript", () => {
+    const mail = supportReplyEmailContent();
+    expect(mail.subject).toBe("ClipClap support replied");
+    expect(mail.text).toContain("/dashboard/support");
+    expect(mail.html).toContain("/dashboard/support");
+    expect(JSON.stringify(mail)).not.toContain("customer message");
   });
 });
 

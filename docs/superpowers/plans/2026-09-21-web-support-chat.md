@@ -177,7 +177,7 @@ git commit -m "feat(web): expose authenticated support API"
 - Modify: `apps/bot/src/__tests__/support.test.ts`
 - Modify: `packages/shared/src/services/__tests__/email.service.test.ts`
 
-- [ ] **Step 1: Write failing marker, dedupe and email tests**
+- [x] **Step 1: Write failing marker, dedupe and email tests**
 
 Assert the exact anchored parser:
 
@@ -193,17 +193,17 @@ operator warning. Duplicate updates do not create another row or email.
 Assert `sendSupportReplyEmail()` uses subject `ClipClap support replied`, a
 `/dashboard/support` CTA, and contains no transcript text.
 
-- [ ] **Step 2: Run focused tests and verify failure**
+- [x] **Step 2: Run focused tests and verify failure**
 
 Run bot support and email tests. Expected: FAIL on missing parser/mailer.
 
-- [ ] **Step 3: Share the support destination helper**
+- [x] **Step 3: Share the support destination helper**
 
 Export `getSupportChatId()` from the existing shared Telegram notification
 module using `SUPPORT_CHAT_ID`, then the first referral admin fallback. Keep a
 thin exported wrapper in bot handlers so existing imports/tests remain valid.
 
-- [ ] **Step 4: Implement web-reply routing**
+- [x] **Step 4: Implement web-reply routing**
 
 In the operator-chat branch, check `parseWebSupportReply` before the existing
 numeric Telegram marker. Require text. Call `storeWebSupportReply` with
@@ -212,7 +212,7 @@ the user; only when `email && emailVerified` call `sendSupportReplyEmail` and,
 on accepted send, set this message's `emailNotifiedAt`. Never send email for a
 duplicate or an already-unread thread. A failed email does not remove the row.
 
-- [ ] **Step 5: Run bot/email tests plus existing support regressions**
+- [x] **Step 5: Run bot/email tests plus existing support regressions**
 
 Run:
 
@@ -222,7 +222,7 @@ docker exec clipclap-support-check-20260921 sh -lc 'cd /app && SUBMISSION_QUEUE=
 
 Expected: all PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add packages/shared/src/services/telegram-notification.service.ts packages/shared/src/services/email.service.ts apps/bot/src/handlers.ts apps/bot/src/__tests__/support.test.ts packages/shared/src/services/__tests__/email.service.test.ts

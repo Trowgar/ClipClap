@@ -41,6 +41,10 @@ import {
   recordConversionEvent,
   recordFunnelEvent,
   recordSupportMessage,
+  storeWebSupportReply,
+  markSupportEmailNotified,
+  sendSupportReplyEmail,
+  getSupportChatId as getConfiguredSupportChatId,
   sanitiseCampaignSlug,
   type SupportKind,
   recordUploadRefusal,
@@ -279,6 +283,7 @@ function helpKeyboard(dict: Dict): ReplyKeyboardMarkup {
 
 const SUPPORT_MARKER = "🆕 #uid";
 const SUPPORT_UID_RE = new RegExp(`^${SUPPORT_MARKER}(\\d+)`);
+const WEB_SUPPORT_RE = /^🆕 #web([a-z0-9]+)\b/;
 
 export function matchSupportAction(text: string): "close" | null {
   for (const loc of LOCALES) {
@@ -288,13 +293,7 @@ export function matchSupportAction(text: string): "close" | null {
 }
 
 export function getSupportChatId(): string | null {
-  const explicit = process.env.SUPPORT_CHAT_ID?.trim();
-  if (explicit) return explicit;
-  const first = (process.env.REFERRAL_ADMIN_TELEGRAM_IDS ?? "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)[0];
-  return first ?? null;
+  return getConfiguredSupportChatId();
 }
 
 function supportKeyboard(dict: Dict): ReplyKeyboardMarkup {
@@ -312,6 +311,40 @@ export function parseSupportReply(
   if (!r?.from?.is_bot) return null;
   const m = SUPPORT_UID_RE.exec(r.text ?? r.caption ?? "");
   return m ? { uid: m[1] } : null;
+}
+
+export function parseWebSupportReply(message: TelegramMessage): { userId: string } | null {
+  const reply = message.reply_to_message;
+  if (!reply?.from?.is_bot) return null;
+  const match = WEB_SUPPORT_RE.exec(reply.text ?? reply.caption ?? "");
+  return match ? { userId: match[1] } : null;
+}
+
+export async function deliverWebSupportReply(
+  client: TelegramClient,
+  userId: string,
+  text: string,
+  supportChatId: string,
+  telegramMessageId: number
+) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId }, select: { id: true, email: true, emailVerified: true },
+  });
+  if (!user) {
+    await client.sendMessage(supportChatId, `⚠️ #web${userId}: пользователь не найден.`).catch(() => undefined);
+    return;
+  }
+  let stored;
+  try {
+    stored = await storeWebSupportReply({ userId, text, supportChatId, telegramMessageId });
+  } catch {
+    await client.sendMessage(supportChatId, `⚠️ #web${userId}: не удалось сохранить ответ.`).catch(() => undefined);
+    return;
+  }
+  if (!stored.created || !stored.shouldNotify || !user.email || !user.emailVerified) return;
+  if (await sendSupportReplyEmail(user.email)) {
+    await markSupportEmailNotified(stored.message.id).catch(() => undefined);
+  }
 }
 
 async function openSupport(
@@ -646,6 +679,15 @@ export async function handleUpdate(
 
   // Operator answering a support ticket (a Telegram reply to the bot's #uid message).
   if (String(message.chat.id) === getSupportChatId()) {
+    const webReply = parseWebSupportReply(message);
+    if (webReply) {
+      if (!text) {
+        await client.sendMessage(message.chat.id, "⚠️ Ответ должен быть текстом. Ответь текстом на сообщение тикета.").catch(() => undefined);
+        return;
+      }
+      await deliverWebSupportReply(client, webReply.userId, text, String(message.chat.id), message.message_id);
+      return;
+    }
     const parsed = parseSupportReply(message);
     if (parsed) {
       if (!text) {

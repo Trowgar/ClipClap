@@ -282,3 +282,25 @@ export async function sendPasswordResetEmail(
     }),
   });
 }
+
+export function supportReplyEmailContent() {
+  const href = `${APP_URL}/dashboard/support`;
+  const heading = "Support replied";
+  const body = "A reply from ClipClap support is waiting in your Dashboard.";
+  const expiry = "Sign in to ClipClap to read it and continue the conversation.";
+  return {
+    subject: "ClipClap support replied",
+    text: [heading, "", body, "", href, "", expiry].join("\n"),
+    html: layout({
+      preheader: "A reply from ClipClap support is waiting.",
+      heading,
+      body,
+      cta: { href, label: "Open support" },
+      expiry,
+    }),
+  };
+}
+
+export function sendSupportReplyEmail(to: string): Promise<boolean> {
+  return sendEmail({ to, ...supportReplyEmailContent() });
+}

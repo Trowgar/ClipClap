@@ -5,12 +5,18 @@ const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
   update: vi.fn(),
   getOrCreateTelegramUser: vi.fn(),
+  storeWebSupportReply: vi.fn(),
+  markSupportEmailNotified: vi.fn(),
+  sendSupportReplyEmail: vi.fn(),
 }));
 vi.mock("@clipclap/shared", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
     getOrCreateTelegramUser: mocks.getOrCreateTelegramUser,
+    storeWebSupportReply: mocks.storeWebSupportReply,
+    markSupportEmailNotified: mocks.markSupportEmailNotified,
+    sendSupportReplyEmail: mocks.sendSupportReplyEmail,
     prisma: { user: { findUnique: mocks.findUnique, update: mocks.update } },
   };
 });
@@ -19,16 +25,18 @@ import {
   matchSupportAction,
   getSupportChatId,
   parseSupportReply,
+  parseWebSupportReply,
   relaySupportMessage,
   deliverSupportReply,
   relaySupportMedia,
   closeSupport,
+  deliverWebSupportReply,
 } from "../handlers";
 
 const origEnv = { ...process.env };
 afterEach(() => {
   process.env = { ...origEnv };
-  vi.clearAllMocks();
+  vi.resetAllMocks();
 });
 
 describe("matchSupportAction", () => {
@@ -79,6 +87,62 @@ describe("parseSupportReply", () => {
     expect(parseSupportReply(notBot as never)).toBeNull();
     expect(parseSupportReply(botReply("no marker here") as never)).toBeNull();
     expect(parseSupportReply({ message_id: 1, chat: { id: 5, type: "private" } } as never)).toBeNull();
+  });
+});
+
+describe("parseWebSupportReply", () => {
+  const botReply = (text: string) => ({
+    message_id: 2, chat: { id: 5, type: "private" },
+    reply_to_message: {
+      message_id: 1, chat: { id: 5, type: "private" },
+      from: { id: 9, is_bot: true }, text,
+    },
+  });
+
+  it("accepts only an anchored server-generated web marker", () => {
+    expect(parseWebSupportReply(botReply("🆕 #webcm123 User") as never)).toEqual({ userId: "cm123" });
+    expect(parseWebSupportReply(botReply("prefix #webcm123") as never)).toBeNull();
+    expect(parseWebSupportReply(botReply("🆕 #web../../etc") as never)).toBeNull();
+  });
+});
+
+describe("deliverWebSupportReply", () => {
+  it("stores one reply and emails only the first unread verified user", async () => {
+    mocks.findUnique.mockResolvedValue({ id: "u1", email: "verified@example.test", emailVerified: new Date() });
+    mocks.storeWebSupportReply.mockResolvedValue({
+      message: { id: "r1" }, created: true, shouldNotify: true,
+    });
+    mocks.sendSupportReplyEmail.mockResolvedValue(true);
+    mocks.markSupportEmailNotified.mockResolvedValue(undefined);
+    const client = { sendMessage: vi.fn().mockResolvedValue(undefined) } as never;
+    await deliverWebSupportReply(client, "u1", "We fixed it", "777", 42);
+    expect(mocks.storeWebSupportReply).toHaveBeenCalledWith({
+      userId: "u1", text: "We fixed it", supportChatId: "777", telegramMessageId: 42,
+    });
+    expect(mocks.sendSupportReplyEmail).toHaveBeenCalledWith("verified@example.test");
+    expect(mocks.markSupportEmailNotified).toHaveBeenCalledWith("r1");
+  });
+
+  it("does not email duplicates, already-unread threads or unverified addresses", async () => {
+    mocks.findUnique.mockResolvedValue({ id: "u1", email: "u@example.test", emailVerified: null });
+    mocks.storeWebSupportReply.mockResolvedValue({
+      message: { id: "r1" }, created: false, shouldNotify: false,
+    });
+    const client = { sendMessage: vi.fn().mockResolvedValue(undefined) } as never;
+    await deliverWebSupportReply(client, "u1", "x", "777", 42);
+    expect(mocks.sendSupportReplyEmail).not.toHaveBeenCalled();
+  });
+
+  it("warns the operator when the user is missing or the reply cannot be stored", async () => {
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    const client = { sendMessage } as never;
+    mocks.findUnique.mockResolvedValueOnce(null);
+    await deliverWebSupportReply(client, "missing", "x", "777", 42);
+    expect(sendMessage).toHaveBeenCalledWith("777", expect.stringContaining("не найден"));
+    mocks.findUnique.mockResolvedValueOnce({ id: "u1", email: null, emailVerified: null });
+    mocks.storeWebSupportReply.mockRejectedValueOnce(new Error("db down"));
+    await deliverWebSupportReply(client, "u1", "x", "777", 43);
+    expect(sendMessage).toHaveBeenCalledWith("777", expect.stringContaining("не удалось сохранить"));
   });
 });
 
