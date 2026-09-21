@@ -6,10 +6,15 @@ import { ChatCircleDots, X } from "@phosphor-icons/react";
 import { SupportChat } from "@/components/support-chat";
 import { cn } from "@/lib/utils";
 
+export function shouldOpenSupportWidget(supportQuery: string | null): boolean {
+  return supportQuery === "open";
+}
+
 export function SupportWidget({ unread }: { unread: number }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const initiallyOpen = searchParams.get("support") === "open";
+  const supportQuery = searchParams.get("support");
+  const initiallyOpen = shouldOpenSupportWidget(supportQuery);
   const [open, setOpen] = useState(initiallyOpen);
   const [hasOpened, setHasOpened] = useState(initiallyOpen);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -24,6 +29,12 @@ export function SupportWidget({ unread }: { unread: number }) {
     setOpen(false);
     window.requestAnimationFrame(() => triggerRef.current?.focus());
   }, []);
+
+  useEffect(() => {
+    if (!shouldOpenSupportWidget(supportQuery)) return;
+    setHasOpened(true);
+    setOpen(true);
+  }, [supportQuery]);
 
   useEffect(() => {
     if (!open) return;
@@ -76,6 +87,7 @@ export function SupportWidget({ unread }: { unread: number }) {
           <div
             ref={panelRef}
             role="dialog"
+            aria-modal="true"
             aria-label="Support chat"
             className={cn(
               "fixed inset-x-0 bottom-0 z-[60] flex h-[min(85dvh,44rem)] flex-col overflow-hidden rounded-t-2xl border border-border bg-background pb-[env(safe-area-inset-bottom)] shadow-[0_-20px_70px_rgba(0,0,0,0.45)]",
@@ -112,7 +124,9 @@ export function SupportWidget({ unread }: { unread: number }) {
       <button
         ref={triggerRef}
         type="button"
-        aria-label="Open support chat"
+        aria-label={unread > 0
+          ? `Open support chat, ${unread} unread ${unread === 1 ? "reply" : "replies"}`
+          : "Open support chat"}
         aria-expanded={open}
         onClick={show}
         className={cn(
@@ -123,7 +137,7 @@ export function SupportWidget({ unread }: { unread: number }) {
         <ChatCircleDots size={21} weight="fill" />
         {unread > 0 && (
           <span
-            aria-label={`${unread} unread support replies`}
+            aria-hidden="true"
             className="absolute -right-1.5 -top-1.5 min-w-5 rounded-full border-2 border-background bg-red-500 px-1 py-0.5 text-center text-[10px] font-bold leading-none text-white"
           >
             {unread > 99 ? "99+" : unread}

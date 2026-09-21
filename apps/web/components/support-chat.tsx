@@ -36,6 +36,11 @@ export function mergeSupportMessages(
   );
 }
 
+export function beginSupportRefresh(previous: AbortController | null): AbortController {
+  previous?.abort();
+  return new AbortController();
+}
+
 export async function refreshSupportConversation(signal: AbortSignal): Promise<{
   messages: SupportMessage[];
   markedRead: boolean;
@@ -76,8 +81,12 @@ export function SupportChat({
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const refreshControllerRef = useRef<AbortController | null>(null);
 
-  const refresh = useCallback(async (signal: AbortSignal) => {
+  const refresh = useCallback(async () => {
+    const controller = beginSupportRefresh(refreshControllerRef.current);
+    refreshControllerRef.current = controller;
+    const { signal } = controller;
     try {
       const result = await refreshSupportConversation(signal);
       if (!result || signal.aborted) return;
@@ -87,23 +96,24 @@ export function SupportChat({
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load support messages.");
     } finally {
+      if (refreshControllerRef.current === controller) refreshControllerRef.current = null;
       if (!signal.aborted) setLoading(false);
     }
   }, [router]);
 
   useEffect(() => {
     if (!active) return;
-    const controller = new AbortController();
-    void refresh(controller.signal);
+    void refresh();
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void refresh(controller.signal);
+      if (document.visibilityState === "visible") void refresh();
     }, 5000);
     const onVisible = () => {
-      if (document.visibilityState === "visible") void refresh(controller.signal);
+      if (document.visibilityState === "visible") void refresh();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
-      controller.abort();
+      refreshControllerRef.current?.abort();
+      refreshControllerRef.current = null;
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
