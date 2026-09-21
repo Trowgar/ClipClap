@@ -36,13 +36,15 @@ it("requires authentication on read, send and mark-read", async () => {
   mocks.auth.mockResolvedValue(null);
   expect((await GET()).status).toBe(401);
   expect((await POST(request({ text: "help", clientMessageId: validId }))).status).toBe(401);
-  expect((await READ()).status).toBe(401);
+  expect((await READ(request({ messageIds: [] }))).status).toBe(401);
 });
 
 it("returns only the authenticated user's thread and unread count", async () => {
   const response = await GET();
   expect(response.status).toBe(200);
-  expect(await response.json()).toEqual({ messages: [{ id: "m1", text: "Hi", direction: "in" }], unread: 1 });
+  expect(await response.json()).toEqual({
+    messages: [{ id: "m1", text: "Hi", direction: "in" }], unread: 1, unreadIds: [],
+  });
   expect(mocks.list).toHaveBeenCalledWith("u1");
   expect(mocks.unread).toHaveBeenCalledWith("u1");
 });
@@ -53,6 +55,7 @@ it.each([
   [{ text: "help", clientMessageId: "not-a-uuid" }, "bad id"],
   [{ text: "help", clientMessageId: validId, contextPath: "https://evil.test" }, "external context"],
   [{ text: "help", clientMessageId: validId, contextPath: "/admin" }, "non-dashboard context"],
+  [{ text: "help", clientMessageId: validId, contextPath: "/dashboard/projects/p1\nspoof" }, "multiline context"],
 ])("rejects invalid input: %s", async (body, _label) => {
   expect((await POST(request(body))).status).toBe(400);
   expect(mocks.submit).not.toHaveBeenCalled();
@@ -76,10 +79,16 @@ it("maps the support rate limit to 429", async () => {
   expect(response.status).toBe(429);
 });
 
-it("marks only the signed-in user's replies read", async () => {
-  const response = await READ();
+it("marks only the signed-in user's displayed replies read", async () => {
+  const response = await READ(request({ messageIds: ["r1", "r2"] }));
   expect(response.status).toBe(204);
-  expect(mocks.read).toHaveBeenCalledWith("u1");
+  expect(mocks.read).toHaveBeenCalledWith("u1", ["r1", "r2"]);
+});
+
+it("rejects malformed read cursors", async () => {
+  const response = await READ(request({ messageIds: ["", "x".repeat(65)] }));
+  expect(response.status).toBe(400);
+  expect(mocks.read).not.toHaveBeenCalled();
 });
 
 it("rejects an oversized request before parsing JSON", async () => {

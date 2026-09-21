@@ -282,7 +282,7 @@ Do not add global polling.
 
 Run the two tests, all `apps/web/src/__tests__`, `npx tsc -p apps/web/tsconfig.json --noEmit`, shared build, bot typecheck, and isolated `next build`. Expected: PASS; the existing BullMQ dynamic-import warning is allowed.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add 'apps/web/app/(dashboard)' apps/web/components/support-chat.tsx apps/web/components/sidebar.tsx apps/web/components/mobile-header.tsx apps/web/src/__tests__/support-page.test.ts apps/web/src/__tests__/support-sidebar.test.ts
@@ -294,7 +294,7 @@ git commit -m "feat(web): add Dashboard support conversation"
 **Files:**
 - Create: `docs/2026-09-21-web-support-production-release.md`
 
-- [ ] **Step 1: Run complete focused verification**
+- [x] **Step 1: Run complete focused verification**
 
 Run all new tests, all bot tests, all web tests, shared build, web/bot typechecks,
 `git diff --check`, and an independent code review. Fix concrete blockers and

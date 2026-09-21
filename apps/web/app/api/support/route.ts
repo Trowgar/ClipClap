@@ -8,7 +8,7 @@ import {
 } from "@clipclap/shared";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const DASHBOARD_PATH = /^\/dashboard(?:\/|$)/;
+const DASHBOARD_PATH = /^\/dashboard(?:\/[^\r\n]*)?$/;
 
 export async function GET() {
   const user = (await auth())?.user;
@@ -16,7 +16,10 @@ export async function GET() {
   const [messages, unread] = await Promise.all([
     listWebSupportMessages(user.id), countUnreadWebSupport(user.id),
   ]);
-  return NextResponse.json({ messages, unread });
+  const unreadIds = messages
+    .filter(message => message.direction === "out" && message.readAt === null)
+    .map(message => message.id);
+  return NextResponse.json({ messages, unread, unreadIds });
 }
 
 export async function POST(req: NextRequest) {
@@ -30,7 +33,7 @@ export async function POST(req: NextRequest) {
   const clientMessageId = typeof body.clientMessageId === "string" ? body.clientMessageId : "";
   const contextPath = body.contextPath === undefined ? undefined : body.contextPath;
   if (!text || text.length > 4000 || !UUID.test(clientMessageId) ||
-      (contextPath !== undefined && (typeof contextPath !== "string" || !DASHBOARD_PATH.test(contextPath)))) {
+      (contextPath !== undefined && (typeof contextPath !== "string" || contextPath.length > 500 || !DASHBOARD_PATH.test(contextPath)))) {
     return NextResponse.json({ error: "Invalid support message" }, { status: 400 });
   }
   try {

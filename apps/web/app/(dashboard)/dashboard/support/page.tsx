@@ -4,7 +4,7 @@ export default async function SupportPage({ searchParams }: {
   searchParams: Promise<{ from?: string }>;
 }) {
   const from = (await searchParams).from;
-  const contextPath = typeof from === "string" && /^\/dashboard(?:\/|$)/.test(from)
+  const contextPath = typeof from === "string" && from.length <= 500 && /^\/dashboard(?:\/[^\r\n]*)?$/.test(from)
     ? from : undefined;
 
   return (

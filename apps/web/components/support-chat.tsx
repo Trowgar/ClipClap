@@ -1,18 +1,42 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { ArrowClockwise, ChatCircleDots, PaperPlaneTilt } from "@phosphor-icons/react";
 
-type SupportMessage = {
+export type SupportMessage = {
   id: string;
   direction: "in" | "out";
   text: string;
   deliveryStatus: "pending" | "sent" | "failed";
   dedupeKey?: string | null;
   createdAt: string | Date;
+  updatedAt?: string | Date;
 };
 
+function getClientMessageId(message: SupportMessage): string | null {
+  if (message.direction !== "in" || !message.dedupeKey) return null;
+  return message.dedupeKey.split(":").at(-1) ?? null;
+}
+
+export function mergeSupportMessages(
+  serverMessages: SupportMessage[],
+  currentMessages: SupportMessage[]
+): SupportMessage[] {
+  const serverClientIds = new Set(serverMessages
+    .map(getClientMessageId)
+    .filter((id): id is string => Boolean(id)));
+  const localOnly = currentMessages.filter(message => {
+    const clientId = getClientMessageId(message);
+    return message.id.startsWith("pending:") && clientId !== null && !serverClientIds.has(clientId);
+  });
+  return [...serverMessages, ...localOnly].sort((a, b) =>
+    new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+  );
+}
+
 export function SupportChat({ contextPath }: { contextPath?: string }) {
+  const router = useRouter();
   const [messages, setMessages] = useState<SupportMessage[]>([]);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(true);
@@ -25,15 +49,23 @@ export function SupportChat({ contextPath }: { contextPath?: string }) {
       const response = await fetch("/api/support", { cache: "no-store" });
       if (!response.ok) throw new Error("Could not load support messages.");
       const data = await response.json();
-      setMessages(data.messages);
-      if (data.unread > 0) await fetch("/api/support/read", { method: "POST" });
+      const serverMessages = data.messages as SupportMessage[];
+      setMessages(current => mergeSupportMessages(serverMessages, current));
+      if (data.unreadIds.length > 0) {
+        const marked = await fetch("/api/support/read", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messageIds: data.unreadIds }),
+        });
+        if (marked.ok) router.refresh();
+      }
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load support messages.");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     void refresh();
@@ -57,6 +89,7 @@ export function SupportChat({ contextPath }: { contextPath?: string }) {
     const optimistic: SupportMessage = {
       id: optimisticId, direction: "in", text: trimmed, deliveryStatus: "pending",
       dedupeKey: `web:pending:${clientMessageId}`, createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     };
     setMessages(current => replaceId
       ? current.map(row => row.id === replaceId ? optimistic : row)
@@ -70,10 +103,13 @@ export function SupportChat({ contextPath }: { contextPath?: string }) {
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error ?? "Could not send your message.");
-      setMessages(current => current.map(row => row.id === optimisticId ? data.message : row));
-      if (!replaceId) setText("");
+      setMessages(current => current.map(row =>
+        row.id === optimisticId || getClientMessageId(row) === getClientMessageId(optimistic)
+          ? data.message : row
+      ));
+      setText(current => current.trim() === trimmed ? "" : current);
     } catch (cause) {
-      setMessages(current => current.map(row => row.id === optimisticId
+      setMessages(current => current.map(row => row.id === optimisticId || getClientMessageId(row) === getClientMessageId(optimistic)
         ? { ...row, deliveryStatus: "failed" } : row));
       setError(cause instanceof Error ? cause.message : "Could not send your message.");
     } finally {
@@ -107,6 +143,10 @@ export function SupportChat({ contextPath }: { contextPath?: string }) {
           </div>
         ) : messages.map(message => {
           const mine = message.direction === "in";
+          const retryable = message.deliveryStatus === "failed" || (
+            message.deliveryStatus === "pending" && message.updatedAt !== undefined &&
+            Date.now() - new Date(message.updatedAt).getTime() >= 2 * 60_000
+          );
           return (
             <article key={message.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
               <div className={`max-w-[88%] sm:max-w-[75%] ${mine ? "text-right" : "text-left"}`}>
@@ -120,9 +160,9 @@ export function SupportChat({ contextPath }: { contextPath?: string }) {
                   <time dateTime={new Date(message.createdAt).toISOString()}>
                     {new Date(message.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                   </time>
-                  {mine && message.deliveryStatus === "pending" && <span>Sending…</span>}
+                  {mine && message.deliveryStatus === "pending" && !retryable && <span>Sending…</span>}
                   {mine && message.deliveryStatus === "sent" && <span>Delivered</span>}
-                  {mine && message.deliveryStatus === "failed" && (
+                  {mine && retryable && (
                     <button type="button" onClick={() => retry(message)} disabled={sending}
                       className="inline-flex items-center gap-1 text-red-300 underline underline-offset-2 disabled:opacity-50">
                       <ArrowClockwise size={11} /> Not sent — Retry

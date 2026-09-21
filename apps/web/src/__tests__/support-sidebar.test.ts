@@ -5,7 +5,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 vi.stubGlobal("React", React);
 
 const pathname = vi.hoisted(() => vi.fn());
-vi.mock("next/navigation", () => ({ usePathname: pathname }));
+vi.mock("next/navigation", () => ({ usePathname: pathname, useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock("../../components/user-nav", () => ({ UserNav: () => null }));
 vi.mock("../../components/usage-bar", () => ({ UsageBar: () => null }));
 vi.mock("@/lib/utils", () => ({ cn: (...values: unknown[]) => values.filter(Boolean).join(" ") }));

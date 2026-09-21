@@ -2,21 +2,25 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
+  findUniqueOrThrow: vi.fn(),
   findFirst: vi.fn(),
   findMany: vi.fn(),
   count: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
   updateMany: vi.fn(),
+  queryRaw: vi.fn(),
   sendTelegram: vi.fn(),
   supportChatId: vi.fn(),
 }));
 
 vi.mock("../../lib/prisma", () => ({
-  prisma: {
+  prisma: (() => {
+    const tx = {
     user: { findUnique: mocks.findUnique },
     supportMessage: {
       findUnique: mocks.findFirst,
+      findUniqueOrThrow: mocks.findUniqueOrThrow,
       findFirst: mocks.findFirst,
       findMany: mocks.findMany,
       count: mocks.count,
@@ -24,7 +28,10 @@ vi.mock("../../lib/prisma", () => ({
       update: mocks.update,
       updateMany: mocks.updateMany,
     },
-  },
+      $queryRaw: mocks.queryRaw,
+    };
+    return { ...tx, $transaction: vi.fn(async (fn: (value: typeof tx) => unknown) => fn(tx)) };
+  })(),
 }));
 vi.mock("../telegram-notification.service", () => ({
   sendTelegramMessage: mocks.sendTelegram,
@@ -46,6 +53,8 @@ const pending = {
   text: "The upload stops", kind: "text", deliveryStatus: "pending",
   dedupeKey: `web:u1:${id}`, contextPath: "/dashboard/projects/p1",
   readAt: null, emailNotifiedAt: null, createdAt: new Date(),
+  updatedAt: new Date(),
+  deliveryClaim: null,
 };
 
 beforeEach(() => {
@@ -54,7 +63,8 @@ beforeEach(() => {
   mocks.findUnique.mockResolvedValue({ id: "u1", email: "a@example.test", name: "Ann" });
   mocks.findFirst.mockResolvedValue(null);
   mocks.count.mockResolvedValue(0);
-  mocks.create.mockResolvedValue(pending);
+  mocks.create.mockImplementation(async ({ data }: { data: object }) => ({ ...pending, ...data }));
+  mocks.findUniqueOrThrow.mockResolvedValue(pending);
   mocks.update.mockImplementation(async ({ data }: { data: object }) => ({ ...pending, ...data }));
   mocks.updateMany.mockResolvedValue({ count: 2 });
   mocks.findMany.mockResolvedValue([pending]);
@@ -87,18 +97,67 @@ describe("submitWebSupportMessage", () => {
     expect(mocks.sendTelegram).not.toHaveBeenCalled();
   });
 
+  it("reclaims a stale pending relay but leaves a fresh claim alone", async () => {
+    mocks.findFirst.mockResolvedValueOnce({
+      ...pending, updatedAt: new Date(Date.now() - 121_000),
+    });
+    await submitWebSupportMessage({ userId: "u1", clientMessageId: id, text: pending.text });
+    expect(mocks.sendTelegram).toHaveBeenCalledOnce();
+
+    mocks.sendTelegram.mockClear();
+    mocks.findFirst.mockResolvedValue({ ...pending, updatedAt: new Date() });
+    await submitWebSupportMessage({ userId: "u1", clientMessageId: id, text: pending.text });
+    expect(mocks.sendTelegram).not.toHaveBeenCalled();
+  });
+
   it("retries the same failed row rather than creating a duplicate", async () => {
     mocks.findFirst.mockResolvedValue({ ...pending, deliveryStatus: "failed" });
     await submitWebSupportMessage({ userId: "u1", clientMessageId: id, text: pending.text });
     expect(mocks.create).not.toHaveBeenCalled();
     expect(mocks.sendTelegram).toHaveBeenCalledOnce();
-    expect(mocks.update).toHaveBeenCalledWith({ where: { id: "m1" }, data: { deliveryStatus: "sent" } });
+    expect(mocks.update).toHaveBeenCalledWith({
+      where: { id: "m1" },
+      data: { deliveryStatus: "pending", deliveryClaim: expect.any(String) },
+    });
+    expect(mocks.updateMany).toHaveBeenCalledWith({
+      where: { id: "m1", deliveryClaim: expect.any(String) },
+      data: { deliveryStatus: "sent", deliveryClaim: null },
+    });
   });
 
   it("marks a relay failure honestly", async () => {
     mocks.sendTelegram.mockResolvedValue(false);
     const result = await submitWebSupportMessage({ userId: "u1", clientMessageId: id, text: pending.text });
     expect(result.deliveryStatus).toBe("failed");
+  });
+
+  it("does not let an expired relay claim overwrite its replacement", async () => {
+    const replacement = { ...pending, deliveryClaim: "new-claim", updatedAt: new Date() };
+    mocks.updateMany.mockResolvedValueOnce({ count: 0 });
+    mocks.findUniqueOrThrow.mockResolvedValueOnce(replacement);
+    const result = await submitWebSupportMessage({
+      userId: "u1", clientMessageId: id, text: pending.text,
+    });
+    expect(result).toEqual(replacement);
+    expect(mocks.updateMany).toHaveBeenCalledWith({
+      where: { id: "m1", deliveryClaim: expect.any(String) },
+      data: { deliveryStatus: "sent", deliveryClaim: null },
+    });
+  });
+
+  it("keeps a maximum-length message inside Telegram's 4096 character limit", async () => {
+    const text = "x".repeat(4000);
+    mocks.create.mockResolvedValue({ ...pending, text });
+    mocks.findUnique.mockResolvedValue({
+      id: "u1", name: "A".repeat(120), email: `${"b".repeat(120)}@example.test`,
+    });
+    await submitWebSupportMessage({
+      userId: "u1", clientMessageId: id, text,
+      contextPath: `/dashboard/projects/${"p".repeat(300)}`,
+    });
+    const relayed = mocks.sendTelegram.mock.calls[0][1] as string;
+    expect(relayed.length).toBeLessThanOrEqual(4096);
+    expect(relayed.endsWith(text)).toBe(true);
   });
 
   it("limits new messages but still permits retries", async () => {
@@ -137,13 +196,14 @@ describe("web support replies and reads", () => {
   it("lists, counts and marks only this user's web replies", async () => {
     await expect(listWebSupportMessages("u1")).resolves.toEqual([pending]);
     await expect(countUnreadWebSupport("u1")).resolves.toBe(0);
-    await expect(markWebSupportRead("u1")).resolves.toBe(2);
+    await expect(markWebSupportRead("u1", ["r1", "r2"])).resolves.toBe(2);
     expect(mocks.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: "u1", surface: "web" } }));
     expect(mocks.count).toHaveBeenCalledWith({ where: {
       userId: "u1", surface: "web", direction: "out", readAt: null,
     } });
     expect(mocks.updateMany).toHaveBeenCalledWith({ where: {
-      userId: "u1", surface: "web", direction: "out", readAt: null,
+      id: { in: ["r1", "r2"] }, userId: "u1", surface: "web", direction: "out", readAt: null,
     }, data: { readAt: expect.any(Date) } });
+    expect(mocks.queryRaw).toHaveBeenCalled();
   });
 });

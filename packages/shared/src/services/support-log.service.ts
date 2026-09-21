@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma";
 import { Prisma, type SupportMessage } from "@prisma/client";
+import { randomUUID } from "node:crypto";
 import { getSupportChatId, sendTelegramMessage } from "./telegram-notification.service";
 
 export type SupportDirection = "in" | "out";
@@ -83,30 +84,71 @@ export interface WebReplyInput {
 }
 
 const WEB_SUPPORT_RATE_LIMIT = 10;
+const TELEGRAM_TEXT_LIMIT = 4096;
+const STALE_PENDING_MS = 2 * 60_000;
+
+async function withSupportUserLock<T>(
+  userId: string,
+  fn: (tx: Prisma.TransactionClient) => Promise<T>
+): Promise<T> {
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT 1 AS ok FROM (SELECT pg_advisory_xact_lock(hashtext(${userId}), 2)) AS _lock`;
+    return fn(tx);
+  });
+}
+
+function webSupportTelegramText(
+  userId: string,
+  label: string,
+  contextPath: string | null,
+  text: string
+): string {
+  let header = `🆕 #web${userId}`;
+  const body = `\n\n${text}`;
+  for (const detail of [
+    ` ${label}`,
+    contextPath ? `\nContext: ${contextPath}` : "",
+  ]) {
+    if (detail && header.length + detail.length + body.length <= TELEGRAM_TEXT_LIMIT) {
+      header += detail;
+    }
+  }
+  return `${header}${body}`;
+}
 
 export async function submitWebSupportMessage(input: WebSupportInput): Promise<SupportMessage> {
   const dedupeKey = `web:${input.userId}:${input.clientMessageId}`;
-  let message = await prisma.supportMessage.findUnique({ where: { dedupeKey } });
-  if (message?.deliveryStatus === "sent" || message?.deliveryStatus === "pending") return message;
+  const claimed = await withSupportUserLock(input.userId, async (tx) => {
+    let message = await tx.supportMessage.findUnique({ where: { dedupeKey } });
+    if (message?.deliveryStatus === "sent") return { message, relay: false };
+    if (message?.deliveryStatus === "pending" &&
+        message.updatedAt.getTime() > Date.now() - STALE_PENDING_MS) {
+      return { message, relay: false };
+    }
 
-  if (!message) {
-    const recent = await prisma.supportMessage.count({ where: {
-      userId: input.userId, surface: "web", direction: "in",
-      createdAt: { gte: new Date(Date.now() - 60_000) },
-    } });
-    if (recent >= WEB_SUPPORT_RATE_LIMIT) throw new SupportRateLimitError("Too many support messages. Please wait a minute.");
-    try {
-      message = await prisma.supportMessage.create({ data: {
+    const deliveryClaim = randomUUID();
+    if (!message) {
+      const recent = await tx.supportMessage.count({ where: {
+        userId: input.userId, surface: "web", direction: "in",
+        createdAt: { gte: new Date(Date.now() - 60_000) },
+      } });
+      if (recent >= WEB_SUPPORT_RATE_LIMIT) {
+        throw new SupportRateLimitError("Too many support messages. Please wait a minute.");
+      }
+      message = await tx.supportMessage.create({ data: {
         userId: input.userId, telegramId: null, surface: "web", direction: "in",
-        text: input.text, kind: "text", deliveryStatus: "pending", dedupeKey,
+        text: input.text, kind: "text", deliveryStatus: "pending", deliveryClaim, dedupeKey,
         contextPath: input.contextPath ?? null,
       } });
-    } catch (error) {
-      if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
-      message = await prisma.supportMessage.findUniqueOrThrow({ where: { dedupeKey } });
-      if (message.deliveryStatus !== "failed") return message;
+    } else {
+      message = await tx.supportMessage.update({
+        where: { id: message.id }, data: { deliveryStatus: "pending", deliveryClaim },
+      });
     }
-  }
+    return { message, relay: true };
+  });
+  if (!claimed.relay) return claimed.message;
+  const message = claimed.message;
 
   const [user, chatId] = await Promise.all([
     prisma.user.findUnique({ where: { id: input.userId }, select: { name: true, email: true } }),
@@ -114,13 +156,20 @@ export async function submitWebSupportMessage(input: WebSupportInput): Promise<S
   ]);
   const label = [user?.name, user?.email ? `(${user.email})` : null]
     .filter(Boolean).join(" ").replace(/[\r\n]+/g, " ").slice(0, 160) || input.userId;
-  const context = message.contextPath ? `\nContext: ${message.contextPath}` : "";
   const delivered = chatId
-    ? await sendTelegramMessage(chatId, `🆕 #web${input.userId} ${label}${context}\n\n${message.text}`)
+    ? await sendTelegramMessage(chatId, webSupportTelegramText(
+        input.userId, label, message.contextPath, message.text
+      ))
     : false;
-  return prisma.supportMessage.update({
-    where: { id: message.id }, data: { deliveryStatus: delivered ? "sent" : "failed" },
+  const deliveryStatus = delivered ? "sent" : "failed";
+  const finalized = await prisma.supportMessage.updateMany({
+    where: { id: message.id, deliveryClaim: message.deliveryClaim },
+    data: { deliveryStatus, deliveryClaim: null },
   });
+  if (finalized.count === 0) {
+    return prisma.supportMessage.findUniqueOrThrow({ where: { id: message.id } });
+  }
+  return { ...message, deliveryStatus, deliveryClaim: null, updatedAt: new Date() };
 }
 
 export async function listWebSupportMessages(userId: string, take = 100): Promise<SupportMessage[]> {
@@ -134,17 +183,19 @@ export async function storeWebSupportReply(input: WebReplyInput): Promise<{
   message: SupportMessage; created: boolean; shouldNotify: boolean;
 }> {
   const dedupeKey = `web-reply:${input.supportChatId}:${input.telegramMessageId}`;
-  const duplicate = await prisma.supportMessage.findUnique({ where: { dedupeKey } });
-  if (duplicate) return { message: duplicate, created: false, shouldNotify: false };
-  const olderUnread = await prisma.supportMessage.findFirst({ where: {
-    userId: input.userId, surface: "web", direction: "out", readAt: null,
-  } });
   try {
-    const message = await prisma.supportMessage.create({ data: {
-      userId: input.userId, telegramId: null, surface: "web", direction: "out",
-      text: input.text, kind: "text", deliveryStatus: "sent", dedupeKey,
-    } });
-    return { message, created: true, shouldNotify: !olderUnread };
+    return await withSupportUserLock(input.userId, async (tx) => {
+      const duplicate = await tx.supportMessage.findUnique({ where: { dedupeKey } });
+      if (duplicate) return { message: duplicate, created: false, shouldNotify: false };
+      const olderUnread = await tx.supportMessage.findFirst({ where: {
+        userId: input.userId, surface: "web", direction: "out", readAt: null,
+      } });
+      const message = await tx.supportMessage.create({ data: {
+        userId: input.userId, telegramId: null, surface: "web", direction: "out",
+        text: input.text, kind: "text", deliveryStatus: "sent", dedupeKey,
+      } });
+      return { message, created: true, shouldNotify: !olderUnread };
+    });
   } catch (error) {
     if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== "P2002") throw error;
     const message = await prisma.supportMessage.findUniqueOrThrow({ where: { dedupeKey } });
@@ -152,12 +203,17 @@ export async function storeWebSupportReply(input: WebReplyInput): Promise<{
   }
 }
 
-export async function markWebSupportRead(userId: string): Promise<number> {
-  const result = await prisma.supportMessage.updateMany({
-    where: { userId, surface: "web", direction: "out", readAt: null },
-    data: { readAt: new Date() },
+export async function markWebSupportRead(userId: string, messageIds: string[]): Promise<number> {
+  if (messageIds.length === 0) return 0;
+  return withSupportUserLock(userId, async (tx) => {
+    const result = await tx.supportMessage.updateMany({
+      where: {
+        id: { in: messageIds }, userId, surface: "web", direction: "out", readAt: null,
+      },
+      data: { readAt: new Date() },
+    });
+    return result.count;
   });
-  return result.count;
 }
 
 export function countUnreadWebSupport(userId: string): Promise<number> {

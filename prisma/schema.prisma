@@ -354,11 +354,13 @@ model SupportMessage {
   kind       String   @default("text")
   surface          String    @default("telegram")
   deliveryStatus   String    @default("sent")
+  deliveryClaim    String?
   dedupeKey        String?   @unique
   readAt           DateTime?
   contextPath      String?
   emailNotifiedAt  DateTime?
   createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
   @@index([telegramId, createdAt])
   @@index([userId, surface, createdAt])
