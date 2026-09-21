@@ -1,5 +1,29 @@
 # Dashboard support release — 21 September 2026
 
+## Composer layout follow-up
+
+Released at `2026-09-21T21:17:20Z` from implementation commit `bb46e29`.
+Only `apps/web/components/support-chat.tsx` and its focused component test were
+copied into the dirty production workspace. The production build ID is
+`OJeEzhngIvRTV9W5ynFlO`; only web was restarted.
+
+- TDD evidence: the new layout assertion failed against the side-by-side
+  composer, then the focused support suite passed 15/15 tests after the change.
+  Both the isolated candidate build and production build exited zero with only
+  the existing BullMQ dynamic-import warning.
+- Authenticated production QA passed without sending a support message. At
+  1440×1000, the 400×640 dialog contained an aligned 366×80 fixed textarea and
+  366×40 full-width button. At 390×844, the viewport-contained panel used an
+  aligned 364×80 textarea and 364×40 button. The helper row stayed between the
+  controls, the Send icon and label were centered, and there were no page or
+  console errors.
+- HTTPS recovered after the web-only restart, the container is running with
+  restart count 0, and the live container reports the expected build ID.
+- Backup and rollback: `/tmp/clipclap-support-composer-release-QmxeWm` contains
+  the prior source/test files and complete previous `.next` build. Restore those
+  files and `previous-next`, then restart only web. Screenshots and the no-send
+  Playwright QA script are stored in the same directory.
+
 Deployed at approximately 16:17 UTC from feature commit `aa2cc06`, layered
 onto the existing dirty production workspace without resetting or replacing
 earlier sales-path changes. Next build: `b2mZV5dhWCexhOqq0DMhk`.
