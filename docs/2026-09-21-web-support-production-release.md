@@ -43,22 +43,64 @@ previously released sales-path changes.
   `previous-next`, and restart only web. Do not reset the workspace or restart
   bot/workers.
 
+## Widget focus containment follow-up
+
+Released at `2026-09-21T18:42:42Z` from reviewed commit
+`0218a9c9c8be88d7947b6e1894fe5a8f206706c5`. Only
+`apps/web/components/support-widget.tsx` and its focused regression test were
+copied into production. The production build ID is
+`izE66QvKa126ecIOpmzSh`; only web was restarted.
+
+- The focused suite passed 8/8 tests, and the production Next build exited zero
+  with only the known BullMQ dynamic-import warning.
+- Interactive production QA proved that opening the modal hides its trigger,
+  the hidden trigger cannot receive focus, forward and reverse Tab remain in
+  the dialog, and Escape closes the dialog before restoring focus to the now
+  visible trigger. Existing desktop and 390x844 mobile lifecycle, draft,
+  redirect/history, backdrop and navigation-removal checks also passed.
+- Exactly one message was sent:
+  `[QA widget focus release 2026-09-21T18:41:25.664Z 40f75747-a80e-4edb-91e0-a7cb01a6975a]`.
+  UI showed `Delivered`, and authenticated `GET /api/support` returned exact row
+  `cmubld1jf001fr4b84s12he02` with `deliveryStatus: sent`. No operator reply or
+  email was created.
+- Authenticated Dashboard returned 200 and 20 observed static assets returned
+  200. There were no page errors or non-429 console errors. Six unrelated edge
+  429s from favicon, analytics and background route-prefetch requests were
+  recorded separately; none involved the support API or message delivery.
+- Backup: `/tmp/clipclap-support-widget-focus-release-QYdaBD`, containing the
+  prior source/test files, release note and complete previous Next build
+  `udmznBhefkFz1k2HQm8B5`, plus the QA script and screenshots. Rollback restores
+  those two source/test files and `previous-next`, then restarts only web.
+
 ## Live behavior
 
-- Authenticated Dashboard users have a Support item on desktop and mobile and
-  a single text conversation at `/dashboard/support`.
+- Authenticated Dashboard users have a floating support trigger on every
+  Dashboard route. There is no Support item in desktop or mobile navigation.
+  The trigger opens a desktop dialog or mobile bottom sheet and is hidden while
+  that modal is open; focus is trapped inside, and Escape closes it and returns
+  focus to the visible trigger.
+- `/dashboard/support` is compatibility-only and redirects to
+  `/dashboard?support=open`, which opens the widget. Query-driven opening also
+  works through browser back/forward navigation. Unsent drafts survive explicit
+  close/reopen while the mounted Dashboard layout remains active.
 - A web message is stored before delivery and relayed to the existing operator
   Telegram chat with an exact `🆕 #web<userId>` reply marker.
 - Replying to that marker is stored in the web thread. The first unread reply
   requests one transcript-free email; subsequent unread replies do not send
   another email. Reading marks only the exact reply IDs shown by the browser.
-- Five-second polling runs only on the Support page while visible. Delivery is
-  explicit (`Sending`, `Delivered`, `Not sent — Retry`), retries preserve the
-  client UUID, and per-user advisory locking enforces ten new messages/minute.
+- Five-second polling runs only while the widget is open and the document is
+  visible. Delivery is explicit (`Sending`, `Delivered`, `Not sent — Retry`),
+  retries preserve the client UUID, and per-user advisory locking enforces ten
+  new messages/minute.
 - A two-minute stale relay can be retried. A per-attempt `deliveryClaim` fences
   final status updates, so an expired request cannot overwrite its replacement.
 
-## Verification
+## Previous page-era verification (historical)
+
+The evidence below records the original `/dashboard/support` page release.
+Navigation and page-specific observations are historical and are superseded by
+the current widget behavior and follow-up verification above; backend delivery,
+reply, migration and concurrency evidence remains applicable.
 
 - 494 tests passed across 54 web/bot/shared suites. Shared build, web and bot
   typechecks, Prisma validation and the isolated Next production build passed.
@@ -94,8 +136,9 @@ previously released sales-path changes.
   `previous-next` while app processes are stopped, then restart the same
   containers in place. Preserve the additive support columns and customer data;
   do not restore the whole database dump over newer transactions.
-- The two `[QA ...]` support rows are deliberately labelled synthetic and must
-  not be treated as customer feedback or conversion evidence.
+- The historical `[QA ...]` rows and focus-release row
+  `cmubld1jf001fr4b84s12he02` are deliberately labelled synthetic and must not
+  be treated as customer feedback or conversion evidence.
 
 Deliberate MVP ceiling: text only, no attachments, typing indicator, live
 presence, WebSocket/SSE or separate operator inbox. Telegram remains the
