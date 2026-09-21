@@ -22,6 +22,10 @@ const props = {
 it("does not include Support navigation", () => {
   pathname.mockReturnValue("/dashboard/projects/p1");
   const html = renderToStaticMarkup(React.createElement(SidebarContent, { ...props, supportUnread: 3 }));
+  expect(html).toContain('href="/dashboard"');
+  expect(html).toContain(">Home<");
+  expect(html).toContain('href="/dashboard/settings"');
+  expect(html).toContain(">Settings<");
   expect(html).not.toContain("Support");
   expect(html).not.toContain("/dashboard/support");
 });
