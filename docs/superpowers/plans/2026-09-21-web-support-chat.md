@@ -30,7 +30,7 @@
 - Modify: `packages/shared/src/services/support-log.service.ts`
 - Create: `packages/shared/src/services/__tests__/web-support.service.test.ts`
 
-- [ ] **Step 1: Write failing service tests**
+- [x] **Step 1: Write failing service tests**
 
 Mock Prisma and cover these exact contracts:
 
@@ -47,7 +47,7 @@ expect(prisma.supportMessage.create).toHaveBeenCalledWith({ data: expect.objectC
 
 Also assert: a sent duplicate is returned without a second Telegram call; a failed duplicate retries the same row; ten other new messages in one minute reject the eleventh; an operator reply is unique by Telegram message; only the first unread reply reports `shouldNotify: true`; read marking affects only outbound web rows for that user; unread count excludes Telegram and inbound rows.
 
-- [ ] **Step 2: Run the new test and verify failure**
+- [x] **Step 2: Run the new test and verify failure**
 
 Run:
 
@@ -57,7 +57,7 @@ docker exec clipclap-support-check-20260921 sh -lc 'cd /app && SUBMISSION_QUEUE=
 
 Expected: FAIL because the web support functions do not exist.
 
-- [ ] **Step 3: Add the additive schema and SQL migration**
+- [x] **Step 3: Add the additive schema and SQL migration**
 
 Change `SupportMessage.telegramId` to nullable and add:
 
@@ -77,7 +77,7 @@ The SQL uses `ALTER COLUMN telegramId DROP NOT NULL`, adds columns with the
 same defaults, creates a unique index on `dedupeKey`, and creates the two
 compound indexes. Existing rows remain `surface='telegram'` and `sent`.
 
-- [ ] **Step 4: Implement the minimum shared service**
+- [x] **Step 4: Implement the minimum shared service**
 
 Keep `recordSupportMessage` and `supportThread` backward compatible. Add:
 
@@ -106,12 +106,12 @@ Context: /dashboard/...
 `web-reply:<supportChatId>:<telegramMessageId>` and checks for prior unread
 outbound web rows before creating the reply.
 
-- [ ] **Step 5: Run Prisma generation and service tests**
+- [x] **Step 5: Run Prisma generation and service tests**
 
 Run `npx prisma generate` in the isolated container, then the Task 1 command.
 Expected: all new service tests PASS; no production DB writes.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add prisma packages/shared/src/services/support-log.service.ts packages/shared/src/services/__tests__/web-support.service.test.ts

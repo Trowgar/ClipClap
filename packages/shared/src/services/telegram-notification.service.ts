@@ -242,6 +242,15 @@ export async function sendTelegramMessage(
   }
 }
 
+export function getSupportChatId(): string | null {
+  const explicit = process.env.SUPPORT_CHAT_ID?.trim();
+  if (explicit) return explicit;
+  return (process.env.REFERRAL_ADMIN_TELEGRAM_IDS ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .find(Boolean) ?? null;
+}
+
 export async function notifyPaymentEvent(
   userId: string,
   event: PaymentEvent

@@ -344,7 +344,7 @@ model SupportMessage {
   id         String   @id @default(cuid())
   /// Telegram id of the USER side of the conversation, in both directions -
   /// so one person's thread is one query, whoever spoke.
-  telegramId String
+  telegramId String?
   userId     String?
   /// "in" = user wrote to us. "out" = we answered.
   direction  String
@@ -352,9 +352,17 @@ model SupportMessage {
   text       String
   /// "text" | "photo" | "document" | "video" | "voice" | "other"
   kind       String   @default("text")
+  surface          String    @default("telegram")
+  deliveryStatus   String    @default("sent")
+  dedupeKey        String?   @unique
+  readAt           DateTime?
+  contextPath      String?
+  emailNotifiedAt  DateTime?
   createdAt  DateTime @default(now())
 
   @@index([telegramId, createdAt])
+  @@index([userId, surface, createdAt])
+  @@index([userId, surface, direction, readAt])
   @@index([createdAt])
   @@map("support_messages")
 }
