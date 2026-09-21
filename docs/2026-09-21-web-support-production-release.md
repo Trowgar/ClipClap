@@ -4,6 +4,45 @@ Deployed at approximately 16:17 UTC from feature commit `aa2cc06`, layered
 onto the existing dirty production workspace without resetting or replacing
 earlier sales-path changes. Next build: `b2mZV5dhWCexhOqq0DMhk`.
 
+## Dashboard support widget follow-up
+
+Released at `2026-09-21T18:16:12Z` from approved candidate
+`c6aff40f1580f3ac2fd8006bc147feda25cee66f`, again by copying only the
+allowlisted differing files into the dirty production workspace. The isolated
+candidate build ID was `1OWol1MtAS2JeGugh6qtT`; the production build ID is
+`udmznBhefkFz1k2HQm8B5` because the production workspace also contains the
+previously released sales-path changes.
+
+- Fresh scoped regression verification passed: 5 files and 29 tests. Web
+  TypeScript checking and both the isolated and production Next builds exited
+  zero. The existing BullMQ dynamic-import warning was the only build warning.
+- Fresh production browser QA passed at 1440x1000 and 390x844 without sending a
+  support message. Desktop verified the removed Support navigation item,
+  accessible trigger and dialog, non-live header note, unsent-draft retention,
+  Escape focus return, legacy redirect, back/forward reopening and backdrop
+  click interception. Mobile verified an unobscured trigger, viewport-contained
+  bottom sheet, backdrop close, draft retention and no Support navigation item.
+  The acceptance run had no page or console errors. A later repeated diagnostic
+  run still passed all widget assertions but caused six unrelated background
+  route-prefetch/favicon requests to receive edge 429s after sustained QA
+  traffic; it did not affect the acceptance run or support endpoints.
+- Authenticated HTTPS Dashboard returned 200, observed Next static assets
+  returned 200, and the public build manifest returned 200. The web container
+  is running with restart count 0 and post-restart logs contain no new errors.
+  Screenshots are `support-widget-desktop.png` and
+  `support-widget-mobile.png` in the backup directory.
+- Runtime scope was web only. The web container alone was restarted; bot and
+  workers were not restarted. The running bot may continue emitting the old
+  `/dashboard/support` email URL because that route now redirects compatibly to
+  `/dashboard?support=open`.
+- Follow-up backup: `/tmp/clipclap-support-widget-release-GdAoRi`. It contains
+  the exact pre-release source/test files or missing markers, the previous Next
+  build `b2mZV5dhWCexhOqq0DMhk`, the new QA script and both screenshots.
+- Follow-up rollback: restore the allowlisted source/test files (removing only
+  files represented by `.missing` markers), replace the web `.next` volume with
+  `previous-next`, and restart only web. Do not reset the workspace or restart
+  bot/workers.
+
 ## Live behavior
 
 - Authenticated Dashboard users have a Support item on desktop and mobile and
