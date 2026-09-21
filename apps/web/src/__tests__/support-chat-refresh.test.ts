@@ -44,10 +44,11 @@ it("refreshes and marks replies read with a fresh controller", async () => {
   expect(fetchMock.mock.calls[1][1].signal).toBe(controller.signal);
 });
 
-it("aborts a stale refresh before starting the latest request", async () => {
-  let resolveOld!: (response: Response) => void;
+it("admits one refresh at a time and allows the next after completion", async () => {
+  let resolveCurrent!: (response: Response) => void;
   const fetchMock = vi.fn()
-    .mockImplementationOnce(() => new Promise<Response>(resolve => { resolveOld = resolve; }))
+    .mockImplementationOnce(() => new Promise<Response>(resolve => { resolveCurrent = resolve; }))
+    .mockResolvedValueOnce({ ok: true })
     .mockResolvedValueOnce({
       ok: true,
       json: async () => ({ messages: [{ id: "new" }], unreadIds: ["new-reply"] }),
@@ -55,23 +56,26 @@ it("aborts a stale refresh before starting the latest request", async () => {
     .mockResolvedValueOnce({ ok: true });
   vi.stubGlobal("fetch", fetchMock);
 
-  const oldController = new AbortController();
-  const oldRefresh = refreshSupportConversation(oldController.signal);
-  const latestController = beginSupportRefresh(oldController);
-  const latestRefresh = refreshSupportConversation(latestController.signal);
+  const currentController = beginSupportRefresh(null)!;
+  const currentRefresh = refreshSupportConversation(currentController.signal);
+  expect(beginSupportRefresh(currentController)).toBeNull();
+  expect(currentController.signal.aborted).toBe(false);
 
+  resolveCurrent({
+    ok: true,
+    json: async () => ({ messages: [{ id: "current" }], unreadIds: ["current-reply"] }),
+  } as Response);
+  await expect(currentRefresh).resolves.toMatchObject({
+    messages: [{ id: "current" }],
+    markedRead: true,
+  });
+
+  const latestController = beginSupportRefresh(null)!;
+  const latestRefresh = refreshSupportConversation(latestController.signal);
   await expect(latestRefresh).resolves.toMatchObject({
     messages: [{ id: "new" }],
     markedRead: true,
   });
-  resolveOld({
-    ok: true,
-    json: async () => ({ messages: [{ id: "old" }], unreadIds: ["old-reply"] }),
-  } as Response);
-  await expect(oldRefresh).resolves.toBeNull();
 
-  expect(oldController.signal.aborted).toBe(true);
-  expect(latestController.signal.aborted).toBe(false);
-  expect(fetchMock.mock.calls.filter(([url]) => url === "/api/support/read")).toHaveLength(1);
-  expect(fetchMock.mock.calls[2][1].body).toContain("new-reply");
+  expect(fetchMock.mock.calls.filter(([url]) => url === "/api/support/read")).toHaveLength(2);
 });

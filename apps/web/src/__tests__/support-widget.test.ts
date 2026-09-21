@@ -18,7 +18,7 @@ vi.mock("../../components/support-chat", () => ({
     }),
 }));
 
-import { shouldOpenSupportWidget, SupportWidget } from "../../components/support-widget";
+import { getSupportOpenPath, SupportWidget } from "../../components/support-widget";
 
 beforeEach(() => {
   pathname.mockReturnValue("/dashboard/projects/p1");
@@ -50,10 +50,11 @@ it("caps a large unread count visually", () => {
   expect(html).toContain(">99+<");
 });
 
-it("only treats support=open as a query-driven open request", () => {
-  expect(shouldOpenSupportWidget("open")).toBe(true);
-  expect(shouldOpenSupportWidget("closed")).toBe(false);
-  expect(shouldOpenSupportWidget(null)).toBe(false);
+it("tracks query-driven open requests across Dashboard paths", () => {
+  expect(getSupportOpenPath("/dashboard/projects", "open")).toBe("/dashboard/projects");
+  expect(getSupportOpenPath("/dashboard/settings", "open")).toBe("/dashboard/settings");
+  expect(getSupportOpenPath("/dashboard/settings", "closed")).toBeNull();
+  expect(getSupportOpenPath("/dashboard/settings", null)).toBeNull();
 });
 
 it("stays closed for an unrelated query parameter", () => {
@@ -71,4 +72,12 @@ it("opens from the support query parameter", () => {
   expect(html).toContain('aria-label="Close support chat"');
   expect(html).toContain('data-active="true"');
   expect(html).toContain('data-context-path="/dashboard/projects/p1"');
+});
+
+it("clears the displayed unread count when query opening", () => {
+  searchParams.mockReturnValue(new URLSearchParams("support=open"));
+  const html = renderWidget(3);
+  expect(html).toContain('aria-label="Open support chat"');
+  expect(html).not.toContain("unread replies");
+  expect(html).not.toContain(">3<");
 });

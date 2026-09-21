@@ -36,9 +36,8 @@ export function mergeSupportMessages(
   );
 }
 
-export function beginSupportRefresh(previous: AbortController | null): AbortController {
-  previous?.abort();
-  return new AbortController();
+export function beginSupportRefresh(previous: AbortController | null): AbortController | null {
+  return previous ? null : new AbortController();
 }
 
 export async function refreshSupportConversation(signal: AbortSignal): Promise<{
@@ -85,6 +84,7 @@ export function SupportChat({
 
   const refresh = useCallback(async () => {
     const controller = beginSupportRefresh(refreshControllerRef.current);
+    if (!controller) return;
     refreshControllerRef.current = controller;
     const { signal } = controller;
     try {

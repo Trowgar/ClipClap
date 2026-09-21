@@ -6,22 +6,24 @@ import { ChatCircleDots, X } from "@phosphor-icons/react";
 import { SupportChat } from "@/components/support-chat";
 import { cn } from "@/lib/utils";
 
-export function shouldOpenSupportWidget(supportQuery: string | null): boolean {
-  return supportQuery === "open";
+export function getSupportOpenPath(pathname: string, supportQuery: string | null): string | null {
+  return supportQuery === "open" ? pathname : null;
 }
 
 export function SupportWidget({ unread }: { unread: number }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const supportQuery = searchParams.get("support");
-  const initiallyOpen = shouldOpenSupportWidget(supportQuery);
+  const initiallyOpen = getSupportOpenPath(pathname, supportQuery) !== null;
   const [open, setOpen] = useState(initiallyOpen);
   const [hasOpened, setHasOpened] = useState(initiallyOpen);
+  const [displayedUnread, setDisplayedUnread] = useState(initiallyOpen ? 0 : unread);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
   const show = () => {
+    setDisplayedUnread(0);
     setHasOpened(true);
     setOpen(true);
   };
@@ -30,11 +32,14 @@ export function SupportWidget({ unread }: { unread: number }) {
     window.requestAnimationFrame(() => triggerRef.current?.focus());
   }, []);
 
+  useEffect(() => { setDisplayedUnread(unread); }, [unread]);
+
   useEffect(() => {
-    if (!shouldOpenSupportWidget(supportQuery)) return;
+    if (getSupportOpenPath(pathname, supportQuery) === null) return;
+    setDisplayedUnread(0);
     setHasOpened(true);
     setOpen(true);
-  }, [supportQuery]);
+  }, [pathname, supportQuery]);
 
   useEffect(() => {
     if (!open) return;
@@ -61,16 +66,9 @@ export function SupportWidget({ unread }: { unread: number }) {
         first.focus();
       }
     };
-    const onPointerDown = (event: MouseEvent) => {
-      if (!window.matchMedia("(min-width: 640px)").matches) return;
-      const target = event.target as Node;
-      if (!panelRef.current?.contains(target) && !triggerRef.current?.contains(target)) close();
-    };
     document.addEventListener("keydown", onKeyDown);
-    document.addEventListener("mousedown", onPointerDown);
     return () => {
       document.removeEventListener("keydown", onKeyDown);
-      document.removeEventListener("mousedown", onPointerDown);
     };
   }, [close, open]);
 
@@ -78,10 +76,9 @@ export function SupportWidget({ unread }: { unread: number }) {
     <>
       {hasOpened && (
         <>
-          <button
-            type="button"
-            aria-label="Close support chat"
-            className={cn("fixed inset-0 z-50 bg-black/60 sm:hidden", !open && "hidden")}
+          <div
+            aria-hidden="true"
+            className={cn("fixed inset-0 z-50 bg-black/60 sm:bg-transparent", !open && "hidden")}
             onClick={close}
           />
           <div
@@ -124,8 +121,8 @@ export function SupportWidget({ unread }: { unread: number }) {
       <button
         ref={triggerRef}
         type="button"
-        aria-label={unread > 0
-          ? `Open support chat, ${unread} unread ${unread === 1 ? "reply" : "replies"}`
+        aria-label={displayedUnread > 0
+          ? `Open support chat, ${displayedUnread} unread ${displayedUnread === 1 ? "reply" : "replies"}`
           : "Open support chat"}
         aria-expanded={open}
         onClick={show}
@@ -135,12 +132,12 @@ export function SupportWidget({ unread }: { unread: number }) {
         )}
       >
         <ChatCircleDots size={21} weight="fill" />
-        {unread > 0 && (
+        {displayedUnread > 0 && (
           <span
             aria-hidden="true"
             className="absolute -right-1.5 -top-1.5 min-w-5 rounded-full border-2 border-background bg-red-500 px-1 py-0.5 text-center text-[10px] font-bold leading-none text-white"
           >
-            {unread > 99 ? "99+" : unread}
+            {displayedUnread > 99 ? "99+" : displayedUnread}
           </span>
         )}
       </button>
