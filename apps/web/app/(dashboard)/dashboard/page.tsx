@@ -13,7 +13,7 @@ import {
 import { UploadZone } from "@/components/upload-zone";
 import { RecentProjects } from "@/components/project-list";
 import { FreeUpgradeCard } from "@/components/free-upgrade-card";
-import { FreeExhaustedPanel, FreePausedPanel } from "@/components/free-state";
+import { FreePausedPanel } from "@/components/free-state";
 import { VerifyEmailPanel } from "@/components/verify-email-panel";
 import { getFreeUpgradeOffer } from "@/lib/free-upgrade-offer";
 
@@ -54,10 +54,9 @@ export default async function DashboardPage() {
   const limits = getPlanLimits(usage.plan, usage.billingCycle ?? "MONTHLY");
   const serializedProjects = JSON.parse(JSON.stringify(recentProjects.projects));
 
-  // Floored, so the number here is the number the refusal would quote. Someone
-  // with 40 seconds left has 0 usable minutes, and rounding that up to 1 would
-  // re-enable the button the gate is about to refuse.
+  // Whole minutes are display-only; upload eligibility uses exact seconds.
   const freeAllowance = {
+    remainingSeconds: trial.remainingSeconds,
     remainingMinutes: Math.floor(trial.remainingSeconds / 60),
     lifetimeMinutes: Math.round(trial.lifetimeSeconds / 60),
   };
@@ -79,11 +78,9 @@ export default async function DashboardPage() {
   // allowed submission on plan NONE can only have come through checkFreeTrial.
   const onFreePlan = usage.plan === "NONE";
 
-  // The three free refusals replace the upload zone with a panel, so the empty
-  // projects list must not tell the reader to upload "above".
+  // Keep the uploader on an exhausted balance so the offer can match the source.
   const showsUploadZone =
     blockCode !== "FREE_NOT_ANCHORED" &&
-    blockCode !== "FREE_EXHAUSTED" &&
     blockCode !== "FREE_BUDGET_CLOSED";
 
   return (
@@ -100,11 +97,6 @@ export default async function DashboardPage() {
           email={session.user.email ?? null}
           lifetimeMinutes={freeAllowance.lifetimeMinutes}
           verificationSentAt={mailState?.verificationSentAt ?? null}
-        />
-      ) : blockCode === "FREE_EXHAUSTED" ? (
-        <FreeExhaustedPanel
-          remainingMinutes={freeAllowance.remainingMinutes}
-          lifetimeMinutes={freeAllowance.lifetimeMinutes}
         />
       ) : blockCode === "FREE_BUDGET_CLOSED" ? (
         <FreePausedPanel

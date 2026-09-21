@@ -129,6 +129,12 @@ describe("job.service createJob", () => {
     expect(calls).toEqual(["tx:start", "tx:commit", "enqueue"]);
   });
 
+  it("freezes the paid entitlement and surface when the job is submitted", async () => {
+    tx.user.findUniqueOrThrow.mockResolvedValueOnce({ plan: "STARTER", billingCycle: "WEEKLY" });
+    await createJob({ userId: "u1", sourceKey: "uploads/u1/x.mp4", surface: "web" });
+    expect(tx.job.create.mock.calls[0][0].data).toMatchObject({ planAtSubmission: "STARTER", submissionSurface: "web" });
+  });
+
   it("writes the Job row and the reservation in the SAME transaction", async () => {
     await createJob({
       userId: "u1",

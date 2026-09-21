@@ -1,9 +1,9 @@
 import { prisma } from "../lib/prisma";
-import { getPresignedDownloadUrl, deleteFile } from "../lib/r2";
+import { getPresignedDownloadUrl, deleteFile, getObjectSize } from "../lib/r2";
 import { getStageQueue } from "../lib/queues";
 import { computeClipExpiresAt } from "../lib/retention";
 import type { Clip, Prisma } from "@prisma/client";
-import type { EditClipInput } from "../types";
+import type { EditClipInput, SubtitleTrack } from "../types";
 
 export async function getClipsByJob(
   jobId: string,
@@ -83,11 +83,40 @@ export async function deleteClip(
   await prisma.clip.delete({ where: { id: clipId } });
 }
 
+export class ClipEditError extends Error {}
+
 export async function editClip(input: EditClipInput): Promise<Clip> {
   const original = await prisma.clip.findFirstOrThrow({
     where: { id: input.clipId, userId: input.userId },
     include: { job: true },
   });
+
+  if (original.deletedAt || !original.storageKey) {
+    throw new ClipEditError("This clip is not available for editing.");
+  }
+  if (!Number.isFinite(input.start) || !Number.isFinite(input.end) ||
+      input.start < 0 || input.start < original.startTime ||
+      input.end > original.endTime || input.end <= input.start ||
+      typeof input.subtitles !== "boolean" ||
+      (input.extendEndSeconds !== undefined && input.extendEndSeconds !== 2 && input.extendEndSeconds !== 5) ||
+      (input.framing !== undefined && input.framing !== "safe-fit") ||
+      (input.extendEndSeconds && input.end !== original.endTime)) {
+    throw new ClipEditError("Invalid edit range or repair option.");
+  }
+  const end = input.end + (input.extendEndSeconds ?? 0);
+  if (end - input.start > 150) {
+    throw new ClipEditError("Edited clips cannot exceed 150 seconds.");
+  }
+  const sourceArtifactKey = original.job.normalizedArtifactKey ?? original.job.sourceArtifactKey ?? undefined;
+  if (input.extendEndSeconds || input.framing) {
+    const sourceDuration = original.job.sourceDurationSec;
+    if (!sourceArtifactKey || !sourceDuration || end > sourceDuration) {
+      throw new ClipEditError("The retained original does not cover this interval.");
+    }
+    const size = await getObjectSize(sourceArtifactKey).catch(() => null);
+    if (!size) throw new ClipEditError("The original video is no longer available. Your clip is unchanged.");
+  }
+  const subtitleTrack = input.subtitleTrack ?? (original.subtitleTrack as SubtitleTrack | null) ?? undefined;
 
   const user = await prisma.user.findUniqueOrThrow({
     where: { id: input.userId },
@@ -102,21 +131,24 @@ export async function editClip(input: EditClipInput): Promise<Clip> {
       userId: input.userId,
       title: `${original.title} (edited)`,
       storageKey: "", // will be set by worker
-      duration: Math.round(input.end - input.start),
+      duration: Math.round(end - input.start),
       startTime: input.start,
-      endTime: input.end,
+      endTime: end,
       subtitles: input.subtitles,
       subtitleTrack:
-        (input.subtitleTrack as unknown as Prisma.InputJsonValue) ?? undefined,
+        (subtitleTrack as unknown as Prisma.InputJsonValue) ?? undefined,
+      language: original.language,
+      cropPlan: original.cropPlan ?? undefined,
       parentClipId: original.id,
       expiresAt,
     },
   });
 
   const relativeStart = Math.max(0, input.start - original.startTime);
-  const relativeEnd = Math.max(relativeStart, input.end - original.startTime);
+  const relativeEnd = end - original.startTime;
 
-  await getStageQueue("render").add("render", {
+  try {
+    await getStageQueue("render").add("render", {
     clipId: newClip.id,
     originalClipStorageKey: original.storageKey,
     jobId: original.jobId,
@@ -124,19 +156,22 @@ export async function editClip(input: EditClipInput): Promise<Clip> {
     start: relativeStart,
     end: relativeEnd,
     subtitles: input.subtitles,
-    subtitleTrack: input.subtitleTrack,
-    sourceArtifactKey:
-      original.job.normalizedArtifactKey ??
-      original.job.sourceArtifactKey ??
-      undefined,
+    subtitleTrack,
+    sourceArtifactKey,
     sourceStart: input.start,
-    sourceEnd: input.end,
+    sourceEnd: end,
+    extendEndSeconds: input.extendEndSeconds,
+    framing: input.framing,
     // Tells the worker's fallback path (used when the clean source above is
     // unavailable) whether original.storageKey's pixels already carry burned
     // subtitles, so it doesn't burn a second layer on top of them.
     originalHasBurnedSubtitles: original.subtitles,
     mode: "trim",
-  });
+    });
+  } catch {
+    await prisma.clip.delete({ where: { id: newClip.id } });
+    throw new ClipEditError("Could not queue the edit. Your original clip is unchanged. Please try again.");
+  }
 
   return newClip;
 }

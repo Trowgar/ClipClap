@@ -87,6 +87,19 @@ export const PLAN_LIMITS: Record<
   },
 };
 
+/** Cheapest existing subscription that can process this whole source on a fresh balance. */
+export function getSourcePurchaseOption(durationSec: number) {
+  if (!Number.isFinite(durationSec) || durationSec <= 0) return null;
+  const options = (Object.keys(PLAN_LIMITS) as Exclude<Plan, "NONE">[]).flatMap(plan =>
+    (["WEEKLY", "MONTHLY"] as BillingCycle[]).flatMap(cycle => {
+      const limits = PLAN_LIMITS[plan][cycle];
+      return limits && durationSec <= Math.min(limits.minutesPerPeriod, limits.maxSourceDurationMinutes) * 60
+        ? [{ plan, cycle, ...limits }] : [];
+    })
+  );
+  return options.sort((a, b) => a.priceUsd - b.priceUsd)[0] ?? null;
+}
+
 /** The free allowance on a brand-new account.
  *
  *  It is LIFETIME, not per-period. A recurring free tier renews forever and is

@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   accountCreate: vi.fn(),
   linkTokenCreate: vi.fn(),
   funnelUpsert: vi.fn(),
+  conversionCreate: vi.fn(),
   refusalCreate: vi.fn(),
   jobCount: vi.fn(),
   jobFindMany: vi.fn(),
@@ -47,6 +48,7 @@ vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
     },
     telegramLinkToken: { create: mocks.linkTokenCreate },
     funnelEvent: { upsert: mocks.funnelUpsert },
+    conversionEvent: { createMany: mocks.conversionCreate },
     uploadRefusal: { create: mocks.refusalCreate },
     job: { count: mocks.jobCount, findMany: mocks.jobFindMany },
     freeUsage: {
@@ -787,6 +789,27 @@ describe("refusals the bot used to swallow", () => {
     expect(eventsRecorded()).not.toContain(uploadRejectedEvent("PROBE_FAILED"));
   });
 
+  it("refuses a source beyond every plan without a purchase prompt", async () => {
+    mocks.probeVideoUrl.mockResolvedValue({ ok: true, durationSec: 181 * 60, title: "Long source" });
+    const { client } = harness();
+    await handleUpdate(client as never, videoUrlUpdate("https://example.com/long") as never, CONFIG);
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      CHAT.id,
+      t("ru").planSourceTooLong(180),
+      { replyMarkup: { inline_keyboard: [] } }
+    );
+    expect(eventsRecorded()).toContain(uploadRejectedEvent("TOO_LONG"));
+    expect(mocks.conversionCreate.mock.calls.some(([arg]) => arg.data.event === "offer_shown")).toBe(false);
+  });
+
+  it("counts a delivered monthly refusal offer", async () => {
+    mocks.probeVideoUrl.mockResolvedValue({ ok: true, durationSec: 177 * 60, title: "Long source" });
+    const { client } = harness();
+    await handleUpdate(client as never, videoUrlUpdate("https://example.com/monthly") as never, CONFIG);
+    expect(mocks.conversionCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ event: "offer_shown", detail: expect.objectContaining({ placement: "submission_refusal", plan: "STARTER", cycle: "MONTHLY" }) }) }));
+    expect(mocks.conversionCreate.mock.invocationCallOrder.at(-1)).toBeGreaterThan(client.sendMessage.mock.invocationCallOrder.at(-1)!);
+  });
+
   // The engine floor. 14 of the first 57 outside jobs were under a minute and
   // gave one clip between them; the refusal now happens at the probe, in
   // words that say what works, and it lands in the ledger with the number.
@@ -1259,6 +1282,7 @@ describe("refusals the bot used to swallow", () => {
         CHAT.id,
         t("ru").queuedBehind(2)
       );
+      expect(mocks.createJob).toHaveBeenCalledWith(expect.objectContaining({ surface: "bot" }));
       expect(mocks.createTelegramDelivery).toHaveBeenCalledWith(
         expect.objectContaining({ jobId: "jq1" })
       );

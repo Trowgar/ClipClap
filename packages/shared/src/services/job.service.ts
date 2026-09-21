@@ -251,6 +251,8 @@ export async function createJob(
         const created = await tx.job.create({
           data: {
             userId: input.userId,
+            planAtSubmission: input.freeCharge ? "NONE" : user.plan,
+            submissionSurface: input.surface ?? null,
             sourceUrl: input.sourceUrl,
             sourceKey: input.sourceKey,
             sourceFingerprint: input.sourceFingerprint ?? null,

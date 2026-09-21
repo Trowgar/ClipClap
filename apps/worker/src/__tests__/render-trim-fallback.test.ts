@@ -80,6 +80,22 @@ describe("renderTrim degrades when the clean source artifact is gone", () => {
     mocks.clipUpdate.mockResolvedValue(undefined);
   });
 
+  it.each([{ extendEndSeconds: 2 as const }, { framing: "safe-fit" as const }])("never pretends a source repair succeeded from the short clip: %j", async repair => {
+    mocks.downloadVideo.mockImplementation(async (_url, key) => {
+      if (key === trimPayload.sourceArtifactKey) throw new Error("NoSuchKey");
+      return "/tmp/existing-clip.mp4";
+    });
+    mocks.trimClipFile.mockResolvedValue("/tmp/short-copy.mp4");
+    await expect(runRenderStage({ ...trimPayload, ...repair })).rejects.toThrow();
+    expect(mocks.trimClipFile).not.toHaveBeenCalled();
+    expect(mocks.uploadFile).not.toHaveBeenCalled();
+    expect(mocks.clipUpdate).not.toHaveBeenCalled();
+    expect(mocks.clipUpdateMany).toHaveBeenCalledWith({
+      where: { id: trimPayload.clipId, userId: trimPayload.userId, storageKey: "" },
+      data: { deletedAt: expect.any(Date) },
+    });
+  });
+
   it("falls back to re-trimming the clip file when the source download rejects, and does not throw", async () => {
     mocks.downloadVideo.mockImplementation(async (_url: unknown, key: string) => {
       if (key === trimPayload.sourceArtifactKey) {

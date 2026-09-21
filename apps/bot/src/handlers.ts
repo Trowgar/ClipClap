@@ -19,6 +19,7 @@ import {
   freeBudgetStatus,
   getOrCreateTelegramUser,
   getPlanLimits,
+  getSourcePurchaseOption,
   getTributeCatalogEntry,
   isBelowSourceFloor,
   isShortSource,
@@ -37,6 +38,7 @@ import {
   parseJobErrorCode,
   prisma,
   recordClipFeedback,
+  recordConversionEvent,
   recordFunnelEvent,
   recordSupportMessage,
   sanitiseCampaignSlug,
@@ -125,11 +127,32 @@ function claimMediaGroup(chatId: number, mediaGroupId: string): boolean {
  *  has a button. */
 export const CALLBACK_PLANS_OPEN = "plans:open";
 
-/** The one-button keyboard under a refusal: opens the plans view. */
-export function blockedKeyboard(dict: Dict): InlineKeyboardMarkup {
+/** Known sources go straight to a covering cycle; no per-user pending state. */
+export function blockedKeyboard(dict: Dict, durationSec?: number): InlineKeyboardMarkup {
+  if (durationSec && durationSec > 0 && !isBelowSourceFloor(durationSec)) {
+    const option = getSourcePurchaseOption(durationSec);
+    return { inline_keyboard: option ? [[{
+      text: sourcePurchaseLabel(dict, option),
+      callback_data: `sub:${option.plan}:${option.cycle}`,
+    }]] : [] };
+  }
   return {
     inline_keyboard: [[{ text: dict.menuPlans, callback_data: CALLBACK_PLANS_OPEN }]],
   };
+}
+
+function sourcePurchaseLabel(dict: Dict, option: NonNullable<ReturnType<typeof getSourcePurchaseOption>>): string {
+  if (option.cycle === "WEEKLY") return dict.planStarterWeeklyBtn;
+  return { STARTER: dict.planStarterBtn, PLUS: dict.planPlusBtn, MAX: dict.planMaxBtn }[option.plan];
+}
+
+async function recordSourceOffer(telegramId: number, dict: Dict, reason: string, durationSec: number | undefined, messageId?: number) {
+  if (!reason.includes(dict.purchaseResubmit)) return;
+  const option = getSourcePurchaseOption(durationSec && durationSec > 0 ? durationSec : 1);
+  if (!option) return;
+  await recordConversionEvent("bot", telegramId, "offer_shown", {
+    placement: "submission_refusal", plan: option.plan, cycle: option.cycle, durationSec, messageId,
+  }, messageId === undefined ? undefined : `bot:offer:${telegramId}:${messageId}`);
 }
 
 export function isReferralAdmin(
@@ -1462,7 +1485,7 @@ async function sendPostClipOffer(
     if (!(await claimPostClipOffer(delivery.chatId, stage, locale))) return;
 
     const starter = getPlanLimits("STARTER", "WEEKLY");
-    await client.sendMessage(
+    const offerMessage = await client.sendMessage(
       delivery.chatId,
       dict.postClipOffer(stage, starter.minutesPerPeriod, starter.priceUsd),
       {
@@ -1477,6 +1500,10 @@ async function sendPostClipOffer(
         },
       }
     );
+    await recordConversionEvent("bot", delivery.chatId, "offer_shown", {
+      placement: "post_clip", stage, messageId: offerMessage?.message_id,
+      ...(stage === "soft" ? {} : { plan: "STARTER", cycle: "WEEKLY" }),
+    }, `bot:post-clip:${delivery.chatId}:${stage}`);
   } catch (error) {
     // This is a sales nudge, never part of delivery correctness. A Telegram,
     // usage, or quota read failure must not make a successfully delivered job
@@ -2277,6 +2304,9 @@ export async function handleSubscribeCallback(
   if (subscribeLocks.has(telegramId)) return;
   subscribeLocks.add(telegramId);
   try {
+    await recordConversionEvent("bot", telegramId, "offer_clicked", {
+      plan: parsed.plan, cycle: parsed.cycle, messageId, chatId,
+    }, `bot:buy:${query.id}`);
     const entry = getTributeCatalogEntry(parsed.plan, parsed.cycle);
 
     // Reuse a fresh PENDING order for the same user+plan+cycle (avoids a second order).
@@ -2292,8 +2322,10 @@ export async function handleSubscribeCallback(
     });
 
     let payUrl: string;
+    let orderUuid: string;
     if (fresh) {
       payUrl = fresh.payUrl;
+      orderUuid = fresh.orderUuid;
     } else {
       const checkoutIntentId = randomUUID();
       let result: { uuid: string; webappPaymentUrl: string };
@@ -2341,20 +2373,25 @@ export async function handleSubscribeCallback(
         return;
       }
       payUrl = result.webappPaymentUrl;
+      orderUuid = result.uuid;
     }
 
     const planLabel = `${PLAN_TITLES[parsed.plan]} (${
       parsed.cycle === "WEEKLY" ? dict.cycleWeekly : dict.cycleMonthly
     })`;
-    await client
+    const shown = await client
       .editMessageText(chatId, messageId, dict.checkoutReady(planLabel), {
         replyMarkup: { inline_keyboard: [[{ text: dict.payBtn, url: payUrl }]] },
       })
-      .catch(() => undefined);
+      .then(() => true, () => false);
+    if (!shown) return;
     // The pay link is now in their hands. Recorded here rather than at the
     // order insert so the reused-fresh-order path counts too - a second tap
     // within fifteen minutes is the same intent and creates no new row.
     await recordFunnelEvent("bot", telegramId, FUNNEL_EVENTS.CHECKOUT_STARTED);
+    await recordConversionEvent("bot", telegramId, "checkout_started", {
+      orderUuid, sessionId: orderUuid, provider: "tribute", plan: parsed.plan, cycle: parsed.cycle, messageId, chatId,
+    }, `bot:checkout:${orderUuid}`);
   } finally {
     subscribeLocks.delete(telegramId);
   }
@@ -2668,9 +2705,10 @@ async function handleVideo(
   }
   const blockedReason = await getSubmissionBlocker(user.id, dict, source.duration, subject);
   if (blockedReason) {
-    await client.sendMessage(message.chat.id, dict.blocked(blockedReason), {
-      replyMarkup: blockedKeyboard(dict),
+    const offerMessage = await client.sendMessage(message.chat.id, source.duration && source.duration > 180 * 60 ? blockedReason : dict.blocked(blockedReason), {
+      replyMarkup: blockedKeyboard(dict, source.duration),
     });
+    await recordSourceOffer(from.id, dict, blockedReason, source.duration, offerMessage?.message_id);
     return;
   }
 
@@ -2737,6 +2775,7 @@ async function handleVideo(
     unownedKey = sourceKey;
 
     const created = await jobService.createJob({
+      surface: "bot",
       userId: user.id,
       sourceKey,
       sourceFingerprint: fingerprint,
@@ -3002,9 +3041,10 @@ async function handleVideoUrl(
   }
   const blockedReason = await getSubmissionBlocker(user.id, dict, probe.durationSec, subject);
   if (blockedReason) {
-    await client.sendMessage(message.chat.id, dict.blocked(blockedReason), {
-      replyMarkup: blockedKeyboard(dict),
+    const offerMessage = await client.sendMessage(message.chat.id, probe.durationSec > 180 * 60 ? blockedReason : dict.blocked(blockedReason), {
+      replyMarkup: blockedKeyboard(dict, probe.durationSec),
     });
+    await recordSourceOffer(from.id, dict, blockedReason, probe.durationSec, offerMessage?.message_id);
     return;
   }
 
@@ -3015,6 +3055,7 @@ async function handleVideoUrl(
   const probedSec = Math.round(probe.durationSec);
 
   const created = await jobService.createJob({
+    surface: "bot",
     userId: user.id,
     sourceUrl: url,
     sourceFingerprint: fingerprint,
@@ -3176,6 +3217,15 @@ export async function getSubmissionBlocker(
     return dict.sourceTooShort;
   }
 
+  if (durationMinutes > 180) {
+    await recordRejection("TOO_LONG", { maxMinutes: 180 });
+    return dict.planSourceTooLong(180);
+  }
+  const purchaseOption = getSourcePurchaseOption(durationSec && durationSec > 0 ? durationSec : 1);
+  const purchaseLabel = purchaseOption
+    ? `${sourcePurchaseLabel(dict, purchaseOption)}\n${dict.purchaseResubmit}`
+    : undefined;
+
   if (
     durationMinutes > 0 &&
     durationMinutes > limits.maxSourceDurationMinutes
@@ -3186,8 +3236,8 @@ export async function getSubmissionBlocker(
       });
       return dict.freeSourceTooLong(
         limits.maxSourceDurationMinutes,
-        STARTER_WEEKLY.maxSourceDurationMinutes
-      );
+        Math.min(purchaseOption?.minutesPerPeriod ?? STARTER_WEEKLY.minutesPerPeriod, 180)
+      ) + `\n\n${purchaseLabel}`;
     }
     await recordRejection("TOO_LONG", {
       maxMinutes: limits.maxSourceDurationMinutes,
@@ -3231,18 +3281,20 @@ export async function getSubmissionBlocker(
             (submission.trial?.lifetimeSeconds ?? FREE_TIER.lifetimeSeconds) / 60
           ),
           STARTER_WEEKLY.minutesPerPeriod,
-          STARTER_WEEKLY.priceUsd
+          STARTER_WEEKLY.priceUsd,
+          purchaseLabel
         );
       case "FREE_BUDGET_CLOSED":
         return dict.freeBudgetClosed(
           STARTER_WEEKLY.minutesPerPeriod,
-          STARTER_WEEKLY.priceUsd
+          STARTER_WEEKLY.priceUsd,
+          purchaseLabel
         );
       case "FREE_SOURCE_TOO_LONG":
         return dict.freeSourceTooLong(
           getPlanLimits("NONE").maxSourceDurationMinutes,
-          STARTER_WEEKLY.maxSourceDurationMinutes
-        );
+          Math.min(purchaseOption?.minutesPerPeriod ?? STARTER_WEEKLY.minutesPerPeriod, 180)
+        ) + `\n\n${purchaseLabel}`;
       case "LIFECYCLE":
         return renderLifecycleBlock(submission.phase, dict);
       case "QUOTA":

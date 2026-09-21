@@ -311,6 +311,22 @@ model FunnelEvent {
   @@map("funnel_events")
 }
 
+// Append-only actions: unlike lifetime FunnelEvent counters these retain time
+// and provider/job identity. No cascading relations: deletion isn't conversion.
+model ConversionEvent {
+  id        String   @id @default(cuid())
+  surface   String
+  subjectId String
+  event     String
+  detail    Json?
+  eventKey  String?  @unique
+  createdAt DateTime @default(now())
+
+  @@index([event, createdAt])
+  @@index([surface, subjectId, createdAt])
+  @@map("conversion_events")
+}
+
 /// One row per support message, in both directions.
 ///
 /// Until 2026-08-21 a user's message was forwarded to the owner's Telegram DM
@@ -441,6 +457,8 @@ model StripeWebhookEvent {
 model Job {
   id                            String    @id @default(cuid())
   userId                        String
+  planAtSubmission              Plan?
+  submissionSurface             String?
   user                          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   sourceUrl                     String?
   sourceKey                     String?

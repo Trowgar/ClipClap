@@ -3,6 +3,12 @@ import type { TopupPack, InvoicePage, SubtitleTrack } from "@clipclap/shared";
 
 const BASE = "";
 
+export class ApiError extends Error {
+  constructor(message: string, public detail: { code?: string; durationSec?: number; remainingSec?: number } = {}) {
+    super(message);
+  }
+}
+
 async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     headers: { "Content-Type": "application/json" },
@@ -11,7 +17,7 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `API error: ${res.status}`);
+    throw new ApiError(body.error || `API error: ${res.status}`, body);
   }
 
   return res.json();
@@ -51,6 +57,8 @@ export const api = {
         trim?: { start: number; end: number };
         subtitles?: boolean;
         subtitleTrack?: SubtitleTrack;
+        extendEndSeconds?: 2 | 5;
+        framing?: "safe-fit";
       }
     ) =>
       fetchApi<ClipData>(`/api/clips/${id}/edit`, { method: "PUT", body: JSON.stringify(data) }),
@@ -68,16 +76,17 @@ export const api = {
     subscription: () => fetchApi<SubscriptionData>("/api/billing/subscription"),
     checkout: (
       plan: Exclude<Plan, "NONE">,
-      cycle: BillingCycle
+      cycle: BillingCycle,
+      durationSec?: number,
     ) =>
       fetchApi<{ url: string }>("/api/billing/checkout", {
         method: "POST",
-        body: JSON.stringify({ plan, cycle }),
+        body: JSON.stringify({ plan, cycle, durationSec }),
       }),
-    topup: (pack: TopupPack) =>
+    topup: (pack: TopupPack, durationSec?: number) =>
       fetchApi<{ url: string }>("/api/billing/topup", {
         method: "POST",
-        body: JSON.stringify({ pack }),
+        body: JSON.stringify({ pack, durationSec }),
       }),
     portal: () =>
       fetchApi<{ url: string }>("/api/billing/portal", {

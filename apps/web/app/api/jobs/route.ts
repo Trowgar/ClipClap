@@ -73,8 +73,8 @@ export async function POST(req: NextRequest) {
   // after DOWNLOAD. Until then the client's number is carried as provisional
   // and nothing but this account's own allowance rests on it.
   let durationSec: number | undefined =
-    typeof sourceDurationSec === "number" && sourceDurationSec > 0
-      ? sourceDurationSec
+    typeof sourceDurationSec === "number" && Number.isFinite(sourceDurationSec) && sourceDurationSec > 0
+      ? Math.round(sourceDurationSec)
       : undefined;
 
   if (url) {
@@ -100,8 +100,9 @@ export async function POST(req: NextRequest) {
       );
       return NextResponse.json(
         {
+          code: "PROBE_FAILED",
           error:
-            "We could not check that video just now. This one is on us - please try again in a minute.",
+            "We could not check that link just now. Upload a video file instead, or try again later.",
         },
         { status: 500 }
       );
@@ -118,8 +119,9 @@ export async function POST(req: NextRequest) {
       });
       return NextResponse.json(
         {
+          code: "PROBE_FAILED",
           error:
-            "We could not read that link. Make sure it points at a single public video and try again.",
+            "We could not read that link. Upload a video file instead. Links must point to a single public video you have permission to use.",
         },
         { status: 400 }
       );
@@ -226,6 +228,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       {
         error: `Source exceeds max duration (${limits.maxSourceDurationMinutes} min). Trim before uploading.`,
+        code: "TOO_LONG", durationSec,
       },
       { status: 400 }
     );
@@ -242,7 +245,8 @@ export async function POST(req: NextRequest) {
       topUpMinutes: submission.quota?.topUpMinutes,
       phase: submission.phase,
     });
-    return NextResponse.json({ error: submission.reason }, { status: 402 });
+    return NextResponse.json({ error: submission.reason, code: submission.code,
+      durationSec, remainingSec: submission.trial?.remainingSeconds }, { status: 402 });
   }
 
   if (jobsToday >= limits.maxJobsPerDay) {
@@ -283,6 +287,7 @@ export async function POST(req: NextRequest) {
   let created: Awaited<ReturnType<typeof jobService.createJob>>;
   try {
     created = await jobService.createJob({
+      surface: "web",
       userId,
       sourceUrl: url || undefined,
       sourceKey: sourceKey || undefined,

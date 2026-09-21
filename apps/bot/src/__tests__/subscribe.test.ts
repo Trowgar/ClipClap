@@ -26,12 +26,16 @@ const flowMocks = vi.hoisted(() => ({
   getTributeCatalogEntry: vi.fn(),
   orderFindFirst: vi.fn(),
   orderCreate: vi.fn(),
+  recordConversionEvent: vi.fn(),
+  recordFunnelEvent: vi.fn(),
 }));
 
 vi.mock("@clipclap/shared", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
+    recordConversionEvent: flowMocks.recordConversionEvent,
+    recordFunnelEvent: flowMocks.recordFunnelEvent,
     createShopOrder: flowMocks.createShopOrder,
     cancelShopOrder: flowMocks.cancelShopOrder,
     getTributeCatalogEntry: flowMocks.getTributeCatalogEntry,
@@ -73,10 +77,12 @@ describe("handleSubscribeCallback", () => {
     expect(JSON.stringify(editArgs)).toContain("https://pay");
     // The checkout message names the plan the user is subscribing to.
     expect(JSON.stringify(editArgs)).toContain("Max");
+    expect(flowMocks.recordConversionEvent).toHaveBeenCalledWith("bot", "42", "offer_clicked", expect.objectContaining({ plan: "MAX", cycle: "MONTHLY" }), "bot:buy:q");
+    expect(flowMocks.recordConversionEvent).toHaveBeenCalledWith("bot", "42", "checkout_started", expect.objectContaining({ orderUuid: "ord-1", sessionId: "ord-1", provider: "tribute" }), "bot:checkout:ord-1");
   });
 
   it("reuses a fresh PENDING order instead of creating a new one", async () => {
-    flowMocks.orderFindFirst.mockResolvedValue({ payUrl: "https://reused-pay" });
+    flowMocks.orderFindFirst.mockResolvedValue({ payUrl: "https://reused-pay", orderUuid: "ord-reused" });
     const client = fakeClient();
     const query = { id: "q", from: { id: 42 }, message: { chat: { id: 7 }, message_id: 3 }, data: "sub:MAX:MONTHLY" };
     await handleSubscribeCallback(client, query as never, t("en"), { id: "user-1" } as never);
@@ -84,6 +90,18 @@ describe("handleSubscribeCallback", () => {
     expect(flowMocks.orderCreate).not.toHaveBeenCalled();
     const editArgs = (client as unknown as { editMessageText: ReturnType<typeof vi.fn> }).editMessageText.mock.calls[0];
     expect(JSON.stringify(editArgs)).toContain("https://reused-pay");
+    await handleSubscribeCallback(client, { ...query, id: "q2" } as never, t("en"), { id: "user-1" });
+    const sessions = flowMocks.recordConversionEvent.mock.calls.filter(call => call[2] === "checkout_started");
+    expect(sessions).toHaveLength(2);
+    expect(sessions.map(call => call[4])).toEqual(["bot:checkout:ord-reused", "bot:checkout:ord-reused"]);
+  });
+
+  it("does not count a checkout whose message could not be delivered", async () => {
+    flowMocks.orderFindFirst.mockResolvedValue({ payUrl: "https://pay", orderUuid: "ord-hidden" });
+    const client = { editMessageText: vi.fn().mockRejectedValue(new Error("send failed")) };
+    await handleSubscribeCallback(client as never, { id: "q", from: { id: 42 }, message: { chat: { id: 7 }, message_id: 3 }, data: "sub:MAX:MONTHLY" } as never, t("en"), { id: "user-1" });
+    expect(flowMocks.recordConversionEvent.mock.calls.filter(call => call[2] === "checkout_started")).toHaveLength(0);
+    expect(flowMocks.recordFunnelEvent).not.toHaveBeenCalled();
   });
 
   it("best-effort cancels the remote order when the local insert fails", async () => {

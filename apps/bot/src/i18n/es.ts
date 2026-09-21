@@ -101,12 +101,12 @@ const es: Dict = {
   lowQualityNote:
     "Aviso: no encontré momentos fuertes, esto es lo mejor disponible.",
   blocked: (reason) => `${reason}\n\n💳 Planes: elige o gestiona tu suscripción.`,
-  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
-    `Tus minutos gratis no alcanzan para esto: quedan ${remainingMinutes} de ${lifetimeMinutes}. Lo que ya te corté es tuyo.\n\nPara seguir: Starter cuesta €${planPriceEur} por semana e incluye ${planMinutes} minutos de video, fuentes de hasta 3 horas y 20 clips guardados 7 días.`,
+  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur, offer) =>
+    `Tus minutos gratis no alcanzan para esto: quedan ${remainingMinutes} de ${lifetimeMinutes}. Lo que ya te corté es tuyo.\n\n${offer ?? `Para seguir: Starter cuesta €${planPriceEur} por semana e incluye ${planMinutes} minutos de video, fuentes de hasta 3 horas y 20 clips guardados 7 días.`}`,
   freeNotAnchored: (planMinutes, planPriceEur) =>
     `Los minutos gratis todavía no están activos en esta cuenta. Escribe a soporte desde el menú de ayuda y lo resuelvo, o empieza ya con Starter: €${planPriceEur} por semana e incluye ${planMinutes} minutos de video.`,
-  freeBudgetClosed: (planMinutes, planPriceEur) =>
-    `Las pruebas gratis están en pausa hasta el día uno del mes que viene. Es un límite mío, no de tu cuenta: tus minutos gratis siguen ahí.\n\nSi quieres cortar ahora, Starter cuesta €${planPriceEur} por semana e incluye ${planMinutes} minutos de video.`,
+  freeBudgetClosed: (planMinutes, planPriceEur, offer) =>
+    `Las pruebas gratis están en pausa hasta el día uno del mes que viene. Es un límite mío, no de tu cuenta: tus minutos gratis siguen ahí.\n\n${offer ?? `Si quieres cortar ahora, Starter cuesta €${planPriceEur} por semana e incluye ${planMinutes} minutos de video.`}`,
   freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
     `Tu prueba gratis admite videos de hasta ${freeMaxMinutes} minutos, y este es más largo. Envía un video más corto, o un fragmento de ${freeMaxMinutes} minutos de este, para probarlo gratis. Con un plan acepto fuentes de hasta ${planMaxMinutes} minutos.`,
   planSourceTooLong: (maxMinutes) =>
@@ -171,6 +171,7 @@ const es: Dict = {
     "🌱 <b>Starter</b> - €3/sem · €9/mes\n   • 75 min/sem (270 min/mes)\n   • 20 clips guardados\n   • 7 días de retención\n\n" +
     "🚀 <b>Plus</b> - €29/mes\n   • 1000 min/mes\n   • 150 clips\n   • 30 días de retención\n\n" +
     "👑 <b>Max</b> - €89/mes\n   • 3500 min/mes\n   • 1000 clips\n   • 90 días de retención\n   • ⚡ cola prioritaria\n\n" +
+    "Fuentes de hasta 180 minutos; el saldo restante debe cubrir el video completo. Starter semanal incluye 75 minutos: para un video de más de 75 minutos, elige el mensual (270 minutos) o envía un fragmento más corto.\n\n" +
     "Elige un plan abajo 👇",
   plansSubscribed: (plan, periodEnd) =>
     periodEnd
@@ -276,9 +277,10 @@ const es: Dict = {
   manageSubscriptionBtn: "🔧 Gestionar suscripción",
   checkingLink: "Comprobando el enlace…",
   urlAccessFailed:
-    "No pude acceder al video de ese enlace. Prueba con otro enlace o sube el archivo directamente.",
+    "No pude acceder al video de ese enlace. Sube el archivo de video aquí directamente.",
   urlYouTubeUnavailable:
-    "Los enlaces de YouTube no funcionan ahora mismo - YouTube nos está bloqueando a nosotros, no es tu enlace, así que otro enlace de YouTube tampoco servirá. El bloqueo va y viene: vuelve a mandar este mismo enlace dentro de un rato, sube el archivo de video aquí directamente, o manda un enlace de TikTok o Twitch.",
+    "YouTube está bloqueando el acceso al video. Sube el archivo de video aquí directamente.",
+  purchaseResubmit: "Cuando se confirme el pago, vuelve a enviar el video para iniciar el procesamiento.",
   referralInfo: (web, tg, earned, pending) =>
     `Tus enlaces de referidos:\nWeb: ${web}\nTelegram: ${tg}\n\nGanancias por referidos: $${earned}\nPendiente (retención de 14 días): $${pending}`,
   referralWithdrawBtn: "💸 Solicitar retiro",

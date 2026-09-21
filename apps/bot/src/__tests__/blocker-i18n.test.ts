@@ -31,8 +31,8 @@ vi.mock("../../../../packages/shared/src/lib/prisma", () => ({
 }));
 
 import { getPlanLimits } from "@clipclap/shared";
-import { getSubmissionBlocker } from "../handlers";
-import { t } from "../i18n";
+import { blockedKeyboard, getSubmissionBlocker } from "../handlers";
+import { LOCALES, t } from "../i18n";
 
 const STARTER_WEEKLY = getPlanLimits("STARTER", "WEEKLY");
 
@@ -138,6 +138,28 @@ const CASES: {
 ];
 
 describe("getSubmissionBlocker speaks the user's language", () => {
+  it.each(LOCALES)("offers a full-source cycle in %s", async (locale) => {
+    mocks.userFindUniqueOrThrow.mockResolvedValue(paidUser({ plan: "NONE" }));
+    const dict = t(locale);
+    const reason = await getSubmissionBlocker("u1", dict, 177 * 60);
+    expect(reason).toContain(dict.planStarterBtn);
+    expect(reason).not.toContain(dict.planStarterWeeklyBtn);
+    expect(reason).toContain(dict.purchaseResubmit);
+    expect(dict.freeExhausted(0, 40, 270, 9, dict.planStarterBtn)).toContain(dict.planStarterBtn);
+    expect(dict.freeExhausted(0, 40, 270, 9, dict.planStarterBtn)).not.toContain("3 hours");
+    expect(blockedKeyboard(dict, 177 * 60).inline_keyboard).toEqual([
+      [{ text: dict.planStarterBtn, callback_data: "sub:STARTER:MONTHLY" }],
+    ]);
+    expect(blockedKeyboard(dict, 75 * 60).inline_keyboard[0][0].callback_data).toBe("sub:STARTER:WEEKLY");
+    expect(blockedKeyboard(dict, 75 * 60 + 1).inline_keyboard[0][0].callback_data).toBe("sub:STARTER:MONTHLY");
+    expect(await getSubmissionBlocker("u1", dict, 181 * 60)).toBe(dict.planSourceTooLong(180));
+    expect(blockedKeyboard(dict, 181 * 60).inline_keyboard).toEqual([]);
+  });
+  it("offers file upload without a link retry loop", () => {
+    expect(t("en").urlYouTubeUnavailable).toContain("upload");
+    expect(t("en").urlYouTubeUnavailable).not.toMatch(/try .*link|send .*link/i);
+    expect(t("en").urlAccessFailed).not.toMatch(/different URL/i);
+  });
   beforeEach(() => {
     mocks.jobCount.mockReset();
     mocks.userFindUniqueOrThrow.mockReset();

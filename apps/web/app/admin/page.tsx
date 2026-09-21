@@ -7,6 +7,7 @@ import {
   getFeedbackSummary,
   getFunnel,
   getPulse,
+  getConversionSummary,
   getRefusals,
   getSideActions,
   getTotals,
@@ -115,6 +116,7 @@ export default async function AdminAnalyticsPage({
     guests,
     feedbackSummary,
     feedbackRows,
+    conversions,
   ] = await Promise.all([
     getPulse(surface, ownAccounts),
     getFunnel(surface),
@@ -129,6 +131,7 @@ export default async function AdminAnalyticsPage({
     surface === "web" ? getWebGuests(requestedPage) : Promise.resolve(null),
     getFeedbackSummary(surface),
     getFeedbackRows(surface),
+    getConversionSummary(surface, ownAccounts),
   ]);
 
   const userDetails = users
@@ -207,6 +210,21 @@ export default async function AdminAnalyticsPage({
           including your own accounts: {totals.users} users · {totals.jobs} jobs
           · {totals.clips} clips
         </p>
+      </section>
+
+      <section>
+        <h2 className="mb-2 font-semibold">Sales actions · last 14 days</h2>
+        <p className="mb-3 text-xs opacity-60">Timestamped since 21 September 2026. Own and synthetic accounts excluded. Browser views require visibility; a Telegram offer means sent, not read. Checkout creation is not payment. Action rows below are independent counts.</p>
+        <p className="mb-3 text-sm">Distinct provider Checkout sessions/orders: {conversions.checkoutSessions}</p>
+        <h3 className="mb-2 text-sm font-medium">Offer cohort · ordered people</h3>
+        <p className="mb-3 text-xs opacity-60">Each step requires every previous step after an offer in this window, across linked web/Telegram identities. Counts use people, not purchases; ordering does not prove that a specific offer caused a payment. Earlier offers and missing events are excluded.</p>
+        <div className="mb-5 space-y-1 text-sm">{conversions.cohort.map(row => <p key={row.event}>{row.event}: {row.users} / {conversions.cohort[0].users}</p>)}</div>
+        <table className="w-full text-sm">
+          <thead><tr className="text-left opacity-60"><th>Action</th><th>People</th><th>Events</th></tr></thead>
+          <tbody>{conversions.rows.map(row => <tr key={row.event} className="border-t border-white/10">
+            <td className="py-2">{row.event}</td><td>{row.users}</td><td>{row.actions}</td>
+          </tr>)}</tbody>
+        </table>
       </section>
 
       {/* 3. Funnel - true step order, with drop-off from the previous step. */}

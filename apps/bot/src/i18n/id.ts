@@ -97,12 +97,12 @@ const id: Dict = {
   lowQualityNote:
     "Catatan: tidak ada momen yang kuat, ini yang terbaik dari yang ada.",
   blocked: (reason) => `${reason}\n\n💳 Paket: pilih atau kelola langgananmu.`,
-  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
-    `Menit gratismu tidak cukup untuk ini: sisa ${remainingMinutes} dari ${lifetimeMinutes}. Klip yang sudah jadi tetap milikmu.\n\nUntuk lanjut: Starter €${planPriceEur} per minggu, isinya ${planMinutes} menit video, sumber sampai 3 jam, dan 20 klip yang disimpan 7 hari.`,
+  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur, offer) =>
+    `Menit gratismu tidak cukup untuk ini: sisa ${remainingMinutes} dari ${lifetimeMinutes}. Klip yang sudah jadi tetap milikmu.\n\n${offer ?? `Untuk lanjut: Starter €${planPriceEur} per minggu, isinya ${planMinutes} menit video, sumber sampai 3 jam, dan 20 klip yang disimpan 7 hari.`}`,
   freeNotAnchored: (planMinutes, planPriceEur) =>
     `Menit gratis belum aktif di akun ini. Hubungi dukungan lewat menu bantuan dan aku bantu beresin, atau mulai sekarang dengan Starter: €${planPriceEur} per minggu untuk ${planMinutes} menit video.`,
-  freeBudgetClosed: (planMinutes, planPriceEur) =>
-    `Percobaan gratis dijeda sampai tanggal 1 bulan depan. Itu batas dari sisiku, bukan dari akunmu - menit gratismu tetap utuh.\n\nKalau mau memotong sekarang, Starter €${planPriceEur} per minggu untuk ${planMinutes} menit video.`,
+  freeBudgetClosed: (planMinutes, planPriceEur, offer) =>
+    `Percobaan gratis dijeda sampai tanggal 1 bulan depan. Itu batas dari sisiku, bukan dari akunmu - menit gratismu tetap utuh.\n\n${offer ?? `Kalau mau memotong sekarang, Starter €${planPriceEur} per minggu untuk ${planMinutes} menit video.`}`,
   freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
     `Percobaan gratis menerima video sampai ${freeMaxMinutes} menit, dan yang ini lebih panjang. Kirim video yang lebih pendek, atau potongan ${freeMaxMinutes} menit dari video ini, untuk mencobanya gratis. Dengan paket, aku menerima sumber sampai ${planMaxMinutes} menit.`,
   planSourceTooLong: (maxMinutes) =>
@@ -167,6 +167,7 @@ const id: Dict = {
     "🌱 <b>Starter</b> - €3/mgg · €9/bln\n   • 75 mnt/mgg (270 mnt/bln)\n   • 20 klip tersimpan\n   • disimpan 7 hari\n\n" +
     "🚀 <b>Plus</b> - €29/bln\n   • 1000 mnt/bln\n   • 150 klip\n   • disimpan 30 hari\n\n" +
     "👑 <b>Max</b> - €89/bln\n   • 3500 mnt/bln\n   • 1000 klip\n   • disimpan 90 hari\n   • ⚡ antrean prioritas\n\n" +
+    "Sumber hingga 180 menit; saldo menit tersisa harus cukup untuk seluruh video. Starter mingguan mencakup 75 menit: untuk video lebih dari 75 menit, pilih bulanan (270 menit) atau kirim potongan lebih pendek.\n\n" +
     "Pilih paket di bawah 👇",
   plansSubscribed: (plan, periodEnd) =>
     periodEnd
@@ -272,9 +273,10 @@ const id: Dict = {
   manageSubscriptionBtn: "🔧 Kelola langganan",
   checkingLink: "Memeriksa tautan…",
   urlAccessFailed:
-    "Tidak bisa mengakses video di tautan itu. Coba tautan lain atau unggah filenya langsung.",
+    "Tidak bisa mengakses video di tautan itu. Unggah file videonya langsung di sini.",
   urlYouTubeUnavailable:
-    "Tautan YouTube sedang tidak berfungsi - yang memblokir adalah YouTube, bukan tautanmu, jadi tautan YouTube lain juga tidak akan membantu. Pemblokirannya datang dan pergi: coba kirim tautan yang sama lagi nanti, unggah file videonya langsung di sini, atau kirim tautan TikTok atau Twitch.",
+    "YouTube memblokir akses ke video ini. Unggah file videonya langsung di sini.",
+  purchaseResubmit: "Setelah pembayaran dikonfirmasi, kirim ulang video untuk memulai pemrosesan.",
   referralInfo: (web, tg, earned, pending) =>
     `Tautan referalmu:\nWeb: ${web}\nTelegram: ${tg}\n\nPenghasilan referal: $${earned}\nTertahan (14 hari): $${pending}`,
   referralWithdrawBtn: "💸 Ajukan penarikan",

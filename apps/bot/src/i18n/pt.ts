@@ -100,12 +100,12 @@ const pt: Dict = {
         : "Terminei. Assisti ao vídeo inteiro, mas não achei momentos fortes o bastante para virar clipe. Tenta um vídeo com mais conversa, emoção ou história.",
   lowQualityNote: "Aviso: não achei momentos fortes, este é o melhor disponível.",
   blocked: (reason) => `${reason}\n\n💳 Planos: escolha ou gerencie sua assinatura.`,
-  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
-    `Seus minutos grátis não dão para isso: restam ${remainingMinutes} de ${lifetimeMinutes}. O que eu já cortei continua seu.\n\nPara continuar: o Starter custa €${planPriceEur} por semana e inclui ${planMinutes} minutos de vídeo, fontes de até 3 horas e 20 clipes guardados por 7 dias.`,
+  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur, offer) =>
+    `Seus minutos grátis não dão para isso: restam ${remainingMinutes} de ${lifetimeMinutes}. O que eu já cortei continua seu.\n\n${offer ?? `Para continuar: o Starter custa €${planPriceEur} por semana e inclui ${planMinutes} minutos de vídeo, fontes de até 3 horas e 20 clipes guardados por 7 dias.`}`,
   freeNotAnchored: (planMinutes, planPriceEur) =>
     `Os minutos grátis ainda não estão liberados nesta conta. Fale com o suporte pelo menu de ajuda que eu resolvo, ou comece agora com o Starter: €${planPriceEur} por semana e ${planMinutes} minutos de vídeo.`,
-  freeBudgetClosed: (planMinutes, planPriceEur) =>
-    `As execuções grátis estão pausadas até o dia primeiro do mês que vem. É um limite meu, não da sua conta: seus minutos grátis continuam lá.\n\nSe quiser cortar agora, o Starter custa €${planPriceEur} por semana e inclui ${planMinutes} minutos de vídeo.`,
+  freeBudgetClosed: (planMinutes, planPriceEur, offer) =>
+    `As execuções grátis estão pausadas até o dia primeiro do mês que vem. É um limite meu, não da sua conta: seus minutos grátis continuam lá.\n\n${offer ?? `Se quiser cortar agora, o Starter custa €${planPriceEur} por semana e inclui ${planMinutes} minutos de vídeo.`}`,
   freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
     `Seu teste grátis aceita vídeos de até ${freeMaxMinutes} minutos, e este é mais longo. Manda um vídeo mais curto, ou um trecho de ${freeMaxMinutes} minutos deste, para testar de graça. Com um plano eu aceito fontes de até ${planMaxMinutes} minutos.`,
   planSourceTooLong: (maxMinutes) =>
@@ -170,6 +170,7 @@ const pt: Dict = {
     "🌱 <b>Starter</b> - €3/sem · €9/mês\n   • 75 min/sem (270 min/mês)\n   • 20 clipes guardados\n   • 7 dias de retenção\n\n" +
     "🚀 <b>Plus</b> - €29/mês\n   • 1000 min/mês\n   • 150 clipes\n   • 30 dias de retenção\n\n" +
     "👑 <b>Max</b> - €89/mês\n   • 3500 min/mês\n   • 1000 clipes\n   • 90 dias de retenção\n   • ⚡ fila prioritária\n\n" +
+    "Fontes de até 180 minutos; o saldo restante deve cobrir o vídeo inteiro. O Starter semanal inclui 75 minutos: para um vídeo acima de 75 minutos, escolha o mensal (270 minutos) ou envie um trecho mais curto.\n\n" +
     "Escolha um plano abaixo 👇",
   plansSubscribed: (plan, periodEnd) =>
     periodEnd
@@ -275,9 +276,10 @@ const pt: Dict = {
   manageSubscriptionBtn: "🔧 Gerenciar assinatura",
   checkingLink: "Verificando o link…",
   urlAccessFailed:
-    "Não consegui acessar o vídeo desse link. Tente outro link ou envie o arquivo direto.",
+    "Não consegui acessar o vídeo desse link. Envie o arquivo de vídeo aqui diretamente.",
   urlYouTubeUnavailable:
-    "Links do YouTube não funcionam no momento - quem está bloqueando é o YouTube, não é o seu link, então outro link do YouTube também não vai adiantar. O bloqueio vai e volta: mande este mesmo link de novo daqui a pouco, envie o arquivo de vídeo aqui direto, ou mande um link do TikTok ou da Twitch.",
+    "O YouTube está bloqueando o acesso ao vídeo. Envie o arquivo de vídeo aqui diretamente.",
+  purchaseResubmit: "Após a confirmação do pagamento, envie o vídeo novamente para iniciar o processamento.",
   referralInfo: (web, tg, earned, pending) =>
     `Seus links de indicação:\nWeb: ${web}\nTelegram: ${tg}\n\nGanhos por indicação: $${earned}\nPendente (retenção de 14 dias): $${pending}`,
   referralWithdrawBtn: "💸 Solicitar saque",

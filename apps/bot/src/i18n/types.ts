@@ -118,8 +118,10 @@ export interface Dict {
     remainingMinutes: number,
     lifetimeMinutes: number,
     planMinutes: number,
-    planPriceEur: number
+    planPriceEur: number,
+    offer?: string
   ) => string;
+  purchaseResubmit: string;
   /** Nothing has vouched for this account yet, so it has no allowance at all.
    *  Unreachable from Telegram in practice - a bot account is anchored by its
    *  phone-backed telegramId - but the code is part of the shared union, and a
@@ -128,7 +130,7 @@ export interface Dict {
   /** Nothing is wrong with THIS account: the month's global free budget is
    *  spent, so free runs are paused until it resets. Say whose limit it is,
    *  or the user reads it as their own allowance being gone. */
-  freeBudgetClosed: (planMinutes: number, planPriceEur: number) => string;
+  freeBudgetClosed: (planMinutes: number, planPriceEur: number, offer?: string) => string;
   /** Source is longer than the free run allows. Names both caps so the choice
    *  - trim it, or pay for length - is visible. */
   freeSourceTooLong: (freeMaxMinutes: number, planMaxMinutes: number) => string;

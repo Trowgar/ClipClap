@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Check, CircleNotch } from "@phosphor-icons/react";
 import type { Plan, BillingCycle } from "@prisma/client";
 import { api } from "@/lib/api";
+import { trackConversion } from "@/lib/conversion";
 
 interface CycleOption {
   label: string;
@@ -20,6 +21,8 @@ interface PlanCardProps {
   current?: boolean;
   currentCycle?: BillingCycle | null;
   highlighted?: boolean;
+  requiredDurationSec?: number;
+  maxSourceDurationMinutes?: number;
 }
 
 export function PlanCard({
@@ -30,21 +33,26 @@ export function PlanCard({
   current,
   currentCycle,
   highlighted,
+  requiredDurationSec,
+  maxSourceDurationMinutes = 180,
 }: PlanCardProps) {
   const [selectedCycle, setSelectedCycle] = useState<BillingCycle>(
-    cycleOptions[0]?.cycle ?? "MONTHLY"
+    cycleOptions.find(c => !requiredDurationSec || c.minutes * 60 >= requiredDurationSec)?.cycle ?? cycleOptions[0]?.cycle ?? "MONTHLY"
   );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const selected = cycleOptions.find((c) => c.cycle === selectedCycle) ?? cycleOptions[0];
   const isCurrent = current && currentCycle === selectedCycle;
+  const doesNotFit = !!requiredDurationSec && requiredDurationSec > Math.min(selected.minutes, maxSourceDurationMinutes) * 60;
 
   const onSubscribe = async () => {
+    if (doesNotFit || isCurrent || loading) return;
     setLoading(true);
     setError(null);
     try {
-      const { url } = await api.billing.checkout(planKey, selectedCycle);
+      trackConversion("checkout_clicked", { placement: "plans", plan: planKey, cycle: selectedCycle, durationSec: requiredDurationSec });
+      const { url } = await api.billing.checkout(planKey, selectedCycle, requiredDurationSec);
       if (url) window.location.href = url;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Checkout failed");
@@ -93,6 +101,8 @@ export function PlanCard({
         </span>
       </p>
       <p className="mt-1 text-xs text-muted-foreground">{selected.minutes} minutes</p>
+      <p className="mt-2 text-xs text-muted-foreground">Each upload must fit your remaining minutes. On a fresh balance: up to {Math.min(selected.minutes, maxSourceDurationMinutes)} minutes per video. Renews automatically; cancel anytime.</p>
+      {doesNotFit && <p role="alert" className="mt-2 text-xs text-amber-300">This option does not cover your {Math.ceil(requiredDurationSec! / 60)}-minute video. Choose a longer billing allowance or a shorter source.</p>}
 
       <ul className="mt-5 space-y-2 text-sm text-neutral-400">
         {features.map((f) => (
@@ -107,7 +117,7 @@ export function PlanCard({
 
       <button
         onClick={onSubscribe}
-        disabled={loading || isCurrent}
+        disabled={loading || isCurrent || doesNotFit}
         className={`mt-6 inline-flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium transition-all disabled:opacity-60 ${
           isCurrent
             ? "cursor-not-allowed bg-white/[0.04] text-neutral-500"

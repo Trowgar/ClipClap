@@ -32,6 +32,20 @@ beforeEach(() => {
 });
 
 describe("POST /api/billing/checkout funnel telemetry", () => {
+  it("refuses a known 177-minute source on weekly Starter before creating checkout", async () => {
+    const response = await POST(request({ plan: "STARTER", cycle: "WEEKLY", durationSec: 177 * 60 }));
+    expect(response.status).toBe(400);
+    expect(createCheckoutSessionMock).not.toHaveBeenCalled();
+  });
+  it("accepts the same source on monthly Starter", async () => {
+    const response = await POST(request({ plan: "STARTER", cycle: "MONTHLY", durationSec: 177 * 60 }));
+    expect(response.status).toBe(200);
+  });
+  it("does not sell an upload longer than every plan's cap", async () => {
+    const response = await POST(request({ plan: "MAX", cycle: "MONTHLY", durationSec: 181 * 60 }));
+    expect(response.status).toBe(400);
+    expect(createCheckoutSessionMock).not.toHaveBeenCalled();
+  });
   it("records checkout_started only after a checkout URL is created", async () => {
     const response = await POST(request({ plan: "STARTER", cycle: "WEEKLY" }));
 

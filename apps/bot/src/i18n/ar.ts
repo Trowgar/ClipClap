@@ -245,22 +245,22 @@ const ar: Dict = {
         : "انتهيت. شاهدت الفيديو كاملًا لكنني لم أجد لحظات قوية بما يكفي لصنع مقاطع - لا مقاطع هذه المرة. جرّب فيديو فيه كلام أكثر أو انفعال أو قصة.",
   lowQualityNote: "للعلم: لم أجد لحظات قوية - هذا أفضل المتاح.",
   blocked: (reason) => `${reason}\n\n💳 الباقات - اختر اشتراكًا أو أدِر اشتراكك.`,
-  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
+  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur, offer) =>
     `دقائقك المجانية لا تكفي لهذا الفيديو - بقي ${isolate(
       remainingMinutes
-    )} من ${minutesAr(lifetimeMinutes)}. وكل ما صنعته لك حتى الآن يبقى لك.\n\nللمتابعة: باقة Starter بـ${isolate(
+    )} من ${minutesAr(lifetimeMinutes)}. وكل ما صنعته لك حتى الآن يبقى لك.\n\n${offer ?? `للمتابعة: باقة Starter بـ${isolate(
       planPriceEur
     )} يورو أسبوعيًا مقابل ${minutesAr(
       planMinutes
-    )} من الفيديو، ومصادر حتى 3 ساعات، و20 مقطعًا تُحفظ 7 أيام.`,
+    )} من الفيديو، ومصادر حتى 3 ساعات، و20 مقطعًا تُحفظ 7 أيام.`}`,
   freeNotAnchored: (planMinutes, planPriceEur) =>
     `دقائقك المجانية لم تُفتح على هذا الحساب بعد. راسل الدعم من قائمة المساعدة وسأتولّى الأمر - أو ابدأ فورًا بباقة Starter: ${isolate(
       planPriceEur
     )} يورو أسبوعيًا مقابل ${minutesAr(planMinutes)} من الفيديو.`,
-  freeBudgetClosed: (planMinutes, planPriceEur) =>
-    `التشغيل المجاني متوقف مؤقتًا حتى أول الشهر القادم. هذا حدّ من جهتي، لا على حسابك - دقائقك المجانية ما زالت بانتظارك.\n\nوإن أردت التقطيع الآن: باقة Starter بـ${isolate(
+  freeBudgetClosed: (planMinutes, planPriceEur, offer) =>
+    `التشغيل المجاني متوقف مؤقتًا حتى أول الشهر القادم. هذا حدّ من جهتي، لا على حسابك - دقائقك المجانية ما زالت بانتظارك.\n\n${offer ?? `وإن أردت التقطيع الآن: باقة Starter بـ${isolate(
       planPriceEur
-    )} يورو أسبوعيًا مقابل ${minutesAr(planMinutes)} من الفيديو.`,
+    )} يورو أسبوعيًا مقابل ${minutesAr(planMinutes)} من الفيديو.`}`,
   freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
     `التشغيل المجاني يشمل الفيديوهات حتى ${minutesAr(
       freeMaxMinutes
@@ -367,6 +367,7 @@ const ar: Dict = {
     "🌱 <b>Starter</b> - €3/أسبوع · €9/شهر\n   • 75 دقيقة/أسبوع (270 دقيقة/شهر)\n   • 20 مقطعًا في التخزين\n   • حفظ 7 أيام\n\n" +
     "🚀 <b>Plus</b> - €29/شهر\n   • 1000 دقيقة/شهر\n   • 150 مقطعًا\n   • حفظ 30 يومًا\n\n" +
     "👑 <b>Max</b> - €89/شهر\n   • 3500 دقيقة/شهر\n   • 1000 مقطع\n   • حفظ 90 يومًا\n   • ⚡ طابور أولوية\n\n" +
+    "مصادر حتى 180 دقيقة؛ يجب أن يغطي رصيد الدقائق المتبقي الفيديو كاملًا. تشمل باقة Starter الأسبوعية 75 دقيقة: لفيديو أطول من 75 دقيقة، اختر الباقة الشهرية (270 دقيقة) أو أرسل مقطعًا أقصر.\n\n" +
     "اختر باقة بالأسفل 👇",
   plansSubscribed: (plan, periodEnd) =>
     periodEnd
@@ -497,9 +498,10 @@ const ar: Dict = {
   manageSubscriptionBtn: "🔧 إدارة الاشتراك",
   checkingLink: "جارٍ فحص الرابط…",
   urlAccessFailed:
-    "تعذّر الوصول إلى الفيديو عبر هذا الرابط. جرّب رابطًا آخر أو ارفع الملف مباشرة.",
+    "تعذّر الوصول إلى الفيديو عبر هذا الرابط. ارفع ملف الفيديو هنا مباشرة.",
   urlYouTubeUnavailable:
-    "روابط يوتيوب لا تعمل حاليًا - يوتيوب يحجبنا نحن، لا أنت، لذلك لن يفيد رابط يوتيوب آخر. الحجب يأتي ويذهب: أعد إرسال هذا الرابط نفسه بعد قليل، أو ارفع ملف الفيديو هنا بدلًا من ذلك، أو أرسل رابطًا من تيك توك أو تويتش.",
+    "يحجب يوتيوب الوصول إلى هذا الفيديو. ارفع ملف الفيديو هنا مباشرة.",
+  purchaseResubmit: "بعد تأكيد الدفع، أرسل الفيديو مرة أخرى لبدء المعالجة.",
   referralInfo: (web, tg, earned, pending) =>
     `روابط الإحالة الخاصة بك:\nالموقع: ${isolate(web)}\nتيليغرام: ${isolate(
       tg

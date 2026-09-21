@@ -5,7 +5,7 @@ import {
   prisma,
   uploadFile,
 } from "@clipclap/shared";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { randomUUID } from "crypto";
 import { unlink } from "fs/promises";
 import { CHILD_MAX_BUFFER_BYTES } from "../child-buffer";
@@ -52,6 +52,15 @@ export async function runRenderStage(
 
     await renderClips(payload);
   } catch (error) {
+    if (payload.mode === "trim") {
+      // An empty edited output is a placeholder, not a playable clip. Mark it
+      // unavailable so editor polling can stop; never invalidate an original
+      // or an output already uploaded by another attempt. A retry clears this.
+      await prisma.clip.updateMany({
+        where: { id: payload.clipId, userId: payload.userId, storageKey: "" },
+        data: { deletedAt: new Date() },
+      });
+    }
     await jobStepService.failJobStep(payload.jobId, "RENDER", error);
     if (payload.mode === "clips") {
       await markJobFailed(payload.jobId, error);
@@ -519,7 +528,24 @@ async function renderTrim(
 
     // Edited cues arrive relative to the ORIGINAL clip file; re-window them
     // to the new trim range so they match the trimmed output.
-    const editedCues = payload.subtitleTrack?.cues ?? [];
+    const sourceRepair = Boolean(payload.extendEndSeconds || payload.framing);
+    if (sourceRepair && (!cleanSource || !Number.isFinite(payload.sourceStart) ||
+        !Number.isFinite(payload.sourceEnd) || payload.sourceStart! < 0 ||
+        payload.sourceEnd! <= payload.sourceStart! || payload.sourceEnd! - payload.sourceStart! > 150)) {
+      throw new Error("Invalid source repair range");
+    }
+    let editedCues = payload.subtitleTrack?.cues ?? [];
+    if (payload.extendEndSeconds && payload.subtitles) {
+      const job = await prisma.job.findUniqueOrThrow({ where: { id: payload.jobId } });
+      const oldEnd = payload.sourceEnd! - payload.extendEndSeconds;
+      const originalDuration = payload.end - payload.extendEndSeconds;
+      const tail = segmentsToCues(asTranscription(job.transcriptJson).segments, oldEnd, payload.sourceEnd!, job.language);
+      editedCues = [
+        ...sliceCues(editedCues, 0, originalDuration),
+        ...tail.map(cue => ({ ...cue, id: `extension-${cue.id}`, start: cue.start + originalDuration, end: cue.end + originalDuration,
+          words: cue.words?.map(word => ({ ...word, start: word.start + originalDuration, end: word.end + originalDuration })) })),
+      ];
+    }
     const windowedCues = sliceCues(editedCues, payload.start, payload.end);
     const wantSubs = payload.subtitles && windowedCues.length > 0;
     // The trim payload predates Arabic and carries no language, so read it.
@@ -553,6 +579,7 @@ async function renderTrim(
         cleanSourcePath = await downloadVideo(undefined, payload.sourceArtifactKey!);
         tempFiles.push(cleanSourcePath);
       } catch (error) {
+        if (sourceRepair) throw new Error("The original video is no longer available for repair");
         console.warn(
           `[render] trim source artifact unavailable on job ${payload.jobId} (key=${payload.sourceArtifactKey}), falling back to clip file:`,
           error
@@ -562,6 +589,10 @@ async function renderTrim(
     }
     if (cleanSourcePath) {
       const sourcePath = cleanSourcePath;
+      const repairSource = sourceRepair ? await probeRepairSource(sourcePath) : null;
+      if (repairSource && payload.sourceEnd! > repairSource.duration) {
+        throw new Error("Requested ending exceeds the original video duration");
+      }
       let assFilter: { filter: string; assPath: string } | null = null;
       if (wantSubs) {
         assFilter = await createAssFilter(windowedCues, trimLanguage);
@@ -571,7 +602,19 @@ async function renderTrim(
       // exactly like sliceCues) so trims keep the face-aware framing.
       const reframeCfg = loadReframeConfig();
       let filterSpec: FilterSpec | null = null;
-      if (reframeCfg.engine === "faces") {
+      if (payload.framing === "safe-fit" && repairSource) {
+        slicedPlan = { version: 4, engine: "faces", source: { width: repairSource.width, height: repairSource.height },
+          shots: [{ start: 0, end: payload.end - payload.start, layout: "safe-fit", reason: "coverage" }] };
+        filterSpec = buildFiltergraph(slicedPlan, assFilter?.filter);
+      } else if (payload.extendEndSeconds) {
+        // A sliced old plan has no coverage of the restored tail. Plan the
+        // requested source interval afresh using the existing local detector.
+        const reframe = reframeCfg.engine === "faces"
+          ? await computeCropPlan(sourcePath, payload.sourceStart!, payload.sourceEnd!, reframeCfg)
+          : null;
+        slicedPlan = reframe?.plan ?? null;
+        if (slicedPlan) filterSpec = buildFiltergraph(slicedPlan, assFilter?.filter);
+      } else if (reframeCfg.engine === "faces") {
         // Defense in depth on top of sliceCropPlan's own guard: a malformed
         // stored cropPlan must never fail the trim - degrade to legacy crop.
         try {
@@ -616,7 +659,7 @@ async function renderTrim(
           filterSpec
         );
       } catch (error) {
-        if (!filterSpec) throw error;
+        if (!filterSpec || payload.framing === "safe-fit") throw error;
         console.warn(
           `[render] reframe encode fallback on job ${payload.jobId}:`,
           error
@@ -632,6 +675,9 @@ async function renderTrim(
       }
       finalPath = cutResult.clipPath;
       tempFiles.push(finalPath);
+      if (sourceRepair && Math.abs(await probeDuration(finalPath) - (payload.sourceEnd! - payload.sourceStart!)) > 0.15) {
+        throw new Error("Rendered repair does not cover the requested interval");
+      }
     } else {
       const originalPath = await downloadVideo(
         undefined,
@@ -679,16 +725,28 @@ async function renderTrim(
       data: {
         storageKey,
         duration: Math.round(payload.end - payload.start),
+        deletedAt: null,
         subtitles: subtitlesBurned,
         subtitleTrack: { cues: windowedCues } as unknown as Prisma.InputJsonValue,
         cropPlan: slicedPlan
           ? (slicedPlan as unknown as Prisma.InputJsonValue)
-          : undefined,
+          : Prisma.DbNull,
       },
     });
   } finally {
     await cleanup(tempFiles);
   }
+}
+
+async function probeRepairSource(path: string): Promise<{ duration: number; width: number; height: number }> {
+  const { execFile } = await import("child_process");
+  const { promisify } = await import("util");
+  const { stdout } = await promisify(execFile)("ffprobe", ["-v", "error", "-select_streams", "v:0",
+    "-show_entries", "format=duration:stream=duration,width,height", "-of", "json", path], { timeout: 15000 });
+  const probe = JSON.parse(stdout);
+  const result = { duration: Number(probe.streams?.[0]?.duration ?? probe.format?.duration), width: Number(probe.streams?.[0]?.width), height: Number(probe.streams?.[0]?.height) };
+  if (Object.values(result).some(value => !Number.isFinite(value) || value <= 0)) throw new Error("Cannot verify original video bounds");
+  return result;
 }
 
 async function cleanup(files: string[]) {

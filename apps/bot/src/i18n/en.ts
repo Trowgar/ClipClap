@@ -146,12 +146,12 @@ const en: Dict = {
         : "Done. I watched the whole video but did not find moments strong enough for clips - no clips this time. Try a video with more talk, emotion, or story.",
   lowQualityNote: "Heads up: no strong moments found - this is the best available.",
   blocked: (reason) => `${reason}\n\n💳 Plans - choose or manage your subscription.`,
-  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur) =>
-    `Your free minutes will not cover this - ${remainingMinutes} of ${lifetimeMinutes} left. Anything I already made for you is yours to keep.\n\nTo carry on: Starter is €${planPriceEur} a week for ${planMinutes} minutes of video, sources up to 3 hours, and 20 clips kept for 7 days.`,
+  freeExhausted: (remainingMinutes, lifetimeMinutes, planMinutes, planPriceEur, offer) =>
+    `Your free minutes will not cover this - ${remainingMinutes} of ${lifetimeMinutes} left. Anything I already made for you is yours to keep.\n\n${offer ?? `To carry on: Starter is €${planPriceEur} a week for ${planMinutes} minutes of video, sources up to 3 hours, and 20 clips kept for 7 days.`}`,
   freeNotAnchored: (planMinutes, planPriceEur) =>
     `Your free minutes are not unlocked on this account yet. Write to support from the Help menu and I'll sort it out - or start straight away with Starter: €${planPriceEur} a week for ${planMinutes} minutes of video.`,
-  freeBudgetClosed: (planMinutes, planPriceEur) =>
-    `Free runs are paused until the first of next month. That is a limit on my side, not on your account - your free minutes are still waiting for you.\n\nIf you want to clip now: Starter is €${planPriceEur} a week for ${planMinutes} minutes of video.`,
+  freeBudgetClosed: (planMinutes, planPriceEur, offer) =>
+    `Free runs are paused until the first of next month. That is a limit on my side, not on your account - your free minutes are still waiting for you.\n\n${offer ?? `If you want to clip now: Starter is €${planPriceEur} a week for ${planMinutes} minutes of video.`}`,
   freeSourceTooLong: (freeMaxMinutes, planMaxMinutes) =>
     `Your free run covers videos up to ${freeMaxMinutes} minutes, and this one is longer. Send a shorter video - or a ${freeMaxMinutes}-minute section of this one - to try it free. A plan takes sources up to ${planMaxMinutes} minutes.`,
   planSourceTooLong: (maxMinutes) =>
@@ -216,6 +216,7 @@ const en: Dict = {
     "🌱 <b>Starter</b> - €3/wk · €9/mo\n   • 75 min/wk (270 min/mo)\n   • 20 clips stored\n   • 7-day retention\n\n" +
     "🚀 <b>Plus</b> - €29/mo\n   • 1000 min/mo\n   • 150 clips\n   • 30-day retention\n\n" +
     "👑 <b>Max</b> - €89/mo\n   • 3500 min/mo\n   • 1000 clips\n   • 90-day retention\n   • ⚡ priority queue\n\n" +
+    "Sources up to 180 minutes; your remaining balance must cover the whole video. Starter weekly includes 75 minutes: for a source over 75 minutes, choose monthly (270 minutes) or send a shorter cut.\n\n" +
     "Pick a plan below 👇",
   plansSubscribed: (plan, periodEnd) =>
     periodEnd
@@ -371,9 +372,10 @@ const en: Dict = {
   manageSubscriptionBtn: "🔧 Manage subscription",
   checkingLink: "Checking link…",
   urlAccessFailed:
-    "Couldn't access the video at that link. Try a different URL or upload the file directly.",
+    "Couldn't access the video at that link. Please upload the video file here directly.",
   urlYouTubeUnavailable:
-    "YouTube links don't work right now - YouTube is blocking us, not you, so another YouTube link won't help. The block comes and goes: try this same link again in a while, upload the video file here instead, or send a TikTok or Twitch link.",
+    "YouTube is blocking access to this video. Please upload the video file here directly.",
+  purchaseResubmit: "After payment is confirmed, send the video again to start processing.",
   referralInfo: (web, tg, earned, pending) =>
     `Your referral links:\nWeb: ${web}\nTelegram: ${tg}\n\nReferral earnings: $${earned}\nPending (14-day hold): $${pending}`,
   referralWithdrawBtn: "💸 Request withdrawal",

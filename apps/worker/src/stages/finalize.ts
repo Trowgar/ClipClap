@@ -3,6 +3,7 @@ import {
   loadModelPrices,
   prisma,
   readRate,
+  recordConversionEvent,
 } from "@clipclap/shared";
 import type { Prisma } from "@prisma/client";
 import { buildJobCostTelemetry, type ModelTokenUsage } from "../cost-telemetry";
@@ -275,6 +276,18 @@ export async function runFinalizeStage(
     await jobStepService.completeJobStep(payload.jobId, "FINALIZE", {
       status: "DONE",
     });
+    if (job.planAtSubmission && job.planAtSubmission !== "NONE" &&
+        (job.submissionSurface === "web" || job.submissionSurface === "bot")) {
+      // Attribute to the entitlement at submission, not the user's plan today.
+      try {
+        const user = job.submissionSurface === "bot"
+          ? await prisma.user.findUnique({ where: { id: job.userId }, select: { telegramId: true } }) : null;
+        const subjectId = job.submissionSurface === "bot" ? user?.telegramId : job.userId;
+        if (subjectId) await recordConversionEvent(job.submissionSurface, subjectId,
+          job.clipsGenerated > 0 ? "paid_job_succeeded" : "paid_job_empty",
+          { jobId: job.id, plan: job.planAtSubmission, clipsGenerated: job.clipsGenerated }, `paid-job:${job.id}`);
+      } catch (error) { console.warn("Paid result telemetry unavailable", error); }
+    }
   } catch (error) {
     await jobStepService.failJobStep(payload.jobId, "FINALIZE", error);
     await prisma.job.update({

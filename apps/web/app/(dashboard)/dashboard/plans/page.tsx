@@ -10,6 +10,7 @@ import {
 } from "@clipclap/shared";
 import { PlanCard } from "@/components/plan-card";
 import { TopupButton } from "@/components/topup-button";
+import { ConversionImpression } from "@/components/conversion-impression";
 
 // Pull canonical pricing/quotas from the shared config so a marketing change
 // in plans.ts propagates here without a second edit (and without drift between
@@ -19,12 +20,17 @@ const STARTER_MONTHLY = PLAN_LIMITS.STARTER.MONTHLY!;
 const PLUS_MONTHLY = PLAN_LIMITS.PLUS.MONTHLY!;
 const MAX_MONTHLY = PLAN_LIMITS.MAX.MONTHLY!;
 
-export default async function PlansPage() {
+export default async function PlansPage({ searchParams }: {
+  searchParams?: Promise<{ durationSec?: string }>;
+}) {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
 
   const usage = await userService.getUsage(session.user.id);
   await recordFunnelEvent("web", session.user.id, FUNNEL_EVENTS.PLANS_OPENED);
+  const duration = Number((await searchParams)?.durationSec);
+  const requiredDurationSec = Number.isFinite(duration) && duration > 0 ? duration : undefined;
+  const canTopup = Boolean(usage.subscriptionState?.live && usage.currentPeriodEnd && usage.currentPeriodEnd > new Date());
 
   return (
     <div className="mx-auto max-w-5xl space-y-10">
@@ -34,10 +40,15 @@ export default async function PlansPage() {
           Choose a plan that fits your workflow. Cancel anytime.
         </p>
       </div>
+      <ConversionImpression event="plans_viewed" detail={{ placement: "plans", durationSec: requiredDurationSec }}>
+        {requiredDurationSec ? <p className="text-sm text-muted-foreground">Your video: {Math.ceil(requiredDurationSec / 60)} source minutes. Options below must cover the entire source; buying a plan does not submit it automatically.</p> : <p className="text-sm text-muted-foreground">Minutes refer to the original video, not the generated clips.</p>}
+      </ConversionImpression>
 
       <div className="grid gap-6 sm:grid-cols-3">
         <PlanCard
           name="Starter"
+          requiredDurationSec={requiredDurationSec}
+          maxSourceDurationMinutes={STARTER_MONTHLY.maxSourceDurationMinutes}
           planKey="STARTER"
           cycleOptions={[
             {
@@ -54,7 +65,6 @@ export default async function PlansPage() {
             },
           ]}
           features={[
-            `Up to ${STARTER_MONTHLY.maxSourceDurationMinutes} min per upload`,
             `${STARTER_MONTHLY.storageClips} clips stored`,
             `${STARTER_MONTHLY.retentionDays}-day retention`,
             "TikTok subtitle style",
@@ -64,6 +74,8 @@ export default async function PlansPage() {
         />
         <PlanCard
           name="Plus"
+          requiredDurationSec={requiredDurationSec}
+          maxSourceDurationMinutes={PLUS_MONTHLY.maxSourceDurationMinutes}
           planKey="PLUS"
           cycleOptions={[
             {
@@ -74,7 +86,6 @@ export default async function PlansPage() {
             },
           ]}
           features={[
-            `Up to ${PLUS_MONTHLY.maxSourceDurationMinutes} min per upload`,
             `${PLUS_MONTHLY.storageClips} clips stored`,
             `${PLUS_MONTHLY.retentionDays}-day retention`,
             "Burned-in subtitles",
@@ -86,6 +97,8 @@ export default async function PlansPage() {
         />
         <PlanCard
           name="Max"
+          requiredDurationSec={requiredDurationSec}
+          maxSourceDurationMinutes={MAX_MONTHLY.maxSourceDurationMinutes}
           planKey="MAX"
           cycleOptions={[
             {
@@ -96,7 +109,6 @@ export default async function PlansPage() {
             },
           ]}
           features={[
-            `Up to ${MAX_MONTHLY.maxSourceDurationMinutes} min per upload`,
             `${MAX_MONTHLY.storageClips} clips stored`,
             `${MAX_MONTHLY.retentionDays}-day retention`,
             `${MAX_MONTHLY.concurrentJobsLimit} jobs at once`,
@@ -117,11 +129,19 @@ export default async function PlansPage() {
         <div className="grid max-w-2xl gap-4 sm:grid-cols-2">
           <TopupButton
             pack="SMALL"
+            requiredDurationSec={requiredDurationSec}
+            remainingMinutes={usage.minutesLimit + usage.topUpMinutesRemaining - usage.minutesUsed}
+            maxSourceDurationMinutes={STARTER_MONTHLY.maxSourceDurationMinutes}
+            enabled={canTopup}
             minutes={TOPUP_PACKS.SMALL.minutes}
             priceUsd={TOPUP_PACKS.SMALL.priceUsd}
           />
           <TopupButton
             pack="LARGE"
+            requiredDurationSec={requiredDurationSec}
+            remainingMinutes={usage.minutesLimit + usage.topUpMinutesRemaining - usage.minutesUsed}
+            maxSourceDurationMinutes={STARTER_MONTHLY.maxSourceDurationMinutes}
+            enabled={canTopup}
             minutes={TOPUP_PACKS.LARGE.minutes}
             priceUsd={TOPUP_PACKS.LARGE.priceUsd}
           />

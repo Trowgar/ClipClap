@@ -25,6 +25,7 @@ const mocks = vi.hoisted(() => ({
   freeBalanceSeconds: vi.fn(),
   deliveryCount: vi.fn(),
   funnelEventCreate: vi.fn(),
+  recordConversionEvent: vi.fn(),
 }));
 
 vi.mock("../../../../packages/shared/src/lib/r2", () => ({
@@ -59,6 +60,7 @@ vi.mock("@clipclap/shared", async () => {
   const actual = await vi.importActual<typeof import("@clipclap/shared")>("@clipclap/shared");
   return {
     ...actual,
+    recordConversionEvent: mocks.recordConversionEvent,
     getUsageForUser: mocks.getUsageForUser,
     freeBalanceSeconds: mocks.freeBalanceSeconds,
   };
@@ -373,6 +375,19 @@ describe("deliverReadyTelegramJobs", () => {
       t("en").postClipOffer("soft", 75, 3),
       { replyMarkup: { inline_keyboard: [[{ text: t("en").postClipPlansBtn, callback_data: "plans:open" }]] } }
     );
+    expect(mocks.recordConversionEvent).toHaveBeenCalledWith("bot", "500", "offer_shown", expect.objectContaining({ placement: "post_clip", stage: "soft" }), "bot:post-clip:500:soft");
+    expect(mocks.recordConversionEvent.mock.invocationCallOrder[0]).toBeGreaterThan(client.sendMessage.mock.invocationCallOrder.at(-1)!);
+  });
+
+  it("does not count an offer that Telegram rejected", async () => {
+    mocks.getUsageForUser.mockResolvedValue({ plan: "NONE", subscriptionState: { live: false } });
+    mocks.freeBalanceSeconds.mockResolvedValue(1200);
+    mocks.deliveryCount.mockResolvedValue(1);
+    store = createStore({ job: doneJob("job1", [clip("c1")]) });
+    const client = makeClient();
+    client.sendMessage.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error("offer failed"));
+    await poll(client);
+    expect(mocks.recordConversionEvent).not.toHaveBeenCalled();
   });
 
   it("offers Starter directly after the free allowance is exhausted", async () => {

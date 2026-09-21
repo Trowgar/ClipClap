@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   refundFailedJob: vi.fn(),
   refundZeroClipJob: vi.fn(),
   trueUpFreeCost: vi.fn(),
+  recordConversionEvent: vi.fn(),
 }));
 
 /** Hoisted: stages/finalize.ts parses the table at module load, which happens
@@ -41,6 +42,7 @@ const PRICE_TABLE = vi.hoisted(() => ({
 }));
 
 vi.mock("@clipclap/shared", async () => ({
+  recordConversionEvent: mocks.recordConversionEvent,
   jobStepService: {
     startJobStep: mocks.startJobStep,
     completeJobStep: mocks.completeJobStep,
@@ -143,6 +145,22 @@ describe("finalize prices a job by the models that answered", () => {
     // gpt-5-mini  32733 in / 10198 out = 0.008183 + 0.020396 = 0.028579
     // -> 0.031762, rounded 0.032. The bug recorded 0.024.
     expect(writtenData().estimatedAnalysisCostUsd).toBe(0.032);
+  });
+
+  it("records a paid result using the submission entitlement and deduplicates by job", async () => {
+    mocks.jobFind.mockResolvedValueOnce({ ...JOB_ROW, userId: "u1", planAtSubmission: "STARTER", submissionSurface: "web" });
+    await runFinalizeStage({ jobId: "job1", userId: "u1" });
+    expect(mocks.recordConversionEvent).toHaveBeenCalledWith("web", "u1", "paid_job_succeeded",
+      { jobId: "job1", plan: "STARTER", clipsGenerated: 12 }, "paid-job:job1");
+  });
+
+  it("does not turn a completed paid job into a failure when telemetry fails", async () => {
+    mocks.jobFind.mockResolvedValueOnce({ ...JOB_ROW, userId: "u1", planAtSubmission: "STARTER", submissionSurface: "web" });
+    mocks.recordConversionEvent.mockRejectedValueOnce(new Error("telemetry down"));
+    const warn = vi.spyOn(console, "warn").mockImplementationOnce(() => {});
+    await expect(runFinalizeStage({ jobId: "job1", userId: "u1" })).resolves.toBeUndefined();
+    expect(mocks.failJobStep).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it("still stamps the CONFIGURED critic on the row", async () => {

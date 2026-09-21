@@ -11,8 +11,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await req.json();
-  const pack = body.pack;
+  const body = await req.json().catch(() => null);
+  const pack = body?.pack;
 
   if (!VALID_PACKS.includes(pack)) {
     return NextResponse.json(
@@ -27,12 +27,13 @@ export async function POST(req: NextRequest) {
       session.user.id,
       pack as ValidPack,
       `${origin}/dashboard?topup=success`,
-      `${origin}/dashboard/plans?topup=cancelled`
+      `${origin}/dashboard/plans?topup=cancelled`,
+      body.durationSec
     );
     return NextResponse.json({ url });
   } catch (e) {
     // Client-class: user must subscribe before buying top-ups.
-    if (e instanceof TopupRequiresSubscriptionError) {
+    if (e instanceof TopupRequiresSubscriptionError || e instanceof topupService.TopupSourceError) {
       return NextResponse.json({ error: e.message }, { status: 400 });
     }
     // Server-class: missing env, Stripe API failure, etc. Log internals,

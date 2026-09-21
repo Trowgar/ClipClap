@@ -6,6 +6,7 @@ import {
 } from "./telegram-notification.service";
 import type { Plan, TributeOrder, TributeWebhookStatus } from "@prisma/client";
 import { Prisma } from "@prisma/client";
+import { recordConversionEvent } from "./funnel.service";
 
 export const TRIBUTE_SIGNATURE_HEADER = "trbt-signature";
 
@@ -233,6 +234,11 @@ export async function applyPaidOrder(
   }
 
   await accrueReferral(order, expiresAt);
+  await recordConversionEvent("bot", order.telegramId, "payment_succeeded", {
+    provider: "tribute", orderUuid: order.orderUuid, plan: order.plan,
+    cycle: order.billingCycle, amount: order.amount, currency: order.currency,
+    renewal: isRenewal, periodEnd: expiresAt.toISOString(),
+  }, `tribute:${order.orderUuid}:${expiresAt.toISOString()}`);
 
   try {
     await notifyPaymentEvent(order.userId, {

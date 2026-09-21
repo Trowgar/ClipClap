@@ -30,6 +30,8 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
   const [playbackRate, setPlaybackRate] = useState(1.0);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [extendEndSeconds, setExtendEndSeconds] = useState<2 | 5 | undefined>();
+  const [safeFit, setSafeFit] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -52,8 +54,11 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
         if (cancelled) return;
         setCues(track.cues ?? []);
         setVideoUrl(download.url);
-        setDuration(clipData.duration);
-        setTrim({ start: 0, end: clipData.duration });
+        const span = clipData.endTime - clipData.startTime;
+        setDuration(span);
+        setTrim({ start: 0, end: span });
+        setExtendEndSeconds(undefined);
+        setSafeFit(false);
         setDirty(false);
       } catch (err) {
         if (!cancelled) {
@@ -79,6 +84,7 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
 
   const handleTrimChange = useCallback((start: number, end: number) => {
     setTrim({ start, end });
+    setExtendEndSeconds(undefined);
     setDirty(true);
   }, []);
 
@@ -96,10 +102,12 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
       const newClip = await api.clips.edit(clip.id, {
         trim: {
           start: clip.startTime + trim.start,
-          end: clip.startTime + trim.end,
+          end: extendEndSeconds ? clip.endTime : clip.startTime + trim.end,
         },
         subtitles: true,
         subtitleTrack: { cues },
+        extendEndSeconds,
+        framing: safeFit ? "safe-fit" : undefined,
       });
 
       // Poll the placeholder clip until the worker uploads the re-render
@@ -108,17 +116,25 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
         attempts += 1;
         try {
           const fresh = await api.clips.get(newClip.id);
-          if (fresh.storageKey) {
+          if (fresh.expired && !fresh.storageKey) {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setSaving(false);
+            setError("Could not render the repaired copy. The original source may no longer be available. Your original clip is unchanged.");
+          } else if (fresh.storageKey) {
             if (pollRef.current) clearInterval(pollRef.current);
             router.push(`/dashboard/editor?clip=${fresh.id}`);
             setSaving(false);
           } else if (attempts >= POLL_MAX) {
             if (pollRef.current) clearInterval(pollRef.current);
             setSaving(false);
-            setError("Re-render is taking longer than expected. Check the project page.");
+            setError("Re-render has not finished. Your original clip is unchanged. Check the project page.");
           }
         } catch {
-          // transient poll error - keep trying until the cap
+          if (attempts >= POLL_MAX) {
+            if (pollRef.current) clearInterval(pollRef.current);
+            setSaving(false);
+            setError("Could not check the re-render result. Your original clip is unchanged. Check the project page.");
+          }
         }
       }, POLL_MS);
     } catch (err) {
@@ -213,6 +229,24 @@ export function ClipEditor({ clipId }: ClipEditorProps) {
               onChange={handleTrimChange}
               onSeek={seek}
             />
+            <fieldset disabled={saving} className="mt-3 flex flex-wrap items-center gap-2 text-sm">
+              <legend className="mb-2">Repair this clip</legend>
+              {([2, 5] as const).map(seconds => (
+                <Button key={seconds} type="button" size="sm" variant={extendEndSeconds === seconds ? "default" : "outline"}
+                  aria-pressed={extendEndSeconds === seconds}
+                  onClick={() => { setExtendEndSeconds(current => current === seconds ? undefined : seconds); setDirty(true); }}>
+                  Extend ending +{seconds}s
+                </Button>
+              ))}
+              <label className="flex items-center gap-2">
+                <input type="checkbox" checked={safeFit} onChange={e => { setSafeFit(e.target.checked); setDirty(true); }} />
+                Show full frame (no crop)
+              </label>
+              <p className="basis-full text-xs text-muted-foreground">
+                Saves a new copy from the retained original. {extendEndSeconds ? `Adds ${extendEndSeconds} seconds after the original ending, with captions from the transcript. ` : ""}
+                Preview shows the current clip; changes appear after re-rendering. Source availability is checked when you save.
+              </p>
+            </fieldset>
           </div>
         </div>
 

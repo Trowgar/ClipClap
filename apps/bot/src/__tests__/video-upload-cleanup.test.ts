@@ -166,6 +166,7 @@ describe("handleVideo cleans up the object it uploaded", () => {
       handleUpdate(client() as never, videoUpdate() as never, CONFIG)
     ).rejects.toThrow();
 
+    expect(mocks.createJob).toHaveBeenCalledWith(expect.objectContaining({ surface: "bot" }));
     expect(mocks.deleteFile).toHaveBeenCalledWith(uploadedKey());
   });
 

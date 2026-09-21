@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { t } from "../i18n";
+import { LOCALES, t } from "../i18n";
 
 describe("plans i18n", () => {
+  it("distinguishes source ceiling from the balance needed for the whole video", () => {
+    for (const locale of LOCALES) {
+      expect(t(locale).plansText).toContain("180");
+    }
+    expect(t("en").plansText).toContain("remaining balance must cover the whole video");
+    expect(t("en").plansText).toContain("over 75 minutes, choose monthly");
+  });
   it("has the Plans menu label in both locales", () => {
     expect(t("en").menuPlans).toBe("💳 Plans");
     expect(t("ru").menuPlans).toBe("💳 Тарифы");

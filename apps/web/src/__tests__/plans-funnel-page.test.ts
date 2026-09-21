@@ -8,6 +8,7 @@ const recordFunnelEventMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/auth", () => ({ auth: authMock }));
 vi.mock("@/components/plan-card", () => ({ PlanCard: () => null }));
 vi.mock("@/components/topup-button", () => ({ TopupButton: () => null }));
+vi.mock("@/components/conversion-impression", () => ({ ConversionImpression: () => null }));
 
 vi.mock("@clipclap/shared", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -29,7 +30,7 @@ beforeEach(() => {
 
 describe("Plans page funnel telemetry", () => {
   it("records a web plans_opened event for the signed-in user", async () => {
-    await PlansPage();
+    await PlansPage({});
 
     expect(recordFunnelEventMock).toHaveBeenCalledWith(
       "web",

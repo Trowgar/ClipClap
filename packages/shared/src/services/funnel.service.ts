@@ -218,6 +218,10 @@ export async function recordFunnelEvent(
   event: FunnelEvent,
   locale?: string | null
 ): Promise<void> {
+  if (event === "checkout_error" || (surface === "bot" && event === "plans_opened")) {
+    const action = event === "plans_opened" ? "plans_viewed" : event;
+    await recordConversionEvent(surface, subjectId, action, { placement: event });
+  }
   try {
     const id = String(subjectId);
     await prisma.funnelEvent.upsert({
@@ -237,6 +241,24 @@ export async function recordFunnelEvent(
       `Funnel telemetry: could not record ${event} for ${surface}:${subjectId}:`,
       error instanceof Error ? error.message : error
     );
+  }
+}
+
+export async function recordConversionEvent(
+  surface: FunnelSurface,
+  subjectId: string | number,
+  event: string,
+  detail?: Record<string, unknown>,
+  eventKey?: string,
+): Promise<void> {
+  try {
+    await prisma.conversionEvent.createMany({
+      data: { surface, subjectId: String(subjectId), event, eventKey,
+        detail: detail ? JSON.parse(JSON.stringify(detail)) : Prisma.JsonNull },
+      skipDuplicates: true,
+    });
+  } catch (error) {
+    console.warn("Conversion telemetry unavailable:", event, error instanceof Error ? error.message : error);
   }
 }
 

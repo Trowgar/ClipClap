@@ -31,6 +31,7 @@ vi.mock("../funnel.service", () => ({
     PAYMENT_SUCCEEDED: "payment_succeeded",
   },
   recordFunnelEvent: vi.fn(),
+  recordConversionEvent: vi.fn(),
 }));
 
 import { prisma } from "../../lib/prisma";
@@ -40,7 +41,7 @@ import {
   handleWebhook,
   CHECKOUT_API_VERSION,
 } from "../billing.service";
-import { recordFunnelEvent } from "../funnel.service";
+import { recordFunnelEvent, recordConversionEvent } from "../funnel.service";
 
 describe("billing.service - createCheckoutSession", () => {
   beforeEach(() => {
@@ -196,6 +197,7 @@ describe("billing.service - handleWebhook", () => {
       data: {
         object: {
           mode: "subscription",
+          payment_status: "paid",
           metadata: { userId: "u1", plan: "PLUS", cycle: "MONTHLY" },
           subscription: "sub_1",
         },
@@ -426,6 +428,7 @@ describe("billing.service - handleWebhook", () => {
       data: {
         object: {
           mode: "payment",
+          payment_status: "paid",
           metadata: { userId: "u1", topupPack: "SMALL", minutes: "100" },
         },
       },
@@ -437,6 +440,89 @@ describe("billing.service - handleWebhook", () => {
       where: { id: "u1" },
       data: { topUpMinutesRemaining: { increment: 100 } },
     });
+  });
+
+  it.each(["subscription", "payment"])("defers unpaid %s checkout until asynchronous payment succeeds", async (mode) => {
+    const session = {
+      id: "cs_delayed", mode, payment_status: "unpaid",
+      metadata: { userId: "u1", minutes: "100" }, subscription: "sub_1",
+    };
+    mockStripe.subscriptions.retrieve.mockResolvedValue({
+      id: "sub_1", items: { data: [{ price: { id: "price_pm" } }] },
+      current_period_start: 1778408000, current_period_end: 1781000000,
+    });
+    mockStripe.webhooks.constructEvent.mockReturnValue({
+      id: "evt_pending", type: "checkout.session.completed", data: { object: session },
+    });
+    await handleWebhook("body", "sig");
+    expect(prisma.user.update).not.toHaveBeenCalled();
+    expect(prisma.user.updateMany).not.toHaveBeenCalled();
+    expect(recordFunnelEvent).not.toHaveBeenCalled();
+    expect(mockStripe.subscriptions.retrieve).not.toHaveBeenCalled();
+    expect(recordConversionEvent).not.toHaveBeenCalled();
+    expect(prisma.stripeWebhookEvent.create).toHaveBeenCalledWith({
+      data: { eventId: "evt_pending", type: "checkout.session.completed" },
+    });
+    mockStripe.webhooks.constructEvent.mockReturnValue({
+      id: "evt_paid", type: "checkout.session.async_payment_succeeded",
+      data: { object: { ...session, payment_status: "paid" } },
+    });
+    await handleWebhook("body", "sig");
+    expect(recordConversionEvent).toHaveBeenCalledWith("web", "u1", "payment_succeeded",
+      expect.objectContaining({ provider: "stripe", sessionId: "cs_delayed", mode }),
+      "stripe:checkout:cs_delayed");
+    if (mode === "payment") {
+      expect(prisma.user.update).toHaveBeenCalledTimes(1);
+      expect(prisma.user.update).toHaveBeenCalledWith({
+        where: { id: "u1" }, data: { topUpMinutesRemaining: { increment: 100 } },
+      });
+    } else {
+      expect(prisma.user.updateMany).toHaveBeenCalledTimes(1);
+      expect(recordFunnelEvent).toHaveBeenCalledTimes(1);
+    }
+    (prisma.stripeWebhookEvent.findUnique as any).mockResolvedValueOnce({ eventId: "evt_paid" });
+    await handleWebhook("body", "sig");
+    expect(mode === "payment" ? prisma.user.update : prisma.user.updateMany).toHaveBeenCalledTimes(1);
+    expect(recordConversionEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["unpaid", "no_payment_required", undefined])("does not fulfill or report checkout with payment_status %s", async (payment_status) => {
+    mockStripe.webhooks.constructEvent.mockReturnValue({
+      id: "evt_unpaid", type: "checkout.session.completed",
+      data: { object: { mode: "subscription", payment_status, subscription: "sub_1", metadata: { userId: "u1" } } },
+    });
+    await handleWebhook("body", "sig");
+    expect(prisma.user.updateMany).not.toHaveBeenCalled();
+    expect(recordFunnelEvent).not.toHaveBeenCalled();
+    expect(recordConversionEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not fulfill an asynchronous payment failure", async () => {
+    mockStripe.webhooks.constructEvent.mockReturnValue({
+      id: "evt_failed", type: "checkout.session.async_payment_failed",
+      data: { object: { mode: "payment", payment_status: "unpaid", metadata: { userId: "u1", minutes: "100" } } },
+    });
+    await handleWebhook("body", "sig");
+    expect(prisma.user.update).not.toHaveBeenCalled();
+    expect(prisma.user.updateMany).not.toHaveBeenCalled();
+    expect(recordConversionEvent).not.toHaveBeenCalled();
+  });
+
+  it.each(["subscription_create", "subscription_cycle"])("records paid invoice conversion only for renewal: %s", async (billing_reason) => {
+    (prisma.user.findUnique as any).mockResolvedValueOnce({ id: "u1", plan: "PLUS" });
+    mockStripe.subscriptions.retrieve.mockResolvedValue({ current_period_start: 1778408000, current_period_end: 1781000000 });
+    mockStripe.webhooks.constructEvent.mockReturnValue({
+      id: "evt_invoice", type: "invoice.payment_succeeded",
+      data: { object: { id: "in_1", subscription: "sub_1", paid: true, amount_paid: 300, billing_reason } },
+    });
+    await handleWebhook("body", "sig");
+    if (billing_reason === "subscription_cycle") {
+      expect(recordConversionEvent).toHaveBeenCalledWith("web", "u1", "payment_succeeded",
+        expect.objectContaining({ invoiceId: "in_1", subscriptionId: "sub_1" }), "stripe:invoice:in_1");
+    } else {
+      expect(recordConversionEvent).not.toHaveBeenCalled();
+    }
+    (prisma.user.findUnique as any).mockResolvedValue(null);
   });
 
   it("absorbs a unique-violation (P2002) from a concurrent create without throwing", async () => {

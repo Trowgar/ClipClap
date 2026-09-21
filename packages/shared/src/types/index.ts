@@ -52,6 +52,7 @@ export interface FreeChargeInput {
 }
 
 export interface CreateJobInput {
+  surface?: "web" | "bot";
   userId: string;
   sourceUrl?: string;
   sourceKey?: string;
@@ -73,6 +74,9 @@ export interface EditClipInput {
   subtitles: boolean;
   /** Cues relative to the original clip file; omitted = keep the stored track. */
   subtitleTrack?: SubtitleTrack;
+  /** Opt-in repair from the retained source; end must equal the old clip end. */
+  extendEndSeconds?: 2 | 5;
+  framing?: "safe-fit";
 }
 
 export interface SubtitleWord {

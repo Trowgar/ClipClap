@@ -5,10 +5,12 @@ const mocks = vi.hoisted(() => ({
   clipFindFirst: vi.fn(),
   clipFindMany: vi.fn(),
   clipCreate: vi.fn(),
+  clipDelete: vi.fn(),
   userFindUniqueOrThrow: vi.fn(),
   queueAdd: vi.fn(),
   getPresignedDownloadUrl: vi.fn(),
   deleteFile: vi.fn(),
+  getObjectSize: vi.fn(),
 }));
 
 vi.mock("../../lib/prisma", () => ({
@@ -18,6 +20,7 @@ vi.mock("../../lib/prisma", () => ({
       findFirst: mocks.clipFindFirst,
       findMany: mocks.clipFindMany,
       create: mocks.clipCreate,
+      delete: mocks.clipDelete,
     },
     user: {
       findUniqueOrThrow: mocks.userFindUniqueOrThrow,
@@ -34,6 +37,7 @@ vi.mock("../../lib/queues", () => ({
 vi.mock("../../lib/r2", () => ({
   getPresignedDownloadUrl: mocks.getPresignedDownloadUrl,
   deleteFile: mocks.deleteFile,
+  getObjectSize: mocks.getObjectSize,
 }));
 
 import {
@@ -55,13 +59,51 @@ describe("clip.service - editClip", () => {
       storageKey: "clips/u1/job1/original.mp4",
       startTime: 40,
       endTime: 60,
-      job: { id: "job1", sourceArtifactKey: "artifacts/job1/source.mp4" },
+      subtitleTrack: { cues: [{ id: "old", start: 1, end: 2, text: "kept" }] },
+      job: { id: "job1", sourceDurationSec: 200, sourceArtifactKey: "artifacts/job1/source.mp4" },
     });
     mocks.userFindUniqueOrThrow.mockResolvedValue({
       plan: "STARTER",
       billingCycle: "MONTHLY",
     });
     mocks.clipCreate.mockResolvedValue({ id: "clip_new" });
+    mocks.getObjectSize.mockResolvedValue(1000);
+    mocks.queueAdd.mockResolvedValue(undefined);
+    mocks.clipDelete.mockResolvedValue(undefined);
+  });
+
+  it("removes only the new placeholder when enqueueing fails", async () => {
+    mocks.queueAdd.mockRejectedValue(new Error("queue unavailable"));
+    await expect(editClip({ clipId: "clip_original", userId: "u1", start: 40, end: 60, subtitles: true, extendEndSeconds: 2 })).rejects.toThrow("queue");
+    expect(mocks.clipDelete).toHaveBeenCalledWith({ where: { id: "clip_new" } });
+  });
+
+  it("creates a separate +5s source repair, preserving stored captions when omitted", async () => {
+    await editClip({ clipId: "clip_original", userId: "u1", start: 40, end: 60, subtitles: true, extendEndSeconds: 5 });
+    expect(mocks.clipFindFirstOrThrow).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "clip_original", userId: "u1" } }));
+    expect(mocks.getObjectSize).toHaveBeenCalledWith("artifacts/job1/source.mp4");
+    expect(mocks.clipCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ parentClipId: "clip_original", startTime: 40, endTime: 65, duration: 25 }) }));
+    expect(mocks.queueAdd).toHaveBeenCalledWith("render", expect.objectContaining({ sourceStart: 40, sourceEnd: 65, end: 25, extendEndSeconds: 5, subtitleTrack: { cues: [{ id: "old", start: 1, end: 2, text: "kept" }] } }));
+  });
+
+  it.each([
+    { start: NaN }, { end: Infinity }, { start: -1 }, { start: 39 },
+    { end: 61 }, { end: 39 }, { extendEndSeconds: 3 }, { framing: "crop" },
+    { extendEndSeconds: 5, end: 59 },
+  ])("rejects invalid edits before creating output: %j", async change => {
+    await expect(editClip({ clipId: "clip_original", userId: "u1", start: 40, end: 60, subtitles: true, ...change } as never)).rejects.toThrow();
+    expect(mocks.clipCreate).not.toHaveBeenCalled();
+    expect(mocks.queueAdd).not.toHaveBeenCalled();
+  });
+
+  it.each(["missing", "past-source", "too-long", "expired"])("refuses %s source repair without a placeholder", async kind => {
+    if (kind === "missing") mocks.getObjectSize.mockRejectedValue(new Error("NoSuchKey"));
+    const original = await mocks.clipFindFirstOrThrow();
+    if (kind === "past-source") original.job.sourceDurationSec = 63;
+    if (kind === "too-long") { original.startTime = 0; original.endTime = 149; }
+    if (kind === "expired") original.deletedAt = new Date();
+    await expect(editClip({ clipId: original.id, userId: "u1", start: original.startTime, end: original.endTime, subtitles: true, extendEndSeconds: 5 })).rejects.toThrow();
+    expect(mocks.clipCreate).not.toHaveBeenCalled();
   });
 
   it("stores absolute trim times but queues relative times for cutting the source clip file", async () => {

@@ -3,8 +3,13 @@
 import { useState, useRef, useCallback } from "react";
 import { ArrowRight, CircleNotch, Paperclip, X, LinkSimple } from "@phosphor-icons/react";
 import { useRouter } from "next/navigation";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import Link from "next/link";
+import { getSourcePurchaseOption } from "@clipclap/shared/config/plans";
+import { getUploadLimit } from "@/lib/upload-limits";
+import { ConversionImpression } from "@/components/conversion-impression";
+import { trackConversion } from "@/lib/conversion";
 
 /** The free allowance, when this account is running on one.
  *
@@ -18,6 +23,7 @@ import { cn } from "@/lib/utils";
  *
  *  Minutes, floored, to match what the gate says when it refuses. */
 export interface FreeAllowance {
+  remainingSeconds: number;
   remainingMinutes: number;
   lifetimeMinutes: number;
 }
@@ -88,6 +94,7 @@ export function UploadZone({
   const [loading, setLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [rejection, setRejection] = useState<ApiError["detail"] | null>(null);
 
   // A free account's balance comes from the ledger and nowhere else. Top-up
   // minutes are deliberately NOT added to it: checkFreeTrial does not look at
@@ -95,18 +102,16 @@ export function UploadZone({
   const minutesAvailable = freeAllowance
     ? Math.max(0, freeAllowance.remainingMinutes)
     : Math.max(0, minutesLimit + topUpMinutesRemaining - minutesUsed);
-  const durationMinutes = sourceDurationSec
-    ? Math.ceil(sourceDurationSec / 60)
-    : 0;
+  const remainingSec = freeAllowance ? freeAllowance.remainingSeconds : minutesAvailable * 60;
+  const localLimit = getUploadLimit(sourceDurationSec, remainingSec, maxSourceDurationMinutes * 60);
 
   // Submission gates. NONE is no longer a gate of its own: a never-subscribed
   // account has a free run, and whether this submission fits inside it is the
   // API's call (canSubmitJob), not something this component can know. The
   // duration/size/quota caps below already carry the free plan's numbers.
-  const overDurationCap =
-    sourceDurationSec !== null && durationMinutes > maxSourceDurationMinutes;
+  const overDurationCap = localLimit === "TOO_LONG";
   const overFileSize = file !== null && file.size > maxFileSizeBytes;
-  const overQuota = durationMinutes > 0 && durationMinutes > minutesAvailable;
+  const overQuota = localLimit === "QUOTA";
   const hasInput = file !== null || url.trim().length > 0;
 
   const canSubmit =
@@ -118,20 +123,26 @@ export function UploadZone({
 
   let blockedReason: string | null = null;
   if (overDurationCap) {
-    blockedReason = `Source exceeds ${maxSourceDurationMinutes} min upload cap. Trim before uploading.`;
+    blockedReason = `This video is ${formatDuration(sourceDurationSec!)}. Your current upload cap is ${maxSourceDurationMinutes} minutes.`;
   } else if (overFileSize) {
     const maxGb = (maxFileSizeBytes / 1024 ** 3).toFixed(1);
     blockedReason = `File is ${formatBytes(file!.size)} - max ${maxGb} GB.`;
   } else if (overQuota) {
-    blockedReason = freeAllowance
-      ? `This video needs ${durationMinutes} min and ${minutesAvailable} of your ${freeAllowance.lifetimeMinutes} free minutes are left. Send a shorter one, or pick a plan.`
-      : `Job needs ${durationMinutes} min, only ${minutesAvailable} available. Upgrade or top up.`;
+    blockedReason = `This video needs ${formatDuration(sourceDurationSec!)}; ${formatDuration(remainingSec)} are available.`;
   }
+
+  const limitCode = overFileSize ? null : localLimit ?? rejection?.code;
+  const needsMinutes = ["TOO_LONG", "QUOTA", "FREE_EXHAUSTED", "FREE_SOURCE_TOO_LONG"].includes(limitCode ?? "");
+  const requiredSec = sourceDurationSec ?? rejection?.durationSec;
+  const purchase = requiredSec ? getSourcePurchaseOption(requiredSec) : null;
+  const offerDetail = { placement: "upload", code: limitCode, durationSec: requiredSec,
+    remainingSec: rejection?.remainingSec ?? remainingSec, plan: purchase?.plan, cycle: purchase?.cycle };
 
   const setFileAndProbe = useCallback(async (next: File | null) => {
     setFile(next);
     setSourceDurationSec(null);
     setError(null);
+    setRejection(null);
     if (next && next.type.startsWith("video/")) {
       const duration = await probeVideoDuration(next);
       setSourceDurationSec(duration ?? null);
@@ -166,6 +177,7 @@ export function UploadZone({
     if (!canSubmit) return;
     setLoading(true);
     setError(null);
+    setRejection(null);
     setUploadProgress(null);
 
     try {
@@ -202,6 +214,7 @@ export function UploadZone({
       router.push(`/dashboard/projects/${job.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong");
+      setRejection(err instanceof ApiError ? err.detail : null);
     } finally {
       setLoading(false);
       setUploadProgress(null);
@@ -260,7 +273,7 @@ export function UploadZone({
             <input
               type="text"
               value={url}
-              onChange={(e) => setUrl(e.target.value)}
+              onChange={(e) => { setUrl(e.target.value); setError(null); setRejection(null); }}
               disabled={loading}
               placeholder={
                 dragActive
@@ -339,8 +352,8 @@ export function UploadZone({
             <span className="text-neutral-300">{uploadProgress}</span>
           ) : file && sourceDurationSec ? (
             <>
-              ~{durationMinutes} min uses ·{" "}
-              <span className="text-neutral-300">{minutesAvailable} min</span>{" "}
+              {formatDuration(sourceDurationSec)} source ·{" "}
+              <span className="text-neutral-300">{formatDuration(remainingSec)}</span>{" "}
               left
             </>
           ) : freeAllowance ? (
@@ -373,6 +386,7 @@ export function UploadZone({
 
       {/* Error / blocked-reason banner */}
       {(error || blockedReason) && (
+        <ConversionImpression event="upload_blocked" detail={offerDetail}>
         <p
           role="alert"
           className={cn(
@@ -382,6 +396,28 @@ export function UploadZone({
         >
           {error ?? blockedReason}
         </p>
+        </ConversionImpression>
+      )}
+      {needsMinutes && requiredSec && (
+        purchase ? <ConversionImpression event="offer_shown" detail={offerDetail}>
+          <div className="space-y-2 rounded-lg border border-white/15 p-3 text-sm">
+            <p>{freeAllowance
+              ? `${purchase.plan === "STARTER" ? "Starter" : purchase.plan} ${purchase.cycle === "WEEKLY" ? "Weekly" : "Monthly"} covers this ${formatDuration(requiredSec)} video: ${purchase.minutesPerPeriod} source minutes for $${purchase.priceUsd}/${purchase.cycle === "WEEKLY" ? "week" : "month"}. Renews automatically; cancel anytime.`
+              : "Add minutes to your current subscription. The full video must fit your remaining balance and upload cap."}</p>
+            <Link className="inline-block rounded-md bg-white px-3 py-2 font-medium text-black"
+              href={`/dashboard/plans?durationSec=${Math.round(requiredSec)}`}>
+              {freeAllowance ? "View plan for this video" : "View minute top-ups"}
+            </Link>
+          </div>
+        </ConversionImpression> : <p className="text-sm text-amber-300">
+          No plan processes this entire source in one upload. Send a segment no longer than {maxSourceDurationMinutes > 40 ? maxSourceDurationMinutes : 180} minutes; it must also fit your minute balance.
+        </p>
+      )}
+      {rejection?.code === "PROBE_FAILED" && (
+        <button type="button" className="rounded-md bg-white px-3 py-2 text-sm font-medium text-black" onClick={() => {
+          trackConversion("file_fallback_clicked", { placement: "upload" });
+          fileInputRef.current?.click();
+        }}>Upload a video file instead</button>
       )}
     </div>
   );

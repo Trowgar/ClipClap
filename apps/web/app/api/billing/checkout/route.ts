@@ -4,6 +4,7 @@ import {
   billingService,
   recordFunnelEvent,
   FUNNEL_EVENTS,
+  PLAN_LIMITS,
 } from "@clipclap/shared";
 import { UnsupportedPlanCycleError } from "@clipclap/shared";
 import type { Plan, BillingCycle } from "@prisma/client";
@@ -17,7 +18,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await req.json();
+  const body = await req.json().catch(() => null);
+  if (!body || typeof body !== "object") return NextResponse.json({ error: "Invalid request" }, { status: 400 });
   const plan = body.plan as Exclude<Plan, "NONE">;
   const cycle = body.cycle as BillingCycle;
 
@@ -26,6 +28,13 @@ export async function POST(req: NextRequest) {
   }
   if (!VALID_CYCLES.includes(cycle)) {
     return NextResponse.json({ error: "Invalid billing cycle" }, { status: 400 });
+  }
+  if (body.durationSec !== undefined) {
+    const limits = PLAN_LIMITS[plan][cycle];
+    if (!limits || typeof body.durationSec !== "number" || !Number.isFinite(body.durationSec) || body.durationSec <= 0 ||
+        body.durationSec > Math.min(limits.minutesPerPeriod, limits.maxSourceDurationMinutes) * 60) {
+      return NextResponse.json({ error: "This plan does not cover the entire source. Choose a sufficient minute allowance or a shorter video." }, { status: 400 });
+    }
   }
 
   const origin = process.env.NEXTAUTH_URL ?? req.nextUrl.origin;

@@ -30,6 +30,8 @@ export type RenderStagePayload =
       sourceArtifactKey?: string;
       sourceStart?: number;
       sourceEnd?: number;
+      extendEndSeconds?: 2 | 5;
+      framing?: "safe-fit";
       /** Whether originalClipStorageKey's pixels already have subtitles burned
        *  in (Clip.subtitles on the row being trimmed). Only the FALLBACK branch
        *  (no clean source available) needs this: it re-encodes that file

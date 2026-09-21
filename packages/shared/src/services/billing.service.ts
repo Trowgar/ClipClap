@@ -3,7 +3,7 @@ import { prisma } from "../lib/prisma";
 import type { Plan, BillingCycle } from "@prisma/client";
 import { getPlanFromPriceId } from "../config/plans";
 import { notifyPaymentEvent } from "./telegram-notification.service";
-import { FUNNEL_EVENTS, recordFunnelEvent } from "./funnel.service";
+import { FUNNEL_EVENTS, recordFunnelEvent, recordConversionEvent } from "./funnel.service";
 
 // 4xx-class: caller picked an invalid plan/cycle combination. Safe to surface
 // to end users.
@@ -95,6 +95,9 @@ export async function createCheckoutSession(
     },
   }, { apiVersion: CHECKOUT_API_VERSION });
 
+  if (!session.url) throw new Error("Stripe did not return a checkout URL");
+  await recordConversionEvent("web", userId, "checkout_started",
+    { provider: "stripe", sessionId: session.id, plan, cycle }, `stripe:created:${session.id}`);
   return session.url!;
 }
 
@@ -120,8 +123,12 @@ export async function handleWebhook(
   if (seen) return;
 
   switch (event.type) {
-    case "checkout.session.completed": {
+    case "checkout.session.completed":
+    case "checkout.session.async_payment_succeeded": {
       const sess = event.data.object as Stripe.Checkout.Session;
+      // Completion can precede settlement for delayed payment methods.
+      // Current plans have no free trial; only confirmed paid sessions fulfill.
+      if (sess.payment_status !== "paid") break;
       const userId = sess.metadata?.userId;
       if (!userId) break;
 
@@ -133,6 +140,9 @@ export async function handleWebhook(
           // imports getStripe from this module.
           const { creditTopupMinutes } = await import("./topup.service");
           await creditTopupMinutes(userId, minutes);
+          await recordConversionEvent("web", userId, FUNNEL_EVENTS.PAYMENT_SUCCEEDED,
+            { provider: "stripe", sessionId: sess.id, mode: sess.mode },
+            `stripe:checkout:${sess.id}`);
         }
         break;
       }
@@ -171,6 +181,9 @@ export async function handleWebhook(
         userId,
         FUNNEL_EVENTS.PAYMENT_SUCCEEDED
       );
+      await recordConversionEvent("web", userId, FUNNEL_EVENTS.PAYMENT_SUCCEEDED,
+        { provider: "stripe", sessionId: sess.id, subscriptionId, mode: sess.mode },
+        `stripe:checkout:${sess.id}`);
 
       await notifyPaymentEvent(userId, {
         kind: "subscription_activated",
@@ -250,6 +263,11 @@ export async function handleWebhook(
           select: { id: true, plan: true },
         });
         if (user && user.plan !== "NONE") {
+          if (invoice.paid && invoice.amount_paid > 0) {
+            await recordConversionEvent("web", user.id, FUNNEL_EVENTS.PAYMENT_SUCCEEDED,
+              { provider: "stripe", invoiceId: invoice.id, subscriptionId, billingReason: invoice.billing_reason },
+              `stripe:invoice:${invoice.id}`);
+          }
           await notifyPaymentEvent(user.id, {
             kind: "subscription_renewed",
             plan: user.plan,
