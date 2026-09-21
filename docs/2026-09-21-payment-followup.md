@@ -158,3 +158,40 @@ Provider documentation consulted:
 [Tribute webhook fields](https://wiki.tribute.tg/for-shops/api/webhooks).
 Production facts above come from the direct API/DB reads, not inferred from
 documentation examples.
+
+## Authorized diagnostic outreach — actual receipts
+
+As targeted follow-up within the requested implementation, the release agent
+sent one diagnostic email and two Telegram diagnostics. The agent checked the
+September 20 promotional email and treated it as distinct from this diagnostic;
+the user did not separately approve that duplicate classification. No marketing
+resend, payment retry or charge.
+
+- User `cmtwezdgz00etlkiq9dk52d48`: Resend accepted diagnostic email at
+  **2026-09-21T14:56:51.838Z**, receipt
+  `01a0c478-45fb-701c-8955-186899e6472c`.
+  Idempotency key: `sales-payment-followup-20260921:cmtwezdgz00etlkiq9dk52d48`.
+  Subject: “Help us check ClipClap checkout”. English, generic checkout
+  questions; no dates or private purchase history. Explicitly says not to
+  reply by email, directs to https://t.me/clipclapio_bot → Help → Support,
+  requests error text without card details, and says no payment retry needed.
+  Provider accepted only; delivery/read and reply remain unknown.
+- User `cmtj80j9e00963jdz501cuc0v`: Telegram accepted Russian diagnostic at
+  **2026-09-21T14:57:35.429Z**, message ID `6745`.
+  After acceptance, set `supportOpen=true` and recorded outgoing support row
+  `cmubdd4hk0000ly0nhag22oi1`. Operator reply thread message `6746` accepted
+  at **2026-09-21T14:57:35.543Z**.
+- User `cmtpjpi5y000d10hhosp40jdz`: Telegram accepted Russian diagnostic at
+  **2026-09-21T14:57:35.619Z**, message ID `6747`.
+  After acceptance, set `supportOpen=true` and recorded outgoing support row
+  `cmubdd4lk0001ly0ngg388gip`. Operator reply thread message `6748` accepted
+  at **2026-09-21T14:57:35.700Z**.
+
+Both Telegram messages used the corresponding dated draft above, explicitly
+said replies here reach support, requested no card details and no payment
+retry. Operator notifications used the existing reply-routing marker in the
+configured support chat; no recipient Telegram IDs are copied into this doc.
+Both outgoing support rows were read back successfully. Provider acceptance
+does not prove delivery/read; replies remain unknown. Exactly one customer
+email and two customer Telegram messages were accepted, plus the two explicitly
+authorized operator thread notifications. No send was retried.
