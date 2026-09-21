@@ -36,6 +36,34 @@ export function mergeSupportMessages(
   );
 }
 
+export async function refreshSupportConversation(signal: AbortSignal): Promise<{
+  messages: SupportMessage[];
+  markedRead: boolean;
+} | null> {
+  try {
+    const response = await fetch("/api/support", { cache: "no-store", signal });
+    if (!response.ok) throw new Error("Could not load support messages.");
+    const data = await response.json();
+    if (signal.aborted) return null;
+
+    let markedRead = false;
+    if (data.unreadIds.length > 0) {
+      const marked = await fetch("/api/support/read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageIds: data.unreadIds }),
+        signal,
+      });
+      if (signal.aborted) return null;
+      markedRead = marked.ok;
+    }
+    return { messages: data.messages as SupportMessage[], markedRead };
+  } catch (cause) {
+    if (signal.aborted || (cause instanceof Error && cause.name === "AbortError")) return null;
+    throw cause;
+  }
+}
+
 export function SupportChat({
   contextPath,
   active = true,
@@ -49,38 +77,33 @@ export function SupportChat({
   const [error, setError] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (signal: AbortSignal) => {
     try {
-      const response = await fetch("/api/support", { cache: "no-store" });
-      if (!response.ok) throw new Error("Could not load support messages.");
-      const data = await response.json();
-      const serverMessages = data.messages as SupportMessage[];
-      setMessages(current => mergeSupportMessages(serverMessages, current));
-      if (data.unreadIds.length > 0) {
-        const marked = await fetch("/api/support/read", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messageIds: data.unreadIds }),
-        });
-        if (marked.ok) router.refresh();
-      }
+      const result = await refreshSupportConversation(signal);
+      if (!result || signal.aborted) return;
+      setMessages(current => mergeSupportMessages(result.messages, current));
+      if (result.markedRead) router.refresh();
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load support messages.");
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
   }, [router]);
 
   useEffect(() => {
     if (!active) return;
-    void refresh();
+    const controller = new AbortController();
+    void refresh(controller.signal);
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void refresh();
+      if (document.visibilityState === "visible") void refresh(controller.signal);
     }, 5000);
-    const onVisible = () => { if (document.visibilityState === "visible") void refresh(); };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refresh(controller.signal);
+    };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
+      controller.abort();
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };

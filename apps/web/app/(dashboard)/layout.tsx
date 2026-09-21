@@ -50,8 +50,8 @@ export default async function DashboardLayout({
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden md:flex-row">
-      <MobileHeader user={user} usage={usageProps} supportUnread={supportUnread} />
-      <Sidebar user={user} usage={usageProps} supportUnread={supportUnread} />
+      <MobileHeader user={user} usage={usageProps} />
+      <Sidebar user={user} usage={usageProps} />
       <main className="flex-1 overflow-y-auto p-4 sm:p-6">{children}</main>
       <SupportWidget unread={supportUnread} />
     </div>

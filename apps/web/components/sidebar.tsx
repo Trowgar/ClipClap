@@ -10,7 +10,6 @@ import { Separator } from "@/components/ui/separator";
 import { Logo } from "@/components/logo";
 
 export interface SidebarProps {
-  supportUnread?: number;
   user: {
     name: string | null;
     email: string | null;
