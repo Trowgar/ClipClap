@@ -125,7 +125,7 @@ git commit -m "feat: add durable web support threads"
 - Create: `apps/web/app/api/support/read/route.ts`
 - Create: `apps/web/src/__tests__/support-route.test.ts`
 
-- [ ] **Step 1: Write failing route tests**
+- [x] **Step 1: Write failing route tests**
 
 Use `NextRequest` and mocked auth/shared service to assert:
 
@@ -141,7 +141,7 @@ relative `/dashboard` path to the service; rate limit maps to 429; relay state
 is returned; GET returns only that user's rows/unread; read POST passes only the
 session ID and returns 204.
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 Run:
 
@@ -151,7 +151,7 @@ docker exec clipclap-support-check-20260921 sh -lc 'cd /app && SUBMISSION_QUEUE=
 
 Expected: FAIL because routes do not exist.
 
-- [ ] **Step 3: Implement route validation and handlers**
+- [x] **Step 3: Implement route validation and handlers**
 
 Use `auth()` in every handler. Accept JSON no larger than 8 KiB. Require an
 RFC-4122-shaped UUID, trimmed text length 1–4000, and optional context matching
@@ -159,7 +159,7 @@ RFC-4122-shaped UUID, trimmed text length 1–4000, and optional context matchin
 email from the browser. Return `{ message }`, `{ messages, unread }`, 429 for
 `SupportRateLimitError`, 400 for malformed input and 401 without auth.
 
-- [ ] **Step 4: Run route tests and commit**
+- [x] **Step 4: Run route tests and commit**
 
 Expected: route test PASS.
 
