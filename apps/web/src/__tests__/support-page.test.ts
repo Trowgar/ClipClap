@@ -1,36 +1,16 @@
 import React from "react";
-import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it, vi } from "vitest";
 
-vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: vi.fn() }) }));
+const redirect = vi.hoisted(() => vi.fn());
+vi.mock("next/navigation", () => ({ redirect, useRouter: () => ({ refresh: vi.fn() }) }));
 vi.stubGlobal("React", React);
 
 import SupportPage from "../../app/(dashboard)/dashboard/support/page";
 import { mergeSupportMessages } from "../../components/support-chat";
 
-it("renders an honest, accessible support conversation", async () => {
-  const html = renderToStaticMarkup(await SupportPage({
-    searchParams: Promise.resolve({ from: "/dashboard/projects/p1" }),
-  }));
-  expect(html).toContain("Support");
-  expect(html).toContain("not a live chat");
-  expect(html).toContain('aria-label="Support conversation"');
-  expect(html).toContain('aria-label="Message to support"');
-  expect(html).toContain("Send");
-});
-
-it("drops an untrusted context path", async () => {
-  const html = renderToStaticMarkup(await SupportPage({
-    searchParams: Promise.resolve({ from: "https://evil.test/private" }),
-  }));
-  expect(html).not.toContain("evil.test");
-});
-
-it("drops a multiline context path", async () => {
-  const html = renderToStaticMarkup(await SupportPage({
-    searchParams: Promise.resolve({ from: "/dashboard/projects/p1\nspoof" }),
-  }));
-  expect(html).not.toContain("spoof");
+it("redirects the legacy support page to the widget", async () => {
+  await SupportPage({ searchParams: Promise.resolve({}) });
+  expect(redirect).toHaveBeenCalledWith("/dashboard?support=open");
 });
 
 it("merges an optimistic row with its server row by client message ID", () => {

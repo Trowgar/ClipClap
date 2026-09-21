@@ -31,8 +31,8 @@ describe("support reply email", () => {
   it("links back to the authenticated chat without copying the transcript", () => {
     const mail = supportReplyEmailContent();
     expect(mail.subject).toBe("ClipClap support replied");
-    expect(mail.text).toContain("/dashboard/support");
-    expect(mail.html).toContain("/dashboard/support");
+    expect(mail.text).toContain("/dashboard?support=open");
+    expect(mail.html).toContain("/dashboard?support=open");
     expect(JSON.stringify(mail)).not.toContain("customer message");
   });
 });

@@ -1,6 +1,6 @@
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 
 vi.stubGlobal("React", React);
 
@@ -19,16 +19,9 @@ const props = {
   usage: { minutesUsed: 0, minutesLimit: 40, topUpRemaining: 0, plan: "NONE", freeTrial: null },
 };
 
-beforeEach(() => pathname.mockReturnValue("/dashboard/projects/p1"));
-
-it("links Support with source context and an accessible unread badge", () => {
+it("does not include Support navigation", () => {
+  pathname.mockReturnValue("/dashboard/projects/p1");
   const html = renderToStaticMarkup(React.createElement(SidebarContent, { ...props, supportUnread: 3 }));
-  expect(html).toContain("Support");
-  expect(html).toContain("/dashboard/support?from=%2Fdashboard%2Fprojects%2Fp1");
-  expect(html).toContain('aria-label="3 unread support replies"');
-});
-
-it("does not render an unread badge at zero", () => {
-  const html = renderToStaticMarkup(React.createElement(SidebarContent, { ...props, supportUnread: 0 }));
-  expect(html).not.toContain("unread support replies");
+  expect(html).not.toContain("Support");
+  expect(html).not.toContain("/dashboard/support");
 });
