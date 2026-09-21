@@ -121,6 +121,10 @@ export const SIDE_ACTION_EVENTS = [
   "plans_opened",
   "checkout_started",
   "checkout_error",
+  "payment_succeeded",
+  "post_clip_offer_soft",
+  "post_clip_offer_starter",
+  "post_clip_offer_exhausted",
 ] as const;
 
 /** What each side action is called on /admin. Deliberately says what was
@@ -135,6 +139,10 @@ const SIDE_ACTION_LABELS: Record<(typeof SIDE_ACTION_EVENTS)[number], string> = 
   plans_opened: "Opened the plans screen",
   checkout_started: "Started a checkout",
   checkout_error: "Checkout failed on our side",
+  payment_succeeded: "Completed a payment",
+  post_clip_offer_soft: "Received a post-clip offer",
+  post_clip_offer_starter: "Received a Starter offer",
+  post_clip_offer_exhausted: "Received a free-limit offer",
 };
 
 /** An event that is recorded but missing from FUNNEL_ORDER is invisible here -

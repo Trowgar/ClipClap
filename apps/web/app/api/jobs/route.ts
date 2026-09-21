@@ -139,7 +139,7 @@ export async function POST(req: NextRequest) {
 
   const durationMinutes =
     typeof durationSec === "number" && durationSec > 0
-      ? Math.ceil(durationSec / 60)
+      ? durationSec / 60
       : 0;
 
   // Under the engine floor: nothing to cut, whatever the plan (SOURCE_FLOOR in

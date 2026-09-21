@@ -3148,7 +3148,7 @@ export async function getSubmissionBlocker(
   const limits = getPlanLimits(user.plan, user.billingCycle ?? "MONTHLY");
   const durationMinutes =
     typeof durationSec === "number" && durationSec > 0
-      ? Math.ceil(durationSec / 60)
+      ? durationSec / 60
       : 0;
 
   // NOTE: this still records before the reply this text goes into is sent -

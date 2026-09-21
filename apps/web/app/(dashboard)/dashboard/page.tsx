@@ -12,8 +12,10 @@ import {
 } from "@clipclap/shared";
 import { UploadZone } from "@/components/upload-zone";
 import { RecentProjects } from "@/components/project-list";
+import { FreeUpgradeCard } from "@/components/free-upgrade-card";
 import { FreeExhaustedPanel, FreePausedPanel } from "@/components/free-state";
 import { VerifyEmailPanel } from "@/components/verify-email-panel";
+import { getFreeUpgradeOffer } from "@/lib/free-upgrade-offer";
 
 export default async function DashboardPage() {
   const session = await auth();
@@ -59,6 +61,12 @@ export default async function DashboardPage() {
     remainingMinutes: Math.floor(trial.remainingSeconds / 60),
     lifetimeMinutes: Math.round(trial.lifetimeSeconds / 60),
   };
+
+  const upgradeOffer = getFreeUpgradeOffer({
+    plan: usage.plan,
+    hasReadyClips: recentProjects.projects.some((project) => project.clipCount > 0),
+    remainingMinutes: freeAllowance.remainingMinutes,
+  });
 
   // Only the free codes are handled. A paid account that is blocked for
   // LIFECYCLE or QUOTA keeps the upload zone it has always had - fixing those
@@ -113,6 +121,8 @@ export default async function DashboardPage() {
           freeAllowance={onFreePlan ? freeAllowance : null}
         />
       )}
+
+      {upgradeOffer && <FreeUpgradeCard urgency={upgradeOffer.urgency} />}
 
       <RecentProjects
         projects={serializedProjects}

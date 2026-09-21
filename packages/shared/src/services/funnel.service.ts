@@ -35,7 +35,7 @@ export const FUNNEL_EVENTS = {
    *  a count of taps is evidence about whether to build the brokerage at all,
    *  which is cheaper to collect than the brokerage is to write. */
   EARN_ADVERTISERS: "earn_advertisers_tapped",
-  /** Bot: the plans-and-prices screen was shown to somebody.
+  /** Bot and web: the plans-and-prices screen was shown to somebody.
    *
    *  Added 2026-08-23 because the whole revenue question sat in an unlit gap.
    *  Twelve checkouts had been opened and none completed, and nothing recorded
@@ -46,13 +46,13 @@ export const FUNNEL_EVENTS = {
    *  question. Five people were asked what stopped them and none answered, so
    *  the answer has to be recorded rather than requested. */
   PLANS_OPENED: "plans_opened",
-  /** Bot: a plan button was tapped, an order exists, and the pay link has been
+  /** Bot and web: a plan button was tapped, an order exists, and the pay link has been
    *  handed over. `tribute_orders` already holds the row; this is here so the
    *  step is readable in the same table as the ones on either side of it, and
    *  so the reused-fresh-order path (a second tap within 15 minutes) counts as
    *  the intent it is rather than vanishing for want of a new row. */
   CHECKOUT_STARTED: "checkout_started",
-  /** Bot: creating the order at Tribute threw, and the person was shown an
+  /** Bot and web: creating checkout threw, and the person was shown an
    *  error instead of a pay link.
    *
    *  Until 2026-08-23 this went to console.error and nowhere else, which means
@@ -60,6 +60,8 @@ export const FUNNEL_EVENTS = {
    *  changing their mind - the two possibilities the whole revenue diagnosis
    *  hangs on. */
   CHECKOUT_ERROR: "checkout_error",
+  /** Web: Stripe confirmed the first subscription checkout payment. */
+  PAYMENT_SUCCEEDED: "payment_succeeded",
   /** Bot: a post-delivery plan nudge was claimed once for this person and stage. */
   POST_CLIP_OFFER_SOFT: "post_clip_offer_soft",
   POST_CLIP_OFFER_STARTER: "post_clip_offer_starter",

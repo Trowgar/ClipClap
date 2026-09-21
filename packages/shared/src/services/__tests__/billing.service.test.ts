@@ -26,6 +26,13 @@ vi.mock("../../lib/prisma", () => ({
   },
 }));
 
+vi.mock("../funnel.service", () => ({
+  FUNNEL_EVENTS: {
+    PAYMENT_SUCCEEDED: "payment_succeeded",
+  },
+  recordFunnelEvent: vi.fn(),
+}));
+
 import { prisma } from "../../lib/prisma";
 import {
   createCheckoutSession,
@@ -33,6 +40,7 @@ import {
   handleWebhook,
   CHECKOUT_API_VERSION,
 } from "../billing.service";
+import { recordFunnelEvent } from "../funnel.service";
 
 describe("billing.service - createCheckoutSession", () => {
   beforeEach(() => {
@@ -216,6 +224,11 @@ describe("billing.service - handleWebhook", () => {
           currentPeriodEnd: new Date(1781000000 * 1000),
         }),
       })
+    );
+    expect(recordFunnelEvent).toHaveBeenCalledWith(
+      "web",
+      "u1",
+      "payment_succeeded"
     );
   });
 

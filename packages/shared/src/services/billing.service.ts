@@ -3,6 +3,7 @@ import { prisma } from "../lib/prisma";
 import type { Plan, BillingCycle } from "@prisma/client";
 import { getPlanFromPriceId } from "../config/plans";
 import { notifyPaymentEvent } from "./telegram-notification.service";
+import { FUNNEL_EVENTS, recordFunnelEvent } from "./funnel.service";
 
 // 4xx-class: caller picked an invalid plan/cycle combination. Safe to surface
 // to end users.
@@ -164,6 +165,12 @@ export async function handleWebhook(
           currentPeriodEnd: new Date(subscription.current_period_end * 1000),
         },
       });
+
+      await recordFunnelEvent(
+        "web",
+        userId,
+        FUNNEL_EVENTS.PAYMENT_SUCCEEDED
+      );
 
       await notifyPaymentEvent(userId, {
         kind: "subscription_activated",

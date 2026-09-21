@@ -369,6 +369,19 @@ describe("getSubmissionBlocker on the free tier", () => {
     expect(await getSubmissionBlocker("u1", t("ru"), 600)).toBeNull();
   });
 
+  it("allows 1742 seconds with 1755 seconds left without rounding to 30 minutes", async () => {
+    freeUser();
+    ledgerCharged(FREE_TIER.lifetimeSeconds - 1755);
+    counts();
+    expect(await getSubmissionBlocker("u1", t("en"), 1742)).toBeNull();
+  });
+
+  it("still refuses a source longer than the actual remaining seconds", async () => {
+    freeUser();
+    ledgerCharged(FREE_TIER.lifetimeSeconds - 1755);
+    expect(await getSubmissionBlocker("u1", t("en"), 1756)).not.toBeNull();
+  });
+
   /**
    * The refusal a real user hits today, and the one this rewrite exists to
    * produce: FREE_TIER_MONTHLY_BUDGET_USD is unset in production, an unset

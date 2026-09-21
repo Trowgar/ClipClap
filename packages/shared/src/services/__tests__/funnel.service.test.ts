@@ -79,6 +79,7 @@ describe("recordFunnelEvent", () => {
     expect(FUNNEL_EVENTS.EARN_ADVERTISERS).toBe("earn_advertisers_tapped");
     expect(FUNNEL_EVENTS.APP_OPENED).toBe("app_opened");
     expect(FUNNEL_EVENTS.VIDEO_SUBMITTED).toBe("video_submitted");
+    expect(FUNNEL_EVENTS.PAYMENT_SUCCEEDED).toBe("payment_succeeded");
   });
 
   it("maps every canSubmitJob code to a rejection event", () => {

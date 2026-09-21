@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { billingService } from "@clipclap/shared";
+import {
+  billingService,
+  recordFunnelEvent,
+  FUNNEL_EVENTS,
+} from "@clipclap/shared";
 import { UnsupportedPlanCycleError } from "@clipclap/shared";
 import type { Plan, BillingCycle } from "@prisma/client";
 
@@ -33,6 +37,11 @@ export async function POST(req: NextRequest) {
       `${origin}/dashboard?checkout=success`,
       `${origin}/dashboard/plans?checkout=cancelled`
     );
+    await recordFunnelEvent(
+      "web",
+      session.user.id,
+      FUNNEL_EVENTS.CHECKOUT_STARTED
+    );
     return NextResponse.json({ url });
   } catch (e) {
     // Client-class: invalid plan/cycle (e.g. PLUS+WEEKLY). Safe to surface.
@@ -42,6 +51,11 @@ export async function POST(req: NextRequest) {
     // Server-class: missing env, Stripe API failure, etc. Log internals,
     // return a generic message so we don't leak infra details to clients.
     console.error("checkout/route.ts:", e);
+    await recordFunnelEvent(
+      "web",
+      session.user.id,
+      FUNNEL_EVENTS.CHECKOUT_ERROR
+    );
     return NextResponse.json(
       { error: "Failed to create checkout. Please try again later." },
       { status: 500 }

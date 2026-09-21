@@ -1,6 +1,13 @@
+import React from "react";
 import { auth } from "@/lib/auth";
 import { redirect } from "next/navigation";
-import { userService, PLAN_LIMITS, TOPUP_PACKS } from "@clipclap/shared";
+import {
+  userService,
+  PLAN_LIMITS,
+  TOPUP_PACKS,
+  recordFunnelEvent,
+  FUNNEL_EVENTS,
+} from "@clipclap/shared";
 import { PlanCard } from "@/components/plan-card";
 import { TopupButton } from "@/components/topup-button";
 
@@ -17,6 +24,7 @@ export default async function PlansPage() {
   if (!session?.user?.id) redirect("/login");
 
   const usage = await userService.getUsage(session.user.id);
+  await recordFunnelEvent("web", session.user.id, FUNNEL_EVENTS.PLANS_OPENED);
 
   return (
     <div className="mx-auto max-w-5xl space-y-10">
