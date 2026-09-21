@@ -240,7 +240,7 @@ git commit -m "feat(bot): deliver web support replies"
 - Create: `apps/web/src/__tests__/support-page.test.ts`
 - Create: `apps/web/src/__tests__/support-sidebar.test.ts`
 
-- [ ] **Step 1: Write failing page/navigation tests**
+- [x] **Step 1: Write failing page/navigation tests**
 
 Render server components with mocked auth/service and assert the layout passes
 the authenticated unread count. Render sidebar and assert Support exists on
@@ -249,11 +249,11 @@ is absent at zero and visible above zero. Static-render the page shell and
 assert the honest asynchronous-support copy, accessible `Support conversation`
 region, textarea label and Send button.
 
-- [ ] **Step 2: Run tests and verify failure**
+- [x] **Step 2: Run tests and verify failure**
 
 Run the two new web tests. Expected: FAIL on missing page/component/props.
 
-- [ ] **Step 3: Implement the page and client chat**
+- [x] **Step 3: Implement the page and client chat**
 
 Use existing Tailwind/shadcn primitives only. `SupportChat`:
 
@@ -271,14 +271,14 @@ The server page validates `from` with the same relative Dashboard pattern and
 passes it to the client. It states: “We’ll reply here. This is not a live chat,
 so replies may take time.”
 
-- [ ] **Step 4: Add navigation and unread badge**
+- [x] **Step 4: Add navigation and unread badge**
 
 The Dashboard layout calls `countUnreadWebSupport(session.user.id)` once and
 passes `supportUnread` through existing sidebar/mobile props. Add a Chat icon,
 accessible badge text and context-preserving href derived from `usePathname()`.
 Do not add global polling.
 
-- [ ] **Step 5: Run UI tests, web typecheck and production build**
+- [x] **Step 5: Run UI tests, web typecheck and production build**
 
 Run the two tests, all `apps/web/src/__tests__`, `npx tsc -p apps/web/tsconfig.json --noEmit`, shared build, bot typecheck, and isolated `next build`. Expected: PASS; the existing BullMQ dynamic-import warning is allowed.
 

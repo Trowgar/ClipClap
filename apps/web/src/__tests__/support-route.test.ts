@@ -53,7 +53,7 @@ it.each([
   [{ text: "help", clientMessageId: "not-a-uuid" }, "bad id"],
   [{ text: "help", clientMessageId: validId, contextPath: "https://evil.test" }, "external context"],
   [{ text: "help", clientMessageId: validId, contextPath: "/admin" }, "non-dashboard context"],
-])("rejects invalid input: %s", async (body) => {
+])("rejects invalid input: %s", async (body, _label) => {
   expect((await POST(request(body))).status).toBe(400);
   expect(mocks.submit).not.toHaveBeenCalled();
 });
