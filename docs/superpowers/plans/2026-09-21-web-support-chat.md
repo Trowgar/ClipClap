@@ -300,21 +300,21 @@ Run all new tests, all bot tests, all web tests, shared build, web/bot typecheck
 `git diff --check`, and an independent code review. Fix concrete blockers and
 rerun affected checks.
 
-- [ ] **Step 2: Back up and apply the additive migration**
+- [x] **Step 2: Back up and apply the additive migration**
 
 Confirm no active jobs. Save a PostgreSQL custom-format dump, current shared
 dist, current Next `.next`, and current task source delta. Apply only the new
 migration and verify columns/indexes read-only. Regenerate Prisma clients in
 web, bot and all worker containers before new source starts.
 
-- [ ] **Step 3: Deploy tested source and build artifacts**
+- [x] **Step 3: Deploy tested source and build artifacts**
 
 Build outside the live `.next`, stop only web/bot/workers after active jobs are
 zero, apply the reviewed task diff, copy tested shared dist and Next build,
 then restart the existing containers in place. Do not recreate analyze or
 transcribe containers because they have custom key-rotation configuration.
 
-- [ ] **Step 4: Run production browser and transport smoke**
+- [x] **Step 4: Run production browser and transport smoke**
 
 With the synthetic account, verify desktop and mobile Support navigation,
 empty state, keyboard send, single Telegram operator notification, delivered
@@ -322,14 +322,14 @@ state, one operator reply, unread badge, poll/read clearing, no duplicate on
 retry, and no page errors. Use a synthetic/test email destination only; do not
 contact a real customer. Force a failed relay only in an isolated test path.
 
-- [ ] **Step 5: Verify health and document evidence**
+- [x] **Step 5: Verify health and document evidence**
 
 Check login/static assets, migration status, bot/web/worker logs and container
 health. Confirm synthetic support rows are excluded from business analytics and
 labelled as QA. Record build ID, test totals, smoke IDs, backup location,
 rollback steps, and the deliberate no-attachments/no-live-presence ceiling.
 
-- [ ] **Step 6: Commit release evidence**
+- [x] **Step 6: Commit release evidence**
 
 ```bash
 git add docs/2026-09-21-web-support-production-release.md
