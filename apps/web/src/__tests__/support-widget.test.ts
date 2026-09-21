@@ -29,6 +29,11 @@ function renderWidget(unread: number) {
   return renderToStaticMarkup(React.createElement(SupportWidget, { unread }));
 }
 
+function supportTriggerClasses(html: string): string[] {
+  const tag = html.match(/<button[^>]+aria-label="Open support chat[^"]*"[^>]*>/)?.[0];
+  return tag?.match(/class="([^"]*)"/)?.[1].split(" ") ?? [];
+}
+
 it("renders no unread badge at zero", () => {
   const html = renderWidget(0);
   expect(html).toContain('aria-label="Open support chat"');
@@ -72,6 +77,12 @@ it("opens from the support query parameter", () => {
   expect(html).toContain('aria-label="Close support chat"');
   expect(html).toContain('data-active="true"');
   expect(html).toContain('data-context-path="/dashboard/projects/p1"');
+});
+
+it("hides the floating trigger only while the dialog is open", () => {
+  expect(supportTriggerClasses(renderWidget(0))).not.toContain("hidden");
+  searchParams.mockReturnValue(new URLSearchParams("support=open"));
+  expect(supportTriggerClasses(renderWidget(0))).toContain("hidden");
 });
 
 it("clears the displayed unread count when query opening", () => {

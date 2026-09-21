@@ -128,7 +128,7 @@ export function SupportWidget({ unread }: { unread: number }) {
         onClick={show}
         className={cn(
           "fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-[70] flex h-12 w-12 items-center justify-center rounded-full border border-white/15 bg-white text-black shadow-[0_12px_35px_rgba(0,0,0,0.45)] transition-transform hover:scale-105 hover:bg-neutral-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white focus-visible:ring-offset-2 focus-visible:ring-offset-black sm:h-11 sm:w-11",
-          open && "max-sm:hidden"
+          open && "hidden"
         )}
       >
         <ChatCircleDots size={21} weight="fill" />
