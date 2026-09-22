@@ -7,6 +7,7 @@ export {
   getQueueNameForStage,
   getStageQueue,
   parseWorkerRole,
+  removeQueuedPipelineJobs,
 } from "./queues";
 export type { StageName } from "./queues";
 export {

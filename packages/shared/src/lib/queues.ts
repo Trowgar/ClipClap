@@ -44,3 +44,47 @@ export function getStageQueue(stage: StageName): Queue {
   queues.set(stage, queue);
   return queue;
 }
+
+const REMOVABLE_PIPELINE_JOB_STATES = [
+  "waiting",
+  "delayed",
+  "prioritized",
+  "paused",
+] as const;
+
+export async function removeQueuedPipelineJobs(
+  pipelineJobId: string
+): Promise<number> {
+  const results = await Promise.allSettled(
+    STAGES.map(async (stage) => {
+      const jobs = await getStageQueue(stage).getJobs([
+        ...REMOVABLE_PIPELINE_JOB_STATES,
+      ]);
+      let removed = 0;
+
+      for (const job of jobs) {
+        const data = job.data as { jobId?: unknown } | null;
+        if (data?.jobId !== pipelineJobId) continue;
+        try {
+          await job.remove();
+          removed += 1;
+        } catch (error) {
+          console.error(
+            `[queue] could not remove ${stage} item ${job.id} for deleted job ${pipelineJobId}:`,
+            error
+          );
+        }
+      }
+      return removed;
+    })
+  );
+
+  return results.reduce((count, result, index) => {
+    if (result.status === "fulfilled") return count + result.value;
+    console.error(
+      `[queue] could not scan ${STAGES[index]} for deleted job ${pipelineJobId}:`,
+      result.reason
+    );
+    return count;
+  }, 0);
+}
