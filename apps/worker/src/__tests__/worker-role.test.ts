@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   releaseNextQueued: vi.fn(async () => []),
   refundFailedJob: vi.fn(async () => undefined),
   notifyPipelineIncident: vi.fn(async () => true),
+  jobFindUnique: vi.fn(),
   download: vi.fn(),
   transcribe: vi.fn(),
   analyze: vi.fn(),
@@ -24,6 +25,9 @@ vi.mock("@clipclap/shared", () => ({
   releaseNextQueued: mocks.releaseNextQueued,
   refundFailedJob: mocks.refundFailedJob,
   notifyPipelineIncident: mocks.notifyPipelineIncident,
+  prisma: {
+    job: { findUnique: mocks.jobFindUnique },
+  },
   parseWorkerRole: (role: string | undefined) => {
     if (
       role === "download" ||
@@ -47,7 +51,12 @@ vi.mock("../stages/render", () => ({ runRenderStage: mocks.render }));
 vi.mock("../stages/finalize", () => ({ runFinalizeStage: mocks.finalize }));
 
 import { UnrecoverableError, Worker } from "bullmq";
-import { createStageWorker, getWorkerConcurrency } from "../worker-app";
+import {
+  createStageWorker,
+  DELETED_PIPELINE_JOB_RESULT,
+  dispatchStageJob,
+  getWorkerConcurrency,
+} from "../worker-app";
 
 describe("worker role config", () => {
   beforeEach(() => {
@@ -165,6 +174,63 @@ describe("worker role config", () => {
 
     expect(mocks.releaseNextQueued).toHaveBeenCalledWith("user-1");
     expect(mocks.notifyPipelineIncident).not.toHaveBeenCalled();
+  });
+
+  it("completes failed work as cancelled when its project was deleted", async () => {
+    const stageError = new Error("Record to update not found");
+    mocks.transcribe.mockRejectedValueOnce(stageError);
+    mocks.jobFindUnique.mockResolvedValueOnce(null);
+
+    await expect(dispatchStageJob("transcribe", {
+      jobId: "pipeline-1",
+      userId: "user-1",
+    })).resolves.toBe(DELETED_PIPELINE_JOB_RESULT);
+
+    expect(mocks.releaseNextQueued).toHaveBeenCalledWith("user-1");
+    expect(mocks.refundFailedJob).not.toHaveBeenCalled();
+    expect(mocks.notifyPipelineIncident).not.toHaveBeenCalled();
+  });
+
+  it("rethrows the original stage error while the project still exists", async () => {
+    const stageError = new Error("transcription provider unavailable");
+    mocks.transcribe.mockRejectedValueOnce(stageError);
+    mocks.jobFindUnique.mockResolvedValueOnce({ id: "pipeline-1" });
+
+    await expect(dispatchStageJob("transcribe", {
+      jobId: "pipeline-1",
+      userId: "user-1",
+    })).rejects.toBe(stageError);
+    expect(mocks.releaseNextQueued).not.toHaveBeenCalled();
+  });
+
+  it("preserves the stage error when deletion cannot be checked", async () => {
+    const stageError = new Error("stage failed");
+    mocks.render.mockRejectedValueOnce(stageError);
+    mocks.jobFindUnique.mockRejectedValueOnce(new Error("database unavailable"));
+
+    await expect(dispatchStageJob("render", {
+      jobId: "pipeline-1",
+      userId: "user-1",
+    })).rejects.toBe(stageError);
+  });
+
+  it("does not release finalize twice after deletion cancellation", async () => {
+    mocks.finalize.mockRejectedValueOnce(new Error("missing row"));
+    mocks.jobFindUnique.mockResolvedValueOnce(null);
+    const worker = createStageWorker("finalize");
+    const calls = (worker as unknown as { on: ReturnType<typeof vi.fn> }).on.mock.calls;
+    const processor = (Worker as unknown as { mock: { calls: unknown[][] } })
+      .mock.calls[0][1] as (job: { data: unknown }) => Promise<unknown>;
+    const completed = (
+      calls.find((call: unknown[]) => call[0] === "completed")?.[1]
+    ) as (job: unknown, result: unknown) => void;
+    const job = { data: { jobId: "pipeline-1", userId: "user-1" } };
+
+    const result = await processor(job);
+    completed(job, result);
+
+    expect(result).toBe(DELETED_PIPELINE_JOB_RESULT);
+    expect(mocks.releaseNextQueued).toHaveBeenCalledTimes(1);
   });
 
   it("rejects canary work on the primary queue so stale consumers cannot answer", async () => {

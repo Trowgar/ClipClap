@@ -4,6 +4,7 @@ import {
   getRedis,
   notifyPipelineIncident,
   parseWorkerRole,
+  prisma,
   refundFailedJob,
   releaseNextQueued,
   type StageName,
@@ -23,6 +24,8 @@ const DEFAULT_CONCURRENCY: Record<StageName, number> = {
   render: 1,
   finalize: 3,
 };
+
+export const DELETED_PIPELINE_JOB_RESULT = "deleted-pipeline-job" as const;
 
 export function getWorkerConcurrency(role: StageName): number {
   const roleEnvName = `${role.toUpperCase()}_CONCURRENCY`;
@@ -71,7 +74,8 @@ export function createStageWorker(
     return closePrimary(force);
   };
 
-  worker.on("completed", (job) => {
+  worker.on("completed", (job, result) => {
+    if (result === DELETED_PIPELINE_JOB_RESULT) return;
     console.log(`[${role}] completed ${job.id}`);
     if (!isQualityCanary(job.data)) void maybeReleaseAfterStageEvent(role, "completed", job);
   });
@@ -139,21 +143,59 @@ async function runQualityCanary(role: StageName, job: QualityCanaryJob, startupR
   return { kind: "feedback-quality-canary", nonce: job.nonce, decisionId: job.decisionId, rolloutInstanceId: startupRolloutInstanceId, role, commitSha, configSha256, runnerVersion: QUALITY_RUNNER_VERSION };
 }
 
+function pipelinePayload(
+  data: unknown
+): { jobId: string; userId: string } | null {
+  if (data === null || typeof data !== "object" || Array.isArray(data)) return null;
+  const value = data as { jobId?: unknown; userId?: unknown };
+  return typeof value.jobId === "string" && typeof value.userId === "string"
+    ? { jobId: value.jobId, userId: value.userId }
+    : null;
+}
+
+async function pipelineJobWasDeleted(jobId: string): Promise<boolean> {
+  try {
+    return await prisma.job.findUnique({
+      where: { id: jobId },
+      select: { id: true },
+    }) === null;
+  } catch (error) {
+    console.error(`[queue] could not verify failed pipeline job ${jobId}:`, error);
+    return false;
+  }
+}
+
 export async function dispatchStageJob(
   role: StageName,
   data: unknown,
   job?: Job,
   token?: string
-): Promise<void> {
-  // Only DOWNLOAD ever parks a job (see FLAP_WAIT_DELAYS_MS in
-  // stages/download.ts): it is the one stage whose failure class - YouTube
-  // throttling the WARP exit - passes on its own. No other stage gets the
-  // BullMQ job handle, so no other stage can call moveToDelayed by accident.
-  if (role === "download") return runDownloadStage(data as never, job, token);
-  if (role === "transcribe") return runTranscribeStage(data as never);
-  if (role === "analyze") return runAnalyzeStage(data as never);
-  if (role === "render") return runRenderStage(data as never);
-  return runFinalizeStage(data as never);
+): Promise<void | typeof DELETED_PIPELINE_JOB_RESULT> {
+  try {
+    // Only DOWNLOAD ever parks a job (see FLAP_WAIT_DELAYS_MS in
+    // stages/download.ts): it is the one stage whose failure class - YouTube
+    // throttling the WARP exit - passes on its own. No other stage gets the
+    // BullMQ job handle, so no other stage can call moveToDelayed by accident.
+    if (role === "download") await runDownloadStage(data as never, job, token);
+    else if (role === "transcribe") await runTranscribeStage(data as never);
+    else if (role === "analyze") await runAnalyzeStage(data as never);
+    else if (role === "render") await runRenderStage(data as never);
+    else await runFinalizeStage(data as never);
+  } catch (error) {
+    const payload = pipelinePayload(data);
+    if (!payload || !(await pipelineJobWasDeleted(payload.jobId))) throw error;
+
+    console.log(`[${role}] discarded deleted pipeline job ${payload.jobId}`);
+    try {
+      await releaseNextQueued(payload.userId);
+    } catch (releaseError) {
+      console.error(
+        `[queue] could not release after deleting ${payload.jobId}:`,
+        releaseError
+      );
+    }
+    return DELETED_PIPELINE_JOB_RESULT;
+  }
 }
 
 /**
