@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   jobFindFirst: vi.fn(),
   jobDelete: vi.fn(),
   deleteFile: vi.fn(),
+  removeQueuedPipelineJobs: vi.fn(),
   settleFreeLedgerOnDelete: vi.fn(),
   deleteForfeitsFreeSeconds: vi.fn(),
   freeUsageFindMany: vi.fn(),
@@ -28,6 +29,10 @@ vi.mock("../../lib/prisma", () => ({
 vi.mock("../../lib/r2", () => ({
   getPresignedDownloadUrl: mocks.getPresignedDownloadUrl,
   deleteFile: mocks.deleteFile,
+}));
+
+vi.mock("../../lib/queues", () => ({
+  removeQueuedPipelineJobs: mocks.removeQueuedPipelineJobs,
 }));
 
 vi.mock("../free-tier.service", () => ({
@@ -218,8 +223,10 @@ describe("project.service", () => {
 describe("deleteProject - R2 keys", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.order.length = 0;
     mocks.deleteFile.mockResolvedValue(undefined);
     mocks.jobDelete.mockResolvedValue({});
+    mocks.removeQueuedPipelineJobs.mockResolvedValue(0);
     mocks.settleFreeLedgerOnDelete.mockResolvedValue(undefined);
   });
 
@@ -262,6 +269,55 @@ describe("deleteProject - R2 keys", () => {
     const deleted = mocks.deleteFile.mock.calls.map((c: any[]) => c[0]);
     expect(deleted).toEqual(["work/u1/job2/source.mp4"]);
   });
+
+  it("cleans BullMQ only after the project row is deleted", async () => {
+    mocks.jobFindFirst.mockResolvedValue({
+      id: "job1",
+      status: "TRANSCRIBING",
+      clipsGenerated: 0,
+      sourceKey: null,
+      sourceArtifactKey: null,
+      normalizedArtifactKey: null,
+      thumbnailKey: null,
+      clips: [],
+    });
+    mocks.jobDelete.mockImplementation(async () => {
+      mocks.order.push("delete");
+      return {};
+    });
+    mocks.removeQueuedPipelineJobs.mockImplementation(async () => {
+      mocks.order.push("queue");
+      return 2;
+    });
+
+    await deleteProject("job1", "u1");
+
+    expect(mocks.order.slice(-2)).toEqual(["delete", "queue"]);
+    expect(mocks.removeQueuedPipelineJobs).toHaveBeenCalledWith("job1");
+  });
+
+  it("finishes deletion when queue cleanup is unavailable", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.jobFindFirst.mockResolvedValue({
+      id: "job1",
+      status: "TRANSCRIBING",
+      clipsGenerated: 0,
+      sourceKey: null,
+      sourceArtifactKey: null,
+      normalizedArtifactKey: null,
+      thumbnailKey: null,
+      clips: [],
+    });
+    mocks.removeQueuedPipelineJobs.mockRejectedValue(new Error("redis unavailable"));
+
+    await expect(deleteProject("job1", "u1")).resolves.toEqual({
+      status: "deleted",
+      deletedClips: 0,
+    });
+    expect(mocks.jobDelete).toHaveBeenCalled();
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
 });
 
 /**
@@ -276,6 +332,7 @@ describe("deleteProject - free ledger", () => {
     vi.clearAllMocks();
     mocks.order.length = 0;
     mocks.deleteFile.mockResolvedValue(undefined);
+    mocks.removeQueuedPipelineJobs.mockResolvedValue(0);
     mocks.settleFreeLedgerOnDelete.mockImplementation(async () => {
       mocks.order.push("settle");
     });

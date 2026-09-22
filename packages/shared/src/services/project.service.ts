@@ -1,6 +1,7 @@
 import { prisma } from "../lib/prisma";
 import { deleteFile, getPresignedDownloadUrl } from "../lib/r2";
 import { parseJobErrorCode, type JobErrorCode } from "../lib/job-error";
+import { removeQueuedPipelineJobs } from "../lib/queues";
 import {
   deleteForfeitsFreeSeconds,
   settleFreeLedgerOnDelete,
@@ -376,6 +377,13 @@ export async function deleteProject(
 
   // Delete DB record first - Prisma cascades to clips, steps, deliveries.
   await prisma.job.delete({ where: { id: job.id } });
+
+  await removeQueuedPipelineJobs(job.id).catch((error) => {
+    console.error(
+      `[deleteProject] failed to remove queued work for ${job.id}:`,
+      error
+    );
+  });
 
   // Best-effort R2 cleanup. Don't fail the operation if R2 hiccups -
   // orphan keys are recoverable via a retention sweep, but a half-deleted DB
