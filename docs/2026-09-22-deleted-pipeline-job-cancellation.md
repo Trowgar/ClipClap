@@ -57,3 +57,21 @@ The completed-event hook must not perform its normal finalize release a second t
 ## Release
 
 Run focused shared and worker tests, package type checks, and the relevant build checks. Then commit, push, merge to `main`, deploy the shared web/API and all five worker roles, and verify the deployed revision plus worker health.
+
+## Implementation evidence
+
+Implemented in three isolated commits:
+
+- `0815054` — remove matching pending items from all five stage queues;
+- `6608640` — run best-effort queue cleanup after the project row is deleted;
+- `aa92ebb` — discard an active stage when its pipeline row disappeared, without retry, refund, incident, or double queue-slot release.
+
+Pre-release verification:
+
+- focused queue, project-deletion, and worker-boundary suites: 3 files, 39/39 tests passed;
+- complete shared suite with the production environment and `SUBMISSION_QUEUE=off`: 57 files, 843/843 tests passed;
+- shared build, worker build, and worker TypeScript check passed;
+- complete worker suite on the feature worktree: 127 files passed, 12 failed; 2,901/2,979 tests passed;
+- the complete worker baseline on the unchanged `main` source also failed (22 files and 119 tests, including archived `.corpus` duplicates) with the same existing failure classes: stale/unrecorded eval fixtures, incomplete `evaluateVisualRecall` mocks, nested Docker unavailable, feedback-learning fixture/lock failures, and existing render/stage-flow expectations.
+
+The focused tests exercise every changed path and are green. The remaining worker-suite failures are baseline/environment failures unrelated to this change. No schema migration or environment-variable change is required.
