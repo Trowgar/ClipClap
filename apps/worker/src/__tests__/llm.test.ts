@@ -112,7 +112,7 @@ describe("callJsonSchema", () => {
     expect(r.ok).toBe(true);
   });
 
-  it("passes reasoning_effort only to gpt-5 models", async () => {
+  it("passes reasoning_effort only to supported reasoning models", async () => {
     const client = fakeClient([() => okResponse({ candidates: [] })]);
     await callJsonSchema(client, newUsage(), {
       model: "gpt-4o-mini",
@@ -133,6 +133,16 @@ describe("callJsonSchema", () => {
     });
     const body51 = client.chat.completions.create.mock.calls[1][0];
     expect(body51.reasoning_effort).toBe("low");
+
+    await callJsonSchema(client, newUsage(), {
+      model: "gpt-6-luna",
+      system: "s",
+      user: "u",
+      schema: SCANNER_SCHEMA,
+      reasoningEffort: "low",
+    });
+    const body6 = client.chat.completions.create.mock.calls[2][0];
+    expect(body6.reasoning_effort).toBe("low");
   });
 
   it("still passes reasoning_effort to gpt-5.6-luna", async () => {

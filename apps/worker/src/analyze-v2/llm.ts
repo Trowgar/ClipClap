@@ -19,7 +19,7 @@ export interface SchemaCallOptions {
   schema: { name: string; strict: boolean; schema: unknown };
   temperature?: number;
   maxOutputTokens?: number;
-  /** Only sent to gpt-5* models. */
+  /** Only sent to gpt-5* and gpt-6* models. */
   reasoningEffort?: string;
   /**
    * BASE of the retry backoff, not a flat delay - the first retry waits about
@@ -333,7 +333,7 @@ export async function callJsonSchema<T>(
     ...(opts.maxOutputTokens !== undefined
       ? { max_completion_tokens: opts.maxOutputTokens }
       : {}),
-    ...(opts.reasoningEffort && opts.model.startsWith("gpt-5")
+    ...(opts.reasoningEffort && /^gpt-[56](?:\.|-|$)/.test(opts.model)
       ? { reasoning_effort: opts.reasoningEffort }
       : {}),
   };
